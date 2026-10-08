@@ -418,6 +418,9 @@ body {
 .ak-field-k { font-family: var(--v2-mono); font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--v2-cap); margin-bottom: 7px; }
 .ak-field input { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 11px 13px; background: #fff; border: 1px solid #e0dcd9; border-radius: 8px; color: var(--v2-ink); }
 .ak-field input:focus { outline: none; border-color: var(--v2-accent); }
+.ak-field select { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 11px 13px; background: #fff; border: 1px solid #e0dcd9; border-radius: 8px; color: var(--v2-ink); }
+.ak-field select:focus { outline: none; border-color: var(--v2-accent); }
+.ak-field-help { margin-top: 7px; font-size: 12.5px; line-height: 1.45; color: var(--v2-cap); }
 .ak-warn { display: flex; gap: 11px; margin-top: 18px; padding: 13px 15px; border: 1px solid #f0e2d4; border-radius: 8px; background: #fdf9f4; }
 .ak-warn i { font-style: normal; color: var(--v2-orange); font-size: 13px; line-height: 1.5; flex: none; font-weight: 700; }
 .ak-warn span { font-size: 12.5px; line-height: 1.6; color: #8a6a3c; }

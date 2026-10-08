@@ -13,6 +13,7 @@ to any static host.
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import pathlib
@@ -593,18 +594,18 @@ JS = """
   var tb=document.getElementById('tbtn'),tm=tb&&tb.parentElement.querySelector('.tmenu');
   if(tb&&tm){
     function cur(){try{return localStorage.getItem('theme')||'auto';}catch(e){return 'auto';}}
-    function mark(){var v=cur();tm.querySelectorAll('[data-theme-set]').forEach(function(x){
+    function markTheme(){var v=cur();tm.querySelectorAll('[data-theme-set]').forEach(function(x){
       x.setAttribute('aria-checked', x.getAttribute('data-theme-set')===v?'true':'false');});}
     function set(v){try{ if(v==='auto'){localStorage.removeItem('theme');delete document.documentElement.dataset.theme;}
       else{localStorage.setItem('theme',v);document.documentElement.dataset.theme=v;} }catch(e){}
-      mark();}
-    function openM(o){tm.hidden=!o;tb.setAttribute('aria-expanded',o?'true':'false');if(o)mark();}
+      markTheme();}
+    function openM(o){tm.hidden=!o;tb.setAttribute('aria-expanded',o?'true':'false');if(o)markTheme();}
     tb.addEventListener('click',function(e){e.stopPropagation();openM(tm.hidden);});
     tm.querySelectorAll('[data-theme-set]').forEach(function(x){
       x.addEventListener('click',function(){set(x.getAttribute('data-theme-set'));openM(false);});});
     document.addEventListener('click',function(){if(!tm.hidden)openM(false);});
     document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!tm.hidden)openM(false);});
-    mark();
+    markTheme();
   }
 
   // Version dropdown: toggle the menu, close on outside click or Escape.
@@ -695,6 +696,20 @@ JS = """
 })();
 """
 
+# The page's script, its theme bootstrap and its styles are files the build emits, named by their
+# content, never inline: the site's Content-Security-Policy (protocol/vercel.json) allows scripts and
+# styles from the site itself and nothing written into a page (management #76, 2026-10-06). The theme
+# is read in <head>, before first paint, as it was inline.
+THEME_JS = 'try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}'
+
+
+def _emitted(stem: str, ext: str, text: str) -> str:
+    return f"{stem}.{hashlib.sha256(text.encode()).hexdigest()[:12]}.{ext}"
+
+
+SITE_FILES = {_emitted("site", "css", CSS): CSS, _emitted("site", "js", JS): JS, _emitted("theme", "js", THEME_JS): THEME_JS}
+CSS_FILE, JS_FILE, THEME_FILE = SITE_FILES
+
 
 def render_markdown(text: str):
     md = markdown.Markdown(extensions=["tables", "fenced_code", "toc", "attr_list", "sane_lists"])
@@ -761,6 +776,36 @@ def rewrite_links(html_text: str, depth: int, version: str = VERSION) -> str:
     return html_text
 
 
+def check_spec_redirects() -> None:
+    """An undated chapter address (/spec/security, /spec/files#5-retention-and-scope) is what other
+    sites link to, and it must always reach the current version. vercel.json serves those redirects,
+    and only a real HTTP redirect keeps the #anchor (a refresh page drops it), so they live there
+    rather than in this build; this is what keeps them true to VERSION. Moving chapters to dated
+    paths without them broke every undated link on harnessrouter.ai (2026-10-08).
+
+    Fails the build when /spec, /spec/index or the chapter rule points anywhere but the latest
+    version, or when the rule's chapter list differs from the chapters the latest version has."""
+    rules = {r["source"]: r for r in json.loads((ROOT / "vercel.json").read_text())["redirects"]}
+    want = [name for name, _ in chapters_for(VERSION) if name != "index"]
+    chapter_rule = next((r for src, r in rules.items() if src.startswith("/spec/:chapter(")), None)
+    problems = []
+    for src in ("/spec", "/spec/index"):
+        if (rules.get(src) or {}).get("destination") != f"/spec/{VERSION}":
+            problems.append(f"{src} must redirect to /spec/{VERSION}")
+    if not chapter_rule:
+        problems.append("no /spec/:chapter(...) rule")
+    else:
+        listed = chapter_rule["source"][len("/spec/:chapter("):-1].split("|")
+        if chapter_rule.get("destination") != f"/spec/{VERSION}/:chapter":
+            problems.append(f"the chapter rule must redirect to /spec/{VERSION}/:chapter")
+        if sorted(listed) != sorted(want):
+            problems.append(f"the chapter rule lists {sorted(listed)}, the latest version has {sorted(want)}")
+        if chapter_rule.get("permanent") is not False:
+            problems.append("the chapter rule must not be permanent: its target moves with each version")
+    if problems:
+        raise SystemExit("protocol/vercel.json, undated spec addresses:\n  " + "\n  ".join(problems))
+
+
 def redirect_html(target: str, label: str) -> str:
     """A tiny bounce page. /spec has no version of its own — it forwards to the latest, so a typed
     or cited /spec always lands on the current specification without duplicating its content. The
@@ -772,7 +817,7 @@ def redirect_html(target: str, label: str) -> str:
         f'<link rel="canonical" href="https://{SITE}{target}">'
         f'<meta name="robots" content="noindex,follow">'
         f'<title>{html.escape(label)} · Unified Harness Protocol</title></head>'
-        f'<body style="font-family:system-ui,sans-serif;padding:2rem">'
+        f'<body>'
         f'Redirecting to the <a href="{target}">current specification</a>&hellip;</body></html>')
 
 
@@ -890,8 +935,8 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "", toc: s
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script>try{{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}}catch(e){{}}</script>
-<style>{CSS}</style>
+<script src="/assets/{THEME_FILE}"></script>
+<link rel="stylesheet" href="/assets/{CSS_FILE}">
 </head>
 <body>
 <header class="top">
@@ -961,10 +1006,21 @@ def page(current: str, title: str, body: str, depth: int, hero: str = "", toc: s
   </main>
   {toc}
 </div>
-<script>{JS}</script>
+<script src="/assets/{JS_FILE}"></script>
 </body>
 </html>
 """
+
+
+def check_script(js: str) -> None:
+    """Fail the build when the page script declares one function name twice. The script is not
+    strict, so a function declared inside a block replaces the outer one of the same name as soon
+    as that block runs: the theme menu's mark() replaced search's mark(), and every search result
+    read "undefined" (live on the site until 2026-10-07)."""
+    names = re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(", js)
+    twice = sorted({n for n in names if names.count(n) > 1})
+    if twice:
+        raise SystemExit(f"the page script declares {', '.join(twice)} more than once")
 
 
 def check_links(dist: pathlib.Path) -> None:
@@ -1162,6 +1218,8 @@ def build() -> int:
         f"VERSIONS offers versions whose spec pages were not built: {unbuilt} — "
         f"extend NAV/build to emit /spec/<version>/ for each before listing it")
 
+    check_spec_redirects()
+
     # /spec forwards to the latest version's overview: a stable, friendly entry that never holds
     # content of its own, so there is nothing to keep in sync with the dated page it points at.
     (DIST / "spec" / "index.html").write_text(
@@ -1229,6 +1287,9 @@ def build() -> int:
     # GitHub and on the generated site. Merge them after the site's brand assets, preserving both.
     if (ROOT / "assets").is_dir():
         shutil.copytree(ROOT / "assets", DIST / "assets", dirs_exist_ok=True)
+    check_script(JS)
+    for name, text in SITE_FILES.items():
+        (DIST / "assets" / name).write_text(text, encoding="utf-8")
 
     # Last: every link in the finished site must resolve. Runs after schema is in place so links
     # to the machine-readable files are checked against the files that actually shipped.

@@ -463,19 +463,75 @@ _SCRUB_MIN = 8   # shorter values are not scrubbed: replacing "yes" everywhere w
 
 def _turn_secrets(env: dict, names: list | None) -> list[str]:
     """The values of a turn's environment that came through a reference (the gateway names them):
-    what the agent may read but the record may not carry. Longest first, so a value that contains
-    another is replaced whole."""
-    vals = {str(env[n]) for n in (names or []) if isinstance(n, str) and env.get(n) and len(str(env[n])) >= _SCRUB_MIN}
+    what the agent may read but the record may not carry. Each also as JSON writes it inside a
+    string, since a tool's output is often JSON text and there a quote, a backslash, a newline and
+    a non-ASCII character are escaped. Longest first, so a value that contains another is replaced
+    whole."""
+    vals: set[str] = set()
+    for n in names or []:
+        v = env.get(n) if isinstance(n, str) else None
+        if v and len(str(v)) >= _SCRUB_MIN:
+            v = str(v)
+            vals.update((v, json.dumps(v)[1:-1], json.dumps(v, ensure_ascii=False)[1:-1]))
     return sorted(vals, key=len, reverse=True)
 
 
-def _scrub_secrets(text: str, secrets: list[str] | None) -> str:
-    """Every occurrence of a turn's secret values replaced in a serialized record. Applied where
-    the gateway reads the turn, so no event, result or error leaves the sandbox with one."""
-    for sec in secrets or []:
-        if sec and sec in text:
-            text = text.replace(sec, "[redacted]")
-    return text
+# What redaction touches in a turn's answer: what the agent wrote (its text, its thinking, its tools'
+# input and output, the result, the error), never the turn's own account of itself. A value that came
+# through a $headers reference is chosen by whoever calls the harness, so it is a pattern the caller
+# picks: redacted everywhere, it let a caller blank the turn's status, every event's type (which the
+# gateway reads the transcript by) or a role, and erase its own transcript from the trace (reported
+# privately, GHSA-7pwj-vv9r-rh2m). The turn's own fields are kept by POSITION, not by name anywhere:
+# a tool's input is an arbitrary map, and a "type" inside it is the agent's content.
+_ANSWER_CONTENT = ("result", "error", "reason", "handoff", "events")
+_ANSWER_KEEP = {
+    "event": frozenset({"type", "subtype", "session_id", "uuid", "parent_tool_use_id", "model", "usage", "modelUsage",
+                        "stop_reason"}),
+    "message": frozenset({"type", "role", "id", "model", "usage", "stop_reason", "stop_sequence"}),
+    "part": frozenset({"type", "id", "tool_use_id", "name"}),
+}
+_ANSWER_DEPTH = 64   # deeper than this, a structure is shown as a placeholder (see _redact_answer)
+
+
+def _redact_answer(out: dict, secrets: list[str] | None) -> dict:
+    """A turn's answer as it leaves the runner: every secret value replaced in what the agent wrote,
+    and nothing nested deeper than _ANSWER_DEPTH. A copy; the record itself is not changed.
+
+    Walked as values, not as serialized text: the text form escapes a quote, a backslash, a newline
+    and every non-ASCII character, so a secret holding one (a PEM key, a passphrase with a quote) was
+    not found and went out whole (reported privately, GHSA-rmh9-whjx-gfrc). Walked with a stack, not
+    recursion, and capped in depth: the agent chooses how deep its tool input nests, and an answer
+    that cannot be serialized is a turn the gateway can never read."""
+    secrets = [s for s in secrets or [] if s]
+    root = dict(out)
+    work = [(root, k, root[k], "events" if k == "events" else "", True, 1) for k in _ANSWER_CONTENT if k in root]
+    while work:
+        parent, key, val, role, scrub, depth = work.pop()
+        if isinstance(val, str):
+            if scrub:
+                for sec in secrets:
+                    if sec in val:
+                        val = val.replace(sec, "[redacted]")
+                parent[key] = val
+            continue
+        if not isinstance(val, (dict, list)):
+            continue
+        if depth > _ANSWER_DEPTH:
+            parent[key] = "[nested too deeply to show]"
+            continue
+        if isinstance(val, dict):
+            keep = _ANSWER_KEEP.get(role, frozenset())
+            new = dict(val)
+            for k, x in val.items():
+                child = "message" if role == "event" and k == "message" else "parts" if role == "message" and k == "content" else ""
+                work.append((new, k, x, child, scrub and k not in keep, depth + 1))
+        else:
+            new = list(val)
+            child = "event" if role == "events" else "part" if role == "parts" else ""
+            for i, x in enumerate(val):
+                work.append((new, i, x, child, scrub, depth + 1))
+        parent[key] = new
+    return root
 
 
 def _child_env() -> dict:
@@ -10423,8 +10479,7 @@ def _turn_answer(turn_id: str, rec: dict, since: int, held: bool) -> dict:
            "events": evs, "n_total": n, "elapsed": round(time.time() - rec["started"], 1)}
     if held:
         out["held"] = True
-    sec = rec.get("secrets")
-    return json.loads(_scrub_secrets(json.dumps(out, default=str), sec)) if sec else out
+    return _redact_answer(out, rec.get("secrets"))
 
 
 @app.get("/turn/{turn_id}")

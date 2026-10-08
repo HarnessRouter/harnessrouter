@@ -167,7 +167,8 @@ RUN chmod +x /tmp/install-kits.sh \
 COPY gateway/ /app/gateway/
 COPY runner/  /app/runner/
 COPY docker/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+COPY docker/hr-retention /usr/local/bin/hr-retention
+RUN chmod +x /app/entrypoint.sh /usr/local/bin/hr-retention
 
 # Next.js standalone output: server + only the modules it actually needs.
 COPY --from=ui /ui/.next/standalone /app/ui/

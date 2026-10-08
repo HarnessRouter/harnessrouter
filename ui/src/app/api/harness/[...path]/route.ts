@@ -42,6 +42,13 @@ const upstream = new Agent({ headersTimeout: maxDuration * 1000, bodyTimeout: ma
 
 async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
+  // The gateway's /internal/* routes are for services that hold the internal key themselves. A
+  // browser has no business on them through a multi-tenant console, where this proxy attaches the
+  // key beside any bearer: they are not forwarded there at all. (A self-hosted box is its owner's:
+  // the signed-in operator may call them, and the gateway refuses any that arrives with a bearer.)
+  if (!SELF_HOSTED && (path || [])[0] === 'internal') {
+    return new Response(JSON.stringify({ detail: 'not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+  }
   const target = `${GATEWAY.replace(/\/$/, '')}/${(path || []).join('/')}${req.nextUrl.search}`;
   const headers: Record<string, string> = {};
   const ct = req.headers.get('content-type');

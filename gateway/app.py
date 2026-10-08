@@ -37,6 +37,7 @@ import subprocess
 import tarfile
 import tempfile
 
+import httpcore
 import httpx
 import redis.asyncio as aioredis
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
@@ -299,7 +300,14 @@ INTERNAL_KEY = os.environ.get("HARNESS_INTERNAL_KEY", "")
 # service-to-service (the engine executor) and keep header trust — key possession is the service
 # credential. Modes: observe (count/log, keep header trust) -> enforce (claims are authoritative;
 # key + a present-but-invalid Authorization is REJECTED).
-HR_IDENTITY_MODE = os.environ.get("HR_IDENTITY_MODE", "observe")
+#
+# Unset, or anything but "off" or "observe", means enforce. A console that is not in self-hosted mode
+# attaches the internal key to every request that carries an Authorization header, so a gateway that
+# trusted the identity headers by default let a junk bearer assert any organization and member
+# (reported privately, GHSA-qrr8-m92f-7vfp). The self-hosted entrypoint sets "off" on purpose: its
+# console pins the one organization and gives the key only to a signed-in session. "observe" is a
+# migration step a multi-tenant operator chooses, never a default.
+HR_IDENTITY_MODE = {"off": "off", "observe": "observe"}.get(os.environ.get("HR_IDENTITY_MODE", "").strip().lower(), "enforce")
 AUTH_JWT_SECRET = os.environ.get("AUTH_JWT_SECRET", "")
 # Deploy fingerprint (baked at image build via the GIT_SHA build-arg, see Dockerfile) — lets
 # release verification bind this running instance to the exact source commit it was built from.
@@ -825,8 +833,18 @@ def _pool_token() -> str:
 # unset in prod it no-oped, leaving /v1/traces and the connection/policy writers OPEN. Every
 # route now authenticates via _principal (API key / internal trust + verified JWT) or
 # _internal_only — auth that fails closed.)
-def _internal_only(x_harness_internal: str = Header(default="")) -> dict:
-    if not INTERNAL_KEY or x_harness_internal != INTERNAL_KEY:
+def _internal_only(request: Request, x_harness_internal: str = Header(default="")) -> dict:
+    # A service (a script, a scheduler, the operator's own console session on a self-hosted box)
+    # calls these routes with the key and nothing else. A request that also carries a bearer is a
+    # person's or an API key's, relayed: a console proxy that is not in self-hosted mode attaches
+    # the key to every request that has a bearer, before anything verifies it, so with a junk bearer
+    # anyone could reach these routes and rewrite any organization's connections and routing
+    # (reported privately, GHSA-p6cq-54cg-8mpv; found live on the hosted service and closed there
+    # the same way, 2026-10-06). Routes for a person or a key resolve the full principal
+    # (_principal, _owned_org); these never take one.
+    if request.headers.get("authorization"):
+        raise HTTPException(401, "internal key required")
+    if not INTERNAL_KEY or not hmac.compare_digest(x_harness_internal.encode(), INTERNAL_KEY.encode()):
         raise HTTPException(401, "internal key required")
     return {"internal": True}
 
@@ -1002,6 +1020,29 @@ def _calibration_route_allowed(method: str, path: str, inner: str) -> bool:
         ("POST", r"/v1/kits/[^/]+/launch"),
     )
     return any(m == method.upper() and re.fullmatch(pat, path) for m, pat in allowed)
+
+
+def _calibration_inner(principal: dict) -> str:
+    """The one harness a calibration credential drives; "" for every other caller."""
+    c = principal.get("calibration")
+    return str(c.get("inner") or "") if c else ""
+
+
+async def _calibration_holds_session(inner: str, sid: str) -> bool:
+    """Whether a session already belongs to the harness a calibration credential drives. The route
+    list above says which doors the credential may knock on; this is what it may touch behind them:
+    a session of that harness, and a response of such a session, and nothing else in the org. A
+    session that names no harness is not its harness's (an ordinary caller's turn may claim a blank
+    one; this credential may not, or a known id would be a way into any unnamed conversation)."""
+    v = await _vertex_get(sid) if sid else None
+    return bool(v) and bool(inner) and str(v.get("harness_id") or "") == inner
+
+
+async def _calibration_holds_response(inner: str, rec: dict | None) -> bool:
+    """...and a response is its harness's when the session that produced it is."""
+    rec = rec or {}
+    sid = str(rec.get("_session_id") or (rec.get("metadata") or {}).get("session_id") or "")
+    return await _calibration_holds_session(inner, sid)
 
 
 def _calibration_env(hv: dict | None, org: str, sid: str, timeout_s: int | None) -> dict | None:
@@ -4445,6 +4486,8 @@ async def list_traces(request: Request, org: str, limit: int = 20, cursor: str =
     p = await _principal(request)
     if (p.get("org") or "") != org:
         raise HTTPException(403, "trace access is limited to your organization")
+    if _key_scope(p):     # a key held to a workspace lists that workspace, whatever it asks for
+        workspace, workspace_default = _key_scope(p), 0
     return await _session_cards(org, limit, cursor, member, harness,
                                 workspace=workspace, ws_default=bool(workspace_default))
 
@@ -4608,12 +4651,72 @@ async def list_sessions(request: Request, limit: int = 20, cursor: str = "",
                                 ws_default=bool(p.get("workspace_default")))
 
 
+def _key_scope(p: dict) -> str:
+    """The one workspace an API key is held to, or "" when the caller is not narrowed. Not narrowed:
+    a person through the console (the workspace it names is a view, not a wall), a key for the
+    whole organization, and a Default Workspace key, which is what an organization's keys were
+    before workspaces existed and keeps that reach (Richard, 2026-10-06; the same function and the
+    same answer on the hosted service)."""
+    if p.get("via") != "api_key":
+        return ""
+    ws = str(p.get("workspace") or "")
+    if not ws or p.get("workspace_default") or ws == f"{p.get('org') or ''}__hr_default":
+        return ""
+    return ws
+
+
+def _scope_keeps(p: dict, item_ws) -> bool:
+    """THE workspace rule, in one place: whether this caller may touch something stamped with
+    `item_ws`. A key held to a workspace (_key_scope) reaches what is stamped with that workspace
+    and nothing else of the organization; what was made before workspaces existed carries no stamp
+    and is the Default Workspace's, so it is not such a key's either. Every other caller reaches
+    everything of its organization.
+
+    The lists always narrowed a workspace's key. The routes that take an id did not: they checked
+    the organization and stopped, so a workspace's key that knew an id read, changed and deleted
+    another workspace's harnesses, sessions and responses, revoked its keys, and could mint itself a
+    key with no workspace at all (reported privately three times). Every route that takes an id now
+    asks here, through _harness_in_reach, _owned_session or _response_in_reach, and a test reads
+    the routes to keep it so."""
+    held = _key_scope(p)
+    return not held or str(item_ws or "") == held
+
+
+async def _harness_in_reach(p: dict, hid: str, *, deleted_ok: bool = False) -> dict:
+    """The harness record behind an id, for this caller, or the same 404 an unknown id gets: its
+    organization's, not deleted, and inside the caller's workspace."""
+    v = await _vertex_get(hid)
+    if (not v or not p.get("org") or str(v.get("org") or "") != str(p.get("org"))
+            or (not deleted_ok and str(v.get("deleted")) in ("1", "true", "True"))
+            or not _scope_keeps(p, v.get("workspace"))):
+        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    return v
+
+
+async def _response_in_reach(p: dict, rec: dict | None) -> bool:
+    """Whether a response of the caller's organization is the caller's to read, cancel or delete.
+    A response belongs to the session that produced it, so the answer is the session's: its
+    workspace for a caller narrowed to one, its harness for a calibration credential. A caller with
+    neither limit is not made to pay for the read."""
+    inner = _calibration_inner(p)
+    if not inner and not _key_scope(p):
+        return True
+    rec = rec or {}
+    sid = str(rec.get("_session_id") or (rec.get("metadata") or {}).get("session_id") or "")
+    v = await _vertex_get(sid) if sid else None
+    if not v or (inner and str(v.get("harness_id") or "") != inner):
+        return False
+    return _scope_keeps(p, v.get("workspace"))
+
+
 async def _owned_session(request: Request, sid: str) -> tuple[str, dict]:
     p = await _principal(request)
     org = p.get("org", "")
     v = await _vertex_get(sid)
     if not v or str(v.get("tenant") or "") != org or str(v.get("status")) == "deleted":
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
+    if not _scope_keeps(p, v.get("workspace")):
+        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")   # another workspace's
     c = p.get("calibration")
     if c and str(v.get("harness_id") or "") != str(c.get("inner") or ""):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")   # not its harness's
@@ -4891,13 +4994,13 @@ async def get_trace_all(sid: str, request: Request, compact: int = 0) -> Respons
 @app.delete("/v1/sessions/{sid}")
 @app.delete("/v1/traces/{sid}")
 async def delete_trace(sid: str, request: Request) -> dict:
-    """Delete a session for good: its trace manifest + event chunks, its durable workspace
-    tarball, and tombstone the session vertex. /v1/sessions/{sid} is the protocol's name for it;
+    """Delete a session for good, at once: everything it left (`_session_purge`), and its record
+    reduced to a marker that holds no content. /v1/sessions/{sid} is the protocol's name for it;
     /v1/traces/{sid} is the older path the Traces app calls, the same handler."""
     p = await _principal(request)
     org = str(p.get("org") or "")
     v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != org:
+    if not v or str(v.get("tenant") or "") != org or not _scope_keeps(p, v.get("workspace")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     # A tombstoned session may be deleted again. A card of it can outlive the first delete (a
     # follow-up that reached the tombstone rewrote the card as "?", 2026-09-07), and this button
@@ -4917,7 +5020,8 @@ async def delete_trace(sid: str, request: Request) -> dict:
         # serving the full conversation. Sessions §6 says deletion MUST make the session
         # unreadable, and the published link is the reader its owner is least likely to remember.
     try:
-        await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0"})
+        await _vg_upsert("HarnessSession", sid, {"status": "deleted", "shared": "0",
+                                                 "deleted_at": str(_now_ms())})
     except Exception:  # noqa: BLE001
         pass
     # Clear local token lookups as well. Every public read checks durable share state, so
@@ -4930,7 +5034,64 @@ async def delete_trace(sid: str, request: Request) -> dict:
             await _stop_session(org, sid, v)
         except Exception:  # noqa: BLE001
             pass
-    base = await _trace_base(sid)
+    await _session_purge(sid, v)
+    await _session_strip(sid, v)
+    # drop in-process state (the vertex was tombstoned first, above)
+    _SHARE_TOKEN_CACHE.clear()
+    _session_trace.pop(sid, None)
+    return {"id": sid, "object": "session", "deleted": True}
+
+
+# What a deleted session's marker keeps: the ids that find what it left, and nothing a person
+# wrote. A finalize or a reconcile can land after the delete, and the tombstone is what refuses
+# them (`_session_write_allowed`, `_index_put`); the retention sweep removes the marker a day later,
+# after purging again whatever such a late write managed to put back.
+_SESSION_MARKER = ("tenant", "workspace", "harness_id", "member_id", "member", "created_at_inv",
+                   "trace_blob", "status", "shared", "deleted_at")
+
+
+async def _session_strip(sid: str, v: dict | None) -> None:
+    """Reduce a deleted session's record to its marker. The store merges on write, so the record
+    is removed and the marker written fresh; a write landing between the two is a status write
+    the next sweep strips again."""
+    cur = await BACKING.graph.get(sid) or dict(v or {})
+    keep = {k: str(cur.get(k) or "") for k in _SESSION_MARKER if cur.get(k)}
+    keep.update({"status": "deleted", "shared": "0"})
+    keep.setdefault("deleted_at", str(_now_ms()))
+    with contextlib.suppress(Exception):
+        await BACKING.graph.delete(sid, "HarnessSession")
+    with contextlib.suppress(Exception):
+        await BACKING.graph.upsert("HarnessSession", sid, keep)
+
+
+async def _session_records(label: str, field: str, sid: str, index: dict | None) -> list[str]:
+    """The ids of one kind of record a session owns. The sweep hands in an index it built once:
+    a lookup by property reads every record of the label, and a volume with thousands of deleted
+    sessions would otherwise read every response once per session."""
+    if index is not None:
+        return list(index.get(label, {}).get(sid, ()))
+    return [str(r["id"]) for r in await BACKING.graph.find(label, {field: sid}) if r.get("id")]
+
+
+async def _session_index() -> dict:
+    """Every session's responses and plugin calls, by session id, in one read of each label."""
+    idx: dict = {}
+    for label, field in (("HarnessResponse", "session_id"), (_PLUG_CALL_LABEL, "session")):
+        by: dict[str, list[str]] = {}
+        for r in await BACKING.graph.find(label):
+            if r.get(field) and r.get("id"):
+                by.setdefault(str(r[field]), []).append(str(r["id"]))
+        idx[label] = by
+    return idx
+
+
+async def _session_purge(sid: str, v: dict | None, index: dict | None = None) -> None:
+    """Everything a session left, removed: its transcript and trace, its responses, the files its
+    tasks produced, their previews and change list, its media, the record of every plugin call it
+    made, its checkpoint and its live working folder. Richard's rule (2026-10-08, the same on the
+    hosted service): deleting a task removes it at once and for good. Idempotent, so the retention
+    sweep runs it again for every marker before removing the marker."""
+    base = _prefix_from_vertex(sid, v)
     # 1) trace manifest + event chunks (drives the Recents/Traces list)
     if base:
         manifest = {}
@@ -4952,7 +5113,25 @@ async def delete_trace(sid: str, request: Request) -> dict:
         # remove the flat index AND the per-harness/per-member mirrors (harness/member from the
         # manifest we just read; falls back to a bare flat-key delete if the manifest was unreadable)
         await _deindex_manifest(base, manifest, _session_trace.get(sid) or {}, v or {})
-    # 2) durable session workspace tarball, and anything the media server holds for it
+    # 2) its responses. Response §7 keeps a response deleted on its own for 30 days; a response
+    # of a deleted session goes with the session.
+    with contextlib.suppress(Exception):
+        for rid in await _session_records("HarnessResponse", "session_id", sid, index):
+            _resp_cache_forget(rid)
+            await _blob_delete(f"responses/{rid}.json", kb=RESP_BLOB_KB)
+            await BACKING.graph.delete(rid, "HarnessResponse")
+    # 3) everything stored under its id: the checkpoint and the media scene (sessions/<sid>/ in
+    # the session store), the change list (sessions/<sid>/ in the response store), the files its
+    # tasks produced (containers/<sid>/) and their rendered previews (previews/<sid>/)
+    for kb, prefix in ((BLOB_KB, f"sessions/{sid}/"), (RESP_BLOB_KB, f"sessions/{sid}/"),
+                       (RESP_BLOB_KB, f"containers/{sid}/"), (RESP_BLOB_KB, f"previews/{sid}/")):
+        with contextlib.suppress(Exception):
+            for it in await _blob_list_all(prefix, kb=kb):
+                await _blob_delete(str(it.get("file_id") or ""), kb=kb)
+        purge = getattr(BACKING.blob, "purge", None)       # what a listing does not show
+        if purge:
+            with contextlib.suppress(Exception):
+                await purge(kb, prefix)
     await _blob_delete(_ws_blob(sid), kb=BLOB_KB)
     # The live working folder is the session's memory on this box (the tarball above is its
     # durable copy); §6 says deletion frees it. Only the runner can remove it: the folder belongs
@@ -4964,10 +5143,10 @@ async def delete_trace(sid: str, request: Request) -> dict:
         except Exception:  # noqa: BLE001
             pass
     await _media_session_purge(sid)
-    # 3) drop in-process state (the vertex was tombstoned first, above)
-    _SHARE_TOKEN_CACHE.clear()
-    _session_trace.pop(sid, None)
-    return {"id": sid, "object": "session", "deleted": True}
+    # 4) the record of every plugin call it made
+    with contextlib.suppress(Exception):
+        for cid in await _session_records(_PLUG_CALL_LABEL, "session", sid, index):
+            await BACKING.graph.delete(cid, _PLUG_CALL_LABEL)
 
 
 # ── connection admin (org admins manage their own provider connections) ──────────
@@ -5709,6 +5888,10 @@ def _rid(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
 async def _vg_upsert(label: str, vid: str, props: dict, *, raise_on_fail: bool = False) -> None:
     """Generic coalesce-upsert for any VG vertex label (HarnessResponse / HarnessApiKey).
     Best-effort by default; VG is closed-world on labels so an unregistered label silently no-ops.
@@ -6103,6 +6286,7 @@ _BEDROCK_CLAUDE = {
     "sonnet-4.6": "us.anthropic.claude-sonnet-4-6", "sonnet-4.5": "us.anthropic.claude-sonnet-4-5",
     "opus-5": "us.anthropic.claude-opus-5", "sonnet-5": "us.anthropic.claude-sonnet-5",
     "opus-5.5": "us.anthropic.claude-opus-5-5", "sonnet-5.5": "us.anthropic.claude-sonnet-5-5",
+    "haiku-5.5": "us.anthropic.claude-haiku-5-5",
     "haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "fable-5": "us.anthropic.claude-fable-5",
     "fable-5.1": "us.anthropic.claude-fable-5-1",
 }
@@ -6110,7 +6294,7 @@ _ANTHROPIC_CLAUDE = {
     "opus-4.8": "claude-opus-4-8", "opus-4.7": "claude-opus-4-7", "opus-4.6": "claude-opus-4-6",
     "opus-4.5": "claude-opus-4-5", "sonnet-4.6": "claude-sonnet-4-6", "sonnet-4.5": "claude-sonnet-4-5",
     "opus-5": "claude-opus-5", "sonnet-5": "claude-sonnet-5",
-    "opus-5.5": "claude-opus-5-5", "sonnet-5.5": "claude-sonnet-5-5",
+    "opus-5.5": "claude-opus-5-5", "sonnet-5.5": "claude-sonnet-5-5", "haiku-5.5": "claude-haiku-5-5",
     "haiku-4.5": "claude-haiku-4-5-20251001", "fable-5": "claude-fable-5",
     "fable-5.1": "claude-fable-5-1",
 }
@@ -6140,6 +6324,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-sonnet-5":   "claude-sonnet-5",
         "claude-opus-4.7":   "claude-opus-4-7",
         "claude-sonnet-4.6": "claude-sonnet-4-6",
+        "claude-haiku-5.5":  "claude-haiku-5-5",
         "claude-haiku-4.5":  "claude-haiku-4-5-20251001",
     },
     "bedrock": {
@@ -6152,6 +6337,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-sonnet-5":   "us.anthropic.claude-sonnet-5",
         "claude-opus-4.7":   "us.anthropic.claude-opus-4-7",
         "claude-sonnet-4.6": "us.anthropic.claude-sonnet-4-6",
+        "claude-haiku-5.5":  "us.anthropic.claude-haiku-5-5",
         "claude-haiku-4.5":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     },
     "openai": {
@@ -6204,6 +6390,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "claude-sonnet-5":    "anthropic/claude-sonnet-5",
         "claude-opus-4.7":    "anthropic/claude-opus-4.7",
         "claude-sonnet-4.6":  "anthropic/claude-sonnet-4.6",
+        "claude-haiku-5.5":   "anthropic/claude-haiku-5.5",
         "claude-haiku-4.5":   "anthropic/claude-haiku-4.5",
         # The Gemini text family, each id read from the aggregator's own /v1/models on 2026-09-06
         # (OpenRouter serves all eleven; TokenRouter lacks four, see _TOKENROUTER_NO_CHANNEL; Vercel
@@ -6331,6 +6518,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gpt-5.6-luna":       "openai/gpt-5.6-luna",
         "gpt-5.5":            "openai/gpt-5.5",
         "gpt-5.3-codex":      "openai/gpt-5.3-codex",
+        "claude-opus-5.5":    "anthropic/claude-opus-5.5",
         "claude-opus-5":      "anthropic/claude-opus-5",
         "claude-fable-5":     "anthropic/claude-fable-5",
         "claude-fable-5-1":    "anthropic/claude-fable-5.1",
@@ -6384,7 +6572,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 _TOKENROUTER_NO_CHANNEL = {
     "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
     "qwen3.8-27b",   # not on TokenRouter's /v1/models (2026-09-12)
-    "claude-opus-5.5",   # not on TokenRouter's /v1/models (2026-09-22): the vendor and the other aggregators serve it
+    "claude-haiku-5.5",   # not on TokenRouter's /v1/models (2026-10-07): the vendor, OpenRouter and Vercel serve it
     # No Meta id is on TokenRouter's list (2026-09-13).
     "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
     "llama-4-maverick", "llama-3.3-70b",
@@ -6524,13 +6712,26 @@ _VERCEL_RESLUG = {
 # meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", HTTP 405; "This model doesn't support tool
 # use in streaming mode", HTTP 400 on llama-3.3-70b) and caps output at 8192, so no harness can
 # drive a turn on it there; the same ids answer on OpenRouter (2026-09-13, every harness x 5).
-_VERCEL_NO_CHANNEL = {"llama-4-maverick", "llama-3.3-70b"}
+# Vercel's nemotron-3.5-lightning returns its tool calls with the arguments garbled (a `path` of
+# `": check.txt we need to provide the content \"kiwi\""`, streamed and not, 4 of 4 raw calls) or
+# none at all: hermes then made no call and said it had, pi's `write` arrived with no input
+# (2026-10-08, 3 of 3 turns). The same id on OpenRouter returned clean arguments 4 of 4 and passed
+# hermes, pi and opencode. It passed every base on Vercel in the 2026-10 matrix, so it is the
+# channel that changed; listed here until a re-measure on Vercel passes.
+_VERCEL_NO_CHANNEL = {"llama-4-maverick", "llama-3.3-70b", "nemotron-3.5-lightning"}
 _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
                             if c not in _VERCEL_NO_CHANNEL}
 # Google AI Studio serves the catalog's Gemini models by their own ids.
 # Google AI Studio serves the whole family under the plain id (its /v1beta/models, 2026-09-06, on
 # the sponsored project; 40 generateContent-capable models, of which these eleven are chat models).
-_VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview")}
+# Not gemini-3.7-flash: since 2026-10-08 Google answers that id with gemini-3.8-flash (`modelVersion`
+# on generateContent, streamed and not; the other seven come back as themselves). Gemini CLI reports
+# the model it ran and fails the turn as a substitution; Google's OpenAI-compatible surface echoes
+# the id it was asked for, so every other base would have run 3.8 under the 3.7 name. TokenRouter,
+# Vercel and OpenRouter still serve it as itself.
+_GOOGLE_ANSWERS_AS_ANOTHER = {"gemini-3.7-flash"}
+_VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview")
+                            if m not in _GOOGLE_ANSWERS_AS_ANOTHER}
 
 
 # ── one order for every model list ────────────────────────────────────────────────────────────
@@ -6545,7 +6746,7 @@ _MODEL_ORDER: tuple[str, ...] = (
     "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
     # Anthropic
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8",
-    "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+    "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
     # Google
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
     "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
@@ -6711,7 +6912,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # falling through to the unmapped default it used at launch.
     "claude": {"default": "claude-sonnet-4.6",
                "models": ["claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                          "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5"]},
+                          "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5"]},
     # hermes (NousResearch hermes-agent) is multi-family — it runs any frontier model through
     # the matching provider connection (family-aware chain selection in _resp_execute). Friendly
     # names are shared with the codex/claude catalogs, so pricing/billing metrics stay identical
@@ -6722,7 +6923,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
                           "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                          "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                          "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
@@ -6755,7 +6956,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash",
@@ -6771,7 +6972,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                            "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                            "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                             "gemini-3.6-flash", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash",
@@ -6797,6 +6998,10 @@ _MODEL_CATALOG: dict[str, dict] = {
     # them to a DIFFERENT model on a DIFFERENT provider. No id this catalog serves is in that table
     # today — `gemini-2.5-pro` was, and left with #196 — but the overlap is upstream's to change in
     # any release, and the prefix skips the table entirely rather than tracking it.
+    #
+    # claude-haiku-5.5 is NOT offered here: on 2026-10-07 aider passed the first four scenarios on it
+    # and failed the recycle scenario in two of three runs (after a recycle it answered a word that
+    # was never asked for), while every other base held the conversation. Re-measure before adding it.
     "aider": {"default": "gpt-5.4",
               "models": [
                   "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
@@ -6828,7 +7033,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
-                 "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                 "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                  "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
@@ -6856,7 +7061,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                     "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                     "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                     "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
-                    "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                    "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                     "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
                     "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                     "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
@@ -6877,7 +7082,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
-                 "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                 "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
@@ -6899,7 +7104,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                       "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                       "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
-                      "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                      "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
                       "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
                       "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                       "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
@@ -6918,7 +7123,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                          "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5",
                          "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7",
-                         "claude-sonnet-4.6", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
+                         "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
                          "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
                          "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
                          "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
@@ -6948,7 +7153,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                         "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
@@ -6970,7 +7175,7 @@ _MODEL_CATALOG: dict[str, dict] = {
               "models": ["gpt-5.4", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5.5", "claude-opus-5",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7",
-                         "claude-sonnet-4.6", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
+                         "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
@@ -6980,7 +7185,7 @@ _MODEL_CATALOG: dict[str, dict] = {
            "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
-                      "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                      "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
@@ -7050,7 +7255,7 @@ _MODEL_CATALOG: dict[str, dict] = {
               "models": ["gpt-5.4", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                          "gpt-5.4-mini", "gpt-5.2",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
-                         "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+                         "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash",
                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
                          "gemini-3-flash-preview",
@@ -7166,7 +7371,7 @@ _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROP
 # sorts first. When nothing on the instance serves one, hermes keeps its default (the main
 # model), which is today's behaviour and the honest answer: we cannot route to a model that no
 # integration here can reach.
-_VISION_CAPABLE = ("claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5.5", "claude-sonnet-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol",
+_VISION_CAPABLE = ("claude-haiku-5.5", "claude-haiku-4.5", "gpt-5.4-mini", "claude-sonnet-5.5", "claude-sonnet-5", "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol",
                    "gpt-5.4", "claude-sonnet-4.6", "claude-opus-5.5", "claude-opus-5", "gpt-5.5")
 
 
@@ -7535,7 +7740,8 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
 # ── session resolution (previous_response_id → reuse prior session for continuity) ──────
 async def _resp_resolve_session(org: str, member: str, prev: str | None, backend_hint: str,
                                 harness_id: str = "", harness_name: str = "",
-                                session_hint: str = "", workspace: str = "") -> tuple[str, str | None]:
+                                session_hint: str = "", workspace: str = "",
+                                caller: dict | None = None) -> tuple[str, str | None]:
     # Continue an existing conversation by (1) the response-id chain, or (2) an explicit session id.
     # (2) is the robust path: the client always knows which conversation it's in, so a follow-up never
     # forks a new empty session just because previous_response_id was momentarily unavailable.
@@ -7583,6 +7789,9 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
         except Exception as e:  # noqa: BLE001
             raise uhp_error(503, "server_error", "The session could not be read right now. Try again.") from e
         if v and str(v.get("tenant") or "") == org and str(v.get("status") or "") != "deleted":
+            if caller is not None and not _scope_keeps(caller, v.get("workspace")):
+                # another workspace's conversation: the same answer as an id that does not exist
+                raise uhp_error(404, "session_not_found", "No session with that id.")
             return await _continue(sid, v)
         if v:
             # a leaked/stored id of another org's session must not let a caller continue it; nor a
@@ -8112,13 +8321,13 @@ async def _apikey_resolve(tok: str) -> dict | None:
             _touch_apikey(sha)
             return {"org": doc.get("org", ""), "member": doc.get("member", ""),
                     "workspace": doc.get("workspace", "") or "",
-                    "workspace_default": bool(doc.get("workspace_default"))}
+                    "workspace_default": bool(doc.get("workspace_default")), "via": "api_key"}
     v = await _vertex_get(sha)
     if v and v.get("kind") == "harness_api_key" and str(v.get("revoked")) not in ("1", "true", "True"):
         _touch_apikey(sha)
         p = {"org": v.get("org", ""), "member": v.get("member", ""),
              "workspace": v.get("workspace", "") or "",
-             "workspace_default": str(v.get("workspace_default") or "") in ("1", "true", "True")}
+             "workspace_default": str(v.get("workspace_default") or "") in ("1", "true", "True"), "via": "api_key"}
         if control_store.enabled():
             try:
                 # create_only: never overwrite an existing doc — a revoke tombstone may have landed
@@ -8215,6 +8424,308 @@ async def _owned_org(request: Request, org: str) -> dict:
     if org != p.get("org"):
         raise HTTPException(403, "not your organization")
     return p
+
+
+# ── retention: when what was deleted is removed ──────────────────────────────────────────────
+# Richard's rule (2026-10-08), the hosted service's too, and published in the self-hosting guide:
+#   for good, at once:          tasks (sessions, with everything they left), API keys, credentials
+#   30 days, restorable, gone:  harnesses, responses deleted on their own, environments, uploads
+# Each delete does its own "at once" part. This sweep removes what has come due: what a delete
+# could not finish, the marker a deleted session keeps for a day, and every 30-day kind past its
+# 30 days. It runs when the server starts and every day after, so the first start of a version
+# that has it removes everything a volume already held marked deleted for longer than 30 days
+# (Richard, 2026-10-08: "remove old ones at once"). A record marked before delete times were
+# written counts from its last write, and the answer says how many did.
+#
+# The shapes are the hosted service's (POST /internal/retention/sweep and /restore), so one
+# operator tool reads both. Arenas and accounts are hosted kinds; this server has neither.
+_RETAIN_MS = 30 * 86_400_000
+_MARKER_MS = 86_400_000
+_RETENTION_SWEEP_S = int(os.environ.get("HR_RETENTION_SWEEP_S", "86400"))
+_RETENTION_KINDS = ("sessions", "responses", "harnesses", "api_keys", "environments", "uploads", "credentials")
+_FOR_GOOD = frozenset({"sessions", "api_keys", "credentials"})
+
+
+def _stamp_ms(v) -> int:
+    """A time as any version wrote it, in milliseconds: seconds or milliseconds, a number or its
+    text. 0 when there is none."""
+    try:
+        f = float(str(v if v is not None else "").strip() or 0)
+    except ValueError:
+        return 0
+    return int(f * 1000) if 0 < f < 1e11 else int(f)
+
+
+def _true(v) -> bool:
+    return str(v) in ("1", "true", "True")
+
+
+async def _retention_due(kind: str, now: int) -> tuple[list[dict], int]:
+    """The items of one kind that are due, oldest first, each {"id", "row"}; and how many of them
+    had no delete time of their own."""
+    rows: list[tuple[int, bool, dict]] = []      # (counted-from time, had a delete time, row)
+
+    def add(row: dict, at_field: str, *fallbacks: str) -> None:
+        at = _stamp_ms(row.get(at_field))
+        own = at > 0 or kind in ("api_keys", "credentials")   # due at once: no clock to count from
+        for f in fallbacks:
+            if at:
+                break
+            at = _stamp_ms(row.get(f))
+        rows.append((at, own, row))
+
+    if kind == "sessions":
+        # A session deleted before this version has no delete time and everything it left still
+        # beside it: due at once, since a task's delete is for good.
+        for r in await BACKING.graph.find("HarnessSession", {"status": "deleted"}):
+            add(r, "deleted_at")
+        due = [(at, own, r) for at, own, r in rows if not at or now - at >= _MARKER_MS]
+    elif kind == "api_keys":
+        for r in await BACKING.graph.find("HarnessApiKey"):
+            if _true(r.get("revoked")) or r.get("kind") != "harness_api_key":
+                add(r, "revoked_at")
+        due = rows
+    elif kind == "credentials":
+        for r in await BACKING.graph.find(_CONNECTION_LABEL, {"deleted": "1"}):
+            add(r, "deleted_at", "updated_at")
+        blank = getattr(BACKING.secrets, "blank", None)
+        if blank:
+            for tenant, name in await blank():
+                rows.append((0, True, {"id": f"secret:{tenant}/{name}", "tenant": tenant, "name": name}))
+        due = rows
+    elif kind == "responses":
+        for r in await BACKING.graph.find("HarnessResponse", {"status": "deleted"}):
+            add(r, "deleted_at", "created_at")
+        due = [(at, own, r) for at, own, r in rows if not at or now - at >= _RETAIN_MS]
+    elif kind == "harnesses":
+        # A harness deleted before delete times were kept counts from its last activity: the later
+        # of its last edit and the last task it ran, which the delete came after (Richard,
+        # 2026-10-08, "Last activity"). Its last edit alone can be months before a delete made
+        # yesterday by someone who had kept using it.
+        last_task: dict[str, int] = {}
+        for sv in await BACKING.graph.find("HarnessSession"):
+            h = str(sv.get("harness_id") or "")
+            if h:
+                t = max(_stamp_ms(sv.get("updated_at")), _stamp_ms(sv.get("created_at")))
+                last_task[h] = max(last_task.get(h, 0), t)
+        for r in await BACKING.graph.find("Harness", {"deleted": "1"}):
+            if not _stamp_ms(r.get("deleted_at")):
+                r = {**r, "_last_activity": str(max(_stamp_ms(r.get("updated_at")), _stamp_ms(r.get("created_at")),
+                                                    last_task.get(str(r.get("id") or ""), 0)) or "")}
+            add(r, "deleted_at", "_last_activity")
+        due = [(at, own, r) for at, own, r in rows if not at or now - at >= _RETAIN_MS]
+    elif kind == "environments":
+        for r in await BACKING.graph.find("Environment", {"deleted": "1"}):
+            add(r, "deleted_at", "updated_at", "created_at")
+        due = [(at, own, r) for at, own, r in rows if not at or now - at >= _RETAIN_MS]
+    elif kind == "uploads":
+        for it in await _blob_list_all("uploads/", kb=RESP_BLOB_KB):
+            key = str(it.get("file_id") or "")
+            if not key.endswith(".meta"):
+                continue
+            fid = key[len("uploads/"):-len(".meta")]
+            meta = await _upload_meta(fid)
+            if meta and meta.get("deleted_at"):
+                add({"id": fid, **meta}, "deleted_at")
+        due = [(at, own, r) for at, own, r in rows if now - at >= _RETAIN_MS]
+    else:
+        return [], 0
+    due.sort(key=lambda t: t[0])
+    return [{"id": str(r.get("id") or ""), "row": r} for _, _, r in due if r.get("id")], \
+        sum(1 for _, own, _ in due if not own)
+
+
+def _harness_blobs(v: dict) -> set[str]:
+    """The skill bundles and plugin packages a harness record names."""
+    try:
+        skills = json.loads(v.get("skills") or "[]")
+    except Exception:  # noqa: BLE001
+        skills = []
+    org = str(v.get("org") or "")
+    keys = {f"skills/{sk['blob']}.json" for sk in (skills if isinstance(skills, list) else [])
+            if isinstance(sk, dict) and sk.get("blob")}
+    return keys | {_plugin_blob_key(org, str(pe["blob"])) for pe in _plugins_of(v) if pe.get("blob")}
+
+
+async def _harness_blob_refs() -> "collections.Counter[str]":
+    """How many harness records name each bundle. A client may write a bundle's id onto another
+    harness, so a removed harness's bundle goes only when no record left names it."""
+    refs: "collections.Counter[str]" = collections.Counter()
+    for h in await BACKING.graph.find("Harness"):
+        refs.update(_harness_blobs(h))
+    return refs
+
+
+async def _retention_remove(kind: str, item: dict, ctx: dict) -> str | None:
+    """Remove one due item for good. Answers why it was left, or None when it is gone."""
+    iid, row = item["id"], item["row"]
+    if kind == "sessions":
+        if "by_session" not in ctx:
+            ctx["by_session"] = await _session_index()
+        await _session_purge(iid, row, ctx["by_session"])
+        await BACKING.graph.delete(iid, "HarnessSession")
+    elif kind == "api_keys":
+        await BACKING.graph.delete(iid, "HarnessApiKey")
+    elif kind == "credentials":
+        if iid.startswith("secret:"):
+            await BACKING.secrets.delete(row["tenant"], row["name"])
+        else:
+            await BACKING.graph.delete(iid, _CONNECTION_LABEL)
+    elif kind == "responses":
+        _resp_cache_forget(iid)
+        await _blob_delete(f"responses/{iid}.json", kb=RESP_BLOB_KB)
+        await BACKING.graph.delete(iid, "HarnessResponse")
+    elif kind == "harnesses":
+        org = str(row.get("org") or "")
+        # credentials were removed at the delete; again here for a harness deleted before that
+        await _hosted_scrub_removed(org, iid, _mcp_list(row), [])
+        for c in await BACKING.graph.find(_CONNECTION_LABEL, {"harness": iid}):
+            if c.get("id"):
+                await BACKING.graph.delete(str(c["id"]), _CONNECTION_LABEL)
+        if "blob_refs" not in ctx:
+            ctx["blob_refs"] = await _harness_blob_refs()
+        refs = ctx["blob_refs"]
+        await BACKING.graph.delete(iid, "Harness")
+        for key in sorted(_harness_blobs(row)):
+            refs[key] -= 1
+            if refs[key] <= 0:
+                await _blob_delete(key, kb=BLOB_KB)
+    elif kind == "environments":
+        try:
+            r = await _env_runner("DELETE", f"/environments/{iid}", iid)
+        except HTTPException:
+            return "the runner that holds environments did not answer"
+        if r.status_code >= 400:
+            return f"the runner could not remove its files (HTTP {r.status_code})"
+        await BACKING.graph.delete(iid, "Environment")
+    elif kind == "uploads":
+        await _blob_delete(f"uploads/{iid}", kb=RESP_BLOB_KB)
+        await _blob_delete(f"uploads/{iid}.meta", kb=RESP_BLOB_KB)
+    return None
+
+
+async def _retention_sweep(dry_run: bool, kinds: list[str] | None = None, limit: int | None = None) -> dict:
+    now = _now_ms()
+    out: dict = {"dry_run": dry_run, ("would_remove" if dry_run else "removed"): {},
+                 "no_delete_time": {}, "left": {}}
+    listed = out["would_remove" if dry_run else "removed"]
+    done = True
+    ctx: dict = {}
+    for kind in kinds or _RETENTION_KINDS:
+        due, no_time = await _retention_due(kind, now)
+        batch = due[:limit] if limit else due
+        if len(batch) < len(due):
+            done = False
+        listed[kind] = []
+        if no_time:
+            out["no_delete_time"][kind] = no_time
+        for item in batch:
+            if dry_run:
+                listed[kind].append(item["id"])
+                continue
+            try:
+                why = await _retention_remove(kind, item, ctx)
+            except Exception as e:  # noqa: BLE001 — one item must not stop the sweep
+                why = f"{type(e).__name__}"
+            if why:
+                out["left"].setdefault(kind, why)
+                done = False
+            else:
+                listed[kind].append(item["id"])
+    # Nothing due is left: after a sweep, nothing it could not remove; after a dry run, nothing
+    # to list (a dry run removes nothing, so anything it lists is still due).
+    out["done"] = done and not (dry_run and any(listed.values()))
+    return out
+
+
+class RetentionSweepBody(BaseModel):
+    dry_run: bool = False
+    kinds: list[str] | None = None
+    limit: int | None = Field(default=None, ge=1)
+
+
+@app.post("/internal/retention/sweep", dependencies=[Depends(_internal_only)])
+async def retention_sweep(body: RetentionSweepBody) -> dict:
+    """Remove what has come due now, or (`dry_run`) list it. `limit` caps each kind per call, and
+    `done` says nothing due is left, so a capped run is called again until it is."""
+    kinds = [k for k in (body.kinds or []) if k not in ("arenas", "accounts")]
+    bad = [k for k in kinds if k not in _RETENTION_KINDS]
+    if bad:
+        raise uhp_error(400, "invalid_input", f"No retention kind {bad[0]!r} on this server.", "kinds",
+                        {"supported": list(_RETENTION_KINDS)})
+    return await _retention_sweep(body.dry_run, kinds or None, body.limit)
+
+
+class RetentionRestoreBody(BaseModel):
+    kind: str
+    id: str
+
+
+@app.post("/internal/retention/restore", dependencies=[Depends(_internal_only)])
+async def retention_restore(body: RetentionRestoreBody) -> dict:
+    """Bring back one item deleted within its 30 days. A kind removed at once cannot come back
+    (409); an item the sweep removed, or never was, is gone (410)."""
+    kind, iid = body.kind, body.id
+    if kind in _FOR_GOOD:
+        raise uhp_error(409, "not_restorable", f"A deleted {kind[:-1].replace('_', ' ')} is removed at once and cannot be restored.", "kind")
+    gone = uhp_error(410, "gone", "Nothing deleted with that id is kept.", "id")
+    if kind == "responses":
+        raw = await _blob_get(f"responses/{iid}.json", kb=RESP_BLOB_KB) if re.fullmatch(r"[A-Za-z0-9_-]+", iid) else None
+        try:
+            rec = json.loads(raw) if raw else None
+        except ValueError:
+            rec = None
+        if not isinstance(rec, dict) or not rec.get("_deleted"):
+            raise gone
+        rec.pop("_deleted", None)
+        rec.pop("_deleted_at", None)
+        _resp_cache_forget(iid)
+        await _blob_put(f"responses/{iid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
+        await _vg_upsert("HarnessResponse", iid, {"status": str(rec.get("status") or "completed"), "deleted_at": ""})
+    elif kind in ("harnesses", "environments"):
+        label = "Harness" if kind == "harnesses" else "Environment"
+        v = await BACKING.graph.get(iid, label=label)
+        if not v or not _true(v.get("deleted")):
+            raise gone
+        if label == "Environment" and any(
+                str(r.get("id")) != iid and not _true(r.get("deleted"))
+                for r in await BACKING.graph.find("Environment", {"slug": str(v.get("slug") or "")})):
+            raise uhp_error(409, "environment_exists",
+                            f"Another environment is mounted at /env/{v.get('slug')} now; rename it first.", "id")
+        await _vg_upsert(label, iid, {"deleted": "0", "deleted_at": "", "updated_at": str(_now_ms())})
+    elif kind == "uploads":
+        meta = await _upload_meta(iid)
+        if not meta or not meta.get("deleted_at") or await _blob_get(f"uploads/{iid}", kb=RESP_BLOB_KB) is None:
+            raise gone
+        meta.pop("deleted_at", None)
+        await _blob_put(f"uploads/{iid}.meta", json.dumps(meta).encode(), kb=RESP_BLOB_KB)
+    else:
+        raise uhp_error(400, "invalid_input", f"No retention kind {kind!r} on this server.", "kind",
+                        {"supported": list(_RETENTION_KINDS)})
+    return {"kind": kind, "id": iid, "restored": True}
+
+
+@app.on_event("startup")
+async def _start_retention_sweep() -> None:
+    async def loop() -> None:
+        await asyncio.sleep(30)          # after startup's own work, not in its way
+        while True:
+            try:
+                run_it = True
+                if control_store.enabled():
+                    with contextlib.suppress(Exception):
+                        run_it = await control_store.try_lock("retention-sweep", max(60, _RETENTION_SWEEP_S - 60))
+                if run_it:
+                    res = await _retention_sweep(False)
+                    n = {k: len(v) for k, v in res["removed"].items() if v}
+                    if n or res["left"]:
+                        print(f"[retention] removed {n or 'nothing'}"
+                              + (f"; deleted before delete times were kept: {res['no_delete_time']}" if res["no_delete_time"] else "")
+                              + (f"; left: {res['left']}" if res["left"] else ""), flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[retention] sweep failed: {type(e).__name__}", flush=True)
+            await asyncio.sleep(_RETENTION_SWEEP_S)
+    asyncio.create_task(loop())
 
 
 @app.get("/internal/storage-usage", dependencies=[Depends(_internal_only)])
@@ -8422,6 +8933,36 @@ async def create_response(body: CreateResponseBody, request: Request):
         raise HTTPException(400, "no org resolved for this principal")
     meta = body.metadata or {}
     probe = {"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
+    # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
+    # {harness_id}/v1/* -> /v1/*, or by the native public-shape route above).
+    harness_id = str(meta.get("harness_id") or request.headers.get("x-harness-id") or "")
+    if not harness_id and body.previous_response_id:
+        # A continuation belongs to its session's harness. A client that does not repeat harness_id
+        # on a follow-up (the protocol asks only for previous_response_id) used to be routed by the
+        # inherited MODEL NAME, and for a base whose models no chat backend serves that fell to the
+        # default backend: a systemone follow-up asked claude for jev-1.13 (measured 2026-09-19).
+        # The session vertex records the harness the conversation started on; that is the harness.
+        _pr = await _resp_get(body.previous_response_id)
+        _psid = str(((_pr or {}).get("metadata") or {}).get("session_id") or "")
+        _pv = await _vertex_get(_psid) if _psid else None
+        harness_id = str((_pv or {}).get("harness_id") or "")
+    harness_name = str(meta.get("harness_name") or "")
+    # A calibration credential is held to its one harness HERE, before the idempotency replay below
+    # hands back a stored response and before any session is touched: a refusal that comes after a
+    # read or a write is not a refusal. It starts runs on that harness, and continues only a
+    # conversation that is already that harness's. Naming its own harness and another harness's
+    # response or session used to pass (the check looked at the harness id alone), and the turn then
+    # ran in the other conversation's workspace.
+    _cal = principal.get("calibration")
+    if _cal and harness_id != str(_cal.get("inner") or ""):
+        raise uhp_error(403, "forbidden", "This credential starts runs on the one harness it drives.",
+                        "metadata.harness_id", {"harness_id": _cal.get("inner")})
+    if _cal and body.previous_response_id and not await _calibration_holds_response(
+            _calibration_inner(principal), await _resp_get(body.previous_response_id)):
+        raise uhp_error(404, "response_not_found", "No response with that id.", "previous_response_id")
+    if _cal and str(meta.get("session_id") or "") and not await _calibration_holds_session(
+            _calibration_inner(principal), str(meta.get("session_id") or "")):
+        raise uhp_error(404, "session_not_found", "No session with that id.", "metadata.session_id")
     # Request idempotency: the durable control store is the SINGLE authority (create_item = atomic
     # reservation). No in-process/blob/Redis fallback — a keyed request without the store fails
     # closed (503), never runs a divergent degraded path. idem_sha_v/idem_rhash are computed here
@@ -8442,24 +8983,6 @@ async def create_response(body: CreateResponseBody, request: Request):
             if str(existing.get("req_hash") or "") not in ("", idem_rhash):
                 raise HTTPException(409, "Idempotency-Key reused with a different request payload")
             return await _idem_replay(str(existing.get("resp_id") or ""), bool(body.stream))
-    # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
-    # {harness_id}/v1/* -> /v1/*, or by the native public-shape route above).
-    harness_id = str(meta.get("harness_id") or request.headers.get("x-harness-id") or "")
-    if not harness_id and body.previous_response_id:
-        # A continuation belongs to its session's harness. A client that does not repeat harness_id
-        # on a follow-up (the protocol asks only for previous_response_id) used to be routed by the
-        # inherited MODEL NAME, and for a base whose models no chat backend serves that fell to the
-        # default backend: a systemone follow-up asked claude for jev-1.13 (measured 2026-09-19).
-        # The session vertex records the harness the conversation started on; that is the harness.
-        _pr = await _resp_get(body.previous_response_id)
-        _psid = str(((_pr or {}).get("metadata") or {}).get("session_id") or "")
-        _pv = await _vertex_get(_psid) if _psid else None
-        harness_id = str((_pv or {}).get("harness_id") or "")
-    harness_name = str(meta.get("harness_name") or "")
-    _cal = principal.get("calibration")
-    if _cal and harness_id != str(_cal.get("inner") or ""):
-        raise uhp_error(403, "forbidden", "This credential starts runs on the one harness it drives.",
-                        "metadata.harness_id", {"harness_id": _cal.get("inner")})
     hv = await _harness_vertex(harness_id) if harness_id else None
     # A deleted harness cannot run new turns (same 404 as the read endpoints), and a harness runs
     # only for the organization and workspace that own it: see _turn_harness_owned.
@@ -8599,7 +9122,8 @@ async def create_response(body: CreateResponseBody, request: Request):
     sid, resume = await _resp_resolve_session(org, member, body.previous_response_id, backend,
                                               harness_id=harness_id, harness_name=harness_name,
                                               session_hint=str(meta.get("session_id") or ""),
-                                              workspace=str(principal.get("workspace") or ""))
+                                              workspace=str(principal.get("workspace") or ""),
+                                              caller=principal)
     # Bill the harness OWNER's org (resolved above), not the caller's — stamp it on the in-process
     # session trace so trace-finalize meters usage against the same org the gate admitted. The turn
     # executes + finalizes on THIS replica, so this in-process stamp is authoritative for metering;
@@ -8835,6 +9359,10 @@ async def harness_events(harness_id: str, request: Request):
     org, member = principal.get("org", ""), principal.get("member", "")
     if not org:
         raise HTTPException(400, "no org resolved for this principal")
+    if harness_id not in _BASE_CATALOG:
+        # a harness with a record is listened to by a caller it is in reach of; a built-in base
+        # has no record and no owner, and its stream stays filtered per member as before
+        await _harness_in_reach(principal, harness_id)
     topic = _bus_topic(org, harness_id)
     q: asyncio.Queue = asyncio.Queue(maxsize=_BUS_Q_MAX)
     _bus.setdefault(topic, set()).add(q)
@@ -9019,6 +9547,8 @@ async def get_response(response_id: str, request: Request):
     # so a cross-org id probe can't confirm existence. Legacy records with no _org stay readable.
     if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
+    if not await _response_in_reach(principal, rec):
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # another workspace's, or not its harness's
     # Durable settler for async/background polling: never leave a poller stuck at 'running' if the
     # owning turn actually finished/died (reconciled from the session vertex + trace).
     rec = await _reconcile_response(response_id, rec)
@@ -9141,15 +9671,19 @@ async def delete_response(response_id: str, request: Request):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # V1C02-004: object-level ownership — one org must not delete another's response. 404 (not
     # 403) so a cross-org id probe can't confirm existence. Legacy records with no _org stay owned.
-    if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
+    if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", "") or not await _response_in_reach(principal, rec):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
+    # Kept 30 days, restorable, then removed by the retention sweep (Richard's rule, 2026-10-08).
+    # Unreadable from now: `_resp_get` answers None for a record marked deleted.
+    now = _now_ms()
     rec["_deleted"] = True
+    rec["_deleted_at"] = now
     try:
         _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
-    await _vg_upsert("HarnessResponse", response_id, {"status": "deleted"})
+    await _vg_upsert("HarnessResponse", response_id, {"status": "deleted", "deleted_at": str(now)})
 
 
 # ── Session sharing + artifact serving by path (HRP-011) ─────────────────────────────────
@@ -9253,7 +9787,7 @@ async def artifact_by_path(sid: str, path: str, request: Request) -> Response:
     """Authenticated artifact-by-path: org members open workspace files directly (inline)."""
     p = await _principal(request)
     v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org"):
+    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     return await _serve_workspace_path(sid, path)
 
@@ -9287,7 +9821,7 @@ async def set_session_share(sid: str, request: Request, body: ShareBody | None =
     suite among them)."""
     p = await _principal(request)
     v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org"):
+    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     if body is None or body.enabled:
         token = str(v.get("share_token") or "") or ("shr" + uuid.uuid4().hex)
@@ -9307,7 +9841,7 @@ async def revoke_session_share(sid: str, request: Request) -> dict:
     was answering 405 while the real revocation hid inside POST {"enabled": false}. Both work."""
     p = await _principal(request)
     v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org"):
+    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     await _vertex_upsert(sid, {"shared": "0"})
     _SHARE_TOKEN_CACHE.clear()
@@ -9318,7 +9852,7 @@ async def revoke_session_share(sid: str, request: Request) -> dict:
 async def get_session_share(sid: str, request: Request) -> dict:
     p = await _principal(request)
     v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org"):
+    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
     return _share_out(str(v.get("shared") or "") == "1", str(v.get("share_token") or ""))
 
@@ -9414,7 +9948,7 @@ async def list_input_items(response_id: str, request: Request, limit: int = 20, 
     rec = await _resp_get(response_id)
     if not rec:
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
-    if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", ""):
+    if str(rec.get("_org") or principal.get("org", "")) != principal.get("org", "") or not await _response_in_reach(principal, rec):
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # LIVE-B: object-level ownership
     data = list(rec.get("_input") or [])
     if order == "desc":
@@ -9438,6 +9972,8 @@ async def cancel_response(response_id: str, request: Request):
     # so a cross-org probe can't even confirm the id exists.
     if str(rec.get("_org") or "") != org:
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
+    if not await _response_in_reach(principal, rec):
+        raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")   # another workspace's, or not its harness's
     sid = str(rec.get("_session_id") or "")
     # PRIMARY (safe, cross-replica): a durable per-RESPONSE monotonic terminal latch. The turn's
     # own loop checks resp_is_cancelled(its resp_id) at every stage and self-terminates within
@@ -9546,6 +10082,40 @@ async def upload_file(request: Request, purpose: str = Form("user_data"), file: 
             "filename": file.filename, "purpose": purpose}
 
 
+_UPLOAD_ID = re.compile(r"file_[0-9a-f]{32}")
+
+
+async def _upload_meta(fid: str) -> dict | None:
+    """An upload's sidecar, or None when there is no such upload. An upload from before sidecars
+    existed answers an empty one."""
+    if not _UPLOAD_ID.fullmatch(fid or ""):
+        return None
+    raw = await _blob_get(f"uploads/{fid}.meta", kb=RESP_BLOB_KB)
+    if raw is None:
+        return {} if await _blob_get(f"uploads/{fid}", kb=RESP_BLOB_KB) is not None else None
+    try:
+        meta = json.loads(raw.decode())
+    except Exception:  # noqa: BLE001
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+@app.delete("/v1/files/{file_id}")
+async def delete_file(file_id: str, request: Request) -> dict:
+    """Delete an upload. Kept 30 days, restorable, then removed by the retention sweep (Richard's
+    rule, 2026-10-08); from now on a task that names it is refused as an unknown id is. The same
+    owner rule as a read: another organization's upload answers 404."""
+    principal = await _principal(request)
+    org = str(principal.get("org") or "")
+    meta = await _upload_meta(file_id)
+    if meta is None or meta.get("deleted_at") or (meta.get("org") and str(meta["org"]) != org):
+        raise uhp_error(404, "file_not_found", f"No file with id {file_id}.", "file_id")
+    meta["deleted_at"] = _now_ms()
+    if not await _blob_put(f"uploads/{file_id}.meta", json.dumps(meta).encode(), kb=RESP_BLOB_KB):
+        raise HTTPException(502, "the file could not be deleted; try again")
+    return {"id": file_id, "object": "file", "deleted": True}
+
+
 async def _resolve_uploads(files_in: list[dict], org: str) -> None:
     """Inline the uploads a task references by file_id, for THIS org only.
 
@@ -9566,7 +10136,8 @@ async def _resolve_uploads(files_in: list[dict], org: str) -> None:
             except Exception:  # noqa: BLE001
                 meta = {}
         owner = str(meta.get("org") or "")
-        data = None if (owner and owner != org) else await _blob_get(f"uploads/{fid}", kb=RESP_BLOB_KB)
+        gone = bool(meta.get("deleted_at"))
+        data = None if (gone or (owner and owner != org)) else await _blob_get(f"uploads/{fid}", kb=RESP_BLOB_KB)
         if data is None:
             raise uhp_error(404, "file_not_found", f"No file with id {fid}.", "input")
         f["content_b64"] = base64.b64encode(data).decode()
@@ -10242,7 +10813,17 @@ class KeyBody(BaseModel):
 
 @app.post("/v1/orgs/{org}/keys")
 async def mint_key(org: str, body: KeyBody, request: Request) -> dict:
-    await _owned_org(request, org)
+    p = await _owned_org(request, org)
+    # A key held to a workspace mints keys for that workspace and no wider, under its own name. The
+    # body used to decide both: a workspace's key asked for a key with no workspace and was handed
+    # one for the whole organization, under any member name it liked (reported privately three
+    # times). A person in the console, and a key that already reaches the organization, choose.
+    held = _key_scope(p)
+    if held:
+        if (body.workspace or "").strip() not in ("", held):
+            raise uhp_error(403, "forbidden", "A key held to one workspace makes keys for that workspace only.", "workspace")
+        body.workspace, body.workspace_default = held, False
+        body.member_id = str(p.get("member") or "")
     tok = "sk-hr-" + uuid.uuid4().hex + uuid.uuid4().hex
     h = _hash_key(tok)
     # Graph FIRST and it must succeed (raise_on_fail): the graph is the source of truth + the
@@ -10270,7 +10851,7 @@ async def mint_key(org: str, body: KeyBody, request: Request) -> dict:
 
 @app.get("/v1/orgs/{org}/keys")
 async def list_keys(org: str, request: Request) -> dict:
-    await _owned_org(request, org)
+    p = await _owned_org(request, org)
     try:
         rows = await BACKING.graph.find("HarnessApiKey", {"org": org})
     except Exception:  # noqa: BLE001
@@ -10279,16 +10860,18 @@ async def list_keys(org: str, request: Request) -> dict:
              "revoked": str(x.get("revoked")) in ("1", "true", "True"), "member": x.get("member"),
              "workspace": x.get("workspace") or "", "last_used": x.get("last_used") or "", "tail": x.get("tail") or ""}
             for x in rows]
+    if _key_scope(p):     # a key held to a workspace sees that workspace's keys
+        keys = [k for k in keys if _scope_keeps(p, k["workspace"])]
     return {"keys": keys}
 
 
 @app.delete("/v1/orgs/{org}/keys/{kid}")
 async def revoke_key(org: str, kid: str, request: Request) -> dict:
-    await _owned_org(request, org)
+    p = await _owned_org(request, org)
     # V1C02-005: the key must belong to THIS org — otherwise a caller could revoke another org's
     # key by id. Verify org ownership on the vertex before writing the tombstone.
     kv = await _vertex_get(kid)
-    if kv and str(kv.get("org") or "") != org:
+    if kv and (str(kv.get("org") or "") != org or not _scope_keeps(p, kv.get("workspace"))):
         raise HTTPException(404, "key not found")
     # Graph revoke FIRST and it MUST succeed (raise_on_fail): the graph is the backstop the hot
     # read falls to when the store doc expires. A silently-failed graph revoke would let the key
@@ -10300,6 +10883,12 @@ async def revoke_key(org: str, kid: str, request: Request) -> dict:
             await control_store.apikey_revoke(kid)
         except Exception:  # noqa: BLE001 — graph is authoritative; the store tombstone is a fast-path
             pass
+    # Then removed at once, with no undo (Richard's rule, 2026-10-08): the record goes, and with
+    # it the key's name and last use. Revoked first so a removal that fails still leaves it dead;
+    # the retention sweep removes what a failed removal left. A last-use stamp landing after
+    # this writes a record with no kind, which no lookup accepts and the sweep removes.
+    with contextlib.suppress(Exception):
+        await BACKING.graph.delete(kid, "HarnessApiKey")
     return {"id": kid, "revoked": True}
 
 
@@ -10415,21 +11004,128 @@ async def _internal_target(host: str, port: int) -> str | None:
     1.01 s lookup let ZERO other tasks run. Every provider file URL is classified on every poll, so
     one relay naming a slow-resolving host froze the gateway for everybody, ten seconds apart.
     """
-    loop = asyncio.get_running_loop()
+    return (await _classify_target(host, port))[1]
+
+
+def _ip_internal(addr: str) -> bool:
+    ip = ipaddress.ip_address(addr.split("%", 1)[0])
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified
+                or any(ip in net for net in _INTERNAL_NETS if ip.version == net.version))
+
+
+async def _resolve(host: str, port: int) -> list:
+    """The one DNS lookup every check makes (a test answers it differently each time)."""
+    return await asyncio.get_running_loop().getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+
+
+async def _classify_target(host: str, port: int) -> tuple[list[str], str | None]:
+    """Resolve a name once and classify every answer: (the addresses, None) when all are outside,
+    ([], why) when any is inside or the lookup failed. The addresses are what a connection must
+    then use (`_CheckedNetwork`), so the name is never resolved a second time between the check
+    and the socket."""
     try:
-        infos = await loop.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        infos = await _resolve(host, port)
     except socket.gaierror as e:
         no_such = {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)}
-        return "host does not resolve" if e.errno in no_such else "host could not be resolved"
+        return [], ("host does not resolve" if e.errno in no_such else "host could not be resolved")
     except Exception:  # noqa: BLE001
-        return "host could not be resolved"
+        return [], "host could not be resolved"
+    addrs: list[str] = []
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified
-                or any(ip in net for net in _INTERNAL_NETS if ip.version == net.version)):
-            return "target resolves to a disallowed (internal) address"
-    return None
+        if _ip_internal(info[4][0]):
+            return [], "target resolves to a disallowed (internal) address"
+        if info[4][0] not in addrs:
+            addrs.append(info[4][0])
+    return addrs, None
+
+
+class _CheckedNetwork(httpcore.AsyncNetworkBackend):
+    """Opens a socket only to an address it classified itself, in the same step.
+
+    `_internal_target` answers for a name, and the client then resolved the name again when it
+    opened the socket: a name that answers a public address to the check and an internal one a
+    moment later (a DNS rebind) passed. Here the name is resolved once, every answer is classified,
+    and the socket goes to one of those very addresses. TLS still verifies the certificate against
+    the name, since httpcore takes the server name from the request, not from this socket. Redirects
+    are not followed by these clients, and if one ever were, its connection would come through here
+    as well.
+
+    `always`: classify on every deployment (a provider's file address), or only on one shared by
+    several organizations (an address a member typed: MCP servers, upload destinations), where a
+    self-hosted box's own network is not refused."""
+
+    def __init__(self, always: bool) -> None:
+        self._inner = httpcore.AnyIOBackend()
+        self._always = always
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        if not (self._always or not _pool_is_local()):
+            return await self._inner.connect_tcp(host, port, timeout=timeout, local_address=local_address,
+                                                 socket_options=socket_options)
+        addrs, why = await _classify_target(host, port)
+        if why:
+            raise httpcore.ConnectError(f"that address cannot be used: {why}")
+        last: Exception | None = None
+        for addr in addrs:
+            try:
+                return await self._inner.connect_tcp(addr, port, timeout=timeout, local_address=local_address,
+                                                     socket_options=socket_options)
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as e:
+                last = e
+        raise last or httpcore.ConnectError("no address to connect to")
+
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        raise httpcore.ConnectError("a local socket is not a network address")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._inner.sleep(seconds)
+
+
+async def _sql_peer_check(addr: str) -> str | None:
+    """sql_plane.PEER_CHECK: on a shared deployment, a database connection that reached a private,
+    local or metadata address is closed before any query. A self-hosted box's own database is the
+    normal case there, as it is for the check made when the connection is saved."""
+    if _pool_is_local():
+        return None
+    if not addr:
+        return "the address it reached could not be read"
+    try:
+        return "it is on a private, local or metadata network" if _ip_internal(addr) else None
+    except ValueError:
+        return "the address it reached is not a network address"
+
+
+sql_plane.PEER_CHECK = _sql_peer_check
+
+_checked_clients: dict[bool, httpx.AsyncClient] = {}
+
+
+def _checked_http(always: bool = False) -> httpx.AsyncClient:
+    """The client for an address somebody else named. Its pool opens connections through
+    `_CheckedNetwork`; httpx 0.28 takes no network backend, so the pool it built is handed one.
+    No environment proxies (a transport given explicitly turns them off): a proxy would resolve
+    the name itself, and the check would be about the proxy."""
+    c = _checked_clients.get(always)
+    if c is None:
+        # Limits belong to the transport: httpx applies a client's own only to a transport it builds.
+        c = _checked_clients[always] = httpx.AsyncClient(
+            transport=_checked_transport(always, httpx.Limits(max_connections=200, max_keepalive_connections=40)),
+            follow_redirects=False, timeout=httpx.Timeout(connect=30, read=600, write=120, pool=60))
+    return c
+
+
+def _checked_transport(always: bool, limits: httpx.Limits | None = None) -> httpx.AsyncHTTPTransport:
+    transport = httpx.AsyncHTTPTransport(limits=limits or httpx.Limits())
+    transport._pool._network_backend = _CheckedNetwork(always)
+    return transport
+
+
+# The plugin vendors' client (plugs_plane.client) opens its connections the same way: a plug's
+# address can be one a member typed (an InsForge backend), and its answer goes back to the agent.
+# On a shared deployment that was a way into the private network; GitHub, Vercel and Microsoft are
+# public and pass the same check.
+plugs_plane.checked_transport = lambda: _checked_transport(False)
 
 
 async def _mcp_list_tools(url: str, token: str) -> dict:
@@ -10442,7 +11138,7 @@ async def _mcp_list_tools(url: str, token: str) -> dict:
     headers = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
     if token:
         headers["authorization"] = token if token.lower().startswith("bearer ") else f"Bearer {token}"
-    c = _client()
+    c = _checked_http()
     init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2024-11-05", "capabilities": {},
                        "clientInfo": {"name": "harnessrouter", "version": "1"}}}
@@ -10504,6 +11200,25 @@ async def put_mcp_secret(org: str, ref: str, body: McpSecretBody, request: Reque
     return await _mcp_secret_store(org, ref, body.token)
 
 
+@app.delete("/v1/orgs/{org}/mcp-secrets/{ref}")
+async def delete_mcp_secret(org: str, ref: str, request: Request) -> dict:
+    await _owned_org(request, org)
+    return await _mcp_secret_delete(org, ref)
+
+
+async def _mcp_secret_delete(org: str, ref: str) -> dict:
+    """Remove a stored MCP server token, at once and for good: a credential is not kept after its
+    delete (Richard's rule, 2026-10-08), and before this the only way to be rid of one was to
+    overwrite it. A harness that still names the reference runs without it."""
+    tenant = _org_tenant(org)
+    if not tenant:
+        raise HTTPException(400, "no org to remove the secret for")
+    safe = re.sub(r"[^a-z0-9]+", "-", ref.lower()).strip("-") or "mcp"
+    key = f"{_MCP_SECRET_PREFIX}{safe}"
+    await BACKING.secrets.delete(tenant, key)
+    return {"ref": f"vault:{key}", "deleted": True}
+
+
 @app.post("/v1/orgs/{org}/mcp-test")
 async def test_mcp(org: str, body: McpTestBody, request: Request) -> dict:
     await _owned_org(request, org)
@@ -10522,6 +11237,12 @@ async def test_mcp(org: str, body: McpTestBody, request: Request) -> dict:
 async def put_mcp_secret_public(ref: str, body: McpSecretBody, request: Request) -> dict:
     org, _ = await _pub_org_member(request)
     return await _mcp_secret_store(org, ref, body.token)
+
+
+@app.delete("/v1/mcp-secrets/{ref}")
+async def delete_mcp_secret_public(ref: str, request: Request) -> dict:
+    org, _ = await _pub_org_member(request)
+    return await _mcp_secret_delete(org, ref)
 
 
 @app.post("/v1/mcp-test")
@@ -10680,19 +11401,22 @@ def _hosted_keys(servers: list[dict]) -> set[str]:
 
 
 async def _hosted_scrub_removed(org: str, hid: str, before: list[dict], after: list[dict]) -> None:
-    """Overwrite the record behind every hosted entry this write removed.
+    """Remove the record behind every hosted entry this write removed.
 
     Dropping the entry and leaving its connection string encrypted on disk would be a surprise of
     the worst kind: removing the tool, or deleting the agent, is the most decisive thing the
     surface offers. Shared by every write that can drop an entry, so they cannot promise
-    differently.
+    differently. Removed rather than overwritten: a credential goes at once and for good, even
+    when its harness is deleted and later restored (Richard's rule, 2026-10-08), and an empty
+    overwrite needed an encryption key the store may not have, so on such an instance the
+    connection string stayed exactly as it was.
 
     THE RECORD MUST BE THIS HARNESS'S — the same binding _hosted_resolve refuses a read on. `auth`
     is a client-writable field and harness ids are public, so anyone may name another agent's ref
     on an entry of their own; removing it would otherwise destroy a connection they were never
     given. Losing a database is the louder of the two surprises, so the check belongs on both.
     Positive evidence of foreign ownership is what skips the scrub: a record we cannot read is one
-    we overwrite, because leaving a connection string behind is the failure this function exists
+    we remove, because leaving a connection string behind is the failure this function exists
     to prevent.
     """
     gone = _hosted_keys(before) - _hosted_keys(after)
@@ -10707,7 +11431,7 @@ async def _hosted_scrub_removed(org: str, hid: str, before: list[dict], after: l
                   flush=True)
             continue
         with contextlib.suppress(Exception):   # an unwritable store must not block the write
-            await BACKING.secrets.put(tenant, key, "", require_encryption=True)
+            await BACKING.secrets.delete(tenant, key)
         scrubbed += 1
     if scrubbed:
         print(f"[sql] {hid}: disconnected ({scrubbed} record(s) scrubbed)", flush=True)
@@ -10781,14 +11505,11 @@ async def _hosted_resolve(server: str, hid: str, org: str, servers: list[dict], 
     return entry, rec
 
 
-async def _harness_for_route(hid: str, org: str) -> dict:
-    """The harness a /servers/{sid} route is addressed to: owned by this org, not deleted, and
-    converted off any earlier shape first — which is the reason this is a helper rather than the
-    three inline lines every other route carries."""
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    return await _mcp_migrate(org, hid, v)
+async def _harness_for_route(hid: str, caller: dict) -> dict:
+    """The harness a /servers/{sid} route is addressed to: in the caller's reach (its organization,
+    its workspace, not deleted) and converted off any earlier shape first."""
+    v = await _harness_in_reach(caller, hid)
+    return await _mcp_migrate(str(caller.get("org") or ""), hid, v)
 
 
 # ── migration: two earlier shapes of "the harness's database" ─────────────────────────────────
@@ -10869,7 +11590,7 @@ async def _mcp_migrate(org: str, hid: str, v: dict | None) -> dict | None:
     await _vg_upsert("Harness", hid, {"mcp_servers": json.dumps(servers), _DS_PROP_LEGACY: ""})
     with contextlib.suppress(Exception):   # an unwritable store must not strand the conversion
         tenant = org if _vault_tenant_ok(org) else GLOBAL_TENANT
-        await BACKING.secrets.put(tenant, old_key, "", require_encryption=True)
+        await BACKING.secrets.delete(tenant, old_key)
     print(f"[migrate] {hid}: database is now an ordinary MCP server", flush=True)
     return {**v, "mcp_servers": json.dumps(servers), _DS_PROP_LEGACY: ""}
 
@@ -10943,12 +11664,13 @@ async def _connection_vertex_put(org: str, hid: str, v: dict | None, entry_id: s
 
 
 async def _connection_vertex_drop(hid: str, key: str) -> None:
-    """The entry is gone, so the configuration is gone with it (the record was scrubbed already)."""
+    """The entry is gone, so the configuration is gone with it (the record was removed already):
+    removed, not marked, since it describes a credential that is gone for good."""
     with contextlib.suppress(Exception):
         for row in await BACKING.graph.find(_CONNECTION_LABEL, {"harness": hid, "secret_key": key}):
             vid = str(row.get("id") or "")
             if vid:
-                await _vg_upsert(_CONNECTION_LABEL, vid, {"deleted": "1", "updated_at": str(int(time.time() * 1000))})
+                await BACKING.graph.delete(vid, _CONNECTION_LABEL)
 
 
 async def _connections_of(org: str, hid: str) -> list[dict]:
@@ -11096,8 +11818,9 @@ async def get_harness_server(hid: str, sid: str, request: Request) -> dict:
     The server that owns the connection is the one that names it, exactly as tools/list is a
     third-party server describing itself. Connection state does not ride a harness read.
     """
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     # WHICH server this is comes from the record, not from a field on the entry and not from the
     # route. One route, because "the server describing itself" is one question — and the entry has
     # nothing on it to branch on, which is the property this whole shape exists to keep.
@@ -11138,8 +11861,9 @@ async def _hosted_resolve_any(hid: str, org: str, servers: list[dict], *,
 @app.post("/v1/harnesses/{hid}/servers/{sid}/query", include_in_schema=False)
 async def run_server_query(hid: str, sid: str, body: SqlQueryBody, request: Request) -> dict:
     """Run one SELECT — what refreshing a dashboard panel does."""
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     _entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v), entry_id=sid)
     want = int(body.max_rows or sql_plane.DEFAULT_MAX_ROWS)
     max_rows = max(1, min(want, sql_plane.DEFAULT_MAX_ROWS))
@@ -11153,8 +11877,9 @@ async def run_server_query(hid: str, sid: str, body: SqlQueryBody, request: Requ
 async def get_server_schema(hid: str, sid: str, request: Request) -> dict:
     """The shape of the connected database: tables, columns, types — and a few rows per table when
     the person left sample rows on. `sampled` in the response says which they got."""
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     _entry, rec = await _hosted_resolve("database", hid, org, _mcp_list(v), entry_id=sid)
     try:
         return await sql_plane.introspect(rec["engine"], rec["dsn"],
@@ -11387,6 +12112,12 @@ def _media_client() -> httpx.AsyncClient:
     """The client every provider call goes through. One seam, so a test can drive all five
     adapters through a transport it controls without stubbing the adapters themselves."""
     return _client()
+
+
+def _media_fetch_client() -> httpx.AsyncClient:
+    """The client a finished file is fetched with: the address is the provider's to name, so the
+    connection goes only to an address classified in the same step, on every deployment."""
+    return _checked_http(always=True)
 
 
 async def _media_providers() -> dict[str, dict]:
@@ -11990,7 +12721,7 @@ async def _media_fetch(url: str) -> bytes:
         raise media_plane.MediaEmpty(refused)
     buf = bytearray()
     try:
-        async with _media_client().stream("GET", url, timeout=300) as r:
+        async with _media_fetch_client().stream("GET", url, timeout=300) as r:
             if r.status_code >= 400:
                 raise media_plane.MediaEmpty(f"the finished file could not be fetched "
                                              f"(HTTP {r.status_code})")
@@ -13780,8 +14511,9 @@ async def _media_route(hid: str, sid: str, eid: str, request: Request,
     still offers them. The app that owns that screen has to say so and offer the way back, which is
     why the kit renders this 404 as a video that cannot be opened rather than as a bare canvas.
     """
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     if servers:
         # the bytes route only: a screenshot the browser plug stored is the session's media too
         entry, rec0 = await _hosted_resolve_any(hid, org, _mcp_list(v), entry_id=eid)
@@ -14068,8 +14800,10 @@ async def _media_harness_purge(hid: str) -> None:
 
 
 async def _media_session_purge(sid: str) -> None:
-    """Deleting the video deletes its media and tombstones its jobs. Called from the one place
-    that deletes a session, so there is no second answer to 'is it gone'."""
+    """Deleting the video deletes its media and its jobs. Called from the one place that deletes
+    a session, so there is no second answer to 'is it gone'. A job still running is first marked
+    deleted, which is what stops the sweeper; then every job's record is removed, finished ones
+    included, because a job's record is the session's (Richard's rule, 2026-10-08)."""
     with contextlib.suppress(Exception):
         for it in await _blob_list_all(f"media/{sid}/", kb=BLOB_KB):
             await _blob_delete(str(it.get("file_id") or ""), kb=BLOB_KB)
@@ -14078,6 +14812,10 @@ async def _media_session_purge(sid: str) -> None:
     with contextlib.suppress(Exception):
         for job in await _media_jobs_of(sid):
             await _vg_upsert(_MEDIA_JOB_LABEL, job["id"], {"deleted": "1", "status": "deleted"})
+    with contextlib.suppress(Exception):
+        for row in await BACKING.graph.find(_MEDIA_JOB_LABEL, {"session": sid}):
+            if row.get("id"):
+                await BACKING.graph.delete(str(row["id"]), _MEDIA_JOB_LABEL)
 
 
 # ── plugs: services connected once for a workspace, reached through one hosted server ─────────
@@ -14346,10 +15084,12 @@ async def _plug_lookup_local(org: str, workspace: str, plug_type: str) -> tuple[
     return (rec["status"] if rec["status"] in _PLUG_STATUSES else "needs_auth"), rec
 
 
-def _plug_workspace(request: Request) -> str:
-    """The workspace a plug route is about: the console names it; a bare API call means the
-    instance's default workspace, the one the console's own harnesses are in."""
-    return str(request.headers.get("x-harness-workspace") or "default")
+def _plug_workspace(request: Request, caller: dict) -> str:
+    """The workspace a plug route is about. A key held to a workspace gets its own, whatever header
+    it sends (it used to be able to name any workspace there). Any other caller names it: the
+    console always does, and a bare API call means the instance's default workspace, the one the
+    console's own harnesses are in."""
+    return _key_scope(caller) or str(request.headers.get("x-harness-workspace") or "default")
 
 
 class PlugBody(BaseModel):
@@ -14374,8 +15114,9 @@ def _plug_public(org: str, workspace: str, plug_type: str, rec: dict | None, sta
 async def list_plugs(request: Request) -> dict:
     """The plugin catalog for the caller's workspace: every type this instance serves, with its
     state here (connected, disabled, needs_auth, missing)."""
-    org, _ = await _pub_org_member(request)
-    workspace = _plug_workspace(request)
+    _caller = await _pub_principal(request)
+    org, _ = _caller["org"], _caller.get("member", "")
+    workspace = _plug_workspace(request, _caller)
     out = []
     for t in _PLUG_FORMS:
         status, rec = await _plug_lookup(org, workspace, t)
@@ -14388,14 +15129,15 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
     """Connect a plugin for the caller's workspace, change its settings, or turn it off. A
     credential goes to the instance's secret store, never onto the record; a plug that needs one
     and has none yet reads needs_auth until it is given."""
-    org, _ = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
     if PLUGS_REGISTRY_URL:
         raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
     form = _PLUG_FORMS.get(plug_type)
     if not form:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type",
                         {"supported": sorted(_PLUG_FORMS)})
-    workspace = _plug_workspace(request)
+    workspace = _plug_workspace(request, _caller)
     _status, prev = await _plug_lookup_local(org, workspace, plug_type)
     config = dict((prev or {}).get("config") or {})
     for k, v in (body.config or {}).items():
@@ -14528,10 +15270,11 @@ class MicrosoftCompleteBody(BaseModel):
 @app.post("/v1/plugs/microsoft365/microsoft/start")
 async def microsoft_start(body: MicrosoftStartBody, request: Request) -> dict:
     """Where the person goes to sign in with Microsoft for this workspace's application."""
-    org, member = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org, member = _caller["org"], _caller.get("member", "")
     if PLUGS_REGISTRY_URL:
         raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
-    workspace = _plug_workspace(request)
+    workspace = _plug_workspace(request, _caller)
     rec = await _m365_plug(org, workspace)
     config = rec.get("config") or {}
     if plugs_plane.m365_mode({}, config) != "delegated":
@@ -14597,8 +15340,9 @@ async def microsoft_complete(body: MicrosoftCompleteBody, request: Request) -> d
 async def microsoft_signout(request: Request) -> dict:
     """Forget this person's sign-in: their refresh token and their account on the record. With
     nobody signed in a delegated plug waits for a sign-in again."""
-    org, member = await _pub_org_member(request)
-    workspace = _plug_workspace(request)
+    _caller = await _pub_principal(request)
+    org, member = _caller["org"], _caller.get("member", "")
+    workspace = _plug_workspace(request, _caller)
     rec = await _m365_plug(org, workspace)
     config = dict(rec.get("config") or {})
     field = plugs_plane.m365_person_field(member)
@@ -14632,10 +15376,11 @@ async def microsoft_signout(request: Request) -> dict:
 @app.get("/v1/plugs/{plug_type}/attachments")
 async def plug_attachments_public(plug_type: str, request: Request) -> dict:
     """How many of the caller's workspace's harnesses include this plugin, from the bindings."""
-    org, _ = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org, _ = _caller["org"], _caller.get("member", "")
     if plug_type not in _PLUG_FORMS:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
-    workspace = _plug_workspace(request)
+    workspace = _plug_workspace(request, _caller)
     rows = _plugs_harness_rows(org, workspace, await BACKING.graph.find("Harness", {"org": org}))
     attached = []
     for r in rows:
@@ -14664,12 +15409,13 @@ async def delete_plug(plug_type: str, request: Request) -> dict:
     """Remove a plugin from the workspace: the record goes and the credential it kept is deleted
     from the secret store. A harness that includes it keeps its entry and loses the tools on its
     next task; nothing at the service changes, and the workspace can connect it again."""
-    org, _ = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
     if PLUGS_REGISTRY_URL:
         raise uhp_error(409, "registry_elsewhere", "Plugins on this deployment are managed on the Plugins page of the workspace.", "plug_type")
     if plug_type not in _PLUG_FORMS:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
-    workspace = _plug_workspace(request)
+    workspace = _plug_workspace(request, _caller)
     _status, rec = await _plug_lookup_local(org, workspace, plug_type)
     if not rec:
         raise uhp_error(404, "plug_not_connected", f"No {plugs_plane.TYPES[plug_type]} plugin is connected for this workspace.", "plug_type")
@@ -14779,8 +15525,9 @@ async def _plugs_server_out(org: str, entry: dict, rec: dict) -> dict:
 async def attach_plugs(hid: str, body: PlugsBody, request: Request) -> dict:
     """Attach the workspace's plugs to one of the caller's harnesses. Idempotent: attaching again
     replaces the list of plugs and tools and rewrites nothing else."""
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     plugs = _plugs_types_ok(body.plugs)
     await _plugs_attach(org, hid, v, plugs, _plugs_tools_ok(body.tools, plugs))
     entry, rec = await _hosted_resolve(_PLUGS_SERVER, hid, org, _mcp_list(await _vertex_get(hid) or v),
@@ -14792,8 +15539,9 @@ async def attach_plugs(hid: str, body: PlugsBody, request: Request) -> dict:
 async def detach_plugs(hid: str, request: Request) -> dict:
     """Detach them: the entry goes and its binding record is scrubbed. The plugs themselves stay
     connected to the workspace for every other harness."""
-    org, _ = await _pub_org_member(request)
-    v = await _harness_for_route(hid, org)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_for_route(hid, _caller)
     cur = _mcp_list(v)
     after = [e for e in cur if str(e.get("id") or "") != _PLUGS_ENTRY["id"]]
     if len(after) == len(cur):
@@ -16568,10 +17316,14 @@ async def delete_environment(env_id: str, request: Request) -> dict:
     v = await _environment_refresh(v)
     if str(v.get("status") or "") == "building":
         raise uhp_error(409, "environment_busy", "A build is running; wait for it before deleting.")
-    r = await _env_runner("DELETE", f"/environments/{env_id}", env_id, params={"slug": str(v.get("slug") or "")})
+    # Kept 30 days, restorable, then removed with its files by the retention sweep (Richard's
+    # rule, 2026-10-08). What goes now is its place at /env/<slug>: no session sees it from here,
+    # and the name is free for another environment.
+    r = await _env_runner("DELETE", f"/environments/{env_id}/mount", env_id, params={"slug": str(v.get("slug") or "")})
     if r.status_code >= 500:
-        raise _env_runner_error(r, "the environment's files could not be removed")
-    await _vg_upsert("Environment", env_id, {"deleted": "1", "updated_at": str(int(time.time() * 1000))})
+        raise _env_runner_error(r, "the environment could not be taken down")
+    now = str(_now_ms())
+    await _vg_upsert("Environment", env_id, {"deleted": "1", "deleted_at": now, "updated_at": now})
     return {"id": env_id, "deleted": True}
 
 
@@ -16644,6 +17396,31 @@ class EnvironmentImportBody(BaseModel):
     replace: bool = False
 
 
+async def _git_url_refused(url: str) -> tuple[str | None, str]:
+    """Why this server will not clone from that address (or None), and the address the clone must
+    connect to: the rule an MCP address follows (_ssrf_check). A self-hosted box's private network
+    is its operator's own and is allowed, with no pin; on a shared deployment an address that
+    resolves to a private, local or metadata range is refused, since the clone runs on this side
+    (reported privately, GHSA-mw9j-m5jf-5r56), and the clone is pinned to an address classified
+    here as "<host>:<port>:<address>", so the name is not resolved again when git connects."""
+    if _pool_is_local():
+        return None, ""
+    from urllib.parse import urlparse
+    u = str(url or "")
+    if u.startswith("git@"):
+        host, port = u[4:].split(":", 1)[0], 22
+    else:
+        try:
+            p = urlparse(u)
+            host, port = p.hostname or "", p.port or {"http": 80, "ssh": 22}.get(p.scheme, 443)
+        except ValueError:
+            return "invalid url", ""
+    if not host:
+        return "url has no host", ""
+    addrs, why = await _classify_target(host, port)
+    return (why, "") if why else (None, f"{host}:{port}:{addrs[0]}")
+
+
 @app.post("/v1/environments/{env_id}/import")
 async def environment_import(env_id: str, request: Request, replace: int = 0) -> dict:
     """A whole project at once, keeping its tree: a zip or tar archive as the body, or a JSON body
@@ -16655,9 +17432,12 @@ async def environment_import(env_id: str, request: Request, replace: int = 0) ->
         git = body.git or {}
         if not str(git.get("url") or ""):
             raise uhp_error(422, "environment_invalid", "Name a git url, or send an archive as the body.", "git.url")
+        refused, pin = await _git_url_refused(str(git.get("url")))
+        if refused:
+            raise uhp_error(422, "environment_invalid", f"That git address cannot be used: {refused}.", "git.url")
         r = await _env_runner("POST", f"/environments/{env_id}/import", env_id, timeout=900.0,
                               params={"replace": int(bool(replace or body.replace)), "git_url": str(git.get("url")),
-                                      "git_ref": str(git.get("ref") or "")}, content=b"")
+                                      "git_ref": str(git.get("ref") or ""), "git_pin": pin}, content=b"")
     else:
         declared = int(request.headers.get("content-length") or 0)
         if declared > _ENV_IMPORT_MAX:
@@ -17273,7 +18053,8 @@ def _workspace_keep(item_ws: str, workspace: str, ws_default: bool) -> bool:
 async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     p = await _owned_org(request, org)
     member = p.get("member") or request.headers.get("x-harness-member", "")
-    workspace = request.headers.get("x-harness-workspace", "")
+    # a key held to a workspace stamps its own, whatever header it sends; any other caller names it
+    workspace = _key_scope(p) or request.headers.get("x-harness-workspace", "")
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)
@@ -17297,7 +18078,9 @@ async def list_harnesses(org: str, request: Request,
     vs empty for org keys); GET-by-id never filtered by member anyway. The member prop
     is still recorded on the vertex for attribution. Optional `workspace` narrows to one
     workspace (Space id); `workspace_default=1` lets unstamped legacy records through."""
-    await _owned_org(request, org)
+    p = await _owned_org(request, org)
+    if _key_scope(p):     # a key held to a workspace lists that workspace, whatever it asks for
+        workspace, workspace_default = _key_scope(p), 0
     rows = await _vg_list_by_org("Harness", org)
     items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
@@ -17309,10 +18092,7 @@ async def list_harnesses(org: str, request: Request,
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}")
 async def get_harness(org: str, hid: str, request: Request) -> dict:
-    await _owned_org(request, org)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _owned_org(request, org), hid)
     return _harness_out(await _mcp_migrate(org, hid, v))
 
 
@@ -17320,10 +18100,7 @@ async def get_harness(org: str, hid: str, request: Request) -> dict:
 async def get_harness_models(org: str, hid: str, request: Request) -> dict:
     """Model-capability view for a harness (internal / console BFF): allowed models, default, and
     the authorized fallback. The console populates its model selector from this."""
-    await _owned_org(request, org)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _owned_org(request, org), hid)
     backend = (_backend_of_harness(v) or _backend_of_builtin(hid)
                or _route_backend(str(v.get("default_model") or ""), None))
     return {"harness_id": hid,
@@ -17334,10 +18111,7 @@ async def get_harness_models(org: str, hid: str, request: Request) -> dict:
 async def get_harness_skill_files(org: str, hid: str, skill_id: str, request: Request) -> dict:
     """Full files of one harness skill, resolving the blob offload — the console uses this to
     hydrate a folder skill for editing (large bundles round-trip as {name, enabled, blob})."""
-    await _owned_org(request, org)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _owned_org(request, org), hid)
     try:
         skills = json.loads(v.get("skills") or "[]")
     except Exception:  # noqa: BLE001
@@ -17353,10 +18127,7 @@ async def get_harness_skill_files(org: str, hid: str, skill_id: str, request: Re
 @app.get("/v1/orgs/{org}/harnesses/{hid}/plugins/{name}/files")
 async def get_harness_plugin_files(org: str, hid: str, name: str, request: Request) -> dict:
     """The complete package of one installed plugin (Plugins §3.1), byte-for-byte."""
-    await _owned_org(request, org)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _owned_org(request, org), hid)
     pe = _plugin_entry(v, name)
     files = await _plugin_files_of(pe, org)
     if not files:
@@ -17367,20 +18138,15 @@ async def get_harness_plugin_files(org: str, hid: str, name: str, request: Reque
 @app.get("/v1/orgs/{org}/harnesses/{hid}/plugin")
 async def export_harness_plugin(org: str, hid: str, request: Request) -> dict:
     """The harness's own tools and skills as an Agent Plugins package (Plugins §5)."""
-    await _owned_org(request, org)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _owned_org(request, org), hid)
     return await _harness_export_plugin(await _mcp_migrate(org, hid, v) or v)
 
 
 @app.put("/v1/orgs/{org}/harnesses/{hid}")
 async def update_harness(org: str, hid: str, body: HarnessBody, request: Request) -> dict:
-    await _owned_org(request, org)
+    _caller = await _owned_org(request, org)
     # V1C02-005: bind the mutation to the caller's org — a foreign harness id must not be editable.
-    cur = await _vertex_get(hid)
-    if not cur or str(cur.get("org") or "") != org or str(cur.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    cur = await _harness_in_reach(_caller, hid)
     cur = await _mcp_migrate(org, hid, cur)
     # Harnesses §5.2: id, base and createdAt are immutable. A body naming a different base is
     # refused rather than applied, because applying it would change the behaviour of every
@@ -17406,19 +18172,24 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
 
 @app.delete("/v1/orgs/{org}/harnesses/{hid}")
 async def delete_harness(org: str, hid: str, request: Request) -> dict:
-    await _owned_org(request, org)
+    _caller = await _owned_org(request, org)
     # V1C02-005: only delete a harness that belongs to the caller's org.
-    cur = await _vertex_get(hid)
-    if not cur or str(cur.get("org") or "") != org:
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    cur = await _mcp_migrate(org, hid, cur)
-    await _vg_upsert("Harness", hid, {"deleted": "1"})
-    # a deleted agent must not still be holding a database password, and must not still be
-    # spending at a provider
-    await _hosted_scrub_removed(org, hid, _mcp_list(cur), [])
-    await _media_harness_purge(hid)
-    await _plugins_discard(org, cur)
+    cur = await _harness_in_reach(_caller, hid, deleted_ok=True)
+    await _harness_delete(org, hid, cur)
     return {"id": hid, "deleted": True}
+
+
+async def _harness_delete(org: str, hid: str, v: dict) -> None:
+    """The one delete both routes call. The harness is kept 30 days, restorable, and then removed
+    with its plugin packages by the retention sweep (Richard's rule, 2026-10-08); the sessions and
+    responses that used it are not touched (Harnesses §5.3). What cannot wait goes now: a deleted
+    agent must not still be holding a database password, and must not still be spending at a
+    provider. A second delete keeps the first one's time, so it cannot extend the 30 days."""
+    v = await _mcp_migrate(org, hid, v)
+    if str(v.get("deleted")) not in ("1", "true", "True") or not v.get("deleted_at"):
+        await _vg_upsert("Harness", hid, {"deleted": "1", "deleted_at": str(_now_ms())})
+    await _hosted_scrub_removed(org, hid, _mcp_list(v), [])
+    await _media_harness_purge(hid)
 
 
 # ── workspaces: the DIRECTORY, server-side (fix for the localStorage split-brain) ──────
@@ -17482,7 +18253,10 @@ class WorkspaceBody(BaseModel):
 
 @app.post("/v1/hr/workspaces")
 async def workspaces_create(body: WorkspaceBody, request: Request) -> dict:
-    org, member = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org, member = _caller["org"], _caller.get("member", "")
+    if _key_scope(_caller):
+        raise uhp_error(403, "forbidden", "A key held to one workspace does not make workspaces.")
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "a workspace needs a name")
@@ -17511,7 +18285,10 @@ async def workspaces_create(body: WorkspaceBody, request: Request) -> dict:
 
 @app.patch("/v1/hr/workspaces/{wid}")
 async def workspaces_update(wid: str, body: WorkspaceBody, request: Request) -> dict:
-    org, _member = await _pub_org_member(request)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    if _key_scope(_caller) and _key_scope(_caller) != wid:
+        raise uhp_error(403, "forbidden", "A key held to one workspace changes that workspace only.")
     rows = await _workspace_rows(org)
     v = next((r for r in rows if str(r.get("ws_id")) == wid), None)
     if v is None:
@@ -17526,6 +18303,15 @@ async def workspaces_update(wid: str, body: WorkspaceBody, request: Request) -> 
 
 # ── PUBLIC harness CRUD (Bearer sk-hr-... API key; org resolved from the key) ──────────
 # This is what a vibe coder's agent (driven by AGENTS.md) calls — no org id, no internal header.
+async def _pub_principal(request: Request) -> dict:
+    """The caller of a public route, whole: its organization AND the workspace it is narrowed to,
+    which a route that takes an id needs and (org, member) alone left behind."""
+    p = await _principal(request)
+    if not p.get("org"):
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    return p
+
+
 async def _pub_org_member(request: Request) -> tuple[str, str]:
     p = await _principal(request)
     org = p.get("org", "")
@@ -17704,9 +18490,6 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     if db_in and not decl:
         raise uhp_error(400, "connection_not_used",
                         f"The '{kit_id}' kit does not read a database.", "database")
-    # Checked before anything is provisioned: a typo in a connection string should cost the person
-    # a corrected form, not a half-configured Harness to find and fix.
-    checked = await _db_validate(db_in.engine, db_in.connection_string) if db_in else None
 
     # Per workspace (see list_kits): launching in a second workspace makes that workspace its own
     # Harness rather than handing back the first workspace's, which its members could not see.
@@ -17716,6 +18499,19 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                      and _workspace_keep(str(r.get("workspace") or ""), ws, wsd)),
                     None)
     want_h = (body_in.harness if body_in else "").strip()
+    # A calibration credential relaunches the kit on the harness it drives and does nothing else
+    # here: the kit must already run on that harness, and it may name no other. Decided NOW, from
+    # what was read, before the connection check below opens a socket and before anything is
+    # written. This check used to sit after the two writes that move a kit to the harness named in
+    # the request, so the credential (which carries no workspace and so sees every harness of the
+    # organization) could name any of them: the answer was 403 and the kit had already been taken
+    # off its harness and put on that one (reported privately, twice).
+    _inner = _calibration_inner(p)
+    if _inner and (str((existing or {}).get("id") or "") != _inner or (want_h and want_h != _inner)):
+        raise uhp_error(403, "forbidden", "This credential relaunches the kit on the harness it drives only.", "harness")
+    # Checked before anything is provisioned: a typo in a connection string should cost the person
+    # a corrected form, not a half-configured Harness to find and fix.
+    checked = await _db_validate(db_in.engine, db_in.connection_string) if db_in else None
     if want_h and want_h != str((existing or {}).get("id") or ""):
         # Run the kit on a Harness the person already has. One kit, one Harness: the previous kit
         # Harness keeps its sessions and its package but is no longer the one the app talks to,
@@ -17733,8 +18529,6 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         await _vg_upsert("Harness", want_h, {"kit": kit_id, "updated_at": now0})
         existing = await _vertex_get(want_h) or {**target, "kit": kit_id}
         print(f"[kits] {kit_id} now runs on {want_h}", flush=True)
-    if p.get("calibration") and str((existing or {}).get("id") or "") != str(p["calibration"].get("inner") or ""):
-        raise uhp_error(403, "forbidden", "This credential relaunches the kit on the harness it drives only.", "harness")
     if decl and not db_in and not existing:
         # Declaring launch.database is what makes it required: every panel this kit builds would
         # have nothing to read, so a launch without a connection is not a partial success.
@@ -17953,11 +18747,35 @@ async def _cloud_records() -> dict:
     return doc
 
 
+async def _cloud_base_refused(base: str) -> str | None:
+    """Why an upload destination's address will not be called, or None: the rule an MCP address
+    follows (_ssrf_check). On a self-hosted box any http(s) host, since the network is the operator's
+    own; on a shared deployment https only, and never an address that resolves to a private, local or
+    metadata range. The test route fetches the address for any caller with a key and returns what it
+    answers, so without this it reached whatever this server can reach (reported privately,
+    GHSA-c5g7-c47h-f6c3)."""
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(str(base or ""))
+    except ValueError:
+        return "invalid url"
+    if not u.hostname:
+        return "url has no host"
+    if _pool_is_local():
+        return None if u.scheme in ("http", "https") else "the address must be http or https"
+    if u.scheme != "https":
+        return "only https addresses are allowed"
+    return await _internal_target(u.hostname, u.port or 443)
+
+
 async def _cloud_me(base_url: str, api_key: str) -> dict:
     """Resolve a key to where an upload lands. Raises HTTPException with the hosted side's words."""
+    refused = await _cloud_base_refused(base_url)
+    if refused:
+        raise HTTPException(400, f"that address cannot be used: {refused}")
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as c:
-            r = await c.get(f"{base_url}/v1/me", headers={"authorization": f"Bearer {api_key}"})
+        r = await _checked_http().get(f"{base_url}/v1/me", headers={"authorization": f"Bearer {api_key}"},
+                                      timeout=httpx.Timeout(20.0, connect=8.0))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"could not reach {base_url}: {str(e)[:120]}")
     if r.status_code == 401:
@@ -18041,11 +18859,14 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     v = await _vertex_get(hid)
     if not v or str(v.get("org") or "") != org or str(v.get("deleted") or "") in ("1", "true"):
         return {"id": hid, "ok": False, "action": "skip", "error": "not found"}
+    refused = await _cloud_base_refused(target.get("base_url") or "")
+    if refused:          # a destination stored before the address was checked
+        return {"id": hid, "ok": False, "action": "skip", "error": f"that address cannot be used: {refused}"}
     plugins_ok = False
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as c:
-            d = (await c.get(f"{target['base_url']}/v1/uhp")).json()
-            plugins_ok = bool((d.get("capabilities") or {}).get("plugins"))
+        d = (await _checked_http().get(f"{target['base_url']}/v1/uhp",
+                                       timeout=httpx.Timeout(10.0, connect=5.0))).json()
+        plugins_ok = bool((d.get("capabilities") or {}).get("plugins"))
     except Exception:  # noqa: BLE001
         plugins_ok = False
     body = await _cloud_harness_body(org, hid, v, plugins_ok)
@@ -18073,9 +18894,9 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     last_error = ""
     for attempt in (remote_id, "chrn" + uuid.uuid4().hex):
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=8.0)) as c:
-                r = await c.put(f"{target['base_url']}/v1/harnesses/{attempt}", json=body,
-                                headers={"authorization": f"Bearer {target['api_key']}"})
+            r = await _checked_http().put(f"{target['base_url']}/v1/harnesses/{attempt}", json=body,
+                                          headers={"authorization": f"Bearer {target['api_key']}"},
+                                          timeout=httpx.Timeout(60.0, connect=8.0))
         except Exception as e:  # noqa: BLE001
             return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
         if r.status_code in (200, 201):
@@ -18237,6 +19058,7 @@ class CloudUploadOneBody(BaseModel):
 @app.post("/v1/harnesses/{hid}/upload", include_in_schema=False)
 async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody | None = None) -> dict:
     p = await _principal(request)
+    await _harness_in_reach(p, hid)
     target = await _cloud_pick_target((body.target if body else None))
     records = await _cloud_records()
     res = await _cloud_upload_one(p.get("org", ""), hid, target, records)
@@ -18251,6 +19073,8 @@ async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody 
 async def cloud_upload_status(hid: str, request: Request) -> dict:
     """The chip on the harness page: never uploaded, uploaded, or changed since."""
     p = await _principal(request)
+    if hid not in _BASE_CATALOG:
+        await _harness_in_reach(p, hid)
     records = await _cloud_records()
     per = records.get("harnesses", {}).get(hid) or {}
     if not per:
@@ -18281,10 +19105,9 @@ async def cloud_upload_status_all(request: Request) -> dict:
 
 @app.get("/v1/harnesses/{hid}")
 async def get_harness_public(hid: str, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     return _harness_out(await _mcp_migrate(org, hid, v))
 
 
@@ -18406,10 +19229,9 @@ async def list_models(request: Request) -> dict:
 async def get_harness_models_public(hid: str, request: Request) -> dict:
     """Model-capability view for a harness (public, Bearer): allowed models, default, authorized
     fallback. A request for a model outside this set is replaced by the fallback at run time."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     backend = (_backend_of_harness(v) or _backend_of_builtin(hid)
                or _route_backend(str(v.get("default_model") or ""), None))
     return {"harness_id": hid,
@@ -18421,10 +19243,7 @@ async def get_harness_skill_files_public(hid: str, skill_id: str, request: Reque
     """Full files of one skill (public, Bearer), resolving the server-side blob offload — large
     folder bundles round-trip on the harness record as {name, enabled, blob}; this returns the
     real files for editing or verification. `skill_id` matches the entry's id or name."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    v = await _harness_in_reach(await _pub_principal(request), hid)
     try:
         skills = json.loads(v.get("skills") or "[]")
     except Exception:  # noqa: BLE001
@@ -18440,10 +19259,9 @@ async def get_harness_skill_files_public(hid: str, skill_id: str, request: Reque
 @app.get("/v1/harnesses/{hid}/plugins/{name}/files")
 async def get_harness_plugin_files_public(hid: str, name: str, request: Request) -> dict:
     """UHP Plugins §3.1: the complete package of one installed plugin."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     pe = _plugin_entry(v, name)
     files = await _plugin_files_of(pe, org)
     if not files:
@@ -18454,10 +19272,9 @@ async def get_harness_plugin_files_public(hid: str, name: str, request: Request)
 @app.get("/v1/harnesses/{hid}/plugin")
 async def export_harness_plugin_public(hid: str, request: Request) -> dict:
     """UHP Plugins §5: the harness's own tools and skills as an Agent Plugins package."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     return await _harness_export_plugin(await _mcp_migrate(org, hid, v) or v)
 
 
@@ -18473,10 +19290,9 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
     harness holds (a kit's, or one installed by hand) and every other package stays; the harness's
     next turn runs it. This is `set_config` for a harness whose configuration lives in its package
     (docs/dual-loop.md, Appendix B), and the route a calibration credential publishes through."""
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     v = await _mcp_migrate(org, hid, v)
     item = {k: getattr(body, k) for k in ("name", "files", "blob") if getattr(body, k)}
     if not item.get("files") and not item.get("blob"):
@@ -18493,10 +19309,9 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
 
 @app.put("/v1/harnesses/{hid}")
 async def update_harness_public(hid: str, body: HarnessBody, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org or str(v.get("deleted")) in ("1", "true", "True"):
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid)
     _p = await _principal(request)
     if _p.get("calibration") and str(body.calibrates or "") != str(v.get("calibrates") or ""):
         raise uhp_error(403, "forbidden", "A calibration credential cannot grant calibration.", "calibrates")
@@ -18519,15 +19334,8 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
 
 @app.delete("/v1/harnesses/{hid}")
 async def delete_harness_public(hid: str, request: Request) -> dict:
-    org, _ = await _pub_org_member(request)
-    v = await _vertex_get(hid)
-    if not v or v.get("org") != org:
-        raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness_id")
-    v = await _mcp_migrate(org, hid, v)
-    await _vg_upsert("Harness", hid, {"deleted": "1"})
-    # a deleted agent must not still be holding a database password, and must not still be
-    # spending at a provider
-    await _hosted_scrub_removed(org, hid, _mcp_list(v), [])
-    await _media_harness_purge(hid)
-    await _plugins_discard(org, v)
+    _caller = await _pub_principal(request)
+    org = _caller["org"]
+    v = await _harness_in_reach(_caller, hid, deleted_ok=True)
+    await _harness_delete(org, hid, v)
     return {"id": hid, "deleted": True}

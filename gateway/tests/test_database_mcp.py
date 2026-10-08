@@ -342,9 +342,9 @@ def test_deleting_the_harness_does_not_leave_the_credential_behind(api, connecte
     assert PG_DSN == (_record(connected) or {})["dsn"]
 
     assert api.delete(f"/v1/harnesses/{connected}").json()["deleted"] is True
-    # The file may remain (the store has no delete); what it holds must not.
+    # Removed, not overwritten: a credential goes at once and for good (2026-10-08).
     assert not asyncio.run(app.BACKING.secrets.get(app._tenants_for(ORG)[0], key))
-    assert PASSWORD not in stored.read_text()
+    assert not stored.exists()
 
 
 def test_another_org_cannot_see_or_use_a_database(client, api, connected):

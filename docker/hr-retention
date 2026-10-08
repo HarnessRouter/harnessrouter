@@ -1,0 +1,27 @@
+#!/bin/sh
+# hr-retention: the retention sweep and restore, for the operator, from inside the container.
+#
+#   docker exec harnessrouter hr-retention                     what is due now (nothing is removed)
+#   docker exec harnessrouter hr-retention sweep               remove what is due now
+#   docker exec harnessrouter hr-retention restore <kind> <id> bring back one item within its 30 days
+#
+# The server sweeps by itself when it starts and once a day; this is for looking, and for
+# restoring a harness, response, environment or upload deleted less than 30 days ago.
+set -eu
+key=""
+for f in /proc/[0-9]*/environ; do
+  key=$(tr '\0' '\n' < "$f" 2>/dev/null | sed -n 's/^HARNESS_INTERNAL_KEY=//p' | head -n 1) || true
+  [ -n "$key" ] && break
+done
+[ -n "$key" ] || { echo "hr-retention: the server is not running in this container" >&2; exit 1; }
+call() {
+  curl -sS -X POST "http://127.0.0.1:8080/internal/retention/$1" -H "x-harness-internal: $key" \
+    -H "content-type: application/json" -d "$2" | python3 -m json.tool
+}
+case "${1:-}" in
+  "")      call sweep '{"dry_run": true}' ;;
+  sweep)   call sweep '{"dry_run": false}' ;;
+  restore) [ $# -eq 3 ] || { echo "usage: hr-retention restore <kind> <id>" >&2; exit 2; }
+           call restore "$(python3 -c 'import json,sys; print(json.dumps({"kind": sys.argv[1], "id": sys.argv[2]}))' "$2" "$3")" ;;
+  *)       echo "usage: hr-retention [sweep | restore <kind> <id>]" >&2; exit 2 ;;
+esac

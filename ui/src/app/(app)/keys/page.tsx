@@ -44,6 +44,9 @@ export default function KeysPage() {
   const [search, setSearch] = useState('');
   const [sheet, setSheet] = useState<Sheet>(null);
   const [name, setName] = useState('');
+  // What a new key reaches. Only asked outside the Default Workspace: a key made there reaches the
+  // whole organization already, which the dialog says instead of asking.
+  const [reach, setReach] = useState<'workspace' | 'organization'>('workspace');
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
@@ -85,8 +88,13 @@ export default function KeysPage() {
     setBusy(true); setErr('');
     try {
       const r = await harnessFetch(base, { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: keyName, member_id: member, workspace: current.id || '',
-                              workspace_name: current.name || '', workspace_default: isDefaultWs }) });
+        // A rotated key keeps the reach it had. A new one is this workspace's, or, when the person
+        // chose it, an organization key: no workspace at all, said in the body.
+        body: JSON.stringify((() => {
+          const ws = rotateFrom ? (rotateFrom.workspace || '') : (reach === 'organization' ? '' : (current.id || ''));
+          return { name: keyName, member_id: member, workspace: ws,
+                   workspace_name: ws ? (current.name || '') : '', workspace_default: !!ws && isDefaultWs };
+        })()) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || JSON.stringify(d));
       if (rotateFrom) {
@@ -129,7 +137,7 @@ export default function KeysPage() {
   };
   const menuKey = rows.find((r) => r.k.id === menuFor)?.k || null;
 
-  const openCreate = () => { setName(''); setErr(''); setCopied(false); setSheet({ kind: 'create' }); };
+  const openCreate = () => { setName(''); setReach('workspace'); setErr(''); setCopied(false); setSheet({ kind: 'create' }); };
 
   return (
     <section className="ak-root" id="view-api-keys">
@@ -137,7 +145,7 @@ export default function KeysPage() {
         <div className="ak-head-row">
           <div>
             <h1>API keys</h1>
-            <p className="ak-sub">Create and revoke credentials scoped to {current.name}.</p>
+            <p className="ak-sub">{isDefaultWs ? <>Create and revoke credentials. A key made in {current.name} reaches every workspace of the organization.</> : <>Create and revoke credentials for {current.name}.</>}</p>
           </div>
           <button className="ak-primary" type="button" disabled={!org} onClick={openCreate}>Create API key</button>
         </div>
@@ -204,13 +212,28 @@ export default function KeysPage() {
               <>
                 <div className="ak-modal-body">
                   <h2 id="akTitle">Create API key</h2>
-                  <p className="ak-modal-sub">Scoped to {current.name}. Name it after where it will live, so an unused key is easy to trace later.</p>
+                  <p className="ak-modal-sub">{isDefaultWs
+                    ? <>A key made in {current.name} reaches every workspace of the organization. To hold a key to one workspace, switch to that workspace first.</>
+                    : <>Name it after where it will live, so an unused key is easy to trace later.</>}</p>
                   <div className="ak-field">
                     <div className="ak-field-k">Name</div>
                     <input value={name} placeholder="e.g. video-service · staging" autoFocus aria-label="Key name"
                       onChange={(e) => setName(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') void mint(name.trim() || 'Untitled key'); }} />
                   </div>
+                  {!isDefaultWs && (
+                    <div className="ak-field">
+                      <div className="ak-field-k">Reach</div>
+                      <select id="ak-reach" value={reach} aria-label="What the key can reach"
+                        onChange={(e) => setReach(e.target.value === 'organization' ? 'organization' : 'workspace')}>
+                        <option value="workspace">{current.name} only</option>
+                        <option value="organization">Organization key: every workspace</option>
+                      </select>
+                      <div className="ak-field-help">{reach === 'organization'
+                        ? 'It reaches every workspace of the organization, and is listed under the Default Workspace.'
+                        : `It reaches what belongs to ${current.name} and nothing else.`}</div>
+                    </div>
+                  )}
                   <div className="ak-warn"><i>!</i><span>The secret is shown once, on the next screen. Paste it into your server environment or the secure modal your coding agent opens, never into chat, source files, or logs.</span></div>
                   {err && <div className="ak-err" style={{ marginTop: 14 }} role="alert">Could not create the key. {err}</div>}
                 </div>

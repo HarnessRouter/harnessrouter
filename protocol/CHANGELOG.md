@@ -2,6 +2,28 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.10.4.post9 (2026-10-06)
+
+No change to the protocol, the schema or any verdict a conformant server gets.
+
+A check that quotes the server's answer in its failure message could not read it. Eighteen messages,
+reached by eight of the nine Environments checks and all ten Memories checks (in the check itself or
+in a helper they share), were built from `r.text`, and a client result had `body`, `json` and
+`header()` but no `text`. A message is
+evaluated only when its assertion fails, so nothing showed against a conformant server. Against a
+server that really refused the call, the check raised `AttributeError`, the suite filed it as ERROR,
+"the check itself broke", and the server's own sentence about why it refused never reached the
+report: a real non-conformance read as a defect in the suite. A result now has `text`, the body
+decoded and never raising, and those checks FAIL with the status and the server's words. Reported
+and fixed by @Jiaqiiii523 (#411), with a test that reads the checks and refuses any attribute a
+result does not have; it now also follows an answer that comes back from a helper and one read
+straight off the call, which between them are a third of the answers the checks read.
+
+A report names the suite that produced it. `suite_version` was a second copy of the version and
+had not moved since `2026.9.12.post4`, so every report written by `2026.10.4` through
+`2026.10.4.post8` carried that older name. The version is now written once, in the package, and
+the build reads it from there. No report published under `reports/` was written in that window.
+
 ## 2026-10-04 (patched the same day)
 
 Additive to `2026-09-28`: every request and object valid under the previous version is valid here.

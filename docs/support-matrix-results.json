@@ -136635,5 +136635,4091 @@
     }
    }
   }
+ },
+ "anthropic|claude-code|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "claude-code",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:11:23.266Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.97,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 CLAUDE CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessfd7503c2484b4cf6bccbdcf6d51197b5",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.9,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 CLAUDE CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.51,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 CLAUDE CODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.7,
+   "tail": "Create a file named hello-claude-code.txt containing exactly the word HELLO, then reply DONE. CLAUDE CODE Wrote a file DONE txt hello-claude-code.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-claude-code.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-claude-code.txt"
+   ],
+   "record_files": [
+    "hello-claude-code.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.66,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. CLAUDE CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessfd7503c2484b4cf6bccbdcf6d51197b5\",\"checkpoint_sha\":\"843fe392ef8113c15dda9eb641d38c96d2b2f245d7e31dc279d7eaf5c499e0a7\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 20,
+   "cache_read": 106936,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|hermes|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "hermes",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:12:38.945Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.46,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 HERMES M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessab287328c17e4cc78c6bea4d48f1a5d7",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.53,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 HERMES M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.74,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 HERMES M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.74,
+   "tail": "Create a file named hello-hermes.txt containing exactly the word HELLO, then reply DONE. HERMES Used a tool DONE txt hello-hermes.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-hermes.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-hermes.txt"
+   ],
+   "record_files": [
+    "hello-hermes.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 13.35,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. HERMES M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessab287328c17e4cc78c6bea4d48f1a5d7\",\"checkpoint_sha\":\"5bd8f7943c953179b2d4dca2505a084319f7af083ded5618d4edb3cc5f240928\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 21,
+   "cache_read": 44310,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|dsh|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "dsh",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:13:56.453Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.19,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 DEEPSEEK HARNESS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess2d0c82c811bc473e88112adb098fd71b",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.45,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 DEEPSEEK HARNESS M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.36,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 DEEPSEEK HARNESS M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.32,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-dsh.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dsh.txt"
+   ],
+   "record_files": [
+    "hello-dsh.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess2d0c82c811bc473e88112adb098fd71b\",\"checkpoint_sha\":\"373101d5c17e33390386fa2916f7c496ff33c22c08ca0b9403b3f6f86aa1d36d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [],
+  "substituted": [],
+  "unlabelled": 4,
+  "tokens": {
+   "input": 21,
+   "cache_read": 47336,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|opencode|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "opencode",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:14:52.291Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.23,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 OPENCODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessac7022788551425b88a7746a1aed44fc",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.4,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 OPENCODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.75,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 OPENCODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.93,
+   "tail": "Create a file named hello-opencode.txt containing exactly the word HELLO, then reply DONE. OPENCODE Used a tool DONE txt hello-opencode.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-opencode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-opencode.txt"
+   ],
+   "record_files": [
+    "hello-opencode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.05,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENCODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessac7022788551425b88a7746a1aed44fc\",\"checkpoint_sha\":\"a07e8665bb432b92f882cf47e269a8fccb29f7b28b7ecf97111af27ff8dd8454\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 21,
+   "cache_read": 49591,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|kilo|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "kilo",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:11:23.136Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.29,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 KILO CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess86d3e048a2784768950204218ef4fb63",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.68,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 KILO CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.97,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 KILO CODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.04,
+   "tail": "Create a file named hello-kilo.txt containing exactly the word HELLO, then reply DONE. KILO CODE Used a tool DONE txt hello-kilo.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-kilo.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-kilo.txt"
+   ],
+   "record_files": [
+    "hello-kilo.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 15.02,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. KILO CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess86d3e048a2784768950204218ef4fb63\",\"checkpoint_sha\":\"94f9adb2dd67cb1d3f98dd3e2b5e0d5f64afc700a555f072aac0d9a6b49114ae\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 539,
+   "cache_read": 79775,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|aider|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "aider",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:13:05.051Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.58,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 AIDER M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess1476e38ca14944879643164375d1d0d3",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.63,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 AIDER M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.66,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 AIDER M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.43,
+   "tail": "Create a file named hello-aider.txt containing exactly the word HELLO, then reply DONE. AIDER DONE Edited a file txt hello-aider.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-aider.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-aider.txt"
+   ],
+   "record_files": [
+    "hello-aider.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": false,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.09,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. AIDER HELLO",
+   "turn_files": [],
+   "why": "answered without M1-claude-haiku-5.5: What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. AIDER HELLO",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess1476e38ca14944879643164375d1d0d3\",\"checkpoint_sha\":\"31cf8c6b72c16c4c0f8e3cb801a7dc38c08224f34bc8271fa3515aee4e49fd96\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 24331,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|kimi|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "kimi",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:14:15.278Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.18,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 KIMI CODE CLI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess83e9c090d92c4569991e80efb77526bd",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.61,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 KIMI CODE CLI M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.67,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 KIMI CODE CLI M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.51,
+   "tail": "Create a file named hello-kimi.txt containing exactly the word HELLO, then reply DONE. KIMI CODE CLI Wrote a file DONE txt hello-kimi.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-kimi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-kimi.txt"
+   ],
+   "record_files": [
+    "hello-kimi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.58,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. KIMI CODE CLI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess83e9c090d92c4569991e80efb77526bd\",\"checkpoint_sha\":\"0bd95edc2be22d82ad2a8ff03f8d4d17f0135eb6c30e3711ca42808a129cf16e\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 184580,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|minimax|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "minimax",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:15:11.760Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.1,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 MINIMAX CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess389afaf9dae5466b810c23462798310e",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.94,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 MINIMAX CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.51,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 MINIMAX CODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.42,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. MINIMAX CODE Used a tool DONE txt hello-minimax.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.49,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. MINIMAX CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess389afaf9dae5466b810c23462798310e\",\"checkpoint_sha\":\"2a7857287d3cece371d608e80056ba18ff8a57a1ab318d5d60967694f87475bb\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 83845,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|grok|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "grok",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:11:23.178Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.86,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 GROK BUILD M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessb7279787a97745a49feafcbbddff3dec",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.7,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 GROK BUILD M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.43,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 GROK BUILD M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.27,
+   "tail": "Create a file named hello-grok.txt containing exactly the word HELLO, then reply DONE. GROK BUILD Used a tool DONE txt hello-grok.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-grok.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-grok.txt"
+   ],
+   "record_files": [
+    "hello-grok.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.48,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. GROK BUILD M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb7279787a97745a49feafcbbddff3dec\",\"checkpoint_sha\":\"b1c2ce2fce402621c19f2e366eb7b7d46c1ee0a0c19716f569b549437a94cbcb\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 95190,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|openhands|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "openhands",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:13:04.907Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.79,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 OPENHANDS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess42c1015024704b4697ee43b855e0e8f3",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 15.5,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 OPENHANDS M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 15.19,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 OPENHANDS M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.85,
+   "tail": "Create a file named hello-openhands.txt containing exactly the word HELLO, then reply DONE. OPENHANDS Used a tool DONE txt hello-openhands.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-openhands.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-openhands.txt"
+   ],
+   "record_files": [
+    "hello-openhands.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENHANDS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess42c1015024704b4697ee43b855e0e8f3\",\"checkpoint_sha\":\"7bb871495821ec3a73960f06ecd4596a097ab49008d1191c0df280798fabc3b3\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 470,
+   "cache_read": 51971,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|agentzero|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "agentzero",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:14:37.314Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.12,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 AGENT ZERO Thought process M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess4748820910ca47f49a2cacf392d2d2ac",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.69,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 AGENT ZERO Thought process M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.49,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 AGENT ZERO Thought process M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.9,
+   "tail": "Create a file named hello-agentzero.txt containing exactly the word HELLO, then reply DONE. AGENT ZERO Edited a file DONE txt hello-agentzero.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-agentzero.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-agentzero.txt"
+   ],
+   "record_files": [
+    "hello-agentzero.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.58,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. AGENT ZERO M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess4748820910ca47f49a2cacf392d2d2ac\",\"checkpoint_sha\":\"64c1d4b5e64abe22a6e593919d4643eebcf404842dd9ae00be2d3c2005a32184\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 56589,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|qwen|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "qwen",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:15:53.203Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.01,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 QWEN CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsesseb623d7979174d76af4d281387e57d66",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.48,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 QWEN CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.54,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 QWEN CODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.41,
+   "tail": "Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE Used a tool DONE txt hello-qwen.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-qwen.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-qwen.txt"
+   ],
+   "record_files": [
+    "hello-qwen.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.52,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. QWEN CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsesseb623d7979174d76af4d281387e57d66\",\"checkpoint_sha\":\"5bf85041f496b02703ce44c634bf7147873b525020284dd50b96c8f2e0ded75e\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 570021,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|cline|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "cline",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:11:23.271Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.97,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 CLINE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessdeffc2b475394077b33934dc7cab2227",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.73,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 CLINE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.38,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 CLINE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 29.95,
+   "tail": " then reply DONE. CLINE Plan: create hello-cline.txt in the workspace root with the content HELLO (no trailing newline, to match \"exactly\"). Then I'll read it back to verify. Used 2 tools I created /data/workspaces/hsessdeffc2b475394077b33934dc7cab2227/hello-cline.txt containing exactly HELLO. I checked it: the file is 5 bytes with no trailing newline. DONE txt hello-cline.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-cline.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cline.txt"
+   ],
+   "record_files": [
+    "hello-cline.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.52,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. CLINE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessdeffc2b475394077b33934dc7cab2227\",\"checkpoint_sha\":\"6db6881e8487a99a2aa44f3a87732dea266c1de12bc73029c89bfc11ac8fba6a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [],
+  "substituted": [],
+  "unlabelled": 4,
+  "tokens": {
+   "input": 51690,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|pi|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "pi",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:12:41.599Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.21,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess677403bd31b34bf58eff589e537ce28e",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.51,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 PI M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.65,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 PI M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.48,
+   "tail": "Create a file named hello-pi.txt containing exactly the word HELLO, then reply DONE. PI Used a tool DONE txt hello-pi.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-pi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-pi.txt"
+   ],
+   "record_files": [
+    "hello-pi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.49,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess677403bd31b34bf58eff589e537ce28e\",\"checkpoint_sha\":\"618b6aa682d0d14b0b3c5d10c33a57e4cce0304b325c4b1217d5f1c4e2b2ced4\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 3512,
+   "cache_read": 17367,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|omp|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "omp",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:14:22.603Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.88,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 OH MY PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessec7a4cd7ffc0481d8d91e81ae83917e5",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.5,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 OH MY PI M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 31,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 OH MY PI M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.74,
+   "tail": "Create a file named hello-omp.txt containing exactly the word HELLO, then reply DONE. OH MY PI Used a tool DONE txt hello-omp.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-omp.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-omp.txt"
+   ],
+   "record_files": [
+    "hello-omp.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.76,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OH MY PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessec7a4cd7ffc0481d8d91e81ae83917e5\",\"checkpoint_sha\":\"b9f06dfcab475a602bb41829b047e81c9a4b11d4967742d473764fea8eeb2b5f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 21,
+   "cache_read": 117921,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "anthropic|goose|claude-haiku-5.5": {
+  "provider": "anthropic",
+  "harness": "goose",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:15:54.342Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.17,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 GOOSE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess5bb4947c132c4f0291e90c47e3eeed2e",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.4,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 GOOSE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.17,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 GOOSE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.78,
+   "tail": "Create a file named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE Used 4 tools DONE txt hello-goose.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-goose.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-goose.txt"
+   ],
+   "record_files": [
+    "hello-goose.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.51,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. GOOSE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess5bb4947c132c4f0291e90c47e3eeed2e\",\"checkpoint_sha\":\"ae7b8f489b6417ff0518c4879e03b3e1dcc7ae9773ae4161f65577b748ad0f4d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Anthropic",
+  "connections": [
+   "integration:Anthropic"
+  ],
+  "served": [
+   "claude-haiku-5-5",
+   "claude-haiku-4-5-20251001"
+  ],
+  "substituted": [
+   "claude-haiku-5-5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 64914,
+   "cache_read": 114669,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|hermes|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "hermes",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:24:06.696Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.92,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 HERMES M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess8c9b8e978346455194d3ddc2c959d11c",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 13.56,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 HERMES M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 HERMES M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.98,
+   "tail": "Create a file named hello-hermes.txt containing exactly the word HELLO, then reply DONE. HERMES Used a tool DONE txt hello-hermes.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-hermes.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-hermes.txt"
+   ],
+   "record_files": [
+    "hello-hermes.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 13.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. HERMES M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess8c9b8e978346455194d3ddc2c959d11c\",\"checkpoint_sha\":\"0573b804980f5b4f89b4ad63ca991292a8a5798de4284a11e4db41893cbfdbdd\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 124046,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|dsh|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "dsh",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:25:32.144Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.3,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 DEEPSEEK HARNESS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessde25ae27a0b8460ba734f386036d1bfe",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.52,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 DEEPSEEK HARNESS M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.6,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 DEEPSEEK HARNESS M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.66,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-dsh.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dsh.txt"
+   ],
+   "record_files": [
+    "hello-dsh.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.51,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessde25ae27a0b8460ba734f386036d1bfe\",\"checkpoint_sha\":\"6e9021bacdd1339e131cfc554a70911e837de2983ccfff717657b4a6154bd9a0\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "unlabelled": 4,
+  "tokens": {
+   "input": 21,
+   "cache_read": 46137,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|opencode|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "opencode",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:26:28.838Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.49,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 OPENCODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess028e8150f9d5410ea266eb2ded0c5a0c",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 9.28,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 OPENCODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.89,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 OPENCODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.98,
+   "tail": "Create a file named hello-opencode.txt containing exactly the word HELLO, then reply DONE. OPENCODE Used a tool DONE txt hello-opencode.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-opencode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-opencode.txt"
+   ],
+   "record_files": [
+    "hello-opencode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENCODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess028e8150f9d5410ea266eb2ded0c5a0c\",\"checkpoint_sha\":\"6ba92bb3ac1cfc551d34d865e2e025cab0f77c6bd6462223a055afd4b3dfa438\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 22878,
+   "cache_read": 49024,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|cheetahclaws|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "cheetahclaws",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:27:39.095Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.74,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 CHEETAHCLAWS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess68d737fe567f4d2ca24a026ea637b1b0",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.71,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 CHEETAHCLAWS M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.33,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 CHEETAHCLAWS M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.47,
+   "tail": "Create a file named hello-cheetahclaws.txt containing exactly the word HELLO, then reply DONE. CHEETAHCLAWS Wrote a file DONE txt hello-cheetahclaws.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "record_files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.19,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. CHEETAHCLAWS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess68d737fe567f4d2ca24a026ea637b1b0\",\"checkpoint_sha\":\"74fc7490edb4122a4e6e61259bfc9200111bb7cbe78f3016489d07945820952f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 75368,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|kilo|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "kilo",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:24:06.627Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.62,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 KILO CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess29c5359b1e6741f9a9c4ce27349ca5ce",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.14,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 KILO CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.61,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 KILO CODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.17,
+   "tail": "Create a file named hello-kilo.txt containing exactly the word HELLO, then reply DONE. KILO CODE Used a tool DONE txt hello-kilo.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-kilo.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-kilo.txt"
+   ],
+   "record_files": [
+    "hello-kilo.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.8,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. KILO CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess29c5359b1e6741f9a9c4ce27349ca5ce\",\"checkpoint_sha\":\"be11a0e7610258f05aa572990873e63231e3227d58b36ffcc9fbe12212be90e9\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 36023,
+   "cache_read": 80133,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|aider|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "aider",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:25:53.663Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.41,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 AIDER M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess3ad1f7b550634aca9989b08a1c0e22ec",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.21,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 AIDER M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.96,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 AIDER M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.2,
+   "tail": "Create a file named hello-aider.txt containing exactly the word HELLO, then reply DONE. AIDER DONE Edited a file txt hello-aider.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-aider.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-aider.txt"
+   ],
+   "record_files": [
+    "hello-aider.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.82,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. AIDER M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess3ad1f7b550634aca9989b08a1c0e22ec\",\"checkpoint_sha\":\"93ec5a2d56e20d52a9fa28bf741e898cd649d4e729d56d1251e9de4feefedccc\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 24403,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|kimi|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "kimi",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:27:07.114Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.1,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 KIMI CODE CLI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess8d2681edfd024f7993a9def7fddca1ff",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.5,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 KIMI CODE CLI M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.43,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 KIMI CODE CLI M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.81,
+   "tail": "Create a file named hello-kimi.txt containing exactly the word HELLO, then reply DONE. KIMI CODE CLI Wrote a file DONE txt hello-kimi.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-kimi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-kimi.txt"
+   ],
+   "record_files": [
+    "hello-kimi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.33,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. KIMI CODE CLI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess8d2681edfd024f7993a9def7fddca1ff\",\"checkpoint_sha\":\"24549280964dca1d3cf96670d224c2f95c34d6502ac5388d275aa013a99711c4\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 184668,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|minimax|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "minimax",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:28:03.062Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.21,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 MINIMAX CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess7637de0fbb2646e5ac93b7d51aa374b3",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.45,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 MINIMAX CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.28,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 MINIMAX CODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.36,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. MINIMAX CODE Used a tool DONE txt hello-minimax.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.41,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. MINIMAX CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess7637de0fbb2646e5ac93b7d51aa374b3\",\"checkpoint_sha\":\"998142d91c350e1bbf91316cf296fe9e37fd4773bc5ba383f5a9bdcfd627da40\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 83953,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|grok|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "grok",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:24:06.778Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.67,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 GROK BUILD M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess0906efdc9b43475ababe546d0bd396ae",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.51,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 GROK BUILD M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.77,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 GROK BUILD M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.97,
+   "tail": "Create a file named hello-grok.txt containing exactly the word HELLO, then reply DONE. GROK BUILD Used a tool DONE txt hello-grok.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-grok.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-grok.txt"
+   ],
+   "record_files": [
+    "hello-grok.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. GROK BUILD M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess0906efdc9b43475ababe546d0bd396ae\",\"checkpoint_sha\":\"634d2d99c1956232360c2be6839d6a40f8540496f5ed8a4c2e5e13ac16438428\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 95095,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|openhands|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "openhands",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:25:31.135Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.64,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 OPENHANDS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsesscfc0c6bbc1c24a8ab114ada9035485dc",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.84,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 OPENHANDS M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.39,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 OPENHANDS M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.64,
+   "tail": "Create a file named hello-openhands.txt containing exactly the word HELLO, then reply DONE. OPENHANDS Used a tool DONE txt hello-openhands.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-openhands.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-openhands.txt"
+   ],
+   "record_files": [
+    "hello-openhands.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.28,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENHANDS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsesscfc0c6bbc1c24a8ab114ada9035485dc\",\"checkpoint_sha\":\"490ad3b345003d2526ef94ab6abfc9f3c04487dfaffaeaae09d82dd9e11e6614\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 23236,
+   "cache_read": 52000,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|agentzero|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "agentzero",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:27:18.759Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.52,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 AGENT ZERO Thought process M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess6dd8f0c09bb9403fb4d4e208ef5ac581",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.51,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 AGENT ZERO Thought process M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.64,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 AGENT ZERO Thought process M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.62,
+   "tail": "Create a file named hello-agentzero.txt containing exactly the word HELLO, then reply DONE. AGENT ZERO Edited a file DONE txt hello-agentzero.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-agentzero.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-agentzero.txt"
+   ],
+   "record_files": [
+    "hello-agentzero.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.56,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. AGENT ZERO Thought process M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess6dd8f0c09bb9403fb4d4e208ef5ac581\",\"checkpoint_sha\":\"f2ada9c6cd7ea003ee12e3650b8e3f7ade7bb8a8339a3a4995d178ce799c9754\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 56612,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|qwen|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "qwen",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:28:30.407Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.35,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 QWEN CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessb0da9e0dc8704d73b581134e642b211c",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.49,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 QWEN CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.75,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 QWEN CODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.05,
+   "tail": "Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE Used a tool DONE txt hello-qwen.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-qwen.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-qwen.txt"
+   ],
+   "record_files": [
+    "hello-qwen.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.49,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. QWEN CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessb0da9e0dc8704d73b581134e642b211c\",\"checkpoint_sha\":\"68800c6ef7c1f493a392f2a295218b4dcf7aac161c7e321f50909fa4a12bf85b\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 570679,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|cline|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "cline",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:24:06.772Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.52,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 CLINE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess1c87e8dcc7f74387b1eec9e56ae7e675",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.55,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 CLINE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.47,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 CLINE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 29.78,
+   "tail": "Create a file named hello-cline.txt containing exactly the word HELLO, then reply DONE. CLINE Plan: create /data/workspaces/hsess1c87e8dcc7f74387b1eec9e56ae7e675/hello-cline.txt in the workspace with the content HELLO and no extra text. Then I'll read it back to verify, and reply DONE. Used 2 tools DONE txt hello-cline.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-cline.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cline.txt"
+   ],
+   "record_files": [
+    "hello-cline.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. CLINE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess1c87e8dcc7f74387b1eec9e56ae7e675\",\"checkpoint_sha\":\"1523b529b1567381b3613cbec9a4c96f34b6dad90a394bd6ebf1401a8e6cf2b8\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [],
+  "substituted": [],
+  "unlabelled": 4,
+  "tokens": {
+   "input": 51682,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|pi|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "pi",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:25:28.413Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 16.89,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess6dfcd8e8fdf8415b8405a313f569876c",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.92,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 PI M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.24,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 PI M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.55,
+   "tail": "Create a file named hello-pi.txt containing exactly the word HELLO, then reply DONE. PI Used a tool DONE txt hello-pi.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-pi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-pi.txt"
+   ],
+   "record_files": [
+    "hello-pi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 9.77,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess6dfcd8e8fdf8415b8405a313f569876c\",\"checkpoint_sha\":\"5f32a99eb74d156b71986fb832da2509e0416e327937c70a1b34a676817b5478\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 25529,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|omp|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "omp",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:26:53.280Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.3,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 OH MY PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess6a73f5ee6dcd4198ada395ff450ffd1f",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.38,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 OH MY PI M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.56,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 OH MY PI M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.4,
+   "tail": "Create a file named hello-omp.txt containing exactly the word HELLO, then reply DONE. OH MY PI Used a tool DONE txt hello-omp.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-omp.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-omp.txt"
+   ],
+   "record_files": [
+    "hello-omp.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.66,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OH MY PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess6a73f5ee6dcd4198ada395ff450ffd1f\",\"checkpoint_sha\":\"519f2f407761cd3a299ca46ea723e05e6be2b2cb0a47a31605cd1a243e64bf04\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 169082,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|goose|claude-haiku-5.5": {
+  "provider": "openrouter",
+  "harness": "goose",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:27:56.531Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.24,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 GOOSE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessfd5bae1c55fb4849904a15ec1a209271",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.38,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 GOOSE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.51,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 GOOSE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.67,
+   "tail": "Create a file named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE Used 4 tools DONE txt hello-goose.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-goose.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-goose.txt"
+   ],
+   "record_files": [
+    "hello-goose.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.46,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. GOOSE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessfd5bae1c55fb4849904a15ec1a209271\",\"checkpoint_sha\":\"c1f328ecb8a33d9a44768dfdfd5878aa15c932fe62b21ae3dbb954f6e5ffa927\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 179206,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|claude-code|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "claude-code",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:17:34.810Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.45,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 CLAUDE CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess38ad0b1adf1e46a59bdcd5bf8faeeba1",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.54,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 CLAUDE CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.43,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 CLAUDE CODE Thought process M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.78,
+   "tail": "Create a file named hello-claude-code.txt containing exactly the word HELLO, then reply DONE. CLAUDE CODE Wrote a file DONE txt hello-claude-code.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-claude-code.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-claude-code.txt"
+   ],
+   "record_files": [
+    "hello-claude-code.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.73,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. CLAUDE CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess38ad0b1adf1e46a59bdcd5bf8faeeba1\",\"checkpoint_sha\":\"f9072935ad4d59f15663f10a12e9f5d85544303485d62098f355f2f1779e67b4\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 1681,
+   "cache_read": 149867,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|hermes|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "hermes",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:19:07.616Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.41,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 HERMES M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess34504ec18e1f4b248207629fbf1462a8",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 13.5,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 HERMES M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.64,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 HERMES M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.8,
+   "tail": "Create a file named hello-hermes.txt containing exactly the word HELLO, then reply DONE. HERMES Used a tool DONE txt hello-hermes.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-hermes.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-hermes.txt"
+   ],
+   "record_files": [
+    "hello-hermes.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 13.5,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. HERMES M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess34504ec18e1f4b248207629fbf1462a8\",\"checkpoint_sha\":\"df696b6d8040e57867bc29fe0750c3123e258878e360b39ccaee8ac00446bfc2\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 124056,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|dsh|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "dsh",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:20:26.550Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.49,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 DEEPSEEK HARNESS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsesscfdd6cc0dbc94232aaabf866282000fb",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.64,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 DEEPSEEK HARNESS M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 9.27,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 DEEPSEEK HARNESS M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.49,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-dsh.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dsh.txt"
+   ],
+   "record_files": [
+    "hello-dsh.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 9.81,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsesscfdd6cc0dbc94232aaabf866282000fb\",\"checkpoint_sha\":\"0aa0128ac9aaf2b0462f7037b2fe26ce0dfcfb1a036b4f3ca843b49e1bbdeae9\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [],
+  "substituted": [],
+  "unlabelled": 4,
+  "tokens": {
+   "input": 21,
+   "cache_read": 47381,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|opencode|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "opencode",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:21:25.511Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.41,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 OPENCODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess0b594374fab4460aa4b0ba6e42b2216d",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.57,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 OPENCODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.56,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 OPENCODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.34,
+   "tail": "Create a file named hello-opencode.txt containing exactly the word HELLO, then reply DONE. OPENCODE Used a tool DONE txt hello-opencode.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-opencode.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-opencode.txt"
+   ],
+   "record_files": [
+    "hello-opencode.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.45,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENCODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess0b594374fab4460aa4b0ba6e42b2216d\",\"checkpoint_sha\":\"ac36f398a8c8e9283ecbd62e017697f04970af565bed3f21fcfb790f9b0f28d6\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 21,
+   "cache_read": 49864,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|cheetahclaws|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "cheetahclaws",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:22:27.610Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.15,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 CHEETAHCLAWS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess91a9c85cfc81437685bdcdaeba2727e6",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.36,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 CHEETAHCLAWS M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.49,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 CHEETAHCLAWS M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.47,
+   "tail": "Create a file named hello-cheetahclaws.txt containing exactly the word HELLO, then reply DONE. CHEETAHCLAWS Wrote a file DONE txt hello-cheetahclaws.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "record_files": [
+    "hello-cheetahclaws.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.46,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. CHEETAHCLAWS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess91a9c85cfc81437685bdcdaeba2727e6\",\"checkpoint_sha\":\"c3924ef74d34e2c63a8c34f73348db401e472474de209ca8cf82870e3371c5fd\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 75392,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|kilo|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "kilo",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:17:34.717Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.76,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 KILO CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess273eb64511964ef8a6c26d1cd80f4ea0",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.86,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 KILO CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.88,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 KILO CODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.05,
+   "tail": "Create a file named hello-kilo.txt containing exactly the word HELLO, then reply DONE. KILO CODE Used a tool DONE txt hello-kilo.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-kilo.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-kilo.txt"
+   ],
+   "record_files": [
+    "hello-kilo.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.79,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. KILO CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess273eb64511964ef8a6c26d1cd80f4ea0\",\"checkpoint_sha\":\"85326b37ae2c7f70032e03cafb8ab2de2cbe3494f3aac9f1d38363d28bf69f76\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 35967,
+   "cache_read": 80080,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|aider|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "aider",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:19:12.118Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.32,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 AIDER M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess6f2c90e40bd44f10b282c6d3afebd696",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.69,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 AIDER M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.81,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 AIDER M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.65,
+   "tail": "Create a file named hello-aider.txt containing exactly the word HELLO, then reply DONE. AIDER hello-aider.txt is a new file, so I can create it directly with an empty SEARCH section. DONE Edited a file txt hello-aider.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-aider.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-aider.txt"
+   ],
+   "record_files": [
+    "hello-aider.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.84,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. AIDER M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess6f2c90e40bd44f10b282c6d3afebd696\",\"checkpoint_sha\":\"f8edac522feac9ba523a59b2f2d7d615ea5397a66de0662079ecd6503614e640\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 24423,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|kimi|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "kimi",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:20:24.396Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.42,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 KIMI CODE CLI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessd01e6c7cd403490da8bfa5f3474aa875",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 9.29,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 KIMI CODE CLI M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.37,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 KIMI CODE CLI M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.64,
+   "tail": "Create a file named hello-kimi.txt containing exactly the word HELLO, then reply DONE. KIMI CODE CLI Wrote a file DONE txt hello-kimi.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-kimi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-kimi.txt"
+   ],
+   "record_files": [
+    "hello-kimi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.37,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. KIMI CODE CLI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd01e6c7cd403490da8bfa5f3474aa875\",\"checkpoint_sha\":\"509515704f890860c5977f6480fe3c520ff5e1649ae559a37663eaf0382b9b76\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 184677,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|minimax|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "minimax",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:21:25.510Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.25,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 MINIMAX CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess0c64f439050e4a0486f60e9e80c340c1",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.89,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 MINIMAX CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.35,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 MINIMAX CODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.28,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. MINIMAX CODE Used a tool DONE txt hello-minimax.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.49,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. MINIMAX CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess0c64f439050e4a0486f60e9e80c340c1\",\"checkpoint_sha\":\"799c3d2fa933885f33f8bb7cf1fa3a01012870ac616861ec9186762f129ef7e4\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 83965,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|grok|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "grok",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:17:34.650Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.44,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 GROK BUILD M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessd62d2d8ffba84d929943ee5aa1f22899",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.48,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 GROK BUILD M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.55,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 GROK BUILD M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.76,
+   "tail": "Create a file named hello-grok.txt containing exactly the word HELLO, then reply DONE. GROK BUILD Used a tool DONE txt hello-grok.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-grok.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-grok.txt"
+   ],
+   "record_files": [
+    "hello-grok.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.59,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. GROK BUILD M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessd62d2d8ffba84d929943ee5aa1f22899\",\"checkpoint_sha\":\"8fca21412f1dfc005b0930b0219aaa2b8c8c10bdf998ac14992c3aca1b06ed48\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 95311,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|openhands|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "openhands",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:19:07.429Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.85,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 OPENHANDS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess42c29cf343884058ae98068bdb49068c",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.8,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 OPENHANDS M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.95,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 OPENHANDS M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 21.08,
+   "tail": "Create a file named hello-openhands.txt containing exactly the word HELLO, then reply DONE. OPENHANDS Used a tool DONE txt hello-openhands.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-openhands.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-openhands.txt"
+   ],
+   "record_files": [
+    "hello-openhands.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 18.17,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OPENHANDS M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess42c29cf343884058ae98068bdb49068c\",\"checkpoint_sha\":\"f4f8e84ffee224cf586ec7435934f21e8bd3fbfe4310d0ffed1b6be074afdceb\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 23122,
+   "cache_read": 51809,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|agentzero|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "agentzero",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:20:54.687Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.21,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 AGENT ZERO Thought process M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess25b197f6be8f48ab9f5aeb76fd6c945d",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 12.1,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 AGENT ZERO Thought process M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.7,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 AGENT ZERO Thought process M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 15.2,
+   "tail": "Create a file named hello-agentzero.txt containing exactly the word HELLO, then reply DONE. AGENT ZERO Edited a file DONE txt hello-agentzero.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-agentzero.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-agentzero.txt"
+   ],
+   "record_files": [
+    "hello-agentzero.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.57,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. AGENT ZERO M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess25b197f6be8f48ab9f5aeb76fd6c945d\",\"checkpoint_sha\":\"b0434d9e23ba8d984bcf3ad907d0e69db7e9224bd740c0fa9a458a8652f38c9e\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 56653,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|qwen|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "qwen",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:22:10.353Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.32,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 QWEN CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess381a50fe7fe94a27bea770486be10267",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.65,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 QWEN CODE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.5,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 QWEN CODE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.49,
+   "tail": "Create a file named hello-qwen.txt containing exactly the word HELLO, then reply DONE. QWEN CODE Used a tool DONE txt hello-qwen.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-qwen.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-qwen.txt"
+   ],
+   "record_files": [
+    "hello-qwen.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.48,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. QWEN CODE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess381a50fe7fe94a27bea770486be10267\",\"checkpoint_sha\":\"02bbb6b068e3a4b0c35334a4f00d1cf36de53962dc31cd3d5c48862f8ac99bd8\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 569929,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|cline|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "cline",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:17:34.815Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.25,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 CLINE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess6d2ad63ef2eb416cb5d896053df857e6",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.78,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 CLINE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.59,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 CLINE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 29.92,
+   "tail": "named hello-cline.txt containing exactly the word HELLO, then reply DONE. CLINE I'll create /data/workspaces/hsess6d2ad63ef2eb416cb5d896053df857e6/hello-cline.txt in the workspace with the content HELLO and no trailing newline, then check it. Used 2 tools The file is created and verified: hello-cline.txt contains exactly HELLO with no trailing newline. DONE txt hello-cline.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-cline.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-cline.txt"
+   ],
+   "record_files": [
+    "hello-cline.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.47,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. CLINE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess6d2ad63ef2eb416cb5d896053df857e6\",\"checkpoint_sha\":\"6335e6b5b3b50648bfeb8fb0482d42ee12f7241fc8f8ec5ff12c1749d1a7e569\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [],
+  "substituted": [],
+  "unlabelled": 4,
+  "tokens": {
+   "input": 51624,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|pi|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "pi",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:18:53.111Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.47,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess4d29113e44784a50ab017cb2eb93a472",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.82,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 PI M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.73,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 PI M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.73,
+   "tail": "Create a file named hello-pi.txt containing exactly the word HELLO, then reply DONE. PI Used a tool DONE txt hello-pi.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-pi.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-pi.txt"
+   ],
+   "record_files": [
+    "hello-pi.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.49,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess4d29113e44784a50ab017cb2eb93a472\",\"checkpoint_sha\":\"e1e98e66dc61668239dc2d523b81ca2d575a4b5011c8b212a5b62324343dd32f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 3520,
+   "cache_read": 17399,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|omp|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "omp",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:20:35.536Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.49,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 OH MY PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsesse9c5d4b3d4514a25ba17f5097bbfc491",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.42,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 OH MY PI M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 9.23,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 OH MY PI M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.79,
+   "tail": "Create a file named hello-omp.txt containing exactly the word HELLO, then reply DONE. OH MY PI Used a tool DONE txt hello-omp.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-omp.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-omp.txt"
+   ],
+   "record_files": [
+    "hello-omp.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. OH MY PI M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsesse9c5d4b3d4514a25ba17f5097bbfc491\",\"checkpoint_sha\":\"9a71989eec215fb33fabc4e6d5e353183230e997a4150bee0dc060bf18d5b0d9\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 21,
+   "cache_read": 117941,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|goose|claude-haiku-5.5": {
+  "provider": "vercel",
+  "harness": "goose",
+  "model": "claude-haiku-5.5",
+  "at": "2026-10-07T20:21:39.437Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.35,
+   "tail": "Reply with exactly: M1-claude-haiku-5.5 GOOSE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess248e328dfeb946e1bc49846738e0c13e",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.43,
+   "tail": "Reply with exactly: M2-claude-haiku-5.5 GOOSE M2-claude-haiku-5.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "claude-haiku-4.5",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.35,
+   "tail": "Reply with exactly: M3-claude-haiku-4.5 GOOSE M3-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 8.6,
+   "tail": "Create a file named hello-goose.txt containing exactly the word HELLO, then reply DONE. GOOSE Used 4 tools DONE txt hello-goose.txt TXT \u00b7 output Preview",
+   "turn_files": [
+    "hello-goose.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-goose.txt"
+   ],
+   "record_files": [
+    "hello-goose.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 17.66,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. GOOSE M1-claude-haiku-5.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess248e328dfeb946e1bc49846738e0c13e\",\"checkpoint_sha\":\"db7d8e72f859c203f254b48e2ddb157c3779b6f05fe40bae4576ee73bd45201c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "anthropic/claude-haiku-5.5",
+   "anthropic/claude-haiku-4.5"
+  ],
+  "substituted": [
+   "anthropic/claude-haiku-5.5"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 179095,
+   "cache_read": 0,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
  }
 }

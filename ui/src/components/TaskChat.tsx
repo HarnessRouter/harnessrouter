@@ -14,6 +14,7 @@ import { track } from '@/lib/analytics';
 import { InsufficientCreditsModal } from '@/components/InsufficientCreditsModal';
 import { billing } from '@/app/(app)/billing/lib';
 import { statusChip, timeAgo } from '@/lib/revamp-data';
+import { minutesAndSeconds } from '@/lib/duration';
 // Shared Conversational Agent surface (UI Core), extracted from this page; see
 // frontend-ui-core/README.md for the token/transport/slot contracts.
 import { Svg, Chevron, IcPlug, IcSkill } from 'reifyui';
@@ -366,7 +367,7 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
   }, [shownSid, taskModel]); // eslint-disable-line react-hooks/exhaustive-deps
   const fmtDur = (s?: number) => {
     if (!s) return '';
-    const m = Math.floor(s / 60), sec = Math.round(s % 60);
+    const [m, sec] = minutesAndSeconds(s);
     return m ? `${m}m ${sec}s` : `${sec}s`;
   };
 

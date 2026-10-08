@@ -10,6 +10,7 @@ import { useParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
+import { minutesAndSeconds } from '@/lib/duration';
 
 interface ShareMeta { session_id?: string; title?: string; status?: string; model?: string;
   backend?: string; harness_id?: string; harness_name?: string; event_count?: number; elapsed?: number; finished_at?: number }
@@ -19,7 +20,7 @@ interface ShareFile { path: string; bytes?: number; media_type?: string }
 
 function fmtDur(s?: number): string {
   if (!s) return '';
-  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  const [m, sec] = minutesAndSeconds(s);
   return m ? `${m}m ${String(sec).padStart(2, '0')}s` : `${sec}s`;
 }
 function fmtBytes(n?: number): string {

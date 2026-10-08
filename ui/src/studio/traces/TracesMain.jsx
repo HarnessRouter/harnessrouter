@@ -4,6 +4,7 @@ import { IconByName } from '@/studio/lib/iconCatalog.jsx';
 import { Markdown } from '@/studio/lib/markdown.jsx';
 import { tracesApi } from './api';
 import { flatten, lanes, fmtK } from './flatten';
+import { traceDurationText } from '@/lib/duration';
 import { useTraces } from './store';
 
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s || '');
@@ -16,13 +17,7 @@ const fmtClock = (s) => {
   const t = Math.max(0, Math.round(s));
   return `${Math.floor(t / 3600)}:${String(Math.floor((t % 3600) / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
 };
-const fmtDur = (sec) => {
-  if (sec == null) return '';
-  const s = Number(sec);
-  if (s < 1) return `${Math.round(s * 1000)}ms`;
-  if (s < 60) return `${s.toFixed(1)}s`;
-  return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
-};
+const fmtDur = (sec) => (sec == null ? '' : traceDurationText(Number(sec)));
 const fmtAgo = (sec) => {
   if (!sec) return '';
   const d = Math.max(0, Date.now() / 1000 - Number(sec));
