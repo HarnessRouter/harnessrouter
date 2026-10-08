@@ -415,4 +415,4 @@ def test_a_capped_sweep_says_when_it_is_done():
 def test_the_sweep_route_refuses_a_kind_it_does_not_know_and_skips_hosted_only_ones():
     assert _status(gw.retention_sweep(gw.RetentionSweepBody(dry_run=True, kinds=["sessionz"]))) == 400
     out = run(gw.retention_sweep(gw.RetentionSweepBody(dry_run=True, kinds=["arenas"])))
-    assert out["dry_run"] is True and "would_remove" in out
+    assert out["dry_run"] is True and "would_remove" in out and out["done"] is True   # nothing due

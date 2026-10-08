@@ -8618,7 +8618,9 @@ async def _retention_sweep(dry_run: bool, kinds: list[str] | None = None, limit:
                 done = False
             else:
                 listed[kind].append(item["id"])
-    out["done"] = done and not dry_run
+    # Nothing due is left: after a sweep, nothing it could not remove; after a dry run, nothing
+    # to list (a dry run removes nothing, so anything it lists is still due).
+    out["done"] = done and not (dry_run and any(listed.values()))
     return out
 
 
