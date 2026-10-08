@@ -6,7 +6,9 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "redirects": [
-    { "source": "/spec", "destination": "/spec/2026-10-04", "permanent": false }
+    { "source": "/spec", "destination": "/spec/2026-10-04", "permanent": false },
+    { "source": "/spec/index", "destination": "/spec/2026-10-04", "permanent": false },
+    { "source": "/spec/:chapter(architecture|lifecycle|harnesses|plugins|environments|memories|tasks|streaming|sessions|files|errors|security|schema)", "destination": "/spec/2026-10-04/:chapter", "permanent": false }
   ],
   "headers": [
     {
