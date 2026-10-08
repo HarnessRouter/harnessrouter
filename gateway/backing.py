@@ -408,6 +408,28 @@ class FileSecretStore:
                 self._p(tenant, name).unlink()
         await asyncio.to_thread(_do)
 
+    async def blank(self) -> list[tuple[str, str]]:
+        """Every stored secret whose value is empty, as (tenant, name). Before 0.32.0 a removed
+        credential was overwritten with nothing rather than deleted; the retention sweep removes
+        those files. A value that cannot be opened (encrypted, and no key) is not reported."""
+        def _do():
+            out: list[tuple[str, str]] = []
+            if not self._root.is_dir():
+                return out
+            for tdir in sorted(self._root.iterdir()):
+                if not tdir.is_dir():
+                    continue
+                for f in sorted(tdir.iterdir()):
+                    if not f.is_file():
+                        continue
+                    try:
+                        if self._open(f.read_text()) == "":
+                            out.append((tdir.name, f.name))
+                    except Exception:  # noqa: BLE001 — unreadable is not empty
+                        continue
+            return out
+        return await asyncio.to_thread(_do)
+
 
 # ── selection ─────────────────────────────────────────────────────────────────────
 

@@ -363,3 +363,25 @@ def test_a_git_import_lands_files_and_directories_and_never_follows_a_link(store
     assert os.stat(src / "src" / "run.sh").st_mode & 0o111
     assert "HR_SECRET_KEY" not in seen["env"] and "HARNESS_INTERNAL_KEY" not in seen["env"]
     assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_a_deleted_environment_takes_down_only_its_own_path(store):
+    """Deleting keeps the files for 30 days and frees the name at once; by the time the files go,
+    another environment may be mounted under that name, and its path must stay."""
+    def point(env_id, slug):
+        E.env_dir(env_id).mkdir(parents=True, exist_ok=True)
+        os.makedirs(E.ENV_MOUNT, exist_ok=True)
+        link = E.mount_path(slug)
+        if os.path.lexists(link):
+            os.unlink(link)
+        os.symlink(str(E.active_link(env_id)), link)
+
+    a, b = "henv_" + "a" * 32, "henv_" + "b" * 32
+    point(a, "data")
+    E.drop_mount("data", a)                      # the delete: its path goes, its files stay
+    assert not os.path.lexists(E.mount_path("data")) and E.env_dir(a).is_dir()
+    point(b, "data")                             # the name is taken by another environment
+    E.drop_mount("data", a)
+    E.delete_environment(a)                      # the sweep, 30 days later: no name given
+    assert os.readlink(E.mount_path("data")) == str(E.active_link(b))
+    assert not E.env_dir(a).exists()
