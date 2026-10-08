@@ -482,8 +482,9 @@ the instance, and are then removed.
 
 Nothing that has not been deleted expires. The server removes what has come due when it starts and
 once a day after that. The first start of 0.32.0 removes what earlier versions only marked as
-deleted more than 30 days before, and what tasks deleted before 0.32.0 left behind; a record from
-before delete times were kept counts from its last change. **Back up the volume before upgrading
+deleted more than 30 days before, and what tasks deleted before 0.32.0 left behind. Earlier
+versions did not keep the time of a delete, so such a record counts from its last activity: for a
+harness, the later of its last change and the last task it ran; for a response, when it was made. **Back up the volume before upgrading
 to 0.32.0** if anything deleted earlier should be kept.
 
 Backups are the caveat to all of this. Removing something from the instance does not remove it

@@ -242,6 +242,17 @@ def test_a_harness_is_removed_after_30_days_with_its_bundles_unless_another_name
     assert run(gw.BACKING.graph.get(other))["deleted"] == "0"
 
 
+def test_a_harness_deleted_before_this_version_counts_from_its_last_task_too():
+    """Its last edit was 40 days ago, but it ran a task 3 days ago, so its delete came after that."""
+    hid, _ = _a_harness()
+    now = gw._now_ms()
+    run(gw.BACKING.graph.upsert("Harness", hid, {"deleted": "1", "updated_at": str(now - 40 * DAY)}))
+    run(gw.BACKING.graph.upsert("HarnessSession", "hsess_" + uuid.uuid4().hex,
+                                {"tenant": ORG, "harness_id": hid, "status": "idle", "updated_at": str(now - 3 * DAY)}))
+    assert hid not in _sweep(dry_run=True, kinds=["harnesses"])["would_remove"]["harnesses"]
+    assert hid in _sweep(now + 28 * DAY, dry_run=True, kinds=["harnesses"])["would_remove"]["harnesses"]
+
+
 def test_a_harness_deleted_before_this_version_counts_from_its_last_write():
     old, _ = _a_harness()
     recent, _ = _a_harness()

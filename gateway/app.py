@@ -8457,8 +8457,10 @@ async def _retention_due(kind: str, now: int) -> tuple[list[dict], int]:
         rows.append((at, own, row))
 
     if kind == "sessions":
+        # A session deleted before this version has no delete time and everything it left still
+        # beside it: due at once, since a task's delete is for good.
         for r in await BACKING.graph.find("HarnessSession", {"status": "deleted"}):
-            add(r, "deleted_at", "updated_at", "created_at")
+            add(r, "deleted_at")
         due = [(at, own, r) for at, own, r in rows if not at or now - at >= _MARKER_MS]
     elif kind == "api_keys":
         for r in await BACKING.graph.find("HarnessApiKey"):
@@ -8478,8 +8480,21 @@ async def _retention_due(kind: str, now: int) -> tuple[list[dict], int]:
             add(r, "deleted_at", "created_at")
         due = [(at, own, r) for at, own, r in rows if not at or now - at >= _RETAIN_MS]
     elif kind == "harnesses":
+        # A harness deleted before delete times were kept counts from its last activity: the later
+        # of its last edit and the last task it ran, which the delete came after (Richard,
+        # 2026-10-08, "Last activity"). Its last edit alone can be months before a delete made
+        # yesterday by someone who had kept using it.
+        last_task: dict[str, int] = {}
+        for sv in await BACKING.graph.find("HarnessSession"):
+            h = str(sv.get("harness_id") or "")
+            if h:
+                t = max(_stamp_ms(sv.get("updated_at")), _stamp_ms(sv.get("created_at")))
+                last_task[h] = max(last_task.get(h, 0), t)
         for r in await BACKING.graph.find("Harness", {"deleted": "1"}):
-            add(r, "deleted_at", "updated_at", "created_at")
+            if not _stamp_ms(r.get("deleted_at")):
+                r = {**r, "_last_activity": str(max(_stamp_ms(r.get("updated_at")), _stamp_ms(r.get("created_at")),
+                                                    last_task.get(str(r.get("id") or ""), 0)) or "")}
+            add(r, "deleted_at", "_last_activity")
         due = [(at, own, r) for at, own, r in rows if not at or now - at >= _RETAIN_MS]
     elif kind == "environments":
         for r in await BACKING.graph.find("Environment", {"deleted": "1"}):
