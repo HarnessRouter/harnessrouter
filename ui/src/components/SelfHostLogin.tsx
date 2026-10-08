@@ -5,6 +5,7 @@
 // resets passwords by email and offers Google — every one of those needs a service this box does
 // not have. Reusing it would mean disabling four flows and explaining the remnants.
 import { useState } from 'react';
+import { safeNext } from '@/lib/safe-next';
 
 export function SelfHostLogin({ next }: { next: string }) {
   const [username, setUsername] = useState('');
@@ -27,7 +28,8 @@ export function SelfHostLogin({ next }: { next: string }) {
       }
       // A full navigation, not a client route change: the middleware has to see the new cookie,
       // and every page under it was rendered as unauthenticated.
-      window.location.assign(next || '/harnesses');
+      // Only a path on this site: `next` is whatever the link said (GHSA-59mq-hx4p-fw48).
+      window.location.assign(safeNext(next));
     } catch {
       setErr('Could not reach this instance.');
     } finally {
