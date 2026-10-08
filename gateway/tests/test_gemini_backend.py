@@ -10,7 +10,10 @@ import app as gw  # noqa: E402
 def test_the_gemini_backend_is_wired_into_the_one_google_provider():
     assert gw._INTEGRATION_WIRING[("google", "gemini")] == "google"
     assert gw._PROVIDER_CATALOG["google"]["base_url"] == "https://generativelanguage.googleapis.com/v1beta/openai"
-    assert set(gw._MODEL_CATALOG["gemini"]["models"]) <= set(gw._VENDOR_MODELS["google"])
+    # every Gemini CLI model runs on a Google key, except one Google answers with another model;
+    # that one runs where it is served as itself (TokenRouter, the hosted service)
+    assert set(gw._MODEL_CATALOG["gemini"]["models"]) - gw._GOOGLE_ANSWERS_AS_ANOTHER <= set(gw._VENDOR_MODELS["google"])
+    assert gw._GOOGLE_ANSWERS_AS_ANOTHER <= set(gw._VENDOR_MODELS["tokenrouter"])
     assert gw._MODEL_CATALOG["gemini"]["default"] == "gemini-3.8-flash"
     assert gw._MODEL_CATALOG["gemini"]["default"] in gw._MODEL_CATALOG["gemini"]["models"]
     assert gw._BASE_CATALOG["gemini"]["backend"] == "gemini"
