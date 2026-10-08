@@ -25,6 +25,7 @@ import { track } from '@/lib/analytics';
 import { getCurrentWorkspaceRef } from '@/lib/workspace';
 import { useEscape } from '@/lib/useEscape';
 import { getConvState, type UserMsg } from '@/lib/conversation';
+import { latencyText } from '@/lib/duration';
 
 type View = 'index' | 'chat' | 'settings';
 type TaskState = 'done' | 'running' | 'failed' | 'cancelled' | 'incomplete';
@@ -45,12 +46,6 @@ function taskState(status?: string): TaskState {
 /** A harness's loaded tasks: the pages read so far, the cursor for the next, and whether one is in flight. */
 interface TaskSlice { list: TraceCard[]; cursor: string; pages: number; loading: boolean }
 
-/** "4.2s" under a minute, "1m 12s" past it. */
-function fmtLatency(s: number): string {
-  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
-  const m = Math.floor(s / 60);
-  return `${m}m ${Math.round(s - m * 60)}s`;
-}
 
 /** "Codex · gpt-5.4" for a row, from the same fields the old list read. */
 function runtimeOf(r: HarnessRow): { baseId: string; name: string; model: string } {
@@ -332,7 +327,7 @@ export default function HarnessesPage() {
                     <span className="hx-badges" aria-label="Task totals">
                       {latency != null && (
                         <span className="hx-badge" title={`Total latency${latencyPartial ? `, from ${totals!.timed} of ${totals!.finished} turns` : ''}`}>
-                          <iconify-icon icon="tabler:clock"></iconify-icon>{latencyPartial ? '≥ ' : ''}{fmtLatency(latency)}
+                          <iconify-icon icon="tabler:clock"></iconify-icon>{latencyPartial ? '≥ ' : ''}{latencyText(latency)}
                         </span>
                       )}
                       {credits != null && (
