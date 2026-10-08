@@ -8,6 +8,7 @@ import { harnessFetch } from '@/lib/hfetch';
 import { getSession } from '@/lib/auth';
 import { OOB, listCustom, type CustomHarness, type OobHarness } from '@/lib/harness';
 import { appendWorkspaceQuery } from '@/lib/workspace';
+import { minutesAndSeconds } from '@/lib/duration';
 
 export interface TraceCard {
   session_id: string;
@@ -91,7 +92,7 @@ export function p95Of(cards: TraceCard[] | undefined): string | null {
   const el = (cards || []).map((c) => c.elapsed || 0).filter((x) => x > 0).sort((a, b) => a - b);
   if (el.length < 3) return null;
   const v = el[Math.min(el.length - 1, Math.floor(el.length * 0.95))];
-  const m = Math.floor(v / 60), s = Math.round(v % 60);
+  const [m, s] = minutesAndSeconds(v);
   return m ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
 }
 
@@ -188,8 +189,16 @@ export function timeAgo(ts: number | null): string {
   if (!ts) return '—';
   const s = Math.max(0, (Date.now() - ts) / 1000);
   if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} hr ago`;
+  // Each band rounds, so a value can round up out of it: 59.5 minutes printed "60 min ago" and
+  // 23.99 hours printed "24 hr ago". Carrying is what the reader expects of the next band.
+  if (s < 3600) {
+    const m = Math.round(s / 60);
+    return m >= 60 ? '1 hr ago' : `${m} min ago`;
+  }
+  if (s < 86400) {
+    const h = Math.round(s / 3600);
+    return h >= 24 ? '1d ago' : `${h} hr ago`;
+  }
   return `${Math.round(s / 86400)}d ago`;
 }
 
