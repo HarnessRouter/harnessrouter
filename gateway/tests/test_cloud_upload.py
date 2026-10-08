@@ -49,9 +49,10 @@ def cloud(monkeypatch):
 
     class Patched(real):
         def __init__(self, *a, **kw):
-            kw["transport"] = httpx.MockTransport(c.handle)
+            kw["transport"] = httpx.MockTransport(lambda r: c.handle(r))   # a test may swap the handler
             super().__init__(*a, **kw)
     monkeypatch.setattr(gw.httpx, "AsyncClient", Patched)
+    monkeypatch.setattr(gw, "_checked_clients", {})     # built afresh, so on this test's cloud
     return c
 
 

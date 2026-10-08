@@ -37,6 +37,7 @@ import subprocess
 import tarfile
 import tempfile
 
+import httpcore
 import httpx
 import redis.asyncio as aioredis
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
@@ -8706,7 +8707,7 @@ async def _start_retention_sweep() -> None:
                     n = {k: len(v) for k, v in res["removed"].items() if v}
                     if n or res["left"]:
                         print(f"[retention] removed {n or 'nothing'}"
-                              + (f"; counted from the last write: {res['no_delete_time']}" if res["no_delete_time"] else "")
+                              + (f"; deleted before delete times were kept: {res['no_delete_time']}" if res["no_delete_time"] else "")
                               + (f"; left: {res['left']}" if res["left"] else ""), flush=True)
             except Exception as e:  # noqa: BLE001
                 print(f"[retention] sweep failed: {type(e).__name__}", flush=True)
@@ -10990,21 +10991,115 @@ async def _internal_target(host: str, port: int) -> str | None:
     1.01 s lookup let ZERO other tasks run. Every provider file URL is classified on every poll, so
     one relay naming a slow-resolving host froze the gateway for everybody, ten seconds apart.
     """
-    loop = asyncio.get_running_loop()
+    return (await _classify_target(host, port))[1]
+
+
+def _ip_internal(addr: str) -> bool:
+    ip = ipaddress.ip_address(addr.split("%", 1)[0])
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified
+                or any(ip in net for net in _INTERNAL_NETS if ip.version == net.version))
+
+
+async def _resolve(host: str, port: int) -> list:
+    """The one DNS lookup every check makes (a test answers it differently each time)."""
+    return await asyncio.get_running_loop().getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+
+
+async def _classify_target(host: str, port: int) -> tuple[list[str], str | None]:
+    """Resolve a name once and classify every answer: (the addresses, None) when all are outside,
+    ([], why) when any is inside or the lookup failed. The addresses are what a connection must
+    then use (`_CheckedNetwork`), so the name is never resolved a second time between the check
+    and the socket."""
     try:
-        infos = await loop.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        infos = await _resolve(host, port)
     except socket.gaierror as e:
         no_such = {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)}
-        return "host does not resolve" if e.errno in no_such else "host could not be resolved"
+        return [], ("host does not resolve" if e.errno in no_such else "host could not be resolved")
     except Exception:  # noqa: BLE001
-        return "host could not be resolved"
+        return [], "host could not be resolved"
+    addrs: list[str] = []
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified
-                or any(ip in net for net in _INTERNAL_NETS if ip.version == net.version)):
-            return "target resolves to a disallowed (internal) address"
-    return None
+        if _ip_internal(info[4][0]):
+            return [], "target resolves to a disallowed (internal) address"
+        if info[4][0] not in addrs:
+            addrs.append(info[4][0])
+    return addrs, None
+
+
+class _CheckedNetwork(httpcore.AsyncNetworkBackend):
+    """Opens a socket only to an address it classified itself, in the same step.
+
+    `_internal_target` answers for a name, and the client then resolved the name again when it
+    opened the socket: a name that answers a public address to the check and an internal one a
+    moment later (a DNS rebind) passed. Here the name is resolved once, every answer is classified,
+    and the socket goes to one of those very addresses. TLS still verifies the certificate against
+    the name, since httpcore takes the server name from the request, not from this socket. Redirects
+    are not followed by these clients, and if one ever were, its connection would come through here
+    as well.
+
+    `always`: classify on every deployment (a provider's file address), or only on one shared by
+    several organizations (an address a member typed: MCP servers, upload destinations), where a
+    self-hosted box's own network is not refused."""
+
+    def __init__(self, always: bool) -> None:
+        self._inner = httpcore.AnyIOBackend()
+        self._always = always
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        if not (self._always or not _pool_is_local()):
+            return await self._inner.connect_tcp(host, port, timeout=timeout, local_address=local_address,
+                                                 socket_options=socket_options)
+        addrs, why = await _classify_target(host, port)
+        if why:
+            raise httpcore.ConnectError(f"that address cannot be used: {why}")
+        last: Exception | None = None
+        for addr in addrs:
+            try:
+                return await self._inner.connect_tcp(addr, port, timeout=timeout, local_address=local_address,
+                                                     socket_options=socket_options)
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as e:
+                last = e
+        raise last or httpcore.ConnectError("no address to connect to")
+
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        raise httpcore.ConnectError("a local socket is not a network address")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._inner.sleep(seconds)
+
+
+async def _sql_peer_check(addr: str) -> str | None:
+    """sql_plane.PEER_CHECK: on a shared deployment, a database connection that reached a private,
+    local or metadata address is closed before any query. A self-hosted box's own database is the
+    normal case there, as it is for the check made when the connection is saved."""
+    if _pool_is_local():
+        return None
+    try:
+        return "it is on a private, local or metadata network" if _ip_internal(addr) else None
+    except ValueError:
+        return "the address it reached is not a network address"
+
+
+sql_plane.PEER_CHECK = _sql_peer_check
+
+_checked_clients: dict[bool, httpx.AsyncClient] = {}
+
+
+def _checked_http(always: bool = False) -> httpx.AsyncClient:
+    """The client for an address somebody else named. Its pool opens connections through
+    `_CheckedNetwork`; httpx 0.28 takes no network backend, so the pool it built is handed one.
+    No environment proxies (a transport given explicitly turns them off): a proxy would resolve
+    the name itself, and the check would be about the proxy."""
+    c = _checked_clients.get(always)
+    if c is None:
+        transport = httpx.AsyncHTTPTransport()
+        transport._pool._network_backend = _CheckedNetwork(always)
+        c = _checked_clients[always] = httpx.AsyncClient(
+            transport=transport, follow_redirects=False,
+            timeout=httpx.Timeout(connect=30, read=600, write=120, pool=60),
+            limits=httpx.Limits(max_connections=200, max_keepalive_connections=40))
+    return c
 
 
 async def _mcp_list_tools(url: str, token: str) -> dict:
@@ -11017,7 +11112,7 @@ async def _mcp_list_tools(url: str, token: str) -> dict:
     headers = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
     if token:
         headers["authorization"] = token if token.lower().startswith("bearer ") else f"Bearer {token}"
-    c = _client()
+    c = _checked_http()
     init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2024-11-05", "capabilities": {},
                        "clientInfo": {"name": "harnessrouter", "version": "1"}}}
@@ -11993,6 +12088,12 @@ def _media_client() -> httpx.AsyncClient:
     return _client()
 
 
+def _media_fetch_client() -> httpx.AsyncClient:
+    """The client a finished file is fetched with: the address is the provider's to name, so the
+    connection goes only to an address classified in the same step, on every deployment."""
+    return _checked_http(always=True)
+
+
 async def _media_providers() -> dict[str, dict]:
     """{provider: {api_key, base_url, auth}} for every catalog provider this deployment can reach.
 
@@ -12594,7 +12695,7 @@ async def _media_fetch(url: str) -> bytes:
         raise media_plane.MediaEmpty(refused)
     buf = bytearray()
     try:
-        async with _media_client().stream("GET", url, timeout=300) as r:
+        async with _media_fetch_client().stream("GET", url, timeout=300) as r:
             if r.status_code >= 400:
                 raise media_plane.MediaEmpty(f"the finished file could not be fetched "
                                              f"(HTTP {r.status_code})")
@@ -17269,13 +17370,15 @@ class EnvironmentImportBody(BaseModel):
     replace: bool = False
 
 
-async def _git_url_refused(url: str) -> str | None:
-    """Why this server will not clone from that address, or None: the rule an MCP address follows
-    (_ssrf_check). A self-hosted box's private network is its operator's own and is allowed; on a
-    shared deployment an address that resolves to a private, local or metadata range is refused,
-    since the clone runs on this side (reported privately, GHSA-mw9j-m5jf-5r56)."""
+async def _git_url_refused(url: str) -> tuple[str | None, str]:
+    """Why this server will not clone from that address (or None), and the address the clone must
+    connect to: the rule an MCP address follows (_ssrf_check). A self-hosted box's private network
+    is its operator's own and is allowed, with no pin; on a shared deployment an address that
+    resolves to a private, local or metadata range is refused, since the clone runs on this side
+    (reported privately, GHSA-mw9j-m5jf-5r56), and the clone is pinned to an address classified
+    here as "<host>:<port>:<address>", so the name is not resolved again when git connects."""
     if _pool_is_local():
-        return None
+        return None, ""
     from urllib.parse import urlparse
     u = str(url or "")
     if u.startswith("git@"):
@@ -17285,10 +17388,11 @@ async def _git_url_refused(url: str) -> str | None:
             p = urlparse(u)
             host, port = p.hostname or "", p.port or {"http": 80, "ssh": 22}.get(p.scheme, 443)
         except ValueError:
-            return "invalid url"
+            return "invalid url", ""
     if not host:
-        return "url has no host"
-    return await _internal_target(host, port)
+        return "url has no host", ""
+    addrs, why = await _classify_target(host, port)
+    return (why, "") if why else (None, f"{host}:{port}:{addrs[0]}")
 
 
 @app.post("/v1/environments/{env_id}/import")
@@ -17302,12 +17406,12 @@ async def environment_import(env_id: str, request: Request, replace: int = 0) ->
         git = body.git or {}
         if not str(git.get("url") or ""):
             raise uhp_error(422, "environment_invalid", "Name a git url, or send an archive as the body.", "git.url")
-        refused = await _git_url_refused(str(git.get("url")))
+        refused, pin = await _git_url_refused(str(git.get("url")))
         if refused:
             raise uhp_error(422, "environment_invalid", f"That git address cannot be used: {refused}.", "git.url")
         r = await _env_runner("POST", f"/environments/{env_id}/import", env_id, timeout=900.0,
                               params={"replace": int(bool(replace or body.replace)), "git_url": str(git.get("url")),
-                                      "git_ref": str(git.get("ref") or "")}, content=b"")
+                                      "git_ref": str(git.get("ref") or ""), "git_pin": pin}, content=b"")
     else:
         declared = int(request.headers.get("content-length") or 0)
         if declared > _ENV_IMPORT_MAX:
@@ -18644,8 +18748,8 @@ async def _cloud_me(base_url: str, api_key: str) -> dict:
     if refused:
         raise HTTPException(400, f"that address cannot be used: {refused}")
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as c:
-            r = await c.get(f"{base_url}/v1/me", headers={"authorization": f"Bearer {api_key}"})
+        r = await _checked_http().get(f"{base_url}/v1/me", headers={"authorization": f"Bearer {api_key}"},
+                                      timeout=httpx.Timeout(20.0, connect=8.0))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"could not reach {base_url}: {str(e)[:120]}")
     if r.status_code == 401:
@@ -18734,9 +18838,9 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
         return {"id": hid, "ok": False, "action": "skip", "error": f"that address cannot be used: {refused}"}
     plugins_ok = False
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as c:
-            d = (await c.get(f"{target['base_url']}/v1/uhp")).json()
-            plugins_ok = bool((d.get("capabilities") or {}).get("plugins"))
+        d = (await _checked_http().get(f"{target['base_url']}/v1/uhp",
+                                       timeout=httpx.Timeout(10.0, connect=5.0))).json()
+        plugins_ok = bool((d.get("capabilities") or {}).get("plugins"))
     except Exception:  # noqa: BLE001
         plugins_ok = False
     body = await _cloud_harness_body(org, hid, v, plugins_ok)
@@ -18764,9 +18868,9 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     last_error = ""
     for attempt in (remote_id, "chrn" + uuid.uuid4().hex):
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=8.0)) as c:
-                r = await c.put(f"{target['base_url']}/v1/harnesses/{attempt}", json=body,
-                                headers={"authorization": f"Bearer {target['api_key']}"})
+            r = await _checked_http().put(f"{target['base_url']}/v1/harnesses/{attempt}", json=body,
+                                          headers={"authorization": f"Bearer {target['api_key']}"},
+                                          timeout=httpx.Timeout(60.0, connect=8.0))
         except Exception as e:  # noqa: BLE001
             return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
         if r.status_code in (200, 201):
