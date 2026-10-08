@@ -776,6 +776,36 @@ def rewrite_links(html_text: str, depth: int, version: str = VERSION) -> str:
     return html_text
 
 
+def check_spec_redirects() -> None:
+    """An undated chapter address (/spec/security, /spec/files#5-retention-and-scope) is what other
+    sites link to, and it must always reach the current version. vercel.json serves those redirects,
+    and only a real HTTP redirect keeps the #anchor (a refresh page drops it), so they live there
+    rather than in this build; this is what keeps them true to VERSION. Moving chapters to dated
+    paths without them broke every undated link on harnessrouter.ai (2026-10-08).
+
+    Fails the build when /spec, /spec/index or the chapter rule points anywhere but the latest
+    version, or when the rule's chapter list differs from the chapters the latest version has."""
+    rules = {r["source"]: r for r in json.loads((ROOT / "vercel.json").read_text())["redirects"]}
+    want = [name for name, _ in chapters_for(VERSION) if name != "index"]
+    chapter_rule = next((r for src, r in rules.items() if src.startswith("/spec/:chapter(")), None)
+    problems = []
+    for src in ("/spec", "/spec/index"):
+        if (rules.get(src) or {}).get("destination") != f"/spec/{VERSION}":
+            problems.append(f"{src} must redirect to /spec/{VERSION}")
+    if not chapter_rule:
+        problems.append("no /spec/:chapter(...) rule")
+    else:
+        listed = chapter_rule["source"][len("/spec/:chapter("):-1].split("|")
+        if chapter_rule.get("destination") != f"/spec/{VERSION}/:chapter":
+            problems.append(f"the chapter rule must redirect to /spec/{VERSION}/:chapter")
+        if sorted(listed) != sorted(want):
+            problems.append(f"the chapter rule lists {sorted(listed)}, the latest version has {sorted(want)}")
+        if chapter_rule.get("permanent") is not False:
+            problems.append("the chapter rule must not be permanent: its target moves with each version")
+    if problems:
+        raise SystemExit("protocol/vercel.json, undated spec addresses:\n  " + "\n  ".join(problems))
+
+
 def redirect_html(target: str, label: str) -> str:
     """A tiny bounce page. /spec has no version of its own — it forwards to the latest, so a typed
     or cited /spec always lands on the current specification without duplicating its content. The
@@ -1187,6 +1217,8 @@ def build() -> int:
     assert not unbuilt, (
         f"VERSIONS offers versions whose spec pages were not built: {unbuilt} — "
         f"extend NAV/build to emit /spec/<version>/ for each before listing it")
+
+    check_spec_redirects()
 
     # /spec forwards to the latest version's overview: a stable, friendly entry that never holds
     # content of its own, so there is nothing to keep in sync with the dated page it points at.
