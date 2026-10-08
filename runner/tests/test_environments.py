@@ -412,6 +412,14 @@ def test_a_pinned_git_clone_connects_to_the_address_the_gateway_classified(store
                          "-c", "http.followRedirects=false"]
     assert ssh[:3] == ["git", "-c", "core.sshCommand=ssh -o HostName=140.82.112.3 -o HostKeyAlias=git.example"]
     assert unpinned[:2] == ["git", "clone"]
+    # through the route, as the gateway sends it
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(E.router)
+    r = TestClient(app).post(f"/environments/henv_{'c' * 32}/import",
+                             params={"git_url": "https://git.example/team/repo.git", "git_pin": "git.example:443:140.82.112.3"})
+    assert r.status_code == 200 and seen[-1][:3] == ["git", "-c", "http.curloptResolve=git.example:443:140.82.112.3"]
     for bad in ("git.example:443:not-an-address", "git.example::140.82.112.3", "a b:22:140.82.112.3"):
         with pytest.raises(HTTPException):
             E.import_git("henv_" + "c" * 32, "git@git.example:team/repo.git" if " " in bad else

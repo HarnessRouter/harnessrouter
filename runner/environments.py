@@ -1132,10 +1132,11 @@ def r_delete(env_id: str, path: str) -> dict:
 
 
 @router.post("/environments/{env_id}/import")
-async def r_import(env_id: str, request: Request, replace: int = 0, git_url: str = "", git_ref: str = "",
-                   git_pin: str = "") -> dict:
+async def r_import(env_id: str, request: Request, replace: int = 0, git_url: str = "", git_ref: str = "") -> dict:
     if git_url:
-        return import_git(env_id, git_url, git_ref, replace=bool(replace), pin=git_pin)
+        # git_pin: host:port:address the gateway classified, on a shared deployment (_git_pin_args)
+        return import_git(env_id, git_url, git_ref, replace=bool(replace),
+                          pin=str(request.query_params.get("git_pin") or ""))
     fd, spool = tempfile.mkstemp(prefix="hr-env-import-")
     try:
         with os.fdopen(fd, "wb") as out:
