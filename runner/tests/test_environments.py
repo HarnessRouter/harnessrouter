@@ -391,3 +391,36 @@ def test_taking_a_path_down_refuses_a_name_that_is_not_one_segment(store):
     for slug in ("../outside", "a/b", "", ".."):
         with pytest.raises(HTTPException):
             E.drop_mount(slug, "henv_" + "a" * 32)
+
+
+def test_a_pinned_git_clone_connects_to_the_address_the_gateway_classified(store, monkeypatch):
+    """On a shared deployment the gateway hands over host:port:address; git must not resolve the
+    name again when it connects (a DNS rebind), nor follow a redirect to a name it would resolve."""
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        os.makedirs(cmd[-1], exist_ok=True)
+        pathlib.Path(cmd[-1], "README.md").write_text("hi\n")
+        return None
+    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    E.import_git("henv_" + "c" * 32, "https://git.example/team/repo.git", pin="git.example:443:140.82.112.3")
+    E.import_git("henv_" + "c" * 32, "git@git.example:team/repo.git", pin="git.example:22:140.82.112.3")
+    E.import_git("henv_" + "c" * 32, "https://git.example/team/repo.git")
+    https, ssh, unpinned = seen
+    assert https[:5] == ["git", "-c", "http.curloptResolve=git.example:443:140.82.112.3",
+                         "-c", "http.followRedirects=false"]
+    assert ssh[:3] == ["git", "-c", "core.sshCommand=ssh -o HostName=140.82.112.3 -o HostKeyAlias=git.example"]
+    assert unpinned[:2] == ["git", "clone"]
+    # through the route, as the gateway sends it
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(E.router)
+    r = TestClient(app).post(f"/environments/henv_{'c' * 32}/import",
+                             params={"git_url": "https://git.example/team/repo.git", "git_pin": "git.example:443:140.82.112.3"})
+    assert r.status_code == 200 and seen[-1][:3] == ["git", "-c", "http.curloptResolve=git.example:443:140.82.112.3"]
+    for bad in ("git.example:443:not-an-address", "git.example::140.82.112.3", "a b:22:140.82.112.3"):
+        with pytest.raises(HTTPException):
+            E.import_git("henv_" + "c" * 32, "git@git.example:team/repo.git" if " " in bad else
+                         "https://git.example/team/repo.git", pin=bad)

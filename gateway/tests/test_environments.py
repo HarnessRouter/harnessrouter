@@ -287,6 +287,8 @@ def test_a_git_address_on_a_private_network_is_refused_on_a_shared_deployment(ap
         r = api.post(f"/v1/environments/{eid}/import", json={"git": {"url": url}})
         assert r.status_code == 422 and "cannot be used" in r.text, (url, r.text)
     assert forwarded == []
-    assert __import__("asyncio").run(app._git_url_refused("https://140.82.112.3/team/repo.git")) is None   # a public address
+    # a public address passes, pinned to the address it was classified as
+    assert __import__("asyncio").run(app._git_url_refused("https://140.82.112.3/team/repo.git")) == \
+        (None, "140.82.112.3:443:140.82.112.3")
     monkeypatch.setattr(app, "_pool_is_local", lambda: True)
-    assert __import__("asyncio").run(app._git_url_refused("https://10.0.0.5/team/repo.git")) is None
+    assert __import__("asyncio").run(app._git_url_refused("https://10.0.0.5/team/repo.git")) == (None, "")
