@@ -80,6 +80,35 @@ def test_import_strips_one_wrapping_directory_and_drops_escapes_and_links(store,
     assert {e["path"] for e in E.tree("henv_z") if not e["dir"]} == {"a.txt", "d/b.txt"}
 
 
+@pytest.mark.parametrize("archive_format", ["zip", "tar"])
+@pytest.mark.parametrize("wrapper, directory_entry", [("", False), ("project/", False), ("project/", True)])
+def test_import_keeps_a_single_file_with_or_without_a_wrapping_directory(
+    store, tmp_path, archive_format, wrapper, directory_entry,
+):
+    data = b"a single file\n"
+    p = tmp_path / ("single." + archive_format)
+    if archive_format == "zip":
+        with zipfile.ZipFile(p, "w") as zf:
+            if directory_entry:
+                zf.writestr(wrapper, b"")
+            zf.writestr(wrapper + "new.txt", data)
+    else:
+        with tarfile.open(p, "w") as tf:
+            if directory_entry:
+                directory = tarfile.TarInfo(wrapper)
+                directory.type = tarfile.DIRTYPE
+                tf.addfile(directory)
+            member = tarfile.TarInfo(wrapper + "new.txt")
+            member.size = len(data)
+            tf.addfile(member, io.BytesIO(data))
+
+    out = E.import_archive("henv_single", str(p))
+    assert out["written"] == 1 and out["skipped"] == 0
+    assert E.source_stat("henv_single") == {"count": 1, "bytes": len(data)}
+    assert E.read_file("henv_single", "new.txt")[0] == data
+    assert {e["path"] for e in E.tree("henv_single")} == {"new.txt"}
+
+
 def _wait(env_id, n, timeout=240):
     for _ in range(timeout * 4):
         rec = E.build_record(env_id, n)

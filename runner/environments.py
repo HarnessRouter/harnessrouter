@@ -351,6 +351,8 @@ def _strip_common_root(names: list[str]) -> str:
     firsts = {n.split("/", 1)[0] for n in names if n.strip("/")}
     if len(firsts) == 1:
         root = next(iter(firsts))
+        if not any(n.startswith(root + "/") and n[len(root) + 1:].strip("/") for n in names):
+            return ""
         if all(n == root or n == root + "/" or n.startswith(root + "/") for n in names if n.strip("/")):
             return root + "/"
     return ""
