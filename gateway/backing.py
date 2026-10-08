@@ -34,6 +34,7 @@ import mimetypes
 import os
 import posixpath
 import re
+import shutil
 import sqlite3
 import tarfile
 import time
@@ -271,6 +272,28 @@ class FileBlobStore:
             return True
         return await asyncio.to_thread(_do)
 
+    async def purge(self, kb: str, prefix: str) -> None:
+        """Remove everything under a folder-shaped prefix ("sessions/<sid>/"), including the
+        temporary files a torn write leaves and `list` does not show. A deleted session's folder
+        held a lone `changed.json.tmp` after every listed object was gone (hr-test copy,
+        2026-10-08)."""
+        def _do():
+            base = (self._root / kb).resolve()
+            if not prefix.endswith("/") or prefix.strip("/") == "":
+                return
+            top = (base / prefix).resolve()
+            if top == base or base not in top.parents or not top.is_dir():
+                return
+            shutil.rmtree(top, ignore_errors=True)
+            for parent in top.parents:
+                if parent == base or base not in parent.parents:
+                    break
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+        await asyncio.to_thread(_do)
+
     async def list(self, kb: str, prefix: str, limit: int = 20, cursor: str | None = None) -> dict:
         # Walk only the subtree the prefix names: everything before its last "/" is a directory
         # under the store, the rest a name prefix inside it. Walking the whole store cost every
@@ -407,6 +430,28 @@ class FileSecretStore:
             with contextlib.suppress(OSError):
                 self._p(tenant, name).unlink()
         await asyncio.to_thread(_do)
+
+    async def blank(self) -> list[tuple[str, str]]:
+        """Every stored secret whose value is empty, as (tenant, name). Before 0.32.0 a removed
+        credential was overwritten with nothing rather than deleted; the retention sweep removes
+        those files. A value that cannot be opened (encrypted, and no key) is not reported."""
+        def _do():
+            out: list[tuple[str, str]] = []
+            if not self._root.is_dir():
+                return out
+            for tdir in sorted(self._root.iterdir()):
+                if not tdir.is_dir():
+                    continue
+                for f in sorted(tdir.iterdir()):
+                    if not f.is_file():
+                        continue
+                    try:
+                        if self._open(f.read_text()) == "":
+                            out.append((tdir.name, f.name))
+                    except Exception:  # noqa: BLE001 — unreadable is not empty
+                        continue
+            return out
+        return await asyncio.to_thread(_do)
 
 
 # ── selection ─────────────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 
 - [Install](#install)
 - [Restarts, upgrades, and backups](#restarts-upgrades-and-backups)
+- [What a delete removes, and when](#what-a-delete-removes-and-when)
 - [Starter kits](#starter-kits)
 - [Plugins](#plugins)
 - [Environments](#environments)
@@ -462,6 +463,45 @@ Stop the container before copying the volume so the SQLite databases and files f
 backup. Preserve the volume's permissions and keep any configured encryption key securely
 alongside your deployment records. Restore the volume and the same configuration before starting
 the replacement instance.
+
+## What a delete removes, and when
+
+Deleting follows one rule on this instance, the same as on the hosted service. Some things go at
+once and cannot be brought back; the others are kept for 30 days, can be restored by whoever runs
+the instance, and are then removed.
+
+| What is deleted | What happens |
+|---|---|
+| A task (a session) | Removed at once, for good: its conversation and trace, its responses, the files it produced and their previews, its list of changed files, its media, the record of every plugin call it made, its checkpoint and its working folder. A marker that holds its id and the time of the delete, and nothing of its content, stays for a day so that a turn still finishing cannot write it back, then goes too. |
+| An API key | Removed at once. It stops working immediately and leaves the list of keys. |
+| A credential | Removed at once: a plugin's stored secrets when the plugin is removed, a database connection when it is removed from a harness or its harness is deleted, a stored tool token deleted with `DELETE /v1/mcp-secrets/{ref}`. |
+| A harness | Kept 30 days, then removed with its skill bundles and plugin packages. A restored harness comes back without its credentials, since those went at once. The tasks and responses that used it are kept. |
+| A response deleted on its own | Unreadable at once, kept 30 days, then removed. A response of a deleted task goes with the task. |
+| An environment | Its `/env/<name>` path goes at once, so no task sees it and the name is free; its files and builds are kept 30 days, then removed. |
+| An upload (`DELETE /v1/files/{id}`) | Refused to new tasks at once, kept 30 days, then removed. |
+
+Nothing that has not been deleted expires. The server removes what has come due when it starts and
+once a day after that. The first start of 0.32.0 removes what earlier versions only marked as
+deleted more than 30 days before, and what tasks deleted before 0.32.0 left behind. Earlier
+versions did not keep the time of a delete, so such a record counts from its last activity: for a
+harness, the later of its last change and the last task it ran; for a response, when it was made. **Back up the volume before upgrading
+to 0.32.0** if anything deleted earlier should be kept.
+
+Backups are the caveat to all of this. Removing something from the instance does not remove it
+from a copy of the volume taken before the delete: a backup keeps whatever it held, for as long
+as the backup is kept. Rotate backups to match the promise you make to the people using the
+instance.
+
+To see what is due, remove it now, or bring something back within its 30 days:
+
+```bash
+docker exec harnessrouter hr-retention                                # what is due (removes nothing)
+docker exec harnessrouter hr-retention sweep                          # remove it now
+docker exec harnessrouter hr-retention restore harnesses chrn_...     # or responses, environments, uploads
+```
+
+An environment cannot be restored while another environment holds its name; rename that one
+first.
 
 ## Starter kits
 
@@ -1137,6 +1177,7 @@ All paths below are relative to the API base above and use the same Bearer key.
 | Read session history | `GET /v1/sessions/{session_id}/turns` |
 | Upload inputs or retrieve outputs | `POST /v1/files`; `GET /v1/sessions/{session_id}/files` |
 | Cancel work | `POST /v1/responses/{response_id}/cancel` |
+| Delete | `DELETE /v1/sessions/{session_id}`, `DELETE /v1/responses/{response_id}`, `DELETE /v1/harnesses/{harness_id}`, `DELETE /v1/files/{file_id}`, `DELETE /v1/mcp-secrets/{ref}`; what each removes and when is in [What a delete removes, and when](#what-a-delete-removes-and-when) |
 | Describe the API | `GET /v1/openapi.json`, the surface above as an OpenAPI document, readable without a login |
 | Inspect execution | `GET /v1/sessions/{session_id}/turns` for the turns; `GET /v1/traces/{session_id}/all` for the stored event stream of the harness as newline-delimited JSON, one event per line (`content-type: application/x-ndjson`; assistant, tool and result events as the CLI emitted them); `/v1/traces/{session_id}/events?chunk=N` reads one stored chunk. Provider-call spans (the model requests behind a turn) are part of the hosted service's observability, not of this edition |
 

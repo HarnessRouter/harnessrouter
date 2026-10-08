@@ -979,15 +979,24 @@ def ensure_mount(env_id: str, slug: str) -> str:
     return link
 
 
-def drop_mount(slug: str) -> None:
-    link = mount_path(slug)
-    if os.path.islink(link):
-        os.unlink(link)
+def drop_mount(slug: str, env_id: str = "") -> None:
+    """Take the path down. Given the environment, only while the path is still that environment's:
+    a deleted environment's name is free at once, and another environment may hold it by the time
+    this one is removed for good."""
+    base = os.path.realpath(ENV_MOUNT)
+    link = os.path.normpath(os.path.join(base, str(slug or "")))
+    if not slug_ok(slug) or not link.startswith(base + os.sep):
+        raise HTTPException(400, "environment slug is not a path segment")
+    if not os.path.islink(link):
+        return
+    if env_id and os.readlink(link) != str(active_link(env_id)):
+        return
+    os.unlink(link)
 
 
 def delete_environment(env_id: str, slug: str = "") -> dict:
     if slug:
-        drop_mount(slug)
+        drop_mount(slug, env_id)
     d = env_dir(env_id)
     if d.exists():
         shutil.rmtree(d, ignore_errors=True)
@@ -1154,6 +1163,13 @@ def r_activate(env_id: str, version: int, slug: str) -> dict:
 @router.delete("/environments/{env_id}")
 def r_delete_env(env_id: str, slug: str = "") -> dict:
     return delete_environment(env_id, slug)
+
+
+@router.delete("/environments/{env_id}/mount")
+def r_unmount_env(env_id: str, slug: str) -> dict:
+    """A deleted environment, kept for 30 days: its files stay, its path goes."""
+    drop_mount(slug, env_id)
+    return {"id": env_id, "mounted": False}
 
 
 @router.get("/environments/{env_id}")
