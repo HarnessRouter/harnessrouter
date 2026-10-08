@@ -169,10 +169,11 @@ def _peer_of(conn) -> str:
 
 
 async def _vet_peer(conn) -> None:
+    """The gateway decides, including for an address that could not be read: on a self-hosted box
+    that is a database on a local socket, the normal case there (0.32.1 refused it)."""
     if PEER_CHECK is None:
         return
-    addr = _peer_of(conn)
-    why = await PEER_CHECK(addr) if addr else "the address it reached could not be read"
+    why = await PEER_CHECK(_peer_of(conn))
     if why:
         raise SqlError(f"This server cannot use that database: {why}.")
 

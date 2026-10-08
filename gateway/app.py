@@ -11075,6 +11075,8 @@ async def _sql_peer_check(addr: str) -> str | None:
     normal case there, as it is for the check made when the connection is saved."""
     if _pool_is_local():
         return None
+    if not addr:
+        return "the address it reached could not be read"
     try:
         return "it is on a private, local or metadata network" if _ip_internal(addr) else None
     except ValueError:
@@ -11093,13 +11095,24 @@ def _checked_http(always: bool = False) -> httpx.AsyncClient:
     the name itself, and the check would be about the proxy."""
     c = _checked_clients.get(always)
     if c is None:
-        transport = httpx.AsyncHTTPTransport()
-        transport._pool._network_backend = _CheckedNetwork(always)
+        # Limits belong to the transport: httpx applies a client's own only to a transport it builds.
         c = _checked_clients[always] = httpx.AsyncClient(
-            transport=transport, follow_redirects=False,
-            timeout=httpx.Timeout(connect=30, read=600, write=120, pool=60),
-            limits=httpx.Limits(max_connections=200, max_keepalive_connections=40))
+            transport=_checked_transport(always, httpx.Limits(max_connections=200, max_keepalive_connections=40)),
+            follow_redirects=False, timeout=httpx.Timeout(connect=30, read=600, write=120, pool=60))
     return c
+
+
+def _checked_transport(always: bool, limits: httpx.Limits | None = None) -> httpx.AsyncHTTPTransport:
+    transport = httpx.AsyncHTTPTransport(limits=limits or httpx.Limits())
+    transport._pool._network_backend = _CheckedNetwork(always)
+    return transport
+
+
+# The plugin vendors' client (plugs_plane.client) opens its connections the same way: a plug's
+# address can be one a member typed (an InsForge backend), and its answer goes back to the agent.
+# On a shared deployment that was a way into the private network; GitHub, Vercel and Microsoft are
+# public and pass the same check.
+plugs_plane.checked_transport = lambda: _checked_transport(False)
 
 
 async def _mcp_list_tools(url: str, token: str) -> dict:
