@@ -6712,13 +6712,26 @@ _VERCEL_RESLUG = {
 # meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", HTTP 405; "This model doesn't support tool
 # use in streaming mode", HTTP 400 on llama-3.3-70b) and caps output at 8192, so no harness can
 # drive a turn on it there; the same ids answer on OpenRouter (2026-09-13, every harness x 5).
-_VERCEL_NO_CHANNEL = {"llama-4-maverick", "llama-3.3-70b"}
+# Vercel's nemotron-3.5-lightning returns its tool calls with the arguments garbled (a `path` of
+# `": check.txt we need to provide the content \"kiwi\""`, streamed and not, 4 of 4 raw calls) or
+# none at all: hermes then made no call and said it had, pi's `write` arrived with no input
+# (2026-10-08, 3 of 3 turns). The same id on OpenRouter returned clean arguments 4 of 4 and passed
+# hermes, pi and opencode. It passed every base on Vercel in the 2026-10 matrix, so it is the
+# channel that changed; listed here until a re-measure on Vercel passes.
+_VERCEL_NO_CHANNEL = {"llama-4-maverick", "llama-3.3-70b", "nemotron-3.5-lightning"}
 _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v) for c, v in _SHARED_SLUGS.items()
                             if c not in _VERCEL_NO_CHANNEL}
 # Google AI Studio serves the catalog's Gemini models by their own ids.
 # Google AI Studio serves the whole family under the plain id (its /v1beta/models, 2026-09-06, on
 # the sponsored project; 40 generateContent-capable models, of which these eleven are chat models).
-_VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview")}
+# Not gemini-3.7-flash: since 2026-10-08 Google answers that id with gemini-3.8-flash (`modelVersion`
+# on generateContent, streamed and not; the other seven come back as themselves). Gemini CLI reports
+# the model it ran and fails the turn as a substitution; Google's OpenAI-compatible surface echoes
+# the id it was asked for, so every other base would have run 3.8 under the 3.7 name. TokenRouter,
+# Vercel and OpenRouter still serve it as itself.
+_GOOGLE_ANSWERS_AS_ANOTHER = {"gemini-3.7-flash"}
+_VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview")
+                            if m not in _GOOGLE_ANSWERS_AS_ANOTHER}
 
 
 # ── one order for every model list ────────────────────────────────────────────────────────────
