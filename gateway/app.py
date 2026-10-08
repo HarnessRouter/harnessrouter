@@ -5063,7 +5063,28 @@ async def _session_strip(sid: str, v: dict | None) -> None:
         await BACKING.graph.upsert("HarnessSession", sid, keep)
 
 
-async def _session_purge(sid: str, v: dict | None) -> None:
+async def _session_records(label: str, field: str, sid: str, index: dict | None) -> list[str]:
+    """The ids of one kind of record a session owns. The sweep hands in an index it built once:
+    a lookup by property reads every record of the label, and a volume with thousands of deleted
+    sessions would otherwise read every response once per session."""
+    if index is not None:
+        return list(index.get(label, {}).get(sid, ()))
+    return [str(r["id"]) for r in await BACKING.graph.find(label, {field: sid}) if r.get("id")]
+
+
+async def _session_index() -> dict:
+    """Every session's responses and plugin calls, by session id, in one read of each label."""
+    idx: dict = {}
+    for label, field in (("HarnessResponse", "session_id"), (_PLUG_CALL_LABEL, "session")):
+        by: dict[str, list[str]] = {}
+        for r in await BACKING.graph.find(label):
+            if r.get(field) and r.get("id"):
+                by.setdefault(str(r[field]), []).append(str(r["id"]))
+        idx[label] = by
+    return idx
+
+
+async def _session_purge(sid: str, v: dict | None, index: dict | None = None) -> None:
     """Everything a session left, removed: its transcript and trace, its responses, the files its
     tasks produced, their previews and change list, its media, the record of every plugin call it
     made, its checkpoint and its live working folder. Richard's rule (2026-10-08, the same on the
@@ -5094,12 +5115,10 @@ async def _session_purge(sid: str, v: dict | None) -> None:
     # 2) its responses. Response §7 keeps a response deleted on its own for 30 days; a response
     # of a deleted session goes with the session.
     with contextlib.suppress(Exception):
-        for r in await BACKING.graph.find("HarnessResponse", {"session_id": sid}):
-            rid = str(r.get("id") or "")
-            if rid:
-                _resp_cache_forget(rid)
-                await _blob_delete(f"responses/{rid}.json", kb=RESP_BLOB_KB)
-                await BACKING.graph.delete(rid, "HarnessResponse")
+        for rid in await _session_records("HarnessResponse", "session_id", sid, index):
+            _resp_cache_forget(rid)
+            await _blob_delete(f"responses/{rid}.json", kb=RESP_BLOB_KB)
+            await BACKING.graph.delete(rid, "HarnessResponse")
     # 3) everything stored under its id: the checkpoint and the media scene (sessions/<sid>/ in
     # the session store), the change list (sessions/<sid>/ in the response store), the files its
     # tasks produced (containers/<sid>/) and their rendered previews (previews/<sid>/)
@@ -5121,9 +5140,8 @@ async def _session_purge(sid: str, v: dict | None) -> None:
     await _media_session_purge(sid)
     # 4) the record of every plugin call it made
     with contextlib.suppress(Exception):
-        for r in await BACKING.graph.find(_PLUG_CALL_LABEL, {"session": sid}):
-            if r.get("id"):
-                await BACKING.graph.delete(str(r["id"]), _PLUG_CALL_LABEL)
+        for cid in await _session_records(_PLUG_CALL_LABEL, "session", sid, index):
+            await BACKING.graph.delete(cid, _PLUG_CALL_LABEL)
 
 
 # ── connection admin (org admins manage their own provider connections) ──────────
@@ -8509,7 +8527,9 @@ async def _retention_remove(kind: str, item: dict, ctx: dict) -> str | None:
     """Remove one due item for good. Answers why it was left, or None when it is gone."""
     iid, row = item["id"], item["row"]
     if kind == "sessions":
-        await _session_purge(iid, row)
+        if "by_session" not in ctx:
+            ctx["by_session"] = await _session_index()
+        await _session_purge(iid, row, ctx["by_session"])
         await BACKING.graph.delete(iid, "HarnessSession")
     elif kind == "api_keys":
         await BACKING.graph.delete(iid, "HarnessApiKey")
