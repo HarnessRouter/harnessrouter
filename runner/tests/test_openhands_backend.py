@@ -218,6 +218,102 @@ def test_an_error_event_is_recorded_not_rendered():
     assert [m for m, _ in out] == ["error"]
 
 
+def test_an_agent_error_is_the_calls_result_and_does_not_fail_the_turn():
+    """The SDK (1.49.2 _emit_tool_error) shows a call it could not make as an ActionEvent with no
+    action, then hands the model an AgentErrorEvent under the same call id, and the model carries
+    on. qwen3.7-plus gave task_tracker a status of 'pending', made both files it was asked for, and
+    the turn was recorded failed because this event was reported as the turn's error (2026-10-09)."""
+    from server import _openhands_to_claude
+    state: dict = {}
+    refused = "Error validating tool 'task_tracker': task_list.1.status Input should be 'todo'"
+    lines = []
+    for ev in ({"kind": "ActionEvent", "tool_call_id": "c1", "tool_name": "task_tracker", "action": None,
+                "tool_call": {"id": "c1", "name": "task_tracker",
+                              "arguments": json.dumps({"command": "plan", "task_list": [{"status": "pending"}]})}},
+               {"kind": "AgentErrorEvent", "tool_name": "task_tracker", "tool_call_id": "c1", "error": refused},
+               {"kind": "MessageEvent", "llm_message": {"role": "assistant", "content": [{"type": "text", "text": "Both files are made."}]}}):
+        out, state = _collect(ev, state)
+        lines += out
+    assert [m for m, _ in lines] == ["tool_call", "tool_result", "text"]
+    assert lines[1][1] == {"id": "c1", "output": refused, "is_error": True}
+    assert not state.get("reported_error") and state["agent_error"] == refused
+    runner: dict = {}
+    events = []
+    for m, p in lines + [("result", {"final": "Both files are made.", "ok": True, "status": "finished"})]:
+        events += _openhands_to_claude({"m": m, "p": p}, runner)
+    assert events[-1]["subtype"] == "success" and events[-1]["result"] == "Both files are made."
+    assert any(b.get("type") == "tool_result" and b.get("is_error") and b.get("tool_use_id") == "c1"
+               for e in events for b in (e.get("message") or {}).get("content") or [])
+
+
+def _turn_over(events: list, monkeypatch) -> tuple[list, dict]:
+    """_run_turn against a socket that delivers `events` in order, then stays quiet."""
+    import types
+
+    class _Socket:
+        def __init__(self):
+            self.queue = [json.dumps(e) for e in events]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def recv(self, timeout=None):
+            if self.queue:
+                return self.queue.pop(0)
+            raise TimeoutError
+
+    client = types.ModuleType("websockets.sync.client")
+    client.connect = lambda *a, **k: _Socket()
+    for name, mod in (("websockets", types.ModuleType("websockets")),
+                      ("websockets.sync", types.ModuleType("websockets.sync")),
+                      ("websockets.sync.client", client)):
+        monkeypatch.setitem(sys.modules, name, mod)
+    monkeypatch.setattr(drv, "_req", lambda *a, **k: {})
+    out, state = [], {}
+    monkeypatch.setattr(drv, "_emit", lambda m, p: out.append((m, p)))
+    drv._run_turn("http://s", "ws://s", "k", "c1", "hi", state, max_seconds=5)
+    return out, state
+
+
+def test_a_failed_status_waits_for_the_reason_that_follows_it(monkeypatch):
+    """The SDK publishes the failed status first and the ConversationErrorEvent saying why second
+    (MaxIterationsReached). Ending on the status left the record with "the agent-server marked the
+    conversation error" while the server's log had the reason (gemini-3.8-flash, 2026-10-09)."""
+    out, state = _turn_over([
+        {"kind": "ConversationStateUpdateEvent", "key": "execution_status", "value": "running"},
+        {"kind": "ConversationStateUpdateEvent", "key": "execution_status", "value": "error"},
+        {"kind": "ConversationErrorEvent", "code": "MaxIterationsReached",
+         "detail": "Agent reached maximum iterations limit (8)."},
+    ], monkeypatch)
+    assert state["status"] == "error" and state.get("reported_error")
+    assert out == [("error", {"text": "MaxIterationsReached: Agent reached maximum iterations limit (8)."})]
+
+
+def test_a_finished_turn_ends_on_its_status(monkeypatch):
+    """Only a failed status has a reason to wait for; a finished turn does not read on."""
+    out, state = _turn_over([
+        {"kind": "ConversationStateUpdateEvent", "key": "execution_status", "value": "running"},
+        {"kind": "ConversationStateUpdateEvent", "key": "execution_status", "value": "finished"},
+        {"kind": "MessageEvent", "llm_message": {"role": "assistant", "content": [{"type": "text", "text": "late"}]}},
+    ], monkeypatch)
+    assert state["status"] == "finished" and out == []
+
+
+def test_a_call_the_sdk_could_not_make_shows_what_the_model_sent():
+    """Such a call carries no action, so its card showed no input at all. Arguments that were not
+    JSON are replaced by the SDK's own marker, which is not the model's and stays off the card."""
+    call, _ = _collect({"kind": "ActionEvent", "tool_call_id": "c2", "tool_name": "terminal", "action": None,
+                        "tool_call": {"id": "c2", "arguments": '{"command": "ls", "timeout": "soon"}'}}, {})
+    assert call[0][1]["name"] == "Shell" and call[0][1]["input"] == {"command": "ls", "timeout": "soon"}
+    call, _ = _collect({"kind": "ActionEvent", "tool_call_id": "c3", "tool_name": "terminal", "action": None,
+                        "tool_call": {"id": "c3", "arguments": json.dumps(
+                            {"_openhands_malformed_tool_call": True, "error": "Expecting value"})}}, {})
+    assert call[0][1]["input"] == {}
+
+
 def test_a_streaming_delta_is_not_rendered_twice():
     """The final MessageEvent carries the same text whole."""
     out, _ = _collect({"kind": "StreamingDeltaEvent", "delta": "OH-"})

@@ -4161,6 +4161,13 @@ def _usage_fields(u) -> dict:
         cached = n(det.get("cached_tokens")) if isinstance(det, dict) else 0
         return {"input_tokens": max(n(u.get("prompt_tokens")) - cached, 0),
                 "output_tokens": n(u.get("completion_tokens")), "cache_read_tokens": cached}
+    if "input_tokens" in u and isinstance(u.get("input_tokens_details"), dict):
+        # The Responses API: Messages' names with chat's meaning. input_tokens is GROSS and the
+        # cached part sits under input_tokens_details (OpenAI, 2026-10-09: 4021 in, 3840 of them
+        # cached). Read as Anthropic's, every cached token was counted as fresh input.
+        cached = n(u["input_tokens_details"].get("cached_tokens"))
+        return {"input_tokens": max(n(u.get("input_tokens")) - cached, 0),
+                "output_tokens": n(u.get("output_tokens")), "cache_read_tokens": cached}
     if "input_tokens" in u or "output_tokens" in u:
         out = {}
         for src, dst in (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
@@ -4179,11 +4186,14 @@ def _usage_fields(u) -> dict:
 def _usage_in_doc(doc) -> dict:
     """The usage a response document or stream event carries, if any. Anthropic's stream puts the
     input side on message_start (under message.usage) and the output side on message_delta, so a
-    call's usage is the union of what its events said, later values replacing earlier ones."""
+    call's usage is the union of what its events said, later values replacing earlier ones. The
+    Responses API's stream carries it inside the response, on response.completed: read only at the
+    top level, every streamed Responses call passed the relay uncounted (hermes and goose, 2026-10-09)."""
     if not isinstance(doc, dict):
         return {}
     for u in (doc.get("usage"), doc.get("usageMetadata"),
-              (doc.get("message") or {}).get("usage") if isinstance(doc.get("message"), dict) else None):
+              (doc.get("message") or {}).get("usage") if isinstance(doc.get("message"), dict) else None,
+              (doc.get("response") or {}).get("usage") if isinstance(doc.get("response"), dict) else None):
         got = _usage_fields(u)
         if got:
             return got
