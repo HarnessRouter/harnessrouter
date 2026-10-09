@@ -57,6 +57,7 @@ import re
 import shlex
 import shutil
 import signal
+import sys
 import socket
 import sqlite3
 import subprocess
@@ -1193,6 +1194,14 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # config.yaml, so a tree another backend wrote is not swept in (kimi's reason).
         rootrels = [".harness/home/.minimax/skills"]
         entryroot = ".harness/home/.minimax/skills"
+    elif backend == "qoder":
+        # Not where a loader looks — nothing on this box loads them. The folders are staged here
+        # for the driver to publish as Qoder Skill resources bound on the session's Agent, which
+        # Qoder's sandbox then installs under the skill's own name. Under .harness/ so the bundle
+        # is never a produced file, and checkpointed so the content hash the driver keeps is
+        # comparable next turn.
+        rootrels = [".harness/skills"]
+        entryroot = ".harness/skills"
     elif backend in ("opencode", "kilo"):
         # Kilo CLI is opencode's fork and keeps the same `skills.paths` key (core/src/v1/config/
         # skills.ts at 7.8.1), so it takes the same directory.
@@ -1594,8 +1603,8 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     workspace PARENT, the user saw an empty turn, and three turns went to copying files into view.
     An instruction is the right mechanism here: writes cannot be walled in a sandbox whose point is
     real bash, and widening collection would ship every scratch file as a deliverable."""
-    if backend == "systemone":
-        return                  # reads no workspace; its instructions travel in the job (see _build_systemone)
+    if backend in ("systemone", "qoder"):
+        return                  # reads no workspace; its instructions travel in the job (_build_systemone, _build_qoder)
     p = _agent_doc_path(cwd, backend)
     base = (agent_doc or "").strip()
     lines = [_AGENTS_BEGIN, "## Workspace", "",
@@ -4425,6 +4434,9 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
+        if flags.get("passthrough"):
+            self._passthrough(base, key, tail, headers, body)
+            return
         if tail.split("?", 1)[0] == "/messages" and not flags.get("bedrock_anthropic"):
             # An Anthropic Messages call (goose's and hermes's anthropic providers, litellm's
             # anthropic/ route, the claude CLI on a custom endpoint). Anthropic reads the key from
@@ -4881,6 +4893,87 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
 
+    def _passthrough(self, base: str, key: str, tail: str, headers: dict, body: bytes | None) -> None:
+        """A route that is only the credential boundary: the request goes up as the client wrote it
+        and the answer comes down as the provider wrote it. No body rewrite, no retry ladder, and
+        NONE of the taps — not the served model, not usage, not the finish reason.
+
+        This is the route a remote runtime's control API rides (Qoder's Managed API, see
+        _qoder_relay_route). Those objects carry a `"model":"…"` field that is the CONFIGURED model,
+        not what served: a session object through the model-call taps would be recorded as a served
+        model and scored by the matrix as a substitution check the backend cannot make. Stalls are
+        not narrated either: a long remote tool step can be silent for longer than the relay's wait,
+        and an error event written into this stream would be read by the driver as the API's own.
+        The connection simply closes, and the driver resumes from its last event id."""
+        req = urllib.request.Request(base.rstrip("/") + tail, data=body, method=self.command, headers=headers)
+        try:
+            resp = urllib.request.urlopen(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
+        except urllib.error.HTTPError as e:
+            data = e.read()
+            self.send_response(e.code)
+            self.send_header("content-type", e.headers.get("content-type") or "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
+            reason = f"{type(e).__name__}: {e}"[:300]
+            print(f"[relay] upstream did not answer {tail} (passthrough): {reason}", flush=True)
+            payload = json.dumps({"type": "error", "error": {
+                "type": "upstream_unavailable", "message": f"the provider did not answer: {reason}"}}).encode()
+            try:
+                self.send_response(504 if isinstance(e, TimeoutError) or "timed out" in str(e) else 502)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            except OSError:
+                pass
+            return
+        ctype = resp.headers.get("content-type") or ""
+        if "text/event-stream" in ctype:
+            self.send_response(resp.status)
+            self.send_header("content-type", ctype)
+            self.send_header("transfer-encoding", "chunked")
+            self.end_headers()
+            while True:
+                try:
+                    chunk = resp.read1(65536)
+                except (http.client.HTTPException, TimeoutError, OSError) as e:
+                    # the stream stopped: closed, not narrated (see above)
+                    print(f"[relay] passthrough stream on {tail} stopped: {type(e).__name__}: {e}"[:300], flush=True)
+                    self.close_connection = True
+                    return
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                    self.wfile.flush()
+                except OSError:
+                    self.close_connection = True
+                    return
+            self.wfile.write(b"0\r\n\r\n")
+            return
+        try:
+            data = resp.read()
+        except (http.client.HTTPException, TimeoutError, OSError) as e:
+            payload = json.dumps({"type": "error", "error": {
+                "type": "upstream_unavailable", "message": f"the provider stopped answering mid-body: {e}"[:300]}}).encode()
+            try:
+                self.send_response(502)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            except OSError:
+                pass
+            return
+        self.send_response(resp.status)
+        self.send_header("content-type", ctype)
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _bedrock_anthropic(self, origin: str, key: str, body: bytes) -> None:
         """Anthropic Messages -> Bedrock InvokeModel, both directions.
 
@@ -4975,8 +5068,28 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):   # noqa: N802 — model listings and the like
         self._forward(None)
 
+    def do_DELETE(self):   # noqa: N802 — a remote runtime's objects are deleted through its API
+        self._forward(None)
+
     def log_message(self, *a):  # diagnostics belong on stderr, never stdout
         pass
+
+
+def _qoder_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
+    """Register one Qoder turn's API base as a pass-through route; → (relay base, placeholder).
+
+    The relay is the credential boundary and nothing else here: the PAT stays in this process, the
+    driver is handed a placeholder, and every call — session create, events, the SSE stream, file
+    upload, DELETE — goes up verbatim (_HermesRelayHandler._passthrough). The base is joined as
+    stored (…/api/v1/cloud), never given a /v1 of its own."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key, _turn_route({"passthrough": True}))
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
 def _bedrock_anthropic_route(origin: str, api_key: str) -> tuple[str, str]:
@@ -7939,6 +8052,146 @@ OPENHANDS_PYTHON = os.environ.get("HR_OPENHANDS_PYTHON",
                                   "/data/agent-tools/openhands-venv/bin/python")
 OPENHANDS_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openhands_driver.py")
 
+# ── qoder: Qoder Cloud Agent, a hosted runtime reached over REST + SSE (api.qoder.com) ────────
+# The first backend whose runtime is not a process this runner spawns. The turn process is
+# runner/qoder_driver.py, an HTTP client to Qoder's Managed API: it creates (or continues) a
+# session there, posts the message, follows the event stream and lands delivered artifacts in the
+# workspace. BACKENDS marks it `remote`, which is what gives it a graceful stop (_stop_proc) so the
+# remote turn is cancelled before the local process is killed.
+#
+# Qoder picks and bills the model itself; a connection carries Qoder's PAT or SAT and nothing else,
+# so the backend has one provider, `qoder`. The public API reports neither token counts nor the
+# served model (only credits), so a turn's result carries no usage and no model, and a `charge`
+# instead — docs/harness-verification.md, "remote runtimes".
+QODER_DEFAULT_MODEL = os.environ.get("QODER_DEFAULT_MODEL", "ultimate")
+QODER_PROVIDERS = {"qoder"}
+QODER_DEFAULT_BASE = "https://api.qoder.com/api/v1/cloud"
+QODER_PYTHON = os.environ.get("HR_QODER_PYTHON", sys.executable)   # stdlib only: the runner's own interpreter
+QODER_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qoder_driver.py")
+QODER_STATE_REL = os.path.join(".harness", "qoder", "state.json")   # the driver's record of its remote ids
+# The built-ins of agent_toolset_20260401, the names tools_disabled matches; pinned equal to
+# qoder_driver.TOOLS and to the gateway's catalog by tests.
+QODER_TOOLS = ("Bash", "DeliverArtifacts", "Edit", "Glob", "Grep", "ImageGen", "ImageSearch", "Read",
+               "WebFetch", "WebSearch", "Write")
+QODER_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
+
+
+def _build_qoder(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                 tools_disabled: list[str] | None = None, agent_doc: str = "",
+                 input_files: list[str] | None = None, skills: list[dict] | None = None) -> list[str]:
+    """One Qoder turn's job, as argv for the driver.
+
+    The harness's instructions travel in the job and become the Agent's `system`: this backend
+    reads no workspace file (the systemone precedent). Disabled tools are withheld by the Agent's
+    tool configuration, the enabled ones `always_allow`, so the remote turn never pauses for a
+    confirmation nobody is here to give. Input files the runner staged are named for the driver to
+    upload and mount; skills are the folders _write_skills produced, for the driver to publish."""
+    pr = provider or "qoder"
+    if pr not in QODER_PROVIDERS:
+        raise HTTPException(400, f"unknown qoder provider '{pr}' (one of {sorted(QODER_PROVIDERS)})")
+    if not auth.api_key:
+        raise HTTPException(400, "qoder needs a PAT or SAT (none configured)")
+    base = (auth.base_url or QODER_DEFAULT_BASE).rstrip("/")
+    relay_base, relay_tok = _qoder_relay_route(base, auth.api_key)
+    env["QODER_API_KEY"] = relay_tok      # the placeholder; the route is found by it, and holds no tap
+    thinking = _TURN_THINKING.get() or {}
+    effort = str(thinking.get("asked") or "")
+    if effort:
+        # Qoder's Agent takes the level by the same names; one it does not know is not sent
+        thinking["applied"] = effort if effort in QODER_EFFORTS else ""
+    job = {"cwd": cwd, "prompt": prompt, "model": model, "base_url": relay_base, "api_key": relay_tok,
+           "resume_session_id": resume_session_id or "",
+           "agent_doc": agent_doc or "",
+           "tools_disabled": [str(t) for t in (tools_disabled or []) if t],
+           "mcp_servers": [s for s in (mcp_servers or []) if isinstance(s, dict)],
+           "input_files": list(input_files or []),
+           "skills": list(skills or []),
+           "effort": effort if effort in QODER_EFFORTS else ""}
+    return [QODER_PYTHON, QODER_DRIVER, json.dumps(job)]
+
+
+def _qoder_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE driver NDJSON line to canonical claude stream-json events.
+
+    The result carries no usage and no model: Qoder's public API reports neither. It carries
+    `charge` ({amount, unit: "qoder_credits", basis: "snapshot"}) when the session's usage snapshot
+    was readable, and `reason` for an `incomplete` turn (every stop_reason other than end_turn,
+    and an artifact the stream declared that did not land)."""
+    m = obj.get("m")
+    p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if m == "__hr_init":
+        sid = str(p.get("session_id") or "")
+        if sid:
+            state["_qoder_init"] = True
+            return [{"type": "system", "subtype": "init", "session_id": sid, "model": state.get("model")}]
+        return []
+    if m == "session":
+        if state.get("_qoder_init"):
+            return []
+        state["_qoder_init"] = True
+        return [{"type": "system", "subtype": "init", "session_id": str(p.get("session_id") or ""),
+                 "model": state.get("model")}]
+    if m == "resume_lost":
+        return [{"type": "system", "subtype": "resume_lost",
+                 "requested_session_id": str(p.get("requested_session_id") or "")}]
+    if m == "text":
+        txt = str(p.get("text") or "")
+        if not txt:
+            return []
+        state["_qoder_text"] = state.get("_qoder_text", "") + txt
+        state["final"] = state["_qoder_text"]
+        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+    if m == "tool_use":
+        if state.get("_qoder_text") and not state["_qoder_text"].endswith("\n"):
+            state["_qoder_text"] += "\n\n"
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": str(p.get("id") or ""), "name": str(p.get("name") or "tool"),
+             "input": p.get("input") if isinstance(p.get("input"), dict) else {}}]}}]
+    if m == "tool_result":
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": str(p.get("tool_use_id") or ""),
+             "is_error": bool(p.get("is_error")), "content": str(p.get("text") or "")}]}}]
+    if m == "mcp_unavailable":
+        servers = [{"name": str(s.get("name"))} for s in (p.get("servers") or [])
+                   if isinstance(s, dict) and s.get("name")]
+        return [{"type": "system", "subtype": "mcp_unavailable", "servers": servers}] if servers else []
+    if m in ("notice", "error"):
+        state.setdefault("_qoder_notices", []).append(str(p.get("text") or p.get("message") or ""))
+        return []
+    if m == "__hr_result":
+        status = str(p.get("status") or "")
+        final = str(p.get("final") or "") or state.get("_qoder_text", "")
+        reason = str(p.get("reason") or "")
+        ev: dict = {"type": "result", "usage": {}}
+        if p.get("charge"):
+            ev["charge"] = p["charge"]
+        if status == "completed":
+            state["final"] = final
+            ev.update(subtype="success", is_error=False, result=final)
+        elif status == "incomplete":
+            state["final"] = final
+            ev.update(subtype="incomplete", is_error=False, result=final or reason, reason=reason)
+        else:
+            # failed, cancelled: the reason is the answer the record shows
+            ev.update(subtype="error", is_error=True, result=reason or final or "the Qoder turn failed",
+                      reason=reason)
+        return [ev]
+    return []
+
+
+def _qoder_eof(state: dict, rc: int) -> list[dict]:
+    """The driver emits its own result, so this fires only when it died before reaching it. The
+    remote session may still be running then: the record says so, with what the driver last said."""
+    notes = [n for n in state.get("_qoder_notices") or [] if n]
+    tail = notes[-1] if notes else f"qoder driver exited {rc} without a result"
+    return [{"type": "result", "subtype": "error", "is_error": True, "usage": {},
+             "result": f"{tail}; the Qoder session may still be running"}]
+
+
+_qoder_to_claude.eof = _qoder_eof   # type: ignore[attr-defined]
+
+
 # ── systemone: the System One Harness (github.com/HarnessRouter/SystemOneHarness, Apache-2.0) ──
 # A loop over a decision model rather than a coding CLI: TypeSafe's Jev answers typed questions with
 # probabilities and writes no text, so the harness compiles the environment's actions into one
@@ -8767,6 +9020,11 @@ BACKENDS = {
     "systemone": {"providers": sorted(SYSTEMONE_PROVIDERS),
                   "default_model": SYSTEMONE_DEFAULT_MODEL,
                   "normalize": _claude_passthrough},
+    # Qoder's runtime is not a process this runner spawns: the driver is an HTTP client to a hosted
+    # session. `remote` is what gives a stop its grace (SIGTERM, then the kill) so the driver can
+    # cancel the remote turn before it dies — see _stop_proc.
+    "qoder": {"providers": sorted(QODER_PROVIDERS), "default_model": QODER_DEFAULT_MODEL,
+              "normalize": _qoder_to_claude, "remote": True},
 }
 
 
@@ -8928,9 +9186,37 @@ def _descendant_pids(root: int) -> list[int]:
     return out
 
 
+# How long a remote backend's driver has between the runner's SIGTERM and its SIGKILL: enough for
+# one cancel call to the remote API and the line that reports it, not enough to hold a stop.
+_REMOTE_STOP_GRACE_S = float(os.environ.get("HR_REMOTE_STOP_GRACE_S", "5") or 5)
+
+
+def _stop_proc(proc: subprocess.Popen, rec: dict) -> None:
+    """End a turn's process the way its backend needs.
+
+    A local CLI is its own runtime: the process group is stopped and killed and the turn is over
+    (_kill_proc_tree). A REMOTE backend's process is a client of a runtime elsewhere, and killing
+    the client leaves that runtime running and billing. So for a backend whose registry entry says
+    `remote`, SIGTERM goes to the driver first and it has _REMOTE_STOP_GRACE_S to cancel the remote
+    turn and say so on stdout — the reader loop is still draining, so the line reaches the record —
+    before the kill the local backends get at once. The same path serves a cancel and the wall-clock
+    cap. SIGTERM precedes the SIGSTOP in _kill_proc_tree on purpose: a stopped process cannot run a
+    handler."""
+    spec = BACKENDS.get(str(rec.get("backend") or "")) or {}
+    if spec.get("remote") and proc.poll() is None:
+        try:
+            proc.send_signal(signal.SIGTERM)
+        except Exception:  # noqa: BLE001
+            pass
+        deadline = time.monotonic() + _REMOTE_STOP_GRACE_S
+        while time.monotonic() < deadline and proc.poll() is None:
+            time.sleep(0.05)
+    _kill_proc_tree(proc, str(rec.get("turn_id") or ""))
+
+
 def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
     rec["capped"] = True
-    _kill_proc_tree(proc, str(rec.get("turn_id") or ""))
+    _stop_proc(proc, rec)
 
 
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
@@ -10108,7 +10394,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         # would be a turn in another session's identity.
         raise HTTPException(400, "cwd is decided by the session identifier")
     os.makedirs(cwd, exist_ok=True)
-    _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
+    input_files = _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
     # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
     # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers
     # from req.skills, so this filter is a parity guard: never write a skill whose name is suppressed.
@@ -10154,6 +10440,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     if note:
         agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + note
     turn_environment = environments.resolve(req.environment)   # 409 when nothing is built: before any process starts
+    if turn_environment and spec.get("remote"):
+        # The layer is mounted read-only in THIS sandbox; a remote runtime sees only what its driver
+        # uploads. Said here, before anything starts, rather than run without it.
+        raise HTTPException(400, f"the {backend} backend runs in a remote runtime and cannot mount an environment")
     _write_agent_doc(cwd, backend, agent_doc, installed_skills, environment=turn_environment)
     # The harness's own variables under the runner's, so nothing a caller names shadows the
     # runner's credentials or paths; the platform's HR_ names come after and win (below).
@@ -10313,6 +10603,17 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                resume_session_id=req.resume_session_id,
                                mcp_servers=req.mcp_servers,
                                tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "qoder":
+        model = model or QODER_DEFAULT_MODEL
+        # The agent doc becomes the remote Agent's system prompt; the skill folders _write_skills
+        # staged are published by the driver; the input files the runner landed are uploaded and
+        # mounted by it. Nothing on this box is read by the runtime.
+        cmd = _build_qoder(req.provider, auth, model, req.prompt, cwd, env,
+                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                           tools_disabled=req.tools_disabled, agent_doc=agent_doc,
+                           input_files=input_files,
+                           skills=[{"name": s["name"], "dir": os.path.dirname(os.path.join(cwd, s["entry"]))}
+                                   for s in installed_skills])
     elif backend == "systemone":
         model = model or SYSTEMONE_DEFAULT_MODEL
         cmd = _build_systemone(req.provider, auth, model, req.prompt, cwd, env,
@@ -10405,8 +10706,55 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
             "host": socket.gethostname(), "max_seconds": cap}
 
 
+class WorkspaceDelete(BaseModel):
+    """What a session delete may carry: the connection of a REMOTE backend, so the objects the
+    session created at that runtime can be deleted too (_remote_purge). Absent for a local one."""
+    auth: Auth | None = None
+    backend: str | None = None
+
+
+def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
+    """Delete what a remote backend's turns created outside this box, before the folder goes.
+
+    The driver recorded every remote id it made in the session's .harness/ state; the same driver,
+    in purge mode, deletes them through the relay (the credential stays here as on a turn). A
+    delete that could not reach the runtime is reported with its ids and logged, never swallowed:
+    the folder is still removed, since the session is already unreadable, but the answer says what
+    is left. None when the session made nothing remote."""
+    state = pathlib.Path(ws) / QODER_STATE_REL
+    if not state.is_file():
+        return None
+    if not (auth and auth.api_key):
+        print(f"[workspace] {ws}: remote Qoder objects recorded but no credential came with the delete; "
+              f"left in place: {state.read_text()[:600]}", flush=True)
+        return {"backend": "qoder", "purged": False, "reason": "no credential", "state": QODER_STATE_REL}
+    base = (auth.base_url or QODER_DEFAULT_BASE).rstrip("/")
+    relay_base, relay_tok = _qoder_relay_route(base, auth.api_key)
+    job = {"purge": True, "cwd": ws, "base_url": relay_base, "api_key": relay_tok}
+    try:
+        proc = subprocess.run([QODER_PYTHON, QODER_DRIVER, json.dumps(job)], capture_output=True, text=True,
+                              timeout=180, **_as_session(ws))
+    except Exception as e:  # noqa: BLE001
+        print(f"[workspace] {ws}: remote purge did not run: {type(e).__name__}: {e}", flush=True)
+        return {"backend": "qoder", "purged": False, "reason": f"purge did not run: {e}"[:300]}
+    report: dict = {}
+    for line in (proc.stdout or "").splitlines():
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("m") == "purge" and isinstance(obj.get("p"), dict):
+            report = obj["p"]
+    failed = report.get("failed") or []
+    if failed or proc.returncode != 0:
+        print(f"[workspace] {ws}: remote purge left objects at Qoder: {json.dumps(failed)[:1500]} "
+              f"(exit {proc.returncode}) {(proc.stderr or '')[-500:]}", flush=True)
+    return {"backend": "qoder", "purged": not failed and proc.returncode == 0,
+            "done": report.get("done") or [], "failed": failed}
+
+
 @app.delete("/workspace")
-async def delete_workspace(identifier: str = "") -> dict:
+async def delete_workspace(identifier: str = "", body: WorkspaceDelete | None = None) -> dict:
     """Remove a session's working folder for good (session delete, Sessions §6).
 
     This lives in the runner and not the gateway on purpose: the gateway runs as an unprivileged
@@ -10414,7 +10762,10 @@ async def delete_workspace(identifier: str = "") -> dict:
     process that made the wall can take it down. The folder is the session's memory on this box;
     the durable tarball is the gateway's to delete. A shared root (sandbox-per-session) is never
     removed. The gateway stops any live turn before asking; turn records here carry no session
-    identity, so this end cannot second-guess that."""
+    identity, so this end cannot second-guess that.
+
+    A session of a REMOTE backend made objects elsewhere too; with the connection in the body they
+    are deleted first (_remote_purge), and the answer carries what that reached."""
     ident = (identifier or "").strip()
     if not ident:
         raise HTTPException(status_code=400, detail="identifier required")
@@ -10430,6 +10781,7 @@ async def delete_workspace(identifier: str = "") -> dict:
     _ws_marker_clear(ident)
     if not os.path.isdir(ws):
         return {"identifier": ident, "removed": False, "reason": "no folder"}
+    remote = await run_in_threadpool(_remote_purge, ws, body.auth if body else None)
     uid = _session_uid(ws)
     shutil.rmtree(ws, ignore_errors=True)
     if uid is not None:
@@ -10439,7 +10791,10 @@ async def delete_workspace(identifier: str = "") -> dict:
             subprocess.run(["groupdel", f"hs{uid}"], capture_output=True)
         except OSError:
             pass
-    return {"identifier": ident, "removed": not os.path.isdir(ws)}
+    out = {"identifier": ident, "removed": not os.path.isdir(ws)}
+    if remote is not None:
+        out["remote"] = remote
+    return out
 
 
 @app.post("/turn/{turn_id}/cancel")
@@ -10454,7 +10809,11 @@ def cancel_turn(turn_id: str) -> dict:
     rec["cancelled"] = True
     proc = rec.get("proc")
     if proc is not None:
-        _kill_proc_tree(proc, turn_id)
+        if (BACKENDS.get(str(rec.get("backend") or "")) or {}).get("remote"):
+            # the grace is waited on a thread of its own, so this answer is not held for it
+            threading.Thread(target=_stop_proc, args=(proc, rec), daemon=True).start()
+        else:
+            _kill_proc_tree(proc, turn_id)
     return {"turn_id": turn_id, "status": "cancelling", "cancelled": True}
 
 

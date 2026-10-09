@@ -20,7 +20,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'qoder' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -215,6 +215,13 @@ export const OOB: OobHarness[] = [
     models: ['jev-latest', 'jev-preview', 'jev-1.13', 'laya', 'openthai-systemone', 'system-one-phase2'], defaultModel: 'jev-latest', moreModels: 0,
     systemPrompt: 'You act inside a finite set of actions the environment offers each step. Choose the action that moves the goal forward, finish when the goal is reached, and escalate when nothing offered fits.',
     tools: [], skills: [] },
+  { id: 'qoder', name: 'Qoder Cloud Agent', version: 'Managed API', backend: 'qoder', status: 'ready',
+    // Placeholder only: the gateway's catalog wins once fetched. Qoder's own model ids, as its
+    // GET /models lists them for the tenant; the runtime is Qoder's cloud, not a process on this
+    // box, and Qoder picks and bills the model behind an id.
+    models: ['auto', 'ultimate', 'performance', 'efficient', 'smodel', 'qmodel_38max', 'qfmodel', 'qmodel_latest', 'qmodel', 'kmodel_latest', 'kmodel', 'gmodel', 'gfmodel', 'dmodel', 'dfmodel', 'mmodel'], defaultModel: 'ultimate', moreModels: 0,
+    systemPrompt: 'You are Qoder, an autonomous coding agent running in a cloud sandbox with shell and file access. Read, edit and run what the task needs, and deliver every file the user should receive with DeliverArtifacts.',
+    tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'ImageSearch', 'ImageGen', 'DeliverArtifacts'], skills: [] },
 ];
 
 export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;

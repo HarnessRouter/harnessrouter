@@ -223,6 +223,97 @@ and need no edit — they were hand-written lists once, and each silently missed
 Its models must be honest: every id the picker offers must run as itself, and a turn that ran on a
 different model fails rather than quietly succeeding.
 
+### Remote runtimes
+
+A remote runtime is a harness whose agent loop runs somewhere this runner does not spawn it: a
+hosted session reached over an API, with the turn process here an HTTP client to it. Qoder Cloud
+Agent (`qoder`, `runner/qoder_driver.py`) is the first. The registry entry declares it —
+`BACKENDS[...]["remote"] = True` — and that flag is what the runner keys the differences below on,
+so the second one follows the same shape instead of rediscovering it. The per-turn contract does
+not change: one process per turn, `__hr_init`, one `{"m","p"}` line per event, `__hr_result`, and
+`server.py` unaware of the wire. What changes is that three things every local backend gets for
+free have to be built, and several of the registration points above have no object.
+
+**Not applicable, and the base says so rather than skipping it:**
+
+- *15, the installer.* There is no binary. `docker/entrypoint.sh` installs nothing for it, and the
+  catalog entry's notes say the runtime is remote.
+- *3 and 4, `_write_skills` and `_agent_doc_path` as places a loader looks.* Nothing on this box
+  loads anything. Skills are staged under `.harness/skills/` for the DRIVER to publish (qoder:
+  as Skill resources bound on the session's Agent, reused by content hash); the harness's
+  instructions travel in the job and become the remote Agent's system prompt
+  (`_write_agent_doc` writes nothing, the systemone precedent).
+- *A plugin's stdio MCP servers.* They are processes on this box; a remote runtime cannot dial
+  them. The driver reports each one as `system/mcp_unavailable` and the base lists no tool for
+  them. URL servers are configured on the remote Agent, and their bearer travels to the vendor
+  (qoder: a Vault credential, created per session and deleted with it); the base's description
+  says so, because the harness owner's token then lives at the vendor.
+- *Environments* (`runner/environments.py`). The layer is mounted read-only in THIS sandbox; the
+  remote session sees only what the driver uploads. A turn that names one is refused before any
+  process starts (`turn()`, 400), rather than run without it.
+- *7, `CHECKPOINT_EXCLUDE` for credentials.* The driver writes none: it holds the relay's
+  placeholder. What it does write is `.harness/<backend>/state.json`, the ids of everything it
+  created remotely, and that file MUST travel in the checkpoint (continuation and deletion on
+  another sandbox depend on it).
+
+**Must be answered instead, each in the PR description and each with a test:**
+
+- *Input files.* `_write_input_files` lands them in a workspace the runtime cannot see. The driver
+  uploads what was staged and tells the model where it is mounted; what the vendor will not take
+  (qoder: anything but a text-type file, 5 MB) fails the turn before anything is created, naming
+  the file, and the base's description states the limit.
+- *Artifacts.* Nothing under `.harness/` is a produced file (`_PRODUCED_EXCLUDE_PREFIX`). A
+  delivered artifact is written to the workspace ROOT and rides the checkpoint, diff and download
+  path unchanged. The driver keeps the list the stream declared and verifies every one landed with
+  its declared size; one missing, expired or refused ends the turn `incomplete` naming it, even
+  when the remote run reports success. **Artifact names are input**: only a plain file name is
+  written — no path separator, no `..`, nothing opening a dot directory, no control characters —
+  an existing file is never overwritten (the new one lands as `name (2).ext` and the record says
+  so) and a symlink is never followed. `../x` and `.harness/x` are pinned refused.
+- *Cancellation.* `_kill_proc_tree` is SIGSTOP then SIGKILL; neither runs a handler, and a killed
+  client leaves the remote turn running and billing. For a `remote` backend `_stop_proc` sends
+  SIGTERM first and waits `_REMOTE_STOP_GRACE_S` while the reader loop keeps draining stdout, so
+  the driver's own line — "cancel accepted", or "cancel failed, session <id> may still be running"
+  — reaches the record before the kill. The same path serves the wall-clock cap. A driver that
+  dies without its result ends the turn with "the session may still be running" (`_qoder_eof`).
+- *Continuation.* `_SESSION_PRESENT` has no probe for it: the driver itself asks the vendor
+  whether the session the caller named is there and takes a message, emits `resume_lost` when it
+  is not, and starts a new one. A session still running an earlier turn is a conflict and fails
+  the turn; it is never retried blindly. `hard` has to hold across turns too: a session that
+  pins its Agent's configuration at creation gets its tools replaced before every message
+  (qoder: `POST /sessions/{id}` with `agent.tools`), pinned by a test that disables a tool
+  between two turns.
+- *Recovery.* The runner replays nothing. A dropped stream is the driver's to resume from its
+  last event id inside the turn; the message is NEVER sent twice — when its acknowledgement is
+  lost the session's history decides whether it arrived. A stream that ends without a terminal
+  event asks the session's status before deciding.
+- *Served model, usage, charge.* Rule 2 and the token columns read what the relay saw; on a
+  pass-through route the relay sees nothing it may use, and the vendor reports what it reports.
+  qoder's public API exposes neither token counts nor the model that served, so its rows read
+  "served model unreported", the token cells are empty, and the result carries no `usage` and no
+  `model`. What it does expose goes on the result as `charge: {amount, unit, basis}` — a shape
+  that names no vendor, so the next runtime uses the same field — never folded into the token
+  columns, and with `basis: "snapshot"` when the figure can lag the turn (qoder's sandbox charges
+  settle after idle). Every `stop_reason` other than the vendor's normal end is `incomplete` with
+  the raw reason, and a typed error event with no retry left is `failed` with the vendor's
+  sentence.
+- *Deletion.* Since 0.32.0 a delete removes data for real, and for this backend the conversation,
+  the input files, the artifacts and every Agent, Skill, Vault and Environment the driver created
+  live at the vendor. `DELETE /workspace` takes the connection in its body (`WorkspaceDelete`) and
+  runs the driver in purge mode before removing the folder (`_remote_purge`); each remote delete
+  that fails is reported with its id in the answer and the log, never swallowed. The lifecycle is
+  one of everything per session — created on the first turn, updated when the harness changed,
+  deleted with the session — so nothing outlives it and the per-turn runner keeps no state at
+  harness level.
+- *The relay is still the credential boundary.* The vendor's API is HTTPS with a bearer, which is
+  exactly what the loopback relay fronts: the base is registered as a PASS-THROUGH route
+  (`_qoder_relay_route`, `_HermesRelayHandler._passthrough`) — no body rewrite, no retry ladder,
+  and NONE of the taps, because a session object through the model-call taps would record the
+  CONFIGURED model as the served one and the matrix would score a check the backend cannot make.
+  A stalled pass-through stream is closed, not narrated with an error event the driver would read
+  as the API's own. DELETE is forwarded. On the hosted service a sandbox never holds a vendor
+  credential, so this is not optional there.
+
 ## What the matrix did not see, and what changed (2026-09-30)
 
 A customer ran twelve of their production tasks across seven bases and nine models on a 2026-09-30

@@ -3162,3 +3162,109 @@ On both candidate starts the log has one line, "Hermes: a tool's own error answe
 The patch was run against the real `hermes-agent` 0.19.0 file: it changes two places and the result compiles (the test for this needs the file at hand and is skipped in CI, since Hermes is not in the image).
 
 Not shown live: a server that cannot be reached still opening the breaker. When the tool server was stopped mid-task Hermes dropped its tools ("Unknown tool") before the breaker came into it. That half is covered by the test of the patched check, where an error that did not come from a tool's own answer still counts.
+
+## The qoder backend: Qoder Cloud Agent, the first remote runtime (2026-10-09) — behaviour measured at a stub, NO column yet
+
+Qoder Cloud Agent runs the agent loop in Qoder's cloud and is reached over its Managed API
+(REST + SSE, `/api/v1/cloud`). The runner's turn process, `runner/qoder_driver.py`, is an HTTP
+client to it: it creates one Environment, one Agent and one Session per HarnessRouter session,
+posts the message, follows the event stream and lands delivered artifacts in the workspace root.
+The registry marks the backend `remote`, and `docs/harness-verification.md` ("Remote runtimes")
+lists what that changes. Issue #236 holds the design discussion.
+
+### Behaviour measured before any column
+
+Measured against a stub of the Managed API built from the public reference
+(`runner/tests/test_qoder_backend.py`, the driver run as the subprocess it is), not against
+api.qoder.com; the live column is the next step and needs a tenant's PAT.
+
+- A turn with a tool call and a delivered artifact: the delta text then only the remainder of the
+  buffered message; the tool call and result under Qoder's event ids; the artifact in the
+  workspace ROOT with its declared bytes, nothing under `.harness/`; the result with no usage, no
+  model, and `charge: {amount, unit: "qoder_credits", basis: "snapshot"}` from the session's usage
+  snapshot. The Agent's toolset carries the disabled tool out of the whitelist, in
+  `disallowed_tools` and `enabled: false`; every enabled one `always_allow`.
+- A declared artifact that does not land, a name with a path, `..`, a dot directory or a control
+  character: the turn is `incomplete` naming the file, nothing is written for it, and nothing is
+  even fetched for a refused name. An existing file is never overwritten (`name (2).ext`) and a
+  symlink is never followed.
+- A tool disabled between two turns of one session: the Agent gets a new version AND the session's
+  own tools are replaced (`POST /sessions/{id}`, `agent.tools`) before the message goes.
+- A session archived at Qoder, or an id the state never knew: `resume_lost`, then a new session; a
+  session still running an earlier turn: a conflict, failed, and the message is not sent.
+- A pending confirmation (`stop_reason: requires_action`): answered — `allow`, or `deny` with a
+  message for a tool the harness disabled — and the turn goes on to its real stop.
+- Every `stop_reason` other than `end_turn` is `incomplete` with the raw reason; a `session.error`
+  with `retry_status: retrying` is waited on, one with `exhausted`/`terminal` fails the turn with
+  Qoder's sentence; `session.status_terminated` fails it.
+- Input files: uploaded once by content hash, mounted at `/mnt/session/uploads/<name>` and named
+  in the system prompt; a binary file fails the turn before anything is created, naming it.
+- Skills: published as custom Skill resources from the staged bundle (bare file tree under the
+  frontmatter name), a new version only when the bytes changed, bound on the Agent; a bundle
+  whose `name` is not a Qoder skill name is reported, not published. A URL MCP server's bearer
+  becomes a Vault credential and the session names the vault; a stdio server is reported
+  `mcp_unavailable`.
+- SIGTERM mid-turn: `POST /sessions/{id}/cancel` reaches the stub, the record carries "cancel
+  accepted by Qoder for session <id>", exit 0; through the runner, `cancel_turn` on a `remote`
+  backend sends SIGTERM first and the driver's last lines reach the turn record before the kill,
+  while a local backend's stop is the SIGKILL it always was.
+- The relay route: a session object naming the configured model passes through and the turn's
+  served model stays empty; DELETE goes up; a 404 comes down as the API wrote it; a stalled stream
+  is closed without an error event. The stub sees the real credential and never the placeholder;
+  the driver sees the placeholder and never the credential.
+- The purge: cancel then delete the session, delete artifact and input files, archive the Agent,
+  delete the Vault, the Skills and the Environment (archived when still referenced); an object
+  already gone is not a failure; a delete the API refuses is reported with its id and the exit says
+  so. `DELETE /workspace` with the connection in its body runs it through the relay; without a
+  credential the folder still goes and the answer says what was left at Qoder.
+
+### Live, against api.qoder.com (2026-10-09, Global region, model `efficient`)
+
+The driver run directly against the Managed API with a tenant PAT, no gateway in the path; the
+recorded history is `runner/tests/fixtures/qoder/live-session-events.json` and a test reads the
+driver's mapping off it.
+
+- **First turn** (12.7 s): Environment, Agent (v1) and Session created; `Write` then
+  `DeliverArtifacts`; `agent.artifact_delivered` with `file_id`, `original_filename: hello.md`,
+  `size: 36`, `content_type`; the file landed in the workspace root with the declared bytes;
+  `session.usage` then `session.status_idle {end_turn}`; charge snapshot
+  `{model_credits: 0.35, sandbox_runtime_credits: 0.03, total_credits: 0.38}`. The event order was
+  the one the reference describes; `agent.thinking` carried no content; `span.model_request_end`
+  carried `model_usage.credits` and no token count, as documented.
+- **Second turn on the same session, Bash disabled between the turns** (5.7 s): the Agent went to
+  v2 and the session's tools were replaced (`session.updated` is in the history); asked to run a
+  shell command, the model answered "I don't have a Bash shell tool available. My available tools
+  are: Read, Grep, Glob, Write, Edit, WebFetch, ImageSearch, ImageGen, and DeliverArtifacts" and
+  recalled the first turn's file verbatim — `hard` across turns, and continuation, on the wire.
+- **Cancellation**: a `sleep 120` Bash step, SIGTERM to the driver 5 s in: `POST /cancel` answered
+  202 at once and the record carries "cancel accepted by Qoder for session <id>"; the remote
+  session still read `running` 3 s later and `idle` within 20 s, its history ending in
+  `session.status_idle {stop_reason: {type: "cancelled"}}` — the abort is asynchronous, and
+  `cancelled` is a `stop_reason` value the reference does not list (it would read as `incomplete`
+  with that raw reason on a turn that saw it). The cancelled turn billed 0.29 model credits.
+- **Purge**: cancel, delete session, delete the artifact file, archive the Agent all answered as
+  documented; `DELETE /environments/{id}` answered **409** even after the session was deleted, and
+  the archive fallback took it.
+- **Models**: `GET /models` listed 17 ids for this tenant (`auto`, `ultimate`, `performance`,
+  `efficient`, `smodel`, `qmodel_38max`, `qfmodel`, `qmodel_latest`, `qmodel`, `kmodel_latest`,
+  `kmodel`, `gmodel`, `gfmodel`, `dmodel`, `dfmodel`, `mmodel`, and a tenant-private dog-fooding
+  mode), each with its `price_factor` and, for most, an `efforts` list — more than the reference's
+  one documented id. The China-region base answered 401 to this token, so a connection is one
+  region. The catalog carries the sixteen public ids; `ultimate` and `efficient` have completed
+  turns.
+
+### Not yet confirmed with Qoder (the driver's defaults until then)
+
+The presigned artifact URL's lifetime (a lapsed link is re-requested, never a failure in itself);
+whether a delivered artifact can carry directory structure (flat names are written); the session
+idle TTL and auto-archive (an archived or missing session is `resume_lost`); the billing of failed
+and cancelled runs (no figure is given for them); whether `POST /sessions/{id}/events` is
+idempotent as a contract (the message is never sent twice, the history decides); the files
+reference's text-only rule against the message schema's image `file_id`.
+
+### Versions and the column
+
+Public reference `04-Managed层`, API version as served on 2026-10-09; no Qoder API version header
+is documented. The live column (five scenarios, custom-harness dimension, the family tour where it
+applies — Qoder picks the model, so a "switch" is a different Qoder id) and a `scripts/benchmark`
+column run once a tenant PAT is on the instance, and this section gains what they measured.
