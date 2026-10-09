@@ -51,6 +51,23 @@ def test_an_openai_stream_reports_usage_only_on_its_last_chunk():
     assert call == {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 0}
 
 
+def test_a_responses_answer_is_netted_and_its_stream_is_read_inside_the_response():
+    """The Responses API names its fields as Messages does and means them as chat does: input_tokens
+    is gross, the cached part under input_tokens_details. A stream carries the usage only inside the
+    response, on response.completed. Measured on OpenAI 2026-10-09 (4021 in, 3840 cached); before,
+    a streamed Responses call counted nothing and a whole answer counted every cached token fresh."""
+    usage = {"input_tokens": 4021, "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 3840},
+             "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 4026}
+    want = {"input_tokens": 181, "output_tokens": 5, "cache_read_tokens": 3840}
+    assert rs._usage_in_doc({"id": "resp_1", "object": "response", "usage": usage}) == want
+    call: dict = {}
+    for line in (b'data: {"type":"response.created","response":{"id":"resp_1","usage":null}}',
+                 b'data: {"type":"response.output_text.delta","delta":"OK"}',
+                 b'data: {"type":"response.completed","response":{"id":"resp_1","usage":' + json.dumps(usage).encode() + b'}}'):
+        call.update(rs._usage_in_sse_line(line))
+    assert call == want
+
+
 def test_a_turn_is_many_calls_and_the_route_sums_them():
     flags: dict = {}
     rs._usage_add(flags, {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 0})
