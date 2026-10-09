@@ -5111,10 +5111,19 @@ async def _remote_delete_body(sid: str, v: dict | None) -> dict | None:
         integs = await _integrations_doc()
     except Exception:  # noqa: BLE001
         integs = []
-    integ = next((i for i in integs if str(i.get("provider") or "").lower() == "qoder"), None)
+    # The connection the session's turns ran on (last_connection, "integration:<name>"): its objects
+    # live in THAT account. Another Qoder connection's key would be refused there and leave them
+    # billing, so with more than one and the session's own gone, nothing is guessed.
+    qoders = [i for i in integs if str(i.get("provider") or "").lower() == "qoder"]
+    last = str((v or {}).get("last_connection") or "")
+    used = last.split(":", 1)[1] if last.startswith("integration:") else ""
+    integ = next((i for i in qoders if str(i.get("name") or "") == used), None) if used else None
+    if integ is None and len(qoders) == 1 and not used:
+        integ = qoders[0]
     if not integ:
-        print(f"[delete] session {sid}: a qoder session, but no qoder integration is configured; "
-              "its remote objects cannot be deleted from here", flush=True)
+        print(f"[delete] session {sid}: a qoder session whose connection ({last or 'unrecorded'}) is not "
+              f"configured among {len(qoders)} qoder integration(s); its remote objects cannot be deleted "
+              "from here", flush=True)
         return {"backend": backend}
     conn = {"name": f"integration:{integ.get('name') or ''}", "backend": backend, "provider": "qoder",
             **{k: val for k, val in (integ.get("config") or {}).items() if val not in (None, "")}}

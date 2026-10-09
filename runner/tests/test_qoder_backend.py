@@ -52,6 +52,7 @@ class Stub:
         self.sessions: dict[str, dict] = {}
         self.agents: dict[str, dict] = {}
         self.blobs: dict[str, bytes] = {}
+        self.vault_creds: dict[str, list[dict]] = {}    # vault id -> its credentials
         self.env_delete_409 = False
         self.fail_deletes = False       # every DELETE of a vault/skill/file answers 500
         self.hang_streams = False
@@ -155,7 +156,22 @@ class Stub:
                 if parts == ["vaults"] and method == "POST":
                     return self._send(200, {"id": self._new("vault"), "credentials": []})
                 if len(parts) == 3 and parts[0] == "vaults" and parts[2] == "credentials":
-                    return self._send(200, {"id": self._new("vcred"), "type": "vault_credential"})
+                    # as Qoder documents it: an mcp_server_url is unique among a vault's ACTIVE credentials
+                    creds = stub.vault_creds.setdefault(parts[1], [])
+                    if method == "GET":
+                        return self._send(200, {"data": [dict(c) for c in creds], "has_more": False})
+                    url = ((body or {}).get("auth") or {}).get("mcp_server_url")
+                    if any(c["mcp_server_url"] == url and not c.get("archived_at") for c in creds):
+                        return self._err(409, "invalid_request_error", "an active credential exists for this server")
+                    cid = self._new("vcred")
+                    creds.append({"id": cid, "mcp_server_url": url, "token": ((body or {}).get("auth") or {}).get("token")})
+                    return self._send(200, {"id": cid, "type": "vault_credential"})
+                if len(parts) == 5 and parts[0] == "vaults" and parts[2] == "credentials" and parts[4] == "archive":
+                    for c in stub.vault_creds.get(parts[1], []):
+                        if c["id"] == parts[3]:
+                            c["archived_at"] = "now"
+                            return self._send(200, {"id": c["id"], "archived_at": "now"})
+                    return self._err(404, "not_found_error", "no credential")
                 if len(parts) == 2 and parts[0] == "vaults" and method == "DELETE":
                     return self._send(200, {"id": parts[1], "type": "vault_deleted"})
                 if parts == ["skills"] and method == "POST":
@@ -559,13 +575,24 @@ def test_input_files_are_uploaded_and_mounted_and_a_binary_one_fails_the_turn_up
     sess = stub.posted("POST", "/sessions")[0][2]
     assert sess["resources"] == [{"type": "file", "file_id": "file_" + sess["resources"][0]["file_id"].split("_")[1],
                                   "mount_path": "/mnt/session/uploads/spec.md"}]
-    assert "/mnt/session/uploads/spec.md" in stub.posted("POST", "/agents")[0][2]["system"]
+    msg = stub.posted("POST", f"/sessions/{sess_id(stub)}/events")[0][2]["events"][0]["content"][0]["text"]
+    assert "/mnt/session/uploads/spec.md" in msg and msg.endswith("x")
     # a second turn does not upload the same bytes again
     stub.calls.clear()
     sid = sess_id(stub)
     stub.sessions[sid]["stages"], stub.sessions[sid]["stage"] = [[RUNNING, IDLE]], 0
     run_driver({"cwd": str(tmp_path), "prompt": "y", "input_files": ["spec.md"], "resume_session_id": sid}, stub)
     assert not stub.posted("POST", "/files")
+    # a file attached on a LATER turn: the session keeps the Agent version (and the system prompt) it
+    # was created with, so the model learns of the file from the message that brought it
+    (tmp_path / "notes.txt").write_text("later")
+    stub.calls.clear()
+    stub.sessions[sid]["stages"], stub.sessions[sid]["stage"] = [[RUNNING, IDLE]], 0
+    run_driver({"cwd": str(tmp_path), "prompt": "z", "input_files": ["notes.txt"], "resume_session_id": sid}, stub)
+    mounted = [c[2] for c in stub.calls if c[0] == "POST" and c[1] == f"/sessions/{sid}/resources"]
+    assert mounted and mounted[0]["mount_path"] == "/mnt/session/uploads/notes.txt"
+    msg = stub.posted("POST", f"/sessions/{sid}/events")[0][2]["events"][0]["content"][0]["text"]
+    assert "/mnt/session/uploads/notes.txt" in msg and msg.endswith("z")
     # a binary file: refused here, before anything is created, naming the file
     fresh = tmp_path / "fresh"
     fresh.mkdir()
@@ -886,3 +913,98 @@ def test_delete_workspace_purges_at_qoder_with_the_connection_it_is_sent(tmp_pat
     ws.mkdir(parents=True)
     out = asyncio.run(rs.delete_workspace(sid))
     assert out["removed"] is True and "remote" not in out
+
+
+# ── review fixes (2026-10-09) ─────────────────────────────────────────────────────────────────────
+def test_a_changed_mcp_token_replaces_the_vault_credential_and_no_token_is_kept(tmp_path, stub):
+    """The gateway mints a per-turn credential for a server it hosts, and keys rotate: a vault that
+    kept the first turn's token failed that server on every later turn. An unchanged token is not
+    sent again; a changed one archives the old credential and creates the new one."""
+    stub.script = [[RUNNING, IDLE]]
+    job = {"cwd": str(tmp_path), "prompt": "x",
+           "mcp_servers": [{"name": "db", "url": "https://hr.example/v1/mcp/database", "auth": "tok-1"}]}
+    run_driver(job, stub)
+    sid = sess_id(stub)
+    vid = stub.posted("POST", "/sessions")[0][2]["vault_ids"][0]
+
+    def again(token):
+        stub.calls.clear()
+        stub.sessions[sid]["stages"], stub.sessions[sid]["stage"] = [[RUNNING, IDLE]], 0
+        lines, _ = run_driver({**job, "prompt": "y", "resume_session_id": sid,
+                               "mcp_servers": [{**job["mcp_servers"][0], "auth": token}]}, stub)
+        return result_of(normalise(lines)[0])
+
+    assert again("tok-1")["subtype"] == "success"
+    assert not [c for c in stub.calls if "/credentials" in c[1]]            # same token: nothing sent
+    assert again("tok-2")["subtype"] == "success"
+    active = [c for c in stub.vault_creds[vid] if not c.get("archived_at")]
+    assert [c["token"] for c in active] == ["tok-2"] and len(stub.vault_creds[vid]) == 2
+    state = (tmp_path / ".harness" / "qoder" / "state.json").read_text()
+    assert "tok-1" not in state and "tok-2" not in state                      # a hash, never the token
+
+
+def test_an_active_credential_the_state_does_not_know_is_archived_and_made_anew(tmp_path, stub):
+    stub.script = [[RUNNING, IDLE]]
+    job = {"cwd": str(tmp_path), "prompt": "x", "mcp_servers": [{"name": "docs", "url": "https://mcp.example/mcp", "auth": "a"}]}
+    run_driver(job, stub)
+    sid = sess_id(stub)
+    st_path = tmp_path / ".harness" / "qoder" / "state.json"
+    st = json.loads(st_path.read_text())
+    st.pop("vault_creds")                     # e.g. a driver killed between the create and the save
+    st_path.write_text(json.dumps(st))
+    stub.sessions[sid]["stages"], stub.sessions[sid]["stage"] = [[RUNNING, IDLE]], 0
+    lines, _ = run_driver({**job, "prompt": "y", "resume_session_id": sid,
+                           "mcp_servers": [{**job["mcp_servers"][0], "auth": "b"}]}, stub)
+    assert result_of(normalise(lines)[0])["subtype"] == "success"
+    vid = st["vault_id"]
+    assert [c["token"] for c in stub.vault_creds[vid] if not c.get("archived_at")] == ["b"]
+
+
+def test_a_model_route_does_not_forward_delete(stub):
+    """DELETE through the relay is a remote runtime's alone: a sandbox must not delete what an org's
+    provider key owns (files, fine-tunes) through the relay that holds the key."""
+    base, tok = rs._hermes_relay_route(stub.base + "/v1", "sk-real")
+    try:
+        req = urllib.request.Request(base + "/files/file_1", method="DELETE", headers={"authorization": f"Bearer {tok}"})
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            assert False, "a DELETE on a model route must be refused"
+        except urllib.error.HTTPError as e:
+            assert e.code == 405
+        assert not [c for c in stub.calls if c[0] == "DELETE"]
+    finally:
+        rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_an_artifact_over_the_limit_or_unwritable_fails_with_its_reason(tmp_path, stub, monkeypatch):
+    monkeypatch.setenv("HR_QODER_ARTIFACT_MAX_BYTES", "8")
+    stub.blobs["file_big"] = b"0123456789"
+    stub.blobs["file_ok"] = b"tiny"
+    stub.script = [[RUNNING,
+                    {"type": "agent.artifact_delivered", "file_id": "file_big", "original_filename": "big.bin", "size": 10},
+                    {"type": "agent.artifact_delivered", "file_id": "file_ok", "original_filename": "ok.txt", "size": 4},
+                    IDLE]]
+    lines, _ = run_driver({"cwd": str(tmp_path), "prompt": "x"}, stub)
+    res = result_of(normalise(lines)[0])
+    assert res["subtype"] == "incomplete" and "big.bin" in res["reason"] and "limit" in res["reason"]
+    assert (tmp_path / "ok.txt").read_bytes() == b"tiny" and not (tmp_path / "big.bin").exists()
+    assert not list((tmp_path / ".harness" / "qoder").glob("*.part"))       # no download left behind
+    # a workspace the file cannot be written to: that artifact fails with the reason; the turn goes on
+    monkeypatch.delenv("HR_QODER_ARTIFACT_MAX_BYTES")
+    ro = tmp_path / "ro"
+    (ro / ".harness" / "qoder").mkdir(parents=True)
+    ro.chmod(0o555)
+    try:
+        stub.script = [[RUNNING, {"type": "agent.artifact_delivered", "file_id": "file_ok", "original_filename": "ok.txt", "size": 4},
+                        {"type": "agent.message", "content": [{"type": "text", "text": "done"}]}, IDLE]]
+        lines, _ = run_driver({"cwd": str(ro), "prompt": "x"}, stub)
+        res = result_of(normalise(lines)[0])
+        assert res["subtype"] == "incomplete" and "could not be written" in res["reason"], res
+        assert not [ln for ln in lines if ln.get("m") == "notice" and "dropped" in str(ln.get("p"))]
+    finally:
+        ro.chmod(0o755)
+
+
+def test_a_long_artifact_name_is_cut_by_bytes_keeping_its_extension():
+    name, why = drv.artifact_name("é" * 200 + ".pdf")
+    assert not why and name.endswith(".pdf") and len(name.encode("utf-8")) <= 240

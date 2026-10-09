@@ -4428,6 +4428,18 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         base, key, flags = route
+        if self.command == "DELETE" and not flags.get("passthrough"):
+            # DELETE is a remote runtime's (its own objects, deleted through its API). A model
+            # provider's route stays GET and POST: a sandbox must not delete what the org's key owns
+            # there (files, fine-tunes, batches) through the relay that holds that key.
+            data = b'{"error": "this route does not forward DELETE"}'
+            self.send_response(405)
+            self.send_header("allow", "GET, POST")
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
         drop = {"host", "content-length", "authorization", "x-goog-api-key", "x-api-key", "connection",
                 "accept-encoding", "transfer-encoding"}

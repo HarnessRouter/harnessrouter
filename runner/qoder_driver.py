@@ -31,6 +31,7 @@ import mimetypes
 import os
 import pathlib
 import re
+import shutil
 import signal
 import sys
 import time
@@ -63,6 +64,9 @@ UPLOAD_BARE = {"dockerfile", "makefile", "gemfile", "rakefile", "procfile", "vag
                "brewfile"}
 UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 MOUNT_ROOT = "/mnt/session/uploads"
+# The largest delivered artifact landed in the workspace. A download goes to disk as it arrives (never
+# held whole in memory) and is cut off past this.
+ARTIFACT_MAX_BYTES = int(os.environ.get("HR_QODER_ARTIFACT_MAX_BYTES") or 2 * 1024 ** 3)
 
 # How long one call may take, and how long a stream read may go without a byte. The stream
 # carries a heartbeat about every 15 s, so a read that waits this long is a dead connection, and
@@ -242,10 +246,15 @@ def artifact_name(original: str) -> tuple[str, str]:
     if name.startswith("."):
         # .harness, .git and the CLI homes live here, and a hidden file is never a deliverable
         return "", f"artifact name opens a dot directory or hidden file: {original!r}"
-    return name[:255], ""
+    if len(name.encode("utf-8")) > 240:
+        # a file name is at most 255 BYTES; cut by bytes, keeping the extension and room for " (n)"
+        stem, ext = os.path.splitext(name)
+        ext = ext if len(ext.encode("utf-8")) <= 16 else ""
+        name = stem.encode("utf-8")[:240 - len(ext.encode("utf-8"))].decode("utf-8", "ignore").rstrip() + ext
+    return name, ""
 
 
-def land_artifact(cwd: str, name: str, data: bytes) -> tuple[str, str]:
+def land_artifact(cwd: str, name: str, data: bytes | pathlib.Path) -> tuple[str, str]:
     """Write `data` as `name` under the workspace root; (the relative path written, a note).
 
     An existing path is never overwritten and a symlink is never followed: a second artifact of
@@ -270,7 +279,11 @@ def land_artifact(cwd: str, name: str, data: bytes) -> tuple[str, str]:
             note = f"{name!r} already existed; written as {candidate!r}"
             continue
         with os.fdopen(fd, "wb") as f:
-            f.write(data)
+            if isinstance(data, (bytes, bytearray)):
+                f.write(data)
+            else:                                   # a download already on disk (see Turn.artifact)
+                with open(data, "rb") as src:
+                    shutil.copyfileobj(src, f, 1 << 20)
         return candidate, note
 
 
@@ -354,12 +367,9 @@ def system_prompt(job: dict) -> str:
              "You run in a remote sandbox. The user sees NO file you write unless you deliver it: when "
              "a task produces a deliverable (a document, a deck, code, an export), save it and then call "
              "DeliverArtifacts with its path. Deliver each file once, by a plain file name; an "
-             "undelivered file is lost to the user."]
-    mounts = job.get("_mounts") or []
-    if mounts:
-        lines += ["", "## Input files", "",
-                  "The user attached these files; they are mounted read-only at:"]
-        lines += [f"- `{m}`" for m in mounts]
+             "undelivered file is lost to the user.",
+             "", f"Files the user attaches are mounted read-only under `{MOUNT_ROOT}/`; each message "
+             "names the ones it brought."]
     block = "\n".join(lines)
     return (base + "\n\n" + block) if base else block
 
@@ -499,6 +509,7 @@ class Turn:
         self.deny_ids: set[str] = set()         # pending confirmations of tools the harness disabled
         self.replaying: dict[str, int] = {}     # a reconnect is replaying deltas of this message: bytes seen
         self.disabled = {str(t) for t in (job.get("tools_disabled") or [])}
+        self.mounts: list[str] = []             # where this turn's attached files are mounted
 
     # ── remote objects ──
     def ensure_environment(self) -> str:
@@ -517,6 +528,12 @@ class Turn:
         return env_id
 
     def ensure_vault(self, creds: list[dict]) -> list[str]:
+        """The session's Vault, holding one active static_bearer credential per MCP server URL with
+        THIS turn's token. A server URL is unique among a vault's active credentials, so a token that
+        changed since the last turn (a rotated key, or the per-turn credential the gateway mints for
+        a server it hosts itself, which expires) archives the old credential and creates the new one:
+        a vault that kept the first turn's token fails that server on every later turn. Only a hash
+        of each token is kept in the state, never the token."""
         if not creds:
             return [self.st["vault_id"]] if self.st.get("vault_id") else []
         vid = str(self.st.get("vault_id") or "")
@@ -525,23 +542,54 @@ class Turn:
                 "display_name": f"harnessrouter {pathlib.Path(self.cwd).name}"[:255],
                 "metadata": {"harnessrouter": "1"}})
             vid = str((created or {}).get("id") or "")
+            if not vid:
+                raise ApiError(0, "api_error", "vault create returned no id", "/vaults")
             self.st["vault_id"] = vid
-            self.st["vault_urls"] = []
             save_state(self.cwd, self.st)
-        have = set(self.st.get("vault_urls") or [])
+        have: dict = self.st.setdefault("vault_creds", {})       # url -> {"id", "sha"}
         for c in creds:
-            if c["url"] in have:
+            sha = _sha(c["token"].encode())
+            cur = have.get(c["url"]) or {}
+            if cur.get("id") and cur.get("sha") == sha:
                 continue
-            try:
-                self.api.request("POST", f"/vaults/{vid}/credentials",
-                                 {"auth": {"type": "static_bearer", "mcp_server_url": c["url"], "token": c["token"]}})
-            except ApiError as e:
-                if e.status != 409:        # an active credential for this server is already there
-                    raise
-            have.add(c["url"])
-        self.st["vault_urls"] = sorted(have)
-        save_state(self.cwd, self.st)
+            if cur.get("id"):
+                self._archive_credential(vid, cur["id"])
+            have[c["url"]] = {"id": self._create_credential(vid, c), "sha": sha}
+            save_state(self.cwd, self.st)
         return [vid]
+
+    def _create_credential(self, vid: str, c: dict) -> str:
+        body = {"auth": {"type": "static_bearer", "mcp_server_url": c["url"], "token": c["token"]}}
+        try:
+            doc = self.api.request("POST", f"/vaults/{vid}/credentials", body)
+        except ApiError as e:
+            if e.status != 409:
+                raise
+            # an active credential for this URL that the state does not know: archived, then made anew
+            for old in self._active_credentials(vid, c["url"]):
+                self._archive_credential(vid, old)
+            doc = self.api.request("POST", f"/vaults/{vid}/credentials", body)
+        cid = str((doc or {}).get("id") or "")
+        if not cid:
+            raise ApiError(0, "api_error", "credential create returned no id", f"/vaults/{vid}/credentials")
+        return cid
+
+    def _active_credentials(self, vid: str, url: str) -> list[str]:
+        doc = self.api.request("GET", f"/vaults/{vid}/credentials")
+        out = []
+        for x in (doc or {}).get("data") or []:
+            if not isinstance(x, dict) or not x.get("id") or x.get("archived_at"):
+                continue
+            if url in (x.get("mcp_server_url"), (x.get("auth") or {}).get("mcp_server_url")):
+                out.append(str(x["id"]))
+        return out
+
+    def _archive_credential(self, vid: str, cid: str) -> None:
+        try:
+            self.api.request("POST", f"/vaults/{vid}/credentials/{cid}/archive")
+        except ApiError as e:
+            if e.status not in (404, 409):       # gone, or archived already
+                raise
 
     def ensure_agent(self, body: dict) -> tuple[str, int, bool]:
         """(agent id, version, whether the configuration changed this turn)."""
@@ -756,43 +804,71 @@ class Turn:
             self.st["artifacts"].append(fid)
             save_state(self.cwd, self.st)
         name, why = artifact_name(original)
+        if not why and isinstance(size, int) and size > ARTIFACT_MAX_BYTES:
+            why = f"{original}: {size} bytes declared, over the {ARTIFACT_MAX_BYTES}-byte artifact limit"
         if why:
             self.artifact_failures.append(why)
             _emit("artifact", {**rec, "status": "refused", "reason": why})
             return
-        data = None
+        # The download goes to disk as it arrives, under .harness/ (never a produced file), and is
+        # landed from there; nothing about one artifact (a full disk, a name the filesystem will not
+        # take) is let out of here, where it would read as a dropped stream and lose its reason.
+        part = pathlib.Path(self.cwd) / ".harness" / "qoder" / f"download-{uuid.uuid4().hex}.part"
+        try:
+            got, why = self._download(fid, original, part)
+            if got is not None and isinstance(size, int) and size >= 0 and got != size:
+                why, got = f"{original}: {got} bytes landed, {size} declared", None
+            if got is None:
+                self.artifact_failures.append(why or f"{original}: download failed")
+                _emit("artifact", {**rec, "status": "failed", "reason": why})
+                return
+            try:
+                written, note = land_artifact(self.cwd, name, part)
+            except OSError as e:
+                why = f"{original}: could not be written: {type(e).__name__}: {e}"[:300]
+                self.artifact_failures.append(why)
+                _emit("artifact", {**rec, "status": "failed", "reason": why})
+                return
+        finally:
+            try:
+                part.unlink()
+            except OSError:
+                pass
+        if note:
+            self.notes.append(note)
+        self.landed.append({**rec, "path": written})
+        _emit("artifact", {**rec, "status": "landed", "path": written})
+
+    def _download(self, fid: str, original: str, part: pathlib.Path) -> tuple[int | None, str]:
+        """(bytes written to `part`, "") or (None, why). The presigned link is asked for again once
+        if the first one fails (its lifetime is not documented); a refused file is not retried."""
         why = ""
-        for attempt in (0, 1):
+        for _attempt in (0, 1):
             try:
                 link = self.api.request("GET", f"/files/{fid}/content")
                 url = str((link or {}).get("url") or "")
                 if not url:
-                    why = f"{original}: no download url"
-                    break
+                    return None, f"{original}: no download url"
                 req = urllib.request.Request(url, method="GET")       # presigned: no credential travels
-                with urllib.request.urlopen(req, timeout=CALL_TIMEOUT_S) as resp:
-                    data = resp.read()
-                break
+                part.parent.mkdir(parents=True, exist_ok=True)
+                n = 0
+                with urllib.request.urlopen(req, timeout=CALL_TIMEOUT_S) as resp, open(part, "wb") as out:
+                    while True:
+                        chunk = resp.read(1 << 20)
+                        if not chunk:
+                            break
+                        n += len(chunk)
+                        if n > ARTIFACT_MAX_BYTES:
+                            return None, f"{original}: over the {ARTIFACT_MAX_BYTES}-byte artifact limit"
+                        out.write(chunk)
+                return n, ""
             except ApiError as e:
                 why = f"{original}: {e}"
                 if e.status in (404, 410, 403):
                     break
             except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
                 why = f"{original}: download failed: {type(e).__name__}: {e}"[:300]
-        if data is None:
-            self.artifact_failures.append(why or f"{original}: download failed")
-            _emit("artifact", {**rec, "status": "failed", "reason": why})
-            return
-        if isinstance(size, int) and size >= 0 and len(data) != size:
-            why = f"{original}: {len(data)} bytes landed, {size} declared"
-            self.artifact_failures.append(why)
-            _emit("artifact", {**rec, "status": "failed", "reason": why})
-            return
-        written, note = land_artifact(self.cwd, name, data)
-        if note:
-            self.notes.append(note)
-        self.landed.append({**rec, "path": written})
-        _emit("artifact", {**rec, "status": "landed", "path": written})
+        return None, why
 
     def run_stream(self, posted_id: str) -> None:
         """Read the session's stream until this turn ends, reconnecting from the last event id on
@@ -863,7 +939,10 @@ class Turn:
         after it may have been delivered, the session's history says whether it was, and the
         message is never sent a second time."""
         before = self.last_history_id()
-        body = {"events": [{"type": "user.message", "content": [{"type": "text", "text": str(self.job.get("prompt") or "")}]}]}
+        text = str(self.job.get("prompt") or "")
+        if self.mounts:
+            text = ("[Attached files, mounted read-only: " + ", ".join(f"`{m}`" for m in self.mounts) + "]\n\n" + text)
+        body = {"events": [{"type": "user.message", "content": [{"type": "text", "text": text}]}]}
         try:
             doc = self.api.request("POST", f"/sessions/{self.session_id}/events", body)
             for e in (doc or {}).get("data") or []:
@@ -944,7 +1023,10 @@ class Turn:
         save_state(self.cwd, self.st)
         resources = upload_inputs(self.api, self.st, self.cwd, rels)
         save_state(self.cwd, self.st)
-        job["_mounts"] = [r["mount_path"] for r in resources]
+        # The files this message brought are named IN the message. The Agent's system prompt cannot
+        # carry them: a session keeps the Agent version it was created with, so a file attached on a
+        # later turn was mounted and never mentioned, and the model did not know it was there.
+        self.mounts = [r["mount_path"] for r in resources]
         body = agent_body(job, bindings, servers)
         aid, version, changed = self.ensure_agent(body)
         if sid:

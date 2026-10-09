@@ -117,3 +117,22 @@ def test_a_session_delete_carries_the_qoder_connection_to_the_runner(monkeypatch
 
     monkeypatch.setattr(gw, "_integrations_doc", none)
     assert asyncio.run(gw._remote_delete_body("sess_1", {"backend": "qoder"})) == {"backend": "qoder"}
+
+
+def test_a_session_delete_uses_the_qoder_account_its_turns_ran_on(monkeypatch):
+    """With two Qoder connections, the session's objects live in the account its turns used
+    (last_connection); the other account's key would be refused there and leave them billing."""
+    monkeypatch.setattr(gw, "SANDBOX_TRUST", "owner")
+
+    async def integs():
+        return [{"name": "qoder-a", "provider": "qoder", "config": {"api_key": "pat-a"}},
+                {"name": "qoder-b", "provider": "qoder", "config": {"api_key": "pat-b"}}]
+
+    monkeypatch.setattr(gw, "_integrations_doc", integs)
+    v = {"backend": "qoder", "last_connection": "integration:qoder-b"}
+    assert asyncio.run(gw._remote_delete_body("sess_1", v))["auth"]["api_key"] == "pat-b"
+    # the session's own connection is gone and two others remain: nothing is guessed
+    v = {"backend": "qoder", "last_connection": "integration:qoder-old"}
+    assert asyncio.run(gw._remote_delete_body("sess_1", v)) == {"backend": "qoder"}
+    # no record of which ran, two candidates: nothing is guessed either
+    assert asyncio.run(gw._remote_delete_body("sess_1", {"backend": "qoder"})) == {"backend": "qoder"}
