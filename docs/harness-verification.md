@@ -294,7 +294,9 @@ free have to be built, and several of the registration points above have no obje
   `model`. What it does expose goes on the result as `charge: {amount, unit, basis}` — a shape
   that names no vendor, so the next runtime uses the same field — never folded into the token
   columns, and with `basis: "snapshot"` when the figure can lag the turn (qoder's sandbox charges
-  settle after idle). Every `stop_reason` other than the vendor's normal end is `incomplete` with
+  settle after idle). A vendor figure that is the session's running total, as qoder's is, is
+  charged per turn as what the turn added to it, with the total beside it (`session_total`);
+  charging the total as it stands bills every earlier turn again. Every `stop_reason` other than the vendor's normal end is `incomplete` with
   the raw reason, and a typed error event with no retry left is `failed` with the vendor's
   sentence.
 - *Deletion.* Since 0.32.0 a delete removes data for real, and for this backend the conversation,

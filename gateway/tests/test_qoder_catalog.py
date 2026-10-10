@@ -44,6 +44,23 @@ def test_the_base_takes_skills_and_not_environments():
     assert gw._backend_takes_environments("") is True
 
 
+def test_the_console_is_told_the_base_takes_no_environment(monkeypatch):
+    """The harness settings page offered every environment on a qoder harness, and a Task on a
+    harness that named one was then refused, every time. /v1/bases says it the way it says
+    takesSkills, and the page offers none."""
+    async def org_member(_request):
+        return "local", "owner"
+
+    async def servable(_org, _backend):
+        return set()
+
+    monkeypatch.setattr(gw, "_pub_org_member", org_member)
+    monkeypatch.setattr(gw, "_servable_models", servable)
+    bases = {b["id"]: b for b in asyncio.run(gw.list_bases(None))["bases"]}
+    assert bases["qoder"]["takesEnvironments"] is False
+    assert all(b["takesEnvironments"] is True for k, b in bases.items() if k != "qoder")
+
+
 def test_one_provider_its_own_and_nothing_else_drives_it():
     wired = {p for (p, b) in gw._INTEGRATION_WIRING if b == "qoder"}
     assert wired == {"qoder"} and gw._INTEGRATION_WIRING[("qoder", "qoder")] == "qoder"

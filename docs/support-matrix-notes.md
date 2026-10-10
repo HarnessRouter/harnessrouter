@@ -3182,7 +3182,9 @@ api.qoder.com; the live column is the next step and needs a tenant's PAT.
   buffered message; the tool call and result under Qoder's event ids; the artifact in the
   workspace ROOT with its declared bytes, nothing under `.harness/`; the result with no usage, no
   model, and `charge: {amount, unit: "qoder_credits", basis: "snapshot"}` from the session's usage
-  snapshot. The Agent's toolset carries the disabled tool out of the whitelist, in
+  snapshot, less what the session had used before the turn (the snapshot is the session's running
+  total: 0.35 after the recorded session's first turn, 0.61 after its second, so the second is
+  charged 0.26). The Agent's toolset carries the disabled tool out of the whitelist, in
   `disallowed_tools` and `enabled: false`; every enabled one `always_allow`.
 - A declared artifact that does not land, a name with a path, `..`, a dot directory or a control
   character: the turn is `incomplete` naming the file, nothing is written for it, and nothing is

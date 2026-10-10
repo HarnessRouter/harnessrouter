@@ -19345,6 +19345,10 @@ async def list_bases(request: Request) -> dict:
                               if b.get("skills", True) else []),
             "builtinSkillsEnumerable": False,
             "takesSkills": bool(b.get("skills", True)),
+            # False for a base whose runtime is remote (qoder): an environment is mounted on this
+            # box only, and a turn that names one is refused (_backend_takes_environments), so the
+            # console offers none rather than a choice every Task would then fail on
+            "takesEnvironments": bool(b.get("environments", True)),
         })
     # The limits a turn gets when neither the request nor the harness sets one, so the console can
     # show the number that will apply rather than a placeholder of its own.

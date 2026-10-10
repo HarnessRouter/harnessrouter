@@ -335,6 +335,10 @@ export interface BaseInfo {
    *  offered actions and reads no documents), so none are offered and none can be added. Absent
    *  on older gateways, which is the same as true. */
   takesSkills?: boolean;
+  /** false means a Task on this base cannot open an environment (Qoder Cloud Agent runs in its own
+   *  cloud, and the layer is mounted on this box only), so none is offered. Absent on older
+   *  gateways, which is the same as true. */
+  takesEnvironments?: boolean;
 }
 
 let _bases: Record<string, BaseInfo> | null = null;
