@@ -78,3 +78,13 @@ smooth ones.
   The protocol now names `DELETE /v1/sessions/{id}` and keeps the old path as an alias rather than
   renaming it, because renaming would break existing clients for a cosmetic gain. A future major
   version may retire the old path through the process above.
+- **Harness writes refuse what they cannot store.** Since 2026-10-10 both maintained servers refuse
+  a harness create or update that carries a field the harness does not have (`422`, naming the field
+  and the nearest one it does have), or a `default_model` its base does not run (`422`,
+  `model_not_available`). Both are tightenings the rules above reserve for a new version. They were
+  made inside `2026-10-04` because the input they refuse was being stored as nothing behind a `200`,
+  and a harness on a model no base runs refused every task given to it; a client, and above all an
+  agent driving the API, had no way to learn why. What the harness object comes back with and cannot be written (`id`,
+  `object`, `createdAt` and the server's own read-only fields) is still accepted and ignored, so a
+  harness read and sent back saves. The next version states both rules in
+  [Harnesses §5](versions/2026-10-04/harnesses.md#5-managing-harnesses).

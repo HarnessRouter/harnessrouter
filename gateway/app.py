@@ -26,6 +26,7 @@ import zipfile
 
 import base64
 import contextlib
+import difflib
 import functools
 import hashlib
 import ipaddress
@@ -44,7 +45,8 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic_core import PydanticCustomError
 
 import backing               # pluggable graph/blob/secret stores (vg | local)
 import media_plane           # the media plane (capability catalog, provider adapters, ffmpeg)
@@ -16769,6 +16771,28 @@ def _require_supported_base(base: str) -> str:
     return b
 
 
+async def _require_offered_model(org: str, base: str, model: str | None, previous: str = "") -> None:
+    """A harness's default model must be one its base runs on this instance, by the rule a task
+    naming that model is held to (_model_authorized_async: the base's catalog and the provider
+    families it takes, or a model an integration that drives the base was given). Refused when the
+    harness is saved rather than at its first task: until 2026-10-10 a harness on gemini-2.5-flash,
+    which no base runs, saved with a 200 and then refused every task given to it, far from the
+    request that made the mistake. An update that leaves the model as it was is not checked again,
+    so an unrelated edit to a harness whose model has since gone still saves."""
+    base = _require_supported_base(base)        # an unknown base is said as that, not as its model
+    m = (model or "").strip()
+    if not m or m == (previous or "").strip():
+        return
+    backend = _backend_of_harness({"base": base}) or base
+    if await _model_authorized_async(m, backend, org):
+        return
+    offered = list(_MODEL_CATALOG.get(backend, {}).get("models", []))
+    raise uhp_error(422, "model_not_available",
+                    f"Model '{m}' is not offered on the {base} base. Use one of: {', '.join(offered[:12])}"
+                    f"{', …' if len(offered) > 12 else ''} (GET /v1/bases lists every base's models).",
+                    "default_model", {"offered": offered})
+
+
 def _either(snake: str, schema: dict | None = None):
     """A create/update field by its schema name (snake_case, HarnessCreate) OR the name the
     harness object comes back with (camelCase, Harness). A client that mirrors what GET returned
@@ -16846,6 +16870,47 @@ class HarnessBody(BaseModel):
     # (docs/dual-loop.md in the System One Harness repository, Appendix B).
     calibrates: str | None = _either("calibrates")
     environment: str | None = None   # the environment (henv_) this harness's tasks read at /env/<slug>; UHP Environments
+
+    @model_validator(mode="before")
+    @classmethod
+    def _known_fields_only(cls, data):
+        """A field a harness does not have is refused, by name, with the nearest one it does have.
+        Until 2026-10-10 an `instructions` or a `system_promt` was dropped and the harness saved
+        without the setting behind a 200; an agent driving the API had nothing to tell it why its
+        harness came back empty, and makes the same harness again and again. What a harness comes back with
+        and cannot be written (its id, owner, workspace, creation time, kit, plugin files not
+        loaded) is let through and ignored, so a harness read and sent back still saves."""
+        if not isinstance(data, dict):
+            return data
+        known = _harness_field_names()
+        unknown = [k for k in data if k not in known and k not in _HARNESS_READ_ONLY]
+        if unknown:
+            k = str(unknown[0])
+            near = difflib.get_close_matches(k, sorted(known), n=1, cutoff=0.6)
+            raise PydanticCustomError(
+                "unknown_field",
+                "unknown harness field '{field}'{hint}. A harness takes: {fields} (the camelCase names "
+                "it comes back with are accepted too).",
+                {"field": k, "hint": f"; did you mean '{near[0]}'?" if near else "",
+                 "fields": ", ".join(cls.model_fields)})
+        return {k: v for k, v in data.items() if k not in _HARNESS_READ_ONLY}
+
+
+# What a harness comes back with (_harness_out) that is not written through these fields, plus the
+# protocol's `object` (Harnesses §2), so a harness read from any UHP server can be sent back.
+_HARNESS_READ_ONLY = frozenset({"id", "object", "kit", "notLoaded", "member", "workspace", "createdAt"})
+
+
+def _harness_field_names() -> frozenset:
+    names: set[str] = set()
+    for name, f in HarnessBody.model_fields.items():
+        names.add(name)
+        va = f.validation_alias
+        if isinstance(va, AliasChoices):
+            names.update(c for c in va.choices if isinstance(c, str))
+        elif isinstance(va, str):
+            names.add(va)
+    return frozenset(names)
 
 
 def _harness_out(v: dict) -> dict:
@@ -18055,6 +18120,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     member = p.get("member") or request.headers.get("x-harness-member", "")
     # a key held to a workspace stamps its own, whatever header it sends; any other caller names it
     workspace = _key_scope(p) or request.headers.get("x-harness-workspace", "")
+    await _require_offered_model(org, body.base, body.default_model)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)
@@ -18156,6 +18222,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
                         "A harness's base cannot change; create a different harness for a different base.",
                         "base", {"base": cur.get("base")})
     body.base = str(cur.get("base") or body.base)
+    await _require_offered_model(org, body.base, body.default_model, str(cur.get("default_model") or ""))
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
@@ -18326,6 +18393,7 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     org, member = p.get("org", ""), p.get("member", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    await _require_offered_model(org, body.base, body.default_model)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)
@@ -19321,6 +19389,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
                         "A harness's base cannot change; create a different harness for a different base.",
                         "base", {"base": v.get("base")})
     body.base = str(v.get("base") or body.base)
+    await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)

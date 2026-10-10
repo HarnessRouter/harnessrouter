@@ -253,7 +253,10 @@ A model that shipped after this release is one row away: open the integration, a
 the id the provider uses on the wire, and save. It appears in every model picker the provider
 drives, and a task may name it. A task that names a model no connected provider serves on that
 base is refused before it starts (`400 model_not_available`), never run on another model;
-`GET /v1/harnesses/{id}/models` lists what a harness can run.
+`GET /v1/harnesses/{id}/models` lists what a harness can run. A harness is held to the same rule
+when it is saved: a default model its base does not run is refused (`422 model_not_available`, with
+the base's models), and so is a field a harness does not have (`422`, naming the field and the
+nearest one it has). A harness read with `GET` and sent back as it came saves.
 
 <details>
 <summary>Running more than one provider</summary>
