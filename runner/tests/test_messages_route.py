@@ -190,3 +190,24 @@ def test_the_hermes_result_carries_the_relays_served_model_and_cache_split():
     body = src[src.index("def _run_hermes_bg("):src.index("# ── HTTP surface")]
     assert "served = _relay_served_model(env)" in body and "_fill_relay_usage(ev, env)" in body
     assert body.index("_fill_relay_usage(ev, env)") < body.rindex("append(ev)")   # stamped before the result is appended
+
+
+def test_a_hermes_turn_is_launched_on_the_provider_its_config_names(monkeypatch, tmp_path):
+    """The --provider flag wins over config.yaml, so the two must name one provider. A custom
+    endpoint in the Messages format arrives as openai-api; it was configured as anthropic and
+    launched as openai-api, and hermes refused it for want of an OPENAI_API_KEY (#374)."""
+    launched = []
+    monkeypatch.setattr(server, "_run_hermes_bg", lambda *args: launched.append(args))
+    wirings = [("openai-api", "anthropic", "anthropic", "ANTHROPIC_BASE_URL"),   # custom, Messages format
+               ("openai-api", "openai", "openai-api", "OPENAI_BASE_URL"),        # custom, Chat Completions
+               ("anthropic", None, "anthropic", "ANTHROPIC_BASE_URL"),
+               ("openrouter", None, "openrouter", "OPENROUTER_BASE_URL")]
+    for i, (provider, fmt, want, base_env) in enumerate(wirings):
+        cwd = tmp_path / str(i)
+        cwd.mkdir()
+        server.turn(server.TurnReq(backend="hermes", provider=provider, model="claude-haiku-4.5", prompt="hi",
+                                   auth=Auth(api_key="sk-test", base_url="https://proxy.example/v1", api_format=fmt),
+                                   cwd=str(cwd)))
+        env, flag = launched[-1][2], launched[-1][4]
+        cfg = yaml.safe_load((pathlib.Path(env["HERMES_HOME"]) / "config.yaml").read_text())
+        assert flag == cfg["model"]["provider"] == want and base_env in env, (provider, fmt)

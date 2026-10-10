@@ -5135,6 +5135,16 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
+def _hermes_resolve_provider(provider: str | None, auth: Auth) -> str:
+    """The hermes provider a turn runs on. A custom endpoint declared in the Anthropic Messages
+    format arrives as openai-api (the gateway's ("custom", "hermes") wiring) and is hermes's
+    anthropic provider. config.yaml and the --provider flag MUST both take this one name: the flag
+    wins over the file, so a turn configured for anthropic but launched with openai-api asked for
+    an OPENAI_API_KEY nobody set (#374)."""
+    p = (provider or "bedrock").lower()
+    return "anthropic" if _anthropic_native(p, auth) else p
+
+
 def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
                         model: str = "", max_turns: int | None = None,
                         mcp_servers: list[dict] | None = None,
@@ -5145,9 +5155,7 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     The model/provider MUST be in config.yaml, not only flags: the chat path's first-run guard
     treats a default-model config as 'unconfigured' and exits into the setup wizard (verified on
     0.19.0 — bedrock bearer creds alone don't satisfy it). The -z/-m flags still take precedence."""
-    p = (provider or "bedrock").lower()
-    if str(auth.api_format or "").strip().lower() == "anthropic":
-        p = "anthropic"             # a custom endpoint in the Messages format is hermes's anthropic provider
+    p = _hermes_resolve_provider(provider, auth)
     if p not in HERMES_PROVIDERS:
         raise HTTPException(400, f"unknown hermes provider '{p}' (one of {sorted(HERMES_PROVIDERS)})")
     hermes_home = pathlib.Path(env.get("HOME") or cwd) / ".hermes"
@@ -10233,7 +10241,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                            mcp_toml=mcp_toml, resume_session_id=req.resume_session_id, tools_disabled=req.tools_disabled)
     elif backend == "hermes":
         model = model or HERMES_DEFAULT_MODEL
-        hermes_provider = (req.provider or "bedrock").lower()
+        hermes_provider = _hermes_resolve_provider(req.provider, auth)
         hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
                                          max_turns=req.max_turns, mcp_servers=req.mcp_servers,
                                          vision_auth=req.vision_auth)
