@@ -5136,14 +5136,13 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
 
 
 def _hermes_resolve_provider(provider: str | None, auth: Auth) -> str:
-    """Resolve the Hermes CLI provider name. A custom endpoint declared in the Anthropic Messages
-    format is hermes's anthropic provider; a generic custom provider defaults to openai-api."""
+    """The hermes provider a turn runs on. A custom endpoint declared in the Anthropic Messages
+    format arrives as openai-api (the gateway's ("custom", "hermes") wiring) and is hermes's
+    anthropic provider. config.yaml and the --provider flag MUST both take this one name: the flag
+    wins over the file, so a turn configured for anthropic but launched with openai-api asked for
+    an OPENAI_API_KEY nobody set (#374)."""
     p = (provider or "bedrock").lower()
-    if _anthropic_native(p, auth):
-        return "anthropic"
-    if p == "custom":
-        return "openai-api"
-    return p
+    return "anthropic" if _anthropic_native(p, auth) else p
 
 
 def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,

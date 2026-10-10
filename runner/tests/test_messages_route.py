@@ -192,42 +192,22 @@ def test_the_hermes_result_carries_the_relays_served_model_and_cache_split():
     assert body.index("_fill_relay_usage(ev, env)") < body.rindex("append(ev)")   # stamped before the result is appended
 
 
-def test_hermes_resolve_provider_custom_anthropic():
-    auth_anthropic = Auth(api_key="sk-real", base_url="https://proxy.example/v1", api_format="anthropic")
-    assert server._hermes_resolve_provider("openai-api", auth_anthropic) == "anthropic"
-    assert server._hermes_resolve_provider("custom", auth_anthropic) == "anthropic"
-    assert server._hermes_resolve_provider(None, auth_anthropic) == "anthropic"
-    assert server._hermes_resolve_provider("bedrock", auth_anthropic) == "anthropic"
-
-    auth_openai = Auth(api_key="sk-real", base_url="https://proxy.example/v1", api_format="openai")
-    assert server._hermes_resolve_provider("openai-api", auth_openai) == "openai-api"
-    assert server._hermes_resolve_provider("custom", auth_openai) == "openai-api"
-    assert server._hermes_resolve_provider(None, auth_openai) == "bedrock"
-
-
-def test_hermes_turn_passes_resolved_anthropic_provider(monkeypatch, tmp_path):
-    launched_args = []
-
-    def fake_thread_start(self):
-        launched_args.append(self._args)
-
-    monkeypatch.setattr(threading.Thread, "start", fake_thread_start)
-
-    req = server.TurnReq(
-        backend="hermes",
-        provider="openai-api",
-        model="claude-haiku-4.5",
-        prompt="hello",
-        auth=Auth(api_key="sk-test", base_url="https://proxy.example/v1", api_format="anthropic"),
-        cwd=str(tmp_path),
-    )
-    server.turn(req)
-
-    assert len(launched_args) == 1
-    # args: (turn_id, cwd, env, model, hermes_provider, req.prompt, req.resume_session_id, req.timeout_seconds, hermes_mcp)
-    args = launched_args[0]
-    turn_model = args[3]
-    turn_provider = args[4]
-    assert turn_model == "claude-haiku-4.5"
-    assert turn_provider == "anthropic"
-
+def test_a_hermes_turn_is_launched_on_the_provider_its_config_names(monkeypatch, tmp_path):
+    """The --provider flag wins over config.yaml, so the two must name one provider. A custom
+    endpoint in the Messages format arrives as openai-api; it was configured as anthropic and
+    launched as openai-api, and hermes refused it for want of an OPENAI_API_KEY (#374)."""
+    launched = []
+    monkeypatch.setattr(server, "_run_hermes_bg", lambda *args: launched.append(args))
+    wirings = [("openai-api", "anthropic", "anthropic", "ANTHROPIC_BASE_URL"),   # custom, Messages format
+               ("openai-api", "openai", "openai-api", "OPENAI_BASE_URL"),        # custom, Chat Completions
+               ("anthropic", None, "anthropic", "ANTHROPIC_BASE_URL"),
+               ("openrouter", None, "openrouter", "OPENROUTER_BASE_URL")]
+    for i, (provider, fmt, want, base_env) in enumerate(wirings):
+        cwd = tmp_path / str(i)
+        cwd.mkdir()
+        server.turn(server.TurnReq(backend="hermes", provider=provider, model="claude-haiku-4.5", prompt="hi",
+                                   auth=Auth(api_key="sk-test", base_url="https://proxy.example/v1", api_format=fmt),
+                                   cwd=str(cwd)))
+        env, flag = launched[-1][2], launched[-1][4]
+        cfg = yaml.safe_load((pathlib.Path(env["HERMES_HOME"]) / "config.yaml").read_text())
+        assert flag == cfg["model"]["provider"] == want and base_env in env, (provider, fmt)
