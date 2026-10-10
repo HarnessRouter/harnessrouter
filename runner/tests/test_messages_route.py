@@ -190,3 +190,44 @@ def test_the_hermes_result_carries_the_relays_served_model_and_cache_split():
     body = src[src.index("def _run_hermes_bg("):src.index("# ── HTTP surface")]
     assert "served = _relay_served_model(env)" in body and "_fill_relay_usage(ev, env)" in body
     assert body.index("_fill_relay_usage(ev, env)") < body.rindex("append(ev)")   # stamped before the result is appended
+
+
+def test_hermes_resolve_provider_custom_anthropic():
+    auth_anthropic = Auth(api_key="sk-real", base_url="https://proxy.example/v1", api_format="anthropic")
+    assert server._hermes_resolve_provider("openai-api", auth_anthropic) == "anthropic"
+    assert server._hermes_resolve_provider("custom", auth_anthropic) == "anthropic"
+    assert server._hermes_resolve_provider(None, auth_anthropic) == "anthropic"
+    assert server._hermes_resolve_provider("bedrock", auth_anthropic) == "anthropic"
+
+    auth_openai = Auth(api_key="sk-real", base_url="https://proxy.example/v1", api_format="openai")
+    assert server._hermes_resolve_provider("openai-api", auth_openai) == "openai-api"
+    assert server._hermes_resolve_provider("custom", auth_openai) == "openai-api"
+    assert server._hermes_resolve_provider(None, auth_openai) == "bedrock"
+
+
+def test_hermes_turn_passes_resolved_anthropic_provider(monkeypatch, tmp_path):
+    launched_args = []
+
+    def fake_thread_start(self):
+        launched_args.append(self._args)
+
+    monkeypatch.setattr(threading.Thread, "start", fake_thread_start)
+
+    req = server.TurnReq(
+        backend="hermes",
+        provider="openai-api",
+        model="claude-haiku-4.5",
+        prompt="hello",
+        auth=Auth(api_key="sk-test", base_url="https://proxy.example/v1", api_format="anthropic"),
+        cwd=str(tmp_path),
+    )
+    server.turn(req)
+
+    assert len(launched_args) == 1
+    # args: (turn_id, cwd, env, model, hermes_provider, req.prompt, req.resume_session_id, req.timeout_seconds, hermes_mcp)
+    args = launched_args[0]
+    turn_model = args[3]
+    turn_provider = args[4]
+    assert turn_model == "claude-haiku-4.5"
+    assert turn_provider == "anthropic"
+
