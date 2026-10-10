@@ -422,6 +422,15 @@ def _on_event(ev: dict, state: dict) -> None:
         # in; the SDK's registry names (terminal, file_editor, task_tracker) are the wire.
         name = str(ev.get("tool_name") or "Tool")
         action = ev.get("action") or {}
+        if not action:
+            # A call the SDK could not make (arguments that failed the tool's validation, a tool it
+            # does not have) carries no action; the card shows what the model sent instead, and
+            # the refusal arrives as this call's result. Arguments that were not JSON at all are
+            # replaced by the SDK with its own marker, which is not the model's and stays off.
+            with contextlib.suppress(Exception):
+                sent = json.loads(str((ev.get("tool_call") or {}).get("arguments") or ""))
+                if isinstance(sent, dict) and not sent.get("_openhands_malformed_tool_call"):
+                    action = sent
         card = _CONSOLE_NAMES.get(name, name)
         # the file editor's `view` is a read, not an edit: the console counts Edit cards as
         # files edited ("Edited 3 files" for one file created and two looked at)
@@ -437,7 +446,19 @@ def _on_event(ev: dict, state: dict) -> None:
         tuid = str(ev.get("tool_call_id") or state.get("last_call") or "t0")
         _emit("tool_result", {"id": tuid, "output": _observation_text(obs),
                               "is_error": bool(obs.get("is_error"))})
-    elif kind in ("AgentErrorEvent", "ConversationErrorEvent"):
+    elif kind == "AgentErrorEvent":
+        # THE ANSWER TO THE MODEL'S CALL, NOT THE TURN'S FAILURE. The SDK sends this to the model
+        # as the result of the call it made, under that call's id (arguments that failed the tool's
+        # validation, a tool it does not have, a tool that raised), and the model carries on.
+        # Reported as the turn's error, a turn the model recovered from was recorded failed:
+        # qwen3.7-plus gave task_tracker a status of 'pending', read the refusal, and made both
+        # files it was asked for (2026-10-09). So it is that call's result, as the model saw it,
+        # and it is kept as the reason should the conversation itself end in error.
+        text = str(ev.get("error") or ev.get("detail") or ev.get("message") or kind)
+        state["agent_error"] = text[:1500]
+        tuid = str(ev.get("tool_call_id") or state.get("last_call") or "t0")
+        _emit("tool_result", {"id": tuid, "output": text, "is_error": True})
+    elif kind == "ConversationErrorEvent":
         # A REAL failure. Recorded, not rendered: it is the turn's reason, not part of its answer.
         #
         # READ code AND detail. This event carries neither `error` nor `message` — its fields are
@@ -458,6 +479,31 @@ def _on_event(ev: dict, state: dict) -> None:
             value = ev.get("value")
             if isinstance(value, str) and value:
                 state["status"] = value.lower()
+
+
+_REASON_WAIT_S = 1.5
+
+
+def _read_the_reason(ws, state: dict) -> None:
+    """THE REASON COMES AFTER THE VERDICT. The SDK sets a failed status, which is published at once,
+    and only then publishes the ConversationErrorEvent saying why (MaxIterationsReached and
+    MaxBudgetReached, local_conversation 1.49.2). A loop that ends on the status never read the
+    reason, and the record said only "the agent-server marked the conversation error" while the
+    server's log said "Agent reached maximum iterations limit (8)" (gemini-3.8-flash, 2026-10-09).
+    So the socket is read on, briefly, until the reason arrives; a status with no reason to follow
+    (stuck) costs the wait and nothing else."""
+    end = time.time() + _REASON_WAIT_S
+    while time.time() < end and not state.get("reported_error"):
+        try:
+            raw = ws.recv(timeout=max(0.1, end - time.time()))
+        except Exception:  # noqa: BLE001 — a quiet or closed socket: there is no reason to read
+            return
+        try:
+            ev = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(ev, dict):
+            _on_event(ev, state)
 
 
 def _run_turn(base: str, ws_base: str, key: str, cid: str, prompt: str, state: dict,
@@ -502,6 +548,8 @@ def _run_turn(base: str, ws_base: str, key: str, cid: str, prompt: str, state: d
             if isinstance(ev, dict):
                 _on_event(ev, state)
                 if state.get("status") in _TERMINAL and state.get("sent"):
+                    if state["status"] in _FAILED and not state.get("reported_error"):
+                        _read_the_reason(ws, state)
                     return
                 # the run is only over once it has started: the status is `idle` until the first
                 # step lands, and returning on that would end the turn before it began
@@ -624,9 +672,11 @@ def main() -> int:
         # The server's own verdict on the conversation is the reason, in its word: `stuck` is
         # the agent repeating itself past the server's detector, `error` a run that ended in one.
         # The log's exception line rides along when there is one; the shutdown noise never.
+        # Without one, the model's last refused call is the likeliest cause, so it is the reason.
         exc_line = tail_before_stop if _EXC_LINE.match((tail_before_stop or "").strip()) else ""
+        why = exc_line or state.get("agent_error") or ""
         _emit("error", {"text": f"the agent-server marked the conversation {status}"
-                                + (f": {exc_line}" if exc_line else "")})
+                                + (f": {why}" if why else "")})
         state["reported_error"] = True
     if not ok and not state.get("reported_error"):
         # A FAILED TURN CAN CARRY NO REASON AT ALL, and that is the server's design rather than a
