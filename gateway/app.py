@@ -6756,7 +6756,6 @@ _VENDOR_MODELS["qoder"] = {m: m for m in (
     "performance",     # Performance
     "efficient",       # Efficient
     "smodel",          # Sonus
-    "cmodel",          # Cantus (listed for the tenant on 2026-10-10)
     "qmodel_38max",    # Qwen3.8-Max
     "qfmodel",         # Qwen3.8-Flash
     "qmodel_latest",   # Qwen3.7-Max
@@ -7386,8 +7385,10 @@ _MODEL_CATALOG["systemone"] = {"default": "jev-latest",
 # API, so these rows read "the id completed a turn" (docs/harness-verification.md, remote runtimes);
 # the list is what the column has run, starting from the documented id.
 _MODEL_CATALOG["qoder"] = {"default": "ultimate",
-                           # the tenant's list of 2026-10-09 (_VENDOR_MODELS["qoder"]); `ultimate` and
-                           # `efficient` have completed live turns, the rest are offered for the column
+                           # every one completed a turn that delivered the file it was asked for, on
+                           # 0.33.0-rc.3 and rc.4 against api.qoder.com (2026-10-10); qfmodel also ran
+                           # the five console scenarios. Qoder also lists cmodel (Cantus), not measured
+                           # and not offered: one turn there costs about 16 credits
                            "models": list(_VENDOR_MODELS["qoder"])}
 # A pair the matrix failed twice on the one aggregator that serves the id is not offered on that
 # harness (2026-09-13, five scenarios each): llama-4-maverick on OpenRouter under qwen writes the

@@ -4974,7 +4974,12 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 except OSError:
                     self.close_connection = True
                     return
-            self.wfile.write(b"0\r\n\r\n")
+            try:
+                self.wfile.write(b"0\r\n\r\n")
+            except OSError:
+                # the driver read its terminal event and closed first (seen on 0.33.0-rc.4 as a
+                # BrokenPipeError traceback per finished stream): nothing is lost
+                self.close_connection = True
             return
         try:
             data = resp.read()

@@ -3270,3 +3270,34 @@ Public reference `04-Managed层`, API version as served on 2026-10-09; no Qoder 
 is documented. The live column (five scenarios, custom-harness dimension, the family tour where it
 applies — Qoder picks the model, so a "switch" is a different Qoder id) and a `scripts/benchmark`
 column run once a tenant PAT is on the instance, and this section gains what they measured.
+
+### Through a self-hosted instance (2026-10-10, 0.33.0-rc.2 to rc.4, Global region, Pro Trial account)
+
+Owner trust, the Qoder connection added to the instance, driven through the console and the API.
+
+- **A plan without credits is refused at the session**, with Qoder's sentence on the record: `402
+  billing_error: You have no available credit`. The Environment, Agent and Skills made before the
+  refusal were deleted with the task (the Agent archived), which also proved the purge live.
+- **Delivered file, follow-up, charge.** qfmodel wrote and delivered `hello.md`; the follow-up on
+  the same Qoder session recalled its line. The first turn was charged 0.29 credits and the second
+  0.03 against a session total of 0.32: the snapshot is the session's running total, and before the
+  per-turn delta the second turn read 0.32. qfmodel is not free here: a small turn bills about
+  0.23 model credits although `GET /models` gives it a price factor of 0.
+- **A tool disabled between turns.** A custom harness ran `uname -s` through Bash, then had Bash
+  disabled; the next turn answered NO SHELL and called nothing. Qoder's session showed `Bash` in
+  `disallowed_tools` and `enabled: false` while the Agent stayed at version 1.
+- **Cancel.** Stop on a turn running `sleep 120`: the record says `cancel accepted by Qoder for
+  session …`, and the Qoder session was idle 6 s after the stop.
+- **Files written and never delivered.** On rc.3 the artifact scenario failed on `auto` and
+  `performance`: the agent wrote the file and answered DONE without calling DeliverArtifacts,
+  though both Qoder's system prompt and ours tell it to. On rc.4, which asks once for what was
+  written and not delivered, one turn of the artifact scenario per model: the 14 ids run there all
+  delivered `HELLO` and answered DONE, and the ask was needed on 10 of the 12 whose Qoder history
+  was read (qmodel_latest and kmodel delivered unasked). `ultimate` delivered unasked in the rc.3
+  matrix, and `smodel` on rc.3 when the prompt said to deliver. qfmodel ran the five console
+  scenarios, all ok (the first try lost the file card in the console while the record held the
+  file; the retry passed).
+- **Cost of one small turn**, in credits: qfmodel 0.33, gfmodel 0.26, dfmodel 0.31, qmodel 0.41,
+  mmodel 0.43, efficient 0.41, auto 0.29, kmodel 0.92, dmodel 1.25, gmodel 1.61, kmodel_latest
+  2.36, qmodel_38max 2.44, qmodel_latest 2.47, performance 4.27, smodel 11.2. Qoder also lists
+  `cmodel` (Cantus, price factor 4); it is not in the catalog, not having been measured.
