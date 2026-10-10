@@ -966,7 +966,11 @@ _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-f
 # turn dying on a 400 nobody can read. gemini-cli 0.58.0 honours GOOGLE_GEMINI_BASE_URL on the
 # API-key path (measured 2026-09-06: pointed at a dead port it retried "fetch failed" against it),
 # so the native paths can be brokered later; until the broker carries them, this set is the guard.
-_NATIVE_ONLY_BACKENDS = {"gemini"}
+_NATIVE_ONLY_BACKENDS = {"gemini",
+                         # qoder: the driver speaks Qoder's own control API (sessions, events, files),
+                         # which the broker's model doors do not carry; the runner's loopback relay is
+                         # its credential boundary, and that needs the connection's key on the box
+                         "qoder"}
 
 
 # ── A harness that drives another harness ─────────────────────────────────────────────────────
@@ -1338,6 +1342,9 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # systemone speaks the provider's decisions endpoint through the loopback relay: TypeSafe's own
     # API (/v1/systemone) and OpenRouter, the one aggregator serving Jev (beta since 2026-09-18).
     ("openrouter", "systemone"): "openrouter", ("typesafe", "systemone"): "typesafe",
+    # qoder runs on Qoder's own hosted runtime and bills through Qoder's model access: a connection
+    # carries a Qoder PAT or SAT and nothing else drives it, so the one pair is its own provider.
+    ("qoder", "qoder"): "qoder",
     ("tokenrouter", "openhands"): "tokenrouter", ("vercel", "openhands"): "tokenrouter",
     ("llmtr", "openhands"): "tokenrouter",
     ("custom", "openhands"): "openai-api",
@@ -2801,6 +2808,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     rec["status"] = "done" if terminal == "completed" else terminal
     if translator.usage:
         rec["usage"] = translator.usage
+    if translator.charge:
+        rec["charge"] = translator.charge
     await _vertex_upsert(sid, {"status": rec["status"], "turn_status": rec["status"]})
     try:
         # Every terminal outcome collects. A cancelled or failed turn may already have written the
@@ -3932,7 +3941,10 @@ def _broker_token(request: Request) -> str:
 _PROVIDER_BASE = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1",
                   # Google AI Studio keys answer on Gemini's OpenAI-compatible surface (chat
                   # completions); a key alone names the endpoint, the same way an OpenAI key does.
-                  "google": "https://generativelanguage.googleapis.com/v1beta/openai"}
+                  "google": "https://generativelanguage.googleapis.com/v1beta/openai",
+                  # Qoder's Managed API, global region; the China region (api.qoder.com.cn) is a
+                  # connection with its base_url set
+                  "qoder": "https://api.qoder.com/api/v1/cloud"}
 
 
 def _with_provider_base(conn: dict | None) -> dict | None:
@@ -5085,6 +5097,40 @@ async def _session_index() -> dict:
     return idx
 
 
+async def _remote_delete_body(sid: str, v: dict | None) -> dict | None:
+    """What the runner's DELETE /workspace needs for a session of a REMOTE backend: the connection
+    whose runtime holds the session's objects, so the runner can delete them there too (the
+    conversation, the files, the Agent the turns created — runner _remote_purge). None for a local
+    backend, where the folder is all there is. The connection is the org's integration for that
+    provider, handed over the way a turn hands it (_auth_from_conn: owner trust, the key; broker
+    trust, nothing — this backend is not brokered — and the runner then says what was left)."""
+    backend = str((v or {}).get("backend") or "").lower()
+    if backend != "qoder":
+        return None
+    try:
+        integs = await _integrations_doc()
+    except Exception:  # noqa: BLE001
+        integs = []
+    # The connection the session's turns ran on (last_connection, "integration:<name>"): its objects
+    # live in THAT account. Another Qoder connection's key would be refused there and leave them
+    # billing, so with more than one and the session's own gone, nothing is guessed.
+    qoders = [i for i in integs if str(i.get("provider") or "").lower() == "qoder"]
+    last = str((v or {}).get("last_connection") or "")
+    used = last.split(":", 1)[1] if last.startswith("integration:") else ""
+    integ = next((i for i in qoders if str(i.get("name") or "") == used), None) if used else None
+    if integ is None and len(qoders) == 1 and not used:
+        integ = qoders[0]
+    if not integ:
+        print(f"[delete] session {sid}: a qoder session whose connection ({last or 'unrecorded'}) is not "
+              f"configured among {len(qoders)} qoder integration(s); its remote objects cannot be deleted "
+              "from here", flush=True)
+        return {"backend": backend}
+    conn = {"name": f"integration:{integ.get('name') or ''}", "backend": backend, "provider": "qoder",
+            **{k: val for k, val in (integ.get("config") or {}).items() if val not in (None, "")}}
+    auth = _auth_from_conn(_with_provider_base(conn) or conn, sid)
+    return {"backend": backend, "auth": auth}
+
+
 async def _session_purge(sid: str, v: dict | None, index: dict | None = None) -> None:
     """Everything a session left, removed: its transcript and trace, its responses, the files its
     tasks produced, their previews and change list, its media, the record of every plugin call it
@@ -5139,7 +5185,7 @@ async def _session_purge(sid: str, v: dict | None, index: dict | None = None) ->
     # delete fails — the session is already unreadable by the time this runs.
     if POOL_ENDPOINT:
         try:
-            await _sandbox("/workspace", sid, "DELETE")
+            await _sandbox("/workspace", sid, "DELETE", body=await _remote_delete_body(sid, v))
         except Exception:  # noqa: BLE001
             pass
     await _media_session_purge(sid)
@@ -5247,6 +5293,19 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret": "api_key",
         "secret_label": "API Key",
         "key_hint": "apikey_…",
+    },
+    # Qoder Cloud Agent: a hosted agent runtime, not a model endpoint. The key is a personal access
+    # token or a service-account token; Qoder picks and bills the model behind it, so only the qoder
+    # base can use this connection, and nothing it serves appears in another base's picker. The
+    # global region's base is fixed here; a China-region tenant sets base_url to
+    # https://api.qoder.com.cn/api/v1/cloud on the connection. A key is checked at GET /models.
+    "qoder": {
+        "label": "Qoder Cloud Agent",
+        "base_url": "https://api.qoder.com/api/v1/cloud",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "Access token (PAT or SAT)",
+        "key_hint": "a Qoder personal or service-account token",
     },
     "tokenrouter": {
         "label": "TokenRouter",
@@ -5956,6 +6015,9 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
     elif t == "result":
         out.append(("result", {"text": ev.get("result") or "", "usage": ev.get("usage"),
                                "is_error": bool(ev.get("is_error")),
+                               # what a remote runtime billed the turn, in its own unit, when it says
+                               # (qoder: credits; never folded into the token counts)
+                               **({"charge": ev["charge"]} if isinstance(ev.get("charge"), dict) else {}),
                                # the thinking level asked and the one applied (runner: _stamp_thinking);
                                # absent for a turn that asked for none
                                **({"reasoning": ev["reasoning"]} if ev.get("reasoning") else {}),
@@ -6022,6 +6084,9 @@ class _RespTranslator:
         self.out_index = -1
         self.output: list[dict] = []
         self.usage: dict | None = None
+        # {"amount", "unit", "basis", ...}: what a remote runtime charged for the turn, in its own
+        # unit (qoder credits), when its API said; None for every backend whose cost is its tokens.
+        self.charge: dict | None = None
         self.error: dict | None = None
         self.cur: dict | None = None
         self.any_text = False
@@ -6039,6 +6104,8 @@ class _RespTranslator:
             meta["environment"] = self.environment
         if self.ignored:
             meta["ignored_fields"] = self.ignored
+        if self.charge:
+            meta["charge"] = self.charge
         return {"id": self.resp_id, "object": "response", "created_at": int(self.created_at),
                 "status": status, "error": self.error,
                 "incomplete_details": ({"reason": self.incomplete_reason, "handoff": self.handoff}
@@ -6146,6 +6213,8 @@ class _RespTranslator:
         elif kind == "result":
             if payload.get("model"):
                 self.served_model = str(payload["model"])
+            if isinstance(payload.get("charge"), dict):
+                self.charge = payload["charge"]
             r = payload.get("reasoning")
             if isinstance(r, dict) and self.reasoning is not None:
                 self.reasoning = {"effort": self.reasoning.get("effort") or r.get("effort"),
@@ -6675,6 +6744,30 @@ _VENDOR_MODELS["openrouter"].update({"jev-1.13": "typesafe/jev-1.13", "jev-lates
 # the pinned id stays OpenRouter's alone and the preview stays TypeSafe's: a harness resolves the id
 # it names through the table of the connection that serves it, and nothing is guessed across them.
 _VENDOR_MODELS["typesafe"] = {"jev-latest": "jev-latest", "jev-preview": "jev-preview"}
+# Qoder's own catalogue, as GET /api/v1/cloud/models lists it for the tenant: the ids are Qoder's
+# names and reach the Agent verbatim. `ultimate` is the one the public reference documents; the
+# column measures the tenant's list and this table grows from what ran.
+_VENDOR_MODELS["qoder"] = {m: m for m in (
+    # as GET /api/v1/cloud/models listed them for a Global-region tenant on 2026-10-09; the display
+    # name is Qoder's and the id reaches the Agent verbatim. A tenant-private id (the dog-fooding
+    # mode) is not offered.
+    "auto",            # Auto
+    "ultimate",        # Ultimate
+    "performance",     # Performance
+    "efficient",       # Efficient
+    "smodel",          # Sonus
+    "qmodel_38max",    # Qwen3.8-Max
+    "qfmodel",         # Qwen3.8-Flash
+    "qmodel_latest",   # Qwen3.7-Max
+    "qmodel",          # Qwen3.7-Plus
+    "kmodel_latest",   # Kimi-K3
+    "kmodel",          # Kimi-K2.8-Preview
+    "gmodel",          # GLM-5.3
+    "gfmodel",         # GLM-5.3-Flash
+    "dmodel",          # DeepSeek-V4-Pro
+    "dfmodel",         # DeepSeek-Flash
+    "mmodel",          # MiniMax-M3
+)}
 
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
@@ -7287,6 +7380,16 @@ _MODEL_CATALOG["systemone"] = {"default": "jev-latest",
                                # models the hosted service serves, reachable with a HarnessRouter key
                                "models": ["jev-latest", "jev-preview", "jev-1.13",
                                           "laya", "openthai-systemone", "system-one-phase2"]}
+# qoder: Qoder's own model ids (_VENDOR_MODELS["qoder"]), the ones its GET /models lists. Qoder
+# chooses what serves an id and reports neither the served model nor token counts on its public
+# API, so these rows read "the id completed a turn" (docs/harness-verification.md, remote runtimes);
+# the list is what the column has run, starting from the documented id.
+_MODEL_CATALOG["qoder"] = {"default": "ultimate",
+                           # every one completed a turn that delivered the file it was asked for, on
+                           # 0.33.0-rc.3 and rc.4 against api.qoder.com (2026-10-10); qfmodel also ran
+                           # the five console scenarios. Qoder also lists cmodel (Cantus), not measured
+                           # and not offered: one turn there costs about 16 credits
+                           "models": list(_VENDOR_MODELS["qoder"])}
 # A pair the matrix failed twice on the one aggregator that serves the id is not offered on that
 # harness (2026-09-13, five scenarios each): llama-4-maverick on OpenRouter under qwen writes the
 # tool call as prose; llama-3.3-70b on OpenRouter fails the recall under goose, the artifact under
@@ -8254,6 +8357,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # finalize record — it's what the per-model llm.* metering bills.
     if translator.usage:
         rec["usage"] = translator.usage
+    if translator.charge:
+        rec["charge"] = translator.charge      # a remote runtime's own bill for the turn, beside the tokens
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
     await _checkpoint(sid, rec)
@@ -8992,6 +9097,11 @@ async def create_response(body: CreateResponseBody, request: Request):
     # here, before anything is allocated, so a missing or unbuilt environment is a 4xx and not a
     # failed turn.
     environment = await _environment_for_turn(org, _task_environment_ref(body, hv))
+    if environment and not _backend_takes_environments(_backend_of_harness(hv) or _backend_of_builtin(harness_id or "")):
+        # The layer is mounted in THIS sandbox; a remote runtime sees none of it. Refused in words
+        # rather than run without the project the task named.
+        raise uhp_error(400, "environment_unsupported",
+                        "This harness runs in a remote runtime and cannot mount an environment.", "environment")
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -16695,6 +16805,35 @@ _BASE_CATALOG: dict[str, dict] = {
         # an MCP server. Pinned by gateway/tests/test_systemone_catalog.py.
         "skills": False,
     },
+    "qoder": {
+        "label": "Qoder Cloud Agent", "backend": "qoder", "status": "ready",
+        # The remote Agent's `system`, before the harness's own instructions and the runner's
+        # delivery contract (runner/qoder_driver.py system_prompt): a file reaches the person only
+        # when the agent delivers it.
+        "system_prompt": ("You are Qoder, an autonomous coding agent running in a cloud sandbox with "
+                          "shell and file access. Read, edit and run what the task needs, and deliver "
+                          "every file the user should receive with DeliverArtifacts."),
+        # The built-ins of agent_toolset_20260401, in Qoder's own names (pinned equal to the runner's
+        # QODER_TOOLS by gateway/tests/test_qoder_catalog.py). A disabled tool is withheld by the
+        # Agent's configuration itself — out of the whitelist, named disallowed, `enabled: false` —
+        # and the session's tools are replaced before every turn, so the deny lands before any
+        # execution: `hard` by UHP §4.3, on every turn of a session. The enabled ones run
+        # `always_allow`, so the remote turn never pauses for a confirmation nobody is here to give.
+        "tools": [("Bash", "Shell"), ("Read", "File Read"), ("Write", "File Write"), ("Edit", "Edit"),
+                  ("Glob", "Glob"), ("Grep", "Search"), ("WebFetch", "Web Fetch"), ("WebSearch", "Web Search"),
+                  ("ImageSearch", "Image Search"), ("ImageGen", "Image Generation"),
+                  ("DeliverArtifacts", "Deliver Artifacts")],
+        "tool_enforcement": "hard",
+        # The runtime is Qoder's, not a process on this box (runner BACKENDS["qoder"]["remote"]):
+        # skills are published to Qoder as Skill resources bound on the session's Agent (so
+        # `skills` stays on); a plugin's stdio MCP servers cannot be reached from there and are
+        # reported unavailable; URL MCP servers are dialled by Qoder's cloud with their bearer held
+        # there in a Vault created for the session; input files are text-type only, 5 MB; an
+        # environment layer cannot be mounted. Token counts and the served model are not on Qoder's
+        # public API: the turn carries a `charge` in Qoder credits instead.
+        "environments": False,
+        "remote": True,
+    },
     "qwen": {
         "label": "Qwen Code", "backend": "qwen", "status": "ready",
         "system_prompt": ("You are Qwen Code, an autonomous coding agent. You work on a real git "
@@ -16753,6 +16892,14 @@ _BASE_CATALOG: dict[str, dict] = {
 # Bases this server can execute. Derived from the catalog above so the two cannot disagree —
 # `claude` is accepted as an alias for `claude-code` because existing harnesses store it.
 _SUPPORTED_BASES = tuple(_BASE_CATALOG) + ("claude",)
+
+
+def _backend_takes_environments(backend: str) -> bool:
+    """Whether a turn on `backend` can mount an environment layer (runner/environments.py). A base
+    whose runtime is remote reads nothing from this box and declares `environments: False`; the
+    turn is refused before anything is allocated rather than run without the layer it named."""
+    b = str(backend or "").lower()
+    return all(bool(e.get("environments", True)) for e in _BASE_CATALOG.values() if e.get("backend") == b)
 
 # The per-harness URL (/{hid}/v1/*) accepts every base id the catalog declares, plus stored chrn
 # ids — DERIVED, so adding a base to _BASE_CATALOG routes its public URL with no second edit.
@@ -19200,6 +19347,10 @@ async def list_bases(request: Request) -> dict:
                               if b.get("skills", True) else []),
             "builtinSkillsEnumerable": False,
             "takesSkills": bool(b.get("skills", True)),
+            # False for a base whose runtime is remote (qoder): an environment is mounted on this
+            # box only, and a turn that names one is refused (_backend_takes_environments), so the
+            # console offers none rather than a choice every Task would then fail on
+            "takesEnvironments": bool(b.get("environments", True)),
         })
     # The limits a turn gets when neither the request nor the harness sets one, so the console can
     # show the number that will apply rather than a placeholder of its own.
