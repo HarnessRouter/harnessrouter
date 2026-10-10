@@ -330,7 +330,7 @@ def test_a_turn_with_a_tool_call_and_an_artifact(tmp_path, stub):
     res = result_of(events)
     assert res["subtype"] == "success" and not res["is_error"], res
     assert res["charge"] == {"amount": 2.0, "unit": "qoder_credits", "basis": "snapshot",
-                             "model_credits": 1.5, "sandbox_runtime_credits": 0.5}
+                             "model_credits": 1.5, "sandbox_runtime_credits": 0.5, "session_total": 2.0}
     assert res["usage"] == {} and "model" not in res         # neither is reported by the API
     assert rs._status_from_result(res, 0) == "done"
     texts = [c["text"] for e in events if e.get("type") == "assistant" for c in e["message"]["content"] if c["type"] == "text"]
@@ -562,6 +562,45 @@ def test_the_recorded_live_session_maps_field_for_field(tmp_path, monkeypatch):
     res = result_of(events_)
     assert res["subtype"] == "success" and res["charge"]["amount"] == 0.35 and res["charge"]["unit"] == "qoder_credits"
     assert res["charge"]["basis"] == "snapshot"
+
+
+def test_each_turn_is_charged_what_it_added_to_the_sessions_running_total(tmp_path, monkeypatch):
+    """Qoder's session usage is the session's running total, not the turn's: the recorded live
+    session read 0.35 credits after its first turn and 0.61 after its second (model 0.35 + 0.23,
+    sandbox 0.03 settled by then). Charging the snapshot as it stands billed the first turn again on
+    the second; each turn now carries what it added, and the total beside it."""
+    events = json.loads((pathlib.Path(__file__).parent / "fixtures" / "qoder" / "live-session-events.json").read_text())
+    cut = events.index(next(e for e in events if e["type"] == "session.updated"))
+    monkeypatch.setattr(drv, "_emit", lambda m, p: emitted.append({"m": m, "p": p}))
+    monkeypatch.setattr(drv.Turn, "artifact", lambda self, doc: None)
+    charges = []
+    for part in (events[:cut], events[cut:]):
+        emitted: list[dict] = []
+        turn = drv.Turn({"cwd": str(tmp_path), "base_url": "http://127.0.0.1:1", "api_key": "x", "prompt": "p"})
+        turn.session_id = "sess_live"
+        for e in part:
+            turn.handle(e["id"], e["type"], json.dumps(e), "", [True])
+        turn.result("completed", "")
+        charges.append([x["p"]["charge"] for x in emitted if x["m"] == "__hr_result"][0])
+    assert [c["amount"] for c in charges] == [0.35, 0.26]
+    assert [c["model_credits"] for c in charges] == [0.35, 0.23]
+    assert [c["sandbox_runtime_credits"] for c in charges] == [0, 0.03]
+    assert [c["session_total"] for c in charges] == [0.35, 0.61]
+    # a continuation that lost its session starts a new running total: nothing is subtracted from it
+    turn = drv.Turn({"cwd": str(tmp_path), "base_url": "http://127.0.0.1:1", "api_key": "x", "prompt": "p"})
+    turn.session_id, turn.usage = "sess_new", {"model_credits": 0.1, "sandbox_runtime_credits": 0, "total_credits": 0.1}
+    assert turn.charge()["amount"] == 0.1
+
+
+def test_a_download_link_that_is_not_a_web_address_lands_nothing(tmp_path, monkeypatch):
+    """urllib opens file:, ftp: and data: URLs as readily as https:. The link comes from Qoder's
+    answer; one that is not a web address would land a file of this box as the artifact."""
+    secret = tmp_path / "secret.txt"
+    secret.write_text("not for the workspace")
+    turn = drv.Turn({"cwd": str(tmp_path / "ws"), "base_url": "http://127.0.0.1:1", "api_key": "x", "prompt": "p"})
+    monkeypatch.setattr(turn.api, "request", lambda *a, **k: {"url": secret.as_uri()})
+    got, why = turn._download("file_x", "secret.txt", tmp_path / "ws" / "part")
+    assert got is None and "not a web address" in why and not (tmp_path / "ws" / "part").exists()
 
 
 # ── input files ───────────────────────────────────────────────────────────────────────────────────

@@ -849,6 +849,10 @@ class Turn:
                 url = str((link or {}).get("url") or "")
                 if not url:
                     return None, f"{original}: no download url"
+                if urllib.parse.urlsplit(url).scheme.lower() not in ("https", "http"):
+                    # urllib also opens file:, ftp: and data: URLs; a link that is not a web address
+                    # would land a file of this box (or anything else) as the artifact
+                    return None, f"{original}: the download link is not a web address"
                 req = urllib.request.Request(url, method="GET")       # presigned: no credential travels
                 part.parent.mkdir(parents=True, exist_ok=True)
                 n = 0
@@ -978,11 +982,26 @@ class Turn:
             pass
 
     def charge(self) -> dict | None:
+        """This turn's charge: the session's usage now, less what the session had used when the
+        turn began. Qoder's usage is the SESSION's running total (the recorded live session read
+        0.35 credits after its first turn and 0.61 after its second), so the snapshot as it stands
+        would bill every earlier turn again on each new one. Sandbox credits settle after idle, so
+        what settles late is counted on the next turn rather than lost or counted twice."""
         if not self.usage or self.usage.get("total_credits") is None:
             return None
-        return {"amount": self.usage.get("total_credits"), "unit": "qoder_credits", "basis": "snapshot",
-                "model_credits": self.usage.get("model_credits"),
-                "sandbox_runtime_credits": self.usage.get("sandbox_runtime_credits")}
+        before = (self.st.get("usage_seen") or {}).get(self.session_id) or {}
+
+        def spent(k: str):
+            now = self.usage.get(k)
+            if not isinstance(now, (int, float)):
+                return now
+            was = before.get(k)
+            return round(max(now - (was if isinstance(was, (int, float)) else 0), 0), 6)
+
+        return {"amount": spent("total_credits"), "unit": "qoder_credits", "basis": "snapshot",
+                "model_credits": spent("model_credits"),
+                "sandbox_runtime_credits": spent("sandbox_runtime_credits"),
+                "session_total": self.usage.get("total_credits")}
 
     def cancel_remote(self) -> str:
         """Stop the remote turn; → the line the record keeps about it."""
@@ -1061,9 +1080,17 @@ class Turn:
         return 0
 
     def result(self, status: str, reason: str) -> None:
+        charge = self.charge()
+        if charge and self.session_id:
+            # what the session had used by the end of this turn: the next turn's charge starts here
+            self.st.setdefault("usage_seen", {})[self.session_id] = dict(self.usage or {})
+            try:
+                save_state(self.cwd, self.st)
+            except OSError:
+                pass
         _emit("__hr_result", {"status": status, "reason": reason, "final": self.final,
                               "session_id": self.session_id or self.st.get("session_id") or "",
-                              "charge": self.charge(), "notes": self.notes,
+                              "charge": charge, "notes": self.notes,
                               "artifacts": self.landed})
 
 
