@@ -6756,6 +6756,7 @@ _VENDOR_MODELS["qoder"] = {m: m for m in (
     "performance",     # Performance
     "efficient",       # Efficient
     "smodel",          # Sonus
+    "cmodel",          # Cantus (listed for the tenant on 2026-10-10)
     "qmodel_38max",    # Qwen3.8-Max
     "qfmodel",         # Qwen3.8-Flash
     "qmodel_latest",   # Qwen3.7-Max

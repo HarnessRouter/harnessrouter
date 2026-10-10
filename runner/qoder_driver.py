@@ -510,6 +510,9 @@ class Turn:
         self.replaying: dict[str, int] = {}     # a reconnect is replaying deltas of this message: bytes seen
         self.disabled = {str(t) for t in (job.get("tools_disabled") or [])}
         self.mounts: list[str] = []             # where this turn's attached files are mounted
+        self.written: list[str] = []            # paths the agent wrote or edited this turn
+        self.delivered_paths: set[str] = set()  # paths it passed to DeliverArtifacts
+        self.nudging = False                    # the delivery round (deliver_written) is running
 
     # ── remote objects ──
     def ensure_environment(self) -> str:
@@ -700,6 +703,8 @@ class Turn:
                     self.streamed[mid] = ""
             return False
         if t == "event_delta":
+            if self.nudging:
+                return False        # the delivery round's own words are not the turn's answer
             d = doc.get("delta") or {}
             c = d.get("content") or {}
             txt = str(c.get("text") or "") if c.get("type") == "text" else ""
@@ -720,6 +725,8 @@ class Turn:
             full = "".join(str(c.get("text") or "") for c in (doc.get("content") or [])
                            if isinstance(c, dict) and c.get("type") == "text")
             seen = self.streamed.pop(str(doc.get("id") or ""), "")
+            if self.nudging:
+                return False
             if full:
                 self.final = full
             if full and full != seen:
@@ -734,9 +741,16 @@ class Turn:
             name = str(doc.get("name") or "tool")
             if t == "agent.mcp_tool_use" and doc.get("mcp_server_name"):
                 name = f"mcp__{doc['mcp_server_name']}__{name}"
-            _emit("tool_use", {"id": str(doc.get("id") or ""), "name": name,
-                               "input": doc.get("input") if isinstance(doc.get("input"), dict) else {},
+            inp = doc.get("input") if isinstance(doc.get("input"), dict) else {}
+            _emit("tool_use", {"id": str(doc.get("id") or ""), "name": name, "input": inp,
                                "permission": doc.get("evaluated_permission")})
+            if t == "agent.tool_use" and name in ("Write", "Edit") and inp.get("file_path"):
+                if str(inp["file_path"]) not in self.written:
+                    self.written.append(str(inp["file_path"]))
+            if t == "agent.tool_use" and name == "DeliverArtifacts":
+                for f in inp.get("files") or []:
+                    if isinstance(f, dict) and f.get("path"):
+                        self.delivered_paths.add(str(f["path"]))
             if doc.get("evaluated_permission") == "ask" and doc.get("id"):
                 self.pending_confirm.append(str(doc["id"]))
                 bare = str(doc.get("name") or "")
@@ -938,14 +952,15 @@ class Turn:
                 raise ApiError(0, "stream", "the event stream ended without a terminal event")
             time.sleep(min(0.5 * attempts, 5.0))
 
-    def post_message(self) -> str:
-        """Send the turn's message once; → the user.message event id. If the call itself fails
-        after it may have been delivered, the session's history says whether it was, and the
-        message is never sent a second time."""
+    def post_message(self, text: str | None = None) -> str:
+        """Send the turn's message once (or `text`, the delivery round's); → the user.message event
+        id. If the call itself fails after it may have been delivered, the session's history says
+        whether it was, and the message is never sent a second time."""
         before = self.last_history_id()
-        text = str(self.job.get("prompt") or "")
-        if self.mounts:
-            text = ("[Attached files, mounted read-only: " + ", ".join(f"`{m}`" for m in self.mounts) + "]\n\n" + text)
+        if text is None:
+            text = str(self.job.get("prompt") or "")
+            if self.mounts:
+                text = ("[Attached files, mounted read-only: " + ", ".join(f"`{m}`" for m in self.mounts) + "]\n\n" + text)
         body = {"events": [{"type": "user.message", "content": [{"type": "text", "text": text}]}]}
         try:
             doc = self.api.request("POST", f"/sessions/{self.session_id}/events", body)
@@ -964,6 +979,45 @@ class Turn:
                     _emit("notice", {"text": "the message's acknowledgement was lost; the session history shows it arrived"})
                     return str(e.get("id") or "")
             raise ApiError(0, "api_error", "the message could not be delivered", f"/sessions/{self.session_id}/events")
+
+    def undelivered(self) -> list[str]:
+        """Files the agent wrote or edited this turn that never reached the person: not passed to
+        DeliverArtifacts and not among the delivered names. Scratch space, the read-only uploads and
+        dot paths are not deliverables."""
+        names = {str(d.get("name") or "") for d in self.declared}
+        out: list[str] = []
+        for p in self.written:
+            if p in out or p in self.delivered_paths or os.path.basename(p) in names:
+                continue
+            if p.startswith(("/tmp/", MOUNT_ROOT + "/")) or any(s.startswith(".") for s in p.split("/") if s):
+                continue
+            out.append(p)
+        return out
+
+    def deliver_written(self) -> None:
+        """A file the agent wrote and did not deliver is lost to the person: Qoder's sandbox is
+        not this workspace, and DeliverArtifacts is the only way a file comes back. Every local
+        base gets what its turn wrote (the runner collects the workspace), so here a turn that ended
+        normally with such files asks the session, once, to deliver them. Measured 2026-10-10 on
+        0.33.0-rc.3: `auto` wrote the file the matrix's artifact scenario asked for and answered DONE
+        without delivering it, though the system prompt says to twice. The round's own words are
+        not shown or kept as the answer; what it delivers lands like any artifact."""
+        if self.terminated or (self.stop_reason or {}).get("type") != "end_turn":
+            return
+        missing = self.undelivered()
+        if not missing:
+            return
+        line = f"asked Qoder to deliver {len(missing)} file(s) the agent wrote but did not deliver: {', '.join(missing)}"
+        self.notes.append(line)
+        _emit("notice", {"text": line})
+        self.nudging, self.stop_reason = True, None
+        try:
+            posted = self.post_message("Deliver these files you wrote to the user now with DeliverArtifacts, in one "
+                                       "call, without changing them: " + ", ".join(missing) +
+                                       ". Then reply with only: DELIVERED")
+            self.run_stream(posted)
+        finally:
+            self.nudging = False
 
     def last_history_id(self) -> str:
         try:
@@ -1062,19 +1116,21 @@ class Turn:
                           "environment_id": env_id})
         posted = self.post_message()
         self.run_stream(posted)
+        self.deliver_written()
         self.snapshot_usage()
         save_state(self.cwd, self.st)
 
         missing = [d for d in self.declared if not any(l["file_id"] == d["file_id"] for l in self.landed)]
+        lost = self.undelivered()
         if self.terminated:
             self.result("failed", (self.error or {}).get("message") or "the Qoder session was terminated")
         elif self.error and self.error.get("retry") in ("terminal", "exhausted") and not self.final:
             self.result("failed", self.error["message"])
         elif str((self.stop_reason or {}).get("type") or "") != "end_turn":
             self.result("incomplete", f"stop_reason {json.dumps(self.stop_reason or {})}")
-        elif missing or self.artifact_failures:
-            self.result("incomplete", "artifact not delivered: " + "; ".join(self.artifact_failures or
-                                                                             [m["name"] for m in missing]))
+        elif missing or self.artifact_failures or lost:
+            self.result("incomplete", "artifact not delivered: " + "; ".join(
+                self.artifact_failures + [m["name"] for m in missing] + [f"{p} (written, never delivered)" for p in lost]))
         else:
             self.result("completed", "")
         return 0

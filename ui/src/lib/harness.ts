@@ -219,7 +219,7 @@ export const OOB: OobHarness[] = [
     // Placeholder only: the gateway's catalog wins once fetched. Qoder's own model ids, as its
     // GET /models lists them for the tenant; the runtime is Qoder's cloud, not a process on this
     // box, and Qoder picks and bills the model behind an id.
-    models: ['auto', 'ultimate', 'performance', 'efficient', 'smodel', 'qmodel_38max', 'qfmodel', 'qmodel_latest', 'qmodel', 'kmodel_latest', 'kmodel', 'gmodel', 'gfmodel', 'dmodel', 'dfmodel', 'mmodel'], defaultModel: 'ultimate', moreModels: 0,
+    models: ['auto', 'ultimate', 'performance', 'efficient', 'smodel', 'cmodel', 'qmodel_38max', 'qfmodel', 'qmodel_latest', 'qmodel', 'kmodel_latest', 'kmodel', 'gmodel', 'gfmodel', 'dmodel', 'dfmodel', 'mmodel'], defaultModel: 'ultimate', moreModels: 0,
     systemPrompt: 'You are Qoder, an autonomous coding agent running in a cloud sandbox with shell and file access. Read, edit and run what the task needs, and deliver every file the user should receive with DeliverArtifacts.',
     tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'ImageSearch', 'ImageGen', 'DeliverArtifacts'], skills: [] },
 ];

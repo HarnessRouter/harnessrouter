@@ -25,6 +25,7 @@ const LOGO: Record<string, string> = {
   grok: '/logos/grok.png',       // Grok's own app icon (grok.com/icon-512x512.png, scaled to 192 px)
   agentzero: '/logos/agentzero.png',   // Agent Zero's own mark (docs/res/favicon_round.png in the MIT agent0ai/agent-zero repository, scaled to 192 px)
   systemone: '/logos/systemone.png',   // the System One Harness's own mark (the project has no vendor logo; Jev is TypeSafe's model, not the harness)
+  qoder: '/logos/qoder.png',     // Qoder's own app icon (the apple-touch icon qoder.com serves, 412 px, scaled to 192 px)
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {

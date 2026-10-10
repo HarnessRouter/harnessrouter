@@ -592,6 +592,43 @@ def test_each_turn_is_charged_what_it_added_to_the_sessions_running_total(tmp_pa
     assert turn.charge()["amount"] == 0.1
 
 
+def test_a_file_written_and_not_delivered_is_asked_for_once_and_the_answer_stays_the_agents(tmp_path, stub):
+    """Measured on 0.33.0-rc.3 (model `auto`): the agent wrote the file the task asked for and
+    answered DONE without delivering it, so the person got nothing. The turn now asks the session,
+    once, to deliver what was written; that round's words are not the answer."""
+    stub.blobs["file_late"] = b"HELLO"
+    write = {"type": "agent.tool_use", "id": "evt_w", "name": "Write", "evaluated_permission": "allow",
+             "input": {"file_path": "/data/hello-qoder.txt", "content": "HELLO"}}
+    scratch = {"type": "agent.tool_use", "id": "evt_s", "name": "Write", "evaluated_permission": "allow",
+               "input": {"file_path": "/tmp/scratch.py", "content": "x"}}
+    deliver = {"type": "agent.tool_use", "id": "evt_d", "name": "DeliverArtifacts", "evaluated_permission": "allow",
+               "input": {"files": [{"path": "/data/hello-qoder.txt"}]}}
+    stub.script = [[RUNNING, write, scratch, {"type": "agent.message", "id": "evt_a", "content": [{"type": "text", "text": "DONE"}]}, IDLE],
+                   [RUNNING, deliver,
+                    {"type": "agent.artifact_delivered", "file_id": "file_late", "original_filename": "hello-qoder.txt", "size": 5},
+                    {"type": "agent.message", "id": "evt_b", "content": [{"type": "text", "text": "DELIVERED"}]}, IDLE]]
+    lines, proc = run_driver({"cwd": str(tmp_path), "prompt": "make hello-qoder.txt, reply DONE"}, stub)
+    assert proc.returncode == 0, proc.stderr
+    res = result_of(normalise(lines)[0])
+    assert res["subtype"] == "success" and res["result"] == "DONE", res
+    assert (tmp_path / "hello-qoder.txt").read_bytes() == b"HELLO"
+    sent = [c[2]["events"][0]["content"][0]["text"] for c in stub.posted("POST", f"/sessions/{sess_id(stub)}/events")]
+    assert len(sent) == 2 and "/data/hello-qoder.txt" in sent[1] and "/tmp/scratch.py" not in sent[1]
+    texts = [x["p"]["text"] for x in (json.loads(ln) for ln in proc.stdout.splitlines() if ln.startswith("{")) if x.get("m") == "text"]
+    assert "DELIVERED" not in "".join(texts)
+
+
+def test_a_file_still_not_delivered_after_the_ask_makes_the_turn_incomplete(tmp_path, stub):
+    write = {"type": "agent.tool_use", "id": "evt_w", "name": "Write", "evaluated_permission": "allow",
+             "input": {"file_path": "/data/report.md", "content": "r"}}
+    stub.script = [[RUNNING, write, {"type": "agent.message", "content": [{"type": "text", "text": "DONE"}]}, IDLE],
+                   [RUNNING, {"type": "agent.message", "content": [{"type": "text", "text": "I cannot."}]}, IDLE]]
+    lines, _ = run_driver({"cwd": str(tmp_path), "prompt": "x"}, stub)
+    res = result_of(normalise(lines)[0])
+    assert res["subtype"] == "incomplete" and "/data/report.md (written, never delivered)" in res["reason"], res
+    assert len(stub.posted("POST", f"/sessions/{sess_id(stub)}/events")) == 2       # asked once, not again
+
+
 def test_a_download_link_that_is_not_a_web_address_lands_nothing(tmp_path, monkeypatch):
     """urllib opens file:, ftp: and data: URLs as readily as https:. The link comes from Qoder's
     answer; one that is not a web address would land a file of this box as the artifact."""
