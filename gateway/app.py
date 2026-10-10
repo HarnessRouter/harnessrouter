@@ -16891,7 +16891,7 @@ class HarnessBody(BaseModel):
                 "unknown_field",
                 "unknown harness field '{field}'{hint}. A harness takes: {fields} (the camelCase names "
                 "it comes back with are accepted too).",
-                {"field": k, "hint": f"; did you mean '{near[0]}'?" if near else "",
+                {"field": k, "hint": f" (did you mean '{near[0]}'?)" if near else "",
                  "fields": ", ".join(cls.model_fields)})
         return {k: v for k, v in data.items() if k not in _HARNESS_READ_ONLY}
 

@@ -62,7 +62,7 @@ def test_a_field_the_harness_does_not_have_is_refused_by_name_with_the_nearest_o
     r = client.post("/v1/harnesses", json={"name": "x", "base": "pi", "system_promt": "a typo's value"}, headers=H)
     assert r.status_code == 422
     msg = r.json()["error"]["message"]
-    assert "system_promt" in msg and "did you mean 'system_prompt'" in msg and "default_model" in msg
+    assert "'system_promt' (did you mean 'system_prompt'?). A harness takes: " in msg and "default_model" in msg
     assert "typo's value" not in r.text                     # the value is never echoed
     r = client.post("/v1/harnesses", json={"name": "x", "base": "pi", "instructions": "do it"}, headers=H)
     assert r.status_code == 422 and "'instructions'" in r.json()["error"]["message"]
