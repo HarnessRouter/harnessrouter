@@ -476,6 +476,87 @@ def test_a_package_check_asks_the_registry_and_refuses_what_is_not_there(monkeyp
     assert E.check_package("apt", "nope")["exists"] is False
 
 
+def _apt_install_argv(monkeypatch, tmp_path, names):
+    """The `apt-get install` command line `_apt_into_layer` hands the box for these declared specs,
+    with `_run` stubbed: no apt, no network, no image, and the same argv a build would get."""
+    calls = []
+
+    def fake_run(log, cmd, cwd, env, deadline, run_as=None, flush=None):
+        calls.append(cmd)
+        if cmd[:3] == ["apt-get", "install", "-y"]:
+            archives = tmp_path / "apt-archives"
+            archives.mkdir(parents=True, exist_ok=True)
+            (archives / "jq_1.7.1-3_amd64.deb").write_bytes(b"!")   # what apt would have downloaded
+    monkeypatch.setattr(E, "_run", fake_run)
+    layer = tmp_path / "layer"
+    layer.mkdir(exist_ok=True)
+    E._apt_into_layer([], layer, names, {}, str(tmp_path), time.time() + 60)
+    return next(c for c in calls if c[:3] == ["apt-get", "install", "-y"])
+
+
+def test_an_apt_spec_reaches_apt_as_the_version_the_declaration_names(monkeypatch, tmp_path):
+    """#427: the pin was cut off before `apt-get` ran, so the layer held a different version than
+    the record declared and nothing said so. A pin apt cannot satisfy must fail the build instead."""
+    exact = _apt_install_argv(monkeypatch, tmp_path, ["jq=1.7.1-3"])
+    assert "jq=1.7.1-3" in exact and "jq" not in exact
+    # pip's `==` is not apt's grammar: it arrives as the single `=` apt parses
+    doubled = _apt_install_argv(monkeypatch, tmp_path, ["jq==1.7.1-3"])
+    assert "jq==1.7.1-3" not in doubled and "jq=1.7.1-3" in doubled
+    # a range: apt has no syntax for one, and installing the newest whatever the range says would be
+    # #427's silent substitution again, so the build fails naming it before apt runs at all
+    for specs in (["jq>=1.6"], ["jq=1.7.1-3", "libyaml>=0.2", "curl"]):
+        with pytest.raises(RuntimeError, match=r"cannot hold to (jq>=1\.6|libyaml>=0\.2)"):
+            _apt_install_argv(monkeypatch, tmp_path, specs)
+    # a bare name keeps its shape: only a pin gets the `=` joined back on
+    bare = _apt_install_argv(monkeypatch, tmp_path, ["jq"])
+    assert "jq" in bare and not any("=" in str(a) and a.startswith("jq") for a in bare)
+    # several declarations keep their own arms, and the package specs are still the last words
+    mixed = _apt_install_argv(monkeypatch, tmp_path, ["jq=1.7.1-3", "libyaml==0.2.5-1", "curl"])
+    assert mixed[-3:] == ["jq=1.7.1-3", "libyaml=0.2.5-1", "curl"]
+    assert mixed[:2] == ["apt-get", "install"] and "Debug::NoLocking=1" in mixed
+    # #427's remaining question: a pin older than a version the image already has is planned by apt
+    # as a downgrade, and `-y` alone stops on "Packages were downgraded and -y was used without
+    # --allow-downgrades". The download goes to the layer's own cache, so the plan is all it changes.
+    assert all("--allow-downgrades" in argv for argv in (exact, doubled, bare, mixed))
+
+
+def test_a_range_is_a_name_with_no_pin_for_every_manager(monkeypatch):
+    """`spec_parts` documents that a range is a name with no pin, and both the build's apt line and
+    the console's package check read through it. Looking for the pin operator first broke that
+    promise for every range that ends in `=`: `jq>=1.6` came back as the name `jq>`."""
+    for spec, want in (("jq", ("jq", "")),
+                       ("jq=1.7.1-3", ("jq", "1.7.1-3")),
+                       ("jq==1.7.1-3", ("jq", "1.7.1-3")),
+                       ("jq>=1.6", ("jq", "")),
+                       ("jq<=1.6", ("jq", "")),
+                       ("jq~=1.6", ("jq", "")),
+                       ("jq!=1.6", ("jq", "")),
+                       ("jq>1.6", ("jq", "")),
+                       ("jq<1.6", ("jq", ""))):
+        assert E.spec_parts(spec, "apt") == want, spec
+        assert E.spec_parts(spec, "pip") == want, spec
+    assert E.spec_parts("@types/node@24.1.0", "npm") == ("@types/node", "24.1.0")
+
+    # and the registry is asked about the package a range names, not about `jq>`: before, an apt
+    # range was looked up as a package literally called `jq>`, which is never in the box's lists
+    def fake_run(cmd, **kw):
+        class R:
+            stdout, returncode = "", 0
+        out = R()
+        if cmd[:2] == ["apt-cache", "policy"]:
+            assert cmd[2] == "jq", cmd      # the name, with no operator left glued to it
+            out.stdout = "jq:\n  Installed: (none)\n  Candidate: 1.7.1-3\n"
+        if cmd[:2] == ["apt-cache", "madison"]:
+            out.stdout = " jq | 1.7.1-3 | http://deb.debian.org bookworm/main amd64 Packages\n"
+        return out
+    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    monkeypatch.setattr(E, "_apt_lists", lambda: None)
+    ranged = E.check_package("apt", "jq>=1.6")
+    assert ranged["exists"] is True and ranged["latest"] == "1.7.1-3" and ranged["version"] == ""
+    # and it is refused there, with the reason, so the console never adds a range apt cannot hold to
+    assert "cannot hold to jq>=1.6" in ranged["error"] and "jq=1.7.1-3" in ranged["error"]
+
+
 def test_a_git_import_lands_files_and_directories_and_never_follows_a_link(store, tmp_path, monkeypatch):
     """A link a repository commits is dropped and counted, like an archive's; following it as root
     wrote what it pointed at into the source (reported privately). The clone gets the build's
