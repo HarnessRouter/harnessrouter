@@ -9,6 +9,7 @@ import pathlib
 import stat
 import sys
 import tarfile
+import threading
 import time
 import zipfile
 
@@ -183,6 +184,125 @@ def test_when_the_record_says_ready_the_version_is_already_the_active_one(store,
     E.start_build("henv_o", 1, "ordered")
     assert _wait("henv_o", 1)["status"] == "ready"
     assert seen == [(1, 1)]
+
+
+def test_a_source_write_during_a_build_snapshot_waits_for_the_snapshot(store, monkeypatch):
+    """#425: `_build` copied the source in its own thread while `write_file` could still land, so a
+    version could hold `a/` from before a write and `z/` from after it — a state the source was
+    never in. The snapshot takes the environment's source lock, and this asks the question at the
+    moment the copy is standing between two directories."""
+    E.write_file("henv_k", "a/one.py", b"old a\n")
+    E.write_file("henv_k", "z/two.py", b"old z\n")
+    inside_copy, release = threading.Event(), threading.Event()
+    real_copytree = E.shutil.copytree
+
+    def slow_copytree(src, dst, **kw):
+        real_copytree(pathlib.Path(src) / "a", pathlib.Path(dst) / "a", dirs_exist_ok=True)
+        inside_copy.set()                 # the build is mid-copy, past a/, before z/
+        release.wait(30)
+        real_copytree(pathlib.Path(src) / "z", pathlib.Path(dst) / "z", dirs_exist_ok=True)
+    monkeypatch.setattr(E.shutil, "copytree", slow_copytree)
+
+    # the count in the build log is read with the same hold the copy takes, so it describes the
+    # tree this build copied rather than whatever the source looked like a moment later
+    reads = []
+    real_count = E.source_stat
+
+    def spy_count(env):
+        out = real_count(env)
+        lock = getattr(E, "_source_lock", None)      # absent before the fix: the read is not held
+        reads.append((out["count"], bool(lock is not None and lock(env).locked())))
+        return out
+    monkeypatch.setattr(E, "source_stat", spy_count)
+
+    landed = threading.Event()
+
+    def writer():
+        E.write_file("henv_k", "z/three.py", b"new z\n")
+        landed.set()
+    thread = threading.Thread(target=writer)
+    E.start_build("henv_k", 1, "mixed")
+    assert inside_copy.wait(30), "the build never reached the copy"
+    thread.start()
+    assert not landed.wait(0.5), "the write landed while the build was inside the snapshot"
+    release.set()
+    thread.join(30)
+    assert landed.is_set()
+
+    rec = _wait("henv_k", 1)
+    assert rec["status"] == "ready", rec["log"]
+    v1 = E.version_dir("henv_k", 1)
+    assert (v1 / "a" / "one.py").read_bytes() == b"old a\n"
+    assert (v1 / "z" / "two.py").read_bytes() == b"old z\n"
+    assert not (v1 / "z" / "three.py").exists()               # one whole state, not a mix of two
+    assert (2, True) in reads, reads                          # a/one.py + z/two.py, counted under the hold
+    # the write is not lost, only ordered: the next build holds it
+    E.start_build("henv_k", 2, "mixed")
+    assert _wait("henv_k", 2)["status"] == "ready"
+    assert (E.version_dir("henv_k", 2) / "z" / "three.py").read_bytes() == b"new z\n"
+
+
+@pytest.mark.parametrize("change,env_id", [("make_dir", "henv_md"), ("delete_path", "henv_dp"),
+                                           ("import_archive", "henv_ia"), ("import_git", "henv_ig")])
+def test_the_snapshot_holds_every_change_to_the_source_not_only_a_write(store, monkeypatch, change, env_id):
+    """#425 asks for the interleaving to be tested rather than for a lock to exist. `make_dir`,
+    `delete_path` and the two imports change the source just as `write_file` does, so each is
+    another way a version can hold a state the source was never in."""
+    E.write_file(env_id, "a/one.py", b"old a\n")
+    E.write_file(env_id, "z/two.py", b"old z\n")
+    archive = store / "one.zip"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("from_archive.txt", "in archive\n")
+    archive.write_bytes(buf.getvalue())
+    if change == "import_git":
+        # the clone is the part that must stay OUTSIDE the hold, so it is not what is being asked
+        # here: git is answered without a network and the swap-in is what the test watches
+        def no_clone(cmd, **kw):
+            class R:
+                returncode, stdout, stderr = 0, "", ""
+            return R()
+        monkeypatch.setattr(E.subprocess, "run", no_clone)
+
+    inside_copy, release, landed = threading.Event(), threading.Event(), threading.Event()
+    real_copytree = E.shutil.copytree
+
+    def slow_copytree(src, dst, **kw):
+        real_copytree(pathlib.Path(src) / "a", pathlib.Path(dst) / "a", dirs_exist_ok=True)
+        inside_copy.set()
+        release.wait(30)
+        real_copytree(pathlib.Path(src) / "z", pathlib.Path(dst) / "z", dirs_exist_ok=True)
+    monkeypatch.setattr(E.shutil, "copytree", slow_copytree)
+
+    def worker():
+        if change == "make_dir":
+            E.make_dir(env_id, "z/deep")
+        elif change == "delete_path":
+            E.delete_path(env_id, "z/two.py")
+        elif change == "import_git":
+            E.import_git(env_id, "https://example.invalid/repository.git")
+        else:
+            E.import_archive(env_id, str(archive), replace=False)
+        landed.set()
+    thread = threading.Thread(target=worker)
+    E.start_build(env_id, 1, "held")
+    assert inside_copy.wait(30), "the build never reached the copy"
+    thread.start()
+    assert not landed.wait(0.5), f"{change} landed while the build was inside the snapshot"
+    release.set()
+    thread.join(30)
+    assert landed.is_set(), f"{change} never finished after the snapshot released"
+
+    paths = {e["path"] for e in E.tree(env_id)}
+    if change == "make_dir":
+        assert "z/deep" in paths
+    elif change == "delete_path":
+        assert "z/two.py" not in paths
+    elif change == "import_git":
+        assert {"a/one.py", "z/two.py"} <= paths        # swapped in, and the source is still there
+    else:
+        assert "from_archive.txt" in paths
+    assert _wait(env_id, 1)["status"] == "ready"
 
 
 def test_a_build_whose_last_write_fails_leaves_the_active_version_as_it_was(store, monkeypatch):
