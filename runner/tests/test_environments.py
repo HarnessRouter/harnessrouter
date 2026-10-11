@@ -382,21 +382,22 @@ def test_an_apt_spec_reaches_apt_as_the_version_the_declaration_names(monkeypatc
     # pip's `==` is not apt's grammar: it arrives as the single `=` apt parses
     doubled = _apt_install_argv(monkeypatch, tmp_path, ["jq==1.7.1-3"])
     assert "jq==1.7.1-3" not in doubled and "jq=1.7.1-3" in doubled
-    # a range is a name with no pin: apt-get cannot parse `jq>=1.6`, and the old split handed it the
-    # literal `jq>`, so a declared range failed the build. It asks for the candidate, as promised.
-    ranged = _apt_install_argv(monkeypatch, tmp_path, ["jq>=1.6"])
-    assert "jq" in ranged and not any(">" in str(arg) for arg in ranged)
+    # a range: apt has no syntax for one, and installing the newest whatever the range says would be
+    # #427's silent substitution again, so the build fails naming it before apt runs at all
+    for specs in (["jq>=1.6"], ["jq=1.7.1-3", "libyaml>=0.2", "curl"]):
+        with pytest.raises(RuntimeError, match=r"cannot hold to (jq>=1\.6|libyaml>=0\.2)"):
+            _apt_install_argv(monkeypatch, tmp_path, specs)
     # a bare name keeps its shape: only a pin gets the `=` joined back on
     bare = _apt_install_argv(monkeypatch, tmp_path, ["jq"])
     assert "jq" in bare and not any("=" in str(a) and a.startswith("jq") for a in bare)
     # several declarations keep their own arms, and the package specs are still the last words
-    mixed = _apt_install_argv(monkeypatch, tmp_path, ["jq=1.7.1-3", "libyaml>=0.2", "curl"])
-    assert mixed[-3:] == ["jq=1.7.1-3", "libyaml", "curl"]
+    mixed = _apt_install_argv(monkeypatch, tmp_path, ["jq=1.7.1-3", "libyaml==0.2.5-1", "curl"])
+    assert mixed[-3:] == ["jq=1.7.1-3", "libyaml=0.2.5-1", "curl"]
     assert mixed[:2] == ["apt-get", "install"] and "Debug::NoLocking=1" in mixed
     # #427's remaining question: a pin older than a version the image already has is planned by apt
     # as a downgrade, and `-y` alone stops on "Packages were downgraded and -y was used without
     # --allow-downgrades". The download goes to the layer's own cache, so the plan is all it changes.
-    assert all("--allow-downgrades" in argv for argv in (exact, doubled, ranged, bare, mixed))
+    assert all("--allow-downgrades" in argv for argv in (exact, doubled, bare, mixed))
 
 
 def test_a_range_is_a_name_with_no_pin_for_every_manager(monkeypatch):
@@ -432,6 +433,8 @@ def test_a_range_is_a_name_with_no_pin_for_every_manager(monkeypatch):
     monkeypatch.setattr(E, "_apt_lists", lambda: None)
     ranged = E.check_package("apt", "jq>=1.6")
     assert ranged["exists"] is True and ranged["latest"] == "1.7.1-3" and ranged["version"] == ""
+    # and it is refused there, with the reason, so the console never adds a range apt cannot hold to
+    assert "cannot hold to jq>=1.6" in ranged["error"] and "jq=1.7.1-3" in ranged["error"]
 
 
 def test_a_git_import_lands_files_and_directories_and_never_follows_a_link(store, tmp_path, monkeypatch):

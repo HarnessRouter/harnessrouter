@@ -552,9 +552,13 @@ REGISTRY_TIMEOUT = 8
 _apt_lists_at = 0.0
 
 
+_RANGE_OPS = (">=", "<=", "~=", "!=", ">", "<")
+
+
 def spec_parts(spec: str, manager: str) -> tuple[str, str]:
     """A spec's name and exact pin: npm's name@version, pip's name==version, apt's name=version.
-    A range (>=, ~=, ...) is a name with no pin; the installer resolves it at build time."""
+    A range (>=, ~=, ...) is a name with no pin; pip resolves it at build time, and apt cannot
+    (apt_range)."""
     s = spec.strip()
     if manager == "npm":
         i = s.rfind("@")
@@ -562,7 +566,7 @@ def spec_parts(spec: str, manager: str) -> tuple[str, str]:
     # Ranges before the pin operators: `>=`, `<=`, `~=` and `!=` each end in `=`, so looking for a
     # pin first read `jq>=1.6` as the name `jq>` with the pin `1.6` — neither what the owner
     # declared nor something apt-get, pip or a registry will answer for.
-    for sep in (">=", "<=", "~=", "!=", ">", "<"):
+    for sep in _RANGE_OPS:
         if sep in s:
             return s.split(sep, 1)[0].strip(), ""
     for sep in ("==", "="):
@@ -570,6 +574,15 @@ def spec_parts(spec: str, manager: str) -> tuple[str, str]:
             n, v = s.split(sep, 1)
             return n.strip(), v.strip()
     return s, ""
+
+
+def apt_range(spec: str) -> bool:
+    """Whether an apt declaration is a range. apt installs one exact version (name=version) or the
+    newest its sources offer (name) and has no syntax for a range, so `jq>=9` would be installed as
+    whatever jq is newest, and the layer would differ from its declaration with nothing saying so
+    (the failure #427 is about). A range is refused instead: when the console checks it, and by the
+    build before apt runs."""
+    return any(op in spec for op in _RANGE_OPS)
 
 
 def _http_json(url: str) -> tuple[int, dict]:
@@ -640,6 +653,9 @@ def check_package(manager: str, spec: str) -> dict:
                 out["version"] = pin
             else:
                 out["error"] = f"{name} {pin} is not published; the latest is {out['latest']}"
+        elif manager == "apt" and apt_range(spec):
+            out["error"] = (f"apt installs one exact version or the newest, and cannot hold to {spec}. "
+                            f"Declare {name}, or {name}={out['latest']} to pin the newest.")
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as e:
         out.update(exists=None, error=f"the registry could not be asked: {str(e)[:120]}")
     return out
@@ -748,6 +764,10 @@ def _apt_into_layer(log: list[str], dst: pathlib.Path, names: list[str], env: di
     and downloads each named package with the dependencies the image lacks, and dpkg unpacks every
     archive under <version>/apt, which a turn puts on PATH and LD_LIBRARY_PATH. The image's own
     packages stay the image's; nothing here changes the container."""
+    ranged = [s for s in names if apt_range(s)]
+    if ranged:
+        raise RuntimeError(f"apt installs one exact version or the newest, and cannot hold to {', '.join(ranged)}: "
+                           f"declare the name alone, or name=version")
     cache = pathlib.Path(scratch) / "apt-archives"
     cache.mkdir(parents=True, exist_ok=True)
     _run(log, ["apt-get", "update", "-qq"], str(dst), env, deadline, flush=flush)
@@ -758,8 +778,8 @@ def _apt_into_layer(log: list[str], dst: pathlib.Path, names: list[str], env: di
                # --allow-downgrades". Nothing here touches the image: the archives go to the layer's
                # own cache and dpkg unpacks them into the layer, so the flag only lets the planner
                # fetch the version the declaration names.
-               # apt-get parses neither `jq>=1.6` nor pip's `==`, so each spec goes through
-               # spec_parts: an exact pin reaches apt as name=version, a range as the bare name.
+               # apt-get does not parse pip's `==`, so each spec goes through spec_parts: an
+               # exact pin reaches apt as name=version (a range was refused above).
                "-o", "Debug::NoLocking=1",
                *[f"{n}={v}" if v else n for n, v in (spec_parts(s, "apt") for s in names)]],
          str(dst), env, deadline, flush=flush)
