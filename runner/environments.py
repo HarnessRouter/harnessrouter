@@ -29,6 +29,7 @@ with EACCES; that is the enforcement, not an instruction.
 """
 from __future__ import annotations
 
+import asyncio
 import grp
 import hashlib
 import json
@@ -1148,7 +1149,10 @@ def r_read(env_id: str, path: str) -> Response:
 
 @router.put("/environments/{env_id}/source")
 async def r_write(env_id: str, path: str, request: Request) -> dict:
-    return write_file(env_id, path, await request.body())
+    data = await request.body()
+    # Off the event loop, as the import is: a write waits for the source lock while a build
+    # snapshots the source, and the runner answers every turn from this one loop.
+    return await asyncio.to_thread(write_file, env_id, path, data)
 
 
 @router.post("/environments/{env_id}/mkdir")
@@ -1163,17 +1167,21 @@ def r_delete(env_id: str, path: str) -> dict:
 
 @router.post("/environments/{env_id}/import")
 async def r_import(env_id: str, request: Request, replace: int = 0, git_url: str = "", git_ref: str = "") -> dict:
+    # The clone, the extraction and the wait for the source lock all run in a worker thread. Called
+    # here directly they ran on the event loop the runner answers every turn from, so a git import
+    # froze the whole runner for as long as the clone took (its /healthz answered in 4.3 s during
+    # a 4.6 s import of django; a clone may take up to ten minutes).
     if git_url:
         # git_pin: host:port:address the gateway classified, on a shared deployment (_git_pin_args)
-        return import_git(env_id, git_url, git_ref, replace=bool(replace),
-                          pin=str(request.query_params.get("git_pin") or ""))
+        return await asyncio.to_thread(import_git, env_id, git_url, git_ref, replace=bool(replace),
+                                       pin=str(request.query_params.get("git_pin") or ""))
     fd, spool = tempfile.mkstemp(prefix="hr-env-import-")
     try:
         with os.fdopen(fd, "wb") as out:
             async for chunk in request.stream():
                 if chunk:
                     out.write(chunk)
-        return import_archive(env_id, spool, replace=bool(replace))
+        return await asyncio.to_thread(import_archive, env_id, spool, replace=bool(replace))
     finally:
         try:
             os.unlink(spool)

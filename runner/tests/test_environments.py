@@ -573,3 +573,55 @@ def test_a_pinned_git_clone_connects_to_the_address_the_gateway_classified(store
         with pytest.raises(HTTPException):
             E.import_git("henv_" + "c" * 32, "git@git.example:team/repo.git" if " " in bad else
                          "https://git.example/team/repo.git", pin=bad)
+
+
+def test_a_write_waiting_on_a_snapshot_or_a_slow_import_leaves_the_runner_answering(store, monkeypatch):
+    """The runner answers every turn from one event loop. A write waiting for the source lock, or a
+    git clone, run on that loop froze every other request until it ended (on 0.32.8 a 4.6 s import
+    kept the runner's /healthz waiting 4.3 s); both now run in a worker thread."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(E.router)
+
+    @app.get("/ping")
+    async def ping():
+        return {}
+
+    eid = "henv_" + "d" * 32
+    E.write_file(eid, "a.txt", b"1")
+    done: dict = {}
+
+    def ping_seconds(c):
+        """How long the loop took to answer, or None when it had not answered in 2 s."""
+        out: dict = {}
+        th = threading.Thread(target=lambda: (t0 := time.time(), c.get("/ping"), out.update(s=time.time() - t0)), daemon=True)
+        th.start()
+        th.join(2.0)
+        return out.get("s")
+
+    with TestClient(app) as c:              # one client, one event loop, as in the runner
+        lock = E._source_lock(eid)
+        lock.acquire()                      # a build is inside its snapshot
+        try:
+            w = threading.Thread(target=lambda: done.update(w=c.put(f"/environments/{eid}/source",
+                                                                    params={"path": "a.txt"}, content=b"2")), daemon=True)
+            w.start()
+            time.sleep(0.3)
+            waited = ping_seconds(c)
+            still_waiting = "w" not in done     # the write is held until the snapshot ends
+        finally:
+            lock.release()
+        w.join(10)
+        assert waited is not None and waited < 1.0, f"the runner did not answer while a write waited ({waited})"
+        assert still_waiting and done["w"].status_code == 200 and E.read_file(eid, "a.txt")[0] == b"2"
+
+        monkeypatch.setattr(E, "import_git", lambda *a, **k: (time.sleep(1.5), {"imported": "git"})[1])
+        g = threading.Thread(target=lambda: done.update(g=c.post(f"/environments/{eid}/import",
+                                                                 params={"git_url": "https://git.example/x.git"})), daemon=True)
+        g.start()
+        time.sleep(0.3)
+        waited = ping_seconds(c)
+        g.join(10)
+        assert waited is not None and waited < 1.0, f"the runner did not answer while a git import ran ({waited})"
+        assert done["g"].status_code == 200
