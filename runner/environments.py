@@ -751,10 +751,16 @@ def _apt_into_layer(log: list[str], dst: pathlib.Path, names: list[str], env: di
     cache = pathlib.Path(scratch) / "apt-archives"
     cache.mkdir(parents=True, exist_ok=True)
     _run(log, ["apt-get", "update", "-qq"], str(dst), env, deadline, flush=flush)
-    _run(log, ["apt-get", "install", "-y", "--download-only", "--reinstall", "-o", f"Dir::Cache::archives={cache}",
-               "-o", "Debug::NoLocking=1",
+    _run(log, ["apt-get", "install", "-y", "--download-only", "--reinstall", "--allow-downgrades",
+               "-o", f"Dir::Cache::archives={cache}",
+               # A pin older than a version the image already has is planned by apt as a downgrade,
+               # and `-y` alone stops on "Packages were downgraded and -y was used without
+               # --allow-downgrades". Nothing here touches the image: the archives go to the layer's
+               # own cache and dpkg unpacks them into the layer, so the flag only lets the planner
+               # fetch the version the declaration names.
                # apt-get parses neither `jq>=1.6` nor pip's `==`, so each spec goes through
                # spec_parts: an exact pin reaches apt as name=version, a range as the bare name.
+               "-o", "Debug::NoLocking=1",
                *[f"{n}={v}" if v else n for n, v in (spec_parts(s, "apt") for s in names)]],
          str(dst), env, deadline, flush=flush)
     debs = sorted(cache.glob("*.deb"))

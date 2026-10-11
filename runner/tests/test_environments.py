@@ -393,6 +393,10 @@ def test_an_apt_spec_reaches_apt_as_the_version_the_declaration_names(monkeypatc
     mixed = _apt_install_argv(monkeypatch, tmp_path, ["jq=1.7.1-3", "libyaml>=0.2", "curl"])
     assert mixed[-3:] == ["jq=1.7.1-3", "libyaml", "curl"]
     assert mixed[:2] == ["apt-get", "install"] and "Debug::NoLocking=1" in mixed
+    # #427's remaining question: a pin older than a version the image already has is planned by apt
+    # as a downgrade, and `-y` alone stops on "Packages were downgraded and -y was used without
+    # --allow-downgrades". The download goes to the layer's own cache, so the plan is all it changes.
+    assert all("--allow-downgrades" in argv for argv in (exact, doubled, ranged, bare, mixed))
 
 
 def test_a_range_is_a_name_with_no_pin_for_every_manager(monkeypatch):
