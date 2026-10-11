@@ -559,13 +559,16 @@ def spec_parts(spec: str, manager: str) -> tuple[str, str]:
     if manager == "npm":
         i = s.rfind("@")
         return (s[:i], s[i + 1:]) if i > 0 else (s, "")
+    # Ranges before the pin operators: `>=`, `<=`, `~=` and `!=` each end in `=`, so looking for a
+    # pin first read `jq>=1.6` as the name `jq>` with the pin `1.6` — neither what the owner
+    # declared nor something apt-get, pip or a registry will answer for.
+    for sep in (">=", "<=", "~=", "!=", ">", "<"):
+        if sep in s:
+            return s.split(sep, 1)[0].strip(), ""
     for sep in ("==", "="):
         if sep in s:
             n, v = s.split(sep, 1)
             return n.strip(), v.strip()
-    for sep in (">=", "<=", "~=", "!=", ">", "<"):
-        if sep in s:
-            return s.split(sep, 1)[0].strip(), ""
     return s, ""
 
 
@@ -749,7 +752,10 @@ def _apt_into_layer(log: list[str], dst: pathlib.Path, names: list[str], env: di
     cache.mkdir(parents=True, exist_ok=True)
     _run(log, ["apt-get", "update", "-qq"], str(dst), env, deadline, flush=flush)
     _run(log, ["apt-get", "install", "-y", "--download-only", "--reinstall", "-o", f"Dir::Cache::archives={cache}",
-               "-o", "Debug::NoLocking=1", *[n.split("=", 1)[0] if "=" in n and not n.startswith("=") else n for n in names]],
+               "-o", "Debug::NoLocking=1",
+               # apt-get parses neither `jq>=1.6` nor pip's `==`, so each spec goes through
+               # spec_parts: an exact pin reaches apt as name=version, a range as the bare name.
+               *[f"{n}={v}" if v else n for n, v in (spec_parts(s, "apt") for s in names)]],
          str(dst), env, deadline, flush=flush)
     debs = sorted(cache.glob("*.deb"))
     if not debs:
