@@ -183,6 +183,27 @@ def test_the_claude_result_names_the_model_from_its_usage_by_model():
     assert named[0]["model"] == "x"
 
 
+def test_a_resumed_claude_turn_after_a_switch_names_the_model_that_answered():
+    """modelUsage on the result is the session's running total: the first turn on a new model still
+    credits the old one with every earlier turn, so the most output tokens named the wrong model.
+    The answer's own message names the model that wrote it; a subagent's message does not count."""
+    state: dict = {}
+    server._claude_passthrough({"type": "assistant", "parent_tool_use_id": "toolu_1",
+                                "message": {"model": "claude-haiku-4-5-20251001", "content": []}}, state)
+    server._claude_passthrough({"type": "assistant", "parent_tool_use_id": None,
+                                "message": {"model": "anthropic/claude-fable-5.1",
+                                            "content": [{"type": "text", "text": "M3"}]}}, state)
+    out = server._claude_passthrough({"type": "result", "result": "M3", "modelUsage": {
+        "claude-haiku-4-5-20251001": {"outputTokens": 111},      # two earlier turns, the old model
+        "anthropic/claude-fable-5.1": {"outputTokens": 14}}}, state)
+    assert out[0]["model"] == "anthropic/claude-fable-5.1"
+    # a synthetic message (the CLI's own error line) names no model; the usage still decides then
+    st2: dict = {}
+    server._claude_passthrough({"type": "assistant", "message": {"model": "<synthetic>", "content": []}}, st2)
+    out = server._claude_passthrough({"type": "result", "result": "ok", "modelUsage": {"m": {"outputTokens": 3}}}, st2)
+    assert out[0]["model"] == "m"
+
+
 def test_the_hermes_result_carries_the_relays_served_model_and_cache_split():
     """hermes builds its own result from its session counters, which carry no cache figures and no
     model; through the relay the provider's statement is at hand and is what prices the turn."""
