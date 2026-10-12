@@ -1084,22 +1084,33 @@ def test_opensquillas_route_asks_openai_for_a_stream_without_padding():
     assert not server._HERMES_RELAY["routes"][tok2][2].get("plain_stream")
 
 
-def test_a_chunk_with_no_choice_reaches_opensquilla_with_openais_keys_only():
-    """Azure's usage trailer carries latency_checkpoint and routing (captured from our own resource,
-    gpt-5.5, 2026-10-12), and opensquilla 0.5.6 fails an answered turn on any key it does not know."""
-    from server import _choiceless_chunk_known_keys, _rewrite_stream_line
-    azure = (b'data: {"choices":[],"created":1,"id":"c","latency_checkpoint":{"engine_ttft_ms":137},'
-             b'"model":"gpt-5.5-2026-04-24","object":"chat.completion.chunk","routing":{"r":"x"},'
-             b'"usage":{"prompt_tokens":9,"completion_tokens":2,"total_tokens":11}}')
-    out = json.loads(_choiceless_chunk_known_keys(azure)[5:])
-    assert set(out) == {"choices", "created", "id", "model", "object", "usage"} and out["usage"]["total_tokens"] == 11
-    # a chunk that carries a choice, OpenAI's own trailer, [DONE] and comments pass as they came
-    for line in (b'data: {"choices":[{"index":0,"delta":{"content":"OK"},"content_filter_results":{}}],"id":"c"}',
-                 b'data: {"choices":[],"id":"c","usage":{"total_tokens":1}}', b"data: [DONE]", b": keep-alive", b""):
-        assert _choiceless_chunk_known_keys(line) == line
-    # only a plain_stream route rewrites; usage_no_nulls keeps doing its own
-    assert _rewrite_stream_line(azure, {}) == azure
-    assert _rewrite_stream_line(azure, {"plain_stream": True}) != azure
+def test_after_a_finished_choice_opensquilla_reads_only_a_bare_usage_chunk():
+    """Every provider ends a stream its own way, and opensquilla 0.5.6 fails a turn that has already
+    answered on anything after a finished choice but a bare usage chunk (2026-10-12)."""
+    from server import _plain_trailer_line, _rewrite_stream_line
+    def run(lines, flags={"plain_stream": True}):
+        st = {}
+        return [_rewrite_stream_line(ln, flags, st) for ln in lines]
+    answer = b'data: {"id":"c","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}]}'
+    finish = b'data: {"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}'
+    usage = '"usage":{"prompt_tokens":9,"completion_tokens":2,"total_tokens":11}'
+    trailers = {
+        "openai": f'data: {{"id":"c","object":"chat.completion.chunk","choices":[],"obfuscation":"xyz",{usage}}}'.encode(),
+        "azure": f'data: {{"choices":[],"id":"c","latency_checkpoint":{{"t":1}},"routing":{{"r":"x"}},{usage}}}'.encode(),
+        "openrouter": f'data: {{"id":"c","provider":"Fireworks","choices":[{{"index":0,"delta":{{"content":"","role":"assistant"}},"finish_reason":null}}],{usage}}}'.encode(),
+    }
+    for name, trailer in trailers.items():
+        out = run([answer, finish, trailer, b"data: [DONE]"])
+        assert out[0] == answer and out[1] == finish and out[3] == b"data: [DONE]", name
+        got = json.loads(out[2][5:])
+        assert got["choices"] == [] and got["usage"]["total_tokens"] == 11, name
+        assert set(got) <= {"id", "object", "created", "model", "system_fingerprint", "service_tier", "usage", "choices"}, name
+    # a post-finish chunk with no usage at all is dropped; before the finish nothing changes
+    assert run([finish, b'data: {"id":"c","choices":[{"index":0,"delta":{}}]}'])[1] == b""
+    assert run([answer, b'data: {"choices":[],"prompt_filter_results":[]}'])[1] == b'data: {"choices":[],"prompt_filter_results":[]}'
+    # another route's stream is untouched
+    assert run([finish, trailers["openai"]], flags={})[1] == trailers["openai"]
+    assert _plain_trailer_line(b": keep-alive", {"finished": True}) == b": keep-alive"
 
 
 def test_a_field_anthropic_calls_deprecated_for_the_model_is_one_the_relay_drops():
