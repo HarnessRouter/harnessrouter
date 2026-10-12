@@ -5329,6 +5329,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
             pending = b""
+            line_state: dict = {}   # what the per-line rewrite has seen of this stream so far
             carry = b""      # tail of the previous chunk, so a split "model":"…" is still seen
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
@@ -5409,7 +5410,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
                     if out_lines is not None:
-                        out_lines.append(_rewrite_stream_line(line, flags) + b"\n")
+                        out_lines.append(_rewrite_stream_line(line, flags, line_state) + b"\n")
                     line = line.strip()
                     if line and not line.startswith(b":"):
                         last_event = time.monotonic()     # an event's line; a comment is not one
@@ -5436,7 +5437,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             seen_thinking = _thinking_in_sse_line(pending.strip())
             _stream_fold(flags, call_usage, seen_thinking if seen_thinking is not None else call_thinking, folded)
             if (flags.get("usage_no_nulls") or flags.get("plain_stream")) and pending:
-                tail_bytes = _rewrite_stream_line(pending, flags)   # a last line with no newline after it
+                tail_bytes = _rewrite_stream_line(pending, flags, line_state)   # a last line with no newline after it
                 self.wfile.write(f"{len(tail_bytes):x}\r\n".encode() + tail_bytes + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
         else:
@@ -5658,16 +5659,18 @@ HR_RELAY_UPSTREAM_TIMEOUT_S = _relay_upstream_timeout()
 _USAGE_NULL_COUNT = re.compile(rb'("[a-z_]*_tokens"\s*:\s*)null')
 
 
-_CHOICELESS_CHUNK_KEYS = frozenset({"id", "object", "created", "model", "system_fingerprint", "service_tier",
-                                    "choices", "usage"})
+_TRAILER_KEYS = ("id", "object", "created", "model", "system_fingerprint", "service_tier", "usage")
 
 
-def _choiceless_chunk_known_keys(line: bytes) -> bytes:
-    """One SSE line with a chunk that carries no choice (the usage trailer, Azure's annotations)
-    reduced to the keys of OpenAI's own chunk. opensquilla 0.5.6 fails a turn that has already
-    answered on any other key there: Azure's usage trailer carries `latency_checkpoint` and
-    `routing` (captured from agentstudio-oai-e2, gpt-5.5, 2026-10-12), which no request option turns
-    off. A chunk with no choice holds no answer, so nothing the client reads is lost; its usage stays."""
+def _plain_trailer_line(line: bytes, state: dict) -> bytes:
+    """One SSE line for a client that accepts nothing after a finished choice but a bare usage
+    chunk (opensquilla 0.5.6: any other key, or any choice, there fails a turn that has already
+    answered). Every provider ends differently, measured 2026-10-12: OpenAI pads the usage trailer
+    with `obfuscation`, Azure adds `latency_checkpoint` and `routing`, OpenRouter repeats a no-op
+    choice with a `provider` key. Once a choice has finished, each later chunk is rewritten to the
+    keys of OpenAI's own trailer with no choice, or dropped when it carries no usage. Nothing after
+    a finished choice is an answer, and the usage is kept (the relay counts it from the line as it
+    came)."""
     raw = line.strip()
     if not raw.startswith(b"data:"):
         return line
@@ -5678,17 +5681,25 @@ def _choiceless_chunk_known_keys(line: bytes) -> bytes:
         obj = json.loads(payload)
     except ValueError:
         return line
-    if not isinstance(obj, dict) or obj.get("choices") != [] or not (set(obj) - _CHOICELESS_CHUNK_KEYS):
+    if not isinstance(obj, dict):
         return line
-    kept = {k: v for k, v in obj.items() if k in _CHOICELESS_CHUNK_KEYS}
-    return b"data: " + json.dumps(kept, separators=(",", ":")).encode()
+    if state.get("finished"):
+        if not isinstance(obj.get("usage"), dict):
+            return b""                       # an empty line: nothing for the client to read
+        kept = {k: obj[k] for k in _TRAILER_KEYS if k in obj and obj[k] is not None}
+        kept["choices"] = []
+        return b"data: " + json.dumps(kept, separators=(",", ":")).encode()
+    choices = obj.get("choices")
+    if isinstance(choices, list) and any(isinstance(c, dict) and c.get("finish_reason") for c in choices):
+        state["finished"] = True
+    return line
 
 
-def _rewrite_stream_line(line: bytes, flags: dict) -> bytes:
+def _rewrite_stream_line(line: bytes, flags: dict, state: dict) -> bytes:
     if flags.get("usage_no_nulls"):
         line = _usage_without_nulls(line)
     if flags.get("plain_stream"):
-        line = _choiceless_chunk_known_keys(line)
+        line = _plain_trailer_line(line, state)
     return line
 
 
