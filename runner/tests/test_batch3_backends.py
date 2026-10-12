@@ -25,7 +25,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
                     Auth, BACKENDS, CHECKPOINT_EXCLUDE, _agent_doc_path, _build_gajae,
                     _build_jcode, _build_mimo, _build_nanobot, _build_opensquilla,
-                    _BRIDGED_TRANSPORTS, _gajae_to_claude, _jcode_eof, _jcode_to_claude,
+                    _BRIDGED_TRANSPORTS, _JCODE_SANDBOX_OFF, _gajae_to_claude, _jcode_eof, _jcode_to_claude,
                     _opencode_to_claude, _opensquilla_eof, _opensquilla_to_claude,
                     _opensquilla_transcript,
                     _jcode_session_model, _mcp_url_is_loopback, _opensquilla_usage,
@@ -312,8 +312,18 @@ def test_jcode_disabled_tools_are_filtered_to_names_this_runtime_has():
     d, env = _ws(), {"HOME": str(pathlib.Path(_ws()) / "h")}
     cmd = _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
                        tools_disabled=["write (File Write)", "NotATool"])
-    assert cmd[cmd.index("--disabled-tools") + 1] == "write"
+    assert cmd[cmd.index("--disabled-tools") + 1].split(",") == sorted({"write"} | _JCODE_SANDBOX_OFF)
     assert "write" in ALL_JCODE_TOOLS and "notatool" not in ALL_JCODE_TOOLS
+
+
+def test_jcode_tools_that_cannot_work_in_the_sandbox_are_off_on_every_turn():
+    # rc.7: gpt-5.4-mini picked jcode's own Firefox-bridge `browser` over the browser plug and ran
+    # 459 tool calls for two hours trying to connect it. Off whatever the harness asks for.
+    d, env = _ws(), {"HOME": str(pathlib.Path(_ws()) / "h")}
+    cmd = _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    off = set(cmd[cmd.index("--disabled-tools") + 1].split(","))
+    assert off == set(_JCODE_SANDBOX_OFF) and {"browser", "macos_computer_use", "gmail", "maintainer_feedback"} <= off
+    assert _JCODE_SANDBOX_OFF <= ALL_JCODE_TOOLS and "bash" not in off and "webfetch" not in off
 
 
 def test_jcode_usage_is_summed_across_requests_and_netted_of_both_caches():

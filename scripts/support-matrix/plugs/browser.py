@@ -97,6 +97,10 @@ def run_base(call, base: str, model: str, keep: bool, log) -> dict:
             if status in ("completed", "failed", "incomplete", "cancelled"):
                 break
             time.sleep(6)
+        if status not in ("completed", "failed", "incomplete", "cancelled"):
+            # Given up on: stop it, as the family tour does. Left running, a jcode turn looping on
+            # a browser it could not connect went on for two hours past this point (rc.7).
+            call("POST", f"/v1/responses/{rid}/cancel", {})
         out["status"] = status
         out["model"] = model or (str(d.get("model") or "") if isinstance(d, dict) else "")   # the turn's own model: the base's default
         text = "".join(p.get("text") or "" for it in (d.get("output") or []) for p in (it.get("content") or [])

@@ -9460,6 +9460,14 @@ ALL_JCODE_TOOLS = {
     "panel", "read", "replace", "schedule", "session_search", "side_panel", "skill_manage",
     "swarm", "todo", "webfetch", "websearch", "write",
 }
+# Off on every turn, whatever the harness asks: jcode tools that cannot work in a headless Linux
+# sandbox, or that leave it on their own. `browser` drives Firefox through an extension bridge that
+# never connects here, and a model that picks it over the browser plug tries to set it up until the
+# turn's cap: gpt-5.4-mini ran 459 tool calls for two hours on 0.33.0-rc.7, "the browser bridge is
+# not connected", on a task the plug does in a minute. `macos_computer_use` is macOS's,
+# `gmail` signs in through jcode's own Google login rather than the person's plugs, and
+# `maintainer_feedback` writes to jcode's maintainer.
+_JCODE_SANDBOX_OFF = frozenset({"browser", "macos_computer_use", "gmail", "maintainer_feedback"})
 
 
 def _jcode_usage_add(state: dict, ev: dict) -> None:
@@ -10430,14 +10438,12 @@ def _build_jcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     elif resume_session_id:
         print(f"[resume] jcode: session {resume_session_id} not in this workspace — starting fresh",
               flush=True)
-    if tools_disabled:
-        # A real per-tool switch, applied AFTER the tool profile, so it is enforcement rather than
-        # instruction: the model's own list came back without the disabled name. Names outside this
-        # runtime's set are dropped, so a label from another backend narrows nothing.
-        names = sorted({x.split(" (")[0].strip().lower() for x in tools_disabled if x and x.strip()}
-                       & ALL_JCODE_TOOLS)
-        if names:
-            cmd += ["--disabled-tools", ",".join(names)]
+    # A real per-tool switch, applied AFTER the tool profile, so it is enforcement rather than
+    # instruction: the model's own list came back without the disabled name. Names outside this
+    # runtime's set are dropped, so a label from another backend narrows nothing.
+    names = sorted(({x.split(" (")[0].strip().lower() for x in (tools_disabled or []) if x and x.strip()}
+                    & ALL_JCODE_TOOLS) | _JCODE_SANDBOX_OFF)
+    cmd += ["--disabled-tools", ",".join(names)]
     if not _jcode_write_mcp(home, mcp_servers) and mcp_servers:
         print("[jcode] every configured MCP server was remote and could not be bridged — "
               "this turn runs without them", flush=True)
