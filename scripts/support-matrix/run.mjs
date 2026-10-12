@@ -190,8 +190,10 @@ try {
           // the partner must be one Codex can carry on with: gpt-5.3-codex and the gpt-5.6 line refuse each
           // other's threads by design (#73), and that rule is not what the switch row measures
           // Codex refuses gpt-5.3-codex after any other model (measured after gpt-5.5 and after the gpt-5.6
-          // line), so a switch away and back can only fail by design: that row is n/a, not a measurement
-          const conflicts = (a, c) => a === 'gpt-5.3-codex' || c === 'gpt-5.3-codex';
+          // line), so a switch away and back can only fail by design: that row is n/a, not a measurement.
+          // Codex's rule alone: mimo switches into and out of gpt-5.3-codex (measured 2026-10-12), and
+          // applying it to every base left that switch unmeasured on every other base offering the id
+          const conflicts = (a, c) => h === 'codex' && (a === 'gpt-5.3-codex' || c === 'gpt-5.3-codex');
           const other = runnableAll.find((x) => x !== m && !conflicts(m, x)) || null;
           if (other) { await pickModel(other); rec.switch = { to: other, ...expectWord(await turn(`Reply with exactly: M3-${other}`), `M3-${other}`) }; }
           else rec.switch = { to: null, ok: null, why: 'only one model' };

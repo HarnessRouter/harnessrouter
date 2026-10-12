@@ -350,6 +350,58 @@ def test_jcode_eof_fails_a_stream_that_ended_with_neither_terminal_event():
     assert out[0]["is_error"] is False and out[0]["result"] == "an answer"
 
 
+def _tool_uses(evs):
+    return [b for e in evs if e.get("type") == "assistant"
+            for b in e["message"]["content"] if b.get("type") == "tool_use"]
+
+
+def test_jcode_tool_call_carries_the_arguments_its_input_pieces_built():
+    # Captured from jcode v0.90.0 against a stub endpoint that streamed one bash call in three
+    # pieces (2026-10-12). The arguments arrive AFTER tool_start, as tool_input pieces with no id;
+    # emitting the call at tool_start sent it with {} and the console row had nothing to open.
+    evs, _ = _norm(_jcode_to_claude, [
+        {"type": "start", "session_id": "s", "model": "stub-model"},
+        {"id": "call_stub1", "name": "bash", "type": "tool_start"},
+        {"delta": "{\"comm", "type": "tool_input"},
+        {"delta": "and\": \"echo stub-", "type": "tool_input"},
+        {"delta": "ok\"}", "type": "tool_input"},
+        {"id": "call_stub1", "name": "bash", "type": "tool_exec"},
+        {"stop_reason": "tool_calls", "type": "message_end"},
+        {"error": None, "id": "call_stub1", "name": "bash", "type": "tool_done",
+         "output": "stub-ok\n\n--- Command finished with exit code: 0 ---\n"},
+        {"stop_reason": "stop", "type": "message_end"},
+        {"type": "done", "text": "finished", "model": "stub-model", "session_id": "s"},
+    ])
+    uses = _tool_uses(evs)
+    assert [(u["id"], u["name"], u["input"]) for u in uses] == [("call_stub1", "bash", {"command": "echo stub-ok"})]
+    kinds = [e["type"] for e in evs]
+    assert kinds.index("user") > kinds.index("assistant")   # the call before its result
+
+
+def test_jcode_two_calls_in_one_message_keep_their_own_arguments_and_order():
+    evs, _ = _norm(_jcode_to_claude, [
+        {"type": "start", "session_id": "s", "model": "m"},
+        {"id": "a", "name": "read", "type": "tool_start"}, {"delta": "{\"path\": \"x\"}", "type": "tool_input"},
+        {"id": "b", "name": "bash", "type": "tool_start"}, {"delta": "{\"command\": \"ls\"}", "type": "tool_input"},
+        {"id": "a", "name": "read", "type": "tool_exec"},
+        {"id": "b", "name": "bash", "type": "tool_exec"},
+        {"type": "message_end", "stop_reason": "tool_calls"},
+        {"type": "done", "text": "ok"},
+    ])
+    assert [(u["id"], u["input"]) for u in _tool_uses(evs)] == [("a", {"path": "x"}), ("b", {"command": "ls"})]
+
+
+def test_jcode_call_cut_off_by_a_kill_still_shows_what_had_arrived():
+    state = {"model": "m"}
+    for o in ({"type": "start", "session_id": "s"}, {"id": "c", "name": "bash", "type": "tool_start"},
+              {"delta": "{\"command\": \"sleep", "type": "tool_input"}):
+        assert _jcode_to_claude(o, state) in ([], [{"type": "system", "subtype": "init", "session_id": "s", "model": "m"}])
+    out = _jcode_eof(state, 1)
+    assert _tool_uses(out) == [{"type": "tool_use", "id": "c", "name": "bash",
+                                "input": {"arguments": "{\"command\": \"sleep"}}]
+    assert out[-1]["type"] == "result" and out[-1]["is_error"] is True
+
+
 def test_jcode_bridges_remote_mcp_because_it_has_no_client_for_one():
     # "jcode currently supports stdio (command-based) servers only; HTTP/SSE entries are recognized
     # and skipped with a log line" — so without the bridge every remote server a harness declares is

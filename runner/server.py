@@ -9486,14 +9486,42 @@ def _jcode_usage(state: dict) -> dict:
     return {k: v for k, v in (state.get("_jc_usage") or {}).items() if v}
 
 
+def _jcode_held_calls(state: dict, upto: str | None = None) -> list[dict]:
+    """Emit the held tool calls, oldest first, with the arguments their `tool_input` pieces built:
+    every one when `upto` is None, else up to and including the call with that id.
+
+    A call is held from `tool_start` because jcode streams its arguments AFTER it, as `tool_input`
+    pieces that carry no id (they belong to the call started last), and a tool_use is final once
+    the gateway has it. Emitting it at tool_start sent every jcode call with `{}`: the console
+    showed a bare "Bash" with nothing to open, and the record kept no command. Measured on v0.90.0
+    against a stub endpoint: tool_start{id,name}, tool_input{delta} x3, tool_exec{id,name},
+    message_end, tool_done{id,output}."""
+    held = state.get("_jc_calls") or []
+    if upto is not None and not any(c["id"] == upto for c in held):
+        return []
+    out = []
+    while held:
+        c = held.pop(0)
+        raw = c["args"].strip()
+        try:
+            inp = json.loads(raw) if raw else {}
+        except ValueError:
+            inp = {"arguments": raw}   # cut short (a killed turn): shown as it arrived, never dropped
+        out.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": c["id"], "name": c["name"],
+             "input": inp if isinstance(inp, dict) else {"arguments": inp}}]}})
+        if c["id"] == upto:
+            break
+    return out
+
+
 def _jcode_to_claude(obj: dict, state: dict) -> list[dict]:
     """Map ONE `jcode run --ndjson` line to zero+ canonical claude stream-json events.
 
     Text streams from text_delta; `text_replace` is jcode's revision event and replaces what was
     streamed, so it is not re-emitted (the user already has the old text on screen — the same
     decision _pi_to_claude makes for a non-prefix revision) but it does become the candidate final.
-    `tool_input` carries argument deltas for a call whose tool_use was already emitted at
-    tool_start, so it is dropped rather than painted twice."""
+    A tool call is held from `tool_start` until its arguments are complete (_jcode_held_calls)."""
     t = obj.get("type")
     if t == "start":
         state["_jc_session"] = obj.get("session_id") or ""
@@ -9515,37 +9543,45 @@ def _jcode_to_claude(obj: dict, state: dict) -> list[dict]:
         state["final"] = txt
         return []
     if t == "tool_start":
-        return [{"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "id": obj.get("id") or "tool",
-             "name": obj.get("name") or "tool", "input": {}}]}}]
+        state.setdefault("_jc_calls", []).append(
+            {"id": obj.get("id") or "tool", "name": obj.get("name") or "tool", "args": ""})
+        return []
+    if t == "tool_input":
+        held = state.get("_jc_calls")
+        if held:
+            held[-1]["args"] += str(obj.get("delta") or "")
+        return []
+    if t == "tool_exec":
+        return _jcode_held_calls(state, obj.get("id") or "tool")
     if t == "tool_done":
         err = obj.get("error")
         content = str(obj.get("output") or err or "")
-        return [{"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": obj.get("id") or "tool",
-             "is_error": bool(err), "content": content[:8000]}]}}]
+        return _jcode_held_calls(state, obj.get("id") or "tool") + [
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": obj.get("id") or "tool",
+                 "is_error": bool(err), "content": content[:8000]}]}}]
     if t == "tokens":
         _jcode_usage_add(state, obj)
         return []
     if t == "message_end":
         # One assistant message ended; the next may follow in the same turn (a tool round trip).
         # `final` is the LAST message's text, so the buffer resets rather than accumulating a
-        # mid-run aside into the answer.
+        # mid-run aside into the answer. Every call the message made has its arguments by now.
         state["_jc_text"] = ""
-        return []
+        return _jcode_held_calls(state)
     if t == "error":
         # A REAL error event, which is more than several of these CLIs have: the message names the
         # endpoint, the model, the auth variable's NAME (never its value), the status and the
         # provider's own body. No `done` follows it, and the process exits 1.
         state["_jc_error"] = str(obj.get("message") or "jcode run failed")[:1000]
-        return [{"type": "result", "subtype": "error", "is_error": True,
-                 "result": state["_jc_error"], "usage": _jcode_usage(state)}]
+        return _jcode_held_calls(state) + [{"type": "result", "subtype": "error", "is_error": True,
+                                            "result": state["_jc_error"], "usage": _jcode_usage(state)}]
     if t == "done":
         # `done.text` is the whole final answer, authoritative over what the deltas assembled.
         final = obj.get("text")
         if isinstance(final, str) and final:
             state["final"] = final
-        return [{"type": "result", "subtype": "success", "is_error": False,
+        return _jcode_held_calls(state) + [{"type": "result", "subtype": "success", "is_error": False,
                  "result": state.get("final", ""), "usage": _jcode_usage(state),
                  # The CLI echoes the REQUESTED id here, never what the provider answered, so this
                  # is deliberately NOT set as the served model: the relay's tap is the only honest
@@ -9559,13 +9595,14 @@ def _jcode_eof(state: dict, rc: int) -> list[dict]:
     emitter ran. The exit code decides, and a failure returns an EMPTY result so the run loop's
     collected stderr tail — which carries jcode's own `Error: …` block — is the reason rather than
     a placeholder written here."""
+    held = _jcode_held_calls(state)   # a call the kill cut off still shows what it was running
     if state.get("_jc_error"):
-        return []
+        return held
     usage = _jcode_usage(state)
     if rc == 0:
-        return [{"type": "result", "subtype": "success", "is_error": False,
-                 "result": state.get("final", ""), "usage": usage}]
-    return [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": usage}]
+        return held + [{"type": "result", "subtype": "success", "is_error": False,
+                        "result": state.get("final", ""), "usage": usage}]
+    return held + [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": usage}]
 
 
 _jcode_to_claude.eof = _jcode_eof   # type: ignore[attr-defined]

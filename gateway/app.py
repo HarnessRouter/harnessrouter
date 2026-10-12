@@ -795,6 +795,43 @@ def _tenant_sem(t: str) -> asyncio.Semaphore:
     return _tenant_sems.setdefault(t or "_", asyncio.Semaphore(_conc_limit("tenant")))
 
 
+@contextlib.asynccontextmanager
+async def _turn_slot(org: str, sid: str):
+    """Both concurrency gates, held for the turn, with the session's heartbeat kept fresh while the
+    turn WAITS for them.
+
+    A turn is marked `starting` when it is accepted, and on one container the gates admit as many
+    turns as the box has cores, so a busy box queues the rest. A queued turn is alive, but it has no
+    runner turn yet and nothing renewed its heartbeat, so the orphan sweep (_reconcile_session)
+    read it as a dead turn and settled it, session and response, as failed; the turn then ran and
+    its final write said completed. Measured 2026-10-12 on a 4-core instance with nine turns in
+    flight: a background poller read `failed` (error null) four seconds in, for the 28 seconds the
+    turn waited, and `completed` at 55 s. The newborn trap of 0.23.2, one stage later."""
+    beat_s = max(1, _RECONCILE_STALE_S // 4)
+    got = asyncio.Event()
+
+    async def beat():
+        while True:
+            try:
+                await asyncio.wait_for(got.wait(), timeout=beat_s)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await _vertex_upsert(sid, {"heartbeat": str(time.time())})
+            except Exception:  # noqa: BLE001 — a missed beat is retried on the next one
+                pass
+
+    t = asyncio.create_task(beat())
+    try:
+        async with _global_sem(), _tenant_sem(org):
+            got.set()
+            yield
+    finally:
+        got.set()
+        t.cancel()
+
+
 def _pool_is_local() -> bool:
     """True when the runner is reachable directly rather than through a cloud session pool.
 
@@ -7443,10 +7480,9 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # substitution would be the provider's, and the relay's served model shows it.
 _MODEL_CATALOG["kilo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models"])   # see its entry
-# This batch's five, each taking the list of the base whose WIRE REACH it shares, and each OFFERED
-# BUT NOT YET MEASURED — no support-matrix column has run on any of them. The precedent for saying
-# so at the ids rather than under a heading that claims measurement is the cheetahclaws entry, and
-# the reason is checklist item 13: a comment that outlives what it describes is a defect here.
+# This batch's bases, each starting from the list of the base whose WIRE REACH it shares. That is
+# the reach, not the offer: each then loses every model that did not run reliably on it in the
+# full measurement (_NOT_OFFERED below, with what each one did).
 #
 # mimo is an opencode FORK that kept opencode's provider model — the config names an ai-sdk package
 # and a baseURL, so it reaches what opencode reaches, Responses ids included.
@@ -7521,6 +7557,27 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     "minimax": frozenset({"gpt-5.6-terra", "gemini-3.5-flash-lite"}),
     "grok": frozenset({"deepseek-v4-pro"}),
     "agentzero": frozenset({"claude-fable-5", "claude-fable-5-1"}),
+    # The four bases of 0.33.0 offer only what they were MEASURED to run reliably: every model of
+    # each base through the five console scenarios twice (0.33.0-batch3.3 and batch3.7, seven
+    # connections), the family tour, and per model the skill, the four MCP tool transports, the
+    # browser and a real .pptx deliverable opened and checked (2026-10-12, docs/support-matrix-notes.md).
+    # ONE failure that is the model's removes it from that base; a product defect was fixed and
+    # measured again instead. What each one did:
+    #   mimo        claude-opus-4.7 refuses the scenario prompt (both runs); llama-3.3-70b answers
+    #               something else; llama-4-maverick writes the tool call as text (no file, twice);
+    #               qwen3.8-flash mixes up its replies; gpt-5.6-luna overruns the turn; hunyuan-4-preview
+    #               finishes the tour's edit without making the deck.
+    #   jcode       grok-build-0.1 and hunyuan-4-preview loop on tools until the cap; kimi-k3 makes
+    #               no file (twice); gemini-3-flash-preview degenerates on its first turn.
+    #   opensquilla claude-opus-4.7 refuses the scenario prompt (both runs); grok-4.20 and
+    #               llama-3.3-70b make no file; hunyuan-4-preview answers something else.
+    #   nanobot     grok-build-0.1 loops on exec; kimi-k3 and llama-3.3-70b make no file;
+    #               grok-4.5's stream stalls mid-turn.
+    "mimo": frozenset({"claude-opus-4.7", "llama-3.3-70b", "llama-4-maverick", "qwen3.8-flash",
+                       "gpt-5.6-luna", "hunyuan-4-preview"}),
+    "jcode": frozenset({"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview"}),
+    "opensquilla": frozenset({"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview"}),
+    "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
@@ -9391,9 +9448,11 @@ async def create_response(body: CreateResponseBody, request: Request):
     try:
         # Clear runner_turn_id too: a stale value (the PREVIOUS turn's CLI) would make a cancel in
         # this warmup window burn seconds on a dead-handle sandbox kill before settling.
+        # The heartbeat too: a turn that is accepted is alive, and the orphan sweep reads a
+        # `starting` session with no runner turn and no recent heartbeat as dead (_turn_slot).
         await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                    "running_response_id": resp_id, "runner_turn_id": "",
-                                   "billing_org": billing_org})
+                                   "billing_org": billing_org, "heartbeat": str(time.time())})
     except Exception as e:  # noqa: BLE001 — this write is load-bearing for cross-replica cancel: log it
         print(f"[cancel] accept-time running_response_id write failed sid={sid} resp={resp_id}: {str(e)[:120]}",
               flush=True)
@@ -9452,7 +9511,7 @@ async def create_response(body: CreateResponseBody, request: Request):
 
         async def run_bg():
             try:
-                async with _global_sem(), _tenant_sem(org):
+                async with _turn_slot(org, sid):
                     for ev in tr.start():
                         await bus_emit_bg(ev)
                     status, produced, rec = await _resp_execute(
@@ -9502,7 +9561,7 @@ async def create_response(body: CreateResponseBody, request: Request):
 
             async def run():
                 try:
-                    async with _global_sem(), _tenant_sem(org):
+                    async with _turn_slot(org, sid):
                         for ev in tr.start():
                             await emit(ev)
                         status, produced, rec = await _resp_execute(
@@ -9560,7 +9619,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     async def bus_emit(ev):
         _bus_publish(org, harness_id, member, sid, resp_id, ev)
     try:
-        async with _global_sem(), _tenant_sem(org):
+        async with _turn_slot(org, sid):
             for ev in tr.start():
                 await bus_emit(ev)
             status, produced, rec = await _resp_execute(
