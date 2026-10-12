@@ -1754,6 +1754,15 @@ async def _sandbox(path: str, sid: str, method: str = "POST", body: dict | None 
                                    headers=_pool_headers(), **kw)
 
 
+class _SandboxRefused(RuntimeError):
+    """The runner answered with its own verdict (a 4xx other than 429): `status` and the reason it
+    gave (`detail`), so a turn it refused to start says why rather than reading as a connection
+    that never ran."""
+    def __init__(self, message: str, status: int, detail: str):
+        super().__init__(message)
+        self.status, self.detail = status, detail
+
+
 async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | None = None,
                         params: dict | None = None, *, attempts: int = 28, base: float = 0.75) -> dict:
     """Call the sandbox and parse JSON, retrying transient failures with exponential backoff.
@@ -1775,8 +1784,15 @@ async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | 
                 return r.json()
             last = f"HTTP {r.status_code}, {len(raw)}B body"
             if 400 <= r.status_code < 500 and r.status_code != 429:   # the server's verdict: waiting cannot change it
-                last = f"HTTP {r.status_code}: {raw[:300].decode('utf-8', 'replace')}"
-                break
+                text = raw[:2000].decode("utf-8", "replace")
+                try:
+                    detail = str((json.loads(text) or {}).get("detail") or text)
+                except ValueError:
+                    detail = text
+                raise _SandboxRefused(f"sandbox {path} failed after {i + 1} of {attempts} tries "
+                                      f"(HTTP {r.status_code}: {text[:300]})", r.status_code, detail[:600])
+        except _SandboxRefused:
+            raise                             # a verdict, not a transient: never retried
         except Exception as e:  # noqa: BLE001
             last = f"{type(e).__name__}: {str(e)[:120]}"
         if i < attempts - 1:
@@ -8166,6 +8182,13 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             break
         try:
             started = await _sandbox_json("/turn", sid, body=body)   # retries cold-start / transient empties
+        except _SandboxRefused as e:
+            # The runner refused to start this turn and said why (jcode on an Anthropic connection
+            # with a model its catalog does not list, 2026-10-12): that is the reason the person
+            # needs, so it carries a status like a connection that ran. Without one, the turn read
+            # "No connection on this account serves claude-sonnet-5.5-direct".
+            rec["tried"].append({"connection": name, "tenant": src, "status": e.status, "error": e.detail})
+            continue
         except Exception as e:  # noqa: BLE001
             rec["tried"].append({"connection": name, "tenant": src, "error": str(e)[:200]})
             continue

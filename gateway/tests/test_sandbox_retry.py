@@ -77,3 +77,15 @@ def test_a_runner_that_never_comes_up_is_reported_with_the_tries_made(monkeypatc
     out, calls, sleeps = _drive(monkeypatch, [_Resp(503, b"")], attempts=4)
     assert isinstance(out, RuntimeError) and len(calls) == 4 and len(sleeps) == 3
     assert "failed after 4 of 4 tries" in str(out) and "HTTP 503" in str(out)
+
+
+def test_a_runner_refusal_at_turn_start_keeps_its_status_and_its_reason(monkeypatch):
+    """The runner refused to start a turn and said why (jcode on an Anthropic connection with a
+    model its catalog does not list): the reason is what the person reads, not "No connection on
+    this account serves <model>", which is what a refusal with no status read as (2026-10-12)."""
+    why = "jcode cannot run claude-sonnet-5-5 on an Anthropic connection: its Anthropic provider runs only the models it lists"
+    out, calls, sleeps = _drive(monkeypatch, [_Resp(400, ('{"detail":"%s"}' % why).encode())])
+    assert isinstance(out, gw._SandboxRefused) and out.status == 400 and out.detail == why
+    rec = {"model": "claude-sonnet-5.5-direct",
+           "tried": [{"connection": "Anthropic", "status": out.status, "error": out.detail}]}
+    assert gw._turn_failure_message(rec) == f"The turn failed: {why}"

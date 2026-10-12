@@ -4326,6 +4326,23 @@ def _google_unknown_field(refused: bytes) -> str:
     return m.group(1) if m else ""
 
 
+_DEPRECATED_FIELD_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)` is deprecated for this model")
+
+
+def _refused_top_level_field(refused: bytes) -> str:
+    """A top-level request field a provider refused by name, or "": Google's unknown field, or a
+    field Anthropic's OpenAI-compatible surface calls deprecated for the model ("`temperature` is
+    deprecated for this model.": nanobot on claude-sonnet-5.5 through a direct Anthropic connection,
+    2026-10-12, every turn). A deprecated field is one the model no longer takes, so dropping it
+    changes nothing the model would have used."""
+    name = _google_unknown_field(refused)
+    if name:
+        return name
+    text = refused.decode("utf-8", "replace") if isinstance(refused, (bytes, bytearray)) else str(refused)
+    m = _DEPRECATED_FIELD_RE.search(text)
+    return m.group(1) if m else ""
+
+
 # Gemini 3 requires each replayed tool call's thought signature: Google's OpenAI-compatible endpoint
 # streams it on every function call (tool_calls[].extra_content.google.thought_signature) and refuses
 # the next request without it, 400 "Function call is missing a thought_signature in functionCall
@@ -5227,7 +5244,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         print("[relay] provider's validator refused the harness's tool declarations; "
                               "normalised them for Google's schema and sent again", flush=True)
                         continue
-                unknown = _google_unknown_field(data) if e.code == 400 else ""
+                unknown = _refused_top_level_field(data) if e.code == 400 else ""
                 dropped = _drop_top_level_field(body, unknown) if (unknown and body is not None) else None
                 if attempt < 2 and dropped is not None and dropped != body:
                     # Google's OpenAI-compatible endpoint refuses any field it does not know (pi and
@@ -5374,11 +5391,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 pending += chunk
                 # a route that rewrites usage forwards whole lines (as rewritten) instead of the
                 # raw read, so a rewrite never straddles two reads
-                out_lines = [] if flags.get("usage_no_nulls") else None
+                out_lines = [] if (flags.get("usage_no_nulls") or flags.get("plain_stream")) else None
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
                     if out_lines is not None:
-                        out_lines.append(_usage_without_nulls(line) + b"\n")
+                        out_lines.append(_rewrite_stream_line(line, flags) + b"\n")
                     line = line.strip()
                     if line and not line.startswith(b":"):
                         last_event = time.monotonic()     # an event's line; a comment is not one
@@ -5404,8 +5421,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             call_usage.update(_usage_in_sse_line(pending.strip()))
             seen_thinking = _thinking_in_sse_line(pending.strip())
             _stream_fold(flags, call_usage, seen_thinking if seen_thinking is not None else call_thinking, folded)
-            if flags.get("usage_no_nulls") and pending:
-                tail_bytes = _usage_without_nulls(pending)      # a last line with no newline after it
+            if (flags.get("usage_no_nulls") or flags.get("plain_stream")) and pending:
+                tail_bytes = _rewrite_stream_line(pending, flags)   # a last line with no newline after it
                 self.wfile.write(f"{len(tail_bytes):x}\r\n".encode() + tail_bytes + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
         else:
@@ -5625,6 +5642,40 @@ HR_RELAY_UPSTREAM_TIMEOUT_S = _relay_upstream_timeout()
 
 
 _USAGE_NULL_COUNT = re.compile(rb'("[a-z_]*_tokens"\s*:\s*)null')
+
+
+_CHOICELESS_CHUNK_KEYS = frozenset({"id", "object", "created", "model", "system_fingerprint", "service_tier",
+                                    "choices", "usage"})
+
+
+def _choiceless_chunk_known_keys(line: bytes) -> bytes:
+    """One SSE line with a chunk that carries no choice (the usage trailer, Azure's annotations)
+    reduced to the keys of OpenAI's own chunk. opensquilla 0.5.6 fails a turn that has already
+    answered on any other key there: Azure's usage trailer carries `latency_checkpoint` and
+    `routing` (captured from agentstudio-oai-e2, gpt-5.5, 2026-10-12), which no request option turns
+    off. A chunk with no choice holds no answer, so nothing the client reads is lost; its usage stays."""
+    raw = line.strip()
+    if not raw.startswith(b"data:"):
+        return line
+    payload = raw[5:].strip()
+    if not payload.startswith(b"{"):
+        return line
+    try:
+        obj = json.loads(payload)
+    except ValueError:
+        return line
+    if not isinstance(obj, dict) or obj.get("choices") != [] or not (set(obj) - _CHOICELESS_CHUNK_KEYS):
+        return line
+    kept = {k: v for k, v in obj.items() if k in _CHOICELESS_CHUNK_KEYS}
+    return b"data: " + json.dumps(kept, separators=(",", ":")).encode()
+
+
+def _rewrite_stream_line(line: bytes, flags: dict) -> bytes:
+    if flags.get("usage_no_nulls"):
+        line = _usage_without_nulls(line)
+    if flags.get("plain_stream"):
+        line = _choiceless_chunk_known_keys(line)
+    return line
 
 
 def _usage_without_nulls(line: bytes) -> bytes:
