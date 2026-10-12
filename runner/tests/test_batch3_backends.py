@@ -1121,3 +1121,17 @@ def test_a_field_anthropic_calls_deprecated_for_the_model_is_one_the_relay_drops
     assert _refused_top_level_field(body) == "temperature"
     assert _refused_top_level_field(b'{"error":{"message":"Invalid JSON payload received. Unknown name \\"store\\": Cannot find field."}}') == "store"
     assert _refused_top_level_field(b'{"error":{"message":"max_tokens: must be positive"}}') == ""
+
+
+def test_nanobots_shell_gets_the_harnesss_own_variables_by_name():
+    """Every other base's shell inherits the harness's variables; nanobot's passes only what it is
+    named. The custom-harness dimension's script ran without its STAMP_NONCE (2026-10-12)."""
+    d, env = _ws(), {"STAMP_NONCE": "n-123", "HR_API_URL": "http://127.0.0.1:8080"}
+    _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                   caller_keys=["STAMP_NONCE", "HR_API_URL", "NOT_SET"])
+    cfg_path = pathlib.Path(d, ".harness", "nanobot", "config.json")
+    text = cfg_path.read_text()
+    ex = json.loads(text)["tools"]["exec"]
+    assert ex["allowedEnvKeys"] == ["STAMP_NONCE", "HR_API_URL"]     # names only, none that is unset
+    assert "n-123" not in text                                     # the value stays in the environment
+    assert "pathPrepend" not in ex                                 # no environment layer, no PATH entry
