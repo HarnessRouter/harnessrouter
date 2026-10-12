@@ -1082,3 +1082,31 @@ def test_opensquillas_route_asks_openai_for_a_stream_without_padding():
     _build_jcode("openai-api", Auth(api_key="k", base_url="https://api.openai.com/v1"), "gpt-5.4-mini", "hi", d2, env2)
     tok2 = next(v for v in env2.values() if str(v).startswith("hr-relay-"))
     assert not server._HERMES_RELAY["routes"][tok2][2].get("plain_stream")
+
+
+def test_a_chunk_with_no_choice_reaches_opensquilla_with_openais_keys_only():
+    """Azure's usage trailer carries latency_checkpoint and routing (captured from our own resource,
+    gpt-5.5, 2026-10-12), and opensquilla 0.5.6 fails an answered turn on any key it does not know."""
+    from server import _choiceless_chunk_known_keys, _rewrite_stream_line
+    azure = (b'data: {"choices":[],"created":1,"id":"c","latency_checkpoint":{"engine_ttft_ms":137},'
+             b'"model":"gpt-5.5-2026-04-24","object":"chat.completion.chunk","routing":{"r":"x"},'
+             b'"usage":{"prompt_tokens":9,"completion_tokens":2,"total_tokens":11}}')
+    out = json.loads(_choiceless_chunk_known_keys(azure)[5:])
+    assert set(out) == {"choices", "created", "id", "model", "object", "usage"} and out["usage"]["total_tokens"] == 11
+    # a chunk that carries a choice, OpenAI's own trailer, [DONE] and comments pass as they came
+    for line in (b'data: {"choices":[{"index":0,"delta":{"content":"OK"},"content_filter_results":{}}],"id":"c"}',
+                 b'data: {"choices":[],"id":"c","usage":{"total_tokens":1}}', b"data: [DONE]", b": keep-alive", b""):
+        assert _choiceless_chunk_known_keys(line) == line
+    # only a plain_stream route rewrites; usage_no_nulls keeps doing its own
+    assert _rewrite_stream_line(azure, {}) == azure
+    assert _rewrite_stream_line(azure, {"plain_stream": True}) != azure
+
+
+def test_a_field_anthropic_calls_deprecated_for_the_model_is_one_the_relay_drops():
+    """nanobot sends temperature, and claude-sonnet-5.5 on Anthropic's OpenAI-compatible surface
+    refused every turn: "`temperature` is deprecated for this model." (2026-10-12)."""
+    from server import _refused_top_level_field
+    body = b'{"type":"error","error":{"type":"invalid_request_error","message":"`temperature` is deprecated for this model."}}'
+    assert _refused_top_level_field(body) == "temperature"
+    assert _refused_top_level_field(b'{"error":{"message":"Invalid JSON payload received. Unknown name \\"store\\": Cannot find field."}}') == "store"
+    assert _refused_top_level_field(b'{"error":{"message":"max_tokens: must be positive"}}') == ""
