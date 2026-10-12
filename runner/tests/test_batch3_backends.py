@@ -868,8 +868,27 @@ def test_resuming_points_the_store_at_the_model_this_turn_asked_for():
     assert "--resume" in argv and argv[argv.index("--resume") + 1] == "sess-1"
     doc = json.loads(f.read_text())
     assert doc["model"] == "google/gemini-3.6-flash"
-    # only the model: the conversation and the provider key are jcode's to keep
+    # the conversation is jcode's to keep; the provider key follows this turn's provider
     assert doc["provider_key"] == "openai-compatible" and doc["messages"]
+
+
+def test_a_switch_between_connection_kinds_carries_the_provider_key_with_the_model():
+    """jcode joins the stored provider key onto the model when it restores a session: after a turn
+    on the Messages path (`claude-api`) an OpenAI-compatible turn asked for
+    `claude-api:openai/gpt-6.1-sol` and got a 404 (the column's switch row, 2026-10-12)."""
+    d, env = _ws(), {}
+    _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    f = _jcode_store(d, env, "sess-5", "claude-haiku-4-5-20251001")
+    doc = json.loads(f.read_text()); doc["provider_key"] = "claude-api"; f.write_text(json.dumps(doc))
+    _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "openai/gpt-6.1-sol", "next", d, env,
+                 resume_session_id="sess-5")
+    doc = json.loads(f.read_text())
+    assert (doc["provider_key"], doc["model"]) == ("openai-compatible", "openai/gpt-6.1-sol")
+    # and back: an Anthropic connection's turn on a session an OpenAI-compatible turn wrote
+    _build_jcode("anthropic", Auth(api_key="k", base_url="https://api.anthropic.com/v1"),
+                 "claude-haiku-4-5-20251001", "again", d, env, resume_session_id="sess-5")
+    doc = json.loads(f.read_text())
+    assert (doc["provider_key"], doc["model"]) == ("claude-api", "claude-haiku-4-5-20251001")
 
 
 def test_a_turn_on_the_same_model_leaves_the_store_untouched():
@@ -1016,3 +1035,50 @@ def test_the_provider_key_never_reaches_the_cli_whatever_the_connection_shape(bu
             if f.is_file():
                 assert key.encode() not in f.read_bytes(), (build, provider, auth.api_format, str(f))
         assert any(str(v).startswith("hr-relay-") for v in env.values()), (build, provider, "no relay placeholder")
+
+
+def test_jcode_runs_on_an_anthropic_connection_only_a_model_its_catalog_lists(monkeypatch):
+    """jcode's Anthropic provider replaces any id its catalog does not list with claude-opus-5-5 and
+    says so only in its own log: a claude-haiku-4.5 turn whose wire id was the dated
+    claude-haiku-4-5-20251001 was answered and billed by Opus (2026-10-12)."""
+    import server
+    monkeypatch.setattr(server, "_JCODE_ANTHROPIC_LISTED", ["claude-opus-5-5", "claude-sonnet-4-6", "claude-haiku-4-5"])
+    a = Auth(api_key="k", base_url="https://api.anthropic.com/v1")
+    # the dated id is the same model under jcode's undated name
+    argv = _build_jcode("anthropic", a, "claude-haiku-4-5-20251001", "hi", _ws(), {})
+    assert argv[argv.index("--model") + 1] == "claude-haiku-4-5"
+    argv = _build_jcode("anthropic", a, "claude-sonnet-4-6", "hi", _ws(), {})
+    assert argv[argv.index("--model") + 1] == "claude-sonnet-4-6"
+    # an id it does not list is refused, never answered by Opus
+    with pytest.raises(server.HTTPException) as e:
+        _build_jcode("anthropic", a, "claude-sonnet-5-5", "hi", _ws(), {})
+    assert "claude-sonnet-5-5" in e.value.detail and "claude-opus-5-5" in e.value.detail
+    # an OpenAI-compatible connection takes any id, as before
+    argv = _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "anthropic/claude-sonnet-5.5", "hi", _ws(), {})
+    assert argv[argv.index("--model") + 1] == "anthropic/claude-sonnet-5.5"
+
+
+def test_opensquillas_route_asks_openai_for_a_stream_without_padding():
+    """OpenAI and Azure pad every streamed chunk with `obfuscation`, the usage trailer included, and
+    opensquilla 0.5.6 fails a turn that has already answered on a trailer key it does not know."""
+    import server
+    from server import _without_stream_obfuscation
+    asked = json.dumps({"model": "gpt-5.4-mini", "stream": True, "stream_options": {"include_usage": True}}).encode()
+    for base in ("https://api.openai.com/v1", "https://agentstudio-oai-e2.openai.azure.com/openai/v1"):
+        out = json.loads(_without_stream_obfuscation(asked, base))
+        assert out["stream_options"] == {"include_usage": True, "include_obfuscation": False}, base
+    # an aggregator's stream, a body that does not stream, and one that already chose are left alone
+    assert _without_stream_obfuscation(asked, "https://ai-gateway.vercel.sh/v1") == asked
+    still = json.dumps({"model": "m", "stream": False}).encode()
+    assert _without_stream_obfuscation(still, "https://api.openai.com/v1") == still
+    chose = json.dumps({"stream": True, "stream_options": {"include_obfuscation": True}}).encode()
+    assert _without_stream_obfuscation(chose, "https://api.openai.com/v1") == chose
+    # only opensquilla's route asks for it
+    d, env = _ws(), {}
+    _build_opensquilla("openai-api", Auth(api_key="k", base_url="https://api.openai.com/v1"), "gpt-5.4-mini", "hi", d, env)
+    tok = next(v for v in env.values() if str(v).startswith("hr-relay-"))
+    assert server._HERMES_RELAY["routes"][tok][2]["plain_stream"] is True
+    d2, env2 = _ws(), {}
+    _build_jcode("openai-api", Auth(api_key="k", base_url="https://api.openai.com/v1"), "gpt-5.4-mini", "hi", d2, env2)
+    tok2 = next(v for v in env2.values() if str(v).startswith("hr-relay-"))
+    assert not server._HERMES_RELAY["routes"][tok2][2].get("plain_stream")
