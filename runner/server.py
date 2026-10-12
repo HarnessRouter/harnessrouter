@@ -12031,6 +12031,21 @@ def _collected_init(ws: str) -> None:
             _git(ws, "update-ref", _COLLECTED_REF, head.stdout.strip())
 
 
+def _collected_at_turn_start(ws: str) -> None:
+    """Set the cursor BEFORE the agent runs, so a turn's own commits are past it.
+
+    It used to be set at the first collection, to the HEAD of that moment: an agent that committed
+    its work during a session's first turn (`git add deck.pptx && git commit`, which jcode's models
+    do) had its commit under the cursor, and /produced listed nothing. Measured on 0.33.0-rc.7:
+    gpt-6-sol and gpt-6.1-sol on jcode made the deck every time and handed back no file, on both
+    runs. A repo with no commit yet gets an empty one to point at; later turns already have a
+    cursor, left where the last collection put it."""
+    _git_ensure(ws)
+    if _git(ws, "rev-parse", "-q", "--verify", "HEAD").returncode != 0:
+        _git(ws, "commit", "-q", "--allow-empty", "-m", "harness: session start")
+    _collected_init(ws)
+
+
 def _produced_keep(status: str, path: str) -> bool:
     if not path or path.endswith("/") or status.startswith("D"):
         return False
@@ -12257,6 +12272,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         raise HTTPException(400, "cwd is decided by the session identifier")
     os.makedirs(cwd, exist_ok=True)
     input_files = _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
+    try:
+        _collected_at_turn_start(_ws(identifier))
+    except Exception as e:  # noqa: BLE001 — the cursor is collection's; a turn never waits on it
+        print(f"[produced] cursor not set at turn start: {str(e)[:160]}", flush=True)
     # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
     # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers
     # from req.skills, so this filter is a parity guard: never write a skill whose name is suppressed.

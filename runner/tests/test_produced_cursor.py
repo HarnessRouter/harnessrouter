@@ -12,7 +12,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from server import _git, _git_ensure, _produced_ack, _produced_list  # noqa: E402
+from server import _collected_at_turn_start, _git, _git_ensure, _produced_ack, _produced_list  # noqa: E402
 
 
 def _ws():
@@ -82,3 +82,26 @@ def test_each_produced_item_says_when_it_was_written():
     _git(d, "add", "-A")
     _git(d, "commit", "-q", "-m", "checkpoint")
     assert {f["path"]: f["mtime"] for f in _produced_list(d)}["old.txt"] == 1_700_000_000.0
+
+
+def test_a_first_turn_that_commits_its_own_work_still_hands_it_back():
+    # 0.33.0-rc.7: jcode's gpt-6 models ended a first turn with `git add deck.pptx && git commit`.
+    # The cursor was set at that turn's collection, to a HEAD that already held the commit, and
+    # /produced listed nothing. Set at the turn's start, the agent's commit is past it.
+    d = tempfile.mkdtemp()                       # a brand-new session: no repo, no commit
+    _collected_at_turn_start(d)
+    (pathlib.Path(d) / "deck.pptx").write_text("deck")
+    _git(d, "add", "deck.pptx")
+    _git(d, "commit", "-q", "-m", "Create deck")   # what the agent ran
+    assert {f["path"] for f in _produced_list(d)} == {"deck.pptx"}
+
+
+def test_the_turn_start_cursor_leaves_a_later_turns_cursor_where_collection_put_it():
+    d = _ws()                                     # a session whose last turn was collected
+    (pathlib.Path(d) / "old.txt").write_text("from an earlier turn")
+    _produced_ack(d)
+    _collected_at_turn_start(d)
+    (pathlib.Path(d) / "new.txt").write_text("this turn")
+    _git(d, "add", "-A")
+    _git(d, "commit", "-q", "-m", "agent commit")
+    assert {f["path"] for f in _produced_list(d)} == {"new.txt"}
