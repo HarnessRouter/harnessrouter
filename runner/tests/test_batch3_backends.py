@@ -120,6 +120,17 @@ def test_mimo_config_is_the_opencode_schema_with_the_key_named_not_written():
     # opencode's snapshot repo is a git repo of the workspace under $HOME; left on it reached
     # 699 MB in twenty turns (#193). The fork inherited it, so it is turned off here too.
     assert cfg["snapshot"] is False
+    # The turn's connection and nothing else: mimo's built-in xiaomi provider is what a model's
+    # `actor` subagent reached on rc.6, refused with "Invalid API Key", failing a finished turn.
+    assert cfg["enabled_providers"] == ["hr"] and list(cfg["provider"]) == ["hr"]
+
+
+def test_opencode_too_reaches_only_the_turns_connection():
+    d, env = _ws(), {}
+    from server import _build_opencode
+    _build_opencode("openai-api", Auth(api_key="k", base_url=UP), "deepseek-v4-pro", "hi", d, env)
+    cfg = json.loads((pathlib.Path(d) / ".harness" / "opencode.json").read_text())
+    assert cfg["enabled_providers"] == ["hr"] and list(cfg["provider"]) == ["hr"]
 
 
 def test_mimo_shares_opencodes_normaliser():

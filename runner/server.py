@@ -7542,6 +7542,14 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
                 "models": {model: {}},
             }
         },
+        # The turn's connection and NOTHING ELSE. Both binaries carry built-in providers besides the
+        # ones a config defines, and a model may name one: mimo's `actor` tool takes a model, and on
+        # 0.33.0-rc.6 gpt-6-sol spawned a visual-QA subagent on `xiaomi/mimo-v2.5`, which MiMo's own
+        # service refused ("Invalid API Key"); the deck was made, the turn failed on the subagent's
+        # error, and the gateway read it as the user's key refused. Measured on @mimo-ai/cli 0.1.15:
+        # `mimo models` lists hr, mimo and six xiaomi ids without this, and hr alone with it. A
+        # request off the connection is also a request the person never sent anywhere.
+        "enabled_providers": ["hr"],
         # opencode's filesystem snapshots back the TUI's undo/revert; a fresh `run` per turn has
         # no one to undo for, and HarnessRouter's checkpoint is the rollback here. Left on, it is
         # a git repo of the workspace under $HOME — 699 MB of the 1.4 GB tarball in #193.
