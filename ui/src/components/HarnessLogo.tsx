@@ -28,10 +28,7 @@ const LOGO: Record<string, string> = {
   jcode: '/logos/jcode.png',   // jcode's own app icon (assets/app-icons/Jcode.icns in the MIT 1jehuang/jcode repository), the 1024 px face resized. It is a BLACK mark on transparency, so it carries no contrast on a dark surface — upstream ships no light variant
   opensquilla: '/logos/opensquilla.png',   // the OpenSquilla mark (assets/opensquilla-mark.png in the Apache-2.0 TokenRhythm/opensquilla repository), already square
   nanobot: '/logos/nanobot.svg',   // the nanobot mark (images/nanobot_mark.svg in the MIT HKUDS/nanobot repository); an SVG like cursor.svg, which this map already serves
-  // NO entry for `mimo`, deliberately: MiMo Code ships only a 1280x381 banner whose mark IS the
-  // wordmark, and a crop of it is unreadable at 26 px. The generic glyph is the honest fallback —
-  // a mapping to a file that is not there renders a broken image, which is worse. If the official
-  // app icon is supplied the way kimi's was, this is a one-line change.
+  mimo: '/logos/mimo.png',   // Xiaomi MiMo's own square mark: the site icon of mimo.xiaomi.com (the "Xiaomi" over "MiMO" wordmark, white on black) is 32 px only, so it is drawn again at 192 px from the full-size wordmark that mimo.xiaomi.com/coder serves (coder/assets/logo.png), in the same layout (Richard, 2026-10-12)
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {
