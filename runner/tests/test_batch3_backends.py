@@ -123,6 +123,9 @@ def test_mimo_config_is_the_opencode_schema_with_the_key_named_not_written():
     # The turn's connection and nothing else: mimo's built-in xiaomi provider is what a model's
     # `actor` subagent reached on rc.6, refused with "Invalid API Key", failing a finished turn.
     assert cfg["enabled_providers"] == ["hr"] and list(cfg["provider"]) == ["hr"]
+    # mimo's own built-in skills off (pptx-official on python-pptx, which no sandbox here can get);
+    # the harness's skills come through skills.paths and stay
+    assert env["MIMOCODE_DISABLE_BUILTIN_SKILLS"] == "1"
 
 
 def test_opencode_too_reaches_only_the_turns_connection():

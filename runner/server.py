@@ -7745,6 +7745,14 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr,
                                  backend="mimo", key_env=_MIMO_KEY_ENV, npm=npm)
     env["MIMOCODE_CONFIG"] = os.path.join(cwd, ".harness", "mimo.json")
+    # mimo's own 23 built-in skills off: several are dead ends here that compete with the skills the
+    # harness mounts. Its pptx/docx/xlsx/pdf-official run on python-pptx and the like, which this
+    # image does not ship and a sandbox cannot pip-install (no route to PyPI): gpt-5.4-mini picked
+    # pptx-official and gave up on the deck three times out of three while officecli, the skill
+    # every other base uses, sat beside it. Its `playwright` competes with the browser plug.
+    # Measured on 0.1.15 with `mimo debug skill`: 37 skills without this, 15 with it, and the
+    # skill from the harness's own skills path present both times.
+    env["MIMOCODE_DISABLE_BUILTIN_SKILLS"] = "1"
     cmd = ["mimo", "run", "--format", "json", "--model", qualified,
            # The sandbox is the trust boundary and nobody is attached to answer a prompt — the
            # same grant claude gets with --dangerously-skip-permissions and pi with --approve.
