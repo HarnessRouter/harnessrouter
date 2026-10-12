@@ -15,7 +15,43 @@
 // (optional: continue an existing conversation instead of starting one), FAMILIES (optional comma
 // list of model ids, one per family; default below), RESULTS (json path), IGNORE_TLS=1.
 import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
+
+// A FAMILY'S TURN HAS TO BE SERVED BY THAT FAMILY. Without this the tour measured only that the
+// conversation survived, and on 2026-10-07 it passed jcode 12 of 12 while every one of those twelve
+// turns was served by openai/gpt-5.4 — jcode's `--model` is its session's INITIAL one, so on
+// --resume the stored model won and the chip the person moved did nothing. A tour that cannot see
+// that is not measuring a model tour.
+//
+// `samemodel.py` is the gateway's own rule and is called rather than copied: an aggregator adds or
+// drops a vendor prefix, a provider appends a dated suffix, and a vendor table renames outright
+// (hunyuan-4-preview is served as tencent/hy4-preview). Reimplementing any of that here would be a
+// second rule to keep in step with the first.
+const HERE = path.dirname(new URL(import.meta.url).pathname);
+// samemodel.py needs 3.10+ (it annotates with `X | None`), and a mac's `python3` is still 3.9, which
+// raised a TypeError on import — a failure this would have swallowed as "nothing to judge on",
+// failing every row for a reason that is about this laptop. The interpreter is therefore CHOSEN,
+// once, by importing the module with it, and a run with none to choose stops instead of measuring.
+const PYTHON = (() => {
+  for (const c of [process.env.PYTHON, 'python3.13', 'python3.12', 'python3.11', 'python3.10', 'python3'].filter(Boolean)) {
+    try {
+      execFileSync(c, ['-c', 'import samemodel'], { cwd: HERE, stdio: 'ignore' });
+      return c;
+    } catch { /* next */ }
+  }
+  console.error('no python that can import samemodel.py (needs 3.10+); set PYTHON=');
+  process.exit(2);
+})();
+const sameModel = (asked, served) => {
+  if (!served) return null;        // nothing to judge on — NOT a pass; see the status text below
+  try {
+    return execFileSync(PYTHON, ['-c',
+      'import sys, samemodel as m; print("1" if m.alias_of(sys.argv[1], sys.argv[2]) else "0")',
+      String(asked), String(served)], { cwd: HERE, encoding: 'utf8' }).trim() === '1';
+  } catch (e) { return null; }
+};
 
 const BASE = process.env.BASE, USER = process.env.HR_USER, PASS = process.env.HR_PASS;
 const HARNESS = process.env.HARNESS || 'cheetahclaws';
@@ -143,10 +179,14 @@ for (const model of FAMILIES) {
   const stamp = `tour ${model} ${++editIdx}`;
   const edit = `${EDITS[(editIdx - 1) % EDITS.length]} Also set the slide's footer text to exactly "${stamp}". Keep it in tour.pptx.`;
   const s = await sendTurn(edit);
-  const ok = !s.timedOut && s.last?.status === 'completed' && (s.last.files || []).some((f) => /\.pptx$/i.test(f.filename || f.name || ''));
   const deck = (s.last?.files || []).some((f) => /\.pptx$/i.test(f.filename || f.name || ''));
-  const row = { family: model, model: s.last?.model, served: s.last?.served_model,
-    status: s.timedOut ? `not settled in ${TURN_CAP_S}s, stopped (${s.last?.status})` : (s.last?.status === 'completed' && !deck ? 'completed, deck not produced' : s.last?.status),
+  const served = sameModel(model, s.last?.served_model);
+  const ok = !s.timedOut && s.last?.status === 'completed' && deck && served === true;
+  const row = { family: model, model: s.last?.model, served: s.last?.served_model, served_as_asked: served,
+    status: s.timedOut ? `not settled in ${TURN_CAP_S}s, stopped (${s.last?.status})`
+      : (s.last?.status === 'completed' && !deck ? 'completed, deck not produced'
+      : (s.last?.status === 'completed' && served === false ? `completed, but served ${s.last?.served_model} and not ${model}`
+      : (s.last?.status === 'completed' && served === null ? 'completed, but no served model was recorded — this rule has nothing to judge on' : s.last?.status))),
     seconds: s.seconds, edit, tool_calls: (s.last?.tools || []).length, files: (s.last?.files || []).map((f) => f.filename || f.name), ok, error: s.last?.error || '' };
   results.turns.push(row);
   log(ok ? 'PASS' : 'FAIL', model, '->', row.status, s.seconds + 's', 'served', s.last?.served_model || '', 'tool calls', row.tool_calls, s.last?.error ? '| ' + s.last.error.slice(0, 160) : '', ok ? '' : '| files ' + JSON.stringify(row.files));

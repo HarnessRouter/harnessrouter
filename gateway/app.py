@@ -26,6 +26,7 @@ import zipfile
 
 import base64
 import contextlib
+import difflib
 import functools
 import hashlib
 import ipaddress
@@ -44,7 +45,8 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic_core import PydanticCustomError
 
 import backing               # pluggable graph/blob/secret stores (vg | local)
 import media_plane           # the media plane (capability catalog, provider adapters, ffmpeg)
@@ -1439,6 +1441,41 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # system-one-phase2) on its own GPU behind TypeSafe's wire, so a HarnessRouter key drives the
     # systemone base too: decisions at <base>/systemone, billed to the key's credits (2026-09-24).
     ("harnessrouter", "systemone"): "typesafe",
+    # ── this batch ────────────────────────────────────────────────────────────────────────────
+    # mimo is an opencode FORK that kept opencode's provider model (an ai-sdk package name plus a
+    # baseURL), so it reaches what opencode reaches and is wired row for row with it. No new
+    # provider entry anywhere: these are wiring rows pointing at providers that already exist,
+    # which is checklist item 1 — a second _PROVIDER_CATALOG key of the same name would silently
+    # overwrite the first on a rebase.
+    ("anthropic", "mimo"): "anthropic",        ("openai", "mimo"): "openai",
+    ("azure-foundry", "mimo"): "azure",
+    ("openrouter", "mimo"): "openai-api",
+    ("tokenrouter", "mimo"): "tokenrouter",    ("vercel", "mimo"): "tokenrouter",
+    ("llmtr", "mimo"): "tokenrouter",          ("custom", "mimo"): "tokenrouter",
+    ("google", "mimo"): "openai-api",          ("harnessrouter", "mimo"): "tokenrouter",
+    # jcode, opensquilla and nanobot each speak ONE OpenAI shape, chat/completions, through the
+    # loopback relay, which is exactly cline's and goose's reach, so they are wired as those are.
+    # jcode and opensquilla also have an Anthropic-Messages provider, used only for a connection
+    # that IS Anthropic — a claude id on an aggregator stays on the relay so its served model
+    # remains readable (see _build_jcode).
+    ("anthropic", "jcode"): "anthropic",       ("openai", "jcode"): "openai",
+    ("azure-foundry", "jcode"): "azure",
+    ("openrouter", "jcode"): "openai-api",
+    ("tokenrouter", "jcode"): "tokenrouter",   ("vercel", "jcode"): "tokenrouter",
+    ("llmtr", "jcode"): "tokenrouter",         ("custom", "jcode"): "openai-api",
+    ("google", "jcode"): "openai-api",         ("harnessrouter", "jcode"): "tokenrouter",
+    ("anthropic", "opensquilla"): "anthropic", ("openai", "opensquilla"): "openai",
+    ("azure-foundry", "opensquilla"): "azure",
+    ("openrouter", "opensquilla"): "openai-api",
+    ("tokenrouter", "opensquilla"): "tokenrouter", ("vercel", "opensquilla"): "tokenrouter",
+    ("llmtr", "opensquilla"): "tokenrouter",   ("custom", "opensquilla"): "openai-api",
+    ("google", "opensquilla"): "openai-api",   ("harnessrouter", "opensquilla"): "tokenrouter",
+    ("anthropic", "nanobot"): "anthropic",     ("openai", "nanobot"): "openai",
+    ("azure-foundry", "nanobot"): "azure",
+    ("openrouter", "nanobot"): "openai-api",
+    ("tokenrouter", "nanobot"): "tokenrouter", ("vercel", "nanobot"): "tokenrouter",
+    ("llmtr", "nanobot"): "tokenrouter",       ("custom", "nanobot"): "openai-api",
+    ("google", "nanobot"): "openai-api",       ("harnessrouter", "nanobot"): "tokenrouter",
 }
 
 
@@ -1724,6 +1761,15 @@ async def _sandbox(path: str, sid: str, method: str = "POST", body: dict | None 
                                    headers=_pool_headers(), **kw)
 
 
+class _SandboxRefused(RuntimeError):
+    """The runner answered with its own verdict (a 4xx other than 429): `status` and the reason it
+    gave (`detail`), so a turn it refused to start says why rather than reading as a connection
+    that never ran."""
+    def __init__(self, message: str, status: int, detail: str):
+        super().__init__(message)
+        self.status, self.detail = status, detail
+
+
 async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | None = None,
                         params: dict | None = None, *, attempts: int = 28, base: float = 0.75) -> dict:
     """Call the sandbox and parse JSON, retrying transient failures with exponential backoff.
@@ -1745,8 +1791,15 @@ async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | 
                 return r.json()
             last = f"HTTP {r.status_code}, {len(raw)}B body"
             if 400 <= r.status_code < 500 and r.status_code != 429:   # the server's verdict: waiting cannot change it
-                last = f"HTTP {r.status_code}: {raw[:300].decode('utf-8', 'replace')}"
-                break
+                text = raw[:2000].decode("utf-8", "replace")
+                try:
+                    detail = str((json.loads(text) or {}).get("detail") or text)
+                except ValueError:
+                    detail = text
+                raise _SandboxRefused(f"sandbox {path} failed after {i + 1} of {attempts} tries "
+                                      f"(HTTP {r.status_code}: {text[:300]})", r.status_code, detail[:600])
+        except _SandboxRefused:
+            raise                             # a verdict, not a transient: never retried
         except Exception as e:  # noqa: BLE001
             last = f"{type(e).__name__}: {str(e)[:120]}"
         if i < attempts - 1:
@@ -5457,10 +5510,17 @@ _CUSTOM_FORMAT_BACKENDS = {
     # Anthropic endpoint cannot cache at all, which cost a benchmark 6 to 8 times the Claude Code
     # price for the same task on goose and OpenHands.
     # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
-    "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
-               "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero"},
+    # This batch: the four offered bases all drive a custom OpenAI endpoint. mimo also takes a
+    # custom ANTHROPIC endpoint (through @ai-sdk/anthropic), which is why it is in both sets;
+    # jcode's and opensquilla's Messages providers exist but are reserved for a connection that IS
+    # Anthropic, so a custom integration declaring the anthropic format would be offered a path the
+    # runner does not take for it — unlisted rather than nearly true.
     # kilo passes api_format to the same ai-sdk package choice opencode makes (_opencode_npm).
-    "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
+    "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
+               "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
+               "mimo", "jcode", "opensquilla", "nanobot"},
+    "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
+                  "mimo"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
 }
@@ -6031,6 +6091,20 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
         # learn the context was dropped, so it is a short, honest note at the top of the reply.
         out.append(("text", "_Note: the earlier conversation could not be restored. This reply "
                             "continues as a new session, without that context._\n\n"))
+    elif t == "system" and ev.get("subtype") == "notice":
+        # A sentence the CLI itself said about how the turn went — not its answer, and not a
+        # failure. OpenSquilla reports "Provider context limit reached; compacting older context
+        # before retrying" this way, and a person reading a turn that took three minutes and lost
+        # its earlier context has no other way to learn why. The runner decides what is worth
+        # saying; this is the one place it can be said, because an unrecognised system subtype is
+        # dropped here in silence, and a runner that emits one is writing to a surface that does
+        # not exist (which is how this event was nearly shipped unrendered).
+        #
+        # Bounded and de-duplicated by the runner, prefixed like the other two notes, and rendered
+        # as the reply's own text rather than as an answer the model gave.
+        text = str(ev.get("text") or "").strip()
+        if text:
+            out.append(("text", f"\n\n_Note: {text[:500]}_\n"))
     elif t == "system" and ev.get("subtype") == "mcp_unavailable":
         # A CLI that runs the turn without an MCP server it could not reach, and says nothing (Kimi
         # Code CLI does exactly that), leaves a person wondering why the agent never used their
@@ -7369,6 +7443,42 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # substitution would be the provider's, and the relay's served model shows it.
 _MODEL_CATALOG["kilo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models"])   # see its entry
+# This batch's five, each taking the list of the base whose WIRE REACH it shares, and each OFFERED
+# BUT NOT YET MEASURED — no support-matrix column has run on any of them. The precedent for saying
+# so at the ids rather than under a heading that claims measurement is the cheetahclaws entry, and
+# the reason is checklist item 13: a comment that outlives what it describes is a defect here.
+#
+# mimo is an opencode FORK that kept opencode's provider model — the config names an ai-sdk package
+# and a baseURL, so it reaches what opencode reaches, Responses ids included.
+_MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+# ── gajae (Gajae-Code) is implemented and NOT offered ─────────────────────────────────────────
+# It has no entry here, none in _BASE_CATALOG, and no wiring row, so this server neither lists it,
+# routes it (_SUPPORTED_BASES and _HID_PREFIX_RE are derived from _BASE_CATALOG) nor runs it. The
+# runner's implementation stays in place — _build_gajae, _gajae_to_claude, their tests and their
+# captured fixtures — because the base WORKS; what stops it is this product's own write-wall, and
+# that is a decision to revisit rather than a defect to fix.
+#
+# MEASURED (2026-10-03, on a real instance, both directions of the switch):
+#   gjc's native lock helper walks from / down to the path it is locking and opens EVERY ancestor
+#   with O_RDONLY|O_DIRECTORY|O_NOFOLLOW (pi-natives, open_parent_no_follow), which needs READ on
+#   each ancestor rather than traverse. docker/entrypoint.sh sets /data and /data/workspaces to
+#   751 — "traversable by sessions, neither listable nor writable" — so a session uid gets EACCES,
+#   the addon reports io_error, and the turn dies before its first model call.
+#   With those two directories at 755 a real turn completed in 4.6 s; put back to 751 it failed
+#   again with the same error. Both sides are defending the same thing from opposite ends: gjc
+#   refuses to trust path resolution for a lock, and this product makes the ancestors unreadable.
+#
+# To offer it: relax those two modes (which gives up "neither listable", not "nor writable"), then
+# restore this entry, the _BASE_CATALOG entry, the _INTEGRATION_WIRING rows and the
+# _CUSTOM_FORMAT_BACKENDS membership. gateway/tests/test_gajae_not_offered.py pins the current
+# state so a half-restore cannot pass unnoticed. docs/support-matrix-notes.md has the full record.
+# jcode, opensquilla and nanobot each speak ONE OpenAI shape — chat/completions — through the
+# loopback relay, which is kimi's reach exactly, so they take kimi's list and are in
+# CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
+# only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
+# relay so its served model stays readable — see _build_jcode.)
+for _b in ("jcode", "opensquilla", "nanobot"):
+    _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
@@ -7429,12 +7539,18 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # minimax: the runner defines its endpoint with api `openai-completions` (MiniMax Code also has an
 # openai-responses api, but it is not the one the runner sets), the kimi case exactly.
 # cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
+# jcode's openai-compatible provider posts to /chat/completions (its own error names the endpoint),
+# opensquilla's generic `custom` provider is its Chat Completions adapter, and nanobot's `custom`
+# provider is the same — its `apiType` field, the one that would select a Responses surface, is
+# refused on any provider but `openai` ("providers.<name>.api_type is only supported for
+# providers.openai", which rejects the whole config). So a Responses-API-only id on any of the three
+# would be a picker row that fails on send.
 # grok: the runner's one custom model is `api_backend = "chat_completions"` (Grok Build can speak the
 # Responses and Messages APIs too, but that is not the model the runner defines).
 # agentzero too: its model is litellm's openai provider (Agent Zero's `other`, a0_api_mode chat).
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
-                      "cheetahclaws", "grok",
-                      "agentzero")
+                      "cheetahclaws", "grok", "agentzero",
+                      "jcode", "opensquilla", "nanobot")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -8169,6 +8285,13 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             break
         try:
             started = await _sandbox_json("/turn", sid, body=body)   # retries cold-start / transient empties
+        except _SandboxRefused as e:
+            # The runner refused to start this turn and said why (jcode on an Anthropic connection
+            # with a model its catalog does not list, 2026-10-12): that is the reason the person
+            # needs, so it carries a status like a connection that ran. Without one, the turn read
+            # "No connection on this account serves claude-sonnet-5.5-direct".
+            rec["tried"].append({"connection": name, "tenant": src, "status": e.status, "error": e.detail})
+            continue
         except Exception as e:  # noqa: BLE001
             rec["tried"].append({"connection": name, "tenant": src, "error": str(e)[:200]})
             continue
@@ -10276,6 +10399,63 @@ def _ws_visible(path: str) -> bool:
     return not any(path.startswith(p) or f"/{p}" in path for p in _WS_HIDE_PREFIXES)
 
 
+# The checkpoint tarball is the session DIRECTORY, which is not always the directory the agent
+# works in: nanobot's loader refuses a session store inside the agent's workspace, so that base
+# keeps its store at the session root and works one level down (_NANOBOT_WS in the runner). Reading
+# the tar straight through therefore showed a nanobot session as 30 files under a `workspace/`
+# prefix the user never typed — its three built-in skill bundles and its instruction file among
+# them — on the share page, in the full files listing, in the download-all zip, and to the kit
+# route that resolves an app's own file BY PATH (a kit asking for deck.json would not have found
+# it). The runner already writes both facts INTO the checkpoint, so this reads them back rather
+# than keeping a second list in the gateway: `.harness/agent-subdir` names the agent's directory
+# and `.git/info/exclude` carries the base's own machinery patterns (git status honours the same
+# file, which is what keeps the produced-files list clean).
+_WS_SUBDIR_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _ws_rules(tf) -> tuple[str, tuple[str, ...]]:
+    def _member(name: str) -> str:
+        for n in (f"./{name}", name):
+            try:
+                m = tf.getmember(n)
+            except KeyError:
+                continue
+            if m.isreg() and m.size <= 64 * 1024:
+                f = tf.extractfile(m)
+                if f is not None:
+                    return f.read().decode(errors="replace")
+        return ""
+    # ONE plain directory name, checked before any stripping: "/etc" stripped of its slashes
+    # would have read as the name "etc", and a value this does not recognise must mean "no subdir"
+    # rather than some other directory.
+    sub = _member(".harness/agent-subdir").strip()
+    if not _WS_SUBDIR_RE.fullmatch(sub):
+        sub = ""
+    pats = tuple(l.strip() for l in _member(".git/info/exclude").splitlines()
+                 if l.strip() and not l.startswith("#"))
+    return sub, pats
+
+
+def _ws_view(path: str, sub: str, pats: tuple[str, ...]) -> str | None:
+    """The tar member's path as the USER sees it, or None when it is not the user's file.
+
+    The base's own exclude patterns are matched against the path as GIT sees it — relative to the
+    session directory — because that is the file git reads them from; the prefix comes off after."""
+    for q in pats:
+        if path == q or (q.endswith("/") and path.startswith(q)):
+            return None
+    if sub:
+        if not path.startswith(f"{sub}/"):
+            return None               # outside the agent's directory is the runner's own state
+        path = path[len(sub) + 1:]
+    return path if _ws_visible(path) else None
+
+
+def _ws_member(path: str, sub: str) -> str:
+    """The inverse: where that user path lives inside the tar."""
+    return f"{sub}/{path}" if sub else path
+
+
 def _wf_id(path: str) -> str:
     return "wf_" + base64.urlsafe_b64encode(path.encode()).decode().rstrip("=")
 
@@ -10376,11 +10556,13 @@ async def _ws_files(sid: str) -> dict[str, bytes] | None:
     out: dict[str, bytes] = {}
     total = 0
     with tf:
+        sub, pats = _ws_rules(tf)
         for m in tf.getmembers():
             if not m.isreg():
                 continue
             path = m.name[2:] if m.name.startswith("./") else m.name
-            if not _ws_visible(path):
+            path = _ws_view(path, sub, pats)
+            if path is None:
                 continue
             if m.size > _WS_FILE_CAP or total + m.size > _WS_TOTAL_CAP:
                 continue                       # oversized: served via the single-member fallback
@@ -10520,7 +10702,9 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
         if tf is None:
             return None
         with tf:
-            for name in (f"./{path}", path):
+            sub, _pats = _ws_rules(tf)
+            member = _ws_member(path, sub)
+            for name in (f"./{member}", member):
                 try:
                     m = tf.getmember(name)
                 except KeyError:
@@ -10589,11 +10773,13 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
     cfile_by_name = await _cfile_by_name(sid)
     files = []
     with tf:
+        sub, pats = _ws_rules(tf)
         for m in tf.getmembers():
             if not m.isreg():
                 continue
             path = m.name[2:] if m.name.startswith("./") else m.name
-            if not _ws_visible(path):
+            path = _ws_view(path, sub, pats)
+            if path is None:
                 continue
             fid = cfile_by_name.get(path) or _wf_id(path)
             files.append({"object": "file", "id": fid, "container_id": sid,
@@ -10691,11 +10877,13 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                     # turn relays, and health probes keep flowing).
                     n, tot = 0, 0
                     with tf:
+                        sub, pats = _ws_rules(tf)
                         for m in tf.getmembers():
                             if not m.isreg():
                                 continue
                             path = m.name[2:] if m.name.startswith("./") else m.name
-                            if not _ws_visible(path) or path.lstrip("/") in seen:
+                            path = _ws_view(path, sub, pats)
+                            if path is None or path.lstrip("/") in seen:
                                 continue
                             tot += m.size
                             if tot > _ARCHIVE_MAX_BYTES:
@@ -16887,6 +17075,98 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("spawn_agent", "Subagent")],
         "tool_enforcement": "instruction",
     },
+    "mimo": {
+        "label": "MiMo Code", "backend": "mimo", "status": "ready",
+        "system_prompt": ("You are MiMo Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The PERMISSION keys the fork kept from opencode (config/permission.ts), because those are
+        # the names that can actually be denied — a key outside this set is accepted by the
+        # record-with-rest schema and then matches no tool, which is a switch the console shows and
+        # that disables nothing.
+        "tools": [("bash", "Shell"), ("read", "File Read"), ("edit", "Edit"), ("glob", "Glob"),
+                  ("grep", "Search"), ("list", "List"), ("webfetch", "Web Fetch"),
+                  ("websearch", "Web Search"), ("todowrite", "Todo"), ("task", "Subagent"),
+                  ("question", "Question"), ("lsp", "LSP"), ("skill", "Skill"),
+                  ("external_directory", "External Directory")],
+        # "hard" for opencode's reason, which the fork did not change: a `permission.<key>: "deny"`
+        # removes the tool rather than discouraging it. The honest limit every shell-bearing base
+        # has: denying `edit` does not stop a file being written through `bash`.
+        "tool_enforcement": "hard",
+    },
+    "jcode": {
+        "label": "jcode", "backend": "jcode", "status": "ready",
+        "system_prompt": ("You are jcode, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # Measured on the pinned v0.90.0 by asking the model for its own tool list, which is the
+        # list the schema was built from; pinned equal to the runner's ALL_JCODE_TOOLS.
+        # macos_computer_use is listed because the build registers it — on Linux it has nothing to
+        # drive, which is a property of the host, not of the catalog.
+        "tools": [("bash", "Shell"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit"), ("replace", "Replace"), ("apply_patch", "Apply Patch"),
+                  ("ls", "List"), ("agentgrep", "Search"), ("open", "Open"),
+                  ("webfetch", "Web Fetch"), ("websearch", "Web Search"), ("browser", "Browser"),
+                  ("todo", "Todo"), ("memory", "Memory"), ("batch", "Batch"), ("bg", "Background"),
+                  ("swarm", "Swarm"), ("applet", "Applet"), ("panel", "Panel"),
+                  ("side_panel", "Side Panel"), ("schedule", "Schedule"),
+                  ("skill_manage", "Skill Manage"), ("jcode_docs", "Docs"),
+                  ("conversation_search", "Conversation Search"),
+                  ("session_search", "Session Search"), ("compile_remote", "Remote Compile"),
+                  ("integration_tools", "Integrations"), ("gmail", "Gmail"),
+                  ("maintainer_feedback", "Maintainer Feedback"),
+                  ("macos_computer_use", "Computer Use"), ("mcp", "MCP"),
+                  ("mcp_call", "MCP Call"), ("mcp_search", "MCP Search"), ("invalid", "Invalid")],
+        # "hard", and measured: --disabled-tools runs after the tool profile, and with `write`
+        # disabled the model's own list came back without it. Writing has four doors here (write,
+        # edit, replace, apply_patch) and egress several, so disabling one is not disabling a
+        # capability — the same honest limit every shell-bearing base carries.
+        "tool_enforcement": "hard",
+    },
+    "opensquilla": {
+        "label": "OpenSquilla", "backend": "opensquilla", "status": "ready",
+        "system_prompt": ("You are OpenSquilla, an autonomous agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The tool names its own turns record (measured: write_file, read_file). Its agent CLI has
+        # NO per-tool deny list — `--permissions` chooses a posture (restricted / bypass / full) —
+        # so this list is deliberately short: it names what a turn was seen to call rather than
+        # advertising a switch for every tool in the runtime when none of them can be withheld.
+        "tools": [("exec", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("list_dir", "List"), ("grep", "Search"),
+                  ("web_search", "Web Search"), ("web_fetch", "Web Fetch")],
+        # "instruction", and for a stated reason rather than for lack of looking: there is no deny
+        # list on `opensquilla agent`, so the disabled set reaches the model as a line in AGENTS.md
+        # (runner/server.py adds this base to the set that gets that instruction). UHP §4.3 forbids
+        # overstating this as much as understating it.
+        "tool_enforcement": "instruction",
+    },
+    "nanobot": {
+        "label": "nanobot", "backend": "nanobot", "status": "ready",
+        "system_prompt": ("You are nanobot, an autonomous agent. You work on a real git workspace "
+                          "with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # The 22 tools its loop registers, read off its own start-up line on 0.3.5 and pinned equal
+        # to the runner's ALL_NANOBOT_TOOLS.
+        "tools": [("exec", "Shell"), ("exec_session", "Shell Session"),
+                  ("list_exec_sessions", "Shell Sessions"), ("run_cli_app", "CLI App"),
+                  ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("apply_patch", "Apply Patch"),
+                  ("find_files", "Find"), ("grep", "Search"), ("list_dir", "List"),
+                  ("web_fetch", "Web Fetch"), ("web_search", "Web Search"),
+                  ("message", "Message"), ("my", "Self"), ("spawn", "Subagent"),
+                  ("create_goal", "Goal Create"), ("update_goal", "Goal Update"),
+                  ("list_sessions", "Sessions"), ("read_session", "Session Read"),
+                  ("search_sessions", "Session Search"),
+                  ("send_session_message", "Session Message")],
+        # "hard", and measured at the door that covers BOTH tool sources: the driver sets the
+        # SESSION's disabled_tools, which the loop applies to the registry it is about to use —
+        # after the MCP provider has registered its own tools into it. A registry filtered at
+        # construction would have withheld the built-ins and let every MCP tool through. Measured:
+        # with write_file withheld the model wrote the file with `exec` instead, which is the honest
+        # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
 }
 
 # Bases this server can execute. Derived from the catalog above so the two cannot disagree —
@@ -16914,6 +17194,28 @@ def _require_supported_base(base: str) -> str:
                         f"This server cannot run the harness base '{base}'.", "base",
                         {"supported": list(_SUPPORTED_BASES)})
     return b
+
+
+async def _require_offered_model(org: str, base: str, model: str | None, previous: str = "") -> None:
+    """A harness's default model must be one its base runs on this instance, by the rule a task
+    naming that model is held to (_model_authorized_async: the base's catalog and the provider
+    families it takes, or a model an integration that drives the base was given). Refused when the
+    harness is saved rather than at its first task: until 2026-10-10 a harness on gemini-2.5-flash,
+    which no base runs, saved with a 200 and then refused every task given to it, far from the
+    request that made the mistake. An update that leaves the model as it was is not checked again,
+    so an unrelated edit to a harness whose model has since gone still saves."""
+    base = _require_supported_base(base)        # an unknown base is said as that, not as its model
+    m = (model or "").strip()
+    if not m or m == (previous or "").strip():
+        return
+    backend = _backend_of_harness({"base": base}) or base
+    if await _model_authorized_async(m, backend, org):
+        return
+    offered = list(_MODEL_CATALOG.get(backend, {}).get("models", []))
+    raise uhp_error(422, "model_not_available",
+                    f"Model '{m}' is not offered on the {base} base. Use one of: {', '.join(offered[:12])}"
+                    f"{', …' if len(offered) > 12 else ''} (GET /v1/bases lists every base's models).",
+                    "default_model", {"offered": offered})
 
 
 def _either(snake: str, schema: dict | None = None):
@@ -16993,6 +17295,47 @@ class HarnessBody(BaseModel):
     # (docs/dual-loop.md in the System One Harness repository, Appendix B).
     calibrates: str | None = _either("calibrates")
     environment: str | None = None   # the environment (henv_) this harness's tasks read at /env/<slug>; UHP Environments
+
+    @model_validator(mode="before")
+    @classmethod
+    def _known_fields_only(cls, data):
+        """A field a harness does not have is refused, by name, with the nearest one it does have.
+        Until 2026-10-10 an `instructions` or a `system_promt` was dropped and the harness saved
+        without the setting behind a 200; an agent driving the API had nothing to tell it why its
+        harness came back empty, and makes the same harness again and again. What a harness comes back with
+        and cannot be written (its id, owner, workspace, creation time, kit, plugin files not
+        loaded) is let through and ignored, so a harness read and sent back still saves."""
+        if not isinstance(data, dict):
+            return data
+        known = _harness_field_names()
+        unknown = [k for k in data if k not in known and k not in _HARNESS_READ_ONLY]
+        if unknown:
+            k = str(unknown[0])
+            near = difflib.get_close_matches(k, sorted(known), n=1, cutoff=0.6)
+            raise PydanticCustomError(
+                "unknown_field",
+                "unknown harness field '{field}'{hint}. A harness takes: {fields} (the camelCase names "
+                "it comes back with are accepted too).",
+                {"field": k, "hint": f" (did you mean '{near[0]}'?)" if near else "",
+                 "fields": ", ".join(cls.model_fields)})
+        return {k: v for k, v in data.items() if k not in _HARNESS_READ_ONLY}
+
+
+# What a harness comes back with (_harness_out) that is not written through these fields, plus the
+# protocol's `object` (Harnesses §2), so a harness read from any UHP server can be sent back.
+_HARNESS_READ_ONLY = frozenset({"id", "object", "kit", "notLoaded", "member", "workspace", "createdAt"})
+
+
+def _harness_field_names() -> frozenset:
+    names: set[str] = set()
+    for name, f in HarnessBody.model_fields.items():
+        names.add(name)
+        va = f.validation_alias
+        if isinstance(va, AliasChoices):
+            names.update(c for c in va.choices if isinstance(c, str))
+        elif isinstance(va, str):
+            names.add(va)
+    return frozenset(names)
 
 
 def _harness_out(v: dict) -> dict:
@@ -18202,6 +18545,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     member = p.get("member") or request.headers.get("x-harness-member", "")
     # a key held to a workspace stamps its own, whatever header it sends; any other caller names it
     workspace = _key_scope(p) or request.headers.get("x-harness-workspace", "")
+    await _require_offered_model(org, body.base, body.default_model)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)
@@ -18303,6 +18647,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
                         "A harness's base cannot change; create a different harness for a different base.",
                         "base", {"base": cur.get("base")})
     body.base = str(cur.get("base") or body.base)
+    await _require_offered_model(org, body.base, body.default_model, str(cur.get("default_model") or ""))
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
@@ -18473,6 +18818,7 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     org, member = p.get("org", ""), p.get("member", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    await _require_offered_model(org, body.base, body.default_model)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)
@@ -19472,6 +19818,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
                         "A harness's base cannot change; create a different harness for a different base.",
                         "base", {"base": v.get("base")})
     body.base = str(v.get("base") or body.base)
+    await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)

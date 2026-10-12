@@ -84,7 +84,7 @@ A row passes only if all five hold, each read from what the server stored:
 | The tool policy was stored | the disabled tool comes back too |
 | The bundle reached the agent | the answer carries a token that exists ONLY inside the script |
 | The script actually ran | the file the script writes is among the turn's produced files |
-| The tool policy took effect | no disabled tool appears among the turn's tool calls |
+| The tool policy took effect | no disabled tool appears among the turn's tool calls. The tool it disables is THAT BASE'S OWN, from `custom-harness.mjs`'s `DISABLED_TOOL` table: a tool id matching nothing in a runtime is dropped on the way through and disables nothing, so a single fixed id made this claim vacuously true on eleven of the twenty bases. A base with no tool the task can spare (aider, whose catalog is one Shell) says the policy is not testable there rather than passing |
 | The MCP server was stored, and called | it comes back on a read, and a second turn's tool calls name it. A call is named by its tool name, except omp, which dispatches MCP as a `write` to `xd://mcp__<server>_<tool>`: there the call's arguments name it |
 
 The token is generated per run and never appears in `SKILL.md` or the prompt, so an answer carrying
@@ -204,8 +204,11 @@ and need no edit — they were hand-written lists once, and each silently missed
     lists with its mark and models.
 13. `ui/src/components/HarnessLogo.tsx`: its brand mark, if there is one. A mapping to a file that
     does not exist renders a broken image — worse than the generic glyph it falls back to.
-14. `ui/src/components/HarnessSettings.tsx`: the instruction-file label, which must agree with
-    `_agent_doc_path` or the settings page names a file the runner does not write.
+14. `ui/src/lib/harness.ts`'s `instructionFileLabel` (which `HarnessSettings.tsx` calls): the
+    instruction-file label, which must agree with `_agent_doc_path` or the settings page names a
+    file the runner does not write. It had drifted — qwen and gemini were labelled `AGENTS.md`
+    while the runner wrote `QWEN.md` and `GEMINI.md` — so it is now one map held to the runner's
+    function by `gateway/tests/test_instruction_file_label.py`.
 
 **Install and measurement:**
 

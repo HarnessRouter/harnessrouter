@@ -183,6 +183,27 @@ def test_the_claude_result_names_the_model_from_its_usage_by_model():
     assert named[0]["model"] == "x"
 
 
+def test_a_resumed_claude_turn_after_a_switch_names_the_model_that_answered():
+    """modelUsage on the result is the session's running total: the first turn on a new model still
+    credits the old one with every earlier turn, so the most output tokens named the wrong model.
+    The answer's own message names the model that wrote it; a subagent's message does not count."""
+    state: dict = {}
+    server._claude_passthrough({"type": "assistant", "parent_tool_use_id": "toolu_1",
+                                "message": {"model": "claude-haiku-4-5-20251001", "content": []}}, state)
+    server._claude_passthrough({"type": "assistant", "parent_tool_use_id": None,
+                                "message": {"model": "anthropic/claude-fable-5.1",
+                                            "content": [{"type": "text", "text": "M3"}]}}, state)
+    out = server._claude_passthrough({"type": "result", "result": "M3", "modelUsage": {
+        "claude-haiku-4-5-20251001": {"outputTokens": 111},      # two earlier turns, the old model
+        "anthropic/claude-fable-5.1": {"outputTokens": 14}}}, state)
+    assert out[0]["model"] == "anthropic/claude-fable-5.1"
+    # a synthetic message (the CLI's own error line) names no model; the usage still decides then
+    st2: dict = {}
+    server._claude_passthrough({"type": "assistant", "message": {"model": "<synthetic>", "content": []}}, st2)
+    out = server._claude_passthrough({"type": "result", "result": "ok", "modelUsage": {"m": {"outputTokens": 3}}}, st2)
+    assert out[0]["model"] == "m"
+
+
 def test_the_hermes_result_carries_the_relays_served_model_and_cache_split():
     """hermes builds its own result from its session counters, which carry no cache figures and no
     model; through the relay the provider's statement is at hand and is what prices the turn."""
@@ -190,3 +211,24 @@ def test_the_hermes_result_carries_the_relays_served_model_and_cache_split():
     body = src[src.index("def _run_hermes_bg("):src.index("# ── HTTP surface")]
     assert "served = _relay_served_model(env)" in body and "_fill_relay_usage(ev, env)" in body
     assert body.index("_fill_relay_usage(ev, env)") < body.rindex("append(ev)")   # stamped before the result is appended
+
+
+def test_a_hermes_turn_is_launched_on_the_provider_its_config_names(monkeypatch, tmp_path):
+    """The --provider flag wins over config.yaml, so the two must name one provider. A custom
+    endpoint in the Messages format arrives as openai-api; it was configured as anthropic and
+    launched as openai-api, and hermes refused it for want of an OPENAI_API_KEY (#374)."""
+    launched = []
+    monkeypatch.setattr(server, "_run_hermes_bg", lambda *args: launched.append(args))
+    wirings = [("openai-api", "anthropic", "anthropic", "ANTHROPIC_BASE_URL"),   # custom, Messages format
+               ("openai-api", "openai", "openai-api", "OPENAI_BASE_URL"),        # custom, Chat Completions
+               ("anthropic", None, "anthropic", "ANTHROPIC_BASE_URL"),
+               ("openrouter", None, "openrouter", "OPENROUTER_BASE_URL")]
+    for i, (provider, fmt, want, base_env) in enumerate(wirings):
+        cwd = tmp_path / str(i)
+        cwd.mkdir()
+        server.turn(server.TurnReq(backend="hermes", provider=provider, model="claude-haiku-4.5", prompt="hi",
+                                   auth=Auth(api_key="sk-test", base_url="https://proxy.example/v1", api_format=fmt),
+                                   cwd=str(cwd)))
+        env, flag = launched[-1][2], launched[-1][4]
+        cfg = yaml.safe_load((pathlib.Path(env["HERMES_HOME"]) / "config.yaml").read_text())
+        assert flag == cfg["model"]["provider"] == want and base_env in env, (provider, fmt)

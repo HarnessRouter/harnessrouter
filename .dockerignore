@@ -24,3 +24,8 @@ __pycache__/
 docs/
 *.md
 !README.md
+
+# The same environment store, for the same reason: .gitignore keeps it out of a commit, but the
+# build copies the working tree, so a local run's leftovers would be baked in at /app/runner/.
+# Its *.md rule above saves only the two README.md; leak.txt and the two symlinks would travel.
+runner/henv*/

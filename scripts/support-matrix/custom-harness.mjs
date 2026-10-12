@@ -14,7 +14,7 @@ import { chromium } from 'playwright';
 import crypto from 'node:crypto';
 
 const BASE = process.env.BASE;
-const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,cheetahclaws,agentzero,qoder').split(',');   // every built-in chat harness, all nineteen (systemone runs decision models only)
+const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,cheetahclaws,agentzero,mimo,jcode,opensquilla,nanobot,qoder').split(',');   // every built-in chat harness, all nineteen (systemone runs decision models only)
 const RESULTS = process.env.RESULTS || 'results-custom.json';
 // A harness's other kind of tool is an MCP server. A self-contained instance hosts only the
 // database and media servers, one needing a database and the other costing real money per call, so
@@ -41,7 +41,20 @@ const toolLabel = (t) => {
   const raw = typeof (t && t.arguments) === 'string' ? t.arguments : JSON.stringify((t && t.arguments) || '');
   let a = {}; try { a = JSON.parse(raw || '{}') || {}; } catch { /* not json; the raw string still feeds xd:// below */ }
   const xd = /xd:\/\/(mcp__[A-Za-z0-9_]+)/.exec(raw || '');
-  return [name, a.tool_name, a.tool, a.name, a.server, xd ? xd[0] : ''].filter(Boolean).map(String).join(' ');
+  // A THIRD shape, and it is not a JSON field: mimo's `exec` is a JavaScript sandbox with the tool
+  // registry in scope, so a served MCP turn is two exec calls — one filtering ALL_TOOLS for the
+  // server, one invoking the tool it found BY NAME inside the code (measured 2026-10-07 on mimo
+  // 0.1.15: `const toolName = 'deepwiki_ask_wiki_question'`, and the answer named a real topic from
+  // that wiki). Read the name and the JSON fields alone and that is `exec, exec`, which made a
+  // PASSING base the dimension's only MCP failure. The discriminator is dispatch versus HTTP: a
+  // call whose code names one of the server's TOOLS went through the harness's wiring, while one
+  // carrying the server's URL did not — a shell that curls the endpoint reaches the same data and
+  // proves nothing, so it keeps counting as a miss. No word boundary before the bare names: the
+  // name mimo dispatched has the server's own prefix glued to it.
+  const inCode = (raw && !raw.includes(MCP_URL))
+    ? (/mcp__[A-Za-z0-9_]+|read_wiki_structure|read_wiki_contents|ask_wiki_question/.exec(raw) || [])[0]
+    : '';
+  return [name, a.tool_name, a.tool, a.name, a.server, xd ? xd[0] : '', inCode || ''].filter(Boolean).map(String).join(' ');
 };
 const MCP_TOOL = new RegExp(`(^|[^a-z])mcp([^a-z]|$)|${MCP_NAME}|read_wiki_structure|read_wiki_contents|ask_question`, 'i');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -107,7 +120,9 @@ const results = {};
 // skill's script), something that reads or writes FILES, whatever loads a SKILL, and the MCP path.
 // Agent Zero names its file tool `text_editor` and its loader `skills_tool`, so a list written from
 // grok's and minimax's names alone picked `text_editor` — the tool the fixture writes with.
-const NEEDED_ID = /^(bash|shell|execute|run_command|run_terminal_command|terminal|code_execution_tool|python.*|node.*|read|read_file|write|write_file|edit|file_edit(or)?|text_editor|str_replace.*|create_file|view|search_replace|apply_patch|glob|grep|list_dir|ls|skills?_?tool|skill|task|search_tool|use_tool|mcp.*)$/i;
+// opensquilla and nanobot name theirs `exec` (and nanobot has `exec_session` too), which `execute`
+// does not match — so the list would have withheld the tool the fixture runs its script with.
+const NEEDED_ID = /^(bash|shell|exec|exec_session|execute|run_command|run_terminal_command|terminal|code_execution_tool|python.*|node.*|read|read_file|write|write_file|edit|file_edit(or)?|text_editor|str_replace.*|create_file|view|search_replace|apply_patch|glob|grep|list_dir|ls|skills?_?tool|skill|task|search_tool|use_tool|mcp.*)$/i;
 const PREFERRED = /^(todo_write|todowrite|todo|web_?fetch|web_?search|browser.*|board_.*|link_pr|goal|wait)$/i;
 const pickDisabled = (tools) => {
   const names = (tools || []).map((t) => String((t && t.name) || t || '')).filter(Boolean);

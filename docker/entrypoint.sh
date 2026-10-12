@@ -204,7 +204,15 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,qoder}"
+# Four of the five added in this batch are in the DEFAULT set rather than opt-in, for the reason
+# agentzero's PR settled: the console lists every base in the catalog, so a base the operator
+# did not opt into is a row that fails on its first turn with no explanation. Disk is the
+# trade — jcode is a ~127 MB static Rust binary and the two Python bases bring their own venvs —
+# and an operator who wants them out sets HR_BACKENDS.
+#
+# gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
+# this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -236,6 +244,11 @@ backend_bin() {
     # on the runner's own interpreter (stdlib only). Nothing is installed, pinned or verified for it,
     # and the image's interpreter is what "installed" means here.
     qoder) echo "$PY" ;;
+    mimo)   echo "$TOOLS/bin/mimo" ;;
+    gajae)  echo "$TOOLS/bin/gjc" ;;
+    jcode)  echo "$TOOLS/bin/jcode" ;;
+    opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
+    nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
   esac
 }
 
@@ -884,6 +897,178 @@ install_omp() {
   mkdir -p "$TOOLS/bin" && install -m 755 "$omp_tmp/omp" "$TOOLS/bin/omp"; rm -rf "$omp_tmp"
 }
 
+# ── this batch's five ─────────────────────────────────────────────────────────────────────────
+# Each is pinned EXACTLY to the release its runner code was measured against (the flags, the event
+# schema, the resume mechanism, the tool ids and the config shape were all read out of THAT
+# version), and each download is verified rather than trusted to a tag: three of the five publish
+# checksums upstream, so those are fetched and compared (install_omp's pattern); the two PyPI-ish
+# ones are pinned by version and proven by an import of the symbol the runner actually uses.
+
+# MiMo Code (MIT, XiaomiMiMo/MiMo-Code) ships on npm as @mimo-ai/cli with the binary `mimo`.
+# 0.1.15 is the release _build_mimo was measured against. The npm registry serves an integrity
+# digest with every tarball and npm verifies it, which is why this one is an npm install rather
+# than a release-asset fetch with a digest of our own.
+install_mimo() {
+  npm install -g --prefix "$TOOLS" --no-audit --no-fund "@mimo-ai/cli@${HR_MIMO_VERSION:-0.1.15}" || return 1
+  # MiMo performs a ONE-TIME SQLite migration and fetches an npm tree of ai-sdk packages on its
+  # first run. Measured: the first turn on a fresh home took over nine minutes and printed nothing
+  # before it was killed; the second, warm, answered in about twenty seconds. A turn is not where
+  # that cost belongs, so a throwaway home is warmed here, at install, and then removed.
+  mimo_warm="$(mktemp -d)"
+  mimo_got="$(HOME="$mimo_warm" "$TOOLS/bin/mimo" --version 2>/dev/null | head -n 1)"
+  rm -rf "$mimo_warm"
+  # The warm-up doubles as the proof: an npm install can land a tree with no working entry point.
+  if [ "$mimo_got" != "${HR_MIMO_VERSION:-0.1.15}" ]; then
+    echo "mimo installed but reports '${mimo_got:-nothing}', wanted ${HR_MIMO_VERSION:-0.1.15}"; return 1
+  fi
+}
+
+# Gajae-Code (MIT, Yeachan-Heo/gajae-code) publishes standalone prebuilt binaries per target on
+# GitHub releases WITH a checksum file beside them (gajae-release-binaries.sha256), so the bytes are
+# compared against upstream's own list rather than against a digest we computed. NOT the npm
+# package `gajae-code`: its bin shim is `#!/usr/bin/env bun`, and bun is not in this image.
+# NOT INSTALLED TODAY: `wanted gajae` is false unless an operator names it, and the gateway offers
+# no gajae base, so this runs for nobody. Kept against the day the write-wall decision is revisited
+# — the integration itself works; see the note in gateway/app.py above _MODEL_CATALOG["mimo"].
+install_gajae() {
+  case "$(uname -m)" in
+    x86_64)        gj_arch="x64" ;;
+    aarch64|arm64) gj_arch="arm64" ;;
+    *) echo "unsupported architecture $(uname -m) for gajae"; return 1 ;;
+  esac
+  gj_ver="${HR_GAJAE_VERSION:-0.18.5}"; gj_ver="${gj_ver#v}"
+  gj_base="https://github.com/Yeachan-Heo/gajae-code/releases/download/v${gj_ver}"
+  gj_tmp="$(mktemp -d)"
+  curl -fsSL "$gj_base/gjc-linux-$gj_arch" -o "$gj_tmp/gjc" || { rm -rf "$gj_tmp"; return 1; }
+  curl -fsSL "$gj_base/gajae-release-binaries.sha256" -o "$gj_tmp/SHA256SUMS" || { rm -rf "$gj_tmp"; return 1; }
+  gj_want="$(grep "  gjc-linux-$gj_arch\$" "$gj_tmp/SHA256SUMS" | awk '{print $1}')"
+  gj_have="$(sha256sum "$gj_tmp/gjc" | awk '{print $1}')"
+  if [ -z "$gj_want" ] || [ "$gj_want" != "$gj_have" ]; then
+    echo "gajae $gj_ver: checksum mismatch for gjc-linux-$gj_arch (want ${gj_want:-none}, have $gj_have)"
+    rm -rf "$gj_tmp"; return 1
+  fi
+  mkdir -p "$TOOLS/bin" && install -m 755 "$gj_tmp/gjc" "$TOOLS/bin/gjc"; rm -rf "$gj_tmp"
+  # The same proof jcode's install owes, for the same reason.
+  gj_got="$("$TOOLS/bin/gjc" --version 2>/dev/null | head -n 1)"
+  if [ "$gj_got" != "gjc/$gj_ver" ]; then
+    echo "gajae installed but reports '${gj_got:-nothing}', wanted gjc/$gj_ver"; rm -f "$TOOLS/bin/gjc"; return 1
+  fi
+}
+
+# jcode (MIT, 1jehuang/jcode) publishes one prebuilt archive per target with a SHA256SUMS file, so
+# it is fetched and compared the same way. v0.90.0 is the release _build_jcode and _jcode_to_claude
+# were measured against — the NDJSON event names, the per-request `tokens` accounting, the resume
+# error text and the tool ids all came out of this build.
+install_jcode() {
+  case "$(uname -m)" in
+    x86_64)        jc_arch="x86_64" ;;
+    aarch64|arm64) jc_arch="aarch64" ;;
+    *) echo "unsupported architecture $(uname -m) for jcode"; return 1 ;;
+  esac
+  jc_ver="${HR_JCODE_VERSION:-0.90.0}"; jc_ver="${jc_ver#v}"
+  jc_base="https://github.com/1jehuang/jcode/releases/download/v${jc_ver}"
+  jc_tmp="$(mktemp -d)"
+  curl -fsSL "$jc_base/jcode-linux-$jc_arch.tar.gz" -o "$jc_tmp/jcode.tar.gz" || { rm -rf "$jc_tmp"; return 1; }
+  curl -fsSL "$jc_base/SHA256SUMS" -o "$jc_tmp/SHA256SUMS" || { rm -rf "$jc_tmp"; return 1; }
+  jc_want="$(grep "  jcode-linux-$jc_arch.tar.gz\$" "$jc_tmp/SHA256SUMS" | awk '{print $1}')"
+  jc_have="$(sha256sum "$jc_tmp/jcode.tar.gz" | awk '{print $1}')"
+  if [ -z "$jc_want" ] || [ "$jc_want" != "$jc_have" ]; then
+    echo "jcode $jc_ver: checksum mismatch for jcode-linux-$jc_arch.tar.gz (want ${jc_want:-none}, have $jc_have)"
+    rm -rf "$jc_tmp"; return 1
+  fi
+  tar -xzf "$jc_tmp/jcode.tar.gz" -C "$jc_tmp" || { rm -rf "$jc_tmp"; return 1; }
+  # THE LINUX ARCHIVE IS A PAIR, NOT A BINARY: `jcode-linux-<arch>` is a 505-byte sh launcher that
+  # puts its own directory on LD_LIBRARY_PATH and execs `jcode-linux-<arch>.bin` beside it. The
+  # macOS archive is a single binary with no launcher, so a probe on a developer's Mac shows one
+  # layout and the image gets the other — installing "the file called jcode*" picked the launcher,
+  # left its .bin behind, and produced an executable that is on PATH and dies on its first turn.
+  # Both layouts are handled, the pair is kept together in its own directory, and `bin/jcode` is a
+  # symlink (the launcher resolves `readlink -f` itself, which is what makes that safe).
+  jc_dir="$TOOLS/jcode"
+  rm -rf "$jc_dir"; mkdir -p "$jc_dir" "$TOOLS/bin"
+  if [ -f "$jc_tmp/jcode-linux-$jc_arch.bin" ]; then
+    install -m 755 "$jc_tmp/jcode-linux-$jc_arch" "$jc_tmp/jcode-linux-$jc_arch.bin" "$jc_dir/" \
+      || { rm -rf "$jc_tmp" "$jc_dir"; return 1; }
+    ln -sf "$jc_dir/jcode-linux-$jc_arch" "$TOOLS/bin/jcode"
+  elif [ -f "$jc_tmp/jcode-linux-$jc_arch" ]; then
+    install -m 755 "$jc_tmp/jcode-linux-$jc_arch" "$TOOLS/bin/jcode" \
+      || { rm -rf "$jc_tmp" "$jc_dir"; return 1; }
+  else
+    echo "release archive held neither jcode-linux-$jc_arch nor its .bin"; rm -rf "$jc_tmp" "$jc_dir"; return 1
+  fi
+  rm -rf "$jc_tmp"
+  # PROVE IT RUNS, and that it is the version that was pinned. An installer that exits 0 without a
+  # working executable is how a base reaches the console and fails on its first task with nothing to
+  # read — which is exactly what the launcher-without-its-.bin produced.
+  jc_got="$("$TOOLS/bin/jcode" --version 2>/dev/null | awk '{print $2}')"
+  if [ "$jc_got" != "v$jc_ver" ]; then
+    echo "jcode installed but reports '${jc_got:-nothing}', wanted v$jc_ver"; rm -rf "$jc_dir" "$TOOLS/bin/jcode"; return 1
+  fi
+}
+
+# OpenSquilla (Apache-2.0, TokenRhythm/opensquilla). Its own venv, the aider/openhands precedent:
+# it pins a large dependency set and must not share the runner's interpreter.
+#
+# THE WHEEL COMES FROM THE GITHUB RELEASE, NOT FROM PyPI. PyPI's `opensquilla` is stale at 0.3.0
+# while upstream ships 0.5.6, and 0.5.6 is the release the runner's code was measured against — the
+# agent CLI's flags, the v1 progress-event envelope, the transcript shape and the config keys. The
+# release publishes SHA256SUMS beside the wheel, so the bytes are compared against it.
+install_opensquilla() {
+  sq_ver="${HR_OPENSQUILLA_VERSION:-0.5.6}"; sq_ver="${sq_ver#v}"
+  sq_base="https://github.com/TokenRhythm/opensquilla/releases/download/v${sq_ver}"
+  sq_whl="opensquilla-${sq_ver}-py3-none-any.whl"
+  sq_tmp="$(mktemp -d)"
+  curl -fsSL "$sq_base/$sq_whl" -o "$sq_tmp/$sq_whl" || { rm -rf "$sq_tmp"; return 1; }
+  curl -fsSL "$sq_base/SHA256SUMS" -o "$sq_tmp/SHA256SUMS" || { rm -rf "$sq_tmp"; return 1; }
+  sq_want="$(grep "  $sq_whl\$" "$sq_tmp/SHA256SUMS" | awk '{print $1}')"
+  sq_have="$(sha256sum "$sq_tmp/$sq_whl" | awk '{print $1}')"
+  if [ -z "$sq_want" ] || [ "$sq_want" != "$sq_have" ]; then
+    echo "opensquilla $sq_ver: checksum mismatch for $sq_whl (want ${sq_want:-none}, have $sq_have)"
+    rm -rf "$sq_tmp"; return 1
+  fi
+  "${HR_OPENSQUILLA_BASE_PYTHON:-python3}" -m venv "$TOOLS/opensquilla-venv" \
+    || { rm -rf "$sq_tmp" "$TOOLS/opensquilla-venv"; return 1; }
+  "$TOOLS/opensquilla-venv/bin/pip" install -q --disable-pip-version-check "$sq_tmp/$sq_whl" \
+    || { rm -rf "$sq_tmp" "$TOOLS/opensquilla-venv"; return 1; }
+  rm -rf "$sq_tmp"
+  # A failed install leaves NO venv behind, and the version is PROVEN rather than assumed: the
+  # wheel's name could be anything, and a base that reports installed and dies on its first turn is
+  # the failure mode every installer here is written to avoid.
+  "$TOOLS/opensquilla-venv/bin/python" -c '
+import sys, importlib.metadata as md
+have = md.version("opensquilla")
+if have != sys.argv[1]:
+    sys.exit("opensquilla %s installed, wanted %s" % (have, sys.argv[1]))
+import opensquilla.cli.main  # noqa: F401 - the module `opensquilla agent` boots from
+' "$sq_ver" || { rm -rf "$TOOLS/opensquilla-venv"; return 1; }
+}
+
+# nanobot (MIT, HKUDS/nanobot) from PyPI as nanobot-ai, pinned to the release the driver was written
+# against. Its own venv, for opensquilla's reason.
+install_nanobot() {
+  nb_ver="${HR_NANOBOT_VERSION:-0.3.5}"; nb_ver="${nb_ver#v}"
+  "${HR_NANOBOT_BASE_PYTHON:-python3}" -m venv "$TOOLS/nanobot-venv" \
+    || { rm -rf "$TOOLS/nanobot-venv"; return 1; }
+  "$TOOLS/nanobot-venv/bin/pip" install -q --disable-pip-version-check "nanobot-ai==$nb_ver" \
+    || { rm -rf "$TOOLS/nanobot-venv"; return 1; }
+  # Prove the SDK SURFACE the driver uses, not just that the package imports: the driver depends on
+  # Nanobot.from_config and on seven STREAM_EVENT_* constants, and a release that renamed one of
+  # them would otherwise fail at the first live turn with an ImportError the user would see as a
+  # dead base. The version is asserted beside them.
+  "$TOOLS/nanobot-venv/bin/python" -c '
+import sys, importlib.metadata as md
+have = md.version("nanobot-ai")
+if have != sys.argv[1]:
+    sys.exit("nanobot-ai %s installed, wanted %s" % (have, sys.argv[1]))
+import nanobot
+for name in ("Nanobot", "STREAM_EVENT_TEXT_DELTA", "STREAM_EVENT_REASONING_DELTA",
+             "STREAM_EVENT_TOOL_STARTED", "STREAM_EVENT_TOOL_COMPLETED",
+             "STREAM_EVENT_TOOL_FAILED", "STREAM_EVENT_RUN_COMPLETED", "STREAM_EVENT_RUN_FAILED"):
+    if not hasattr(nanobot, name):
+        sys.exit("nanobot-ai %s does not export %s, which runner/nanobot_driver.py needs" % (have, name))
+' "$nb_ver" || { rm -rf "$TOOLS/nanobot-venv"; return 1; }
+}
+
 # Run an install and, if it fails, SAY WHY.
 #
 # This was `>/dev/null 2>&1 || true`, and the silence cost a day of someone's life: a root-owned
@@ -1080,6 +1265,48 @@ install_backends() {
     echo "[harnessrouter] installing Grok Build $GROK_PIN (Apache-2.0, version- and digest-pinned)…"
     try_install "Grok Build" install_grok || true
   fi
+
+  # ── this batch's five ───────────────────────────────────────────────────────────────────────
+  # Each is checked by the version its own binary REPORTS, not merely by the executable existing,
+  # so a pin bump in the image reaches a data volume that already carries the previous build. That
+  # is the dsh lesson applied up front: the venv and the binaries outlive the image.
+  MIMO_PIN="${HR_MIMO_VERSION:-0.1.15}"
+  if wanted mimo && [ "$("$(backend_bin mimo)" --version 2>/dev/null | head -n 1)" != "$MIMO_PIN" ]; then
+    echo "[harnessrouter] installing MiMo Code $MIMO_PIN (MIT, version-pinned)…"
+    try_install "MiMo Code" install_mimo || true
+  fi
+
+  GAJAE_PIN="${HR_GAJAE_VERSION:-0.18.5}"
+  # `gjc --version` prints `gjc/<version>`, so the pin is compared against that spelling.
+  if wanted gajae && [ "$("$(backend_bin gajae)" --version 2>/dev/null | head -n 1)" != "gjc/$GAJAE_PIN" ]; then
+    echo "[harnessrouter] installing Gajae-Code $GAJAE_PIN (MIT, version-pinned)…"
+    try_install "Gajae-Code" install_gajae || true
+  fi
+
+  JCODE_PIN="${HR_JCODE_VERSION:-0.90.0}"
+  # `jcode --version` prints `jcode v<version> (<commit>)`; the version field is what is pinned.
+  if wanted jcode && [ "$("$(backend_bin jcode)" --version 2>/dev/null | awk '{print $2}')" != "v$JCODE_PIN" ]; then
+    echo "[harnessrouter] installing jcode $JCODE_PIN (MIT, version-pinned) — ~127 MB…"
+    try_install "jcode" install_jcode || true
+  fi
+
+  OPENSQUILLA_PIN="${HR_OPENSQUILLA_VERSION:-0.5.6}"
+  if wanted opensquilla && [ "$("$TOOLS/opensquilla-venv/bin/python" -c 'import importlib.metadata as m;print(m.version("opensquilla"))' 2>/dev/null)" != "$OPENSQUILLA_PIN" ]; then
+    rm -rf "$TOOLS/opensquilla-venv"
+    echo "[harnessrouter] installing OpenSquilla $OPENSQUILLA_PIN (Apache-2.0, version-pinned)…"
+    try_install "OpenSquilla" install_opensquilla || true
+  fi
+
+  NANOBOT_PIN="${HR_NANOBOT_VERSION:-0.3.5}"
+  if wanted nanobot && [ "$("$TOOLS/nanobot-venv/bin/python" -c 'import importlib.metadata as m;print(m.version("nanobot-ai"))' 2>/dev/null)" != "$NANOBOT_PIN" ]; then
+    rm -rf "$TOOLS/nanobot-venv"
+    echo "[harnessrouter] installing nanobot $NANOBOT_PIN (MIT, version-pinned)…"
+    try_install "nanobot" install_nanobot || true
+  fi
+  [ -x "$TOOLS/nanobot-venv/bin/python" ] && export HR_NANOBOT_PYTHON="$TOOLS/nanobot-venv/bin/python"
+  # Both venv bases are reached by PATH from the runner, so the interpreter and the console script
+  # are named explicitly — $TOOLS/bin is what PATH carries, and neither of these lives there.
+  [ -x "$TOOLS/opensquilla-venv/bin/opensquilla" ] && export HR_OPENSQUILLA_BIN="$TOOLS/opensquilla-venv/bin/opensquilla"
 
   # The largest install of the set: ~735 MB and about ninety seconds on a fresh volume
   # (tree-sitter-language-pack 351 MB, scipy 100, numpy 57). In the default list all the same,

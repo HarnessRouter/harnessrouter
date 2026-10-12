@@ -9,6 +9,7 @@ import pathlib
 import stat
 import sys
 import tarfile
+import threading
 import time
 import zipfile
 
@@ -185,6 +186,125 @@ def test_when_the_record_says_ready_the_version_is_already_the_active_one(store,
     assert seen == [(1, 1)]
 
 
+def test_a_source_write_during_a_build_snapshot_waits_for_the_snapshot(store, monkeypatch):
+    """#425: `_build` copied the source in its own thread while `write_file` could still land, so a
+    version could hold `a/` from before a write and `z/` from after it — a state the source was
+    never in. The snapshot takes the environment's source lock, and this asks the question at the
+    moment the copy is standing between two directories."""
+    E.write_file("henv_k", "a/one.py", b"old a\n")
+    E.write_file("henv_k", "z/two.py", b"old z\n")
+    inside_copy, release = threading.Event(), threading.Event()
+    real_copytree = E.shutil.copytree
+
+    def slow_copytree(src, dst, **kw):
+        real_copytree(pathlib.Path(src) / "a", pathlib.Path(dst) / "a", dirs_exist_ok=True)
+        inside_copy.set()                 # the build is mid-copy, past a/, before z/
+        release.wait(30)
+        real_copytree(pathlib.Path(src) / "z", pathlib.Path(dst) / "z", dirs_exist_ok=True)
+    monkeypatch.setattr(E.shutil, "copytree", slow_copytree)
+
+    # the count in the build log is read with the same hold the copy takes, so it describes the
+    # tree this build copied rather than whatever the source looked like a moment later
+    reads = []
+    real_count = E.source_stat
+
+    def spy_count(env):
+        out = real_count(env)
+        lock = getattr(E, "_source_lock", None)      # absent before the fix: the read is not held
+        reads.append((out["count"], bool(lock is not None and lock(env).locked())))
+        return out
+    monkeypatch.setattr(E, "source_stat", spy_count)
+
+    landed = threading.Event()
+
+    def writer():
+        E.write_file("henv_k", "z/three.py", b"new z\n")
+        landed.set()
+    thread = threading.Thread(target=writer)
+    E.start_build("henv_k", 1, "mixed")
+    assert inside_copy.wait(30), "the build never reached the copy"
+    thread.start()
+    assert not landed.wait(0.5), "the write landed while the build was inside the snapshot"
+    release.set()
+    thread.join(30)
+    assert landed.is_set()
+
+    rec = _wait("henv_k", 1)
+    assert rec["status"] == "ready", rec["log"]
+    v1 = E.version_dir("henv_k", 1)
+    assert (v1 / "a" / "one.py").read_bytes() == b"old a\n"
+    assert (v1 / "z" / "two.py").read_bytes() == b"old z\n"
+    assert not (v1 / "z" / "three.py").exists()               # one whole state, not a mix of two
+    assert (2, True) in reads, reads                          # a/one.py + z/two.py, counted under the hold
+    # the write is not lost, only ordered: the next build holds it
+    E.start_build("henv_k", 2, "mixed")
+    assert _wait("henv_k", 2)["status"] == "ready"
+    assert (E.version_dir("henv_k", 2) / "z" / "three.py").read_bytes() == b"new z\n"
+
+
+@pytest.mark.parametrize("change,env_id", [("make_dir", "henv_md"), ("delete_path", "henv_dp"),
+                                           ("import_archive", "henv_ia"), ("import_git", "henv_ig")])
+def test_the_snapshot_holds_every_change_to_the_source_not_only_a_write(store, monkeypatch, change, env_id):
+    """#425 asks for the interleaving to be tested rather than for a lock to exist. `make_dir`,
+    `delete_path` and the two imports change the source just as `write_file` does, so each is
+    another way a version can hold a state the source was never in."""
+    E.write_file(env_id, "a/one.py", b"old a\n")
+    E.write_file(env_id, "z/two.py", b"old z\n")
+    archive = store / "one.zip"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("from_archive.txt", "in archive\n")
+    archive.write_bytes(buf.getvalue())
+    if change == "import_git":
+        # the clone is the part that must stay OUTSIDE the hold, so it is not what is being asked
+        # here: git is answered without a network and the swap-in is what the test watches
+        def no_clone(cmd, **kw):
+            class R:
+                returncode, stdout, stderr = 0, "", ""
+            return R()
+        monkeypatch.setattr(E.subprocess, "run", no_clone)
+
+    inside_copy, release, landed = threading.Event(), threading.Event(), threading.Event()
+    real_copytree = E.shutil.copytree
+
+    def slow_copytree(src, dst, **kw):
+        real_copytree(pathlib.Path(src) / "a", pathlib.Path(dst) / "a", dirs_exist_ok=True)
+        inside_copy.set()
+        release.wait(30)
+        real_copytree(pathlib.Path(src) / "z", pathlib.Path(dst) / "z", dirs_exist_ok=True)
+    monkeypatch.setattr(E.shutil, "copytree", slow_copytree)
+
+    def worker():
+        if change == "make_dir":
+            E.make_dir(env_id, "z/deep")
+        elif change == "delete_path":
+            E.delete_path(env_id, "z/two.py")
+        elif change == "import_git":
+            E.import_git(env_id, "https://example.invalid/repository.git")
+        else:
+            E.import_archive(env_id, str(archive), replace=False)
+        landed.set()
+    thread = threading.Thread(target=worker)
+    E.start_build(env_id, 1, "held")
+    assert inside_copy.wait(30), "the build never reached the copy"
+    thread.start()
+    assert not landed.wait(0.5), f"{change} landed while the build was inside the snapshot"
+    release.set()
+    thread.join(30)
+    assert landed.is_set(), f"{change} never finished after the snapshot released"
+
+    paths = {e["path"] for e in E.tree(env_id)}
+    if change == "make_dir":
+        assert "z/deep" in paths
+    elif change == "delete_path":
+        assert "z/two.py" not in paths
+    elif change == "import_git":
+        assert {"a/one.py", "z/two.py"} <= paths        # swapped in, and the source is still there
+    else:
+        assert "from_archive.txt" in paths
+    assert _wait(env_id, 1)["status"] == "ready"
+
+
 def test_a_build_whose_last_write_fails_leaves_the_active_version_as_it_was(store, monkeypatch):
     E.write_file("henv_l", "setup.sh", b"#!/bin/sh\necho preparing\n")
     E.start_build("henv_l", 1, "last")
@@ -356,6 +476,87 @@ def test_a_package_check_asks_the_registry_and_refuses_what_is_not_there(monkeyp
     assert E.check_package("apt", "nope")["exists"] is False
 
 
+def _apt_install_argv(monkeypatch, tmp_path, names):
+    """The `apt-get install` command line `_apt_into_layer` hands the box for these declared specs,
+    with `_run` stubbed: no apt, no network, no image, and the same argv a build would get."""
+    calls = []
+
+    def fake_run(log, cmd, cwd, env, deadline, run_as=None, flush=None):
+        calls.append(cmd)
+        if cmd[:3] == ["apt-get", "install", "-y"]:
+            archives = tmp_path / "apt-archives"
+            archives.mkdir(parents=True, exist_ok=True)
+            (archives / "jq_1.7.1-3_amd64.deb").write_bytes(b"!")   # what apt would have downloaded
+    monkeypatch.setattr(E, "_run", fake_run)
+    layer = tmp_path / "layer"
+    layer.mkdir(exist_ok=True)
+    E._apt_into_layer([], layer, names, {}, str(tmp_path), time.time() + 60)
+    return next(c for c in calls if c[:3] == ["apt-get", "install", "-y"])
+
+
+def test_an_apt_spec_reaches_apt_as_the_version_the_declaration_names(monkeypatch, tmp_path):
+    """#427: the pin was cut off before `apt-get` ran, so the layer held a different version than
+    the record declared and nothing said so. A pin apt cannot satisfy must fail the build instead."""
+    exact = _apt_install_argv(monkeypatch, tmp_path, ["jq=1.7.1-3"])
+    assert "jq=1.7.1-3" in exact and "jq" not in exact
+    # pip's `==` is not apt's grammar: it arrives as the single `=` apt parses
+    doubled = _apt_install_argv(monkeypatch, tmp_path, ["jq==1.7.1-3"])
+    assert "jq==1.7.1-3" not in doubled and "jq=1.7.1-3" in doubled
+    # a range: apt has no syntax for one, and installing the newest whatever the range says would be
+    # #427's silent substitution again, so the build fails naming it before apt runs at all
+    for specs in (["jq>=1.6"], ["jq=1.7.1-3", "libyaml>=0.2", "curl"]):
+        with pytest.raises(RuntimeError, match=r"cannot hold to (jq>=1\.6|libyaml>=0\.2)"):
+            _apt_install_argv(monkeypatch, tmp_path, specs)
+    # a bare name keeps its shape: only a pin gets the `=` joined back on
+    bare = _apt_install_argv(monkeypatch, tmp_path, ["jq"])
+    assert "jq" in bare and not any("=" in str(a) and a.startswith("jq") for a in bare)
+    # several declarations keep their own arms, and the package specs are still the last words
+    mixed = _apt_install_argv(monkeypatch, tmp_path, ["jq=1.7.1-3", "libyaml==0.2.5-1", "curl"])
+    assert mixed[-3:] == ["jq=1.7.1-3", "libyaml=0.2.5-1", "curl"]
+    assert mixed[:2] == ["apt-get", "install"] and "Debug::NoLocking=1" in mixed
+    # #427's remaining question: a pin older than a version the image already has is planned by apt
+    # as a downgrade, and `-y` alone stops on "Packages were downgraded and -y was used without
+    # --allow-downgrades". The download goes to the layer's own cache, so the plan is all it changes.
+    assert all("--allow-downgrades" in argv for argv in (exact, doubled, bare, mixed))
+
+
+def test_a_range_is_a_name_with_no_pin_for_every_manager(monkeypatch):
+    """`spec_parts` documents that a range is a name with no pin, and both the build's apt line and
+    the console's package check read through it. Looking for the pin operator first broke that
+    promise for every range that ends in `=`: `jq>=1.6` came back as the name `jq>`."""
+    for spec, want in (("jq", ("jq", "")),
+                       ("jq=1.7.1-3", ("jq", "1.7.1-3")),
+                       ("jq==1.7.1-3", ("jq", "1.7.1-3")),
+                       ("jq>=1.6", ("jq", "")),
+                       ("jq<=1.6", ("jq", "")),
+                       ("jq~=1.6", ("jq", "")),
+                       ("jq!=1.6", ("jq", "")),
+                       ("jq>1.6", ("jq", "")),
+                       ("jq<1.6", ("jq", ""))):
+        assert E.spec_parts(spec, "apt") == want, spec
+        assert E.spec_parts(spec, "pip") == want, spec
+    assert E.spec_parts("@types/node@24.1.0", "npm") == ("@types/node", "24.1.0")
+
+    # and the registry is asked about the package a range names, not about `jq>`: before, an apt
+    # range was looked up as a package literally called `jq>`, which is never in the box's lists
+    def fake_run(cmd, **kw):
+        class R:
+            stdout, returncode = "", 0
+        out = R()
+        if cmd[:2] == ["apt-cache", "policy"]:
+            assert cmd[2] == "jq", cmd      # the name, with no operator left glued to it
+            out.stdout = "jq:\n  Installed: (none)\n  Candidate: 1.7.1-3\n"
+        if cmd[:2] == ["apt-cache", "madison"]:
+            out.stdout = " jq | 1.7.1-3 | http://deb.debian.org bookworm/main amd64 Packages\n"
+        return out
+    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    monkeypatch.setattr(E, "_apt_lists", lambda: None)
+    ranged = E.check_package("apt", "jq>=1.6")
+    assert ranged["exists"] is True and ranged["latest"] == "1.7.1-3" and ranged["version"] == ""
+    # and it is refused there, with the reason, so the console never adds a range apt cannot hold to
+    assert "cannot hold to jq>=1.6" in ranged["error"] and "jq=1.7.1-3" in ranged["error"]
+
+
 def test_a_git_import_lands_files_and_directories_and_never_follows_a_link(store, tmp_path, monkeypatch):
     """A link a repository commits is dropped and counted, like an archive's; following it as root
     wrote what it pointed at into the source (reported privately). The clone gets the build's
@@ -453,3 +654,55 @@ def test_a_pinned_git_clone_connects_to_the_address_the_gateway_classified(store
         with pytest.raises(HTTPException):
             E.import_git("henv_" + "c" * 32, "git@git.example:team/repo.git" if " " in bad else
                          "https://git.example/team/repo.git", pin=bad)
+
+
+def test_a_write_waiting_on_a_snapshot_or_a_slow_import_leaves_the_runner_answering(store, monkeypatch):
+    """The runner answers every turn from one event loop. A write waiting for the source lock, or a
+    git clone, run on that loop froze every other request until it ended (on 0.32.8 a 4.6 s import
+    kept the runner's /healthz waiting 4.3 s); both now run in a worker thread."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(E.router)
+
+    @app.get("/ping")
+    async def ping():
+        return {}
+
+    eid = "henv_" + "d" * 32
+    E.write_file(eid, "a.txt", b"1")
+    done: dict = {}
+
+    def ping_seconds(c):
+        """How long the loop took to answer, or None when it had not answered in 2 s."""
+        out: dict = {}
+        th = threading.Thread(target=lambda: (t0 := time.time(), c.get("/ping"), out.update(s=time.time() - t0)), daemon=True)
+        th.start()
+        th.join(2.0)
+        return out.get("s")
+
+    with TestClient(app) as c:              # one client, one event loop, as in the runner
+        lock = E._source_lock(eid)
+        lock.acquire()                      # a build is inside its snapshot
+        try:
+            w = threading.Thread(target=lambda: done.update(w=c.put(f"/environments/{eid}/source",
+                                                                    params={"path": "a.txt"}, content=b"2")), daemon=True)
+            w.start()
+            time.sleep(0.3)
+            waited = ping_seconds(c)
+            still_waiting = "w" not in done     # the write is held until the snapshot ends
+        finally:
+            lock.release()
+        w.join(10)
+        assert waited is not None and waited < 1.0, f"the runner did not answer while a write waited ({waited})"
+        assert still_waiting and done["w"].status_code == 200 and E.read_file(eid, "a.txt")[0] == b"2"
+
+        monkeypatch.setattr(E, "import_git", lambda *a, **k: (time.sleep(1.5), {"imported": "git"})[1])
+        g = threading.Thread(target=lambda: done.update(g=c.post(f"/environments/{eid}/import",
+                                                                 params={"git_url": "https://git.example/x.git"})), daemon=True)
+        g.start()
+        time.sleep(0.3)
+        waited = ping_seconds(c)
+        g.join(10)
+        assert waited is not None and waited < 1.0, f"the runner did not answer while a git import ran ({waited})"
+        assert done["g"].status_code == 200

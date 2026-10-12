@@ -29,6 +29,7 @@ with EACCES; that is the enforcement, not an instruction.
 """
 from __future__ import annotations
 
+import asyncio
 import grp
 import hashlib
 import json
@@ -85,6 +86,17 @@ _gid_lock = threading.Lock()
 router = APIRouter()
 _builds_lock = threading.Lock()
 _builds: dict[str, threading.Thread] = {}   # "<id>:<n>" -> the thread building it
+_source_locks: dict[str, threading.Lock] = {}
+_source_locks_guard = threading.Lock()
+
+
+def _source_lock(env_id: str) -> threading.Lock:
+    """Orders every change to an environment's source against the snapshot a build takes of it, so
+    a version is one whole state of the source and never a mix of two. The runner serves
+    environments from this one process, which is why a threading.Lock per environment id is enough;
+    a runner that served them from several processes would need the same ordering across them."""
+    with _source_locks_guard:
+        return _source_locks.setdefault(str(env_id), threading.Lock())
 
 
 # ── paths ───────────────────────────────────────────────────────────────────────────────────────
@@ -315,28 +327,31 @@ def write_file(env_id: str, rel: str, data: bytes) -> dict:
     p = _safe_rel(src, rel)
     if p.is_dir():
         raise HTTPException(409, "a directory is at that path")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".hr-tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, p)
+    with _source_lock(env_id):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".hr-tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, p)
     return {"path": rel.strip("/"), "bytes": len(data)}
 
 
 def make_dir(env_id: str, rel: str) -> dict:
     src = _source(env_id)
     p = _safe_rel(src, rel)
-    p.mkdir(parents=True, exist_ok=True)
+    with _source_lock(env_id):
+        p.mkdir(parents=True, exist_ok=True)
     return {"path": rel.strip("/"), "dir": True}
 
 
 def delete_path(env_id: str, rel: str) -> dict:
     p = _safe_rel(source_dir(env_id), rel)
-    if p.is_dir() and not p.is_symlink():
-        shutil.rmtree(p)
-    elif p.exists() or p.is_symlink():
-        p.unlink()
-    else:
-        raise HTTPException(404, "nothing at that path")
+    with _source_lock(env_id):
+        if p.is_dir() and not p.is_symlink():
+            shutil.rmtree(p)
+        elif p.exists() or p.is_symlink():
+            p.unlink()
+        else:
+            raise HTTPException(404, "nothing at that path")
     return {"path": rel.strip("/"), "deleted": True}
 
 
@@ -369,7 +384,15 @@ def _member_ok(name: str) -> str | None:
 def import_archive(env_id: str, data_path: str, *, replace: bool = False) -> dict:
     """Extract a zip or tar archive into the source. Only regular files and directories land:
     symlinks, hard links, devices and any member that names a path outside the source are
-    dropped and counted, never written. A single wrapping directory is stripped."""
+    dropped and counted, never written. A single wrapping directory is stripped.
+
+    The lock is held from the replace through the last member, so a build snapshotting while this
+    runs waits instead of copying a tree half-refilled. The wait is bounded by the archive."""
+    with _source_lock(env_id):
+        return _import_archive(env_id, data_path, replace=replace)
+
+
+def _import_archive(env_id: str, data_path: str, *, replace: bool = False) -> dict:
     src = source_dir(env_id)
     if replace and src.exists():
         shutil.rmtree(src)
@@ -513,10 +536,13 @@ def import_git(env_id: str, url: str, ref: str = "", *, replace: bool = False, p
         except subprocess.TimeoutExpired:
             raise HTTPException(504, "git clone did not finish in 10 minutes")
         shutil.rmtree(tmp + "/repo/.git", ignore_errors=True)
-        src = source_dir(env_id)
-        if replace and src.exists():
-            shutil.rmtree(src)
-        written, skipped = _copy_without_links(tmp + "/repo", _source(env_id))
+        # The clone ran outside the lock, into its own temporary directory, so a slow network never
+        # holds up a build. Only swapping the source in needs ordering against a snapshot.
+        with _source_lock(env_id):
+            src = source_dir(env_id)
+            if replace and src.exists():
+                shutil.rmtree(src)
+            written, skipped = _copy_without_links(tmp + "/repo", _source(env_id))
     return {"imported": "git", "url": url, "ref": ref, "written": written, "skipped": skipped, **source_stat(env_id)}
 
 
@@ -552,21 +578,37 @@ REGISTRY_TIMEOUT = 8
 _apt_lists_at = 0.0
 
 
+_RANGE_OPS = (">=", "<=", "~=", "!=", ">", "<")
+
+
 def spec_parts(spec: str, manager: str) -> tuple[str, str]:
     """A spec's name and exact pin: npm's name@version, pip's name==version, apt's name=version.
-    A range (>=, ~=, ...) is a name with no pin; the installer resolves it at build time."""
+    A range (>=, ~=, ...) is a name with no pin; pip resolves it at build time, and apt cannot
+    (apt_range)."""
     s = spec.strip()
     if manager == "npm":
         i = s.rfind("@")
         return (s[:i], s[i + 1:]) if i > 0 else (s, "")
+    # Ranges before the pin operators: `>=`, `<=`, `~=` and `!=` each end in `=`, so looking for a
+    # pin first read `jq>=1.6` as the name `jq>` with the pin `1.6` — neither what the owner
+    # declared nor something apt-get, pip or a registry will answer for.
+    for sep in _RANGE_OPS:
+        if sep in s:
+            return s.split(sep, 1)[0].strip(), ""
     for sep in ("==", "="):
         if sep in s:
             n, v = s.split(sep, 1)
             return n.strip(), v.strip()
-    for sep in (">=", "<=", "~=", "!=", ">", "<"):
-        if sep in s:
-            return s.split(sep, 1)[0].strip(), ""
     return s, ""
+
+
+def apt_range(spec: str) -> bool:
+    """Whether an apt declaration is a range. apt installs one exact version (name=version) or the
+    newest its sources offer (name) and has no syntax for a range, so `jq>=9` would be installed as
+    whatever jq is newest, and the layer would differ from its declaration with nothing saying so
+    (the failure #427 is about). A range is refused instead: when the console checks it, and by the
+    build before apt runs."""
+    return any(op in spec for op in _RANGE_OPS)
 
 
 def _http_json(url: str) -> tuple[int, dict]:
@@ -637,6 +679,9 @@ def check_package(manager: str, spec: str) -> dict:
                 out["version"] = pin
             else:
                 out["error"] = f"{name} {pin} is not published; the latest is {out['latest']}"
+        elif manager == "apt" and apt_range(spec):
+            out["error"] = (f"apt installs one exact version or the newest, and cannot hold to {spec}. "
+                            f"Declare {name}, or {name}={out['latest']} to pin the newest.")
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as e:
         out.update(exists=None, error=f"the registry could not be asked: {str(e)[:120]}")
     return out
@@ -745,11 +790,24 @@ def _apt_into_layer(log: list[str], dst: pathlib.Path, names: list[str], env: di
     and downloads each named package with the dependencies the image lacks, and dpkg unpacks every
     archive under <version>/apt, which a turn puts on PATH and LD_LIBRARY_PATH. The image's own
     packages stay the image's; nothing here changes the container."""
+    ranged = [s for s in names if apt_range(s)]
+    if ranged:
+        raise RuntimeError(f"apt installs one exact version or the newest, and cannot hold to {', '.join(ranged)}: "
+                           f"declare the name alone, or name=version")
     cache = pathlib.Path(scratch) / "apt-archives"
     cache.mkdir(parents=True, exist_ok=True)
     _run(log, ["apt-get", "update", "-qq"], str(dst), env, deadline, flush=flush)
-    _run(log, ["apt-get", "install", "-y", "--download-only", "--reinstall", "-o", f"Dir::Cache::archives={cache}",
-               "-o", "Debug::NoLocking=1", *[n.split("=", 1)[0] if "=" in n and not n.startswith("=") else n for n in names]],
+    _run(log, ["apt-get", "install", "-y", "--download-only", "--reinstall", "--allow-downgrades",
+               "-o", f"Dir::Cache::archives={cache}",
+               # A pin older than a version the image already has is planned by apt as a downgrade,
+               # and `-y` alone stops on "Packages were downgraded and -y was used without
+               # --allow-downgrades". Nothing here touches the image: the archives go to the layer's
+               # own cache and dpkg unpacks them into the layer, so the flag only lets the planner
+               # fetch the version the declaration names.
+               # apt-get does not parse pip's `==`, so each spec goes through spec_parts: an
+               # exact pin reaches apt as name=version (a range was refused above).
+               "-o", "Debug::NoLocking=1",
+               *[f"{n}={v}" if v else n for n, v in (spec_parts(s, "apt") for s in names)]],
          str(dst), env, deadline, flush=flush)
     debs = sorted(cache.glob("*.deb"))
     if not debs:
@@ -857,9 +915,12 @@ def _build(env_id: str, n: int, slug: str, activate: bool, spec: dict | None = N
         deadline = time.time() + BUILD_TIMEOUT
         env = _tool_env()
         stage("copying files")
-        log.append(f"copying the project ({source_stat(env_id)['count']} files)")
-        shutil.copytree(src, dst, symlinks=False, dirs_exist_ok=True,
-                        ignore=lambda d, names: [x for x in names if x in NOT_COPIED])
+        # The count and the copy are one reading of the tree: a source write waits here, so a version
+        # holds one whole state of the source and the log counts what this build actually copied.
+        with _source_lock(env_id):
+            log.append(f"copying the project ({source_stat(env_id)['count']} files)")
+            shutil.copytree(src, dst, symlinks=False, dirs_exist_ok=True,
+                            ignore=lambda d, names: [x for x in names if x in NOT_COPIED])
         as_build = _build_as(env_id)
         with tempfile.TemporaryDirectory(prefix="hr-env-build-") as scratch:
             env["HOME"] = env["TMPDIR"] = scratch
@@ -1120,7 +1181,10 @@ def r_read(env_id: str, path: str) -> Response:
 
 @router.put("/environments/{env_id}/source")
 async def r_write(env_id: str, path: str, request: Request) -> dict:
-    return write_file(env_id, path, await request.body())
+    data = await request.body()
+    # Off the event loop, as the import is: a write waits for the source lock while a build
+    # snapshots the source, and the runner answers every turn from this one loop.
+    return await asyncio.to_thread(write_file, env_id, path, data)
 
 
 @router.post("/environments/{env_id}/mkdir")
@@ -1135,17 +1199,21 @@ def r_delete(env_id: str, path: str) -> dict:
 
 @router.post("/environments/{env_id}/import")
 async def r_import(env_id: str, request: Request, replace: int = 0, git_url: str = "", git_ref: str = "") -> dict:
+    # The clone, the extraction and the wait for the source lock all run in a worker thread. Called
+    # here directly they ran on the event loop the runner answers every turn from, so a git import
+    # froze the whole runner for as long as the clone took (its /healthz answered in 4.3 s during
+    # a 4.6 s import of django; a clone may take up to ten minutes).
     if git_url:
         # git_pin: host:port:address the gateway classified, on a shared deployment (_git_pin_args)
-        return import_git(env_id, git_url, git_ref, replace=bool(replace),
-                          pin=str(request.query_params.get("git_pin") or ""))
+        return await asyncio.to_thread(import_git, env_id, git_url, git_ref, replace=bool(replace),
+                                       pin=str(request.query_params.get("git_pin") or ""))
     fd, spool = tempfile.mkstemp(prefix="hr-env-import-")
     try:
         with os.fdopen(fd, "wb") as out:
             async for chunk in request.stream():
                 if chunk:
                     out.write(chunk)
-        return import_archive(env_id, spool, replace=bool(replace))
+        return await asyncio.to_thread(import_archive, env_id, spool, replace=bool(replace))
     finally:
         try:
             os.unlink(spool)
