@@ -4189,6 +4189,34 @@ def _request_stream_usage(body: bytes) -> bytes:
     return body
 
 
+_OPENAI_STREAM_HOSTS = ("api.openai.com", ".openai.azure.com", ".cognitiveservices.azure.com")
+
+
+def _without_stream_obfuscation(body: bytes, base: str) -> bytes:
+    """Ask OpenAI or Azure for a stream without its `obfuscation` padding, on a body that already
+    asks for the usage chunk.
+
+    OpenAI pads every streamed chunk with an `obfuscation` field, the usage trailer included, and
+    opensquilla 0.5.6 accepts after `finish_reason` only a chunk whose keys it knows: a turn that had
+    already answered failed with "The model provider returned an invalid response" (invalid_stream_
+    order) on every OpenAI and Azure model the review instance has (gpt-5.5, gpt-5.4-mini, gpt-5.2,
+    2026-10-12), while the same models through an aggregator that drops the field passed. Only that
+    route asks for this; the padding stays on every other client's stream. A provider that refuses
+    the field meets the relay's one-time retry without stream_options."""
+    host = (urllib.parse.urlsplit(base).hostname or "").lower()
+    if not (host == _OPENAI_STREAM_HOSTS[0] or host.endswith(_OPENAI_STREAM_HOSTS[1:])):
+        return body
+    try:
+        obj = json.loads(body)
+        so = obj.get("stream_options") if isinstance(obj, dict) else None
+        if obj.get("stream") is True and isinstance(so, dict) and "include_obfuscation" not in so:
+            obj["stream_options"] = {**so, "include_obfuscation": False}
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
 def _rename_max_tokens(body: bytes) -> bytes:
     """max_tokens -> max_completion_tokens in one chat-completions body.
 
@@ -4983,6 +5011,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             body = _with_free_form_objects(body)     # before the Gemini normaliser below, which has its own rules
             if flags.get("stream_usage"):
                 body = _request_stream_usage(body)
+            if flags.get("plain_stream"):
+                body = _without_stream_obfuscation(body, base)
             if flags.get("rename_max_tokens"):
                 body = _rename_max_tokens(body)
             if flags.get("stringify_tool_content"):
@@ -5641,7 +5671,7 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
 def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = (),
                         stream_usage: bool = False, gemini_schemas: bool = False,
                         usage_no_nulls: bool = False, exact_base: bool = False,
-                        aux: bool = False) -> tuple[str, str]:
+                        aux: bool = False, plain_stream: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -5670,7 +5700,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         upstream = (base_url or "").rstrip("/") if exact_base else _relay_base_with_version(base_url)
         flags = {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
-                 "usage_no_nulls": bool(usage_no_nulls), **({} if aux else _turn_effort())}
+                 "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
+                 **({} if aux else _turn_effort())}
         _HERMES_RELAY["routes"][tok] = (upstream, api_key, flags if aux else _turn_route(flags))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
@@ -9516,7 +9547,7 @@ def _build_opensquilla(provider: str, auth: Auth, model: str, prompt: str, cwd: 
         # environment, where the agent's shell can read it, and the relay is the only tap that can
         # say which model answered. The Messages provider gets the relay's origin, which works
         # whichever of /v1/messages or /messages it joins on.
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, plain_stream=True)
         auth = auth.model_copy(update={"base_url": _relay_origin(relay_base) if anthropic else relay_base,
                                        "api_key": relay_tok})
     state_dir, transcript, usage_path = _opensquilla_paths(cwd)
@@ -9788,7 +9819,55 @@ def _jcode_has_session(env: dict, session_id: str) -> bool:
     return (pathlib.Path(home) / ".jcode" / "sessions" / f"{session_id}.json").is_file()
 
 
-def _jcode_session_model(env: dict, session_id: str, model: str) -> str:
+_JCODE_ANTHROPIC_LISTED: list[str] | None = None
+
+
+def _jcode_anthropic_listed() -> list[str]:
+    """The Claude ids jcode's Anthropic provider runs, from the binary itself (`jcode model list`, a
+    static catalog: 125 ms with no reachable endpoint), read once per runner process."""
+    global _JCODE_ANTHROPIC_LISTED
+    if _JCODE_ANTHROPIC_LISTED is None:
+        try:
+            with tempfile.TemporaryDirectory(prefix="hr-jcode-models-") as home:
+                r = subprocess.run(["jcode", "model", "list", "--provider", "anthropic-api"], capture_output=True,
+                                   text=True, timeout=30, env={**_child_env(), "HOME": home, "JCODE_NO_TELEMETRY": "1",
+                                                               "ANTHROPIC_AUTH_TOKEN": "placeholder",
+                                                               "ANTHROPIC_BASE_URL": "http://127.0.0.1:9"})
+            _JCODE_ANTHROPIC_LISTED = [ln.strip() for ln in r.stdout.splitlines() if ln.strip().startswith("claude")]
+        except (OSError, subprocess.TimeoutExpired):
+            _JCODE_ANTHROPIC_LISTED = []
+    return _JCODE_ANTHROPIC_LISTED
+
+
+def _jcode_anthropic_model(model: str) -> str:
+    """The id jcode's Anthropic provider is handed for this model, or a refusal.
+
+    jcode runs ONLY the Claude ids its own catalog lists on that provider, and anything else it
+    replaces with its default, claude-opus-5-5, saying so only in its own log ("Model
+    claude-haiku-4-5-20251001 not supported by Anthropic provider"). Measured on the review instance
+    (2026-10-12): a turn asked for claude-haiku-4.5 through a direct Anthropic connection, the
+    connection's wire id was the dated claude-haiku-4-5-20251001, and Opus answered and was billed.
+    A dated id whose undated name jcode lists is the same model under jcode's name; any other id is
+    refused here rather than answered by a different model."""
+    listed = _jcode_anthropic_listed()
+    if not listed or model in listed:
+        return model                     # nothing to check against: the turn runs as asked
+    bare = re.sub(r"-\d{8}$", "", model)
+    if bare in listed:
+        return bare
+    raise HTTPException(400, f"jcode cannot run {model} on an Anthropic connection: its Anthropic provider "
+                             f"runs only the models it lists ({', '.join(x for x in listed if '[' not in x)}) and "
+                             f"would answer with {listed[0]} instead. Serve this model to jcode through an "
+                             f"OpenAI-compatible connection, or use another base.")
+
+
+# The provider key jcode writes into a session for each --provider this runner passes it, read from
+# its own session files (2026-10-12): a turn on the Messages path stores `claude-api`, an
+# OpenAI-compatible one `openai-compatible`.
+_JCODE_PROVIDER_KEY = {"anthropic-api": "claude-api", "openai-compatible": "openai-compatible"}
+
+
+def _jcode_session_model(env: dict, session_id: str, model: str, provider_key: str = "") -> str:
     """Point a resumed jcode session at the model THIS turn asked for; → what it held before.
 
     jcode's `--model` and `--provider` are documented as the INITIAL ones ("Interactive sessions can
@@ -9829,9 +9908,17 @@ def _jcode_session_model(env: dict, session_id: str, model: str) -> str:
     # is stripped, so the mechanism stops being reachable from here. The normal path IS fixed and
     # measured; a turn after a KILLED turn stays on the killed turn's model until someone with the
     # source can say why. mimo, the control, is right on both paths.
-    if was == model:
+    # The PROVIDER KEY goes with the model. jcode joins the stored key onto the model when it
+    # restores the session, so after a turn on the Messages path (`claude-api`) a turn on an
+    # OpenAI-compatible connection asked its provider for `claude-api:openai/gpt-6.1-sol` and got a
+    # 404 (the five-scenario column's switch row, 2026-10-12); the other way round reaches no base
+    # url at all.
+    held_key = str(doc.get("provider_key") or "")
+    if was == model and (not provider_key or held_key == provider_key):
         return ""
     doc["model"] = model
+    if provider_key:
+        doc["provider_key"] = provider_key
     tmp = path.with_suffix(".hr-tmp")
     try:
         tmp.write_text(json.dumps(doc))
@@ -9913,6 +10000,7 @@ def _build_jcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
         # or /messages onto it, the relay strips one /v1 and joins the rest onto the connection's
         # own base, as for hermes's Anthropic SDK (_relay_origin).
         env["ANTHROPIC_BASE_URL"] = _relay_origin(base) if auth.api_key else base
+        model = _jcode_anthropic_model(model)
         if auth.api_key:
             env["ANTHROPIC_AUTH_TOKEN"] = auth.api_key
         prov = "anthropic-api"
@@ -9938,7 +10026,7 @@ def _build_jcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     if resume_session_id and _jcode_has_session(env, resume_session_id):
         # before --resume, not after: the model this turn asked for has to be in the store jcode is
         # about to read, because its own --model is only the session's INITIAL one.
-        was = _jcode_session_model(env, resume_session_id, model)
+        was = _jcode_session_model(env, resume_session_id, model, _JCODE_PROVIDER_KEY.get(prov, ""))
         if was:
             print(f"[jcode] session {resume_session_id} held model {was}; this turn asked for "
                   f"{model}, so the store was pointed at it", flush=True)
