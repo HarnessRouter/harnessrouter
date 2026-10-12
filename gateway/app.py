@@ -7573,11 +7573,18 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #               llama-3.3-70b make no file; hunyuan-4-preview answers something else.
     #   nanobot     grok-build-0.1 loops on exec; kimi-k3 and llama-3.3-70b make no file;
     #               grok-4.5's stream stalls mid-turn.
+    #   all four    nemotron-3-super does not follow a skill (mimo twice, jcode, opensquilla) and
+    #               makes a deck without the asked-for text or none at all (mimo, jcode, nanobot).
+    #   and         jcode: llama-3.3-70b writes deck.pptx as a file that is not a deck (twice).
+    #               mimo: kimi-k3 writes a tool call as text instead of making it, the failure that
+    #               already took it off jcode and nanobot.
     "mimo": frozenset({"claude-opus-4.7", "llama-3.3-70b", "llama-4-maverick", "qwen3.8-flash",
-                       "gpt-5.6-luna", "hunyuan-4-preview"}),
-    "jcode": frozenset({"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview"}),
-    "opensquilla": frozenset({"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview"}),
-    "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5"}),
+                       "gpt-5.6-luna", "hunyuan-4-preview", "nemotron-3-super", "kimi-k3"}),
+    "jcode": frozenset({"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview",
+                        "nemotron-3-super", "llama-3.3-70b"}),
+    "opensquilla": frozenset({"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview",
+                              "nemotron-3-super"}),
+    "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5", "nemotron-3-super"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
