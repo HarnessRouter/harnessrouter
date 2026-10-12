@@ -1994,6 +1994,16 @@ def _claude_passthrough(obj: dict, state: dict) -> list[dict]:
     if obj2 is None:
         return []
     obj = obj2
+    if obj.get("type") == "assistant" and not obj.get("parent_tool_use_id"):
+        # The model that wrote this turn's answer is named on the answer itself. The result's
+        # modelUsage is the SESSION's running total: after a model switch on a resumed session it
+        # still credits the previous model with every earlier turn's tokens, so the most output
+        # tokens named the old model on the first turn served by the new one (claude-haiku-4.5,
+        # 111 tokens from two turns, over claude-fable-5-1's 14; the matrix's switch row,
+        # 2026-10-12). A subagent's message carries parent_tool_use_id and does not count.
+        m = str((obj.get("message") or {}).get("model") or "")
+        if m and m != "<synthetic>":
+            state["_answer_model"] = m
     if obj.get("type") == "result":
         # A turn whose only "answer" is the CLI's error line is a failed turn with that reason: a
         # Qwen Code turn Opus 5 refused completed with "[API Error: Model stream ended with empty
@@ -2012,6 +2022,10 @@ def _claude_passthrough(obj: dict, state: dict) -> list[dict]:
         # produced the output is the served model, which a direct Anthropic key never sent through
         # the relay (served_model stayed empty on every Claude Code run of a benchmark, 2026-09-30).
         served = _claude_model_used(obj)
+        if served and state.get("_answer_model"):
+            # Only where the CLI reports usage by model (Claude Code): grok's result names no model
+            # and leaves the served one to the relay, through this same passthrough.
+            served = state["_answer_model"]
         if served:
             obj = {**obj, "model": served}
     # Default (batch) mode: pass the CLI's stream-json through unchanged — the CLI emits one event
