@@ -1058,6 +1058,20 @@ _NOISE_SEG = {"node_modules", "chrome-deps", "debs", ".venv", "venv", "site-pack
 _NOISE_EXT = (".deb", ".whl", ".pyc", ".pyo", ".so", ".o", ".a", ".class", ".rpm", ".apk")
 
 
+# A LibreOffice user profile is the tool's state, not a deliverable. A model that checks its deck
+# by rendering it may point -env:UserInstallation inside the workspace (gpt-6.1-sol did, on
+# opensquilla and on jcode, 2026-10-12), and the profile's dozens of files, all newer than the deck,
+# filled the 25 a turn hands back and pushed deck.pptx out of them. LibreOffice writes this file in
+# every profile it starts, so a directory holding it is a profile and its `user/` tree goes.
+_LO_PROFILE_MARK = "user/registrymodifications.xcu"
+
+
+def _without_lo_profiles(paths):
+    roots = {q[: -len(_LO_PROFILE_MARK)] for q in paths
+             if q == _LO_PROFILE_MARK or q.endswith("/" + _LO_PROFILE_MARK)}
+    return [q for q in paths if not any(q.startswith(r + "user/") for r in roots)]
+
+
 def _is_produced_noise(path: str) -> bool:
     if any(seg in _NOISE_SEG for seg in path.split("/")):
         return True
@@ -12079,6 +12093,8 @@ def _produced_list(ws: str) -> list[dict]:
         path = path.strip().strip('"')
         if _produced_keep(status, path):
             seen.setdefault(path, status.strip() or "?")
+    keep = set(_without_lo_profiles(list(seen)))
+    seen = {k: v for k, v in seen.items() if k in keep}
     # mtime rides on each item so a reader can put the newest first: a response carries at most
     # HARNESS_RESP_MAX_FILES of them, and git's path order handed a Mario run its first 24 frames
     # of 1,400 (hosted, 2026-09-25). 0 when the file is gone (a deletion) or cannot be stat'ed.

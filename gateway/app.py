@@ -7570,17 +7570,13 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #   jcode       grok-build-0.1 and hunyuan-4-preview loop on tools until the cap; kimi-k3 makes
     #               no file (twice); gemini-3-flash-preview degenerates on its first turn.
     #   opensquilla claude-opus-4.7 refuses the scenario prompt (both runs); grok-4.20 and
-    #               llama-3.3-70b make no file; hunyuan-4-preview answers something else;
-    #               gpt-6.1-sol renders its deck to check it with a LibreOffice profile inside the
-    #               workspace (twice), and those files, newer than the deck, push deck.pptx out of
-    #               the 25 a turn hands back: the person never receives the deck.
+    #               llama-3.3-70b make no file; hunyuan-4-preview answers something else.
     #   nanobot     grok-build-0.1 loops on exec; kimi-k3 and llama-3.3-70b make no file;
     #               grok-4.5's stream stalls mid-turn.
     "mimo": frozenset({"claude-opus-4.7", "llama-3.3-70b", "llama-4-maverick", "qwen3.8-flash",
                        "gpt-5.6-luna", "hunyuan-4-preview"}),
     "jcode": frozenset({"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview"}),
-    "opensquilla": frozenset({"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview",
-                              "gpt-6.1-sol"}),
+    "opensquilla": frozenset({"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview"}),
     "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5"}),
 }
 for _b, _e in _MODEL_CATALOG.items():

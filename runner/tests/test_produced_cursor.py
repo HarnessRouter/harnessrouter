@@ -12,7 +12,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from server import _collected_at_turn_start, _git, _git_ensure, _produced_ack, _produced_list  # noqa: E402
+from server import _collected_at_turn_start, _without_lo_profiles, _git, _git_ensure, _produced_ack, _produced_list  # noqa: E402
 
 
 def _ws():
@@ -105,3 +105,18 @@ def test_the_turn_start_cursor_leaves_a_later_turns_cursor_where_collection_put_
     _git(d, "add", "-A")
     _git(d, "commit", "-q", "-m", "agent commit")
     assert {f["path"] for f in _produced_list(d)} == {"new.txt"}
+
+
+def test_a_libreoffice_profile_in_the_workspace_is_not_a_deliverable():
+    # gpt-6.1-sol checked its deck with -env:UserInstallation inside the workspace (opensquilla and
+    # jcode, 2026-10-12); the profile's files, newer than the deck, filled the 25 a turn hands back.
+    d = _ws()
+    for rel in ("deck.pptx", "preview/deck.png", "preview/lo-profile/user/registrymodifications.xcu",
+                "preview/lo-profile/user/pack/ExtensionInfo.pack", "notes/user/todo.md"):
+        f = pathlib.Path(d) / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x")
+    assert {f["path"] for f in _produced_list(d)} == {"deck.pptx", "preview/deck.png", "notes/user/todo.md"}
+    # a profile at the workspace root, and a folder named user/ that is not a profile, both read right
+    assert _without_lo_profiles(["user/registrymodifications.xcu", "user/pack/a", "out.pdf"]) == ["out.pdf"]
+    assert _without_lo_profiles(["user/readme.md", "out.pdf"]) == ["user/readme.md", "out.pdf"]
