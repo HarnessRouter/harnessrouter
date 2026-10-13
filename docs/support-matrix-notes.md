@@ -41,7 +41,7 @@ every dimension above on the build that ships, with one exception named below.
 - nemotron-3-super, on all four: does not follow a skill (mimo twice, jcode, opensquilla) and makes
   a deck without the asked-for text or none (mimo, jcode, nanobot).
 
-**Product defects the measurement found, each fixed and measured again** (all in this release):
+**Product defects the measurement found, each fixed and measured again** (all in this release, ten in all):
 - jcode's tool calls reached the console with no arguments: the runner sent each call at
   `tool_start` and dropped the `tool_input` pieces that carry them. Held until complete now; a
   console check (scripts/support-matrix/ui-tool-rows.mjs) opens the Bash row and finds the command.
@@ -61,6 +61,16 @@ every dimension above on the build that ships, with one exception named below.
 - A LibreOffice profile inside the workspace (a model checking its deck by rendering it) filled the
   25 files a turn hands back and pushed the deck out. A profile's `user/` tree is not a deliverable.
   gpt-6.1-sol, briefly taken off opensquilla for this, is offered again and passes.
+- opensquilla's tool rows had no arguments while the turn ran (its progress events carry none).
+  The runner's relay now keeps each call's arguments as the model sends them, by call id, and the
+  row opens with them; the transcript fills any call the relay did not see when the turn ends.
+  Checked in the console mid-turn (scripts/support-matrix/ui-tool-rows-live.mjs).
+- opensquilla answered English prompts in Chinese, French or Spanish on GPT models (gpt-5.4: 8 of 8
+  in Chinese): its own system prompt's three reply-language rules. The runner takes them out of the
+  installed template; English prompts then got English answers (8 of 8) and Chinese prompts Chinese.
+  Its `cron` tool, whose scheduler never runs in a one-shot turn, is off too.
+- A hermes turn the provider refused said only "↻ Resumed session …": the relay keeps the provider's
+  refusal on the route, and the turn's error is that refusal when hermes said nothing else.
 
 **The exception.** nemotron-3.5-lightning is the one offered model these bases reach through
 OpenRouter on the review instance, and that instance's OpenRouter key reached its spending limit
