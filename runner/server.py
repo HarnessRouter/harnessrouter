@@ -10225,16 +10225,21 @@ _ZEROCLAW_KEY_ENV = "ZEROCLAW_providers__models__custom__hr__api_key"
 # (ask_user, escalate_to_human, reaction, poll); a runner turn has none, so the call would hang the
 # turn until zeroclaw's own timeout. The last three let the MODEL change what serves the turn —
 # model_switch and model_routing_config pick another model, proxy_config another route — and a turn
-# that ran on a model nobody asked for is a substitution (matrix rule 2).
+# that ran on a model nobody asked for is a substitution (matrix rule 2). The last three cannot work
+# in the sandbox at all — MEASURED on 0.8.5 in the image: browser_open "Failed to open system browser",
+# browser "agent-browser CLI is unavailable", screenshot "No screenshot tool found" — so offering them
+# is a picker row that fails on use (rule 4). The instance's browser plugin is the browser here.
 _ZEROCLAW_NEVER = ("ask_user", "escalate_to_human", "reaction", "poll",
-                   "model_switch", "model_routing_config", "proxy_config")
+                   "model_switch", "model_routing_config", "proxy_config",
+                   "browser_open", "browser", "screenshot")
 # The tools zeroclaw 0.8.5 offers a session under the config server.py writes, as the agent itself
 # listed them (and each cross-checked against its registration in crates/zeroclaw-tools), minus
-# _ZEROCLAW_NEVER. Pinned equal to the gateway's _BASE_CATALOG["zeroclaw"] tool ids by its tests.
+# _ZEROCLAW_NEVER. web_fetch, web_search_tool (DuckDuckGo) and http_request were each seen to work
+# in the image. Pinned equal to the gateway's _BASE_CATALOG["zeroclaw"] tool ids by its tests.
 ALL_ZEROCLAW_TOOLS = (
     "shell", "file_read", "file_write", "file_edit", "glob_search", "content_search",
     "git_operations", "deliver_file", "web_fetch", "web_search_tool", "http_request",
-    "browser_open", "browser", "screenshot", "image_info", "calculator", "TodoWrite", "llm_task",
+    "image_info", "calculator", "TodoWrite", "llm_task",
     "spawn_subagent", "delegate", "memory_store", "memory_recall", "memory_forget",
 )
 # The variables a turn's shell needs that zeroclaw does not pass on by itself. Its shell tool builds
