@@ -10,7 +10,10 @@ import { chromium } from 'playwright';
 const BASE = process.env.BASE, HB = process.env.HBASE, MODELS = (process.env.MODELS || '').split(',').filter(Boolean);
 const CAP_S = Number(process.env.CAP_S || 480);
 const INSTR = 'Use pdf gen skill to generate a pdf with your desired output text';
-const PROMPTS = ['say hi', 'improve the style', 'change background to purple', 'change to red', 'change to green'];
+// the first turn asks for the instruction outright: "say hi" alone leaves a PDF to the model's
+// judgement, and gpt-5.6-luna (nanobot) and qfmodel (qoder) answered "Hi!" without one although the
+// instruction reached them (a marker it asked for came back, 2026-10-13)
+const PROMPTS = ['follow your instruction: say hi', 'improve the style', 'change background to purple', 'change to red', 'change to green'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const b = await chromium.launch(); const page = await (await b.newContext({ viewport: { width: 1440, height: 900 } })).newPage();

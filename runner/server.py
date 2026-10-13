@@ -9021,6 +9021,17 @@ def _build_qoder(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     return [QODER_PYTHON, QODER_DRIVER, json.dumps(job)]
 
 
+# A reasoning model behind a Qoder id can leave its thinking markers in the text Qoder streams: on
+# 0.33.0-rc.19 the `performance` id's answer began "</think> Rendered — full-bleed purple…". Neither
+# marker is the answer: a whole <think>…</think> block goes, and a stray tag of either kind with it.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.S)
+_THINK_TAG = re.compile(r"\s*</?think>\s*")
+
+
+def _without_think(text: str) -> str:
+    return _THINK_TAG.sub(" ", _THINK_BLOCK.sub("", text)).strip() if "think>" in text else text
+
+
 def _qoder_to_claude(obj: dict, state: dict) -> list[dict]:
     """Map ONE driver NDJSON line to canonical claude stream-json events.
 
@@ -9047,10 +9058,12 @@ def _qoder_to_claude(obj: dict, state: dict) -> list[dict]:
                  "requested_session_id": str(p.get("requested_session_id") or "")}]
     if m == "text":
         txt = str(p.get("text") or "")
+        if "think>" in txt:
+            txt = _THINK_TAG.sub(" ", txt).lstrip()
         if not txt:
             return []
         state["_qoder_text"] = state.get("_qoder_text", "") + txt
-        state["final"] = state["_qoder_text"]
+        state["final"] = _without_think(state["_qoder_text"])
         return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
     if m == "tool_use":
         if state.get("_qoder_text") and not state["_qoder_text"].endswith("\n"):
@@ -9071,7 +9084,7 @@ def _qoder_to_claude(obj: dict, state: dict) -> list[dict]:
         return []
     if m == "__hr_result":
         status = str(p.get("status") or "")
-        final = str(p.get("final") or "") or state.get("_qoder_text", "")
+        final = _without_think(str(p.get("final") or "") or state.get("_qoder_text", ""))
         reason = str(p.get("reason") or "")
         ev: dict = {"type": "result", "usage": {}}
         if p.get("charge"):
