@@ -748,6 +748,53 @@ def test_opensquilla_calls_come_back_with_their_arguments_under_the_live_rows_na
         ("call_1", "exec_command", {"cmd": "echo one"}), ("call_2", "exec_command", {"cmd": "echo two"})]
 
 
+def test_the_relay_assembles_a_tool_calls_arguments_from_the_models_stream():
+    from server import _relay_tool_args, _tool_args_in_body, _tool_args_in_sse_line
+    flags, st = {}, {}
+    for piece in ({"index": 0, "id": "call_a", "function": {"name": "exec_command", "arguments": ""}},
+                  {"index": 0, "function": {"arguments": "{\"cmd\": \"echo "}},
+                  {"index": 0, "function": {"arguments": "one\"}"}},
+                  {"index": 1, "id": "call_b", "function": {"name": "read", "arguments": "{\"path\": \"a\"}"}}):
+        line = b"data: " + json.dumps({"choices": [{"index": 0, "delta": {"tool_calls": [piece]}}]}).encode()
+        _tool_args_in_sse_line(line, flags, st)
+    assert _relay_tool_args([flags], "call_a") == {"cmd": "echo one"}
+    assert _relay_tool_args([flags], "call_b") == {"path": "a"}
+    # Anthropic Messages: a tool_use block and its input_json_delta pieces
+    fa, sa = {}, {}
+    for ev in ({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}}},
+               {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"command\": "}},
+               {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "\"ls\"}"}}):
+        _tool_args_in_sse_line(b"data: " + json.dumps(ev).encode(), fa, sa)
+    assert _relay_tool_args([fa], "toolu_1") == {"command": "ls"}
+    # a whole response, both shapes
+    fb = {}
+    _tool_args_in_body(json.dumps({"choices": [{"message": {"tool_calls": [
+        {"id": "call_c", "function": {"name": "x", "arguments": "{\"k\": 1}"}}]}}]}).encode(), fb)
+    _tool_args_in_body(json.dumps({"content": [{"type": "tool_use", "id": "toolu_2", "name": "y", "input": {"q": "z"}}]}).encode(), fb)
+    assert _relay_tool_args([fb], "call_c") == {"k": 1} and _relay_tool_args([fb], "toolu_2") == {"q": "z"}
+    # nothing seen, or not yet a whole object: no arguments rather than a wrong one
+    assert _relay_tool_args([flags], "call_zzz") is None and _relay_tool_args(None, "call_a") is None
+    _tool_args_note_half = {"tool_args": {"call_h": "{\"cmd\": \"ec"}}
+    assert _relay_tool_args([_tool_args_note_half], "call_h") is None
+
+
+def test_opensquilla_rows_have_their_arguments_while_the_turn_runs():
+    # The live fix: the relay saw the model send call_1's arguments before opensquilla ran the tool,
+    # so the row the progress event opens carries them, and the transcript does not add a second.
+    d = _ws()
+    base = pathlib.Path(d, ".harness", "opensquilla"); base.mkdir(parents=True)
+    (base / "transcript.jsonl").write_text(json.dumps({"type": "message", "message": {"role": "assistant", "content": [
+        {"type": "toolCall", "name": "exec", "id": "call_1", "arguments": {"cmd": "echo one"}}]}}))
+    route = {"tool_args": {"call_1": "{\"cmd\": \"echo one\"}"}}
+    state = {"model": "gpt-5.4", "final": "", "cwd": d, "routes": [route]}
+    evs = _opensquilla_to_claude({"_event": True, "schema_version": 1, "kind": "tool_use_start",
+                                  "tool_use_id": "call_1", "tool_name": "exec_command"}, state)
+    assert evs[0]["message"]["content"][0]["input"] == {"cmd": "echo one"}
+    late = [b for e in _opensquilla_transcript(state) if e.get("type") == "assistant"
+            for b in e["message"]["content"] if b.get("type") == "tool_use"]
+    assert late == []
+
+
 def test_opensquilla_transcript_answer_has_the_directive_removed():
     d = _ws()
     base = pathlib.Path(d, ".harness", "opensquilla"); base.mkdir(parents=True)

@@ -4791,6 +4791,93 @@ def _usage_in_doc(doc) -> dict:
     return {}
 
 
+_TOOL_ARGS_KEEP = 512
+
+
+def _tool_args_note(flags: dict, cid: str, args: str) -> None:
+    """A tool call's arguments as the model sent them, on the route, by call id (bounded)."""
+    d = flags.setdefault("tool_args", {})
+    d[cid] = args
+    while len(d) > _TOOL_ARGS_KEEP:
+        d.pop(next(iter(d)))
+
+
+def _tool_args_in_sse_line(line: bytes, flags: dict, st: dict) -> None:
+    """Tool calls as a model streams them through the relay, assembled by call id: OpenAI
+    chat/completions `delta.tool_calls[]` pieces, and Anthropic `tool_use` blocks with their
+    `input_json_delta`. `st` is this response's own state (indices are per response).
+
+    For a harness that announces a call without its arguments: opensquilla's progress event names
+    the call and nothing else, so its console row had nothing to open while the turn ran; the call
+    id is the provider's, and the model sent the arguments before the tool ran."""
+    if not line.startswith(b"data:"):
+        return
+    raw = line[5:].strip()
+    if not (b"tool_calls" in raw or b"tool_use" in raw or b"input_json_delta" in raw):
+        return
+    try:
+        j = json.loads(raw)
+    except ValueError:
+        return
+    if not isinstance(j, dict):
+        return
+    for ch in j.get("choices") or []:
+        for tc in ((ch.get("delta") or {}) if isinstance(ch, dict) else {}).get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            cur = st.setdefault("oa", {}).setdefault(tc.get("index", 0), {"id": "", "args": ""})
+            if tc.get("id"):
+                cur["id"] = str(tc["id"])
+            piece = (tc.get("function") or {}).get("arguments")
+            if isinstance(piece, str):
+                cur["args"] += piece
+            if cur["id"]:
+                _tool_args_note(flags, cur["id"], cur["args"])
+    t = j.get("type")
+    if t == "content_block_start" and (j.get("content_block") or {}).get("type") == "tool_use":
+        cb = j["content_block"]
+        st.setdefault("an", {})[j.get("index", 0)] = {"id": str(cb.get("id") or ""), "args": ""}
+    elif t == "content_block_delta" and (j.get("delta") or {}).get("type") == "input_json_delta":
+        cur = (st.get("an") or {}).get(j.get("index", 0))
+        if cur and cur["id"]:
+            cur["args"] += j["delta"].get("partial_json") or ""
+            _tool_args_note(flags, cur["id"], cur["args"])
+
+
+def _tool_args_in_body(data: bytes, flags: dict) -> None:
+    """The same, from a whole (non-streamed) response."""
+    if b"tool_calls" not in data and b"tool_use" not in data:
+        return
+    try:
+        j = json.loads(data)
+    except ValueError:
+        return
+    if not isinstance(j, dict):
+        return
+    for ch in j.get("choices") or []:
+        for tc in ((ch.get("message") or {}) if isinstance(ch, dict) else {}).get("tool_calls") or []:
+            if isinstance(tc, dict) and tc.get("id"):
+                _tool_args_note(flags, str(tc["id"]), str((tc.get("function") or {}).get("arguments") or ""))
+    for c in j.get("content") or []:
+        if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id"):
+            _tool_args_note(flags, str(c["id"]), json.dumps(c.get("input") or {}))
+
+
+def _relay_tool_args(routes, cid: str) -> dict | None:
+    """The arguments the relay saw for this call id on any of the turn's routes, parsed; None when
+    it saw none, or they do not parse as a JSON object yet."""
+    for f in reversed(routes or []):
+        raw = ((f.get("tool_args") or {}) if isinstance(f, dict) else {}).get(cid)
+        if raw is None:
+            continue
+        try:
+            v = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            return None
+        return v if isinstance(v, dict) and v else None
+    return None
+
+
 def _usage_in_sse_line(line: bytes) -> dict:
     """One SSE line as it passes the relay → the usage it carries, {} for anything else."""
     if not line.startswith(b"data:") or b"sage" not in line:
@@ -5372,6 +5459,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             pending = b""
             line_state: dict = {}   # what the per-line rewrite has seen of this stream so far
+            tool_state: dict = {}   # this response's tool calls, by index (_tool_args_in_sse_line)
             carry = b""      # tail of the previous chunk, so a split "model":"…" is still seen
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
@@ -5458,6 +5546,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         last_event = time.monotonic()     # an event's line; a comment is not one
                         flags["last_data"] = time.time()  # ...and the route's own note of it (_hermes_startup_hung)
                     call_usage.update(_usage_in_sse_line(line))
+                    _tool_args_in_sse_line(line, flags, tool_state)
                     seen_thinking = _thinking_in_sse_line(line)
                     if seen_thinking is not None:
                         call_thinking = seen_thinking
@@ -5513,6 +5602,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fr = _finish_reason_in(data[-65536:])
             if fr:
                 flags["last_finish"] = fr
+            _tool_args_in_body(data, flags)
             if body is not None and b"sage" in data:
                 try:
                     whole = json.loads(data)
@@ -9790,9 +9880,12 @@ def _opensquilla_transcript(state: dict) -> list[dict]:
             # that row in place (same id, same name, no result yet) rather than adding one; the name
             # is the one the row was given, so the two can never disagree.
             live = state.get("_sq_calls") or {}
+            filled = state.get("_sq_filled") or set()
             for c in content:
                 if not (isinstance(c, dict) and c.get("type") == "toolCall" and c.get("id")):
                     continue
+                if c["id"] in filled:
+                    continue     # its row has had its arguments since it started; a second would duplicate it
                 args = c.get("arguments")
                 if isinstance(args, str):
                     try:
@@ -9825,13 +9918,18 @@ def _opensquilla_to_claude(obj: dict, state: dict) -> list[dict]:
     if obj.get("_event") is True:
         kind = obj.get("kind")
         if kind == "tool_use_start":
-            state.setdefault("_sq_calls", {})[obj.get("tool_use_id") or "tool"] = obj.get("tool_name") or "tool"
+            tid = obj.get("tool_use_id") or "tool"
+            state.setdefault("_sq_calls", {})[tid] = obj.get("tool_name") or "tool"
+            # The progress stream carries no arguments, by design; the model sent them through the
+            # relay before the tool ran, under this same call id, so the row has them from the start.
+            # When the relay saw none (a route that is not relayed), the row starts empty and the
+            # transcript fills it when the turn ends (_opensquilla_transcript).
+            args = _relay_tool_args(state.get("routes"), tid)
+            if args:
+                state.setdefault("_sq_filled", set()).add(tid)
             return [{"type": "assistant", "message": {"content": [
-                {"type": "tool_use", "id": obj.get("tool_use_id") or "tool",
-                 "name": obj.get("tool_name") or "tool",
-                 # The progress stream carries no arguments, by design. An empty object is the
-                 # honest rendering: a card with no arguments, rather than invented ones.
-                 "input": {}}]}}]
+                {"type": "tool_use", "id": tid, "name": obj.get("tool_name") or "tool",
+                 "input": args or {}}]}}]
         if kind == "router_decision":
             # The router is turned OFF by the config this builder writes, so this event should
             # never arrive. If it does, the turn ran on a model nobody asked for: recorded so the
@@ -11108,7 +11206,9 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                  timeout_seconds: int | None = None, partial: bool = False) -> None:
     rec = _turns[turn_id]
     rec["turn_id"] = turn_id
-    state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time()}
+    state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time(),
+             # the relay's notes on this turn's routes (a translator may read what the model sent)
+             "routes": rec.get("routes")}
     result_ev = None
     env = {**env, _TURN_MARK: turn_id}
     try:
