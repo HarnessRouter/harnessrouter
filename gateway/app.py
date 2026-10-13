@@ -7577,9 +7577,15 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #               makes a deck without the asked-for text or none at all (mimo, jcode, nanobot).
     #   and         jcode: llama-3.3-70b writes deck.pptx as a file that is not a deck (twice).
     #               mimo: kimi-k3 writes a tool call as text instead of making it, the failure that
-    #               already took it off jcode and nanobot.
+    #               already took it off jcode and nanobot; mistral-medium-3.5 answers a deck request
+    #               with `<use_skill>officecli</use_skill>` as text and makes nothing (two of three);
+    #               gemini-3.5-flash and gemini-3.6-flash create a blank deck and end the turn there
+    #               (twice each on the build that ships; mimo's other six Gemini ids pass);
+    #               gpt-5.4-mini, asked to call a named MCP tool, runs the plugin's skill instead
+    #               (once on rc.7, three of four transports on rc.9).
     "mimo": frozenset({"claude-opus-4.7", "llama-3.3-70b", "llama-4-maverick", "qwen3.8-flash",
-                       "gpt-5.6-luna", "hunyuan-4-preview", "nemotron-3-super", "kimi-k3"}),
+                       "gpt-5.6-luna", "hunyuan-4-preview", "nemotron-3-super", "kimi-k3",
+                       "mistral-medium-3.5", "gemini-3.5-flash", "gemini-3.6-flash", "gpt-5.4-mini"}),
     "jcode": frozenset({"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview",
                         "nemotron-3-super", "llama-3.3-70b"}),
     "opensquilla": frozenset({"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview",

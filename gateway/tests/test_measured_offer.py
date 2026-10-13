@@ -16,7 +16,8 @@ import app as gw  # noqa: E402
 # so removing one there has to be a decision made here too.
 FAILED = {
     "mimo": {"claude-opus-4.7", "llama-3.3-70b", "llama-4-maverick", "qwen3.8-flash", "gpt-5.6-luna",
-             "hunyuan-4-preview", "nemotron-3-super", "kimi-k3"},
+             "hunyuan-4-preview", "nemotron-3-super", "kimi-k3", "mistral-medium-3.5", "gemini-3.5-flash",
+             "gemini-3.6-flash", "gpt-5.4-mini"},
     "jcode": {"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview", "nemotron-3-super",
               "llama-3.3-70b"},
     "opensquilla": {"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview", "nemotron-3-super"},
