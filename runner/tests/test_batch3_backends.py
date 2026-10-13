@@ -455,6 +455,17 @@ def test_opensquilla_config_turns_the_router_off_and_declares_the_window():
     assert 'provider = "custom"' in cfg
 
 
+def test_opensquilla_denies_cron_which_a_one_shot_turn_never_runs():
+    # Its scheduler never runs under `opensquilla agent`, and its description was the only non-English
+    # text in the request (Chinese examples); gpt-5.5 opened English answers in Chinese on rc.15.
+    # Measured with the request captured at a stub: 26 tools with cron, 25 and no Chinese without.
+    import tomllib
+    d, env = _ws(), {}
+    _build_opensquilla("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    cfg = tomllib.loads(pathlib.Path(d, ".harness", "opensquilla", "config.toml").read_text())
+    assert cfg["tools"]["deny"] == ["cron"]
+
+
 def test_opensquilla_argv_bounds_retries_and_keeps_a_session_db():
     d, env = _ws(), {}
     cmd = _build_opensquilla("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,

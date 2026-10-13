@@ -10040,6 +10040,14 @@ def _opensquilla_config(auth: Auth, model: str, state_dir: pathlib.Path, anthrop
         "# ensure_agent_workspace writes those whatever this says; _git_exclude is what covers them.",
         'source = "state"',
         "",
+        "[tools]",
+        "# `cron` schedules jobs for opensquilla's own scheduler, which a one-shot `opensquilla agent`",
+        "# turn never runs, so a job made with it never fires. Its description is also the only text in",
+        "# the whole request that is not English (three Chinese example requests), and on 0.33.0-rc.15",
+        "# gpt-5.5 and gpt-5.4 answered English prompts with a Chinese opening line. The global policy's",
+        "# deny list wins over every later layer (tools/policy_helpers.py).",
+        'deny = ["cron"]',
+        "",
     ]
     entries = []
     for i, sv in enumerate(mcp_servers or []):
