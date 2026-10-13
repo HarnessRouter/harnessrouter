@@ -10081,10 +10081,53 @@ def _opensquilla_config(auth: Auth, model: str, state_dir: pathlib.Path, anthrop
     (state_dir / "config.toml").write_text("\n".join(lines))
 
 
+# opensquilla's own reply-language rules, in its system prompt template. Measured on 0.33.0-rc.16
+# against gpt-5.4 with plain English prompts: with them, 8 of 8 answers in Chinese, and with the
+# Chinese line alone removed, 4 of 4 in French; with all three removed, 4 of 4 in English (gpt-5.5
+# drifted too, gemini and claude did not). Without them a model answers in the person's language,
+# as on every other base. The template has no override hook (identity/prompt.py loads it from the
+# package directory), so the lines are taken out of the installed file before a turn runs, once per
+# runner, idempotently; installs made before this fix get it too.
+_OPENSQUILLA_LANGUAGE_RULES = re.compile(
+    r"^- (?:Write tool preambles in the same language as the user's current conversation\."
+    r"|Use the conversation's language for all user-visible replies[^\n]*"
+    r"|If the user writes in Chinese, keep replying in Chinese[^\n]*)\n", re.M)
+_OPENSQUILLA_LANGUAGE_DONE: list[bool] = []
+
+
+def _opensquilla_reply_language_fix(venv: pathlib.Path | None = None) -> str:
+    """Remove the three rules from the installed template; what was done, for the log."""
+    if _OPENSQUILLA_LANGUAGE_DONE:
+        return "done"
+    venv = venv or pathlib.Path(OPENSQUILLA_BIN).parent.parent
+    found = sorted(venv.glob("lib/python*/site-packages/opensquilla/identity/templates/system_prompt.j2"))
+    if not found:
+        return "no template"
+    t = found[0]
+    s = t.read_text(encoding="utf-8")
+    new = _OPENSQUILLA_LANGUAGE_RULES.sub("", s)
+    if new != s:
+        t.write_text(new, encoding="utf-8")
+        what = "removed"
+    elif "conversation's language" in s or "replying in Chinese" in s:
+        # a release that reworded them: say so rather than leave the drift unexplained
+        print("[opensquilla] WARNING: its reply-language rules are in a form this runner does not "
+              "know; English prompts may get answers in another language", flush=True)
+        what = "unknown form"
+    else:
+        what = "absent"
+    _OPENSQUILLA_LANGUAGE_DONE.append(True)
+    return what
+
+
 def _build_opensquilla(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                        resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                        tools_disabled: list[str] | None = None,
                        max_turns: int | None = None) -> list[str]:
+    try:
+        _opensquilla_reply_language_fix()
+    except OSError as e:   # never fails a turn; the turn just keeps opensquilla's own wording
+        print(f"[opensquilla] reply-language rules not changed: {e}", flush=True)
     pr = provider or "openai-api"
     if pr not in OPENSQUILLA_PROVIDERS:
         raise HTTPException(400, f"unknown opensquilla provider '{pr}' "

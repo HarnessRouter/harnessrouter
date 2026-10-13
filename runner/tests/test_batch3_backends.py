@@ -466,6 +466,28 @@ def test_opensquilla_denies_cron_which_a_one_shot_turn_never_runs():
     assert cfg["tools"]["deny"] == ["cron"]
 
 
+def test_opensquilla_reply_language_rules_come_out_of_its_template(tmp_path, monkeypatch):
+    # gpt-5.4 answered English prompts in Chinese (8 of 8) under these rules, in French without the
+    # Chinese one, and in English (4 of 4) without all three, rc.16.
+    import server
+    t = tmp_path / "lib" / "python3.12" / "site-packages" / "opensquilla" / "identity" / "templates"
+    t.mkdir(parents=True)
+    body = ("## Reply Guidelines\n\n"
+            "- Use the conversation's language for all user-visible replies, including progress notes, tables, and final answers.\n"
+            "- If the user writes in Chinese, keep replying in Chinese unless they explicitly ask for another language.\n"
+            "- Lead final answers with the result and a usable reference when relevant.\n"
+            "## Tools\n- Write tool preambles in the same language as the user's current conversation.\n- Keep it short.\n")
+    (t / "system_prompt.j2").write_text(body)
+    monkeypatch.setattr(server, "_OPENSQUILLA_LANGUAGE_DONE", [])
+    assert server._opensquilla_reply_language_fix(tmp_path) == "removed"
+    out = (t / "system_prompt.j2").read_text()
+    assert "language" not in out and "Chinese" not in out
+    assert "- Lead final answers with the result" in out and "- Keep it short." in out
+    monkeypatch.setattr(server, "_OPENSQUILLA_LANGUAGE_DONE", [])
+    assert server._opensquilla_reply_language_fix(tmp_path) == "absent"      # idempotent
+    assert server._opensquilla_reply_language_fix(tmp_path) == "done"        # once per runner
+
+
 def test_opensquilla_argv_bounds_retries_and_keeps_a_session_db():
     d, env = _ws(), {}
     cmd = _build_opensquilla("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
