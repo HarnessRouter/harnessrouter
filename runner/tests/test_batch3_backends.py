@@ -828,6 +828,39 @@ def test_opensquilla_rows_have_their_arguments_while_the_turn_runs():
     assert late == []
 
 
+def test_opensquilla_replays_only_this_turn_of_a_resumed_sessions_transcript():
+    # A resumed session's transcript holds the whole conversation; replaying it all put the first
+    # turn's answer in front of the sixth's and every earlier call into its trace (2026-10-13).
+    d = _ws()
+    base = pathlib.Path(d, ".harness", "opensquilla"); base.mkdir(parents=True)
+    msgs = [
+        {"role": "user", "content": [{"type": "text", "text": "[2026-10-13T04:51+00:00 Tue UTC]\nfollow instruction: hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hello! How can I help you today?"}]},
+        {"role": "user", "content": [{"type": "text", "text": "[2026-10-13T04:53+00:00 Tue UTC]\nmake a pdf"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Writing it."},
+                                          {"type": "toolCall", "name": "write_file", "id": "call_old", "arguments": {"path": "a.pdf"}}]},
+        {"role": "toolResult", "toolCallId": "call_old", "content": [{"type": "text", "text": "Written"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Made a.pdf"}]},
+        {"role": "user", "content": [{"type": "text", "text": "[2026-10-13T07:30+00:00 Tue UTC]\nchange to red"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Recolouring."},
+                                          {"type": "toolCall", "name": "edit_file", "id": "call_new", "arguments": {"color": "red"}}]},
+        {"role": "toolResult", "toolCallId": "call_new", "content": [{"type": "text", "text": "Edited"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "It is red now."}]},
+    ]
+    (base / "transcript.jsonl").write_text("\n".join(json.dumps({"type": "message", "message": m}) for m in msgs))
+    (base / "turn_prompt.txt").write_text("change to red")
+    state = {"model": "gpt-5.4", "final": "", "cwd": d}
+    evs = _opensquilla_transcript(state)
+    blob = json.dumps(evs)
+    assert "Hello! How can I help" not in blob and "Made a.pdf" not in blob and "call_old" not in blob
+    assert "Recolouring." in blob and "call_new" in blob and "Edited" in blob
+    assert state["final"] == "It is red now."
+    # the prompt not on record (a turn built before this): after the last user message, the same turn
+    (base / "turn_prompt.txt").unlink()
+    state = {"model": "gpt-5.4", "final": "", "cwd": d}
+    assert "Made a.pdf" not in json.dumps(_opensquilla_transcript(state)) and state["final"] == "It is red now."
+
+
 def test_opensquilla_transcript_answer_has_the_directive_removed():
     d = _ws()
     base = pathlib.Path(d, ".harness", "opensquilla"); base.mkdir(parents=True)

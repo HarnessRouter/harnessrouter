@@ -9847,21 +9847,39 @@ def _opensquilla_transcript(state: dict) -> list[dict]:
     cwd = state.get("cwd") or ""
     if not cwd:
         return []
-    _, transcript, _ = _opensquilla_paths(cwd)
+    state_dir, transcript, _ = _opensquilla_paths(cwd)
     try:
         lines = transcript.read_text(errors="replace").splitlines()
     except OSError:
         return []
-    out: list[dict] = []
-    final = ""
+    msgs: list[dict] = []
     for raw in lines:
         raw = raw.strip()
         if not raw.startswith("{"):
             continue
         try:
-            msg = (json.loads(raw) or {}).get("message") or {}
+            msgs.append((json.loads(raw) or {}).get("message") or {})
         except Exception:  # noqa: BLE001 — one unparseable line in a transcript the CLI is still
             continue       # appending to is a line, not a turn: skip it and read the rest.
+    # THIS turn only. A resumed session's transcript is the whole conversation, rewritten each turn,
+    # and replaying it all put every earlier answer in front of this one and every earlier tool call
+    # and result into its trace (2026-10-13: a sixth turn answered "Hello! How can I help you
+    # today?…" from the first and listed 31 tools). The turn begins after the LAST user message that
+    # carries its prompt; without the prompt on record, after the last user message.
+    try:
+        prompt = (state_dir / "turn_prompt.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        prompt = ""
+    def _user_text(m: dict) -> str:
+        c = m.get("content")
+        return c if isinstance(c, str) else "\n".join(
+            x.get("text") or "" for x in (c or []) if isinstance(x, dict) and x.get("type") == "text")
+    users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+    mine = [i for i in users if prompt and prompt in _user_text(msgs[i])]
+    start = (mine or users or [-1])[-1] + 1
+    out: list[dict] = []
+    final = ""
+    for msg in msgs[start:]:
         role = msg.get("role")
         content = msg.get("content") if isinstance(msg.get("content"), list) else []
         if role == "assistant":
@@ -10167,6 +10185,13 @@ def _build_opensquilla(provider: str, auth: Auth, model: str, prompt: str, cwd: 
             stale.unlink()
         except OSError:
             pass
+    # The transcript opensquilla writes for a resumed session holds the WHOLE conversation, every
+    # earlier turn included, so the end-of-turn replay must know where this turn begins: by its own
+    # prompt (_opensquilla_transcript).
+    try:
+        (state_dir / "turn_prompt.txt").write_text(prompt, encoding="utf-8")
+    except OSError:
+        pass
     cmd = [OPENSQUILLA_BIN, "agent", "-m", prompt,
            "--json", "--event-stream-stderr",
            "--workspace", cwd,
