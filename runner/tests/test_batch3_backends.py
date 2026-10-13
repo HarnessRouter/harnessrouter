@@ -867,15 +867,13 @@ def test_opensquilla_replays_only_this_turn_of_a_resumed_sessions_transcript():
         {"role": "assistant", "content": [{"type": "text", "text": "It is red now."}]},
     ]
     (base / "transcript.jsonl").write_text("\n".join(json.dumps({"type": "message", "message": m}) for m in msgs))
-    (base / "turn_prompt.txt").write_text("change to red")
-    state = {"model": "gpt-5.4", "final": "", "cwd": d}
+    state = {"model": "gpt-5.4", "final": "", "cwd": d, "prompt": "change to red"}
     evs = _opensquilla_transcript(state)
     blob = json.dumps(evs)
     assert "Hello! How can I help" not in blob and "Made a.pdf" not in blob and "call_old" not in blob
     assert "Recolouring." in blob and "call_new" in blob and "Edited" in blob
     assert state["final"] == "It is red now."
-    # the prompt not on record (a turn built before this): after the last user message, the same turn
-    (base / "turn_prompt.txt").unlink()
+    # the prompt not on record: after the last user message, the same turn
     state = {"model": "gpt-5.4", "final": "", "cwd": d}
     assert "Made a.pdf" not in json.dumps(_opensquilla_transcript(state)) and state["final"] == "It is red now."
 

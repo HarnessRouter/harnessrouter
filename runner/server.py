@@ -9900,11 +9900,8 @@ def _opensquilla_transcript(state: dict) -> list[dict]:
     # and replaying it all put every earlier answer in front of this one and every earlier tool call
     # and result into its trace (2026-10-13: a sixth turn answered "Hello! How can I help you
     # today?…" from the first and listed 31 tools). The turn begins after the LAST user message that
-    # carries its prompt; without the prompt on record, after the last user message.
-    try:
-        prompt = (state_dir / "turn_prompt.txt").read_text(encoding="utf-8").strip()
-    except OSError:
-        prompt = ""
+    # carries its prompt (the run loop's state holds it); without it, after the last user message.
+    prompt = str(state.get("prompt") or "").strip()
     def _user_text(m: dict) -> str:
         c = m.get("content")
         return c if isinstance(c, str) else "\n".join(
@@ -10220,13 +10217,6 @@ def _build_opensquilla(provider: str, auth: Auth, model: str, prompt: str, cwd: 
             stale.unlink()
         except OSError:
             pass
-    # The transcript opensquilla writes for a resumed session holds the WHOLE conversation, every
-    # earlier turn included, so the end-of-turn replay must know where this turn begins: by its own
-    # prompt (_opensquilla_transcript).
-    try:
-        (state_dir / "turn_prompt.txt").write_text(prompt, encoding="utf-8")
-    except OSError:
-        pass
     cmd = [OPENSQUILLA_BIN, "agent", "-m", prompt,
            "--json", "--event-stream-stderr",
            "--workspace", cwd,
@@ -11315,14 +11305,17 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
                  timeout_seconds: int | None = None, partial: bool = False,
-                 max_turns: int | None = None) -> None:
+                 max_turns: int | None = None, prompt: str = "") -> None:
     rec = _turns[turn_id]
     rec["turn_id"] = turn_id
     state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time(),
              # the relay's notes on this turn's routes (a translator may read what the model sent)
              "routes": rec.get("routes"),
              # the turn's step budget, for a CLI that has no limit of its own (_jcode_to_claude)
-             "max_turns": max_turns}
+             "max_turns": max_turns,
+             # the turn's own prompt, where a transcript of the whole conversation begins this turn
+             # (_opensquilla_transcript)
+             "prompt": prompt}
     result_ev = None
     env = {**env, _TURN_MARK: turn_id}
     try:
@@ -12910,7 +12903,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         threading.Thread(target=_run_turn_bg,
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
-                         kwargs={"max_turns": req.max_turns},
+                         kwargs={"max_turns": req.max_turns, "prompt": req.prompt or ""},
                          daemon=True).start()
     cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     return {"turn_id": turn_id, "status": "running", "backend": backend, "model": model,
