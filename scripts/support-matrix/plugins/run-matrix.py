@@ -176,8 +176,16 @@ def run_one(api: Api, base: str, mode: str, model: str, keep: bool, task_timeout
             "input": prompt, "metadata": {"harness_id": created["id"]}, "stream": False,
             "max_step": 12}, timeout=task_timeout)
         answer = text_of(resp) if status == 200 else ""
+        # With --model the row measures THAT model: a turn the gateway served with another one (a
+        # fallback, or the base's default) is not a pass for it, whatever the answer says.
+        meta = (resp.get("metadata") or {}) if isinstance(resp, dict) else {}
+        row["served"] = str(resp.get("model") or "") if isinstance(resp, dict) else ""
+        swapped = model and (row["served"] != model or meta.get("requested_model") or meta.get("model_fallback"))
         if status != 200:
             row["outcome"], row["detail"] = "task failed", f"HTTP {status} {str(resp)[:200]}"
+        elif swapped:
+            row["outcome"] = "other model"
+            row["detail"] = f"asked {model}, served {row['served']!r} {meta.get('requested_model') or ''}".strip()
         elif token in answer:
             row["outcome"] = "pass"
             row["detail"] = answer.strip().splitlines()[-1][:200]

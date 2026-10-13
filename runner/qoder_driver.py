@@ -254,15 +254,29 @@ def artifact_name(original: str) -> tuple[str, str]:
     return name, ""
 
 
-def land_artifact(cwd: str, name: str, data: bytes | pathlib.Path) -> tuple[str, str]:
+def land_artifact(cwd: str, name: str, data: bytes | pathlib.Path,
+                  replaceable: frozenset[str] | set[str] = frozenset()) -> tuple[str, str]:
     """Write `data` as `name` under the workspace root; (the relative path written, a note).
 
-    An existing path is never overwritten and a symlink is never followed: a second artifact of
-    the same name in one session (or a file the agent of an earlier turn left) lands beside it as
-    `name (2).ext`, and the note says so. The write is to a temporary name and renamed into place
-    with O_EXCL semantics, so a race with the agent's own files cannot replace one."""
+    A path in `replaceable` (a file THIS session's deliveries wrote: the deliverable's earlier
+    version) is replaced, atomically, the way a revised file is on every other base: on 0.33.0-rc.19
+    a conversation revising one PDF over five turns left hi.pdf, "hi (2).pdf", "hi (3).pdf"…, the
+    newest under a name the person never chose. Any OTHER existing path is never overwritten (a file
+    the person attached, or one this session did not deliver) and a symlink is never followed: it
+    lands beside it as `name (2).ext`, and the note says so."""
     root = pathlib.Path(cwd)
     stem, ext = os.path.splitext(name)
+    if name in replaceable and (root / name).is_file() and not (root / name).is_symlink():
+        tmp = root / f".{name}.{uuid.uuid4().hex}.landing"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        with os.fdopen(fd, "wb") as f:
+            if isinstance(data, (bytes, bytearray)):
+                f.write(data)
+            else:
+                with open(data, "rb") as src:
+                    shutil.copyfileobj(src, f, 1 << 20)
+        os.replace(tmp, root / name)
+        return name, ""
     candidate, n, note = name, 1, ""
     while True:
         target = root / candidate
@@ -348,8 +362,10 @@ def agent_body(job: dict, skills: list[dict], mcp_servers: list[dict]) -> dict:
     effort = str(job.get("effort") or "").strip().lower()
     if effort and effort in EFFORTS:
         model = {"id": model, "effort": effort}
-    name = f"harnessrouter {pathlib.Path(str(job.get('cwd') or '')).name or 'session'}"[:256]
-    return {"name": name, "model": model,
+    # The model reads the agent's name as its own: named "harnessrouter <session dir>", qfmodel
+    # opened a turn with "Hi! I'm harnessrouter hsess2b3b804c…" (0.33.0-rc.19). It is the base's
+    # name; the session is identified by the metadata, and the environment and vault keep theirs.
+    return {"name": "Qoder", "model": model,
             "description": "Created by HarnessRouter for one session; deleted with it.",
             "system": system_prompt(job),
             "tools": tools_config(job.get("tools_disabled") or []),
@@ -837,7 +853,7 @@ class Turn:
                 _emit("artifact", {**rec, "status": "failed", "reason": why})
                 return
             try:
-                written, note = land_artifact(self.cwd, name, part)
+                written, note = land_artifact(self.cwd, name, part, frozenset(self.st.get("delivered") or []))
             except OSError as e:
                 why = f"{original}: could not be written: {type(e).__name__}: {e}"[:300]
                 self.artifact_failures.append(why)
@@ -850,6 +866,9 @@ class Turn:
                 pass
         if note:
             self.notes.append(note)
+        if written not in (self.st.get("delivered") or []):
+            self.st.setdefault("delivered", []).append(written)
+            save_state(self.cwd, self.st)
         self.landed.append({**rec, "path": written})
         _emit("artifact", {**rec, "status": "landed", "path": written})
 

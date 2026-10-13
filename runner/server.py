@@ -1058,6 +1058,20 @@ _NOISE_SEG = {"node_modules", "chrome-deps", "debs", ".venv", "venv", "site-pack
 _NOISE_EXT = (".deb", ".whl", ".pyc", ".pyo", ".so", ".o", ".a", ".class", ".rpm", ".apk")
 
 
+# A LibreOffice user profile is the tool's state, not a deliverable. A model that checks its deck
+# by rendering it may point -env:UserInstallation inside the workspace (gpt-6.1-sol did, on
+# opensquilla and on jcode, 2026-10-12), and the profile's dozens of files, all newer than the deck,
+# filled the 25 a turn hands back and pushed deck.pptx out of them. LibreOffice writes this file in
+# every profile it starts, so a directory holding it is a profile and its `user/` tree goes.
+_LO_PROFILE_MARK = "user/registrymodifications.xcu"
+
+
+def _without_lo_profiles(paths):
+    roots = {q[: -len(_LO_PROFILE_MARK)] for q in paths
+             if q == _LO_PROFILE_MARK or q.endswith("/" + _LO_PROFILE_MARK)}
+    return [q for q in paths if not any(q.startswith(r + "user/") for r in roots)]
+
+
 def _is_produced_noise(path: str) -> bool:
     if any(seg in _NOISE_SEG for seg in path.split("/")):
         return True
@@ -4777,6 +4791,93 @@ def _usage_in_doc(doc) -> dict:
     return {}
 
 
+_TOOL_ARGS_KEEP = 512
+
+
+def _tool_args_note(flags: dict, cid: str, args: str) -> None:
+    """A tool call's arguments as the model sent them, on the route, by call id (bounded)."""
+    d = flags.setdefault("tool_args", {})
+    d[cid] = args
+    while len(d) > _TOOL_ARGS_KEEP:
+        d.pop(next(iter(d)))
+
+
+def _tool_args_in_sse_line(line: bytes, flags: dict, st: dict) -> None:
+    """Tool calls as a model streams them through the relay, assembled by call id: OpenAI
+    chat/completions `delta.tool_calls[]` pieces, and Anthropic `tool_use` blocks with their
+    `input_json_delta`. `st` is this response's own state (indices are per response).
+
+    For a harness that announces a call without its arguments: opensquilla's progress event names
+    the call and nothing else, so its console row had nothing to open while the turn ran; the call
+    id is the provider's, and the model sent the arguments before the tool ran."""
+    if not line.startswith(b"data:"):
+        return
+    raw = line[5:].strip()
+    if not (b"tool_calls" in raw or b"tool_use" in raw or b"input_json_delta" in raw):
+        return
+    try:
+        j = json.loads(raw)
+    except ValueError:
+        return
+    if not isinstance(j, dict):
+        return
+    for ch in j.get("choices") or []:
+        for tc in ((ch.get("delta") or {}) if isinstance(ch, dict) else {}).get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            cur = st.setdefault("oa", {}).setdefault(tc.get("index", 0), {"id": "", "args": ""})
+            if tc.get("id"):
+                cur["id"] = str(tc["id"])
+            piece = (tc.get("function") or {}).get("arguments")
+            if isinstance(piece, str):
+                cur["args"] += piece
+            if cur["id"]:
+                _tool_args_note(flags, cur["id"], cur["args"])
+    t = j.get("type")
+    if t == "content_block_start" and (j.get("content_block") or {}).get("type") == "tool_use":
+        cb = j["content_block"]
+        st.setdefault("an", {})[j.get("index", 0)] = {"id": str(cb.get("id") or ""), "args": ""}
+    elif t == "content_block_delta" and (j.get("delta") or {}).get("type") == "input_json_delta":
+        cur = (st.get("an") or {}).get(j.get("index", 0))
+        if cur and cur["id"]:
+            cur["args"] += j["delta"].get("partial_json") or ""
+            _tool_args_note(flags, cur["id"], cur["args"])
+
+
+def _tool_args_in_body(data: bytes, flags: dict) -> None:
+    """The same, from a whole (non-streamed) response."""
+    if b"tool_calls" not in data and b"tool_use" not in data:
+        return
+    try:
+        j = json.loads(data)
+    except ValueError:
+        return
+    if not isinstance(j, dict):
+        return
+    for ch in j.get("choices") or []:
+        for tc in ((ch.get("message") or {}) if isinstance(ch, dict) else {}).get("tool_calls") or []:
+            if isinstance(tc, dict) and tc.get("id"):
+                _tool_args_note(flags, str(tc["id"]), str((tc.get("function") or {}).get("arguments") or ""))
+    for c in j.get("content") or []:
+        if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id"):
+            _tool_args_note(flags, str(c["id"]), json.dumps(c.get("input") or {}))
+
+
+def _relay_tool_args(routes, cid: str) -> dict | None:
+    """The arguments the relay saw for this call id on any of the turn's routes, parsed; None when
+    it saw none, or they do not parse as a JSON object yet."""
+    for f in reversed(routes or []):
+        raw = ((f.get("tool_args") or {}) if isinstance(f, dict) else {}).get(cid)
+        if raw is None:
+            continue
+        try:
+            v = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            return None
+        return v if isinstance(v, dict) and v else None
+    return None
+
+
 def _usage_in_sse_line(line: bytes) -> dict:
     """One SSE line as it passes the relay → the usage it carries, {} for anything else."""
     if not line.startswith(b"data:") or b"sage" not in line:
@@ -5251,6 +5352,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # at 429 or 503 this did not print them.
                 print(f"[relay] {'google' if google else 'provider'} refused {tail} model={_body_model} "
                       f"status={e.code}: {data[:300]!r}", flush=True)
+                # ...and on the route, for a harness that does not say why its turn failed: hermes
+                # printed only its own "↻ Resumed session" line when Vercel refused gpt-6.1-sol for
+                # a spent budget (2026-10-13), and that line was the turn's whole error.
+                flags["last_refusal"] = _refusal_words(e.code, data)
                 if (attempt < 2 and e.code == 400 and b"thought_signature" in data
                         and not flags.get("thought_signature") and body is not None):
                     # a Gemini 3 endpoint this relay did not recognise as Google names the need itself
@@ -5354,6 +5459,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             pending = b""
             line_state: dict = {}   # what the per-line rewrite has seen of this stream so far
+            tool_state: dict = {}   # this response's tool calls, by index (_tool_args_in_sse_line)
             carry = b""      # tail of the previous chunk, so a split "model":"…" is still seen
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
@@ -5440,6 +5546,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         last_event = time.monotonic()     # an event's line; a comment is not one
                         flags["last_data"] = time.time()  # ...and the route's own note of it (_hermes_startup_hung)
                     call_usage.update(_usage_in_sse_line(line))
+                    _tool_args_in_sse_line(line, flags, tool_state)
                     seen_thinking = _thinking_in_sse_line(line)
                     if seen_thinking is not None:
                         call_thinking = seen_thinking
@@ -5495,6 +5602,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fr = _finish_reason_in(data[-65536:])
             if fr:
                 flags["last_finish"] = fr
+            _tool_args_in_body(data, flags)
             if body is not None and b"sage" in data:
                 try:
                     whole = json.loads(data)
@@ -7542,6 +7650,14 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
                 "models": {model: {}},
             }
         },
+        # The turn's connection and NOTHING ELSE. Both binaries carry built-in providers besides the
+        # ones a config defines, and a model may name one: mimo's `actor` tool takes a model, and on
+        # 0.33.0-rc.6 gpt-6-sol spawned a visual-QA subagent on `xiaomi/mimo-v2.5`, which MiMo's own
+        # service refused ("Invalid API Key"); the deck was made, the turn failed on the subagent's
+        # error, and the gateway read it as the user's key refused. Measured on @mimo-ai/cli 0.1.15:
+        # `mimo models` lists hr, mimo and six xiaomi ids without this, and hr alone with it. A
+        # request off the connection is also a request the person never sent anywhere.
+        "enabled_providers": ["hr"],
         # opencode's filesystem snapshots back the TUI's undo/revert; a fresh `run` per turn has
         # no one to undo for, and HarnessRouter's checkpoint is the rollback here. Left on, it is
         # a git repo of the workspace under $HOME — 699 MB of the 1.4 GB tarball in #193.
@@ -7723,6 +7839,14 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr,
                                  backend="mimo", key_env=_MIMO_KEY_ENV, npm=npm)
     env["MIMOCODE_CONFIG"] = os.path.join(cwd, ".harness", "mimo.json")
+    # mimo's own 23 built-in skills off: several are dead ends here that compete with the skills the
+    # harness mounts. Its pptx/docx/xlsx/pdf-official run on python-pptx and the like, which this
+    # image does not ship and a sandbox cannot pip-install (no route to PyPI): gpt-5.4-mini picked
+    # pptx-official and gave up on the deck three times out of three while officecli, the skill
+    # every other base uses, sat beside it. Its `playwright` competes with the browser plug.
+    # Measured on 0.1.15 with `mimo debug skill`: 37 skills without this, 15 with it, and the
+    # skill from the harness's own skills path present both times.
+    env["MIMOCODE_DISABLE_BUILTIN_SKILLS"] = "1"
     cmd = ["mimo", "run", "--format", "json", "--model", qualified,
            # The sandbox is the trust boundary and nobody is attached to answer a prompt — the
            # same grant claude gets with --dangerously-skip-permissions and pi with --approve.
@@ -8897,6 +9021,17 @@ def _build_qoder(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     return [QODER_PYTHON, QODER_DRIVER, json.dumps(job)]
 
 
+# A reasoning model behind a Qoder id can leave its thinking markers in the text Qoder streams: on
+# 0.33.0-rc.19 the `performance` id's answer began "</think> Rendered — full-bleed purple…". Neither
+# marker is the answer: a whole <think>…</think> block goes, and a stray tag of either kind with it.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.S)
+_THINK_TAG = re.compile(r"\s*</?think>\s*")
+
+
+def _without_think(text: str) -> str:
+    return _THINK_TAG.sub(" ", _THINK_BLOCK.sub("", text)).strip() if "think>" in text else text
+
+
 def _qoder_to_claude(obj: dict, state: dict) -> list[dict]:
     """Map ONE driver NDJSON line to canonical claude stream-json events.
 
@@ -8923,10 +9058,12 @@ def _qoder_to_claude(obj: dict, state: dict) -> list[dict]:
                  "requested_session_id": str(p.get("requested_session_id") or "")}]
     if m == "text":
         txt = str(p.get("text") or "")
+        if "think>" in txt:
+            txt = _THINK_TAG.sub(" ", txt).lstrip()
         if not txt:
             return []
         state["_qoder_text"] = state.get("_qoder_text", "") + txt
-        state["final"] = state["_qoder_text"]
+        state["final"] = _without_think(state["_qoder_text"])
         return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
     if m == "tool_use":
         if state.get("_qoder_text") and not state["_qoder_text"].endswith("\n"):
@@ -8947,7 +9084,7 @@ def _qoder_to_claude(obj: dict, state: dict) -> list[dict]:
         return []
     if m == "__hr_result":
         status = str(p.get("status") or "")
-        final = str(p.get("final") or "") or state.get("_qoder_text", "")
+        final = _without_think(str(p.get("final") or "") or state.get("_qoder_text", ""))
         reason = str(p.get("reason") or "")
         ev: dict = {"type": "result", "usage": {}}
         if p.get("charge"):
@@ -9452,6 +9589,23 @@ ALL_JCODE_TOOLS = {
     "panel", "read", "replace", "schedule", "session_search", "side_panel", "skill_manage",
     "swarm", "todo", "webfetch", "websearch", "write",
 }
+# Off on every turn, whatever the harness asks: jcode tools that cannot work in a headless Linux
+# sandbox, or that leave it on their own. `browser` drives Firefox through an extension bridge that
+# never connects here, and a model that picks it over the browser plug tries to set it up until the
+# turn's cap: gpt-5.4-mini ran 459 tool calls for two hours on 0.33.0-rc.7, "the browser bridge is
+# not connected", on a task the plug does in a minute. `macos_computer_use` is macOS's,
+# `gmail` signs in through jcode's own Google login rather than the person's plugs, and
+# `maintainer_feedback` writes to jcode's maintainer.
+# `todo` and `memory` are the way into jcode's runaway turns. Its todo tool carries per-item
+# "confidence" and a "closed feedback loop" plan, and a model can keep re-validating against it:
+# grok-4.20 on a three-turn PDF edit made 84 calls in five minutes, 47 of them `todo`, ending "the
+# validation has transcended into the null-eternal"; a person's grok-4.6 turn re-verified "All 11…
+# 12… 13 items" through `todo` and `memory` until stopped (0.33.0-rc.18). With both off, grok-4.20
+# finished all three turns in three runs of three (4 to 12 calls a turn), and claude-sonnet-5.5,
+# gpt-5.4 and grok-4.6 finished faster than with them. No release after the pinned v0.90.0, through
+# v0.95.0, changes either. `memory` is jcode's own store under its home, not this product's memory.
+_JCODE_SANDBOX_OFF = frozenset({"browser", "macos_computer_use", "gmail", "maintainer_feedback",
+                                "todo", "memory"})
 
 
 def _jcode_usage_add(state: dict, ev: dict) -> None:
@@ -9486,14 +9640,42 @@ def _jcode_usage(state: dict) -> dict:
     return {k: v for k, v in (state.get("_jc_usage") or {}).items() if v}
 
 
+def _jcode_held_calls(state: dict, upto: str | None = None) -> list[dict]:
+    """Emit the held tool calls, oldest first, with the arguments their `tool_input` pieces built:
+    every one when `upto` is None, else up to and including the call with that id.
+
+    A call is held from `tool_start` because jcode streams its arguments AFTER it, as `tool_input`
+    pieces that carry no id (they belong to the call started last), and a tool_use is final once
+    the gateway has it. Emitting it at tool_start sent every jcode call with `{}`: the console
+    showed a bare "Bash" with nothing to open, and the record kept no command. Measured on v0.90.0
+    against a stub endpoint: tool_start{id,name}, tool_input{delta} x3, tool_exec{id,name},
+    message_end, tool_done{id,output}."""
+    held = state.get("_jc_calls") or []
+    if upto is not None and not any(c["id"] == upto for c in held):
+        return []
+    out = []
+    while held:
+        c = held.pop(0)
+        raw = c["args"].strip()
+        try:
+            inp = json.loads(raw) if raw else {}
+        except ValueError:
+            inp = {"arguments": raw}   # cut short (a killed turn): shown as it arrived, never dropped
+        out.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": c["id"], "name": c["name"],
+             "input": inp if isinstance(inp, dict) else {"arguments": inp}}]}})
+        if c["id"] == upto:
+            break
+    return out
+
+
 def _jcode_to_claude(obj: dict, state: dict) -> list[dict]:
     """Map ONE `jcode run --ndjson` line to zero+ canonical claude stream-json events.
 
     Text streams from text_delta; `text_replace` is jcode's revision event and replaces what was
     streamed, so it is not re-emitted (the user already has the old text on screen — the same
     decision _pi_to_claude makes for a non-prefix revision) but it does become the candidate final.
-    `tool_input` carries argument deltas for a call whose tool_use was already emitted at
-    tool_start, so it is dropped rather than painted twice."""
+    A tool call is held from `tool_start` until its arguments are complete (_jcode_held_calls)."""
     t = obj.get("type")
     if t == "start":
         state["_jc_session"] = obj.get("session_id") or ""
@@ -9515,37 +9697,58 @@ def _jcode_to_claude(obj: dict, state: dict) -> list[dict]:
         state["final"] = txt
         return []
     if t == "tool_start":
-        return [{"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "id": obj.get("id") or "tool",
-             "name": obj.get("name") or "tool", "input": {}}]}}]
+        # jcode has no step limit of its own (no flag for one), so the turn's budget is counted
+        # here: past it the turn ends incomplete at its budget and the run loop stops the process.
+        # Without it a model that would not stop ran to the turn's wall-clock cap: grok-4.20 made
+        # 84 calls in five minutes on 0.33.0-rc.18, 47 of them `todo`, "the validation has
+        # transcended into the null-eternal", and a person stopped it by hand.
+        n = state["_jc_tool_n"] = state.get("_jc_tool_n", 0) + 1
+        cap = state.get("max_turns")
+        if cap and n > int(cap) and not state.get("_stop"):
+            state["_stop"] = "max_turns"
+            return _jcode_held_calls(state) + [{
+                "type": "result", "subtype": "error_max_turns", "is_error": False,
+                "result": state.get("final", "") or state.get("_jc_text", ""),
+                "usage": _jcode_usage(state)}]
+        state.setdefault("_jc_calls", []).append(
+            {"id": obj.get("id") or "tool", "name": obj.get("name") or "tool", "args": ""})
+        return []
+    if t == "tool_input":
+        held = state.get("_jc_calls")
+        if held:
+            held[-1]["args"] += str(obj.get("delta") or "")
+        return []
+    if t == "tool_exec":
+        return _jcode_held_calls(state, obj.get("id") or "tool")
     if t == "tool_done":
         err = obj.get("error")
         content = str(obj.get("output") or err or "")
-        return [{"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": obj.get("id") or "tool",
-             "is_error": bool(err), "content": content[:8000]}]}}]
+        return _jcode_held_calls(state, obj.get("id") or "tool") + [
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": obj.get("id") or "tool",
+                 "is_error": bool(err), "content": content[:8000]}]}}]
     if t == "tokens":
         _jcode_usage_add(state, obj)
         return []
     if t == "message_end":
         # One assistant message ended; the next may follow in the same turn (a tool round trip).
         # `final` is the LAST message's text, so the buffer resets rather than accumulating a
-        # mid-run aside into the answer.
+        # mid-run aside into the answer. Every call the message made has its arguments by now.
         state["_jc_text"] = ""
-        return []
+        return _jcode_held_calls(state)
     if t == "error":
         # A REAL error event, which is more than several of these CLIs have: the message names the
         # endpoint, the model, the auth variable's NAME (never its value), the status and the
         # provider's own body. No `done` follows it, and the process exits 1.
         state["_jc_error"] = str(obj.get("message") or "jcode run failed")[:1000]
-        return [{"type": "result", "subtype": "error", "is_error": True,
-                 "result": state["_jc_error"], "usage": _jcode_usage(state)}]
+        return _jcode_held_calls(state) + [{"type": "result", "subtype": "error", "is_error": True,
+                                            "result": state["_jc_error"], "usage": _jcode_usage(state)}]
     if t == "done":
         # `done.text` is the whole final answer, authoritative over what the deltas assembled.
         final = obj.get("text")
         if isinstance(final, str) and final:
             state["final"] = final
-        return [{"type": "result", "subtype": "success", "is_error": False,
+        return _jcode_held_calls(state) + [{"type": "result", "subtype": "success", "is_error": False,
                  "result": state.get("final", ""), "usage": _jcode_usage(state),
                  # The CLI echoes the REQUESTED id here, never what the provider answered, so this
                  # is deliberately NOT set as the served model: the relay's tap is the only honest
@@ -9559,13 +9762,14 @@ def _jcode_eof(state: dict, rc: int) -> list[dict]:
     emitter ran. The exit code decides, and a failure returns an EMPTY result so the run loop's
     collected stderr tail — which carries jcode's own `Error: …` block — is the reason rather than
     a placeholder written here."""
+    held = _jcode_held_calls(state)   # a call the kill cut off still shows what it was running
     if state.get("_jc_error"):
-        return []
+        return held
     usage = _jcode_usage(state)
     if rc == 0:
-        return [{"type": "result", "subtype": "success", "is_error": False,
-                 "result": state.get("final", ""), "usage": usage}]
-    return [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": usage}]
+        return held + [{"type": "result", "subtype": "success", "is_error": False,
+                        "result": state.get("final", ""), "usage": usage}]
+    return held + [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": usage}]
 
 
 _jcode_to_claude.eof = _jcode_eof   # type: ignore[attr-defined]
@@ -9678,21 +9882,36 @@ def _opensquilla_transcript(state: dict) -> list[dict]:
     cwd = state.get("cwd") or ""
     if not cwd:
         return []
-    _, transcript, _ = _opensquilla_paths(cwd)
+    state_dir, transcript, _ = _opensquilla_paths(cwd)
     try:
         lines = transcript.read_text(errors="replace").splitlines()
     except OSError:
         return []
-    out: list[dict] = []
-    final = ""
+    msgs: list[dict] = []
     for raw in lines:
         raw = raw.strip()
         if not raw.startswith("{"):
             continue
         try:
-            msg = (json.loads(raw) or {}).get("message") or {}
+            msgs.append((json.loads(raw) or {}).get("message") or {})
         except Exception:  # noqa: BLE001 — one unparseable line in a transcript the CLI is still
             continue       # appending to is a line, not a turn: skip it and read the rest.
+    # THIS turn only. A resumed session's transcript is the whole conversation, rewritten each turn,
+    # and replaying it all put every earlier answer in front of this one and every earlier tool call
+    # and result into its trace (2026-10-13: a sixth turn answered "Hello! How can I help you
+    # today?…" from the first and listed 31 tools). The turn begins after the LAST user message that
+    # carries its prompt (the run loop's state holds it); without it, after the last user message.
+    prompt = str(state.get("prompt") or "").strip()
+    def _user_text(m: dict) -> str:
+        c = m.get("content")
+        return c if isinstance(c, str) else "\n".join(
+            x.get("text") or "" for x in (c or []) if isinstance(x, dict) and x.get("type") == "text")
+    users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+    mine = [i for i in users if prompt and prompt in _user_text(msgs[i])]
+    start = (mine or users or [-1])[-1] + 1
+    out: list[dict] = []
+    final = ""
+    for msg in msgs[start:]:
         role = msg.get("role")
         content = msg.get("content") if isinstance(msg.get("content"), list) else []
         if role == "assistant":
@@ -9706,6 +9925,28 @@ def _opensquilla_transcript(state: dict) -> list[dict]:
                 # assistant message was exactly "DONE".
                 final = text
                 out.append({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+            # Each call again, now WITH its arguments: the progress stream announced it with none
+            # (tool_use_start carries no input), so its row had nothing to show. The gateway fills
+            # that row in place (same id, same name, no result yet) rather than adding one; the name
+            # is the one the row was given, so the two can never disagree.
+            live = state.get("_sq_calls") or {}
+            filled = state.get("_sq_filled") or set()
+            for c in content:
+                if not (isinstance(c, dict) and c.get("type") == "toolCall" and c.get("id")):
+                    continue
+                if c["id"] in filled:
+                    continue     # its row has had its arguments since it started; a second would duplicate it
+                args = c.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except ValueError:
+                        args = {"arguments": args}
+                if not args:
+                    continue
+                out.append({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "id": c["id"], "name": live.get(c["id"]) or c.get("name") or "tool",
+                     "input": args if isinstance(args, dict) else {"arguments": args}}]}})
         elif role == "toolResult":
             body = "\n".join(c.get("text") or "" for c in content
                              if isinstance(c, dict) and c.get("type") == "text")
@@ -9727,12 +9968,18 @@ def _opensquilla_to_claude(obj: dict, state: dict) -> list[dict]:
     if obj.get("_event") is True:
         kind = obj.get("kind")
         if kind == "tool_use_start":
+            tid = obj.get("tool_use_id") or "tool"
+            state.setdefault("_sq_calls", {})[tid] = obj.get("tool_name") or "tool"
+            # The progress stream carries no arguments, by design; the model sent them through the
+            # relay before the tool ran, under this same call id, so the row has them from the start.
+            # When the relay saw none (a route that is not relayed), the row starts empty and the
+            # transcript fills it when the turn ends (_opensquilla_transcript).
+            args = _relay_tool_args(state.get("routes"), tid)
+            if args:
+                state.setdefault("_sq_filled", set()).add(tid)
             return [{"type": "assistant", "message": {"content": [
-                {"type": "tool_use", "id": obj.get("tool_use_id") or "tool",
-                 "name": obj.get("tool_name") or "tool",
-                 # The progress stream carries no arguments, by design. An empty object is the
-                 # honest rendering: a card with no arguments, rather than invented ones.
-                 "input": {}}]}}]
+                {"type": "tool_use", "id": tid, "name": obj.get("tool_name") or "tool",
+                 "input": args or {}}]}}]
         if kind == "router_decision":
             # The router is turned OFF by the config this builder writes, so this event should
             # never arrive. If it does, the turn ran on a model nobody asked for: recorded so the
@@ -9843,6 +10090,14 @@ def _opensquilla_config(auth: Auth, model: str, state_dir: pathlib.Path, anthrop
         "# ensure_agent_workspace writes those whatever this says; _git_exclude is what covers them.",
         'source = "state"',
         "",
+        "[tools]",
+        "# `cron` schedules jobs for opensquilla's own scheduler, which a one-shot `opensquilla agent`",
+        "# turn never runs, so a job made with it never fires. Its description is also the only text in",
+        "# the whole request that is not English (three Chinese example requests), and on 0.33.0-rc.15",
+        "# gpt-5.5 and gpt-5.4 answered English prompts with a Chinese opening line. The global policy's",
+        "# deny list wins over every later layer (tools/policy_helpers.py).",
+        'deny = ["cron"]',
+        "",
     ]
     entries = []
     for i, sv in enumerate(mcp_servers or []):
@@ -9876,10 +10131,53 @@ def _opensquilla_config(auth: Auth, model: str, state_dir: pathlib.Path, anthrop
     (state_dir / "config.toml").write_text("\n".join(lines))
 
 
+# opensquilla's own reply-language rules, in its system prompt template. Measured on 0.33.0-rc.16
+# against gpt-5.4 with plain English prompts: with them, 8 of 8 answers in Chinese, and with the
+# Chinese line alone removed, 4 of 4 in French; with all three removed, 4 of 4 in English (gpt-5.5
+# drifted too, gemini and claude did not). Without them a model answers in the person's language,
+# as on every other base. The template has no override hook (identity/prompt.py loads it from the
+# package directory), so the lines are taken out of the installed file before a turn runs, once per
+# runner, idempotently; installs made before this fix get it too.
+_OPENSQUILLA_LANGUAGE_RULES = re.compile(
+    r"^- (?:Write tool preambles in the same language as the user's current conversation\."
+    r"|Use the conversation's language for all user-visible replies[^\n]*"
+    r"|If the user writes in Chinese, keep replying in Chinese[^\n]*)\n", re.M)
+_OPENSQUILLA_LANGUAGE_DONE: list[bool] = []
+
+
+def _opensquilla_reply_language_fix(venv: pathlib.Path | None = None) -> str:
+    """Remove the three rules from the installed template; what was done, for the log."""
+    if _OPENSQUILLA_LANGUAGE_DONE:
+        return "done"
+    venv = venv or pathlib.Path(OPENSQUILLA_BIN).parent.parent
+    found = sorted(venv.glob("lib/python*/site-packages/opensquilla/identity/templates/system_prompt.j2"))
+    if not found:
+        return "no template"
+    t = found[0]
+    s = t.read_text(encoding="utf-8")
+    new = _OPENSQUILLA_LANGUAGE_RULES.sub("", s)
+    if new != s:
+        t.write_text(new, encoding="utf-8")
+        what = "removed"
+    elif "conversation's language" in s or "replying in Chinese" in s:
+        # a release that reworded them: say so rather than leave the drift unexplained
+        print("[opensquilla] WARNING: its reply-language rules are in a form this runner does not "
+              "know; English prompts may get answers in another language", flush=True)
+        what = "unknown form"
+    else:
+        what = "absent"
+    _OPENSQUILLA_LANGUAGE_DONE.append(True)
+    return what
+
+
 def _build_opensquilla(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                        resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                        tools_disabled: list[str] | None = None,
                        max_turns: int | None = None) -> list[str]:
+    try:
+        _opensquilla_reply_language_fix()
+    except OSError as e:   # never fails a turn; the turn just keeps opensquilla's own wording
+        print(f"[opensquilla] reply-language rules not changed: {e}", flush=True)
     pr = provider or "openai-api"
     if pr not in OPENSQUILLA_PROVIDERS:
         raise HTTPException(400, f"unknown opensquilla provider '{pr}' "
@@ -10385,14 +10683,12 @@ def _build_jcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     elif resume_session_id:
         print(f"[resume] jcode: session {resume_session_id} not in this workspace — starting fresh",
               flush=True)
-    if tools_disabled:
-        # A real per-tool switch, applied AFTER the tool profile, so it is enforcement rather than
-        # instruction: the model's own list came back without the disabled name. Names outside this
-        # runtime's set are dropped, so a label from another backend narrows nothing.
-        names = sorted({x.split(" (")[0].strip().lower() for x in tools_disabled if x and x.strip()}
-                       & ALL_JCODE_TOOLS)
-        if names:
-            cmd += ["--disabled-tools", ",".join(names)]
+    # A real per-tool switch, applied AFTER the tool profile, so it is enforcement rather than
+    # instruction: the model's own list came back without the disabled name. Names outside this
+    # runtime's set are dropped, so a label from another backend narrows nothing.
+    names = sorted(({x.split(" (")[0].strip().lower() for x in (tools_disabled or []) if x and x.strip()}
+                    & ALL_JCODE_TOOLS) | _JCODE_SANDBOX_OFF)
+    cmd += ["--disabled-tools", ",".join(names)]
     if not _jcode_write_mcp(home, mcp_servers) and mcp_servers:
         print("[jcode] every configured MCP server was remote and could not be bridged — "
               "this turn runs without them", flush=True)
@@ -11008,10 +11304,18 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 
 
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
-                 timeout_seconds: int | None = None, partial: bool = False) -> None:
+                 timeout_seconds: int | None = None, partial: bool = False,
+                 max_turns: int | None = None, prompt: str = "") -> None:
     rec = _turns[turn_id]
     rec["turn_id"] = turn_id
-    state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time()}
+    state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time(),
+             # the relay's notes on this turn's routes (a translator may read what the model sent)
+             "routes": rec.get("routes"),
+             # the turn's step budget, for a CLI that has no limit of its own (_jcode_to_claude)
+             "max_turns": max_turns,
+             # the turn's own prompt, where a transcript of the whole conversation begins this turn
+             # (_opensquilla_transcript)
+             "prompt": prompt}
     result_ev = None
     env = {**env, _TURN_MARK: turn_id}
     try:
@@ -11080,6 +11384,12 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     # Claude's stream-json carries the final assistant text on the result event;
                     # the codex normalizer already fills state['final'], so prefer that.
                     state["final"] = state.get("final") or ev.get("result") or ""
+            if state.get("_stop") and not state.get("_stopped") and proc.poll() is None:
+                # A translator ended the turn itself (a CLI with no step limit of its own went past
+                # the turn's budget): the process is stopped here, and the result event it emitted
+                # says why, so the turn is incomplete at its budget rather than running to the cap.
+                state["_stopped"] = True
+                _kill_proc_tree(proc, turn_id)
         rc = proc.wait()
     finally:
         killer.cancel()
@@ -11465,16 +11775,37 @@ _HERMES_POLL_S = 0.8
 _HERMES_STARTUP_TIMEOUT_S = float(os.environ.get("HERMES_STARTUP_TIMEOUT_S", "90"))
 
 
-_HERMES_SID_LINE = re.compile(r"^session_id:\s*\S+$")
+# hermes's own status lines, never a reason: the `session_id:` it closes every run with, and the
+# "↻ Resumed session <id> (N user messages, M total messages)" it prints when a turn resumes.
+_HERMES_SID_LINE = re.compile(r"^(session_id:\s*\S+|↻ Resumed session \S+.*)$")
 
 
-def _hermes_error_text(err_lines: list[str], rc: int | None, silent_s: float) -> str:
+def _refusal_words(status: int, body: bytes) -> str:
+    """A provider's refusal in its own words: the JSON error's message when there is one, else the
+    body's start, after the status."""
+    text = body.decode("utf-8", "replace").strip()
+    try:
+        j = json.loads(text)
+        err = j.get("error") if isinstance(j, dict) else None
+        msg = (err.get("message") if isinstance(err, dict) else err) or (j.get("message") if isinstance(j, dict) else "")
+        if isinstance(msg, str) and msg.strip():
+            text = msg.strip()
+    except ValueError:
+        pass
+    return f"{status}: {text[:500]}"
+
+
+def _hermes_error_text(err_lines: list[str], rc: int | None, silent_s: float, refusal: str = "") -> str:
     """Why a hermes run failed, from its last stderr lines. The CLI closes every run with a
     `session_id: <id>` line, a failed one too; taken as the reason, it told a person "The last one
-    said: session_id: 20261005_135032_0fb4fd" (the hosted service, 2026-10-05). When the CLI said
-    nothing else, the reason is what is known: it stopped with no final answer, its exit code, and
-    how long it had been silent by then."""
+    said: session_id: 20261005_135032_0fb4fd" (the hosted service, 2026-10-05), and a resumed turn
+    whose provider refused it said only "↻ Resumed session …" (2026-10-13). Neither is a reason.
+    When the CLI said nothing else, the reason is the provider's refusal the relay saw on this
+    turn, if there was one; else what is known: no final answer, the exit code, and how long it had
+    been silent by then."""
     said = "\n".join(x for x in err_lines[-30:] if not _HERMES_SID_LINE.match(x.strip())).strip()
+    if not said and refusal:
+        said = f"The model provider refused the request ({refusal})"
     return (said or f"Hermes ended the turn without a final answer and gave no reason "
                     f"(exit code {rc}, {silent_s:.0f} s after its last message).")[:2000]
 
@@ -11739,7 +12070,9 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     if not use_chat:
         final = "\n".join(out_buf).strip() or final
     ok = rc == 0 and not run_failed and not rec.get("cancelled") and not rec.get("capped") and bool(final.strip())
-    err_txt = _hermes_error_text(err_buf, rc, time.time() - last_msg)
+    refusal = next((str(f.get("last_refusal")) for f in reversed(rec.get("routes") or [])
+                    if isinstance(f, dict) and f.get("last_refusal")), "")
+    err_txt = _hermes_error_text(err_buf, rc, time.time() - last_msg, refusal)
     if rec.get("startup_timeout"):
         # The generic exit_code/stderr text is useless here (the process was killed by US, not a
         # normal failure) — say what actually happened instead of leaving a cryptic "exit_code=-9".
@@ -11980,6 +12313,21 @@ def _collected_init(ws: str) -> None:
             _git(ws, "update-ref", _COLLECTED_REF, head.stdout.strip())
 
 
+def _collected_at_turn_start(ws: str) -> None:
+    """Set the cursor BEFORE the agent runs, so a turn's own commits are past it.
+
+    It used to be set at the first collection, to the HEAD of that moment: an agent that committed
+    its work during a session's first turn (`git add deck.pptx && git commit`, which jcode's models
+    do) had its commit under the cursor, and /produced listed nothing. Measured on 0.33.0-rc.7:
+    gpt-6-sol and gpt-6.1-sol on jcode made the deck every time and handed back no file, on both
+    runs. A repo with no commit yet gets an empty one to point at; later turns already have a
+    cursor, left where the last collection put it."""
+    _git_ensure(ws)
+    if _git(ws, "rev-parse", "-q", "--verify", "HEAD").returncode != 0:
+        _git(ws, "commit", "-q", "--allow-empty", "-m", "harness: session start")
+    _collected_init(ws)
+
+
 def _produced_keep(status: str, path: str) -> bool:
     if not path or path.endswith("/") or status.startswith("D"):
         return False
@@ -12013,6 +12361,8 @@ def _produced_list(ws: str) -> list[dict]:
         path = path.strip().strip('"')
         if _produced_keep(status, path):
             seen.setdefault(path, status.strip() or "?")
+    keep = set(_without_lo_profiles(list(seen)))
+    seen = {k: v for k, v in seen.items() if k in keep}
     # mtime rides on each item so a reader can put the newest first: a response carries at most
     # HARNESS_RESP_MAX_FILES of them, and git's path order handed a Mario run its first 24 frames
     # of 1,400 (hosted, 2026-09-25). 0 when the file is gone (a deletion) or cannot be stat'ed.
@@ -12206,6 +12556,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         raise HTTPException(400, "cwd is decided by the session identifier")
     os.makedirs(cwd, exist_ok=True)
     input_files = _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
+    try:
+        _collected_at_turn_start(_ws(identifier))
+    except Exception as e:  # noqa: BLE001 — the cursor is collection's; a turn never waits on it
+        print(f"[produced] cursor not set at turn start: {str(e)[:160]}", flush=True)
     # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
     # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers
     # from req.skills, so this filter is a parity guard: never write a skill whose name is suppressed.
@@ -12549,6 +12903,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         threading.Thread(target=_run_turn_bg,
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
+                         kwargs={"max_turns": req.max_turns, "prompt": req.prompt or ""},
                          daemon=True).start()
     cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     return {"turn_id": turn_id, "status": "running", "backend": backend, "model": model,

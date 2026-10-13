@@ -1084,3 +1084,36 @@ def test_an_artifact_over_the_limit_or_unwritable_fails_with_its_reason(tmp_path
 def test_a_long_artifact_name_is_cut_by_bytes_keeping_its_extension():
     name, why = drv.artifact_name("é" * 200 + ".pdf")
     assert not why and name.endswith(".pdf") and len(name.encode("utf-8")) <= 240
+
+
+def test_a_reasoning_models_think_markers_are_not_the_answer():
+    # rc.19: the `performance` id's answer began "</think> Rendered — full-bleed purple…".
+    from server import _qoder_to_claude
+    state = {"model": "performance"}
+    out = []
+    for o in ({"m": "text", "p": {"text": "</think> Rendered"}}, {"m": "text", "p": {"text": " — full-bleed purple."}},
+              {"m": "__hr_result", "p": {"status": "completed", "final": "<think>plan the colours</think>Rendered — full-bleed purple."}}):
+        out += _qoder_to_claude(o, state)
+    texts = [b["text"] for e in out if e.get("type") == "assistant" for b in e["message"]["content"] if b.get("type") == "text"]
+    assert "think>" not in "".join(texts) and texts[0] == "Rendered"
+    res = [e for e in out if e.get("type") == "result"][0]
+    assert res["result"] == "Rendered — full-bleed purple." and state["final"] == res["result"]
+
+
+
+def test_a_revised_deliverable_replaces_its_earlier_version_but_nothing_else(tmp_path):
+    # rc.19: one PDF revised over five turns landed as hi.pdf, "hi (2).pdf", "hi (3).pdf"...
+    written, _ = drv.land_artifact(str(tmp_path), "hi.pdf", b"v1")
+    written, note = drv.land_artifact(str(tmp_path), "hi.pdf", b"v2", frozenset({written}))
+    assert written == "hi.pdf" and not note and (tmp_path / "hi.pdf").read_bytes() == b"v2"
+    assert not list(tmp_path.glob("hi (*")) and not list(tmp_path.glob(".hi.pdf.*"))
+    # a file this session did not deliver (the person's own) is still never overwritten
+    (tmp_path / "mine.pdf").write_bytes(b"theirs")
+    written, note = drv.land_artifact(str(tmp_path), "mine.pdf", b"x", frozenset({"hi.pdf"}))
+    assert written == "mine (2).pdf" and (tmp_path / "mine.pdf").read_bytes() == b"theirs"
+
+
+def test_the_agent_is_named_for_the_base_never_for_the_session():
+    # qfmodel introduced itself as "harnessrouter hsess2b3b804c…" from the agent's name (rc.19)
+    body = drv.agent_body({"cwd": "/data/workspaces/hsess2b3b804ca4d14025b33a69316c6f350a", "model": "qfmodel"}, [], [])
+    assert body["name"] == "Qoder" and "hsess" not in json.dumps({k: v for k, v in body.items() if k != "metadata"})

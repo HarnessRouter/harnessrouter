@@ -186,12 +186,20 @@ try {
         log(`FIRST ${k} ${rec.first.ok ? 'ok' : 'FAIL'} ${rec.first.s}s ${rec.first.why}`);
         if (rec.first.ok) {
           rec.followup = expectWord(await turn(`Reply with exactly: M2-${m}`), `M2-${m}`);
+          // This turn's OWN answer must not carry the first turn's: a base that replayed its whole
+          // transcript at the end of each turn answered "M1-…M2-…" and passed on the M2 alone
+          // (opensquilla, found by hand on 2026-10-13: a sixth answer opened with the first).
+          if (rec.followup.ok && (rec.followup.answer || '').includes(`M1-${m}`)) {
+            rec.followup = { ...rec.followup, ok: false, why: `the follow-up repeats the first turn's answer: ${rec.followup.answer.slice(-200)}` };
+          }
           log(`FOLLOWUP ${k} ${rec.followup.ok ? 'ok' : 'FAIL'} ${rec.followup.s}s ${rec.followup.why}`);
           // the partner must be one Codex can carry on with: gpt-5.3-codex and the gpt-5.6 line refuse each
           // other's threads by design (#73), and that rule is not what the switch row measures
           // Codex refuses gpt-5.3-codex after any other model (measured after gpt-5.5 and after the gpt-5.6
-          // line), so a switch away and back can only fail by design: that row is n/a, not a measurement
-          const conflicts = (a, c) => a === 'gpt-5.3-codex' || c === 'gpt-5.3-codex';
+          // line), so a switch away and back can only fail by design: that row is n/a, not a measurement.
+          // Codex's rule alone: mimo switches into and out of gpt-5.3-codex (measured 2026-10-12), and
+          // applying it to every base left that switch unmeasured on every other base offering the id
+          const conflicts = (a, c) => h === 'codex' && (a === 'gpt-5.3-codex' || c === 'gpt-5.3-codex');
           const other = runnableAll.find((x) => x !== m && !conflicts(m, x)) || null;
           if (other) { await pickModel(other); rec.switch = { to: other, ...expectWord(await turn(`Reply with exactly: M3-${other}`), `M3-${other}`) }; }
           else rec.switch = { to: null, ok: null, why: 'only one model' };

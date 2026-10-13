@@ -6,6 +6,79 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## The four new bases offer only what they run reliably (2026-10-12, 0.33.0-rc.5 to rc.11, the review instance)
+
+The rule from here on, for every base: a base offers the models it was measured to run reliably on
+every dimension, and one failure that is the model's own and repeats (on its retest, or in the same
+dimension on another base) takes the model off that base. A failure whose cause was the product is
+fixed and measured again instead, never used to drop or to keep a model.
+
+**What was measured, per base and per model.** Every model each base could reach went through the
+five console scenarios twice (0.33.0-batch3.3 and batch3.7, seven connections) and the family tour.
+Then each model left on a base ran, through the API on the review instance: the plugin skill, an
+MCP tool over stdio, the free-form rows tool, SSE and streamable HTTP (the row passes only when the
+model asked for served it), the browser plug (navigate and click, the answer naming the page), and a
+one-page deck with a stamp no other turn could make, downloaded, opened and checked for the stamp.
+Every first failure was retested once.
+
+**What each base offers.** mimo 47, jcode 50, opensquilla 51, nanobot 51. Every offered model passed
+every dimension above on the build that ships, with one exception named below.
+
+**Taken off, with what each did** (the same text is above `_NOT_OFFERED` in gateway/app.py):
+- mimo: claude-opus-4.7 (refuses the scenario prompt, twice), llama-3.3-70b (answers something
+  else), llama-4-maverick (writes the tool call as text, twice), qwen3.8-flash (mixes up its
+  replies), gpt-5.6-luna (overruns the turn), hunyuan-4-preview (no deck in the tour),
+  nemotron-3-super, kimi-k3 (tool call as text), mistral-medium-3.5 (`<use_skill>officecli</use_skill>`
+  as text, no deck, two of three), gemini-3.5-flash and gemini-3.6-flash (a blank deck and the turn
+  ends, twice each), gpt-5.4-mini (runs the plugin's skill when asked for a named MCP tool).
+- jcode: grok-build-0.1 and hunyuan-4-preview (loop on tools to the cap), kimi-k3 (no file, twice),
+  gemini-3-flash-preview (degenerates on its first turn), nemotron-3-super, llama-3.3-70b (writes
+  deck.pptx as a file that is not a deck, twice).
+- opensquilla: claude-opus-4.7 (refuses the prompt, twice), grok-4.20 and llama-3.3-70b (no file),
+  hunyuan-4-preview (answers something else), nemotron-3-super.
+- nanobot: grok-build-0.1 (loops on exec), kimi-k3 and llama-3.3-70b (no file), grok-4.5 (stream
+  stalls), nemotron-3-super.
+- nemotron-3-super, on all four: does not follow a skill (mimo twice, jcode, opensquilla) and makes
+  a deck without the asked-for text or none (mimo, jcode, nanobot).
+
+**Product defects the measurement found, each fixed and measured again** (all in this release, eleven in all):
+- jcode's tool calls reached the console with no arguments: the runner sent each call at
+  `tool_start` and dropped the `tool_input` pieces that carry them. Held until complete now; a
+  console check (scripts/support-matrix/ui-tool-rows.mjs) opens the Bash row and finds the command.
+- A turn waiting for a slot on a busy single-container instance read `failed`, then `completed`: the
+  orphan sweep took a `starting` session with no heartbeat for a dead one. The accept-time write
+  stamps the heartbeat and `_turn_slot` renews it while the turn waits.
+- mimo could reach providers other than the turn's connection: a model's `actor` subagent named
+  `xiaomi/mimo-v2.5`, MiMo's service refused the key, and a finished deck turn failed as "your key
+  was refused". opencode and mimo configs now set `enabled_providers: ["hr"]`.
+- mimo's 23 built-in skills competed with the harness's: its pptx/docx/xlsx/pdf-official need
+  python-pptx and the like, which no sandbox here can install. `MIMOCODE_DISABLE_BUILTIN_SKILLS=1`.
+- jcode's own `browser` needs a Firefox extension bridge that never connects in the sandbox; a
+  model that picked it looped for two hours (459 tool calls). Off on every jcode turn, with
+  `macos_computer_use`, `gmail` and `maintainer_feedback`.
+- A file the agent committed on a session's first turn was never handed back (the collection
+  cursor was set at that turn's collection, after the commit). Set at the turn's start now.
+- A LibreOffice profile inside the workspace (a model checking its deck by rendering it) filled the
+  25 files a turn hands back and pushed the deck out. A profile's `user/` tree is not a deliverable.
+  gpt-6.1-sol, briefly taken off opensquilla for this, is offered again and passes.
+- opensquilla's tool rows had no arguments while the turn ran (its progress events carry none).
+  The runner's relay now keeps each call's arguments as the model sends them, by call id, and the
+  row opens with them; the transcript fills any call the relay did not see when the turn ends.
+  Checked in the console mid-turn (scripts/support-matrix/ui-tool-rows-live.mjs).
+- opensquilla answered English prompts in Chinese, French or Spanish on GPT models (gpt-5.4: 8 of 8
+  in Chinese): its own system prompt's three reply-language rules. The runner takes them out of the
+  installed template; English prompts then got English answers (8 of 8) and Chinese prompts Chinese.
+  Its `cron` tool, whose scheduler never runs in a one-shot turn, is off too.
+- Every opensquilla answer replayed the conversation so far: the transcript of a resumed session
+  holds every turn and the end-of-turn replay read all of it. It starts at this turn's prompt now,
+  and the suite's follow-up fails an answer that repeats the first turn's.
+- A hermes turn the provider refused said only "↻ Resumed session …": the relay keeps the provider's
+  refusal on the route, and the turn's error is that refusal when hermes said nothing else.
+
+**The exception.** nemotron-3.5-lightning is the one offered model these bases reach through
+OpenRouter on the review instance, and that instance's OpenRouter key reached its spending limit
+during the re-measure on rc.9: its deck there could not run. It passed every dimension on rc.7.
+
 ## Claude Haiku 5.5 (2026-10-07)
 
 Added in 0.31.12 beside Haiku 4.5 on every base that offers Haiku 4.5 except aider, with every

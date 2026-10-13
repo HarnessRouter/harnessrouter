@@ -17,6 +17,7 @@ import { getCurrentWorkspaceRef } from '@/lib/workspace';
 import { track } from '@/lib/analytics';
 import { billing } from '@/app/(app)/billing/lib';
 import { oobById } from '@/lib/harness';
+import { fillStep } from '@/lib/tool-steps';
 import { withText, withReasoning, withStep, withResult } from 'reifyui';
 import { createConversationStore } from 'reifyui';
 
@@ -52,7 +53,8 @@ function beforeError(blocks: Block[], apply: (rest: Block[]) => Block[]): Block[
 }
 const addText = (blocks: Block[], d: string): Block[] => beforeError(blocks, (r) => withText(r, d));
 const addReasoning = (blocks: Block[], d: string): Block[] => beforeError(blocks, (r) => withReasoning(r, d));
-const addStep = (blocks: Block[], step: ToolStep): Block[] => beforeError(blocks, (r) => withStep(r, step));
+const addStep = (blocks: Block[], step: ToolStep): Block[] =>
+  fillStep(blocks, step) ?? beforeError(blocks, (r) => withStep(r, step));
 const addResult = (blocks: Block[], callId: string, output: string): Block[] => beforeError(blocks, (r) => withResult(r, callId, output));
 function errorBlock(blocks: Block[], msg: string): Block {
   return { kind: 'text', text: (blocks.length ? '\n\n' : '') + 'Error: ' + msg, error: true };
