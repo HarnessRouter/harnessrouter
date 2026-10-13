@@ -46,3 +46,8 @@ def test_zeroclaw_is_chat_completions_only():
     assert not set(A._MODEL_CATALOG["zeroclaw"]["models"]) & A.RESPONSES_ONLY_MODELS
     assert "zeroclaw" in A._CUSTOM_FORMAT_BACKENDS["openai"]
     assert "zeroclaw" not in A._CUSTOM_FORMAT_BACKENDS["anthropic"]
+
+
+def test_a_model_the_matrix_failed_twice_is_not_offered():
+    assert "llama-3.3-70b" not in A._MODEL_CATALOG["zeroclaw"]["models"]
+    assert "llama-3.3-70b" in A._MODEL_CATALOG["nanobot"]["models"]   # a zeroclaw finding, not the model's

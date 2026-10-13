@@ -3877,13 +3877,36 @@ the loopback relay, so it is wired row for row with nanobot and is in `CHAT_ONLY
 | Five scenarios, OpenRouter, claude-haiku-4.5 and gpt-5.4-mini | 10 of 10, every turn on `integration:openrouter`, none unlabelled |
 | Custom harness (skill + script, disabled tool, MCP over streamable HTTP) | pass: skill reached, script ran through `shell` with the harness's variable, `web_fetch` disabled and unused, `deepwiki__read_wiki_structure` called |
 | Install on a first start | `installing zeroclaw 0.8.5 …`, digest verified, listed among backends available |
+| Five scenarios, 15 more OpenRouter models (the cheap and mid tier of every family) | 14 of 15; llama-3.3-70b is not offered (below) |
+| Plugin matrix (`plugins/run-matrix.py --mode all`, gpt-5.4-mini) | 5 of 5: skills, stdio MCP, rows, remote SSE, remote streamable HTTP |
+| Family tour, one conversation over ten families | 10 of 10, every turn served by its family; two passed on a retest (below) |
+| Cancel mid-turn (a turn inside `sleep 120`) | cancelled at once; the driver, `zeroclaw acp`, its shell and `sleep` were all gone 5 s later; the next turn in the session recalled the first |
+| zeroclaw's own web tools in the image | `web_fetch`, `web_search_tool` (DuckDuckGo) and `http_request` work |
 
 - **Finding, prompt cache on Claude:** claude-haiku-4.5 read 7% of its input from cache against 70% for
   gpt-5.4-mini. zeroclaw's chat/completions requests carry no `cache_control`, so Anthropic models on
   an aggregator cache little. The agentzero, aider and cline rows report the same for the same reason.
 
+- **llama-3.3-70b is not offered.** On OpenRouter it declined the first turn, a one-line echo, twice in
+  a row ("The provided functions are insufficient for me to complete this task", then "I cannot perform
+  this task as it requires additional information that is not provided"), with zeroclaw's tool list in
+  the request. It is in `_NOT_OFFERED["zeroclaw"]`, as it is on goose, hermes, pi and kilo.
+- **The family tour's two retests.** kimi-k2.7-code's first turn failed with zeroclaw's "The model
+  provider returned an invalid semantic completion": the provider returned no text and no tool call on
+  the stream and again on zeroclaw's non-streaming fallback. The turn failed with that reason rather
+  than completing empty. muse-glimmer-30b's first turn completed without rebuilding the deck. Both
+  passed on a retest in the same conversation.
+- **Three tools need a desktop and are not offered.** In the image, `browser_open` failed with "Failed
+  to open system browser", `browser` with "agent-browser CLI is unavailable" and `screenshot` with "No
+  screenshot tool found". They are in `_ZEROCLAW_NEVER` (rule 4).
+- **The instance's own MCP server is reached over loopback.** On nanobot, reaching it needed
+  `_BRIDGE_LOOPBACK_BACKENDS`. zeroclaw connected to `http://127.0.0.1:8080/v1/mcp/plugs` directly and
+  called `plugs__browser_navigate`. The browser column itself could not be judged on this instance: the
+  plug answered "The browser service is not set up on this deployment", and nanobot, run as a control,
+  failed the same way.
+
 ### Not yet measured
 
-The other models of the catalog, the other providers (the direct Anthropic and OpenAI connections,
-Vercel, TokenRouter), the family tour, the plugin matrix's remote columns, the environments column and
-the benchmark dimension.
+The expensive models of the catalog (Sonnet, Opus, Fable, the GPT sol and terra lines, Gemini Pro), the
+other providers (the direct Anthropic and OpenAI connections, Vercel, TokenRouter), the browser column
+on an instance with a browser service, the environments column and the benchmark dimension.

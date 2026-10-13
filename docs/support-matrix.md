@@ -3653,6 +3653,20 @@ session_id: 20260913_060549_70cbeb |
 | qwen | step-3.7-flash | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 | zeroclaw | claude-haiku-4.5 | pass | pass | pass (gpt-5.4-mini) | pass | pass | OpenRouter | served as anthropic/claude-haiku-4.5 (the provider's alias of the same model) ; cache 7% of input (finding in the notes) |
 | zeroclaw | gpt-5.4-mini | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | served as openai/gpt-5.4-mini (the provider's alias of the same model) ; cache 70% of input |
+| zeroclaw | claude-haiku-5.5 | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
+| zeroclaw | deepseek-v4-flash | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as deepseek/deepseek-v4-flash (the provider's alias of the same model) ; cache 68% of input |
+| zeroclaw | deepseek-v4.1-flash | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as deepseek/deepseek-v4.1-flash (the provider's alias of the same model) ; cache 68% of input |
+| zeroclaw | gemini-3.1-flash-lite | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as google/gemini-3.1-flash-lite (the provider's alias of the same model) ; cache 65% of input |
+| zeroclaw | gemini-3.5-flash-lite | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as google/gemini-3.5-flash-lite (the provider's alias of the same model) ; cache 65% of input |
+| zeroclaw | glm-5.3-flash | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as z-ai/glm-5.3-flash (the provider's alias of the same model) ; cache 68% of input |
+| zeroclaw | gpt-5.6-luna | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-5.6-luna (the provider's alias of the same model) ; cache 67% of input |
+| zeroclaw | gpt-6-luna | pass | pass | pass (gpt-5.6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) ; cache 67% of input |
+| zeroclaw | kimi-k2.7-code | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as moonshotai/kimi-k2.7-code (the provider's alias of the same model) ; cache 67% of input |
+| zeroclaw | muse-glimmer-30b | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as meta/muse-glimmer-30b (the provider's alias of the same model) ; cache 69% of input |
+| zeroclaw | nemotron-3.5-lightning | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as nvidia/nemotron-3.5-lightning (the provider's alias of the same model) ; cache 70% of input |
+| zeroclaw | qwen3.8-27b | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as qwen/qwen3.8-27b (the provider's alias of the same model) ; cache 32% of input |
+| zeroclaw | qwen3.8-flash | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as qwen/qwen3.8-flash (the provider's alias of the same model) ; cache 69% of input |
+| zeroclaw | step-3.7-flash | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as stepfun/step-3.7-flash (the provider's alias of the same model) ; cache 68% of input |
 
 283 pairs, 1374 of 1380 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
 
@@ -4519,6 +4533,7 @@ Not run in this column, 839 pairs the provider serves that the harness did not r
 - qwen x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- zeroclaw x llama-3.3-70b: not offered, it declined the first turn twice ("The provided functions are insufficient for me to complete this task"); see the notes
 
 ## Provider: tokenrouter
 

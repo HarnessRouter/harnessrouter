@@ -7529,6 +7529,11 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     "minimax": frozenset({"gpt-5.6-terra", "gemini-3.5-flash-lite"}),
     "grok": frozenset({"deepseek-v4-pro"}),
     "agentzero": frozenset({"claude-fable-5", "claude-fable-5-1"}),
+    # zeroclaw (0.8.5, 2026-10-13): llama-3.3-70b on OpenRouter declines the FIRST turn — a one-line
+    # echo — twice in a row ("The provided functions are insufficient for me to complete this task",
+    # then "I cannot perform this task as it requires additional information that is not provided"),
+    # with zeroclaw's tool list in the request. Fourteen other models passed all five scenarios.
+    "zeroclaw": frozenset({"llama-3.3-70b"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
