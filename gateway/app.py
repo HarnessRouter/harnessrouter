@@ -1238,6 +1238,10 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("azure-foundry", "codex"): "azure",       ("azure-foundry", "hermes"): "azure-foundry",
     ("bedrock", "claude"): "bedrock",          ("bedrock", "hermes"): "bedrock",
     ("openrouter", "codex"): "tokenrouter",    ("openrouter", "hermes"): "openrouter",
+    # OpenRouter answers Anthropic's Messages shape too, at https://openrouter.ai/api/v1/messages
+    # (2026-10-13: 200 with an Anthropic message envelope for anthropic/claude-sonnet-4.6, and a
+    # Claude Code turn completed through it), so it drives Claude Code the way Vercel does.
+    ("openrouter", "claude"): "tokenrouter",
     ("tokenrouter", "claude"): "tokenrouter",  ("tokenrouter", "codex"): "tokenrouter",
     ("tokenrouter", "hermes"): "openai-api",
     ("openai", "codex"): "openai",             ("openai", "hermes"): "openai-api",

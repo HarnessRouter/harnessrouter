@@ -28,7 +28,9 @@ connection, Haiku 4.5 as the switch partner:
   recycle it answered a word that was never asked for) in two of three runs, so Haiku 5.5 is left
   out of aider's catalog. Claude Code runs it on the CLI the image pins (2.1.280); no bump.
 - Vercel AI Gateway: 17 of 17 bases pass all five.
-- OpenRouter: 16 of 16 pass all five (Claude Code cannot use an OpenRouter connection).
+- OpenRouter: 16 of 16 pass all five (Claude Code could not use an OpenRouter connection then; it
+  can since 2026-10-13, through OpenRouter's Anthropic-shaped /api/v1/messages, and is not yet
+  measured on it).
 - Findings that are not about Haiku 5.5 and appear for Haiku 4.5 on the same bases: through the
   Anthropic connection agentzero, aider, cline, grok, kimi, minimax and qwen read no prompt cache
   (they do not ask Anthropic to cache, so every call pays the full input price); cline and dsh report
