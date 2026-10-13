@@ -1,5 +1,6 @@
 // ui-tool-rows.mjs: one console task on HARNESS that runs a shell command; then every tool row of the
-// answer must open, and the Bash row must show the command it ran. Env BASE, HR_PASS, HARNESS, SHOT.
+// answer must open, and the shell row must show the command it ran. Env BASE, HR_PASS, HARNESS, SHOT,
+// ROW (the shell row's label as a regex: bash on jcode, exec_command on opensquilla; default bash).
 import { chromium } from 'playwright';
 const BASE = process.env.BASE, H = process.env.HARNESS || 'jcode', WORD = `ui-row-${Date.now() % 100000}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -23,14 +24,14 @@ try {
   }
   await sleep(3000);
   // a finished turn folds its tools under "Used N tools": open the group first, as a person would
-  const group = page.getByText(/^Used \d+ tools?$/).first();
+  const group = page.getByText(/^Used (a|\d+) tools?$/).first();   // "Used a tool" for one
   if (await group.count()) { await group.click(); await sleep(800); }
   const rows = await page.evaluate(() => [...document.querySelectorAll('button.wbx-act-row')].map((x) => ({ label: x.textContent.trim().slice(0, 40), disabled: x.disabled })));
   console.log('ROWS', JSON.stringify(rows));
-  const bash = page.locator('button.wbx-act-row', { hasText: /bash/i }).first();
+  const bash = page.locator('button.wbx-act-row', { hasText: new RegExp(process.env.ROW || 'bash', 'i') }).first();
   let shown = '';
   if (await bash.count()) { await bash.click(); await sleep(800); shown = await bash.evaluate((x) => (x.parentElement?.textContent || '').replace(/\s+/g, ' ').slice(0, 400)); }
   await page.screenshot({ path: process.env.SHOT || 'ui-tool-rows.png', fullPage: false });
   const ok = rows.length > 0 && rows.every((r) => !r.disabled) && shown.includes(`echo ${WORD}`);
-  console.log(ok ? 'PASS' : 'FAIL', H, 'bash row shows:', shown.slice(0, 200));
+  console.log(ok ? 'PASS' : 'FAIL', H, 'shell row shows:', shown.slice(0, 200));
 } finally { await b.close(); }

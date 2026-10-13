@@ -153,3 +153,22 @@ def test_the_cli_home_is_out_of_the_workspaces_own_history_so_the_tar_is_the_onl
     subprocess.run(["git", "-C", ws, "add", "-A"], check=True, env={**os.environ, **server._GIT_ENV})
     tracked = subprocess.run(["git", "-C", ws, "ls-files"], capture_output=True, check=True).stdout.decode()
     assert "notes.md" in tracked and ".harness/home" not in tracked
+
+
+def test_a_resumed_turn_the_provider_refused_says_why_not_that_it_resumed():
+    # 2026-10-13: Vercel refused gpt-6.1-sol on a spent budget; hermes printed only its resume line
+    # and its session id, and "↻ Resumed session …" was the turn's whole error.
+    from server import _refusal_words
+    lines = ["↻ Resumed session 20261013_042621_26ef17 (2 user messages, 4 total messages)",
+             "session_id: 20261013_042621_26ef17"]
+    refusal = _refusal_words(429, b'{"error":{"message":"API key budget exceeded. Current spend: $500.31, limit: $500.00.","type":"rate_limit"}}')
+    assert refusal == "429: API key budget exceeded. Current spend: $500.31, limit: $500.00."
+    text = _hermes_error_text(lines, 1, 2.0, refusal)
+    assert text == "The model provider refused the request (429: API key budget exceeded. Current spend: $500.31, limit: $500.00.)"
+    assert "Resumed session" not in text
+    # hermes's own words still win when it gave any
+    assert _hermes_error_text(lines + ["Error: provider returned 400: context length exceeded"], 1, 2.0, refusal) \
+        == "Error: provider returned 400: context length exceeded"
+    # no refusal on the turn: the known facts, as before
+    assert "without a final answer" in _hermes_error_text(lines, 1, 2.0)
+    assert _refusal_words(503, b"upstream unavailable") == "503: upstream unavailable"

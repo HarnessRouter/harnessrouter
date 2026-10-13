@@ -5265,6 +5265,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # at 429 or 503 this did not print them.
                 print(f"[relay] {'google' if google else 'provider'} refused {tail} model={_body_model} "
                       f"status={e.code}: {data[:300]!r}", flush=True)
+                # ...and on the route, for a harness that does not say why its turn failed: hermes
+                # printed only its own "↻ Resumed session" line when Vercel refused gpt-6.1-sol for
+                # a spent budget (2026-10-13), and that line was the turn's whole error.
+                flags["last_refusal"] = _refusal_words(e.code, data)
                 if (attempt < 2 and e.code == 400 and b"thought_signature" in data
                         and not flags.get("thought_signature") and body is not None):
                     # a Gemini 3 endpoint this relay did not recognise as Google names the need itself
@@ -11558,16 +11562,37 @@ _HERMES_POLL_S = 0.8
 _HERMES_STARTUP_TIMEOUT_S = float(os.environ.get("HERMES_STARTUP_TIMEOUT_S", "90"))
 
 
-_HERMES_SID_LINE = re.compile(r"^session_id:\s*\S+$")
+# hermes's own status lines, never a reason: the `session_id:` it closes every run with, and the
+# "↻ Resumed session <id> (N user messages, M total messages)" it prints when a turn resumes.
+_HERMES_SID_LINE = re.compile(r"^(session_id:\s*\S+|↻ Resumed session \S+.*)$")
 
 
-def _hermes_error_text(err_lines: list[str], rc: int | None, silent_s: float) -> str:
+def _refusal_words(status: int, body: bytes) -> str:
+    """A provider's refusal in its own words: the JSON error's message when there is one, else the
+    body's start, after the status."""
+    text = body.decode("utf-8", "replace").strip()
+    try:
+        j = json.loads(text)
+        err = j.get("error") if isinstance(j, dict) else None
+        msg = (err.get("message") if isinstance(err, dict) else err) or (j.get("message") if isinstance(j, dict) else "")
+        if isinstance(msg, str) and msg.strip():
+            text = msg.strip()
+    except ValueError:
+        pass
+    return f"{status}: {text[:500]}"
+
+
+def _hermes_error_text(err_lines: list[str], rc: int | None, silent_s: float, refusal: str = "") -> str:
     """Why a hermes run failed, from its last stderr lines. The CLI closes every run with a
     `session_id: <id>` line, a failed one too; taken as the reason, it told a person "The last one
-    said: session_id: 20261005_135032_0fb4fd" (the hosted service, 2026-10-05). When the CLI said
-    nothing else, the reason is what is known: it stopped with no final answer, its exit code, and
-    how long it had been silent by then."""
+    said: session_id: 20261005_135032_0fb4fd" (the hosted service, 2026-10-05), and a resumed turn
+    whose provider refused it said only "↻ Resumed session …" (2026-10-13). Neither is a reason.
+    When the CLI said nothing else, the reason is the provider's refusal the relay saw on this
+    turn, if there was one; else what is known: no final answer, the exit code, and how long it had
+    been silent by then."""
     said = "\n".join(x for x in err_lines[-30:] if not _HERMES_SID_LINE.match(x.strip())).strip()
+    if not said and refusal:
+        said = f"The model provider refused the request ({refusal})"
     return (said or f"Hermes ended the turn without a final answer and gave no reason "
                     f"(exit code {rc}, {silent_s:.0f} s after its last message).")[:2000]
 
@@ -11832,7 +11857,9 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     if not use_chat:
         final = "\n".join(out_buf).strip() or final
     ok = rc == 0 and not run_failed and not rec.get("cancelled") and not rec.get("capped") and bool(final.strip())
-    err_txt = _hermes_error_text(err_buf, rc, time.time() - last_msg)
+    refusal = next((str(f.get("last_refusal")) for f in reversed(rec.get("routes") or [])
+                    if isinstance(f, dict) and f.get("last_refusal")), "")
+    err_txt = _hermes_error_text(err_buf, rc, time.time() - last_msg, refusal)
     if rec.get("startup_timeout"):
         # The generic exit_code/stderr text is useless here (the process was killed by US, not a
         # normal failure) — say what actually happened instead of leaving a cryptic "exit_code=-9".
