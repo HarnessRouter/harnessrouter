@@ -3651,6 +3651,8 @@ session_id: 20260913_060549_70cbeb |
 | qwen | qwen3.8-flash | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter | served as qwen/qwen3.8-flash (the provider's alias of the same model) |
 | qwen | qwen3.8-max | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
 | qwen | step-3.7-flash | pass | pass | pass (qwen3.7-max) | pass | pass | OpenRouter |  |
+| zeroclaw | claude-haiku-4.5 | pass | pass | pass (gpt-5.4-mini) | pass | pass | OpenRouter | served as anthropic/claude-haiku-4.5 (the provider's alias of the same model) ; cache 7% of input (finding in the notes) |
+| zeroclaw | gpt-5.4-mini | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | served as openai/gpt-5.4-mini (the provider's alias of the same model) ; cache 70% of input |
 
 283 pairs, 1374 of 1380 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
 

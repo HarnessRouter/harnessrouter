@@ -1476,6 +1476,14 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("tokenrouter", "nanobot"): "tokenrouter", ("vercel", "nanobot"): "tokenrouter",
     ("llmtr", "nanobot"): "tokenrouter",       ("custom", "nanobot"): "openai-api",
     ("google", "nanobot"): "openai-api",       ("harnessrouter", "nanobot"): "tokenrouter",
+    # zeroclaw speaks ONE OpenAI shape too — its `custom` provider posts chat/completions — through
+    # the loopback relay, so it is wired row for row with nanobot.
+    ("anthropic", "zeroclaw"): "anthropic",    ("openai", "zeroclaw"): "openai",
+    ("azure-foundry", "zeroclaw"): "azure",
+    ("openrouter", "zeroclaw"): "openai-api",
+    ("tokenrouter", "zeroclaw"): "tokenrouter", ("vercel", "zeroclaw"): "tokenrouter",
+    ("llmtr", "zeroclaw"): "tokenrouter",      ("custom", "zeroclaw"): "openai-api",
+    ("google", "zeroclaw"): "openai-api",      ("harnessrouter", "zeroclaw"): "tokenrouter",
 }
 
 
@@ -5518,7 +5526,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     # kilo passes api_format to the same ai-sdk package choice opencode makes (_opencode_npm).
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
                "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
-               "mimo", "jcode", "opensquilla", "nanobot"},
+               "mimo", "jcode", "opensquilla", "nanobot", "zeroclaw"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
@@ -7477,7 +7485,7 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
 # only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
 # relay so its served model stays readable — see _build_jcode.)
-for _b in ("jcode", "opensquilla", "nanobot"):
+for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw"):
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
@@ -7550,7 +7558,7 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # agentzero too: its model is litellm's openai provider (Agent Zero's `other`, a0_api_mode chat).
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
                       "cheetahclaws", "grok", "agentzero",
-                      "jcode", "opensquilla", "nanobot")
+                      "jcode", "opensquilla", "nanobot", "zeroclaw")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -17165,6 +17173,33 @@ _BASE_CATALOG: dict[str, dict] = {
         # construction would have withheld the built-ins and let every MCP tool through. Measured:
         # with write_file withheld the model wrote the file with `exec` instead, which is the honest
         # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
+    "zeroclaw": {
+        "label": "ZeroClaw", "backend": "zeroclaw", "status": "ready",
+        "system_prompt": ("You are ZeroClaw, an autonomous agent. You work on a real git workspace "
+                          "with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # The tools zeroclaw 0.8.5 offers a session under the runner's config, as the agent listed
+        # them, pinned equal to the runner's ALL_ZEROCLAW_TOOLS. The seven the runner never offers
+        # (interactive callbacks and model or route switches) are not here: there is nothing to
+        # turn off.
+        "tools": [("shell", "Shell"), ("file_read", "File Read"), ("file_write", "File Write"),
+                  ("file_edit", "Edit"), ("glob_search", "Find"), ("content_search", "Search"),
+                  ("git_operations", "Git"), ("deliver_file", "Deliver File"),
+                  ("web_fetch", "Web Fetch"), ("web_search_tool", "Web Search"),
+                  ("http_request", "HTTP Request"), ("browser_open", "Browser Open"),
+                  ("browser", "Browser"), ("screenshot", "Screenshot"),
+                  ("image_info", "Image Info"), ("calculator", "Calculator"),
+                  ("TodoWrite", "Todo"), ("llm_task", "LLM Task"),
+                  ("spawn_subagent", "Subagent"), ("delegate", "Delegate"),
+                  ("memory_store", "Memory Store"), ("memory_recall", "Memory Recall"),
+                  ("memory_forget", "Memory Forget")],
+        # "hard": the runner writes the disabled tools into the risk profile's `excluded_tools`,
+        # which removes them from the tool list the model is offered (measured: an excluded tool is
+        # absent from the agent's own list) and is the one door that also removes MCP tools. As on
+        # every base, withholding a tool withholds that tool, not the capability: with file_write
+        # off, `shell` can still write a file.
         "tool_enforcement": "hard",
     },
 }

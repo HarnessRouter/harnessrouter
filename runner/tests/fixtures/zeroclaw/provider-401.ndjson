@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","error":{"code":-32603,"message":"The model provider custom.hr rejected its credentials. Check the configured credentials."},"id":"PROMPT"}

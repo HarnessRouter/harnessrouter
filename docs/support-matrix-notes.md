@@ -3810,3 +3810,80 @@ environment names. It could not read them — `control.db` and `graph.db` are `0
 `0700`, and a session uid already has traverse, so file contents are governed by each file's own
 mode either way. The half that stops a session renaming or replacing another session's directory
 (which needs write on the parent, not on the target) is untouched by that change.
+
+## zeroclaw, a new base (2026-10-13, refs #442)
+
+zeroclaw (zeroclaw-labs/zeroclaw, Apache-2.0) is a Rust personal-agent runtime, pinned to 0.8.5
+(released 2026-09-05) and installed from its GitHub release archive, verified against digests
+pinned in `docker/entrypoint.sh` (read off that release's own SHA256SUMS). It is driven through its
+ACP server, `zeroclaw acp`, by `runner/zeroclaw_driver.py`, which re-emits claude's stream-json, so
+the normaliser is the passthrough. It speaks chat/completions through its `custom` provider and rides
+the loopback relay, so it is wired row for row with nanobot and is in `CHAT_ONLY_BACKENDS`.
+
+### Why ACP, and what the probes showed (against OpenRouter, claude-haiku-4.5)
+
+- **`zeroclaw agent -m` cannot hold a conversation.** It prints the final answer as prose, and its
+  `--session-state-file` is read only by the interactive REPL, so every one-shot run starts from the
+  system prompt alone. ACP keeps sessions in `data/sessions/acp-sessions.db`, and `session/resume` in
+  a later process seeds the agent with them: a second process named the file the first had written.
+- **The model is the config's, and the config is rewritten every turn.** `session/resume` rebuilds the
+  agent from the current `config.toml`, so a switch is a new `model` line. The switch rows below were
+  served by the partner model on both pairs.
+- **zeroclaw seeds seven files into its agent workspace** (AGENTS.md, SOUL.md, IDENTITY.md, USER.md,
+  TOOLS.md, MEMORY.md, HEARTBEAT.md). With the agent workspace equal to the session directory all
+  seven came back as produced files. The agent workspace is now `.harness/zeroclaw/agent` and the ACP
+  `cwd` is the session directory: the file and shell tools are rooted at the `cwd` (`pwd` answered the
+  session directory; a relative `file_write` landed there), and the instruction file and skills are
+  read from the agent workspace. A sentinel written into `.harness/zeroclaw/agent/AGENTS.md` before
+  the first turn was repeated by the agent, and the file was left as written.
+- **Its shell refused ordinary commands even at level `full`.** `touch` and anything chained with `&&`
+  answered "Command not allowed by security policy". The risk profile uses zeroclaw's documented
+  trusted mode (`allowed_commands = ["*"]`, `block_high_risk_commands = false`); the session already
+  runs as its own OS user in its own directory.
+- **Its shell passes on only what it is told to.** A variable in the driver's environment came back
+  empty and PATH was reset to the system default; names in `shell_env_passthrough` arrived. The runner
+  names PATH, the environment layer's variables and the harness's own (nanobot's arrangement).
+- **A custom endpoint gets prompt-guided tools by default.** Through the relay the model wrote its
+  calls as `<tool_call>` text with invented `<tool_result>` lines, two of three arrived without their
+  arguments ("Missing 'path' parameter"), and one file took three model calls (read off the session's
+  stored transcript). zeroclaw's provider factory defaults a `custom` endpoint to prompt-guided tools
+  (its own test: "custom OpenAI-compatible endpoints must default to prompt-guided tools"). The runner
+  sets `native_tools = true`; the same turn then made one native call and used half the input tokens.
+- **The context budget was left at zeroclaw's default (32,000 tokens), on a measurement.** A six-turn
+  session on claude-haiku-4.5, four turns of it reading a 6 KB file, reached about 35,000 input tokens
+  per model call; zeroclaw recorded no trim or compaction event, all 17 messages stayed in the store,
+  and the last turn recalled a codeword from the first. A much longer session may still trim: zeroclaw
+  then sends `_zeroclaw/history_trimmed`, which the driver does not yet surface.
+- **The thinking level and attached images need nothing of their own.** The relay applies the turn's
+  level to every request body it carries (`runner/reasoning.py`), and an attached image arrives as a
+  file in the workspace, as on nanobot.
+- **Failure reporting (checklist item 8).** A provider failure is a JSON-RPC error on the prompt
+  (`-32603`, "The model provider custom.hr rejected its credentials", measured with a bad key), and a
+  session the store does not hold is `-32000 Session not found` on `session/resume`. Both are
+  structured, so nothing is parsed out of prose. The driver fails the turn on the first, and starts a
+  new session on the second while `_resume_lost` reports the lost history.
+- **Usage and the served model come from the relay.** The ACP stream carries no usage and names only
+  the configured model. Neither the key nor anything derived from it was found in any file zeroclaw
+  wrote.
+- **Interactive tools are never offered.** `ask_user`, `escalate_to_human`, `reaction` and `poll` call
+  back to the ACP client and wait for a person; `model_switch`, `model_routing_config` and
+  `proxy_config` let the model change what serves the turn. All seven are in `excluded_tools` on every
+  turn, and an excluded tool is absent from the list the agent reports.
+
+### Measured (self-hosted, image built from this branch's final commit, 2026-10-13)
+
+| Dimension | Result |
+|---|---|
+| Five scenarios, OpenRouter, claude-haiku-4.5 and gpt-5.4-mini | 10 of 10, every turn on `integration:openrouter`, none unlabelled |
+| Custom harness (skill + script, disabled tool, MCP over streamable HTTP) | pass: skill reached, script ran through `shell` with the harness's variable, `web_fetch` disabled and unused, `deepwiki__read_wiki_structure` called |
+| Install on a first start | `installing zeroclaw 0.8.5 …`, digest verified, listed among backends available |
+
+- **Finding, prompt cache on Claude:** claude-haiku-4.5 read 7% of its input from cache against 70% for
+  gpt-5.4-mini. zeroclaw's chat/completions requests carry no `cache_control`, so Anthropic models on
+  an aggregator cache little. The agentzero, aider and cline rows report the same for the same reason.
+
+### Not yet measured
+
+The other models of the catalog, the other providers (the direct Anthropic and OpenAI connections,
+Vercel, TokenRouter), the family tour, the plugin matrix's remote columns, the environments column and
+the benchmark dimension.
