@@ -7861,7 +7861,10 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
     # WITH a mapping is still routable and must still be shown.
     eff_map = await _effective_model_map()
     integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
-    seen = set(curated)
+    # A model measured unreliable on this base stays off it whichever connection names it: the
+    # failure was how the model behaved on the base (_NOT_OFFERED), and a custom endpoint that
+    # lists the same id brought gpt-5.4-mini back onto mimo's picker on the review instance.
+    seen = set(curated) | set(_NOT_OFFERED.get(backend, frozenset()))
     for canonical, iname in eff_map.items():
         if canonical in seen:
             continue

@@ -46,3 +46,21 @@ def test_every_default_is_one_the_base_still_offers():
     for base in FAILED:
         cat = gw._MODEL_CATALOG[base]
         assert cat["default"] in cat["models"], base
+
+
+def test_a_connection_that_names_a_removed_model_does_not_bring_it_back(monkeypatch):
+    # The review instance's custom OpenAI endpoint lists gpt-5.4-mini, and the picker's custom-model
+    # loop added it to mimo, which had it removed. Its own new ids still appear.
+    import asyncio
+
+    async def _eff():
+        return {"gpt-5.4-mini": "Custom", "my-own-model": "Custom"}
+
+    async def _docs():
+        return [{"name": "Custom", "provider": "custom", "api_format": "openai"}]
+
+    monkeypatch.setattr(gw, "_effective_model_map", _eff)
+    monkeypatch.setattr(gw, "_integrations_doc", _docs)
+    monkeypatch.setattr(gw, "_integration_serves_backend", lambda integ, backend: True)
+    ids = [m["id"] for m in asyncio.run(gw._harness_models_view({}, "mimo"))["models"]]
+    assert "gpt-5.4-mini" not in ids and "my-own-model" in ids
