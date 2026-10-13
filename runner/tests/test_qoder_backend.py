@@ -1098,3 +1098,22 @@ def test_a_reasoning_models_think_markers_are_not_the_answer():
     assert "think>" not in "".join(texts) and texts[0] == "Rendered"
     res = [e for e in out if e.get("type") == "result"][0]
     assert res["result"] == "Rendered — full-bleed purple." and state["final"] == res["result"]
+
+
+
+def test_a_revised_deliverable_replaces_its_earlier_version_but_nothing_else(tmp_path):
+    # rc.19: one PDF revised over five turns landed as hi.pdf, "hi (2).pdf", "hi (3).pdf"...
+    written, _ = drv.land_artifact(str(tmp_path), "hi.pdf", b"v1")
+    written, note = drv.land_artifact(str(tmp_path), "hi.pdf", b"v2", frozenset({written}))
+    assert written == "hi.pdf" and not note and (tmp_path / "hi.pdf").read_bytes() == b"v2"
+    assert not list(tmp_path.glob("hi (*")) and not list(tmp_path.glob(".hi.pdf.*"))
+    # a file this session did not deliver (the person's own) is still never overwritten
+    (tmp_path / "mine.pdf").write_bytes(b"theirs")
+    written, note = drv.land_artifact(str(tmp_path), "mine.pdf", b"x", frozenset({"hi.pdf"}))
+    assert written == "mine (2).pdf" and (tmp_path / "mine.pdf").read_bytes() == b"theirs"
+
+
+def test_the_agent_is_named_for_the_base_never_for_the_session():
+    # qfmodel introduced itself as "harnessrouter hsess2b3b804c…" from the agent's name (rc.19)
+    body = drv.agent_body({"cwd": "/data/workspaces/hsess2b3b804ca4d14025b33a69316c6f350a", "model": "qfmodel"}, [], [])
+    assert body["name"] == "Qoder" and "hsess" not in json.dumps({k: v for k, v in body.items() if k != "metadata"})
