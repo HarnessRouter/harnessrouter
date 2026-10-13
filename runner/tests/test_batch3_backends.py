@@ -25,7 +25,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
                     Auth, BACKENDS, CHECKPOINT_EXCLUDE, _agent_doc_path, _build_gajae,
                     _build_jcode, _build_mimo, _build_nanobot, _build_opensquilla,
-                    _BRIDGED_TRANSPORTS, _gajae_to_claude, _jcode_eof, _jcode_to_claude,
+                    _BRIDGED_TRANSPORTS, _JCODE_SANDBOX_OFF, _gajae_to_claude, _jcode_eof, _jcode_to_claude,
                     _opencode_to_claude, _opensquilla_eof, _opensquilla_to_claude,
                     _opensquilla_transcript,
                     _jcode_session_model, _mcp_url_is_loopback, _opensquilla_usage,
@@ -120,6 +120,20 @@ def test_mimo_config_is_the_opencode_schema_with_the_key_named_not_written():
     # opencode's snapshot repo is a git repo of the workspace under $HOME; left on it reached
     # 699 MB in twenty turns (#193). The fork inherited it, so it is turned off here too.
     assert cfg["snapshot"] is False
+    # The turn's connection and nothing else: mimo's built-in xiaomi provider is what a model's
+    # `actor` subagent reached on rc.6, refused with "Invalid API Key", failing a finished turn.
+    assert cfg["enabled_providers"] == ["hr"] and list(cfg["provider"]) == ["hr"]
+    # mimo's own built-in skills off (pptx-official on python-pptx, which no sandbox here can get);
+    # the harness's skills come through skills.paths and stay
+    assert env["MIMOCODE_DISABLE_BUILTIN_SKILLS"] == "1"
+
+
+def test_opencode_too_reaches_only_the_turns_connection():
+    d, env = _ws(), {}
+    from server import _build_opencode
+    _build_opencode("openai-api", Auth(api_key="k", base_url=UP), "deepseek-v4-pro", "hi", d, env)
+    cfg = json.loads((pathlib.Path(d) / ".harness" / "opencode.json").read_text())
+    assert cfg["enabled_providers"] == ["hr"] and list(cfg["provider"]) == ["hr"]
 
 
 def test_mimo_shares_opencodes_normaliser():
@@ -301,8 +315,20 @@ def test_jcode_disabled_tools_are_filtered_to_names_this_runtime_has():
     d, env = _ws(), {"HOME": str(pathlib.Path(_ws()) / "h")}
     cmd = _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
                        tools_disabled=["write (File Write)", "NotATool"])
-    assert cmd[cmd.index("--disabled-tools") + 1] == "write"
+    assert cmd[cmd.index("--disabled-tools") + 1].split(",") == sorted({"write"} | _JCODE_SANDBOX_OFF)
     assert "write" in ALL_JCODE_TOOLS and "notatool" not in ALL_JCODE_TOOLS
+
+
+def test_jcode_tools_that_cannot_work_in_the_sandbox_are_off_on_every_turn():
+    # rc.7: gpt-5.4-mini picked jcode's own Firefox-bridge `browser` over the browser plug and ran
+    # 459 tool calls for two hours trying to connect it. Off whatever the harness asks for.
+    d, env = _ws(), {"HOME": str(pathlib.Path(_ws()) / "h")}
+    cmd = _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    off = set(cmd[cmd.index("--disabled-tools") + 1].split(","))
+    assert off == set(_JCODE_SANDBOX_OFF) and {"browser", "macos_computer_use", "gmail", "maintainer_feedback"} <= off
+    # the way into its runaway turns (grok-4.20: 84 calls, 47 of them todo; with both off, 3 of 3 runs finished)
+    assert {"todo", "memory"} <= off
+    assert _JCODE_SANDBOX_OFF <= ALL_JCODE_TOOLS and "bash" not in off and "webfetch" not in off
 
 
 def test_jcode_usage_is_summed_across_requests_and_netted_of_both_caches():
@@ -350,6 +376,75 @@ def test_jcode_eof_fails_a_stream_that_ended_with_neither_terminal_event():
     assert out[0]["is_error"] is False and out[0]["result"] == "an answer"
 
 
+def _tool_uses(evs):
+    return [b for e in evs if e.get("type") == "assistant"
+            for b in e["message"]["content"] if b.get("type") == "tool_use"]
+
+
+def test_jcode_tool_call_carries_the_arguments_its_input_pieces_built():
+    # Captured from jcode v0.90.0 against a stub endpoint that streamed one bash call in three
+    # pieces (2026-10-12). The arguments arrive AFTER tool_start, as tool_input pieces with no id;
+    # emitting the call at tool_start sent it with {} and the console row had nothing to open.
+    evs, _ = _norm(_jcode_to_claude, [
+        {"type": "start", "session_id": "s", "model": "stub-model"},
+        {"id": "call_stub1", "name": "bash", "type": "tool_start"},
+        {"delta": "{\"comm", "type": "tool_input"},
+        {"delta": "and\": \"echo stub-", "type": "tool_input"},
+        {"delta": "ok\"}", "type": "tool_input"},
+        {"id": "call_stub1", "name": "bash", "type": "tool_exec"},
+        {"stop_reason": "tool_calls", "type": "message_end"},
+        {"error": None, "id": "call_stub1", "name": "bash", "type": "tool_done",
+         "output": "stub-ok\n\n--- Command finished with exit code: 0 ---\n"},
+        {"stop_reason": "stop", "type": "message_end"},
+        {"type": "done", "text": "finished", "model": "stub-model", "session_id": "s"},
+    ])
+    uses = _tool_uses(evs)
+    assert [(u["id"], u["name"], u["input"]) for u in uses] == [("call_stub1", "bash", {"command": "echo stub-ok"})]
+    kinds = [e["type"] for e in evs]
+    assert kinds.index("user") > kinds.index("assistant")   # the call before its result
+
+
+def test_jcode_stops_at_the_turns_step_budget():
+    # jcode has no step limit; grok-4.20 looped 84 calls in five minutes on its todo tool (rc.18).
+    from server import _status_from_result
+    state = {"model": "m", "max_turns": 3}
+    out = []
+    for i in range(5):
+        out += _jcode_to_claude({"id": f"c{i}", "name": "todo", "type": "tool_start"}, state)
+    results = [e for e in out if e.get("type") == "result"]
+    assert len(results) == 1 and results[0]["subtype"] == "error_max_turns"
+    assert state["_stop"] == "max_turns"
+    assert _status_from_result(results[0], -9) == "max_turns"
+    # no budget on record: never stopped by this
+    free = {"model": "m"}
+    assert not [e for i in range(50) for e in _jcode_to_claude({"id": f"c{i}", "name": "bash", "type": "tool_start"}, free)
+                if e.get("type") == "result"]
+
+
+def test_jcode_two_calls_in_one_message_keep_their_own_arguments_and_order():
+    evs, _ = _norm(_jcode_to_claude, [
+        {"type": "start", "session_id": "s", "model": "m"},
+        {"id": "a", "name": "read", "type": "tool_start"}, {"delta": "{\"path\": \"x\"}", "type": "tool_input"},
+        {"id": "b", "name": "bash", "type": "tool_start"}, {"delta": "{\"command\": \"ls\"}", "type": "tool_input"},
+        {"id": "a", "name": "read", "type": "tool_exec"},
+        {"id": "b", "name": "bash", "type": "tool_exec"},
+        {"type": "message_end", "stop_reason": "tool_calls"},
+        {"type": "done", "text": "ok"},
+    ])
+    assert [(u["id"], u["input"]) for u in _tool_uses(evs)] == [("a", {"path": "x"}), ("b", {"command": "ls"})]
+
+
+def test_jcode_call_cut_off_by_a_kill_still_shows_what_had_arrived():
+    state = {"model": "m"}
+    for o in ({"type": "start", "session_id": "s"}, {"id": "c", "name": "bash", "type": "tool_start"},
+              {"delta": "{\"command\": \"sleep", "type": "tool_input"}):
+        assert _jcode_to_claude(o, state) in ([], [{"type": "system", "subtype": "init", "session_id": "s", "model": "m"}])
+    out = _jcode_eof(state, 1)
+    assert _tool_uses(out) == [{"type": "tool_use", "id": "c", "name": "bash",
+                                "input": {"arguments": "{\"command\": \"sleep"}}]
+    assert out[-1]["type"] == "result" and out[-1]["is_error"] is True
+
+
 def test_jcode_bridges_remote_mcp_because_it_has_no_client_for_one():
     # "jcode currently supports stdio (command-based) servers only; HTTP/SSE entries are recognized
     # and skipped with a log line" — so without the bridge every remote server a harness declares is
@@ -377,6 +472,39 @@ def test_opensquilla_config_turns_the_router_off_and_declares_the_window():
     assert '[models.custom."gpt-5.4"]' in cfg
     assert "context_window = 200000" in cfg
     assert 'provider = "custom"' in cfg
+
+
+def test_opensquilla_denies_cron_which_a_one_shot_turn_never_runs():
+    # Its scheduler never runs under `opensquilla agent`, and its description was the only non-English
+    # text in the request (Chinese examples); gpt-5.5 opened English answers in Chinese on rc.15.
+    # Measured with the request captured at a stub: 26 tools with cron, 25 and no Chinese without.
+    import tomllib
+    d, env = _ws(), {}
+    _build_opensquilla("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    cfg = tomllib.loads(pathlib.Path(d, ".harness", "opensquilla", "config.toml").read_text())
+    assert cfg["tools"]["deny"] == ["cron"]
+
+
+def test_opensquilla_reply_language_rules_come_out_of_its_template(tmp_path, monkeypatch):
+    # gpt-5.4 answered English prompts in Chinese (8 of 8) under these rules, in French without the
+    # Chinese one, and in English (4 of 4) without all three, rc.16.
+    import server
+    t = tmp_path / "lib" / "python3.12" / "site-packages" / "opensquilla" / "identity" / "templates"
+    t.mkdir(parents=True)
+    body = ("## Reply Guidelines\n\n"
+            "- Use the conversation's language for all user-visible replies, including progress notes, tables, and final answers.\n"
+            "- If the user writes in Chinese, keep replying in Chinese unless they explicitly ask for another language.\n"
+            "- Lead final answers with the result and a usable reference when relevant.\n"
+            "## Tools\n- Write tool preambles in the same language as the user's current conversation.\n- Keep it short.\n")
+    (t / "system_prompt.j2").write_text(body)
+    monkeypatch.setattr(server, "_OPENSQUILLA_LANGUAGE_DONE", [])
+    assert server._opensquilla_reply_language_fix(tmp_path) == "removed"
+    out = (t / "system_prompt.j2").read_text()
+    assert "language" not in out and "Chinese" not in out
+    assert "- Lead final answers with the result" in out and "- Keep it short." in out
+    monkeypatch.setattr(server, "_OPENSQUILLA_LANGUAGE_DONE", [])
+    assert server._opensquilla_reply_language_fix(tmp_path) == "absent"      # idempotent
+    assert server._opensquilla_reply_language_fix(tmp_path) == "done"        # once per runner
 
 
 def test_opensquilla_argv_bounds_retries_and_keeps_a_session_db():
@@ -641,6 +769,113 @@ def test_opensquilla_channel_routing_directives_are_not_part_of_the_answer():
     assert _opensquilla_text("READY") == "READY"
     # and nothing else in double brackets is touched
     assert _opensquilla_text("see [[notes]] here") == "see [[notes]] here"
+
+
+def test_opensquilla_calls_come_back_with_their_arguments_under_the_live_rows_name():
+    # The progress stream announces a call with no input; its row read `{}` in the console and the
+    # record. The transcript has the arguments, and the end-of-turn replay now sends each call again
+    # under the same id and the name the live row was given, so the gateway fills that row in place.
+    d = _ws()
+    base = pathlib.Path(d, ".harness", "opensquilla"); base.mkdir(parents=True)
+    (base / "transcript.jsonl").write_text("\n".join(json.dumps(x) for x in [
+        {"type": "message", "message": {"role": "assistant", "content": [
+            {"type": "toolCall", "name": "exec", "id": "call_1", "arguments": {"cmd": "echo one"}},
+            {"type": "toolCall", "name": "exec", "id": "call_2", "arguments": "{\"cmd\": \"echo two\"}"},
+            {"type": "toolCall", "name": "noop", "id": "call_3", "arguments": {}}]}},
+        {"type": "message", "message": {"role": "toolResult", "toolCallId": "call_1", "isError": False,
+                                        "content": [{"type": "text", "text": "one"}]}},
+        {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "DONE"}]}},
+    ]))
+    evs, state = _norm(_opensquilla_to_claude, [
+        {"_event": True, "schema_version": 1, "kind": "tool_use_start", "tool_use_id": "call_1", "tool_name": "exec_command"},
+        {"_event": True, "schema_version": 1, "kind": "tool_use_start", "tool_use_id": "call_2", "tool_name": "exec_command"},
+    ], cwd=d)
+    live = [b for e in evs for b in e["message"]["content"] if b.get("type") == "tool_use"]
+    assert [(u["id"], u["input"]) for u in live] == [("call_1", {}), ("call_2", {})]
+    late = [b for e in _opensquilla_transcript(state) if e.get("type") == "assistant"
+            for b in e["message"]["content"] if b.get("type") == "tool_use"]
+    # each call once more, WITH its arguments (a JSON string parsed), named as the live row was; a
+    # call with no arguments is not sent again (there is nothing to fill)
+    assert [(u["id"], u["name"], u["input"]) for u in late] == [
+        ("call_1", "exec_command", {"cmd": "echo one"}), ("call_2", "exec_command", {"cmd": "echo two"})]
+
+
+def test_the_relay_assembles_a_tool_calls_arguments_from_the_models_stream():
+    from server import _relay_tool_args, _tool_args_in_body, _tool_args_in_sse_line
+    flags, st = {}, {}
+    for piece in ({"index": 0, "id": "call_a", "function": {"name": "exec_command", "arguments": ""}},
+                  {"index": 0, "function": {"arguments": "{\"cmd\": \"echo "}},
+                  {"index": 0, "function": {"arguments": "one\"}"}},
+                  {"index": 1, "id": "call_b", "function": {"name": "read", "arguments": "{\"path\": \"a\"}"}}):
+        line = b"data: " + json.dumps({"choices": [{"index": 0, "delta": {"tool_calls": [piece]}}]}).encode()
+        _tool_args_in_sse_line(line, flags, st)
+    assert _relay_tool_args([flags], "call_a") == {"cmd": "echo one"}
+    assert _relay_tool_args([flags], "call_b") == {"path": "a"}
+    # Anthropic Messages: a tool_use block and its input_json_delta pieces
+    fa, sa = {}, {}
+    for ev in ({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}}},
+               {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"command\": "}},
+               {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "\"ls\"}"}}):
+        _tool_args_in_sse_line(b"data: " + json.dumps(ev).encode(), fa, sa)
+    assert _relay_tool_args([fa], "toolu_1") == {"command": "ls"}
+    # a whole response, both shapes
+    fb = {}
+    _tool_args_in_body(json.dumps({"choices": [{"message": {"tool_calls": [
+        {"id": "call_c", "function": {"name": "x", "arguments": "{\"k\": 1}"}}]}}]}).encode(), fb)
+    _tool_args_in_body(json.dumps({"content": [{"type": "tool_use", "id": "toolu_2", "name": "y", "input": {"q": "z"}}]}).encode(), fb)
+    assert _relay_tool_args([fb], "call_c") == {"k": 1} and _relay_tool_args([fb], "toolu_2") == {"q": "z"}
+    # nothing seen, or not yet a whole object: no arguments rather than a wrong one
+    assert _relay_tool_args([flags], "call_zzz") is None and _relay_tool_args(None, "call_a") is None
+    _tool_args_note_half = {"tool_args": {"call_h": "{\"cmd\": \"ec"}}
+    assert _relay_tool_args([_tool_args_note_half], "call_h") is None
+
+
+def test_opensquilla_rows_have_their_arguments_while_the_turn_runs():
+    # The live fix: the relay saw the model send call_1's arguments before opensquilla ran the tool,
+    # so the row the progress event opens carries them, and the transcript does not add a second.
+    d = _ws()
+    base = pathlib.Path(d, ".harness", "opensquilla"); base.mkdir(parents=True)
+    (base / "transcript.jsonl").write_text(json.dumps({"type": "message", "message": {"role": "assistant", "content": [
+        {"type": "toolCall", "name": "exec", "id": "call_1", "arguments": {"cmd": "echo one"}}]}}))
+    route = {"tool_args": {"call_1": "{\"cmd\": \"echo one\"}"}}
+    state = {"model": "gpt-5.4", "final": "", "cwd": d, "routes": [route]}
+    evs = _opensquilla_to_claude({"_event": True, "schema_version": 1, "kind": "tool_use_start",
+                                  "tool_use_id": "call_1", "tool_name": "exec_command"}, state)
+    assert evs[0]["message"]["content"][0]["input"] == {"cmd": "echo one"}
+    late = [b for e in _opensquilla_transcript(state) if e.get("type") == "assistant"
+            for b in e["message"]["content"] if b.get("type") == "tool_use"]
+    assert late == []
+
+
+def test_opensquilla_replays_only_this_turn_of_a_resumed_sessions_transcript():
+    # A resumed session's transcript holds the whole conversation; replaying it all put the first
+    # turn's answer in front of the sixth's and every earlier call into its trace (2026-10-13).
+    d = _ws()
+    base = pathlib.Path(d, ".harness", "opensquilla"); base.mkdir(parents=True)
+    msgs = [
+        {"role": "user", "content": [{"type": "text", "text": "[2026-10-13T04:51+00:00 Tue UTC]\nfollow instruction: hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hello! How can I help you today?"}]},
+        {"role": "user", "content": [{"type": "text", "text": "[2026-10-13T04:53+00:00 Tue UTC]\nmake a pdf"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Writing it."},
+                                          {"type": "toolCall", "name": "write_file", "id": "call_old", "arguments": {"path": "a.pdf"}}]},
+        {"role": "toolResult", "toolCallId": "call_old", "content": [{"type": "text", "text": "Written"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Made a.pdf"}]},
+        {"role": "user", "content": [{"type": "text", "text": "[2026-10-13T07:30+00:00 Tue UTC]\nchange to red"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Recolouring."},
+                                          {"type": "toolCall", "name": "edit_file", "id": "call_new", "arguments": {"color": "red"}}]},
+        {"role": "toolResult", "toolCallId": "call_new", "content": [{"type": "text", "text": "Edited"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "It is red now."}]},
+    ]
+    (base / "transcript.jsonl").write_text("\n".join(json.dumps({"type": "message", "message": m}) for m in msgs))
+    state = {"model": "gpt-5.4", "final": "", "cwd": d, "prompt": "change to red"}
+    evs = _opensquilla_transcript(state)
+    blob = json.dumps(evs)
+    assert "Hello! How can I help" not in blob and "Made a.pdf" not in blob and "call_old" not in blob
+    assert "Recolouring." in blob and "call_new" in blob and "Edited" in blob
+    assert state["final"] == "It is red now."
+    # the prompt not on record: after the last user message, the same turn
+    state = {"model": "gpt-5.4", "final": "", "cwd": d}
+    assert "Made a.pdf" not in json.dumps(_opensquilla_transcript(state)) and state["final"] == "It is red now."
 
 
 def test_opensquilla_transcript_answer_has_the_directive_removed():

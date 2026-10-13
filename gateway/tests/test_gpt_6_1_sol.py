@@ -28,7 +28,8 @@ def test_every_provider_we_route_to_names_its_own_id():
 def test_it_leads_the_gpt_6_family_wherever_that_family_is_offered():
     for base, cat in gw._MODEL_CATALOG.items():
         models = cat["models"]
-        if base in REFUSED_EVERYWHERE:
+        if base in REFUSED_EVERYWHERE or M in gw._NOT_OFFERED.get(base, frozenset()):
+            # a measured exception (opensquilla, 2026-10-12: its deck never reaches the person)
             assert M not in models, base
         elif "gpt-6-sol" in models:
             assert models.index(M) == models.index("gpt-6-sol") - (2 if "gpt-6-astra" in models else 1), base

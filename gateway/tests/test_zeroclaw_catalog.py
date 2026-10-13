@@ -50,4 +50,5 @@ def test_zeroclaw_is_chat_completions_only():
 
 def test_a_model_the_matrix_failed_twice_is_not_offered():
     assert "llama-3.3-70b" not in A._MODEL_CATALOG["zeroclaw"]["models"]
-    assert "llama-3.3-70b" in A._MODEL_CATALOG["nanobot"]["models"]   # a zeroclaw finding, not the model's
+    # withheld per base, not from the catalog: other bases still offer it
+    assert any("llama-3.3-70b" in e["models"] for b, e in A._MODEL_CATALOG.items() if b != "zeroclaw")
