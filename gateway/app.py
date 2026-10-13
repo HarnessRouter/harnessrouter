@@ -795,6 +795,43 @@ def _tenant_sem(t: str) -> asyncio.Semaphore:
     return _tenant_sems.setdefault(t or "_", asyncio.Semaphore(_conc_limit("tenant")))
 
 
+@contextlib.asynccontextmanager
+async def _turn_slot(org: str, sid: str):
+    """Both concurrency gates, held for the turn, with the session's heartbeat kept fresh while the
+    turn WAITS for them.
+
+    A turn is marked `starting` when it is accepted, and on one container the gates admit as many
+    turns as the box has cores, so a busy box queues the rest. A queued turn is alive, but it has no
+    runner turn yet and nothing renewed its heartbeat, so the orphan sweep (_reconcile_session)
+    read it as a dead turn and settled it, session and response, as failed; the turn then ran and
+    its final write said completed. Measured 2026-10-12 on a 4-core instance with nine turns in
+    flight: a background poller read `failed` (error null) four seconds in, for the 28 seconds the
+    turn waited, and `completed` at 55 s. The newborn trap of 0.23.2, one stage later."""
+    beat_s = max(1, _RECONCILE_STALE_S // 4)
+    got = asyncio.Event()
+
+    async def beat():
+        while True:
+            try:
+                await asyncio.wait_for(got.wait(), timeout=beat_s)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await _vertex_upsert(sid, {"heartbeat": str(time.time())})
+            except Exception:  # noqa: BLE001 — a missed beat is retried on the next one
+                pass
+
+    t = asyncio.create_task(beat())
+    try:
+        async with _global_sem(), _tenant_sem(org):
+            got.set()
+            yield
+    finally:
+        got.set()
+        t.cancel()
+
+
 def _pool_is_local() -> bool:
     """True when the runner is reachable directly rather than through a cloud session pool.
 
@@ -968,7 +1005,11 @@ _BROKERABLE_PROVIDERS = {"anthropic", "tokenrouter", "openai", "azure", "azure-f
 # turn dying on a 400 nobody can read. gemini-cli 0.58.0 honours GOOGLE_GEMINI_BASE_URL on the
 # API-key path (measured 2026-09-06: pointed at a dead port it retried "fetch failed" against it),
 # so the native paths can be brokered later; until the broker carries them, this set is the guard.
-_NATIVE_ONLY_BACKENDS = {"gemini"}
+_NATIVE_ONLY_BACKENDS = {"gemini",
+                         # qoder: the driver speaks Qoder's own control API (sessions, events, files),
+                         # which the broker's model doors do not carry; the runner's loopback relay is
+                         # its credential boundary, and that needs the connection's key on the box
+                         "qoder"}
 
 
 # ── A harness that drives another harness ─────────────────────────────────────────────────────
@@ -1340,6 +1381,9 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # systemone speaks the provider's decisions endpoint through the loopback relay: TypeSafe's own
     # API (/v1/systemone) and OpenRouter, the one aggregator serving Jev (beta since 2026-09-18).
     ("openrouter", "systemone"): "openrouter", ("typesafe", "systemone"): "typesafe",
+    # qoder runs on Qoder's own hosted runtime and bills through Qoder's model access: a connection
+    # carries a Qoder PAT or SAT and nothing else drives it, so the one pair is its own provider.
+    ("qoder", "qoder"): "qoder",
     ("tokenrouter", "openhands"): "tokenrouter", ("vercel", "openhands"): "tokenrouter",
     ("llmtr", "openhands"): "tokenrouter",
     ("custom", "openhands"): "openai-api",
@@ -1434,6 +1478,41 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # system-one-phase2) on its own GPU behind TypeSafe's wire, so a HarnessRouter key drives the
     # systemone base too: decisions at <base>/systemone, billed to the key's credits (2026-09-24).
     ("harnessrouter", "systemone"): "typesafe",
+    # ── this batch ────────────────────────────────────────────────────────────────────────────
+    # mimo is an opencode FORK that kept opencode's provider model (an ai-sdk package name plus a
+    # baseURL), so it reaches what opencode reaches and is wired row for row with it. No new
+    # provider entry anywhere: these are wiring rows pointing at providers that already exist,
+    # which is checklist item 1 — a second _PROVIDER_CATALOG key of the same name would silently
+    # overwrite the first on a rebase.
+    ("anthropic", "mimo"): "anthropic",        ("openai", "mimo"): "openai",
+    ("azure-foundry", "mimo"): "azure",
+    ("openrouter", "mimo"): "openai-api",
+    ("tokenrouter", "mimo"): "tokenrouter",    ("vercel", "mimo"): "tokenrouter",
+    ("llmtr", "mimo"): "tokenrouter",          ("custom", "mimo"): "tokenrouter",
+    ("google", "mimo"): "openai-api",          ("harnessrouter", "mimo"): "tokenrouter",
+    # jcode, opensquilla and nanobot each speak ONE OpenAI shape, chat/completions, through the
+    # loopback relay, which is exactly cline's and goose's reach, so they are wired as those are.
+    # jcode and opensquilla also have an Anthropic-Messages provider, used only for a connection
+    # that IS Anthropic — a claude id on an aggregator stays on the relay so its served model
+    # remains readable (see _build_jcode).
+    ("anthropic", "jcode"): "anthropic",       ("openai", "jcode"): "openai",
+    ("azure-foundry", "jcode"): "azure",
+    ("openrouter", "jcode"): "openai-api",
+    ("tokenrouter", "jcode"): "tokenrouter",   ("vercel", "jcode"): "tokenrouter",
+    ("llmtr", "jcode"): "tokenrouter",         ("custom", "jcode"): "openai-api",
+    ("google", "jcode"): "openai-api",         ("harnessrouter", "jcode"): "tokenrouter",
+    ("anthropic", "opensquilla"): "anthropic", ("openai", "opensquilla"): "openai",
+    ("azure-foundry", "opensquilla"): "azure",
+    ("openrouter", "opensquilla"): "openai-api",
+    ("tokenrouter", "opensquilla"): "tokenrouter", ("vercel", "opensquilla"): "tokenrouter",
+    ("llmtr", "opensquilla"): "tokenrouter",   ("custom", "opensquilla"): "openai-api",
+    ("google", "opensquilla"): "openai-api",   ("harnessrouter", "opensquilla"): "tokenrouter",
+    ("anthropic", "nanobot"): "anthropic",     ("openai", "nanobot"): "openai",
+    ("azure-foundry", "nanobot"): "azure",
+    ("openrouter", "nanobot"): "openai-api",
+    ("tokenrouter", "nanobot"): "tokenrouter", ("vercel", "nanobot"): "tokenrouter",
+    ("llmtr", "nanobot"): "tokenrouter",       ("custom", "nanobot"): "openai-api",
+    ("google", "nanobot"): "openai-api",       ("harnessrouter", "nanobot"): "tokenrouter",
 }
 
 
@@ -1719,6 +1798,15 @@ async def _sandbox(path: str, sid: str, method: str = "POST", body: dict | None 
                                    headers=_pool_headers(), **kw)
 
 
+class _SandboxRefused(RuntimeError):
+    """The runner answered with its own verdict (a 4xx other than 429): `status` and the reason it
+    gave (`detail`), so a turn it refused to start says why rather than reading as a connection
+    that never ran."""
+    def __init__(self, message: str, status: int, detail: str):
+        super().__init__(message)
+        self.status, self.detail = status, detail
+
+
 async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | None = None,
                         params: dict | None = None, *, attempts: int = 28, base: float = 0.75) -> dict:
     """Call the sandbox and parse JSON, retrying transient failures with exponential backoff.
@@ -1740,8 +1828,15 @@ async def _sandbox_json(path: str, sid: str, method: str = "POST", body: dict | 
                 return r.json()
             last = f"HTTP {r.status_code}, {len(raw)}B body"
             if 400 <= r.status_code < 500 and r.status_code != 429:   # the server's verdict: waiting cannot change it
-                last = f"HTTP {r.status_code}: {raw[:300].decode('utf-8', 'replace')}"
-                break
+                text = raw[:2000].decode("utf-8", "replace")
+                try:
+                    detail = str((json.loads(text) or {}).get("detail") or text)
+                except ValueError:
+                    detail = text
+                raise _SandboxRefused(f"sandbox {path} failed after {i + 1} of {attempts} tries "
+                                      f"(HTTP {r.status_code}: {text[:300]})", r.status_code, detail[:600])
+        except _SandboxRefused:
+            raise                             # a verdict, not a transient: never retried
         except Exception as e:  # noqa: BLE001
             last = f"{type(e).__name__}: {str(e)[:120]}"
         if i < attempts - 1:
@@ -2803,6 +2898,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     rec["status"] = "done" if terminal == "completed" else terminal
     if translator.usage:
         rec["usage"] = translator.usage
+    if translator.charge:
+        rec["charge"] = translator.charge
     await _vertex_upsert(sid, {"status": rec["status"], "turn_status": rec["status"]})
     try:
         # Every terminal outcome collects. A cancelled or failed turn may already have written the
@@ -3934,7 +4031,10 @@ def _broker_token(request: Request) -> str:
 _PROVIDER_BASE = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1",
                   # Google AI Studio keys answer on Gemini's OpenAI-compatible surface (chat
                   # completions); a key alone names the endpoint, the same way an OpenAI key does.
-                  "google": "https://generativelanguage.googleapis.com/v1beta/openai"}
+                  "google": "https://generativelanguage.googleapis.com/v1beta/openai",
+                  # Qoder's Managed API, global region; the China region (api.qoder.com.cn) is a
+                  # connection with its base_url set
+                  "qoder": "https://api.qoder.com/api/v1/cloud"}
 
 
 def _with_provider_base(conn: dict | None) -> dict | None:
@@ -5087,6 +5187,40 @@ async def _session_index() -> dict:
     return idx
 
 
+async def _remote_delete_body(sid: str, v: dict | None) -> dict | None:
+    """What the runner's DELETE /workspace needs for a session of a REMOTE backend: the connection
+    whose runtime holds the session's objects, so the runner can delete them there too (the
+    conversation, the files, the Agent the turns created — runner _remote_purge). None for a local
+    backend, where the folder is all there is. The connection is the org's integration for that
+    provider, handed over the way a turn hands it (_auth_from_conn: owner trust, the key; broker
+    trust, nothing — this backend is not brokered — and the runner then says what was left)."""
+    backend = str((v or {}).get("backend") or "").lower()
+    if backend != "qoder":
+        return None
+    try:
+        integs = await _integrations_doc()
+    except Exception:  # noqa: BLE001
+        integs = []
+    # The connection the session's turns ran on (last_connection, "integration:<name>"): its objects
+    # live in THAT account. Another Qoder connection's key would be refused there and leave them
+    # billing, so with more than one and the session's own gone, nothing is guessed.
+    qoders = [i for i in integs if str(i.get("provider") or "").lower() == "qoder"]
+    last = str((v or {}).get("last_connection") or "")
+    used = last.split(":", 1)[1] if last.startswith("integration:") else ""
+    integ = next((i for i in qoders if str(i.get("name") or "") == used), None) if used else None
+    if integ is None and len(qoders) == 1 and not used:
+        integ = qoders[0]
+    if not integ:
+        print(f"[delete] session {sid}: a qoder session whose connection ({last or 'unrecorded'}) is not "
+              f"configured among {len(qoders)} qoder integration(s); its remote objects cannot be deleted "
+              "from here", flush=True)
+        return {"backend": backend}
+    conn = {"name": f"integration:{integ.get('name') or ''}", "backend": backend, "provider": "qoder",
+            **{k: val for k, val in (integ.get("config") or {}).items() if val not in (None, "")}}
+    auth = _auth_from_conn(_with_provider_base(conn) or conn, sid)
+    return {"backend": backend, "auth": auth}
+
+
 async def _session_purge(sid: str, v: dict | None, index: dict | None = None) -> None:
     """Everything a session left, removed: its transcript and trace, its responses, the files its
     tasks produced, their previews and change list, its media, the record of every plugin call it
@@ -5141,7 +5275,7 @@ async def _session_purge(sid: str, v: dict | None, index: dict | None = None) ->
     # delete fails — the session is already unreadable by the time this runs.
     if POOL_ENDPOINT:
         try:
-            await _sandbox("/workspace", sid, "DELETE")
+            await _sandbox("/workspace", sid, "DELETE", body=await _remote_delete_body(sid, v))
         except Exception:  # noqa: BLE001
             pass
     await _media_session_purge(sid)
@@ -5249,6 +5383,19 @@ _PROVIDER_CATALOG: dict[str, dict] = {
         "secret": "api_key",
         "secret_label": "API Key",
         "key_hint": "apikey_…",
+    },
+    # Qoder Cloud Agent: a hosted agent runtime, not a model endpoint. The key is a personal access
+    # token or a service-account token; Qoder picks and bills the model behind it, so only the qoder
+    # base can use this connection, and nothing it serves appears in another base's picker. The
+    # global region's base is fixed here; a China-region tenant sets base_url to
+    # https://api.qoder.com.cn/api/v1/cloud on the connection. A key is checked at GET /models.
+    "qoder": {
+        "label": "Qoder Cloud Agent",
+        "base_url": "https://api.qoder.com/api/v1/cloud",
+        "fields": [],
+        "secret": "api_key",
+        "secret_label": "Access token (PAT or SAT)",
+        "key_hint": "a Qoder personal or service-account token",
     },
     "tokenrouter": {
         "label": "TokenRouter",
@@ -5400,10 +5547,17 @@ _CUSTOM_FORMAT_BACKENDS = {
     # Anthropic endpoint cannot cache at all, which cost a benchmark 6 to 8 times the Claude Code
     # price for the same task on goose and OpenHands.
     # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
-    "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
-               "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero"},
+    # This batch: the four offered bases all drive a custom OpenAI endpoint. mimo also takes a
+    # custom ANTHROPIC endpoint (through @ai-sdk/anthropic), which is why it is in both sets;
+    # jcode's and opensquilla's Messages providers exist but are reserved for a connection that IS
+    # Anthropic, so a custom integration declaring the anthropic format would be offered a path the
+    # runner does not take for it — unlisted rather than nearly true.
     # kilo passes api_format to the same ai-sdk package choice opencode makes (_opencode_npm).
-    "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
+    "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
+               "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
+               "mimo", "jcode", "opensquilla", "nanobot"},
+    "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
+                  "mimo"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
 }
@@ -5961,6 +6115,9 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
     elif t == "result":
         out.append(("result", {"text": ev.get("result") or "", "usage": ev.get("usage"),
                                "is_error": bool(ev.get("is_error")),
+                               # what a remote runtime billed the turn, in its own unit, when it says
+                               # (qoder: credits; never folded into the token counts)
+                               **({"charge": ev["charge"]} if isinstance(ev.get("charge"), dict) else {}),
                                # the thinking level asked and the one applied (runner: _stamp_thinking);
                                # absent for a turn that asked for none
                                **({"reasoning": ev["reasoning"]} if ev.get("reasoning") else {}),
@@ -5974,6 +6131,20 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
         # learn the context was dropped, so it is a short, honest note at the top of the reply.
         out.append(("text", "_Note: the earlier conversation could not be restored. This reply "
                             "continues as a new session, without that context._\n\n"))
+    elif t == "system" and ev.get("subtype") == "notice":
+        # A sentence the CLI itself said about how the turn went — not its answer, and not a
+        # failure. OpenSquilla reports "Provider context limit reached; compacting older context
+        # before retrying" this way, and a person reading a turn that took three minutes and lost
+        # its earlier context has no other way to learn why. The runner decides what is worth
+        # saying; this is the one place it can be said, because an unrecognised system subtype is
+        # dropped here in silence, and a runner that emits one is writing to a surface that does
+        # not exist (which is how this event was nearly shipped unrendered).
+        #
+        # Bounded and de-duplicated by the runner, prefixed like the other two notes, and rendered
+        # as the reply's own text rather than as an answer the model gave.
+        text = str(ev.get("text") or "").strip()
+        if text:
+            out.append(("text", f"\n\n_Note: {text[:500]}_\n"))
     elif t == "system" and ev.get("subtype") == "mcp_unavailable":
         # A CLI that runs the turn without an MCP server it could not reach, and says nothing (Kimi
         # Code CLI does exactly that), leaves a person wondering why the agent never used their
@@ -6026,7 +6197,14 @@ class _RespTranslator:
         self.seq = 0
         self.out_index = -1
         self.output: list[dict] = []
+        # call_id -> (its function_call item, output index), and the call_ids with a result, for the
+        # one late fill of a call's arguments (_handle, "tool_use")
+        self._calls: dict[str, tuple[dict, int]] = {}
+        self._resulted: set[str] = set()
         self.usage: dict | None = None
+        # {"amount", "unit", "basis", ...}: what a remote runtime charged for the turn, in its own
+        # unit (qoder credits), when its API said; None for every backend whose cost is its tokens.
+        self.charge: dict | None = None
         self.error: dict | None = None
         self.cur: dict | None = None
         self.any_text = False
@@ -6044,6 +6222,8 @@ class _RespTranslator:
             meta["environment"] = self.environment
         if self.ignored:
             meta["ignored_fields"] = self.ignored
+        if self.charge:
+            meta["charge"] = self.charge
         return {"id": self.resp_id, "object": "response", "created_at": int(self.created_at),
                 "status": status, "error": self.error,
                 "incomplete_details": ({"reason": self.incomplete_reason, "handoff": self.handoff}
@@ -6124,11 +6304,26 @@ class _RespTranslator:
             evs.append(self._ev("response.output_text.delta", item_id=self.cur["id"],
                                 output_index=self.cur["oi"], content_index=0, delta=payload))
         elif kind == "tool_use":
+            inp = payload["input"]
+            args = inp if isinstance(inp, str) else json.dumps(inp, default=str)
+            prior = self._calls.get(payload["id"])
+            if (prior and prior[0].get("arguments") in ("", "{}") and args not in ("", "{}")
+                    and prior[0].get("name") == payload["name"] and payload["id"] not in self._resulted):
+                # A call the runner emitted when it started, before its arguments were known, sent
+                # again with them: the arguments go on THAT row, never a second one. opensquilla's
+                # progress stream carries no arguments, and its transcript, which does, is read when
+                # the turn ends. Only an empty row with the same name and no result yet is filled
+                # (some translators fall back to a fixed id such as "tool" when a CLI gives none, and
+                # two different calls must not become one); anything else goes the way it always went.
+                item, oi = prior
+                item["arguments"] = args
+                evs.append(self._ev("response.function_call_arguments.done", item_id=item["id"],
+                                    output_index=oi, arguments=args))
+                evs.append(self._ev("response.output_item.done", output_index=oi, item=item))
+                return evs
             evs += self._close_cur()
             self.out_index += 1
             fid = _rid("fc")
-            inp = payload["input"]
-            args = inp if isinstance(inp, str) else json.dumps(inp, default=str)
             shell = {"id": fid, "type": "function_call", "call_id": payload["id"],
                      "name": payload["name"], "arguments": "", "status": "in_progress"}
             done = {**shell, "arguments": args, "status": "completed"}
@@ -6139,7 +6334,9 @@ class _RespTranslator:
                                 output_index=self.out_index, arguments=args))
             evs.append(self._ev("response.output_item.done", output_index=self.out_index, item=done))
             self.output.append(done)
+            self._calls.setdefault(payload["id"], (done, self.out_index))
         elif kind == "tool_result":
+            self._resulted.add(payload["call_id"])
             evs += self._close_cur()
             self.out_index += 1
             oid = _rid("fco")
@@ -6151,6 +6348,8 @@ class _RespTranslator:
         elif kind == "result":
             if payload.get("model"):
                 self.served_model = str(payload["model"])
+            if isinstance(payload.get("charge"), dict):
+                self.charge = payload["charge"]
             r = payload.get("reasoning")
             if isinstance(r, dict) and self.reasoning is not None:
                 self.reasoning = {"effort": self.reasoning.get("effort") or r.get("effort"),
@@ -6680,6 +6879,30 @@ _VENDOR_MODELS["openrouter"].update({"jev-1.13": "typesafe/jev-1.13", "jev-lates
 # the pinned id stays OpenRouter's alone and the preview stays TypeSafe's: a harness resolves the id
 # it names through the table of the connection that serves it, and nothing is guessed across them.
 _VENDOR_MODELS["typesafe"] = {"jev-latest": "jev-latest", "jev-preview": "jev-preview"}
+# Qoder's own catalogue, as GET /api/v1/cloud/models lists it for the tenant: the ids are Qoder's
+# names and reach the Agent verbatim. `ultimate` is the one the public reference documents; the
+# column measures the tenant's list and this table grows from what ran.
+_VENDOR_MODELS["qoder"] = {m: m for m in (
+    # as GET /api/v1/cloud/models listed them for a Global-region tenant on 2026-10-09; the display
+    # name is Qoder's and the id reaches the Agent verbatim. A tenant-private id (the dog-fooding
+    # mode) is not offered.
+    "auto",            # Auto
+    "ultimate",        # Ultimate
+    "performance",     # Performance
+    "efficient",       # Efficient
+    "smodel",          # Sonus
+    "qmodel_38max",    # Qwen3.8-Max
+    "qfmodel",         # Qwen3.8-Flash
+    "qmodel_latest",   # Qwen3.7-Max
+    "qmodel",          # Qwen3.7-Plus
+    "kmodel_latest",   # Kimi-K3
+    "kmodel",          # Kimi-K2.8-Preview
+    "gmodel",          # GLM-5.3
+    "gfmodel",         # GLM-5.3-Flash
+    "dmodel",          # DeepSeek-V4-Pro
+    "dfmodel",         # DeepSeek-Flash
+    "mmodel",          # MiniMax-M3
+)}
 
 # Vercel's AI Gateway carries the same catalogue under nearly the same slugs, so it starts from
 # OpenRouter's table too. Only the vendor prefix differs on four of them, and it differs because
@@ -7281,6 +7504,41 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # substitution would be the provider's, and the relay's served model shows it.
 _MODEL_CATALOG["kilo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models"])   # see its entry
+# This batch's bases, each starting from the list of the base whose WIRE REACH it shares. That is
+# the reach, not the offer: each then loses every model that did not run reliably on it in the
+# full measurement (_NOT_OFFERED below, with what each one did).
+#
+# mimo is an opencode FORK that kept opencode's provider model — the config names an ai-sdk package
+# and a baseURL, so it reaches what opencode reaches, Responses ids included.
+_MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+# ── gajae (Gajae-Code) is implemented and NOT offered ─────────────────────────────────────────
+# It has no entry here, none in _BASE_CATALOG, and no wiring row, so this server neither lists it,
+# routes it (_SUPPORTED_BASES and _HID_PREFIX_RE are derived from _BASE_CATALOG) nor runs it. The
+# runner's implementation stays in place — _build_gajae, _gajae_to_claude, their tests and their
+# captured fixtures — because the base WORKS; what stops it is this product's own write-wall, and
+# that is a decision to revisit rather than a defect to fix.
+#
+# MEASURED (2026-10-03, on a real instance, both directions of the switch):
+#   gjc's native lock helper walks from / down to the path it is locking and opens EVERY ancestor
+#   with O_RDONLY|O_DIRECTORY|O_NOFOLLOW (pi-natives, open_parent_no_follow), which needs READ on
+#   each ancestor rather than traverse. docker/entrypoint.sh sets /data and /data/workspaces to
+#   751 — "traversable by sessions, neither listable nor writable" — so a session uid gets EACCES,
+#   the addon reports io_error, and the turn dies before its first model call.
+#   With those two directories at 755 a real turn completed in 4.6 s; put back to 751 it failed
+#   again with the same error. Both sides are defending the same thing from opposite ends: gjc
+#   refuses to trust path resolution for a lock, and this product makes the ancestors unreadable.
+#
+# To offer it: relax those two modes (which gives up "neither listable", not "nor writable"), then
+# restore this entry, the _BASE_CATALOG entry, the _INTEGRATION_WIRING rows and the
+# _CUSTOM_FORMAT_BACKENDS membership. gateway/tests/test_gajae_not_offered.py pins the current
+# state so a half-restore cannot pass unnoticed. docs/support-matrix-notes.md has the full record.
+# jcode, opensquilla and nanobot each speak ONE OpenAI shape — chat/completions — through the
+# loopback relay, which is kimi's reach exactly, so they take kimi's list and are in
+# CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
+# only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
+# relay so its served model stays readable — see _build_jcode.)
+for _b in ("jcode", "opensquilla", "nanobot"):
+    _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
@@ -7292,6 +7550,16 @@ _MODEL_CATALOG["systemone"] = {"default": "jev-latest",
                                # models the hosted service serves, reachable with a HarnessRouter key
                                "models": ["jev-latest", "jev-preview", "jev-1.13",
                                           "laya", "openthai-systemone", "system-one-phase2"]}
+# qoder: Qoder's own model ids (_VENDOR_MODELS["qoder"]), the ones its GET /models lists. Qoder
+# chooses what serves an id and reports neither the served model nor token counts on its public
+# API, so these rows read "the id completed a turn" (docs/harness-verification.md, remote runtimes);
+# the list is what the column has run, starting from the documented id.
+_MODEL_CATALOG["qoder"] = {"default": "ultimate",
+                           # every one completed a turn that delivered the file it was asked for, on
+                           # 0.33.0-rc.3 and rc.4 against api.qoder.com (2026-10-10); qfmodel also ran
+                           # the five console scenarios. Qoder also lists cmodel (Cantus), not measured
+                           # and not offered: one turn there costs about 16 credits
+                           "models": list(_VENDOR_MODELS["qoder"])}
 # A pair the matrix failed twice on the one aggregator that serves the id is not offered on that
 # harness (2026-09-13, five scenarios each): llama-4-maverick on OpenRouter under qwen writes the
 # tool call as prose; llama-3.3-70b on OpenRouter fails the recall under goose, the artifact under
@@ -7313,6 +7581,47 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     "minimax": frozenset({"gpt-5.6-terra", "gemini-3.5-flash-lite"}),
     "grok": frozenset({"deepseek-v4-pro"}),
     "agentzero": frozenset({"claude-fable-5", "claude-fable-5-1"}),
+    # The four bases of 0.33.0 offer only what they were MEASURED to run reliably: every model of
+    # each base through the five console scenarios twice (0.33.0-batch3.3 and batch3.7, seven
+    # connections), the family tour, and per model the skill, the four MCP tool transports, the
+    # browser and a real .pptx deliverable opened and checked (2026-10-12, docs/support-matrix-notes.md).
+    # ONE failure that is the model's removes it from that base; a product defect was fixed and
+    # measured again instead. What each one did:
+    #   mimo        claude-opus-4.7 refuses the scenario prompt (both runs); llama-3.3-70b answers
+    #               something else; llama-4-maverick writes the tool call as text (no file, twice);
+    #               qwen3.8-flash mixes up its replies; gpt-5.6-luna overruns the turn; hunyuan-4-preview
+    #               finishes the tour's edit without making the deck.
+    #   jcode       grok-build-0.1 and hunyuan-4-preview loop on tools until the cap; kimi-k3 makes
+    #               no file (twice); gemini-3-flash-preview degenerates on its first turn.
+    #   opensquilla claude-opus-4.7 refuses the scenario prompt (both runs); grok-4.20 and
+    #               llama-3.3-70b make no file; hunyuan-4-preview answers something else.
+    #   nanobot     grok-build-0.1 loops on exec; kimi-k3 and llama-3.3-70b make no file;
+    #               grok-4.5's stream stalls mid-turn.
+    #   all four    nemotron-3-super does not follow a skill (mimo twice, jcode, opensquilla) and
+    #               makes a deck without the asked-for text or none at all (mimo, jcode, nanobot).
+    #   and         jcode: llama-3.3-70b writes deck.pptx as a file that is not a deck (twice).
+    #               mimo: kimi-k3 writes a tool call as text instead of making it, the failure that
+    #               already took it off jcode and nanobot; mistral-medium-3.5 answers a deck request
+    #               with `<use_skill>officecli</use_skill>` as text and makes nothing (two of three);
+    #               gemini-3.5-flash and gemini-3.6-flash create a blank deck and end the turn there
+    #               (twice each on the build that ships; mimo's other six Gemini ids pass);
+    #               gpt-5.4-mini, asked to call a named MCP tool, runs the plugin's skill instead
+    #               (once on rc.7, three of four transports on rc.9).
+    #   rc.21       the last runs before 0.33.0 (Richard: "get the failure models out"): on jcode,
+    #               muse-glimmer-30b and muse-spark-1.1 each failed a plugin turn (skill turn
+    #               incomplete; "calling the probe_sse tool now" and no call); in the five-turn
+    #               conversation whose harness instruction asks for a PDF, gpt-6.1-sol (opensquilla),
+    #               gpt-5.6-luna (nanobot) and qfmodel (qoder) answered "say hi" without one.
+    "mimo": frozenset({"claude-opus-4.7", "llama-3.3-70b", "llama-4-maverick", "qwen3.8-flash",
+                       "gpt-5.6-luna", "hunyuan-4-preview", "nemotron-3-super", "kimi-k3",
+                       "mistral-medium-3.5", "gemini-3.5-flash", "gemini-3.6-flash", "gpt-5.4-mini"}),
+    "jcode": frozenset({"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview",
+                        "nemotron-3-super", "llama-3.3-70b", "muse-glimmer-30b", "muse-spark-1.1"}),
+    "opensquilla": frozenset({"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview",
+                              "nemotron-3-super", "gpt-6.1-sol"}),
+    "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5", "nemotron-3-super",
+                          "gpt-5.6-luna"}),
+    "qoder": frozenset({"qfmodel"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
@@ -7331,12 +7640,18 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # minimax: the runner defines its endpoint with api `openai-completions` (MiniMax Code also has an
 # openai-responses api, but it is not the one the runner sets), the kimi case exactly.
 # cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
+# jcode's openai-compatible provider posts to /chat/completions (its own error names the endpoint),
+# opensquilla's generic `custom` provider is its Chat Completions adapter, and nanobot's `custom`
+# provider is the same — its `apiType` field, the one that would select a Responses surface, is
+# refused on any provider but `openai` ("providers.<name>.api_type is only supported for
+# providers.openai", which rejects the whole config). So a Responses-API-only id on any of the three
+# would be a picker row that fails on send.
 # grok: the runner's one custom model is `api_backend = "chat_completions"` (Grok Build can speak the
 # Responses and Messages APIs too, but that is not the model the runner defines).
 # agentzero too: its model is litellm's openai provider (Agent Zero's `other`, a0_api_mode chat).
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
-                      "cheetahclaws", "grok",
-                      "agentzero")
+                      "cheetahclaws", "grok", "agentzero",
+                      "jcode", "opensquilla", "nanobot")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -7577,7 +7892,10 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
     # WITH a mapping is still routable and must still be shown.
     eff_map = await _effective_model_map()
     integrations = {str(i.get("name") or ""): i for i in await _integrations_doc()}
-    seen = set(curated)
+    # A model measured unreliable on this base stays off it whichever connection names it: the
+    # failure was how the model behaved on the base (_NOT_OFFERED), and a custom endpoint that
+    # lists the same id brought gpt-5.4-mini back onto mimo's picker on the review instance.
+    seen = set(curated) | set(_NOT_OFFERED.get(backend, frozenset()))
     for canonical, iname in eff_map.items():
         if canonical in seen:
             continue
@@ -8071,6 +8389,13 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             break
         try:
             started = await _sandbox_json("/turn", sid, body=body)   # retries cold-start / transient empties
+        except _SandboxRefused as e:
+            # The runner refused to start this turn and said why (jcode on an Anthropic connection
+            # with a model its catalog does not list, 2026-10-12): that is the reason the person
+            # needs, so it carries a status like a connection that ran. Without one, the turn read
+            # "No connection on this account serves claude-sonnet-5.5-direct".
+            rec["tried"].append({"connection": name, "tenant": src, "status": e.status, "error": e.detail})
+            continue
         except Exception as e:  # noqa: BLE001
             rec["tried"].append({"connection": name, "tenant": src, "error": str(e)[:200]})
             continue
@@ -8259,6 +8584,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # finalize record — it's what the per-model llm.* metering bills.
     if translator.usage:
         rec["usage"] = translator.usage
+    if translator.charge:
+        rec["charge"] = translator.charge      # a remote runtime's own bill for the turn, beside the tokens
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
     await _checkpoint(sid, rec)
@@ -8997,6 +9324,11 @@ async def create_response(body: CreateResponseBody, request: Request):
     # here, before anything is allocated, so a missing or unbuilt environment is a 4xx and not a
     # failed turn.
     environment = await _environment_for_turn(org, _task_environment_ref(body, hv))
+    if environment and not _backend_takes_environments(_backend_of_harness(hv) or _backend_of_builtin(harness_id or "")):
+        # The layer is mounted in THIS sandbox; a remote runtime sees none of it. Refused in words
+        # rather than run without the project the task named.
+        raise uhp_error(400, "environment_unsupported",
+                        "This harness runs in a remote runtime and cannot mount an environment.", "environment")
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -9163,9 +9495,11 @@ async def create_response(body: CreateResponseBody, request: Request):
     try:
         # Clear runner_turn_id too: a stale value (the PREVIOUS turn's CLI) would make a cancel in
         # this warmup window burn seconds on a dead-handle sandbox kill before settling.
+        # The heartbeat too: a turn that is accepted is alive, and the orphan sweep reads a
+        # `starting` session with no runner turn and no recent heartbeat as dead (_turn_slot).
         await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                    "running_response_id": resp_id, "runner_turn_id": "",
-                                   "billing_org": billing_org})
+                                   "billing_org": billing_org, "heartbeat": str(time.time())})
     except Exception as e:  # noqa: BLE001 — this write is load-bearing for cross-replica cancel: log it
         print(f"[cancel] accept-time running_response_id write failed sid={sid} resp={resp_id}: {str(e)[:120]}",
               flush=True)
@@ -9224,7 +9558,7 @@ async def create_response(body: CreateResponseBody, request: Request):
 
         async def run_bg():
             try:
-                async with _global_sem(), _tenant_sem(org):
+                async with _turn_slot(org, sid):
                     for ev in tr.start():
                         await bus_emit_bg(ev)
                     status, produced, rec = await _resp_execute(
@@ -9274,7 +9608,7 @@ async def create_response(body: CreateResponseBody, request: Request):
 
             async def run():
                 try:
-                    async with _global_sem(), _tenant_sem(org):
+                    async with _turn_slot(org, sid):
                         for ev in tr.start():
                             await emit(ev)
                         status, produced, rec = await _resp_execute(
@@ -9332,7 +9666,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     async def bus_emit(ev):
         _bus_publish(org, harness_id, member, sid, resp_id, ev)
     try:
-        async with _global_sem(), _tenant_sem(org):
+        async with _turn_slot(org, sid):
             for ev in tr.start():
                 await bus_emit(ev)
             status, produced, rec = await _resp_execute(
@@ -10171,6 +10505,63 @@ def _ws_visible(path: str) -> bool:
     return not any(path.startswith(p) or f"/{p}" in path for p in _WS_HIDE_PREFIXES)
 
 
+# The checkpoint tarball is the session DIRECTORY, which is not always the directory the agent
+# works in: nanobot's loader refuses a session store inside the agent's workspace, so that base
+# keeps its store at the session root and works one level down (_NANOBOT_WS in the runner). Reading
+# the tar straight through therefore showed a nanobot session as 30 files under a `workspace/`
+# prefix the user never typed — its three built-in skill bundles and its instruction file among
+# them — on the share page, in the full files listing, in the download-all zip, and to the kit
+# route that resolves an app's own file BY PATH (a kit asking for deck.json would not have found
+# it). The runner already writes both facts INTO the checkpoint, so this reads them back rather
+# than keeping a second list in the gateway: `.harness/agent-subdir` names the agent's directory
+# and `.git/info/exclude` carries the base's own machinery patterns (git status honours the same
+# file, which is what keeps the produced-files list clean).
+_WS_SUBDIR_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _ws_rules(tf) -> tuple[str, tuple[str, ...]]:
+    def _member(name: str) -> str:
+        for n in (f"./{name}", name):
+            try:
+                m = tf.getmember(n)
+            except KeyError:
+                continue
+            if m.isreg() and m.size <= 64 * 1024:
+                f = tf.extractfile(m)
+                if f is not None:
+                    return f.read().decode(errors="replace")
+        return ""
+    # ONE plain directory name, checked before any stripping: "/etc" stripped of its slashes
+    # would have read as the name "etc", and a value this does not recognise must mean "no subdir"
+    # rather than some other directory.
+    sub = _member(".harness/agent-subdir").strip()
+    if not _WS_SUBDIR_RE.fullmatch(sub):
+        sub = ""
+    pats = tuple(l.strip() for l in _member(".git/info/exclude").splitlines()
+                 if l.strip() and not l.startswith("#"))
+    return sub, pats
+
+
+def _ws_view(path: str, sub: str, pats: tuple[str, ...]) -> str | None:
+    """The tar member's path as the USER sees it, or None when it is not the user's file.
+
+    The base's own exclude patterns are matched against the path as GIT sees it — relative to the
+    session directory — because that is the file git reads them from; the prefix comes off after."""
+    for q in pats:
+        if path == q or (q.endswith("/") and path.startswith(q)):
+            return None
+    if sub:
+        if not path.startswith(f"{sub}/"):
+            return None               # outside the agent's directory is the runner's own state
+        path = path[len(sub) + 1:]
+    return path if _ws_visible(path) else None
+
+
+def _ws_member(path: str, sub: str) -> str:
+    """The inverse: where that user path lives inside the tar."""
+    return f"{sub}/{path}" if sub else path
+
+
 def _wf_id(path: str) -> str:
     return "wf_" + base64.urlsafe_b64encode(path.encode()).decode().rstrip("=")
 
@@ -10271,11 +10662,13 @@ async def _ws_files(sid: str) -> dict[str, bytes] | None:
     out: dict[str, bytes] = {}
     total = 0
     with tf:
+        sub, pats = _ws_rules(tf)
         for m in tf.getmembers():
             if not m.isreg():
                 continue
             path = m.name[2:] if m.name.startswith("./") else m.name
-            if not _ws_visible(path):
+            path = _ws_view(path, sub, pats)
+            if path is None:
                 continue
             if m.size > _WS_FILE_CAP or total + m.size > _WS_TOTAL_CAP:
                 continue                       # oversized: served via the single-member fallback
@@ -10415,7 +10808,9 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
         if tf is None:
             return None
         with tf:
-            for name in (f"./{path}", path):
+            sub, _pats = _ws_rules(tf)
+            member = _ws_member(path, sub)
+            for name in (f"./{member}", member):
                 try:
                     m = tf.getmember(name)
                 except KeyError:
@@ -10484,11 +10879,13 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
     cfile_by_name = await _cfile_by_name(sid)
     files = []
     with tf:
+        sub, pats = _ws_rules(tf)
         for m in tf.getmembers():
             if not m.isreg():
                 continue
             path = m.name[2:] if m.name.startswith("./") else m.name
-            if not _ws_visible(path):
+            path = _ws_view(path, sub, pats)
+            if path is None:
                 continue
             fid = cfile_by_name.get(path) or _wf_id(path)
             files.append({"object": "file", "id": fid, "container_id": sid,
@@ -10586,11 +10983,13 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                     # turn relays, and health probes keep flowing).
                     n, tot = 0, 0
                     with tf:
+                        sub, pats = _ws_rules(tf)
                         for m in tf.getmembers():
                             if not m.isreg():
                                 continue
                             path = m.name[2:] if m.name.startswith("./") else m.name
-                            if not _ws_visible(path) or path.lstrip("/") in seen:
+                            path = _ws_view(path, sub, pats)
+                            if path is None or path.lstrip("/") in seen:
                                 continue
                             tot += m.size
                             if tot > _ARCHIVE_MAX_BYTES:
@@ -16700,6 +17099,35 @@ _BASE_CATALOG: dict[str, dict] = {
         # an MCP server. Pinned by gateway/tests/test_systemone_catalog.py.
         "skills": False,
     },
+    "qoder": {
+        "label": "Qoder Cloud Agent", "backend": "qoder", "status": "ready",
+        # The remote Agent's `system`, before the harness's own instructions and the runner's
+        # delivery contract (runner/qoder_driver.py system_prompt): a file reaches the person only
+        # when the agent delivers it.
+        "system_prompt": ("You are Qoder, an autonomous coding agent running in a cloud sandbox with "
+                          "shell and file access. Read, edit and run what the task needs, and deliver "
+                          "every file the user should receive with DeliverArtifacts."),
+        # The built-ins of agent_toolset_20260401, in Qoder's own names (pinned equal to the runner's
+        # QODER_TOOLS by gateway/tests/test_qoder_catalog.py). A disabled tool is withheld by the
+        # Agent's configuration itself — out of the whitelist, named disallowed, `enabled: false` —
+        # and the session's tools are replaced before every turn, so the deny lands before any
+        # execution: `hard` by UHP §4.3, on every turn of a session. The enabled ones run
+        # `always_allow`, so the remote turn never pauses for a confirmation nobody is here to give.
+        "tools": [("Bash", "Shell"), ("Read", "File Read"), ("Write", "File Write"), ("Edit", "Edit"),
+                  ("Glob", "Glob"), ("Grep", "Search"), ("WebFetch", "Web Fetch"), ("WebSearch", "Web Search"),
+                  ("ImageSearch", "Image Search"), ("ImageGen", "Image Generation"),
+                  ("DeliverArtifacts", "Deliver Artifacts")],
+        "tool_enforcement": "hard",
+        # The runtime is Qoder's, not a process on this box (runner BACKENDS["qoder"]["remote"]):
+        # skills are published to Qoder as Skill resources bound on the session's Agent (so
+        # `skills` stays on); a plugin's stdio MCP servers cannot be reached from there and are
+        # reported unavailable; URL MCP servers are dialled by Qoder's cloud with their bearer held
+        # there in a Vault created for the session; input files are text-type only, 5 MB; an
+        # environment layer cannot be mounted. Token counts and the served model are not on Qoder's
+        # public API: the turn carries a `charge` in Qoder credits instead.
+        "environments": False,
+        "remote": True,
+    },
     "qwen": {
         "label": "Qwen Code", "backend": "qwen", "status": "ready",
         "system_prompt": ("You are Qwen Code, an autonomous coding agent. You work on a real git "
@@ -16753,11 +17181,111 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("spawn_agent", "Subagent")],
         "tool_enforcement": "instruction",
     },
+    "mimo": {
+        "label": "MiMo Code", "backend": "mimo", "status": "ready",
+        "system_prompt": ("You are MiMo Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The PERMISSION keys the fork kept from opencode (config/permission.ts), because those are
+        # the names that can actually be denied — a key outside this set is accepted by the
+        # record-with-rest schema and then matches no tool, which is a switch the console shows and
+        # that disables nothing.
+        "tools": [("bash", "Shell"), ("read", "File Read"), ("edit", "Edit"), ("glob", "Glob"),
+                  ("grep", "Search"), ("list", "List"), ("webfetch", "Web Fetch"),
+                  ("websearch", "Web Search"), ("todowrite", "Todo"), ("task", "Subagent"),
+                  ("question", "Question"), ("lsp", "LSP"), ("skill", "Skill"),
+                  ("external_directory", "External Directory")],
+        # "hard" for opencode's reason, which the fork did not change: a `permission.<key>: "deny"`
+        # removes the tool rather than discouraging it. The honest limit every shell-bearing base
+        # has: denying `edit` does not stop a file being written through `bash`.
+        "tool_enforcement": "hard",
+    },
+    "jcode": {
+        "label": "jcode", "backend": "jcode", "status": "ready",
+        "system_prompt": ("You are jcode, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # Measured on the pinned v0.90.0 by asking the model for its own tool list, which is the
+        # list the schema was built from; pinned equal to the runner's ALL_JCODE_TOOLS.
+        # macos_computer_use is listed because the build registers it — on Linux it has nothing to
+        # drive, which is a property of the host, not of the catalog.
+        "tools": [("bash", "Shell"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit"), ("replace", "Replace"), ("apply_patch", "Apply Patch"),
+                  ("ls", "List"), ("agentgrep", "Search"), ("open", "Open"),
+                  ("webfetch", "Web Fetch"), ("websearch", "Web Search"), ("browser", "Browser"),
+                  ("todo", "Todo"), ("memory", "Memory"), ("batch", "Batch"), ("bg", "Background"),
+                  ("swarm", "Swarm"), ("applet", "Applet"), ("panel", "Panel"),
+                  ("side_panel", "Side Panel"), ("schedule", "Schedule"),
+                  ("skill_manage", "Skill Manage"), ("jcode_docs", "Docs"),
+                  ("conversation_search", "Conversation Search"),
+                  ("session_search", "Session Search"), ("compile_remote", "Remote Compile"),
+                  ("integration_tools", "Integrations"), ("gmail", "Gmail"),
+                  ("maintainer_feedback", "Maintainer Feedback"),
+                  ("macos_computer_use", "Computer Use"), ("mcp", "MCP"),
+                  ("mcp_call", "MCP Call"), ("mcp_search", "MCP Search"), ("invalid", "Invalid")],
+        # "hard", and measured: --disabled-tools runs after the tool profile, and with `write`
+        # disabled the model's own list came back without it. Writing has four doors here (write,
+        # edit, replace, apply_patch) and egress several, so disabling one is not disabling a
+        # capability — the same honest limit every shell-bearing base carries.
+        "tool_enforcement": "hard",
+    },
+    "opensquilla": {
+        "label": "OpenSquilla", "backend": "opensquilla", "status": "ready",
+        "system_prompt": ("You are OpenSquilla, an autonomous agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The tool names its own turns record (measured: write_file, read_file). Its agent CLI has
+        # NO per-tool deny list — `--permissions` chooses a posture (restricted / bypass / full) —
+        # so this list is deliberately short: it names what a turn was seen to call rather than
+        # advertising a switch for every tool in the runtime when none of them can be withheld.
+        "tools": [("exec", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("list_dir", "List"), ("grep", "Search"),
+                  ("web_search", "Web Search"), ("web_fetch", "Web Fetch")],
+        # "instruction", and for a stated reason rather than for lack of looking: there is no deny
+        # list on `opensquilla agent`, so the disabled set reaches the model as a line in AGENTS.md
+        # (runner/server.py adds this base to the set that gets that instruction). UHP §4.3 forbids
+        # overstating this as much as understating it.
+        "tool_enforcement": "instruction",
+    },
+    "nanobot": {
+        "label": "nanobot", "backend": "nanobot", "status": "ready",
+        "system_prompt": ("You are nanobot, an autonomous agent. You work on a real git workspace "
+                          "with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # The 22 tools its loop registers, read off its own start-up line on 0.3.5 and pinned equal
+        # to the runner's ALL_NANOBOT_TOOLS.
+        "tools": [("exec", "Shell"), ("exec_session", "Shell Session"),
+                  ("list_exec_sessions", "Shell Sessions"), ("run_cli_app", "CLI App"),
+                  ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("apply_patch", "Apply Patch"),
+                  ("find_files", "Find"), ("grep", "Search"), ("list_dir", "List"),
+                  ("web_fetch", "Web Fetch"), ("web_search", "Web Search"),
+                  ("message", "Message"), ("my", "Self"), ("spawn", "Subagent"),
+                  ("create_goal", "Goal Create"), ("update_goal", "Goal Update"),
+                  ("list_sessions", "Sessions"), ("read_session", "Session Read"),
+                  ("search_sessions", "Session Search"),
+                  ("send_session_message", "Session Message")],
+        # "hard", and measured at the door that covers BOTH tool sources: the driver sets the
+        # SESSION's disabled_tools, which the loop applies to the registry it is about to use —
+        # after the MCP provider has registered its own tools into it. A registry filtered at
+        # construction would have withheld the built-ins and let every MCP tool through. Measured:
+        # with write_file withheld the model wrote the file with `exec` instead, which is the honest
+        # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
 }
 
 # Bases this server can execute. Derived from the catalog above so the two cannot disagree —
 # `claude` is accepted as an alias for `claude-code` because existing harnesses store it.
 _SUPPORTED_BASES = tuple(_BASE_CATALOG) + ("claude",)
+
+
+def _backend_takes_environments(backend: str) -> bool:
+    """Whether a turn on `backend` can mount an environment layer (runner/environments.py). A base
+    whose runtime is remote reads nothing from this box and declares `environments: False`; the
+    turn is refused before anything is allocated rather than run without the layer it named."""
+    b = str(backend or "").lower()
+    return all(bool(e.get("environments", True)) for e in _BASE_CATALOG.values() if e.get("backend") == b)
 
 # The per-harness URL (/{hid}/v1/*) accepts every base id the catalog declares, plus stored chrn
 # ids — DERIVED, so adding a base to _BASE_CATALOG routes its public URL with no second edit.
@@ -19271,6 +19799,10 @@ async def list_bases(request: Request) -> dict:
                               if b.get("skills", True) else []),
             "builtinSkillsEnumerable": False,
             "takesSkills": bool(b.get("skills", True)),
+            # False for a base whose runtime is remote (qoder): an environment is mounted on this
+            # box only, and a turn that names one is refused (_backend_takes_environments), so the
+            # console offers none rather than a choice every Task would then fail on
+            "takesEnvironments": bool(b.get("environments", True)),
         })
     # The limits a turn gets when neither the request nor the harness sets one, so the console can
     # show the number that will apply rather than a placeholder of its own.

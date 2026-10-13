@@ -6,6 +6,79 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## The four new bases offer only what they run reliably (2026-10-12, 0.33.0-rc.5 to rc.11, the review instance)
+
+The rule from here on, for every base: a base offers the models it was measured to run reliably on
+every dimension, and one failure that is the model's own and repeats (on its retest, or in the same
+dimension on another base) takes the model off that base. A failure whose cause was the product is
+fixed and measured again instead, never used to drop or to keep a model.
+
+**What was measured, per base and per model.** Every model each base could reach went through the
+five console scenarios twice (0.33.0-batch3.3 and batch3.7, seven connections) and the family tour.
+Then each model left on a base ran, through the API on the review instance: the plugin skill, an
+MCP tool over stdio, the free-form rows tool, SSE and streamable HTTP (the row passes only when the
+model asked for served it), the browser plug (navigate and click, the answer naming the page), and a
+one-page deck with a stamp no other turn could make, downloaded, opened and checked for the stamp.
+Every first failure was retested once.
+
+**What each base offers.** mimo 47, jcode 50, opensquilla 51, nanobot 51. Every offered model passed
+every dimension above on the build that ships, with one exception named below.
+
+**Taken off, with what each did** (the same text is above `_NOT_OFFERED` in gateway/app.py):
+- mimo: claude-opus-4.7 (refuses the scenario prompt, twice), llama-3.3-70b (answers something
+  else), llama-4-maverick (writes the tool call as text, twice), qwen3.8-flash (mixes up its
+  replies), gpt-5.6-luna (overruns the turn), hunyuan-4-preview (no deck in the tour),
+  nemotron-3-super, kimi-k3 (tool call as text), mistral-medium-3.5 (`<use_skill>officecli</use_skill>`
+  as text, no deck, two of three), gemini-3.5-flash and gemini-3.6-flash (a blank deck and the turn
+  ends, twice each), gpt-5.4-mini (runs the plugin's skill when asked for a named MCP tool).
+- jcode: grok-build-0.1 and hunyuan-4-preview (loop on tools to the cap), kimi-k3 (no file, twice),
+  gemini-3-flash-preview (degenerates on its first turn), nemotron-3-super, llama-3.3-70b (writes
+  deck.pptx as a file that is not a deck, twice).
+- opensquilla: claude-opus-4.7 (refuses the prompt, twice), grok-4.20 and llama-3.3-70b (no file),
+  hunyuan-4-preview (answers something else), nemotron-3-super.
+- nanobot: grok-build-0.1 (loops on exec), kimi-k3 and llama-3.3-70b (no file), grok-4.5 (stream
+  stalls), nemotron-3-super.
+- nemotron-3-super, on all four: does not follow a skill (mimo twice, jcode, opensquilla) and makes
+  a deck without the asked-for text or none (mimo, jcode, nanobot).
+
+**Product defects the measurement found, each fixed and measured again** (all in this release, eleven in all):
+- jcode's tool calls reached the console with no arguments: the runner sent each call at
+  `tool_start` and dropped the `tool_input` pieces that carry them. Held until complete now; a
+  console check (scripts/support-matrix/ui-tool-rows.mjs) opens the Bash row and finds the command.
+- A turn waiting for a slot on a busy single-container instance read `failed`, then `completed`: the
+  orphan sweep took a `starting` session with no heartbeat for a dead one. The accept-time write
+  stamps the heartbeat and `_turn_slot` renews it while the turn waits.
+- mimo could reach providers other than the turn's connection: a model's `actor` subagent named
+  `xiaomi/mimo-v2.5`, MiMo's service refused the key, and a finished deck turn failed as "your key
+  was refused". opencode and mimo configs now set `enabled_providers: ["hr"]`.
+- mimo's 23 built-in skills competed with the harness's: its pptx/docx/xlsx/pdf-official need
+  python-pptx and the like, which no sandbox here can install. `MIMOCODE_DISABLE_BUILTIN_SKILLS=1`.
+- jcode's own `browser` needs a Firefox extension bridge that never connects in the sandbox; a
+  model that picked it looped for two hours (459 tool calls). Off on every jcode turn, with
+  `macos_computer_use`, `gmail` and `maintainer_feedback`.
+- A file the agent committed on a session's first turn was never handed back (the collection
+  cursor was set at that turn's collection, after the commit). Set at the turn's start now.
+- A LibreOffice profile inside the workspace (a model checking its deck by rendering it) filled the
+  25 files a turn hands back and pushed the deck out. A profile's `user/` tree is not a deliverable.
+  gpt-6.1-sol, briefly taken off opensquilla for this, is offered again and passes.
+- opensquilla's tool rows had no arguments while the turn ran (its progress events carry none).
+  The runner's relay now keeps each call's arguments as the model sends them, by call id, and the
+  row opens with them; the transcript fills any call the relay did not see when the turn ends.
+  Checked in the console mid-turn (scripts/support-matrix/ui-tool-rows-live.mjs).
+- opensquilla answered English prompts in Chinese, French or Spanish on GPT models (gpt-5.4: 8 of 8
+  in Chinese): its own system prompt's three reply-language rules. The runner takes them out of the
+  installed template; English prompts then got English answers (8 of 8) and Chinese prompts Chinese.
+  Its `cron` tool, whose scheduler never runs in a one-shot turn, is off too.
+- Every opensquilla answer replayed the conversation so far: the transcript of a resumed session
+  holds every turn and the end-of-turn replay read all of it. It starts at this turn's prompt now,
+  and the suite's follow-up fails an answer that repeats the first turn's.
+- A hermes turn the provider refused said only "↻ Resumed session …": the relay keeps the provider's
+  refusal on the route, and the turn's error is that refusal when hermes said nothing else.
+
+**The exception.** nemotron-3.5-lightning is the one offered model these bases reach through
+OpenRouter on the review instance, and that instance's OpenRouter key reached its spending limit
+during the re-measure on rc.9: its deck there could not run. It passed every dimension on rc.7.
+
 ## Claude Haiku 5.5 (2026-10-07)
 
 Added in 0.31.12 beside Haiku 4.5 on every base that offers Haiku 4.5 except aider, with every
@@ -638,6 +711,11 @@ wrong. Two suggestions, both the maintainer's call: let the dimension name the t
 (a base that has no `WebSearch` could disable one it has), and make the script write something the
 agent cannot predict from reading it.
 
+**The first of those two was done on 2026-10-03** (see "The disabled tool is the base's own"
+below): `custom-harness.mjs` now carries a per-base `DISABLED_TOOL` table, held to the gateway's
+`_BASE_CATALOG` by a test. The second — a script whose output the agent cannot predict from reading
+it — is still open.
+
 **Known open question: `max_context_size`.** kimi requires one per model and plans compaction
 against it; the catalog carries no per-id window, so `KIMI_CONTEXT_WINDOW` holds one value for all
 ids, exactly as `CODEX_CONTEXT_WINDOW` does for codex. Being wrong changes WHEN the agent compacts,
@@ -754,11 +832,15 @@ runner's, where the same class of bump breaks FastAPI outright.
 **Known limitation: no tool loop, so the custom-harness dimension's disabled tool is not aider's.**
 The request body's keys are exactly `['messages','model','temperature']` — no `tools`, no
 `functions`. aider's withholdable surface is the shell command and the URL scrape, which the gate
-really does refuse; but `custom-harness.mjs` disables the fixed id `WebSearch`, which matches
-nothing on this harness — so `disabled_tool_unused` would pass VACUOUSLY, as it already does for
-qwen, gemini and cline, whose catalogs carry no `WebSearch` either. The enforcement here is real and
-demonstrable; what is missing is a dimension that disables a tool the base under test actually
+really does refuse; but `custom-harness.mjs` disabled the fixed id `WebSearch`, which matches
+nothing on this harness — so `disabled_tool_unused` passed VACUOUSLY, as it also did for qwen,
+gemini and cline, whose catalogs carry no `WebSearch` either. The enforcement here is real and
+demonstrable; what was missing was a dimension that disables a tool the base under test actually
 lists.
+
+**Fixed 2026-10-03** (see "The disabled tool is the base's own" below). aider is the one base the
+table marks `null`: its catalog is a single tool, Shell, and the stamp task needs it, so the
+dimension says it cannot test the policy there instead of passing.
 
 
 ## aider × Google, the first paid column (2026-09-16)
@@ -3162,3 +3244,642 @@ On both candidate starts the log has one line, "Hermes: a tool's own error answe
 The patch was run against the real `hermes-agent` 0.19.0 file: it changes two places and the result compiles (the test for this needs the file at hand and is skipped in CI, since Hermes is not in the image).
 
 Not shown live: a server that cannot be reached still opening the breaker. When the tool server was stopped mid-task Hermes dropped its tools ("Unknown tool") before the breaker came into it. That half is covered by the test of the patched check, where an error that did not come from a tool's own answer still counts.
+
+## The qoder backend: Qoder Cloud Agent, the first remote runtime (2026-10-09) — behaviour measured at a stub, NO column yet
+
+Qoder Cloud Agent runs the agent loop in Qoder's cloud and is reached over its Managed API
+(REST + SSE, `/api/v1/cloud`). The runner's turn process, `runner/qoder_driver.py`, is an HTTP
+client to it: it creates one Environment, one Agent and one Session per HarnessRouter session,
+posts the message, follows the event stream and lands delivered artifacts in the workspace root.
+The registry marks the backend `remote`, and `docs/harness-verification.md` ("Remote runtimes")
+lists what that changes. Issue #236 holds the design discussion.
+
+### Behaviour measured before any column
+
+Measured against a stub of the Managed API built from the public reference
+(`runner/tests/test_qoder_backend.py`, the driver run as the subprocess it is), not against
+api.qoder.com; the live column is the next step and needs a tenant's PAT.
+
+- A turn with a tool call and a delivered artifact: the delta text then only the remainder of the
+  buffered message; the tool call and result under Qoder's event ids; the artifact in the
+  workspace ROOT with its declared bytes, nothing under `.harness/`; the result with no usage, no
+  model, and `charge: {amount, unit: "qoder_credits", basis: "snapshot"}` from the session's usage
+  snapshot, less what the session had used before the turn (the snapshot is the session's running
+  total: 0.35 after the recorded session's first turn, 0.61 after its second, so the second is
+  charged 0.26). The Agent's toolset carries the disabled tool out of the whitelist, in
+  `disallowed_tools` and `enabled: false`; every enabled one `always_allow`.
+- A declared artifact that does not land, a name with a path, `..`, a dot directory or a control
+  character: the turn is `incomplete` naming the file, nothing is written for it, and nothing is
+  even fetched for a refused name. An existing file is never overwritten (`name (2).ext`) and a
+  symlink is never followed.
+- A tool disabled between two turns of one session: the Agent gets a new version AND the session's
+  own tools are replaced (`POST /sessions/{id}`, `agent.tools`) before the message goes.
+- A session archived at Qoder, or an id the state never knew: `resume_lost`, then a new session; a
+  session still running an earlier turn: a conflict, failed, and the message is not sent.
+- A pending confirmation (`stop_reason: requires_action`): answered — `allow`, or `deny` with a
+  message for a tool the harness disabled — and the turn goes on to its real stop.
+- Every `stop_reason` other than `end_turn` is `incomplete` with the raw reason; a `session.error`
+  with `retry_status: retrying` is waited on, one with `exhausted`/`terminal` fails the turn with
+  Qoder's sentence; `session.status_terminated` fails it.
+- Input files: uploaded once by content hash, mounted at `/mnt/session/uploads/<name>` and named
+  in the system prompt; a binary file fails the turn before anything is created, naming it.
+- Skills: published as custom Skill resources from the staged bundle (bare file tree under the
+  frontmatter name), a new version only when the bytes changed, bound on the Agent; a bundle
+  whose `name` is not a Qoder skill name is reported, not published. A URL MCP server's bearer
+  becomes a Vault credential and the session names the vault; a stdio server is reported
+  `mcp_unavailable`.
+- SIGTERM mid-turn: `POST /sessions/{id}/cancel` reaches the stub, the record carries "cancel
+  accepted by Qoder for session <id>", exit 0; through the runner, `cancel_turn` on a `remote`
+  backend sends SIGTERM first and the driver's last lines reach the turn record before the kill,
+  while a local backend's stop is the SIGKILL it always was.
+- The relay route: a session object naming the configured model passes through and the turn's
+  served model stays empty; DELETE goes up; a 404 comes down as the API wrote it; a stalled stream
+  is closed without an error event. The stub sees the real credential and never the placeholder;
+  the driver sees the placeholder and never the credential.
+- The purge: cancel then delete the session, delete artifact and input files, archive the Agent,
+  delete the Vault, the Skills and the Environment (archived when still referenced); an object
+  already gone is not a failure; a delete the API refuses is reported with its id and the exit says
+  so. `DELETE /workspace` with the connection in its body runs it through the relay; without a
+  credential the folder still goes and the answer says what was left at Qoder.
+
+### Live, against api.qoder.com (2026-10-09, Global region, model `efficient`)
+
+The driver run directly against the Managed API with a tenant PAT, no gateway in the path; the
+recorded history is `runner/tests/fixtures/qoder/live-session-events.json` and a test reads the
+driver's mapping off it.
+
+- **First turn** (12.7 s): Environment, Agent (v1) and Session created; `Write` then
+  `DeliverArtifacts`; `agent.artifact_delivered` with `file_id`, `original_filename: hello.md`,
+  `size: 36`, `content_type`; the file landed in the workspace root with the declared bytes;
+  `session.usage` then `session.status_idle {end_turn}`; charge snapshot
+  `{model_credits: 0.35, sandbox_runtime_credits: 0.03, total_credits: 0.38}`. The event order was
+  the one the reference describes; `agent.thinking` carried no content; `span.model_request_end`
+  carried `model_usage.credits` and no token count, as documented.
+- **Second turn on the same session, Bash disabled between the turns** (5.7 s): the Agent went to
+  v2 and the session's tools were replaced (`session.updated` is in the history); asked to run a
+  shell command, the model answered "I don't have a Bash shell tool available. My available tools
+  are: Read, Grep, Glob, Write, Edit, WebFetch, ImageSearch, ImageGen, and DeliverArtifacts" and
+  recalled the first turn's file verbatim — `hard` across turns, and continuation, on the wire.
+- **Cancellation**: a `sleep 120` Bash step, SIGTERM to the driver 5 s in: `POST /cancel` answered
+  202 at once and the record carries "cancel accepted by Qoder for session <id>"; the remote
+  session still read `running` 3 s later and `idle` within 20 s, its history ending in
+  `session.status_idle {stop_reason: {type: "cancelled"}}` — the abort is asynchronous, and
+  `cancelled` is a `stop_reason` value the reference does not list (it would read as `incomplete`
+  with that raw reason on a turn that saw it). The cancelled turn billed 0.29 model credits.
+- **Purge**: cancel, delete session, delete the artifact file, archive the Agent all answered as
+  documented; `DELETE /environments/{id}` answered **409** even after the session was deleted, and
+  the archive fallback took it.
+- **Models**: `GET /models` listed 17 ids for this tenant (`auto`, `ultimate`, `performance`,
+  `efficient`, `smodel`, `qmodel_38max`, `qfmodel`, `qmodel_latest`, `qmodel`, `kmodel_latest`,
+  `kmodel`, `gmodel`, `gfmodel`, `dmodel`, `dfmodel`, `mmodel`, and a tenant-private dog-fooding
+  mode), each with its `price_factor` and, for most, an `efforts` list — more than the reference's
+  one documented id. The China-region base answered 401 to this token, so a connection is one
+  region. The catalog carries the sixteen public ids; `ultimate` and `efficient` have completed
+  turns.
+
+### Not yet confirmed with Qoder (the driver's defaults until then)
+
+The presigned artifact URL's lifetime (a lapsed link is re-requested, never a failure in itself);
+whether a delivered artifact can carry directory structure (flat names are written); the session
+idle TTL and auto-archive (an archived or missing session is `resume_lost`); the billing of failed
+and cancelled runs (no figure is given for them); whether `POST /sessions/{id}/events` is
+idempotent as a contract (the message is never sent twice, the history decides); the files
+reference's text-only rule against the message schema's image `file_id`.
+
+### Versions and the column
+
+Public reference `04-Managed层`, API version as served on 2026-10-09; no Qoder API version header
+is documented. The live column (five scenarios, custom-harness dimension, the family tour where it
+applies — Qoder picks the model, so a "switch" is a different Qoder id) and a `scripts/benchmark`
+column run once a tenant PAT is on the instance, and this section gains what they measured.
+
+### Through a self-hosted instance (2026-10-10, 0.33.0-rc.2 to rc.4, Global region, Pro Trial account)
+
+Owner trust, the Qoder connection added to the instance, driven through the console and the API.
+
+- **A plan without credits is refused at the session**, with Qoder's sentence on the record: `402
+  billing_error: You have no available credit`. The Environment, Agent and Skills made before the
+  refusal were deleted with the task (the Agent archived), which also proved the purge live.
+- **Delivered file, follow-up, charge.** qfmodel wrote and delivered `hello.md`; the follow-up on
+  the same Qoder session recalled its line. The first turn was charged 0.29 credits and the second
+  0.03 against a session total of 0.32: the snapshot is the session's running total, and before the
+  per-turn delta the second turn read 0.32. qfmodel is not free here: a small turn bills about
+  0.23 model credits although `GET /models` gives it a price factor of 0.
+- **A tool disabled between turns.** A custom harness ran `uname -s` through Bash, then had Bash
+  disabled; the next turn answered NO SHELL and called nothing. Qoder's session showed `Bash` in
+  `disallowed_tools` and `enabled: false` while the Agent stayed at version 1.
+- **Cancel.** Stop on a turn running `sleep 120`: the record says `cancel accepted by Qoder for
+  session …`, and the Qoder session was idle 6 s after the stop.
+- **Files written and never delivered.** On rc.3 the artifact scenario failed on `auto` and
+  `performance`: the agent wrote the file and answered DONE without calling DeliverArtifacts,
+  though both Qoder's system prompt and ours tell it to. On rc.4, which asks once for what was
+  written and not delivered, one turn of the artifact scenario per model: the 14 ids run there all
+  delivered `HELLO` and answered DONE, and the ask was needed on 10 of the 12 whose Qoder history
+  was read (qmodel_latest and kmodel delivered unasked). `ultimate` delivered unasked in the rc.3
+  matrix, and `smodel` on rc.3 when the prompt said to deliver. qfmodel ran the five console
+  scenarios, all ok (the first try lost the file card in the console while the record held the
+  file; the retry passed).
+- **Cost of one small turn**, in credits: qfmodel 0.33, gfmodel 0.26, dfmodel 0.31, qmodel 0.41,
+  mmodel 0.43, efficient 0.41, auto 0.29, kmodel 0.92, dmodel 1.25, gmodel 1.61, kmodel_latest
+  2.36, qmodel_38max 2.44, qmodel_latest 2.47, performance 4.27, smodel 11.2. Qoder also lists
+  `cmodel` (Cantus, price factor 4); it is not in the catalog, not having been measured.
+
+## Five bases added together, four of them offered (2026-10-02/06)
+
+MiMo Code (XiaomiMiMo/MiMo-Code, MIT), Gajae-Code (Yeachan-Heo/gajae-code, MIT), jcode
+(1jehuang/jcode, MIT), OpenSquilla (TokenRhythm/opensquilla, Apache-2.0) and nanobot
+(HKUDS/nanobot, MIT), as the seventeenth to twenty-first bases.
+
+**gajae is implemented and NOT OFFERED**: its CLI cannot run under this product's session
+write-wall, measured both ways on a live instance — see "gajae: the write-wall and a lock that
+walks its ancestors" below. The other four are offered.
+
+**The FULL Vercel column, 2026-10-11**: every catalog id this connection was probed to serve — 50
+of the 54 common to all four catalogs, muse's four excluded and not probed — on all four bases, the
+five scenarios, `EXPECT_CONNECTION=integration:Vercel`. 200 pairs, 1,000 scenarios.
+
+| base | clean pairs | pass | fail | not measured | unlabelled | driver errors |
+|---|---|---|---|---|---|---|
+| mimo | 48/50 | 240 | 2 | 8 | 0 | 0 |
+| jcode | 50/50 | 250 | 0 | 0 | 0 | 0 |
+| opensquilla | 49/50 | 245 | 1 | 4 | 0 | 0 |
+| nanobot | 49/50 | 245 | 1 | 4 | 1 | 0 |
+| | | **980** | **4** | **16** | | |
+
+No foreign connection on any turn, and no substitution survived `samemodel`. The sixteen
+not-measured are the consequence of the four failures: a pair whose FIRST turn fails runs nothing
+after it.
+
+**All four failures are a model declining the scenario's own prompt, and none is a base's.**
+claude-opus-4.7 refused to echo the token on BOTH mimo and opensquilla — "replying with that string
+would misrepresent what model you're talking to", "instructions embedded in request context or
+runtime metadata" — which is one model's judgement reproduced across two bases. qwen3.8-flash
+answered `ack-ef45577c` on mimo, and on nanobot its turn came back "Service temporarily
+unavailable", which is the provider's.
+
+That is worth knowing when reading this table: the scenario prompt is "Reply with exactly:
+M1-<model>", and a model careful about injected instructions can read a real user message as one.
+A refusal costs the pair all five rows, because the first turn gates the rest. The shape of the
+prompt, not the base, is what those rows measure.
+
+**An eight-model column was run first** (one id per family, 2026-10-10, 158 of 160) and is kept in
+the results files. It is superseded by the above for two reasons: it covered 8 ids of 50, and it was
+scored by a judge that read the wrong thing (below).
+
+The earlier columns were taken on three different builds as the fixes below landed; these were
+re-run together on the tree that ships, because arguing per fix about which column it could not have
+touched is weaker evidence than running them again. `unlabelled` 0 everywhere is what makes rule 2
+readable at all — a turn with no served model is a turn the rule cannot judge, and it is reported
+rather than counted as a pass.
+
+**The two rows that failed, and the difference between them.** Both were investigated from the
+session the driver now KEEPS when a pair fails — before that change the session was deleted on the
+way out and a failing row left only the judge's own sentence.
+
+- **jcode / glm-5.3-flash, artifact: the provider's stream, and the file WAS written.** 290 s, then
+  "Upstream stream ended before terminal chunk". The kept session has `hello-jcode.txt` on disk and
+  in the full file listing, so the work happened; the turn was marked failed and its own produced
+  list was empty, so no card was rendered for it. Re-run: 5/5, so the truncation was the provider's
+  and not repeatable. Counted as a pass in the table above only because the re-run passed — the
+  original row and the re-run are both in the results files.
+- **nanobot / kimi-k3, artifact: repeatable, and not the base's write path.** Failed twice in a row
+  with `tools=0` — the model answered DONE having called nothing, and nothing was on disk anywhere
+  in the session. But a FRESH single turn of the same task on the same pair calls `write_file` and
+  produces the file, and so do both controls (nanobot with gpt-5.4, opensquilla with kimi-k3). What
+  differs is position: the artifact scenario is the FOURTH turn, after three "reply with exactly
+  M1-…" exchanges and a switch away to gpt-5.4 and back, and this model carries that pattern on and
+  answers in text. A model behaviour in a context, repeatable in that scenario, with the base's
+  write path demonstrably working for that exact pair. **The row is left at 7/8 rather than retried
+  until it passes.**
+
+Everything below is behaviour measured against the pinned build on a developer machine — flags,
+event schema, failure reporting, resume, usage accounting, tool policy — through a real provider one
+turn at a time. It says each base works; the column above is what says each MODEL it offers does.
+
+### What each one is, and what it shares
+
+| base | pinned | lineage | normaliser | turn process |
+|---|---|---|---|---|
+| mimo | @mimo-ai/cli 0.1.15 | an **opencode fork** (its repo root package.json is still `"name": "opencode"`) | `_opencode_to_claude`, unchanged | `mimo run --format json` |
+| gajae | gjc 0.18.5 | **pi's lineage** (docs/porting-from-pi-mono.md; its deps still carry `pi-ai`) | `_gajae_to_claude`, which delegates to `_pi_to_claude` | `gjc -p --mode json` |
+| jcode | v0.90.0 | its own (Rust) | `_jcode_to_claude`, its own | `jcode … run --ndjson` |
+| opensquilla | 0.5.6 | openclaw/hermes lineage (it migrates `~/.openclaw` and `~/.hermes`; its transcript is the pi message shape) | `_opensquilla_to_claude`, its own | `opensquilla agent --json --event-stream-stderr` |
+| nanobot | nanobot-ai 0.3.5 | its own (a personal-agent runtime, not a coding CLI) | the claude passthrough | `runner/nanobot_driver.py`, in process through its SDK |
+
+### The defects each one's defaults would have caused, and what was done
+
+- **opensquilla routes the model away from you by default.** `[squilla_router] enabled = true` ships
+  on, and the router "scores each turn … then routes it across four tiers to the cheapest capable
+  model". That is matrix rule 2 violated by configuration, not by accident. The builder writes
+  `enabled = false`, and if a `router_decision` event arrives anyway the turn FAILS naming the model
+  it ran instead — the rule pi already enforces for a CLI that substitutes.
+- **opensquilla assumes a generic endpoint holds 8192 tokens.** The first live probe died with
+  `provider_request_too_large` — "The fixed system instructions exceed the provider request budget"
+  — on a three-sentence prompt, because its own system block is ~14k characters and its tool schemas
+  ~29k. The builder declares `context_window` per model.
+- **opensquilla's `--session-db-path` defaults to `:memory:`**, i.e. no continuity between turns at
+  all. It is named explicitly, inside `.harness/`, so the conversation is checkpointed.
+- **jcode replaces itself mid-measurement.** Auto-update is on by default; `--no-update` is passed
+  on every turn. (`--auto-update` takes no value — `--auto-update=false` is a clap usage error.)
+  Its anonymous telemetry is also on by default and prints to stderr: `JCODE_NO_TELEMETRY=1`.
+- **jcode's own `done.usage` is not the turn's usage.** `NdjsonRunState.usage` is ASSIGNED on every
+  `TokenUsage` event rather than accumulated, so it holds the LAST request's numbers: a measured
+  two-request turn reported input 10,748 while its two `tokens` events summed to 21,357. The
+  normaliser accumulates the events and ignores `done.usage`. Its `input` is also GROSS — jcode's
+  own OpenAI client says "input_tokens is the total, including both cache-read and cache-write
+  subsets" — so BOTH caches are netted out, where `_norm_token_usage` nets only the read.
+- **jcode has no remote MCP client at all.** "jcode currently supports stdio (command-based)
+  servers only; HTTP/SSE entries are recognized and skipped with a log line." Without the runner's
+  bridge every remote server a harness declares is dropped in silence, so jcode is in
+  `_BRIDGED_TRANSPORTS` for both transports. opensquilla takes stdio and SSE but not streamable
+  HTTP, so it is bridged for `http`.
+- **jcode's `--model` is its session's INITIAL model, and a resumed turn ignores the one it is
+  given.** Its own help says so ("Interactive sessions can switch providers with /model") and
+  `jcode run` has no model flag of its own, so on `--resume` the model stored with the session wins.
+  Measured on 2026-10-07 with mimo as a flat-layout control in the same run: two turns in one
+  session, haiku then gemini — jcode served `anthropic/claude-haiku-4.5` twice, mimo served each as
+  asked. The family tour served ALL TWELVE of jcode's families with `openai/gpt-5.4` and scored it
+  12 of 12, and the EIGHT-MODEL column had the same evidence and passed it too: every jcode pair's
+  `served` list held ONE entry where every mimo pair's held two. Both judges now read the served
+  model (`run.mjs` fails a switch row unless the turn naming the partner was served by it;
+  `family-tour.mjs` requires the family's own model), and `_jcode_session_model` points the session
+  store at this turn's model before `--resume` reads it. After: that eight-model column went to 8 of
+  8 pairs with two served entries each, and the full 50-id column (above) is 50 of 50.
+
+  **What that does not fix, and will not be fixed from here: a turn after a KILLED turn stays on the
+  killed turn's model.** Reproduced deterministically with the same control — A on gpt-5.4 served
+  gpt-5.4, B on haiku killed mid-flight by a 10 s cap, C asked for gemini and was served HAIKU,
+  with the runner's own log line showing it had pointed the store at gemini first. Three places
+  jcode records the model were tried and measured and NONE of them changes it: the session file's
+  top-level `model` (which does fix the normal path, and is what ships), `env_snapshots[].model`
+  (the tour's file carried four consecutive entries naming the cancelled turn's model, which is
+  what made it look like the answer), and the `turns` table of `model-usage-v1.sqlite3`, which the
+  session file's own `model_usage_turn_id` points into. jcode's log has a `model` step inside
+  `restore_session` that assigns it; the binary is stripped, so the mechanism stops being reachable.
+  The alternative — refusing to resume a killed session when the model changed, and saying so with
+  the existing `resume_lost` notice — trades the conversation for the model, and the decision was to
+  keep the conversation and write the limit down here. A turn whose model matters after an
+  interruption should be started as a new session.
+
+- **A jcode turn leaves almost nothing to diagnose with.** Its NDJSON carries `id` and `name` for a
+  tool call and never the INPUT (`tool_done` carries `output`), so the record's tool arguments are
+  `{}` — and a turn that is cancelled loses its served model and its tool list from the record
+  altogether. The 279-tool-call runaway below was readable only from the gateway's event trace.
+
+- **Two of twelve families ran away on jcode and the deck was already correct.** Measured
+  2026-10-07, grok-4.3 on the tour's "make the code line monospace" edit: 193 `bash` + 86 `todo`
+  calls, 68 tool-result rounds, ten minutes, no final answer. The trace shows it had ALREADY made
+  the change (Courier New present, sizes present, schema valid) and kept re-reading the slide XML,
+  the font list, the sizes and the file's sha256, rewriting one completed todo seventeen times.
+  deepseek, kimi, glm and mistral then also failed to settle inside the cap — the first three
+  families, before any model switch had real effect, finished in 27-33 s. jcode has no step or
+  iteration flag of any kind, so nothing bounds this but the turn's wall clock
+  (`MAX_TURN_SECONDS`, six hours by default); the operator's step budget — the gateway's `max_step`,
+  which reaches the runner as `max_turns` — is forwarded by nine of twenty builders and is a no-op
+  on the other eleven, this one included.
+
+- **nanobot's CLI seeds the workspace and makes a second git repository in it.** `nanobot agent -m`
+  calls `sync_workspace_templates()`, which creates AGENTS.md, SOUL.md, USER.md, HEARTBEAT.md,
+  memory/MEMORY.md, memory/history.jsonl, prompts/README.md and skills/ and then `GitStore.init()`s
+  the workspace — measured, all eight on a bare directory. Its SDK path calls neither (only
+  `.nanobot/workspace-id` appears), which is one of the reasons this base is driven in process.
+- **nanobot refuses a session store that sits inside the agent's workspace**, and that rules out
+  the arrangement every other base here uses. `JsonlSessionStore.__init__` raises "session storage
+  must be outside the agent workspace" when the sessions root is the workspace or under it — a
+  sound rule, since the agent has file tools over its workspace and must not be able to rewrite its
+  own conversation. The conversation still has to ride the checkpoint, which is a tar of the
+  session directory, so the sessions root has to be inside the session and outside the workspace:
+  the only shape that satisfies both is config (and therefore sessions) in `.harness/nanobot/` with
+  the agent's workspace one level down, at `<session>/workspace`. Its AGENTS.md and skills live
+  there too, and the driver chdirs into it, so a shell that writes a relative path cannot land a
+  level above what the model was told it has — Agent Zero's artifact failures were exactly that.
+
+  The nesting STAYS; what changed is that it no longer reaches the user, because a session's file
+  root and the agent's cwd being different directories broke three things. Measured on a live
+  instance with a flat-layout base as the control in the same run:
+    1. a file written through `PUT /v1/sessions/{sid}/files` landed at the session root and the
+       agent answered "there is no notes.txt in the working directory", while the control read it.
+       That route is how an app owns state the agent also edits (the slides kit's deck.json), and
+       caller attachments land the same way. Both run before a backend is built, so neither can know
+       a base nests: `_adopt_into` moves root-level files into the agent's workspace at the start of
+       every turn, keeping back only what `/produced` already excludes.
+    2. deliverables came back as `workspace/<name>`, a directory the user never typed.
+       `_produced_visible` strips it where the cards and their download both resolve, and GET /file
+       tries the agent's directory then the session root.
+    3. the CHECKPOINT readers — share page, full file listing, download-all zip, and the kit route
+       that resolves a file by path — showed 30 files under that prefix, machinery included. The
+       runner writes `.harness/agent-subdir` and `.git/info/exclude` into the checkpoint and the
+       gateway reads them back (`_ws_rules`/`_ws_view`), so one source serves both sides rather than
+       a second exclusion list in the gateway.
+  An earlier version of this file called the prefix unfixable. That was read off the constraint
+  rather than measured, and only the constraint on the session store was real.
+  **Found by running the runner's real argv against the real package**, not by any test: the
+  driver's own fake could not have seen it, which is the whole of why that end-to-end was run.
+- **nanobot's usage is gross too.** A measured two-request turn: `input_tokens` 11,107 with
+  `cache_read_tokens` 5,503, while the requests reported 5,506 and 5,601 — the cached read is a
+  SUBSET. The driver nets it.
+- **gajae auto-enables `/v1/models` discovery on a custom provider.** Against Vercel it listed 376
+  upstream models under our provider name. It is marked optional, so an endpoint without a models
+  list degrades to the static entry, and the builder names the model fully qualified so a fuzzy
+  `--model` cannot land on a discovered id. Its signed model-preset registry — an HTTPS fetch that
+  can rewrite which model a preset names — is turned off.
+- **jcode's Linux release is a PAIR, and its macOS release is not.** `jcode-linux-<arch>.tar.gz`
+  holds a 505-byte `sh` launcher plus `jcode-linux-<arch>.bin`; the launcher puts its own directory
+  on `LD_LIBRARY_PATH` and execs the `.bin` beside it. The macOS archive holds a single binary and
+  no launcher — so a probe on a developer's Mac shows one layout and the image gets the other.
+  Installing "the file called jcode*" took the launcher, left its `.bin` behind, and produced an
+  executable that is on PATH, satisfies `backend_bin`, and dies on its first turn. Found by running
+  the installer function against the real Linux asset, which is now part of what is done before a
+  base is called installed: `install_mimo`, `install_gajae` and `install_jcode` each run the binary
+  and compare the version it REPORTS, and remove what they put down when it does not match.
+- **mimo's first run on a fresh volume is a one-time SQLite migration.** Measured: over nine
+  minutes with no output before it was killed, about twenty seconds warm. The installer warms a
+  throwaway home so a turn never pays it.
+
+### Failure reporting, per base (checklist item 8: check, do not assume)
+
+| base | how a provider failure arrives | exit |
+|---|---|---|
+| mimo | opencode's `error` event | 1 |
+| gajae | assistant `message_end` with `stopReason:"error"`, `errorStatus`, `errorMessage` — pi's contract exactly; ONE attempt on a 401, no retry storm. Also an `agent_failed` event pi has no branch for, which is why gajae carries its own wrapper | 1 |
+| jcode | a real `error` event naming the endpoint, the model, the auth variable's NAME (never its value), the status and the provider's body | 1 |
+| opensquilla | an `_event` of kind `error`, and `errors[]` on the final object | 1 |
+| nanobot | `run.failed`, or a `run.completed` whose RunResult carries an `error` or a non-completed `stop_reason` | driver's |
+
+### Tool enforcement, measured
+
+`hard` on four, and each was proven by asking the model for its own tool list with one tool
+withheld: gajae's `--tools` allowlist (write absent), jcode's `--disabled-tools` (write absent),
+mimo's `permission.<key>: "deny"` (opencode's, inherited), nanobot's session policy (write_file
+absent — and the model then wrote the file with `exec`, which is the honest limit every
+shell-bearing base has). `instruction` on opensquilla, because `--permissions` picks a posture and
+there is no deny list anywhere on its agent CLI; the disabled set reaches the model through
+AGENTS.md instead, as it does for codex, hermes, dsh and gemini.
+
+nanobot's policy is set on the SESSION rather than on the tool registry on purpose: the loop
+applies it per turn to the registry it is about to use, which by then also holds the MCP provider's
+tools. A registry filtered when the driver started would withhold the built-ins and let every MCP
+tool through — openhands' half-policy defect. The driver refuses to run the turn if the policy did
+not take.
+
+### End to end, with the runner's own argv and the runner's own relay (2026-10-02/03)
+
+Not the probe commands typed by hand: `_build_<base>` was called with a live connection, the
+loopback relay was started in the same process, the argv it returned was run against the pinned
+binary, and the bytes that came back were fed to the shipped normaliser. The task was the same on
+each: write a file and reply with exactly DONE.
+
+| base | file written | result | usage read off the record |
+|---|---|---|---|
+| gajae | `e2e.txt` = kiwi | success, `DONE`, served model `openai/gpt-6-luna` | 6 fresh in / 37 out, 11,105 cache read, 11,157 cache write |
+| jcode | `e2e.txt` = kiwi | success, `DONE` | 6 fresh in / 66 out, 10,592 cache read, 10,741 cache write |
+| opensquilla | `e2e.txt` = kiwi | success, `DONE` (from the transcript, not the concatenated `text`) | 6 fresh in / 189 out, 8,281 cache read, 8,408 cache write |
+| nanobot | `workspace/e2e.txt` = kiwi | success, `DONE` | 5,596 fresh in / 31 out, 5,505 cache read |
+| mimo | `e2e.txt` = kiwi | success, `DONE` | 12 fresh in / 406 out, 43,991 cache read, 15,155 cache write |
+
+mimo's end-to-end on a FRESH home timed out at 300 s inside its one-time SQLite migration; on a warm
+home the same argv answered normally, which is the row above. That cost is a property of a fresh
+data volume, not of a turn, and it is exactly why `install_mimo` warms a throwaway home at install.
+
+The relay is the one that matters for rule 2: all five reached the provider through it with the
+placeholder bearer in the environment, so `_relay_served_model` has its input on every one of them.
+gajae also names the served model itself, on every assistant message.
+
+### The Google column, and what a DIRECT provider showed that the aggregator hid (2026-10-11)
+
+Google's own OpenAI-compatible surface (`https://generativelanguage.googleapis.com/v1beta/openai`),
+as the instance's ONLY integration, on the eight gemini ids it serves: **160 of 160 scenarios, all
+four bases 8/8**, no failure, nothing unmeasured, no driver error, `unlabelled` 0, no foreign
+connection, no substitution. The served id comes back BARE (`gemini-3.8-flash`, no vendor prefix),
+which is the direct path's own signature.
+
+This column exists because of a defect in this batch's first commit: it added
+`("google", <base>)` wiring for all four bases WITHOUT probing any of them, against the rule the
+same file states two hundred lines above it — "No ("google", "goose") row: unprobed is unlisted, and
+Gemini through this surface is a request-shape question the matrix has to answer first". The catalog
+was claiming google worked on four bases on no evidence. It now has evidence.
+
+**And it answers that request-shape question, the other way round from what the relay's own repair
+suggested.** nanobot's tool declarations are refused by Google's validator through VERCEL — the
+`anyOf: [array, null]` with no `items` that the reactive repair was written for — and on the direct
+endpoint the same declarations were accepted with no repair at all: zero relay refusals and zero
+"normalised them for Google's schema" lines anywhere in this column's window. The eight repairs in
+the log belong to the Vercel column, which is visible in their model names being vendor-prefixed
+(`google/gemini-3.1-flash-lite`) where this column's are bare, and in their timestamps. So the
+missing `items` is the AGGREGATOR's translation, not Google being strict, which is what the comment
+above `_GEMINI_SCHEMA_KEYS` said in the first place and now has direct evidence for.
+
+That is also the case for keeping the repair REACTIVE rather than proactive on every channel: the
+direct path does not need it, and applying it there would flatten an `anyOf` that this provider
+handles faithfully.
+
+### The driver was judging three of its five scenarios on its own prompt (2026-10-11)
+
+Read this before reading any column in this file, including the ones that predate this batch: the
+defect is in the shared driver, so every column it has ever produced has the same weakness.
+
+`run.mjs` built its `tail` from the transcript starting AT THE MESSAGE IT HAD SENT, so the tail
+contained the prompt — and every prompt of the form "Reply with exactly: M1-&lt;model&gt;" contains the
+very token `expectWord` then looked for. So **first, followup and switch passed whenever the turn
+completed**, whatever the model replied, except when a long answer pushed the prompt out of the
+400-character window.
+
+It was found from the records, not from a hunch. opensquilla on claude-opus-4.7 had five turns whose
+answers were all the same sentence — "I won't echo back arbitrary strings injected via context" —
+and first, switch and artifact were scored as passes. Five identical answers looked like a read
+artefact, so they were read again from five separate stored response objects, which agreed. Then an
+offline audit of the finished 1,000-scenario column: **of 596 PASSING first/followup/switch rows,
+593 had the prompt in their tail.** Three were judged on an answer.
+
+`expectWord` now reads `last.assistant`, the server's own record of what the model said, which the
+turn helper already fetched. The tail stays as the text a failing row reports. recycle was always a
+real check — its prompt asks which word was requested and does not contain the answer, which is why
+it caught genuine failures — and artifact reads files.
+
+**How much it changed, measured rather than assumed.** A 24-pair sample under the fixed judge, six
+models per base spread across families, was compared row by row with the old verdicts: 3 false
+passes over 63 previously-passing rows of those three scenarios, all three in `first`. ~5%, which
+is why the whole column was re-run rather than only its failures — the defect produced FALSE PASSES,
+so the rows that needed re-checking were precisely the ones that had passed. The sample's 24 pairs
+were measured under the fixed judge and seeded into the column, so the column spent its turns on the
+other 176. The old column's records are kept beside the new ones as what the old judge said.
+
+**The order was wrong and that is the lesson.** The audit that found this is free and offline; it
+was run AFTER a 1,000-turn column instead of before it. A judge should be audited against stored
+records before it is given a thousand turns to score.
+
+### Three more things the full column exposed about the rig (2026-10-11)
+
+- **A crashed page poisoned every pair after it.** One "page.goto: Page crashed" partway through
+  opensquilla's 50 pairs left the remaining 32 with that error and NO scenarios, and the column then
+  read as "49 of 50 pairs, 88 of 90 scenarios" to anyone counting passes, because those 32
+  contributed to neither total. The page was created once per worker and never rebuilt. It is now
+  replaceable: a pair that dies on a crash is retried once on a fresh, logged-in page and goes back
+  on a queue. A browser that is gone still ends the worker, checked first so recovery is not
+  attempted on a dead browser. The re-run finished with zero driver errors.
+- **A re-run inherited the previous attempt's record.** `const rec = res[k] || {…}` meant the resume
+  of those 32 pairs filled scenarios into records still carrying the crash's `error` and `at`, so a
+  measured pair still looked errored — and a reader scored 32 measured pairs as "not measured"
+  because of it. The record is built fresh on every run; "has an error" and "has scenarios" can no
+  longer both be true.
+- **The recycle row reported the driver's own patience as the base's failure.** The route refuses
+  while a turn is settling and the driver retried the 409 for 30 s; mimo on gpt-5.6-luna had an
+  artifact turn still `running` at 478 s, so its recycle row read "recycle refused: HTTP 409 a turn
+  is running". It now waits for the session's record to reach a terminal state, up to 300 s, and
+  says so when it never does.
+
+### What every dimension measured, and what is still not measured
+
+All four offered bases have now been through all four dimensions on the Vercel connection. gajae is
+not offered and is in none of them (see the write-wall section below).
+
+| dimension | mimo | jcode | opensquilla | nanobot |
+|---|---|---|---|---|
+| five scenarios × ALL 50 served ids (Vercel) | 48/50 | 50/50 | 49/50 | 49/50 |
+| five scenarios × 8 gemini ids (Google, direct) | 8/8 | 8/8 | 8/8 | 8/8 |
+| custom-harness (own skill, own script, tool policy, MCP) | ok | ok | ok | ok |
+| plugin: skills / mcp / sse / http | 4/4 | 4/4 | 4/4 | 4/4 |
+| browser (one task in plain words, through the plugin) | ok | ok | ok | ok |
+| environments (pip, npm and apt from the layer, no install) | 3/3 | 3/3 | 3/3 | 3/3 |
+| family tour, 12 families in one conversation | 12/12 | 3/12 | 11/12 | 11/12 |
+
+Both of those were re-run with all four bases on ONE build after the two nanobot fixes they
+exposed, rather than left as "three bases before the fix and nanobot after it": the fixes are
+nanobot-only by construction, but that is an argument where a 16-turn re-run is a measurement.
+
+The browser column needs a browser, and this instance had none when it first ran: all four bases
+failed on "navigate: not configured", which says nothing about any base. The runs above use the
+operator's-own-browser configuration — `HR_BROWSER_CDP_URL` against a headless Chromium in the
+container — and NOT the browser-use vendor key; the two are different paths and a row proved on one
+is not proof for the other. The environments column ran on one layer carrying tabulate (pip),
+qrcode (npm) and jq (apt), and every row used them with zero install commands in the trace.
+
+Rule 2 is not merely answerable on these bases now, it was READ: `unlabelled` is 0 on all 32 pairs,
+so every turn carried a served model off the relay, and no substitution survived `samemodel`.
+
+- **The two tours that show 11 of 12 failed the same family, grok-4.3, inside the same few minutes**,
+  and the reason was the provider's: nanobot's row carried "The model is currently at capacity due to
+  high demand" and opensquilla's carried its own fallback sentence for a terminal event with no
+  message. Both pass grok on a retry — on a fresh session AND on the same long conversation that had
+  failed — so the rows stay as measured with the retries recorded beside them.
+- **jcode's 3 of 12 is the limit written up above**: its fourth family ran away and was killed at the
+  tour's cap, and every family after it stayed on the killed turn's model.
+- Still not measured: any connection other than Vercel and Google. The tour's families were PROBED first,
+  one short turn each, because a family this connection cannot serve would fail a tour for a reason
+  that says nothing about the base: twelve of thirteen answered. llama-3.3-70b was refused by this
+  instance with "no provider configured for backend 'mimo'" — this org holds one integration, which
+  is not a statement about what Vercel serves — so the tour covered twelve. muse is deliberately absent from these runs and no muse credential was used.
+  **"Five ids Vercel does not serve at all" earlier in this file is out of date for ALL FIVE.** That
+  passage is a 2026-09-16 measurement; the full column of 2026-10-11 ran every one of them and each
+  answered and passed 5 of 5 — `claude-fable-5-1` as `anthropic/claude-fable-5.1`,
+  `gemini-3-flash-preview` as `google/gemini-3-flash`, `grok-4.20` as `spacexai/grok-4.20-reasoning`,
+  `hunyuan-4-preview` as `tencent/hy4-preview`, `nemotron-3-super` as
+  `nvidia/nemotron-3-super-120b-a12b`. Every one of those is the provider renaming the model and
+  `samemodel` resolves all five, which is why this column reports no substitution. A provider's
+  coverage is a dated measurement and not a property of the id.
+
+## The disabled tool is the base's own, and the label on the instructions box is the runner's (2026-10-03)
+
+Three things the batch of five exposed, each a surface that read as working and was not.
+
+### The custom-harness dimension was disabling a tool eleven bases do not have
+
+`custom-harness.mjs` built every harness with `disabled_tools: ['WebSearch']` and judged the claim
+with `!tools.some((t) => /websearch/i.test(t))`. A tool id that matches nothing in a runtime is
+dropped on the way through and disables nothing, so on a base with no tool of that exact name
+`disabled_tool_unused` was VACUOUSLY true — a row passing a check that was not running, the same
+shape as the openhands column that reported 40/40 on a substitution check with no input.
+
+Eleven of the twenty bases were in that state: aider, codex, goose, openhands, pi and qwen/gemini/
+cline (the ones the 2026-09-19 and 2026-09-28 notes had already named), plus the five added on
+2026-10-02, whose ids are `web_search` / `websearch` — which the old regex would not have matched
+even where the tool existed.
+
+Now there is a per-base `DISABLED_TOOL` table, each entry read off that base's own `_BASE_CATALOG`
+entry and each a tool the stamp task does not need (nothing switches off a shell, a read or a
+write — that would fail the task rather than test the policy):
+
+| base | tool | base | tool |
+|---|---|---|---|
+| claude-code | `WebSearch` | kimi | `FetchURL` |
+| codex | `git` | cheetahclaws | `WebSearch` |
+| hermes | `web_search` | openhands | `Todo` |
+| pi | `edit` | mimo | `websearch` |
+| dsh | `web_search` | gajae | `web_search` |
+| opencode | `websearch` | jcode | `websearch` |
+| qwen | `web_fetch` | opensquilla | `web_search` |
+| gemini | `google_web_search` | nanobot | `web_search` |
+| cline | `fetch_web_content` | goose | `read_image` |
+| omp | `web_search` | **aider** | **null — not testable** |
+
+aider's catalog is one tool, Shell, and the task needs it, so its row reports that the policy is
+not testable on that base rather than passing. A vacuous pass is worse than an honest gap.
+
+The judge now compares whole names ignoring case and separators (`web_search`, `websearch` and
+`WebSearch` are one name; `search` does not match `search_sessions`), the row records WHICH tool it
+switched off, and `gateway/tests/test_matrix_disabled_tool.py` holds the table to `_BASE_CATALOG`
+so the next base whose ids drift fails there rather than quietly going vacuous.
+
+### The settings page named a file the runner does not write
+
+Registration point 14 requires the console's instruction-file label to agree with
+`_agent_doc_path`. Nothing checked it and it had drifted: the page labelled the box `AGENTS.md` for
+qwen and gemini while the runner writes `QWEN.md` and `GEMINI.md`. The instructions still reached
+the agent; the name on the box was wrong, which on this repo's terms is a defect rather than a nit.
+The label now comes from one exported map (`instructionFileLabel`), and
+`gateway/tests/test_instruction_file_label.py` holds it to `_agent_doc_path` for every base.
+
+### A CLI could say something about a turn and have it reach nobody
+
+The gateway's translator renders exactly two `system` subtypes and drops every other in silence, so
+a runner emitting a third was writing to a surface that did not exist. OpenSquilla reports
+"Provider context limit reached; compacting older context before retrying" as a progress event, and
+a person reading a turn that took minutes and lost its earlier context had no way to learn why.
+`system/notice` is now rendered as a note on the reply, beside `resume_lost` and `mcp_unavailable`;
+the runner bounds it and de-duplicates it (that warning repeats once per retry).
+
+## gajae: the write-wall and a lock that walks its ancestors (2026-10-03, decided 2026-10-06)
+
+Every gajae turn through the product died before its first model call:
+
+    [Uncaught Exception] Error: Failed to snapshot staged file lock: io_error.
+
+**The cause, with evidence at each link.**
+
+1. gjc's native lock helper `open_parent_no_follow` (`crates/pi-natives/src/path_identity.rs`)
+   hardens the lock against symlink swaps by refusing to trust path resolution: it walks from `/`
+   down to the path it is locking and opens EVERY ancestor with
+   `O_RDONLY|O_DIRECTORY|O_NOFOLLOW`. On a directory that needs **read**, not traverse.
+2. `docker/entrypoint.sh` sets `/data` and `/data/workspaces` to `751` — its own comment:
+   "traversable by sessions, neither listable nor writable".
+3. Measured in the container: as a session uid, `open("/data", O_RDONLY|O_DIRECTORY)` is EACCES;
+   as the product user, which owns it, it succeeds.
+4. The addon maps EACCES to `io_error`, `acquireFileLock` throws, nothing catches it.
+5. **Positive control**: the same binary, the same uid, the same flags, in a directory whose only
+   ancestor is `/` (0755) — no crash, and the run reaches the provider.
+6. **Narrowing**: cwd left under `/data` (unreadable ancestors) with only the agent dir and the
+   session dir moved to a readable path — works. So it is specifically the directories gjc locks,
+   both of which the runner names (`GJC_CODING_AGENT_DIR`, `--session-dir`).
+7. **Both directions of the switch, on a real turn through the API**: at `751` the turn failed with
+   that error; at `755` it completed in 4.6 s answering correctly with
+   `served_model = openai/gpt-5.4`; back at `751` it failed again. The modes were restored.
+
+Neither side is wrong. gjc assumes it may be running where an attacker can write and verifies every
+ancestor itself; this product makes those ancestors unwritable so nobody can, and in doing so makes
+them unreadable, which is what gjc's verification needs.
+
+**Decision (the user's, 2026-10-06): do not weaken the wall.** gajae is removed from everything
+that offers, routes or installs it — `_MODEL_CATALOG`, `_BASE_CATALOG`, `_INTEGRATION_WIRING`,
+`_CUSTOM_FORMAT_BACKENDS`, the console's `OOB` and logo map, the default `HR_BACKENDS`, and both
+measurement dimensions' base lists. The runner's implementation stays (`_build_gajae`,
+`_gajae_to_claude`, 13 tests and two captured fixtures) because the base works and the blocker is a
+product decision; `gateway/tests/test_gajae_not_offered.py` pins every one of those surfaces so a
+half-restore — listed but not routable, or routable but not installed — cannot pass unnoticed.
+
+**What it would take to offer it.** Relax `/data` and `/data/workspaces` to `755`, then restore the
+catalog entries, the wiring rows and the `_CUSTOM_FORMAT_BACKENDS` membership. What that gives up is
+"neither listable", not "nor writable": a session uid could then enumerate other session ids and
+environment names. It could not read them — `control.db` and `graph.db` are `0600` and `blobs/` is
+`0700`, and a session uid already has traverse, so file contents are governed by each file's own
+mode either way. The half that stops a session renaming or replacing another session's directory
+(which needs write on the parent, not on the target) is untouched by that change.

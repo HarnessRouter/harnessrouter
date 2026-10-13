@@ -1,0 +1,16 @@
+{"model": "openai/gpt-6-luna", "provider": "openrouter", "session_id": "session_sloth_1790981189870_91a9d9ad23dfe74a", "type": "start"}
+{"connection": "https/sse", "type": "connection_type"}
+{"phase": "sending request", "type": "connection_phase"}
+{"phase": "waiting for response", "type": "connection_phase"}
+{"id": "call_DKi1n58dmH4fXDBtF8sbZWGU", "name": "write", "type": "tool_start"}
+{"id": "call_DKi1n58dmH4fXDBtF8sbZWGU", "name": "write", "type": "tool_exec"}
+{"stop_reason": "tool_calls", "type": "message_end"}
+{"cache_creation_input": 175, "cache_read_input": 10431, "input": 10609, "output": 63, "type": "tokens"}
+{"error": null, "id": "call_DKi1n58dmH4fXDBtF8sbZWGU", "name": "write", "output": "Created probe.txt (1 lines):\n1+ banana\n\nFile diff:\n```diff\n--- /dev/null\n+++ b/probe.txt\n@@ -0,0 +1 @@\n+banana\n\\ No newline at end of file\n```\n", "type": "tool_done"}
+{"connection": "https/sse", "type": "connection_type"}
+{"phase": "sending request", "type": "connection_phase"}
+{"phase": "waiting for response", "type": "connection_phase"}
+{"text": "DONE", "type": "text_delta"}
+{"stop_reason": "stop", "type": "message_end"}
+{"cache_creation_input": 139, "cache_read_input": 10606, "input": 10748, "output": 5, "type": "tokens"}
+{"connection_phase": "waiting for response", "connection_type": "https/sse", "model": "openai/gpt-6-luna", "provider": "openrouter", "session_id": "session_sloth_1790981189870_91a9d9ad23dfe74a", "status_detail": null, "text": "DONE", "type": "done", "upstream_provider": null, "usage": {"cache_creation_input_tokens": 139, "cache_read_input_tokens": 10606, "input_tokens": 10748, "output_tokens": 5}}

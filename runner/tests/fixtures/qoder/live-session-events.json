@@ -1,0 +1,375 @@
+[
+ {
+  "id": "evt_00rv4y8m1ntvklo39jxt",
+  "processed_at": "2026-10-09T03:09:11.989752107Z",
+  "type": "session.status_running"
+ },
+ {
+  "agent_name": "harnessrouter live-ws1",
+  "id": "evt_00rv4y8m1ntvljcw6kq3",
+  "processed_at": "2026-10-09T03:09:11.989752107Z",
+  "session_thread_id": "sthr_00rv4y7nzicqoxu769ok",
+  "type": "session.thread_status_running"
+ },
+ {
+  "content": [
+   {
+    "text": "Create a file named hello.md containing exactly the line: Hello from HarnessRouter live test. Then deliver it with DeliverArtifacts. Reply with one short sentence when done.",
+    "type": "text"
+   }
+  ],
+  "id": "evt_00rv4y8j2a70i2z1fuw8",
+  "processed_at": "2026-10-09T03:09:11.989752107Z",
+  "type": "user.message"
+ },
+ {
+  "id": "evt_00rv4y8j4s3cxtujzmz4",
+  "processed_at": "2026-10-09T03:09:12.032189121Z",
+  "type": "span.model_request_start"
+ },
+ {
+  "id": "evt_00rv4ybbfq0hsvdjgjrd",
+  "processed_at": "2026-10-09T03:09:13.760879Z",
+  "type": "agent.thinking"
+ },
+ {
+  "evaluated_permission": "allow",
+  "id": "evt_00rv4ybzuo0004mic0tg",
+  "input": {
+   "content": "Hello from HarnessRouter live test.\n",
+   "file_path": "/data/hello.md"
+  },
+  "name": "Write",
+  "processed_at": "2026-10-09T03:09:14.280972Z",
+  "type": "agent.tool_use"
+ },
+ {
+  "id": "evt_00rv4ycz88uf4nercl7f",
+  "is_error": false,
+  "model_request_start_id": "evt_00rv4y8j4s3cxtujzmz4",
+  "model_usage": {
+   "credits": 0.27
+  },
+  "processed_at": "2026-10-09T03:09:14.280972Z",
+  "type": "span.model_request_end"
+ },
+ {
+  "content": [
+   {
+    "text": "Write file /data/hello.md successfully\n\n--- /data/hello.md\n+++ /data/hello.md\n@@ -0,0 +1,2 @@\n+Hello from HarnessRouter live test.\n+",
+    "type": "text"
+   }
+  ],
+  "id": "evt_00rv4yhnzwb9cyiwfmsz",
+  "is_error": false,
+  "processed_at": "2026-10-09T03:09:16.734162Z",
+  "tool_use_id": "evt_00rv4ybzuo0004mic0tg",
+  "type": "agent.tool_result"
+ },
+ {
+  "id": "evt_00rv4yhqcsv0hn4cos2n",
+  "processed_at": "2026-10-09T03:09:16.767099439Z",
+  "type": "span.model_request_start"
+ },
+ {
+  "id": "evt_00rv4yj7cmio0wdrr34d",
+  "processed_at": "2026-10-09T03:09:19.443238Z",
+  "type": "agent.thinking"
+ },
+ {
+  "evaluated_permission": "allow",
+  "id": "evt_00rv4ymwy6kn5mjhi022",
+  "input": {
+   "files": [
+    {
+     "path": "/data/hello.md"
+    }
+   ]
+  },
+  "name": "DeliverArtifacts",
+  "processed_at": "2026-10-09T03:09:19.819914Z",
+  "type": "agent.tool_use"
+ },
+ {
+  "id": "evt_00rv4ynmw4ykgke06ccm",
+  "is_error": false,
+  "model_request_start_id": "evt_00rv4yhqcsv0hn4cos2n",
+  "model_usage": {
+   "credits": 0.04
+  },
+  "processed_at": "2026-10-09T03:09:19.819914Z",
+  "type": "span.model_request_end"
+ },
+ {
+  "content_type": "text/markdown",
+  "file_id": "file_00rv4you3vw8wpwq624j",
+  "id": "evt_00rv4yp7cui9sapw4gkh",
+  "original_filename": "hello.md",
+  "processed_at": "2026-10-09T03:09:20.644172Z",
+  "size": 36,
+  "type": "agent.artifact_delivered"
+ },
+ {
+  "content": [
+   {
+    "text": "Delivered 1/1 artifact(s):\n- delivered hello.md (file_id=file_00rv4you3vw8wpwq624j, 36 bytes)",
+    "type": "text"
+   }
+  ],
+  "id": "evt_00rv4ypa28jr4061rxic",
+  "is_error": false,
+  "processed_at": "2026-10-09T03:09:20.685128Z",
+  "tool_use_id": "evt_00rv4ymwy6kn5mjhi022",
+  "type": "agent.tool_result"
+ },
+ {
+  "id": "evt_00rv4ypcmmsjlloiq530",
+  "processed_at": "2026-10-09T03:09:20.720708031Z",
+  "type": "span.model_request_start"
+ },
+ {
+  "id": "evt_00rv4yqr4n01sm5vuunn",
+  "processed_at": "2026-10-09T03:09:22.024343Z",
+  "type": "agent.thinking"
+ },
+ {
+  "content": [
+   {
+    "text": "Done—hello.md has been created and delivered.",
+    "type": "text"
+   }
+  ],
+  "id": "evt_00rv4ys20oz5sw9z2zpn",
+  "processed_at": "2026-10-09T03:09:22.137665Z",
+  "type": "agent.message"
+ },
+ {
+  "id": "evt_00rv4ys3r4m4gnmyp7lt",
+  "is_error": false,
+  "model_request_start_id": "evt_00rv4ypcmmsjlloiq530",
+  "model_usage": {
+   "credits": 0.03
+  },
+  "processed_at": "2026-10-09T03:09:22.137665Z",
+  "type": "span.model_request_end"
+ },
+ {
+  "agent_name": "harnessrouter live-ws1",
+  "id": "evt_00rv4ys4640747he4bao",
+  "processed_at": "2026-10-09T03:09:22.137665Z",
+  "session_thread_id": "sthr_00rv4y7nzicqoxu769ok",
+  "stop_reason": {
+   "type": "end_turn"
+  },
+  "type": "session.thread_status_idle"
+ },
+ {
+  "id": "evt_00rv4ys4sl3b4cwpk6cu",
+  "model_credits": 0.35,
+  "processed_at": "2026-10-09T03:09:22.137665Z",
+  "sandbox_runtime_credits": 0,
+  "total_credits": 0.35,
+  "type": "session.usage"
+ },
+ {
+  "id": "evt_00rv4ys2x5tz4r6nhvgg",
+  "processed_at": "2026-10-09T03:09:22.137665Z",
+  "stop_reason": {
+   "type": "end_turn"
+  },
+  "type": "session.status_idle"
+ },
+ {
+  "agent": {
+   "description": "Created by HarnessRouter for one session; deleted with it.",
+   "id": "agent_00rv4y759agowv21tpo8",
+   "mcp_servers": [],
+   "model": {
+    "effective_context_window": 200000,
+    "id": "efficient"
+   },
+   "multiagent": null,
+   "name": "harnessrouter live-ws1",
+   "skills": [],
+   "system": "Be brief.\n\n## Delivering files\n\nYou run in a remote sandbox. The user sees NO file you write unless you deliver it: when a task produces a deliverable (a document, a deck, code, an export), save it and then call DeliverArtifacts with its path. Deliver each file once, by a plain file name; an undelivered file is lost to the user.",
+   "tools": [
+    {
+     "configs": [
+      {
+       "enabled": true,
+       "name": "DeliverArtifacts",
+       "permission_policy": {
+        "type": "always_allow"
+       }
+      },
+      {
+       "enabled": true,
+       "name": "Edit",
+       "permission_policy": {
+        "type": "always_allow"
+       }
+      },
+      {
+       "enabled": true,
+       "name": "Glob",
+       "permission_policy": {
+        "type": "always_allow"
+       }
+      },
+      {
+       "enabled": true,
+       "name": "Grep",
+       "permission_policy": {
+        "type": "always_allow"
+       }
+      },
+      {
+       "enabled": true,
+       "name": "ImageGen",
+       "permission_policy": {
+        "type": "always_allow"
+       }
+      },
+      {
+       "enabled": true,
+       "name": "ImageSearch",
+       "permission_policy": {
+        "type": "always_allow"
+       }
+      },
+      {
+       "enabled": true,
+       "name": "Read",
+       "permission_policy": {
+        "type": "always_allow"
+       }
+      },
+      {
+       "enabled": true,
+       "name": "WebFetch",
+       "permission_policy": {
+        "type": "always_allow"
+       }
+      },
+      {
+       "enabled": true,
+       "name": "Write",
+       "permission_policy": {
+        "type": "always_allow"
+       }
+      },
+      {
+       "enabled": false,
+       "name": "Bash"
+      },
+      {
+       "enabled": false,
+       "name": "WebSearch"
+      }
+     ],
+     "disallowed_tools": [
+      "Bash",
+      "WebSearch"
+     ],
+     "enabled_tools": [
+      "DeliverArtifacts",
+      "Edit",
+      "Glob",
+      "Grep",
+      "ImageGen",
+      "ImageSearch",
+      "Read",
+      "WebFetch",
+      "Write"
+     ],
+     "type": "agent_toolset_20260401"
+    }
+   ],
+   "type": "agent",
+   "version": 1
+  },
+  "id": "evt_00rv50or76kg0d69q695",
+  "processed_at": "2026-10-09T03:09:57.777562571Z",
+  "type": "session.updated"
+ },
+ {
+  "id": "evt_00rv50pqs8kxs3nx71zl",
+  "processed_at": "2026-10-09T03:09:58.255615488Z",
+  "type": "session.status_running"
+ },
+ {
+  "agent_name": "harnessrouter live-ws1",
+  "id": "evt_00rv50pqs8kxtkwoyatw",
+  "processed_at": "2026-10-09T03:09:58.255615488Z",
+  "session_thread_id": "sthr_00rv4y7nzicqoxu769ok",
+  "type": "session.thread_status_running"
+ },
+ {
+  "content": [
+   {
+    "text": "Using the Bash shell tool, run the command: cat /data/hello.md  and tell me the output verbatim. If the shell tool is not available to you, say exactly which tool is missing and what hello.md said in our earlier turn.",
+    "type": "text"
+   }
+  ],
+  "id": "evt_00rv50pocu4u9t0u09p0",
+  "processed_at": "2026-10-09T03:09:58.255615488Z",
+  "type": "user.message"
+ },
+ {
+  "id": "evt_00rv50pofc16pfdh3n0y",
+  "processed_at": "2026-10-09T03:09:58.290841397Z",
+  "type": "span.model_request_start"
+ },
+ {
+  "id": "evt_00rv50sc7x24gf0laxo5",
+  "processed_at": "2026-10-09T03:10:00.967483Z",
+  "type": "agent.thinking"
+ },
+ {
+  "content": [
+   {
+    "text": "I don't have a Bash shell tool available. My available tools are: Read, Grep, Glob, Write, Edit, WebFetch, ImageSearch, ImageGen, and DeliverArtifacts — no Bash/shell execution tool is among them.\n\nFrom our earlier turn, hello.md contained exactly:\n\n```\nHello from HarnessRouter live test.\n```",
+    "type": "text"
+   }
+  ],
+  "id": "evt_00rv50v32d6gwmddbj1u",
+  "processed_at": "2026-10-09T03:10:01.905504Z",
+  "type": "agent.message"
+ },
+ {
+  "id": "evt_00rv50wq8j1ts1zm4mzx",
+  "is_error": false,
+  "model_request_start_id": "evt_00rv50pofc16pfdh3n0y",
+  "model_usage": {
+   "credits": 0.23
+  },
+  "processed_at": "2026-10-09T03:10:01.905504Z",
+  "type": "span.model_request_end"
+ },
+ {
+  "agent_name": "harnessrouter live-ws1",
+  "id": "evt_00rv50wql0jk1wq7cmu5",
+  "processed_at": "2026-10-09T03:10:01.905504Z",
+  "session_thread_id": "sthr_00rv4y7nzicqoxu769ok",
+  "stop_reason": {
+   "type": "end_turn"
+  },
+  "type": "session.thread_status_idle"
+ },
+ {
+  "id": "evt_00rv50wr7hmo09aswreu",
+  "model_credits": 0.58,
+  "processed_at": "2026-10-09T03:10:01.905504Z",
+  "sandbox_runtime_credits": 0.03,
+  "total_credits": 0.61,
+  "type": "session.usage"
+ },
+ {
+  "id": "evt_00rv50wpek9ogpqk8hsb",
+  "processed_at": "2026-10-09T03:10:01.905504Z",
+  "stop_reason": {
+   "type": "end_turn"
+  },
+  "type": "session.status_idle"
+ }
+]

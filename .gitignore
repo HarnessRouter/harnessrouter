@@ -13,3 +13,16 @@ protocol/site/dist/
 
 protocol/site/dist/
 *.egg-info/
+
+# An environment store a test run left behind. runner/tests/test_environments.py's `store` fixture
+# points ENV_ROOT at a tmp_path, but the git-import test writes its clone target relative to the
+# CWD, so running the suite from inside runner/ leaves `runner/henv<id>/` there — reproduced on an
+# unmodified main. Six of those files were committed by a `git add -A` in this branch's merge, and
+# two of them are symlinks into /tmp/pytest-of-root/... The id is a short [a-z0-9_-] token
+# (environments._ID_SAFE), so the prefix is the stable part.
+runner/henv*/
+
+# The matrix driver's own lockfile. package.json is tracked and the README asks the operator to
+# `npm install` next to run.mjs, so the lock has never been in the tree — and a `git add -A` after
+# installing playwright committed it twice in this branch before this rule existed.
+scripts/support-matrix/package-lock.json

@@ -162,12 +162,18 @@ jobs:
           docker rm -f smoke 2>/dev/null || true
           docker volume rm smoke-data 2>/dev/null || true
           docker run -d --name smoke -v smoke-data:/data -e HR_SECRET_KEY=ci-smoke "$REF"
-          for i in $(seq 1 60); do
+          # A fresh volume installs every default base before it prints this line. Five minutes was
+          # enough for twenty bases and no longer is: from the four added in #448 on, amd64 was still
+          # installing when the wait ended, and the gate then blamed the first base it checked
+          # ("claude did not install"), three candidates running. Twelve minutes, and a timeout says
+          # so rather than naming a base.
+          for i in $(seq 1 144); do
             docker logs smoke 2>&1 | grep -q "backends available" && break
             sleep 5
           done
           docker logs smoke 2>&1 | tail -30
           LINE=$(docker logs smoke 2>&1 | grep "backends available" | tail -1 || true)
+          [ -n "$LINE" ] || { echo "::error::the installs did not finish within 12 minutes on ${{ matrix.arch }}"; exit 1; }
           echo "$LINE"
           for b in claude codex hermes pi dsh; do
             echo "$LINE" | grep -q "$b" || { echo "::error::$b did not install on ${{ matrix.arch }}"; exit 1; }

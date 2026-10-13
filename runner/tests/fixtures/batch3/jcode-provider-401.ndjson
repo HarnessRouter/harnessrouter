@@ -1,0 +1,4 @@
+{"model": "openai/gpt-6-luna", "provider": "openrouter", "session_id": "session_dog_1790981247328_eb623c91ec44a141", "type": "start"}
+{"connection": "https/sse", "type": "connection_type"}
+{"phase": "sending request", "type": "connection_phase"}
+{"message": "OpenAI-compatible chat request failed\n  endpoint: https://ai-gateway.vercel.sh/v1/chat/completions\n  model: openai/gpt-6-luna\n  auth: OPENAI_COMPAT_API_KEY\n  status: 401 Unauthorized\n  response: {\"error\":{\"message\":\"Authentication failed. Create an API key and set in AI_GATEWAY_API_KEY environment variable: https://example/keys check network connectivity, DNS/TLS, that the base URL includes the API version (usually /v1), and that the model exists on the provider.", "model": "openai/gpt-6-luna", "provider": "openrouter", "session_id": "session_dog_1790981247328_eb623c91ec44a141", "type": "error"}

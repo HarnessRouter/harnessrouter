@@ -57,6 +57,7 @@ import re
 import shlex
 import shutil
 import signal
+import sys
 import socket
 import sqlite3
 import subprocess
@@ -359,6 +360,43 @@ def _agentzero_session_present(cwd: str, cmd: list[str], session_id: str) -> boo
         return False
     agents = doc.get("agents") if isinstance(doc, dict) else None
     return bool(agents) and bool((agents[0] or {}).get("history"))
+def _opensquilla_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Ask opensquilla's session database whether this key is in it.
+
+    It cannot be read off argv: --session-id names a FRESH session as well as continuing one (the
+    goose shape), so its presence says nothing. The store is the SQLite file the driver passes as
+    --session-db-path — a path, not a guess, because the default is `:memory:` and without an
+    explicit file there is no continuity at all. The id is a distinctive token, so the test is the
+    same shape as opencode's: the bytes of the database and of its write-ahead log, which can still
+    hold a session the previous turn wrote."""
+    base = pathlib.Path(cwd) / ".harness" / "opensquilla"
+    needle = session_id.encode()
+    for name in ("sessions.sqlite", "sessions.sqlite-wal"):
+        f = base / name
+        try:
+            if f.is_file() and needle in f.read_bytes():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _nanobot_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Ask nanobot's session store for the file that IS this conversation.
+
+    Not a search of bytes: nanobot names the file deterministically, so the predicate can be the
+    CLI's own. Sessions live beside the CONFIG file (get_data_dir() is get_config_path().parent),
+    under sessions/<workspace-id>/<urlsafe-b64(session_key) without padding>.jsonl. The workspace
+    id is a hash this process does not compute, so the one directory level is globbed and the
+    file name is the exact one nanobot would open."""
+    base = pathlib.Path(cwd) / ".harness" / "nanobot" / "sessions"
+    if not base.is_dir() or not session_id:
+        return False
+    name = base64.urlsafe_b64encode(session_id.encode()).decode().rstrip("=") + ".jsonl"
+    try:
+        return any((d / name).is_file() for d in base.iterdir() if d.is_dir())
+    except OSError:
+        return False
 
 
 _SESSION_PRESENT = {
@@ -378,6 +416,15 @@ _SESSION_PRESENT = {
     "openhands": _openhands_session_present,
     "cheetahclaws": _cheetahclaws_session_present,
     "agentzero": _agentzero_session_present,
+    # This batch: three builders perform the lookup themselves and carry the id in argv only when
+    # they found it (mimo's -s, gajae's -r, jcode's --resume all exit without running the model on
+    # an id their store does not hold), so argv IS the builder's conclusion. The two driver-backed
+    # bases pass the key on every turn and must ask their store.
+    "mimo": _argv_session_present,
+    "gajae": _argv_session_present,
+    "jcode": _argv_session_present,
+    "opensquilla": _opensquilla_session_present,
+    "nanobot": _nanobot_session_present,
 }
 
 
@@ -395,6 +442,39 @@ def _resume_lost(backend: str, cmd: list[str], resume_session_id: str | None,
     if probe is None or not resume_session_id:
         return None
     return None if probe(cwd, cmd, resume_session_id) else resume_session_id
+
+
+def _git_exclude(ws: str, patterns: list[str], why: str) -> None:
+    """Hide a backend's OWN machinery from the produced-files list, through git's own door.
+
+    `/produced` is `git status --porcelain -uall` over the session directory, so anything a CLI
+    writes into the directory the user collects is handed back as the task's deliverable. Every
+    backend but two keeps its machinery under `.harness/`, which _PRODUCED_EXCLUDE_PREFIX already
+    drops. nanobot cannot (its SkillsLoader reads `<workspace>/skills` and nothing else) and
+    opensquilla cannot (`ensure_agent_workspace` seeds SOUL.md, IDENTITY.md, USER.md and MEMORY.md
+    into its workspace unconditionally — `seed_templates` has no caller that passes False and no
+    setting reads it).
+
+    `.git/info/exclude` and NOT a .gitignore: it is per-repository, it is not a file in the
+    agent's workspace (so the agent cannot read, edit or be confused by it, and it is not itself a
+    produced file), and _git_ensure rewrites only the tracked root .gitignore, so this survives
+    every turn. It travels with the session because the checkpoint is a tar of the directory —
+    which also means these files still reach the next turn: what is hidden is the DELIVERABLES
+    list, not the session.
+
+    It excludes UNTRACKED files only, which is the case that matters: these are written on the
+    first turn, and after the first collection they are committed to the checkpoint ref and stop
+    appearing in the diff anyway."""
+    if not patterns:
+        return
+    try:
+        _git_ensure(ws)                      # idempotent; a fresh session may have no repo yet
+        info = pathlib.Path(ws, ".git", "info")
+        info.mkdir(parents=True, exist_ok=True)
+        (info / "exclude").write_text(
+            "\n".join([f"# written by the harness runner: {why}", *patterns, ""]))
+    except Exception:  # noqa: BLE001 — a missing exclude costs noise in a list, never the turn
+        pass
 
 
 def _isolate_session(ws: str) -> None:
@@ -654,6 +734,36 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       # named in kilo.json, and only the relay's placeholder at that), but a
                       # `kilo auth login` inside a task would, and it must not travel.
                       "./.harness/home/.local/share/kilo/auth.json",
+                      # MiMo Code is opencode's fork and carries the same snapshot repo under its
+                      # own name. _opencode_config turns snapshots off for it too; this keeps a
+                      # workspace hydrated from before that from dragging one through every
+                      # later checkpoint.
+                      "./.harness/home/.local/share/mimocode/snapshot",
+                      # gajae reads models.yml's apiKey as an env var NAME, so the file holds no
+                      # credential today — but pi's models.json did until it didn't, and auth.json
+                      # is written by `gjc /login`, which a task could run.
+                      "./.harness/home/.gjc/agent/auth.json",
+                      "./.harness/home/.gjc/agent/models.yml",
+                      "./.harness/home/.gjc/agent/.env",
+                      # jcode keeps provider credentials under its own home and in the per-provider
+                      # env files its `provider add --api-key-stdin` writes. The runner puts the
+                      # relay's per-turn placeholder in the ENVIRONMENT and writes neither, but
+                      # `jcode login` / `jcode provider add` inside a task would.
+                      "./.harness/home/.jcode/auth.json",
+                      "./.harness/home/.jcode/credentials.json",
+                      "./.harness/home/.config/jcode",
+                      # opensquilla stores provider keys in its profile .env and its onboarding
+                      # writes api_key straight into config.toml. The driver passes the relay
+                      # placeholder in the environment instead, but `opensquilla onboard` or
+                      # `configure provider` inside a task writes both.
+                      "./.harness/opensquilla/.env",
+                      "./.harness/opensquilla/secrets.toml",
+                      # nanobot's config.json carries providers.<n>.api_key literally — it has no
+                      # env-name indirection — so the file the driver writes per turn holds the
+                      # turn's relay placeholder and must never ride a checkpoint tarball. Its
+                      # SESSIONS live in the same directory and MUST travel, so the exclusion is
+                      # the file, not the directory.
+                      "./.harness/nanobot/config.json",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -731,6 +841,14 @@ AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
 OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
 CHEETAHCLAWS_DEFAULT_MODEL = os.environ.get("CHEETAHCLAWS_DEFAULT_MODEL", "gpt-5.4")
 AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-5.4")
+# MiMo Code is an opencode fork (its repo root package.json is still literally "opencode"), so it
+# shares opencode's default for the same reason: multi-family through one connection.
+MIMO_DEFAULT_MODEL = os.environ.get("MIMO_DEFAULT_MODEL", "gpt-5.4")
+# Gajae-Code is pi's lineage (docs/porting-from-pi-mono.md), so it shares pi's default too.
+GAJAE_DEFAULT_MODEL = os.environ.get("GAJAE_DEFAULT_MODEL", "gpt-5.4")
+JCODE_DEFAULT_MODEL = os.environ.get("JCODE_DEFAULT_MODEL", "gpt-5.4")
+OPENSQUILLA_DEFAULT_MODEL = os.environ.get("OPENSQUILLA_DEFAULT_MODEL", "gpt-5.4")
+NANOBOT_DEFAULT_MODEL = os.environ.get("NANOBOT_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -836,6 +954,13 @@ def _git_ensure(ws: str) -> None:
         ".cheetahclaws/tasks.json",
         ".harness/agentzero/base/usr/.env", ".harness/agentzero/base/usr/secrets.env",
         *_PER_TURN_CONFIG,
+        # this batch — the same files CHECKPOINT_EXCLUDE drops from the tarball
+        ".harness/home/.gjc/agent/auth.json", ".harness/home/.gjc/agent/models.yml",
+        ".harness/home/.gjc/agent/.env",
+        ".harness/home/.jcode/auth.json", ".harness/home/.jcode/credentials.json",
+        ".harness/home/.config/jcode/",
+        ".harness/opensquilla/.env", ".harness/opensquilla/secrets.toml",
+        ".harness/nanobot/config.json",
         "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
         ".harness/home/",
         # Agent Zero's whole base, for the #193 reason: its chat.json stores the full rendered
@@ -933,6 +1058,20 @@ _NOISE_SEG = {"node_modules", "chrome-deps", "debs", ".venv", "venv", "site-pack
 _NOISE_EXT = (".deb", ".whl", ".pyc", ".pyo", ".so", ".o", ".a", ".class", ".rpm", ".apk")
 
 
+# A LibreOffice user profile is the tool's state, not a deliverable. A model that checks its deck
+# by rendering it may point -env:UserInstallation inside the workspace (gpt-6.1-sol did, on
+# opensquilla and on jcode, 2026-10-12), and the profile's dozens of files, all newer than the deck,
+# filled the 25 a turn hands back and pushed deck.pptx out of them. LibreOffice writes this file in
+# every profile it starts, so a directory holding it is a profile and its `user/` tree goes.
+_LO_PROFILE_MARK = "user/registrymodifications.xcu"
+
+
+def _without_lo_profiles(paths):
+    roots = {q[: -len(_LO_PROFILE_MARK)] for q in paths
+             if q == _LO_PROFILE_MARK or q.endswith("/" + _LO_PROFILE_MARK)}
+    return [q for q in paths if not any(q.startswith(r + "user/") for r in roots)]
+
+
 def _is_produced_noise(path: str) -> bool:
     if any(seg in _NOISE_SEG for seg in path.split("/")):
         return True
@@ -948,6 +1087,69 @@ def _safe_join(cwd: str, rel: str) -> pathlib.Path | None:
     except ValueError:
         return None
     return p
+
+
+# nanobot is the one base whose agent workspace is a SUBDIRECTORY of the session (_NANOBOT_WS):
+# its own loader refuses a session store inside the workspace, so the session dir holds the store
+# and the agent works one level down. That makes the session's file root and the agent's cwd two
+# different directories, and everything the USER exchanges with the session goes through the
+# session root: attachments, an app's PUT (the slides kit's deck.json), the produced-files list and
+# its downloads. MEASURED on a live instance: a file written through PUT /v1/sessions/{sid}/files
+# landed at the session root and the agent answered "there is no secret.txt in the working
+# directory" — while the same test on a flat-layout base read it back. The marker is what lets the
+# file routes, which know only an identifier, find the directory the agent actually looks in.
+_AGENT_SUBDIR_MARKER = pathlib.Path(".harness", "agent-subdir")
+
+
+def _agent_subdir_set(ws: str, sub: str) -> None:
+    try:
+        m = pathlib.Path(ws) / _AGENT_SUBDIR_MARKER
+        m.parent.mkdir(parents=True, exist_ok=True)
+        m.write_text(sub)
+    except Exception:  # noqa: BLE001 — without the marker _visible_root is the session dir, so the
+        pass            # produced list keeps the workspace/ prefix and GET /file finds the file by
+                        # its fallback: the turn still works, it just reads as it did before.
+
+
+def _visible_root(ws: str) -> str:
+    """The directory whose contents are the USER's files. The session dir for every base but one."""
+    try:
+        sub = (pathlib.Path(ws) / _AGENT_SUBDIR_MARKER).read_text().strip()
+    except OSError:
+        return ws
+    # _safe_join VALIDATES (it rejects an escape), but it also resolves symlinks, and on a mac
+    # /var is one — a resolved root does not share a prefix with the ws it came from, so the
+    # relpath below became "../../.." and nothing was stripped. The returned path is therefore
+    # built from ws as the caller spelled it.
+    if not sub or _safe_join(ws, sub) is None:
+        return ws
+    d = os.path.join(ws, sub)
+    return d if os.path.isdir(d) else ws
+
+
+def _adopt_into(ws: str, sub: str) -> None:
+    """Move user files sitting at the session root into the agent's workspace.
+
+    The write paths that run BEFORE a backend is built — a caller's attachments, and an app's PUT on
+    a session that has not had a turn yet — have no way to know a base nests its workspace, so they
+    land at the root. Rather than teach each of them, the one base that nests adopts them here, at
+    the start of every turn, which is exactly when the agent is about to look. Only the runner's own
+    entries stay behind; nothing else at the root belongs to anyone but the session."""
+    root = pathlib.Path(ws)
+    # DERIVED from the same lists /produced excludes, so "the runner's own entries" means one thing
+    # in both places: a name added to those lists is also a name this leaves at the root.
+    keep = ({".git", ".gitignore", sub} | _PRODUCED_EXCLUDE_NAMES | _NOISE_SEG
+            | {q.rstrip("/") for q in _PRODUCED_EXCLUDE_PREFIX})
+    for child in root.iterdir():
+        if child.name in keep:
+            continue
+        dest = root / sub / child.name
+        if dest.exists():
+            continue
+        try:
+            os.replace(child, dest)
+        except OSError:
+            pass
 
 
 def _write_input_files(cwd: str, files: list[dict] | None) -> list[str]:
@@ -1193,6 +1395,14 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # config.yaml, so a tree another backend wrote is not swept in (kimi's reason).
         rootrels = [".harness/home/.minimax/skills"]
         entryroot = ".harness/home/.minimax/skills"
+    elif backend == "qoder":
+        # Not where a loader looks — nothing on this box loads them. The folders are staged here
+        # for the driver to publish as Qoder Skill resources bound on the session's Agent, which
+        # Qoder's sandbox then installs under the skill's own name. Under .harness/ so the bundle
+        # is never a produced file, and checkpointed so the content hash the driver keeps is
+        # comparable next turn.
+        rootrels = [".harness/skills"]
+        entryroot = ".harness/skills"
     elif backend in ("opencode", "kilo"):
         # Kilo CLI is opencode's fork and keeps the same `skills.paths` key (core/src/v1/config/
         # skills.ts at 7.8.1), so it takes the same directory.
@@ -1209,6 +1419,43 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # produced files and carried in the checkpoint.
         rootrels = [".harness/agentzero/base/usr/skills"]
         entryroot = ".harness/agentzero/base/usr/skills"
+    elif backend == "mimo":
+        # MiMo Code is opencode's fork and kept its `skills:{paths}` key, so the loader adapts to
+        # us here too — one directory, named in mimo.json.
+        rootrels = [".harness/skills"]
+        entryroot = ".harness/skills"
+    elif backend == "gajae":
+        # ~/.gjc/agent/skills/<name>/SKILL.md, the CANONICAL user location in gjc's own discovery
+        # table (docs/skills.md), with the agent dir redirected by GJC_CODING_AGENT_DIR into
+        # .harness/home/.gjc/agent (see _build_gajae). User-global for pi's reason: gjc gates
+        # project-local files behind a trust decision, and the user root loads unconditionally.
+        rootrels = [".harness/home/.gjc/agent/skills"]
+        entryroot = ".harness/home/.gjc/agent/skills"
+    elif backend == "jcode":
+        # ~/.jcode/skills/<name>/SKILL.md — jcode's GLOBAL skills root (tool/skill.rs names it
+        # first), and $HOME is already <cwd>/.harness/home, so this is both inside a loader path
+        # and inside the excluded, checkpointed tree. NOT ./.jcode/skills or ./.claude/skills,
+        # which jcode also reads: those sit in the workspace, where a skill bundle would be
+        # handed back to the user as a deliverable on every turn (goose's lesson).
+        rootrels = [".harness/home/.jcode/skills"]
+        entryroot = ".harness/home/.jcode/skills"
+    elif backend == "opensquilla":
+        # $OPENSQUILLA_STATE_DIR/skills/<name>/SKILL.md — its "managed" root (skills/__init__.py
+        # names the five sources; managed is the writable one), and the driver points the state
+        # dir at .harness/opensquilla, so this is under .harness/ like goose's.
+        rootrels = [".harness/opensquilla/skills"]
+        entryroot = ".harness/opensquilla/skills"
+    elif backend == "nanobot":
+        # <workspace>/skills/<name>/SKILL.md. This is the ONE path nanobot's loader reads for a
+        # skill that is not bundled with the package: SkillsLoader fixes `workspace_skills =
+        # workspace / "skills"` in its constructor and takes no override, and the workspace has to
+        # be the session directory or the agent's files land outside what the user collects.
+        # So unlike every other backend above, this bundle IS in the workspace and IS reported
+        # among produced files. Excluding "skills/" globally would hide a user's own folder of
+        # that name on twenty other bases, which is worse; a skill that never loads is worse
+        # still. Written down here rather than quietly: see the PR body's follow-up.
+        rootrels = [f"{_NANOBOT_WS}/skills"]
+        entryroot = f"{_NANOBOT_WS}/skills"
     else:
         # dsh has no skill loader; the AGENTS.md block below is the only door.
         # aider lands here on purpose too, and for a stronger reason: it has no skill loader AND no
@@ -1402,9 +1649,47 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # arrive, `search_tool` answers "No MCP tools are available in this session", and the turn runs
 # without them. Its streamable-HTTP client is fine (verified against a local server and the public
 # deepwiki one, tools discovered and called), so only SSE is bridged.
+# jcode takes BOTH, because it has no remote MCP client at all: its README states "jcode
+# currently supports stdio (command-based) servers only; HTTP/SSE entries are recognized and
+# skipped with a log line" — so without the bridge every remote server a harness declares is
+# dropped in silence and the agent simply never has those tools.
 _BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "grok": ("sse",),
-                       "cheetahclaws": ("http",)}
+                       "cheetahclaws": ("http",), "jcode": ("http", "sse"),
+                       # opensquilla's MCPServerEntry takes transport "stdio" | "sse" only, so a
+                       # streamable-HTTP server has no client here either.
+                       "opensquilla": ("http",)}
 _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_bridge.py")
+
+
+# A backend whose MCP client reaches a remote server fine but REFUSES one on a loopback or private
+# address. nanobot runs `validate_url_target` over every server url and drops the ones it does not
+# like with a log line of its own, so the server is simply absent from the model's tools and nothing
+# reaches the turn record as a refusal. MEASURED by the browser column (2026-10-10): the `plugs`
+# server, which is how every base gets the browser tools, is injected at
+# http://127.0.0.1:8080/v1/mcp/plugs — nanobot was the one base of four that made NO browser call,
+# twice, and said "I don't currently have the browser toolset available in this session" while its
+# config held the server correctly at tools.mcpServers.plugs.
+#
+# The bridge is the fix rather than nanobot's own `tools.ssrf_whitelist`: that list is applied
+# GLOBALLY by its config loader, so whitelisting the loopback range to let the product's own server
+# through would also let the AGENT's fetch tools reach anything on loopback — the exact thing that
+# guard is there to stop. Bridged, there is no url for nanobot to validate: the runner speaks to the
+# server and the agent sees a stdio command. Its own remote client keeps handling PUBLIC servers,
+# which is measured (the deepwiki server over streamable HTTP and SSE, both columns).
+_BRIDGE_LOOPBACK_BACKENDS = {"nanobot"}
+_LOOPBACK_HOSTS = ("localhost", "127.", "::1", "0.0.0.0", "169.254.", "10.", "192.168.")
+
+
+def _mcp_url_is_loopback(url: str) -> bool:
+    """Whether this server's url names a loopback, link-local or private host."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    host = host.strip("[]").lower()
+    if host.startswith("172."):
+        try:                                     # 172.16.0.0/12, and no other 172.
+            return 16 <= int(host.split(".")[1]) <= 31
+        except (IndexError, ValueError):
+            return False
+    return host == "localhost" or host.endswith(".localhost") or host.startswith(_LOOPBACK_HOSTS)
 
 
 def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dict]:
@@ -1414,14 +1699,15 @@ def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dic
     without a transport is streamable HTTP, as everywhere else in this file. Other servers and
     backends pass untouched."""
     bridged = _BRIDGED_TRANSPORTS.get(backend)
-    if not bridged:
+    loopback_only = backend in _BRIDGE_LOOPBACK_BACKENDS
+    if not bridged and not loopback_only:
         return list(servers or [])
     out: list[dict] = []
     for s in servers or []:
         s = s or {}
         url = str(s.get("url") or "").strip()
         transport = str(s.get("transport") or "http").lower()
-        if not url or transport not in bridged:
+        if not url or not (transport in (bridged or ()) or (loopback_only and _mcp_url_is_loopback(url))):
             out.append(s)
             continue
         name = _mcp_name(str(s.get("name") or s.get("id") or "mcp"))
@@ -1543,6 +1829,10 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
 
     Getting this wrong is silent: the file is written either way, and a backend that does not read
     the name we chose simply never sees the harness's instructions."""
+    if backend == "nanobot":
+        # The one base whose agent workspace is a subdirectory of the session (see _NANOBOT_WS):
+        # the file has to be where THAT workspace is, or it is written and never read.
+        return pathlib.Path(cwd) / _NANOBOT_WS / "AGENTS.md"
     if backend == "qwen":
         return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
     if backend == "gemini":
@@ -1574,8 +1864,22 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # grok loads AGENTS.md (and CLAUDE.md, AGENT.md …) at every level from the repo root down to
         # the cwd, once the folder is trusted; _build_grok sets GROK_FOLDER_TRUST=0. Verified on
         # 1.0.41: a token written in AGENTS.md was in the model request.
+        # The five added in this batch all read AGENTS.md from the project root, each verified
+        # against the pinned build rather than the docs:
+        #   mimo        — opencode's instruction-context loader, unchanged in the fork
+        #   gajae       — discovery/agents-md.ts, "Discovers standalone AGENTS.md files by walking
+        #                 up from cwd", plus ~/.gjc/agent/AGENTS.md (system-prompt.ts)
+        #   jcode       — jcode-base/src/prompt.rs load_agents_md_files_from_dirs, which labels it
+        #                 "Project Instructions (AGENTS.md)"; no CLAUDE.md branch, despite the
+        #                 repo shipping one of its own
+        #   opensquilla — its clean-room flag is literally --stateless-keep-project-rules,
+        #                 "keep AGENTS.md project rules only"
+        #   nanobot     — its own workspace template set writes AGENTS.md, so that is the name its
+        #                 context builder reads
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
-                                   "goose", "kimi", "aider", "openhands", "kilo", "grok", "agentzero")
+                                   "goose", "kimi", "aider", "openhands", "kilo", "grok",
+                                   "agentzero",
+                                   "mimo", "gajae", "jcode", "opensquilla", "nanobot")
         else "CLAUDE.md")
 
 
@@ -1594,8 +1898,8 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     workspace PARENT, the user saw an empty turn, and three turns went to copying files into view.
     An instruction is the right mechanism here: writes cannot be walled in a sandbox whose point is
     real bash, and widening collection would ship every scratch file as a deliverable."""
-    if backend == "systemone":
-        return                  # reads no workspace; its instructions travel in the job (see _build_systemone)
+    if backend in ("systemone", "qoder"):
+        return                  # reads no workspace; its instructions travel in the job (_build_systemone, _build_qoder)
     p = _agent_doc_path(cwd, backend)
     base = (agent_doc or "").strip()
     lines = [_AGENTS_BEGIN, "## Workspace", "",
@@ -1713,6 +2017,16 @@ def _claude_passthrough(obj: dict, state: dict) -> list[dict]:
     if obj2 is None:
         return []
     obj = obj2
+    if obj.get("type") == "assistant" and not obj.get("parent_tool_use_id"):
+        # The model that wrote this turn's answer is named on the answer itself. The result's
+        # modelUsage is the SESSION's running total: after a model switch on a resumed session it
+        # still credits the previous model with every earlier turn's tokens, so the most output
+        # tokens named the old model on the first turn served by the new one (claude-haiku-4.5,
+        # 111 tokens from two turns, over claude-fable-5-1's 14; the matrix's switch row,
+        # 2026-10-12). A subagent's message carries parent_tool_use_id and does not count.
+        m = str((obj.get("message") or {}).get("model") or "")
+        if m and m != "<synthetic>":
+            state["_answer_model"] = m
     if obj.get("type") == "result":
         # A turn whose only "answer" is the CLI's error line is a failed turn with that reason: a
         # Qwen Code turn Opus 5 refused completed with "[API Error: Model stream ended with empty
@@ -1731,6 +2045,10 @@ def _claude_passthrough(obj: dict, state: dict) -> list[dict]:
         # produced the output is the served model, which a direct Anthropic key never sent through
         # the relay (served_model stayed empty on every Claude Code run of a benchmark, 2026-09-30).
         served = _claude_model_used(obj)
+        if served and state.get("_answer_model"):
+            # Only where the CLI reports usage by model (Claude Code): grok's result names no model
+            # and leaves the served one to the relay, through this same passthrough.
+            served = state["_answer_model"]
         if served:
             obj = {**obj, "model": served}
     # Default (batch) mode: pass the CLI's stream-json through unchanged — the CLI emits one event
@@ -3152,6 +3470,218 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     return cmd
 
 
+# ── gajae-code (Yeachan-Heo/gajae-code, binary `gjc`) ─────────────────────────────────────────
+# Pi's lineage, ported to its own tree (docs/porting-from-pi-mono.md; its npm dependency set still
+# carries `pi-ai`, and `$pickenv("GJC_TIMING", "PI_TIMING")` reads pi's env names as fallbacks).
+# Measured on the pinned 0.18.5 binary (2026-10-02), `gjc -p --mode json` emits pi's event stream
+# with pi's field names — session{id} / message_update{assistantMessageEvent} / message_end{message}
+# / tool_execution_start{toolCallId,toolName,args} / tool_execution_end{toolCallId,result,isError} /
+# agent_end — and every assistant message_end carries `model` and
+# `usage:{input,output,cacheRead,cacheWrite}`. So it reads through _pi_to_claude, as omp does,
+# rather than carrying a copy of it; _gajae_to_claude adds only the one event pi has no branch for.
+#
+# WHAT IS NOT PI:
+#   * no --approve / --auto-approve flag exists, and none is needed: print mode runs tools
+#     unattended (measured — it wrote a file with nothing attached to approve).
+#   * the tool switch is an ALLOWLIST (--tools a,b,c) like omp's, not pi's --exclude-tools.
+#   * resume is `-r <id>` against a session DIRECTORY (--session-dir), and a missing id exits
+#     without running the model, printing plain text `Session "<id>" not found.` — so the lookup
+#     happens here and -r is added only when the file is present.
+#   * the agent dir is GJC_CODING_AGENT_DIR and the custom-provider file is models.yml.
+GAJAE_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
+
+# gjc reads `providers.<n>.apiKey` as the NAME of an environment variable, so the credential is
+# named in models.yml and never written into it (the same discipline as opencode's `{env:VAR}`).
+_GAJAE_KEY_ENV = "HR_GAJAE_KEY"
+
+# Every tool id gjc 0.18.5 registers, read off tools/descriptors.ts's `names` table plus the three
+# hidden ones, and not off `--help`, whose list is stale (it advertises a `notebook` tool this build
+# does not have). An unknown name on --tools is a WARNING and is dropped (cli/args.ts filters
+# against BUILTIN_TOOLS before the agent sees it), so unlike omp a drifted list cannot kill a turn —
+# it can only make the allowlist narrower than intended, which is why the list is pinned by a test.
+# `computer` is macOS-arm64 only and is therefore never present in the image.
+ALL_GAJAE_TOOLS = {
+    "read", "bash", "edit", "ast_grep", "ast_edit", "render_mermaid", "ask", "debug", "bisect",
+    "eval", "python", "calc", "ssh", "github", "find", "search", "lsp", "browser", "checkpoint",
+    "rewind", "task", "subagent", "job", "monitor", "cron", "recipe", "irc", "todo_write",
+    "web_search", "search_tool_bm25", "skill_discovery", "telegram_send", "write", "skill", "goal",
+    "move_session",
+}
+
+
+def _gajae_has_session(session_dir: pathlib.Path, session_id: str) -> bool:
+    """Is this session in this workspace's session directory?
+
+    gjc names its files `<ISO timestamp>_<id>.jsonl` (measured), so the id is matched inside the
+    name rather than as the whole of it. Without this check `-r` on an id the directory does not
+    hold exits before the first event and prints only prose, which would read to the runner as a
+    turn that produced nothing."""
+    if not session_id or not session_dir.is_dir():
+        return False
+    try:
+        return any(p.is_file() for p in session_dir.rglob(f"*{session_id}*.jsonl"))
+    except OSError:
+        return False
+
+
+def _gajae_write_mcp(hdir: pathlib.Path, servers: list[dict] | None) -> str:
+    """Write the file `gjc --mcp-config` takes ("Tools-only MCP config file (absolute path)") and
+    return its path, or "" when there is nothing to write.
+
+    Standard mcpServers schema. The file goes under .harness/ rather than into the agent dir
+    because --mcp-config names it explicitly, and --no-mcp is passed beside it so the CONVENTIONAL
+    locations (the agent dir's mcp.json and the project's .gjc/mcp.json) are not also loaded: the
+    project one is a file in the workspace, which a task could write and the next turn would
+    execute — the hole pi closes with --no-extensions and opencode with --pure."""
+    entries: dict = {}
+    for i, sv in enumerate(servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if url:
+            entry: dict = {"type": "sse" if str(sv.get("transport") or "").lower() == "sse" else "http",
+                           "url": url}
+            if _mcp_headers(sv):
+                entry["headers"] = _mcp_headers(sv)
+        elif sv.get("command"):
+            entry = {"type": "stdio", "command": str(sv["command"]),
+                     "args": [str(a) for a in (sv.get("args") or [])]}
+        else:
+            continue
+        entries[name] = entry
+    if not entries:
+        return ""
+    hdir.mkdir(parents=True, exist_ok=True)
+    path = hdir / "gajae-mcp.json"
+    path.write_text(json.dumps({"mcpServers": entries}, indent=2))
+    return str(path)
+
+
+def _gajae_to_claude(obj: dict, state: dict) -> list[dict]:
+    """gjc's `--mode json` stream is pi's, so this delegates to _pi_to_claude for every event pi
+    knows and handles only the one it does not.
+
+    `agent_failed` is gjc's own: print-mode.ts writes `{"type":"agent_failed","error":<diagnostic>}`
+    when the run's terminal disposition is a failure that no assistant message_end already reported
+    (an empty turn among them). Without a branch for it that turn reads as a completed turn whose
+    answer is whatever text came before — the failure-reported-as-prose shape _CLAUDE_ERR_RE and
+    _GOOSE_ERR_RE exist for. The error becomes the turn's reason and is NOT rendered as the answer.
+    pi and omp may emit the same event (it is in their shared AgentEvent union); this is NOT added
+    to _pi_to_claude because it has not been measured on either of those builds, and a normaliser
+    changed on an unmeasured assumption is how the last three of these went wrong."""
+    if obj.get("type") == "agent_failed":
+        err = obj.get("error")
+        if isinstance(err, dict):
+            text = str(err.get("message") or err.get("code") or "gajae agent failed")
+        else:
+            text = str(err or "gajae agent failed")
+        state["_pi_error"] = text[:500]
+        return []
+    return _pi_to_claude(obj, state)
+
+
+def _build_gajae(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                 tools_disabled: list[str] | None = None, vision: bool = True) -> list[str]:
+    pr = provider or "anthropic"
+    if pr not in GAJAE_PROVIDERS:
+        raise HTTPException(400, f"unknown gajae provider '{pr}' (one of {sorted(GAJAE_PROVIDERS)})")
+    home = pathlib.Path(env.get("HOME") or cwd)
+    agent_dir = home / ".gjc" / "agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    env["GJC_CODING_AGENT_DIR"] = str(agent_dir)
+    # The signed model-preset registry is an HTTPS fetch at start-up that can rewrite which model a
+    # preset names. The harness names one model explicitly and must get that model, so the registry
+    # is off: a catalog fetched at run time is exactly the substitution surface matrix rule 2 is
+    # about, and the sandbox should not reach out for it either.
+    env["GJC_MODEL_PRESET_REGISTRY_DISABLED"] = "1"
+
+    use_custom = bool(auth.base_url) or pr in ("azure", "openai-api", "tokenrouter")
+    if use_custom:
+        if not auth.base_url:
+            raise HTTPException(400, f"gajae provider '{pr}' needs a base_url (none configured)")
+        if auth.api_format == "anthropic":
+            api = "anthropic-messages"
+        elif auth.api_format == "openai":
+            api = "openai-completions"
+        elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
+            api = "anthropic-messages"
+        elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+            api = "openai-responses"
+        else:
+            api = "openai-completions"
+        if api in ("openai-completions", "openai-responses") and auth.api_key and not auth.api_format:
+            # The relay, for pi's reasons, plus one of its own: the key would otherwise be written
+            # literally into models.yml, which lives under the checkpointed workspace.
+            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+            auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+        # gjc resolves `apiKey` as the NAME of an environment variable (resolveApiKeyConfig), so the
+        # credential is named here and read from the environment — hermes's `key_env` discipline,
+        # and the reason models.yml can be in the workspace at all. It is still excluded from the
+        # checkpoint beside pi's and omp's, because a future build reading it as a literal must not
+        # turn this file into a leak.
+        env[_GAJAE_KEY_ENV] = auth.api_key or ""
+        base = (auth.base_url or "").rstrip("/")
+        if api == "anthropic-messages":
+            base = base.removesuffix("/v1")
+        elif not auth.api_format and not base.endswith("/v1"):
+            base += "/v1"
+        (agent_dir / "models.yml").write_text(json.dumps({"providers": {"hr": {
+            "baseUrl": base, "api": api, "apiKey": _GAJAE_KEY_ENV,
+            "models": [{"id": model, "name": model, "reasoning": False,
+                        "input": ["text", "image"] if vision else ["text"],
+                        "contextWindow": 200000, "maxTokens": 32000}],
+        }}}, indent=2))
+        pname = "hr"
+    else:
+        pname = pr
+        if pr == "anthropic" and auth.api_key:
+            env["ANTHROPIC_API_KEY"] = auth.api_key
+        elif pr == "openai" and auth.api_key:
+            env["OPENAI_API_KEY"] = auth.api_key
+
+    session_dir = pathlib.Path(cwd, ".harness", "gajae-sessions")
+    session_dir.mkdir(parents=True, exist_ok=True)
+    cmd = ["gjc", "-p", "--mode", "json",
+           # --model takes a FUZZY pattern. The id is given fully qualified so the exact entry
+           # wins: a custom provider also gets auto-enabled /v1/models discovery (model-registry.ts
+           # ~2976 adds `discovery:{type:"openai-models-list"}` to any custom OpenAI-family
+           # provider, optional so a relay that answers 404 degrades to the static model), and a
+           # bare family name among 300 discovered ids is a substitution waiting to happen.
+           "--model", f"{pname}/{model}" if pname == "hr" else model,
+           # Session storage AND lookup, inside .harness/ so the transcript is checkpointed and
+           # never handed back as a produced file.
+           "--session-dir", str(session_dir),
+           # Rules discovery stays ON: AGENTS.md is how the workspace contract reaches the model.
+           # What is off is everything that executes or fetches something the workspace could have
+           # planted — see --no-mcp below and the preset registry above.
+           "--no-mcp",
+           # Title generation is a second model call per turn for a string nothing here reads.
+           "--no-title",
+           # No LSP server to talk to in the sandbox, and it is a per-turn start-up cost.
+           "--no-lsp"]
+    mcp_path = _gajae_write_mcp(pathlib.Path(cwd, ".harness"), mcp_servers)
+    if mcp_path:
+        cmd += ["--mcp-config", mcp_path]
+    if resume_session_id and _gajae_has_session(session_dir, resume_session_id):
+        cmd += ["-r", resume_session_id]
+    elif resume_session_id:
+        print(f"[resume] gajae: session {resume_session_id} not in this workspace — starting fresh",
+              flush=True)
+    if tools_disabled:
+        disabled = {x.split(" (")[0].strip().lower() for x in tools_disabled if x and x.strip()}
+        enabled = [t for t in sorted(ALL_GAJAE_TOOLS) if t not in disabled]
+        if len(enabled) == len(ALL_GAJAE_TOOLS):
+            pass          # named nothing this runtime has: an allowlist that removes nothing is not sent
+        elif not enabled:
+            cmd += ["--no-tools"]
+        else:
+            cmd += [f"--tools={','.join(enabled)}"]
+    cmd.append(prompt)
+    return cmd
+
+
 # ── hermes (NousResearch hermes-agent CLI) ──────────────────────────────────────────
 # One-shot turns run `hermes -z` (auto-approves, prints ONLY the final text on stdout, writes a
 # JSON usage report via --usage-file); follow-up turns run `hermes chat -q -r <sid>` because the
@@ -3696,6 +4226,34 @@ def _request_stream_usage(body: bytes) -> bytes:
     return body
 
 
+_OPENAI_STREAM_HOSTS = ("api.openai.com", ".openai.azure.com", ".cognitiveservices.azure.com")
+
+
+def _without_stream_obfuscation(body: bytes, base: str) -> bytes:
+    """Ask OpenAI or Azure for a stream without its `obfuscation` padding, on a body that already
+    asks for the usage chunk.
+
+    OpenAI pads every streamed chunk with an `obfuscation` field, the usage trailer included, and
+    opensquilla 0.5.6 accepts after `finish_reason` only a chunk whose keys it knows: a turn that had
+    already answered failed with "The model provider returned an invalid response" (invalid_stream_
+    order) on every OpenAI and Azure model the review instance has (gpt-5.5, gpt-5.4-mini, gpt-5.2,
+    2026-10-12), while the same models through an aggregator that drops the field passed. Only that
+    route asks for this; the padding stays on every other client's stream. A provider that refuses
+    the field meets the relay's one-time retry without stream_options."""
+    host = (urllib.parse.urlsplit(base).hostname or "").lower()
+    if not (host == _OPENAI_STREAM_HOSTS[0] or host.endswith(_OPENAI_STREAM_HOSTS[1:])):
+        return body
+    try:
+        obj = json.loads(body)
+        so = obj.get("stream_options") if isinstance(obj, dict) else None
+        if obj.get("stream") is True and isinstance(so, dict) and "include_obfuscation" not in so:
+            obj["stream_options"] = {**so, "include_obfuscation": False}
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
 def _rename_max_tokens(body: bytes) -> bytes:
     """max_tokens -> max_completion_tokens in one chat-completions body.
 
@@ -3805,6 +4363,23 @@ def _google_unknown_field(refused: bytes) -> str:
     return m.group(1) if m else ""
 
 
+_DEPRECATED_FIELD_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)` is deprecated for this model")
+
+
+def _refused_top_level_field(refused: bytes) -> str:
+    """A top-level request field a provider refused by name, or "": Google's unknown field, or a
+    field Anthropic's OpenAI-compatible surface calls deprecated for the model ("`temperature` is
+    deprecated for this model.": nanobot on claude-sonnet-5.5 through a direct Anthropic connection,
+    2026-10-12, every turn). A deprecated field is one the model no longer takes, so dropping it
+    changes nothing the model would have used."""
+    name = _google_unknown_field(refused)
+    if name:
+        return name
+    text = refused.decode("utf-8", "replace") if isinstance(refused, (bytes, bytearray)) else str(refused)
+    m = _DEPRECATED_FIELD_RE.search(text)
+    return m.group(1) if m else ""
+
+
 # Gemini 3 requires each replayed tool call's thought signature: Google's OpenAI-compatible endpoint
 # streams it on every function call (tool_calls[].extra_content.google.thought_signature) and refuses
 # the next request without it, 400 "Function call is missing a thought_signature in functionCall
@@ -3826,6 +4401,19 @@ _STRICT_GEMINI_HOSTS = tuple(h for h in (
     urllib.parse.urlsplit(os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai")).netloc) if h)
 
 
+# A channel+model whose validator has already refused this process's tool declarations. Each turn
+# gets its OWN relay route, so a flag on the route is forgotten at the next turn and every turn pays
+# one refused round trip (measured: four turns, four refusals). This remembers it for the runner's
+# life instead, keyed by the upstream host and the model, which is as wide as the evidence goes — a
+# different model on the same channel may well be served by something that does not validate this
+# way, and the normalisation flattens anyOf, so it is not applied on a guess.
+_GEMINI_SCHEMA_SEEN: set[tuple[str, str]] = set()
+
+
+def _gemini_schema_key(base: str, model: str) -> tuple[str, str]:
+    return (urllib.parse.urlsplit(base).netloc, str(model or "").lower())
+
+
 def _gemini_channel(base: str) -> bool:
     """Whether `base` is a provider that serves Google's native API under its own root."""
     return any(h in base for h in _STRICT_GEMINI_HOSTS)
@@ -3834,11 +4422,14 @@ def _gemini_channel(base: str) -> bool:
 # description, nullable, enum, properties, required, items, min/max, anyOf and a few more) and
 # refuses anything else: "Unknown name \"$schema\" at 'tools[0].function_declarations[0].parameters'",
 # "Unknown name \"exclusiveMinimum\"", "schema didn't specify the schema type field". Google's own
-# OpenAI-compatible endpoint, OpenRouter and Vercel normalise a harness's JSON-schema declarations
-# before they reach it; TokenRouter's Gemini channels forward them as sent, so the first turn of a
+# OpenAI-compatible endpoint, OpenRouter and Vercel normalise MOST of a harness's JSON-schema
+# declarations — but not all: measured on Vercel 2026-10-07, an optional array parameter
+# (`anyOf: [array, null]`, no `items`) reached Google as sent and was refused, which is why the retry
+# loop applies this on ANY channel once that channel's validator has named the problem.
+# TokenRouter's Gemini channels forward them as sent from the start, so the first turn of a
 # task on opencode ($schema) and cline (exclusiveMinimum, a property without type) failed on the
 # ids those channels serve natively, gemini-3.8-flash for one (measured 2026-09-06, the platform
-# column). Until TokenRouter normalises them itself, this relay does, for that channel only.
+# column). Until TokenRouter normalises them itself, this relay does, proactively for it.
 _GEMINI_SCHEMA_KEYS = {"type", "format", "title", "description", "nullable", "enum", "maxItems", "minItems",
                        "properties", "required", "minProperties", "maxProperties", "minLength", "maxLength",
                        "pattern", "example", "anyOf", "propertyOrdering", "default", "items", "minimum", "maximum"}
@@ -4200,6 +4791,93 @@ def _usage_in_doc(doc) -> dict:
     return {}
 
 
+_TOOL_ARGS_KEEP = 512
+
+
+def _tool_args_note(flags: dict, cid: str, args: str) -> None:
+    """A tool call's arguments as the model sent them, on the route, by call id (bounded)."""
+    d = flags.setdefault("tool_args", {})
+    d[cid] = args
+    while len(d) > _TOOL_ARGS_KEEP:
+        d.pop(next(iter(d)))
+
+
+def _tool_args_in_sse_line(line: bytes, flags: dict, st: dict) -> None:
+    """Tool calls as a model streams them through the relay, assembled by call id: OpenAI
+    chat/completions `delta.tool_calls[]` pieces, and Anthropic `tool_use` blocks with their
+    `input_json_delta`. `st` is this response's own state (indices are per response).
+
+    For a harness that announces a call without its arguments: opensquilla's progress event names
+    the call and nothing else, so its console row had nothing to open while the turn ran; the call
+    id is the provider's, and the model sent the arguments before the tool ran."""
+    if not line.startswith(b"data:"):
+        return
+    raw = line[5:].strip()
+    if not (b"tool_calls" in raw or b"tool_use" in raw or b"input_json_delta" in raw):
+        return
+    try:
+        j = json.loads(raw)
+    except ValueError:
+        return
+    if not isinstance(j, dict):
+        return
+    for ch in j.get("choices") or []:
+        for tc in ((ch.get("delta") or {}) if isinstance(ch, dict) else {}).get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            cur = st.setdefault("oa", {}).setdefault(tc.get("index", 0), {"id": "", "args": ""})
+            if tc.get("id"):
+                cur["id"] = str(tc["id"])
+            piece = (tc.get("function") or {}).get("arguments")
+            if isinstance(piece, str):
+                cur["args"] += piece
+            if cur["id"]:
+                _tool_args_note(flags, cur["id"], cur["args"])
+    t = j.get("type")
+    if t == "content_block_start" and (j.get("content_block") or {}).get("type") == "tool_use":
+        cb = j["content_block"]
+        st.setdefault("an", {})[j.get("index", 0)] = {"id": str(cb.get("id") or ""), "args": ""}
+    elif t == "content_block_delta" and (j.get("delta") or {}).get("type") == "input_json_delta":
+        cur = (st.get("an") or {}).get(j.get("index", 0))
+        if cur and cur["id"]:
+            cur["args"] += j["delta"].get("partial_json") or ""
+            _tool_args_note(flags, cur["id"], cur["args"])
+
+
+def _tool_args_in_body(data: bytes, flags: dict) -> None:
+    """The same, from a whole (non-streamed) response."""
+    if b"tool_calls" not in data and b"tool_use" not in data:
+        return
+    try:
+        j = json.loads(data)
+    except ValueError:
+        return
+    if not isinstance(j, dict):
+        return
+    for ch in j.get("choices") or []:
+        for tc in ((ch.get("message") or {}) if isinstance(ch, dict) else {}).get("tool_calls") or []:
+            if isinstance(tc, dict) and tc.get("id"):
+                _tool_args_note(flags, str(tc["id"]), str((tc.get("function") or {}).get("arguments") or ""))
+    for c in j.get("content") or []:
+        if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id"):
+            _tool_args_note(flags, str(c["id"]), json.dumps(c.get("input") or {}))
+
+
+def _relay_tool_args(routes, cid: str) -> dict | None:
+    """The arguments the relay saw for this call id on any of the turn's routes, parsed; None when
+    it saw none, or they do not parse as a JSON object yet."""
+    for f in reversed(routes or []):
+        raw = ((f.get("tool_args") or {}) if isinstance(f, dict) else {}).get(cid)
+        if raw is None:
+            continue
+        try:
+            v = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            return None
+        return v if isinstance(v, dict) and v else None
+    return None
+
+
 def _usage_in_sse_line(line: bytes) -> dict:
     """One SSE line as it passes the relay → the usage it carries, {} for anything else."""
     if not line.startswith(b"data:") or b"sage" not in line:
@@ -4429,12 +5107,27 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         base, key, flags = route
+        if self.command == "DELETE" and not flags.get("passthrough"):
+            # DELETE is a remote runtime's (its own objects, deleted through its API). A model
+            # provider's route stays GET and POST: a sandbox must not delete what the org's key owns
+            # there (files, fine-tunes, batches) through the relay that holds that key.
+            data = b'{"error": "this route does not forward DELETE"}'
+            self.send_response(405)
+            self.send_header("allow", "GET, POST")
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
         drop = {"host", "content-length", "authorization", "x-goog-api-key", "x-api-key", "connection",
                 "accept-encoding", "transfer-encoding"}
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
+        if flags.get("passthrough"):
+            self._passthrough(base, key, tail, headers, body)
+            return
         if tail.split("?", 1)[0] == "/messages" and not flags.get("bedrock_anthropic"):
             # An Anthropic Messages call (goose's and hermes's anthropic providers, litellm's
             # anthropic/ route, the claude CLI on a custom endpoint). Anthropic reads the key from
@@ -4474,6 +5167,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             body = _with_free_form_objects(body)     # before the Gemini normaliser below, which has its own rules
             if flags.get("stream_usage"):
                 body = _request_stream_usage(body)
+            if flags.get("plain_stream"):
+                body = _without_stream_obfuscation(body, base)
             if flags.get("rename_max_tokens"):
                 body = _rename_max_tokens(body)
             if flags.get("stringify_tool_content"):
@@ -4502,10 +5197,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         if google and body is not None and self.path.endswith("/chat/completions"):
             body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
             headers["content-length"] = str(len(body))
-        if ((_gemini_channel(base) or flags.get("gemini_schemas")) and "gemini" in str(_body_model).lower()
+        if ((((_gemini_channel(base) or flags.get("gemini_schemas"))
+              and "gemini" in str(_body_model).lower())
+             or _gemini_schema_key(base, _body_model) in _GEMINI_SCHEMA_SEEN)
                 and body is not None and self.path.endswith("/chat/completions")):
             # TokenRouter's Gemini channels hand a harness's JSON-schema tool declarations to Google's
-            # validator as sent; the broker does the same normalisation for brokered traffic
+            # validator as sent; the broker does the same normalisation for brokered traffic. The flag
+            # carries the same repair on a channel this did not expect to need it, once that channel's
+            # own validator has named the problem (below).
             body = _with_gemini_schemas(body)
             headers["content-length"] = str(len(body))
         if body is not None:
@@ -4641,14 +5340,22 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     body = flat
                     headers["content-length"] = str(len(body))
                     continue
-                if e.code in (400, 422):
-                    # The provider's own words, kept here for every provider: a harness shows a
-                    # refusal as "400 (no body)" (Gemini CLI) or cuts it to a few dozen characters
-                    # (CheetahClaws), and a matrix row that fails must carry the reproduced text
-                    # (docs/harness-verification.md). A llama-3.3-70b turn on a compacted history
-                    # was refused as "malformed" on 2026-09-27 with the reason cut off.
-                    print(f"[relay] {'google' if google else 'provider'} refused {tail} model={_body_model} "
-                          f"status={e.code}: {data[:300]!r}", flush=True)
+                # The provider's own words, kept here for EVERY provider and every status: a
+                # harness shows a refusal as "400 (no body)" (Gemini CLI) or cuts it to a few
+                # dozen characters (CheetahClaws), and a matrix row that fails must carry the
+                # reproduced text (docs/harness-verification.md). A llama-3.3-70b turn on a
+                # compacted history was refused as "malformed" on 2026-09-27 with the reason cut
+                # off. This was 400 and 422 only, which is why a repeatable grok failure on
+                # opensquilla (2026-10-10) left nothing to read: its own code falls back to "The
+                # model provider request failed." when the terminal event carries no message, so
+                # the provider's status and body were the only account of it that existed, and
+                # at 429 or 503 this did not print them.
+                print(f"[relay] {'google' if google else 'provider'} refused {tail} model={_body_model} "
+                      f"status={e.code}: {data[:300]!r}", flush=True)
+                # ...and on the route, for a harness that does not say why its turn failed: hermes
+                # printed only its own "↻ Resumed session" line when Vercel refused gpt-6.1-sol for
+                # a spent budget (2026-10-13), and that line was the turn's whole error.
+                flags["last_refusal"] = _refusal_words(e.code, data)
                 if (attempt < 2 and e.code == 400 and b"thought_signature" in data
                         and not flags.get("thought_signature") and body is not None):
                     # a Gemini 3 endpoint this relay did not recognise as Google names the need itself
@@ -4657,7 +5364,30 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
                     headers["content-length"] = str(len(body))
                     continue
-                unknown = _google_unknown_field(data) if e.code == 400 else ""
+                if (attempt < 2 and e.code == 400 and b"function_declarations" in data
+                        and not flags.get("gemini_schemas") and body is not None
+                        and self.path.endswith("/chat/completions")):
+                    # Google's validator refused OUR tool declarations through a channel this relay
+                    # did not think needed normalising. MEASURED on Vercel (2026-10-07, the batch-3
+                    # nanobot column): "function_declarations[14].parameters.properties[args].items:
+                    # field predicate failed: $type == Type.ARRAY" and "…any_of[0].items: missing
+                    # field" — an optional array parameter, passed through to Google as sent. The
+                    # comment above _GEMINI_SCHEMA_KEYS said Vercel normalises these before they
+                    # reach Google; for this shape it does not, and one of eight models was dead on
+                    # its FIRST turn with nothing in the harness's own log to read.
+                    # Reactive rather than proactive on purpose: the normaliser flattens anyOf, which
+                    # loses information a channel that handles it faithfully would have kept. It is
+                    # applied only after that channel has refused, and then for the rest of the route.
+                    fixed = _with_gemini_schemas(body)
+                    if fixed != body:
+                        flags["gemini_schemas"] = True
+                        _GEMINI_SCHEMA_SEEN.add(_gemini_schema_key(base, _body_model))
+                        body = fixed
+                        headers["content-length"] = str(len(body))
+                        print("[relay] provider's validator refused the harness's tool declarations; "
+                              "normalised them for Google's schema and sent again", flush=True)
+                        continue
+                unknown = _refused_top_level_field(data) if e.code == 400 else ""
                 dropped = _drop_top_level_field(body, unknown) if (unknown and body is not None) else None
                 if attempt < 2 and dropped is not None and dropped != body:
                     # Google's OpenAI-compatible endpoint refuses any field it does not know (pi and
@@ -4728,6 +5458,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
             pending = b""
+            line_state: dict = {}   # what the per-line rewrite has seen of this stream so far
+            tool_state: dict = {}   # this response's tool calls, by index (_tool_args_in_sse_line)
             carry = b""      # tail of the previous chunk, so a split "model":"…" is still seen
             fcarry = b""     # tail of the previous chunk, for the finish_reason field
             call_usage: dict = {}   # what this call's events said about tokens, unioned
@@ -4804,16 +5536,17 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 pending += chunk
                 # a route that rewrites usage forwards whole lines (as rewritten) instead of the
                 # raw read, so a rewrite never straddles two reads
-                out_lines = [] if flags.get("usage_no_nulls") else None
+                out_lines = [] if (flags.get("usage_no_nulls") or flags.get("plain_stream")) else None
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
                     if out_lines is not None:
-                        out_lines.append(_usage_without_nulls(line) + b"\n")
+                        out_lines.append(_rewrite_stream_line(line, flags, line_state) + b"\n")
                     line = line.strip()
                     if line and not line.startswith(b":"):
                         last_event = time.monotonic()     # an event's line; a comment is not one
                         flags["last_data"] = time.time()  # ...and the route's own note of it (_hermes_startup_hung)
                     call_usage.update(_usage_in_sse_line(line))
+                    _tool_args_in_sse_line(line, flags, tool_state)
                     seen_thinking = _thinking_in_sse_line(line)
                     if seen_thinking is not None:
                         call_thinking = seen_thinking
@@ -4834,8 +5567,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             call_usage.update(_usage_in_sse_line(pending.strip()))
             seen_thinking = _thinking_in_sse_line(pending.strip())
             _stream_fold(flags, call_usage, seen_thinking if seen_thinking is not None else call_thinking, folded)
-            if flags.get("usage_no_nulls") and pending:
-                tail_bytes = _usage_without_nulls(pending)      # a last line with no newline after it
+            if (flags.get("usage_no_nulls") or flags.get("plain_stream")) and pending:
+                tail_bytes = _rewrite_stream_line(pending, flags, line_state)   # a last line with no newline after it
                 self.wfile.write(f"{len(tail_bytes):x}\r\n".encode() + tail_bytes + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
         else:
@@ -4869,6 +5602,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             fr = _finish_reason_in(data[-65536:])
             if fr:
                 flags["last_finish"] = fr
+            _tool_args_in_body(data, flags)
             if body is not None and b"sage" in data:
                 try:
                     whole = json.loads(data)
@@ -4890,6 +5624,92 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+
+    def _passthrough(self, base: str, key: str, tail: str, headers: dict, body: bytes | None) -> None:
+        """A route that is only the credential boundary: the request goes up as the client wrote it
+        and the answer comes down as the provider wrote it. No body rewrite, no retry ladder, and
+        NONE of the taps — not the served model, not usage, not the finish reason.
+
+        This is the route a remote runtime's control API rides (Qoder's Managed API, see
+        _qoder_relay_route). Those objects carry a `"model":"…"` field that is the CONFIGURED model,
+        not what served: a session object through the model-call taps would be recorded as a served
+        model and scored by the matrix as a substitution check the backend cannot make. Stalls are
+        not narrated either: a long remote tool step can be silent for longer than the relay's wait,
+        and an error event written into this stream would be read by the driver as the API's own.
+        The connection simply closes, and the driver resumes from its last event id."""
+        req = urllib.request.Request(base.rstrip("/") + tail, data=body, method=self.command, headers=headers)
+        try:
+            resp = urllib.request.urlopen(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
+        except urllib.error.HTTPError as e:
+            data = e.read()
+            self.send_response(e.code)
+            self.send_header("content-type", e.headers.get("content-type") or "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
+            reason = f"{type(e).__name__}: {e}"[:300]
+            print(f"[relay] upstream did not answer {tail} (passthrough): {reason}", flush=True)
+            payload = json.dumps({"type": "error", "error": {
+                "type": "upstream_unavailable", "message": f"the provider did not answer: {reason}"}}).encode()
+            try:
+                self.send_response(504 if isinstance(e, TimeoutError) or "timed out" in str(e) else 502)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            except OSError:
+                pass
+            return
+        ctype = resp.headers.get("content-type") or ""
+        if "text/event-stream" in ctype:
+            self.send_response(resp.status)
+            self.send_header("content-type", ctype)
+            self.send_header("transfer-encoding", "chunked")
+            self.end_headers()
+            while True:
+                try:
+                    chunk = resp.read1(65536)
+                except (http.client.HTTPException, TimeoutError, OSError) as e:
+                    # the stream stopped: closed, not narrated (see above)
+                    print(f"[relay] passthrough stream on {tail} stopped: {type(e).__name__}: {e}"[:300], flush=True)
+                    self.close_connection = True
+                    return
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                    self.wfile.flush()
+                except OSError:
+                    self.close_connection = True
+                    return
+            try:
+                self.wfile.write(b"0\r\n\r\n")
+            except OSError:
+                # the driver read its terminal event and closed first (seen on 0.33.0-rc.4 as a
+                # BrokenPipeError traceback per finished stream): nothing is lost
+                self.close_connection = True
+            return
+        try:
+            data = resp.read()
+        except (http.client.HTTPException, TimeoutError, OSError) as e:
+            payload = json.dumps({"type": "error", "error": {
+                "type": "upstream_unavailable", "message": f"the provider stopped answering mid-body: {e}"[:300]}}).encode()
+            try:
+                self.send_response(502)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            except OSError:
+                pass
+            return
+        self.send_response(resp.status)
+        self.send_header("content-type", ctype)
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _bedrock_anthropic(self, origin: str, key: str, body: bytes) -> None:
         """Anthropic Messages -> Bedrock InvokeModel, both directions.
@@ -4985,8 +5805,28 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):   # noqa: N802 — model listings and the like
         self._forward(None)
 
+    def do_DELETE(self):   # noqa: N802 — a remote runtime's objects are deleted through its API
+        self._forward(None)
+
     def log_message(self, *a):  # diagnostics belong on stderr, never stdout
         pass
+
+
+def _qoder_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
+    """Register one Qoder turn's API base as a pass-through route; → (relay base, placeholder).
+
+    The relay is the credential boundary and nothing else here: the PAT stays in this process, the
+    driver is handed a placeholder, and every call — session create, events, the SSE stream, file
+    upload, DELETE — goes up verbatim (_HermesRelayHandler._passthrough). The base is joined as
+    stored (…/api/v1/cloud), never given a /v1 of its own."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key, _turn_route({"passthrough": True}))
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
 def _bedrock_anthropic_route(origin: str, api_key: str) -> tuple[str, str]:
@@ -5057,6 +5897,50 @@ HR_RELAY_UPSTREAM_TIMEOUT_S = _relay_upstream_timeout()
 _USAGE_NULL_COUNT = re.compile(rb'("[a-z_]*_tokens"\s*:\s*)null')
 
 
+_TRAILER_KEYS = ("id", "object", "created", "model", "system_fingerprint", "service_tier", "usage")
+
+
+def _plain_trailer_line(line: bytes, state: dict) -> bytes:
+    """One SSE line for a client that accepts nothing after a finished choice but a bare usage
+    chunk (opensquilla 0.5.6: any other key, or any choice, there fails a turn that has already
+    answered). Every provider ends differently, measured 2026-10-12: OpenAI pads the usage trailer
+    with `obfuscation`, Azure adds `latency_checkpoint` and `routing`, OpenRouter repeats a no-op
+    choice with a `provider` key. Once a choice has finished, each later chunk is rewritten to the
+    keys of OpenAI's own trailer with no choice, or dropped when it carries no usage. Nothing after
+    a finished choice is an answer, and the usage is kept (the relay counts it from the line as it
+    came)."""
+    raw = line.strip()
+    if not raw.startswith(b"data:"):
+        return line
+    payload = raw[5:].strip()
+    if not payload.startswith(b"{"):
+        return line
+    try:
+        obj = json.loads(payload)
+    except ValueError:
+        return line
+    if not isinstance(obj, dict):
+        return line
+    if state.get("finished"):
+        if not isinstance(obj.get("usage"), dict):
+            return b""                       # an empty line: nothing for the client to read
+        kept = {k: obj[k] for k in _TRAILER_KEYS if k in obj and obj[k] is not None}
+        kept["choices"] = []
+        return b"data: " + json.dumps(kept, separators=(",", ":")).encode()
+    choices = obj.get("choices")
+    if isinstance(choices, list) and any(isinstance(c, dict) and c.get("finish_reason") for c in choices):
+        state["finished"] = True
+    return line
+
+
+def _rewrite_stream_line(line: bytes, flags: dict, state: dict) -> bytes:
+    if flags.get("usage_no_nulls"):
+        line = _usage_without_nulls(line)
+    if flags.get("plain_stream"):
+        line = _plain_trailer_line(line, state)
+    return line
+
+
 def _usage_without_nulls(line: bytes) -> bytes:
     """One answer line (an SSE event or a whole body) with every null token count inside its usage
     written as 0. Moonshot's kimi-k3 through TokenRouter ends a stream with
@@ -5101,7 +5985,7 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
 def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = (),
                         stream_usage: bool = False, gemini_schemas: bool = False,
                         usage_no_nulls: bool = False, exact_base: bool = False,
-                        aux: bool = False) -> tuple[str, str]:
+                        aux: bool = False, plain_stream: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -5130,7 +6014,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         upstream = (base_url or "").rstrip("/") if exact_base else _relay_base_with_version(base_url)
         flags = {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
-                 "usage_no_nulls": bool(usage_no_nulls), **({} if aux else _turn_effort())}
+                 "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
+                 **({} if aux else _turn_effort())}
         _HERMES_RELAY["routes"][tok] = (upstream, api_key, flags if aux else _turn_route(flags))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
@@ -6720,10 +7605,17 @@ def _opencode_npm(auth: Auth, model: str, pr: str) -> str:
 
 def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
                      skills_dir: str | None, tools_disabled: list[str] | None = None,
-                     pr: str = "") -> str:
-    """Write <cwd>/opencode.json and return the provider-qualified model id for --model."""
+                     pr: str = "", backend: str = "opencode", key_env: str = "",
+                     npm: str = "") -> str:
+    """Write <cwd>/.harness/<backend>.json and return the provider-qualified model id for --model.
+
+    `backend`/`key_env` exist for MiMo Code, which is an opencode FORK and reads the same config
+    schema (measured on @mimo-ai/cli 0.1.15: provider.<n>.{npm,options,models}, mcp, permission,
+    skills:{paths,urls}, snapshot — its own Effect schema, same keys) from its own env var. The
+    file name differs so two backends in one workspace cannot overwrite each other's config."""
+    key_env = key_env or _OPENCODE_KEY_ENV
     if not auth.base_url:
-        raise HTTPException(400, "opencode needs a base_url (none configured)")
+        raise HTTPException(400, f"{backend} needs a base_url (none configured)")
     # Which ai-sdk package serves this turn. A turn runs exactly ONE model, so this is decided per
     # turn at provider level rather than per model entry — opencode resolves
     # `model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible"`, so the provider-level
@@ -6734,7 +7626,10 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
     # chat/completions, and sending it to the openai-compatible package fails at the first call.
     # When api_format is set (custom integration), the user's explicit choice wins over any
     # model-family heuristic — the endpoint is the one they told us to reach.
-    npm = _opencode_npm(auth, model, pr)
+    # `npm` lets a caller decide the package itself: mimo does, because opencode's choice sends
+    # an aggregator's claude id down the Messages shape and off the relay, where nothing can
+    # read the served model back (see _mimo_npm).
+    npm = npm or _opencode_npm(auth, model, pr)
     # Every ai-sdk package appends its own resource to baseURL (@ai-sdk/anthropic "/messages",
     # @ai-sdk/openai "/responses", openai-compatible "/chat/completions") and expects the "/v1"
     # to be there already, the way pi's openai clients do (see _pi_models_json). A connection
@@ -6751,10 +7646,18 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
         "provider": {
             "hr": {
                 "npm": npm,
-                "options": {"baseURL": base, "apiKey": "{env:%s}" % _OPENCODE_KEY_ENV},
+                "options": {"baseURL": base, "apiKey": "{env:%s}" % key_env},
                 "models": {model: {}},
             }
         },
+        # The turn's connection and NOTHING ELSE. Both binaries carry built-in providers besides the
+        # ones a config defines, and a model may name one: mimo's `actor` tool takes a model, and on
+        # 0.33.0-rc.6 gpt-6-sol spawned a visual-QA subagent on `xiaomi/mimo-v2.5`, which MiMo's own
+        # service refused ("Invalid API Key"); the deck was made, the turn failed on the subagent's
+        # error, and the gateway read it as the user's key refused. Measured on @mimo-ai/cli 0.1.15:
+        # `mimo models` lists hr, mimo and six xiaomi ids without this, and hr alone with it. A
+        # request off the connection is also a request the person never sent anywhere.
+        "enabled_providers": ["hr"],
         # opencode's filesystem snapshots back the TUI's undo/revert; a fresh `run` per turn has
         # no one to undo for, and HarnessRouter's checkpoint is the rollback here. Left on, it is
         # a git repo of the workspace under $HOME — 699 MB of the 1.4 GB tarball in #193.
@@ -6779,12 +7682,16 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
     # and reaches the provider); the env var is set in _build_opencode below.
     hdir = pathlib.Path(cwd, ".harness")
     hdir.mkdir(exist_ok=True)
-    (hdir / "opencode.json").write_text(json.dumps(cfg, indent=2))
+    (hdir / f"{backend}.json").write_text(json.dumps(cfg, indent=2))
     return f"hr/{model}"
 
 
-def _opencode_has_session(env: dict, session_id: str) -> bool:
+def _opencode_has_session(env: dict, session_id: str, share: str = "opencode") -> bool:
     """Is this opencode session actually in this workspace's database?
+
+    `share` names the directory under $HOME/.local/share and the database inside it, because MiMo
+    Code keeps the same SQLite store under its own name (measured: $HOME/.local/share/mimocode/
+    mimocode.db plus -wal, the same two files this reads for opencode).
 
     opencode stores conversations in SQLite rather than one file per session, so there is no path
     to stat the way claude's .jsonl or codex's rollout allows. The id is a distinctive token, so
@@ -6796,9 +7703,9 @@ def _opencode_has_session(env: dict, session_id: str) -> bool:
     home = pathlib.Path(env.get("HOME") or "")
     if not home or not session_id:
         return False
-    base = home / ".local" / "share" / "opencode"
+    base = home / ".local" / "share" / share
     needle = session_id.encode()
-    for name in ("opencode.db", "opencode.db-wal"):
+    for name in (f"{share}.db", f"{share}.db-wal"):
         f = base / name
         try:
             if f.exists() and needle in f.read_bytes():
@@ -6860,6 +7767,104 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
         # one turn. Starting a fresh CLI thread in the SAME workspace keeps the files and lets the
         # follow-up run.
         print(f"[resume] opencode: session {resume_session_id} not in this workspace — starting fresh",
+              flush=True)
+    cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
+    return cmd
+
+
+# ── MiMo Code (XiaomiMiMo/MiMo-Code, npm @mimo-ai/cli, binary `mimo`) ────────────────────────
+# An opencode FORK, and openly so: the repo root package.json is still literally `"name":
+# "opencode"`. Measured on 0.1.15 (2026-10-02), it shares with opencode the thing that matters
+# most here — the `run --format json` event stream, line for line: {type, timestamp, sessionID,
+# part:{…}} with step_start / text / tool_use / step_finish / error, and step-finish's
+# tokens:{total,input,output,reasoning,cache:{read,write}} in opencode's cache-exclusive
+# convention. So it shares _opencode_to_claude and _opencode_usage_add rather than carrying a
+# copy, exactly as omp shares pi's normaliser.
+#
+# What differs is only spelling, and each difference is a place a shared helper is parameterised
+# rather than forked:
+#   --auto                -> --dangerously-skip-permissions (alias --yolo)
+#   --session <id>        -> -s <id>
+#   OPENCODE_CONFIG       -> MIMOCODE_CONFIG
+#   ~/.local/share/opencode/opencode.db -> ~/.local/share/mimocode/mimocode.db
+# Its provider list is opencode's, for the same reason: the config takes an ai-sdk package name
+# and a baseURL, so the wire formats it can speak are the ones _opencode_npm chooses between.
+MIMO_PROVIDERS = set(OPENCODE_PROVIDERS)
+_MIMO_KEY_ENV = "HR_MIMO_KEY"
+
+
+def _mimo_npm(auth: Auth, model: str, pr: str) -> str:
+    """Which ai-sdk package serves this mimo turn — opencode's choice, with ONE difference.
+
+    opencode sends a claude id on an AGGREGATOR through @ai-sdk/anthropic, i.e. the Messages shape.
+    When this was measured that turn left the relay, and mimo names no served model of its own, so
+    every claude row on an aggregator recorded NO served_model and matrix rule 2 could not be
+    evaluated on it. (Every keyed mimo turn rides the relay now, the Messages shape included.)
+
+    MEASURED WITH A CONTROL on the Vercel column (2026-10-06): mimo's claude-haiku-4.5 pair came
+    back `unlabelled=4`, no served model on any of its four turns, while all seven of its other
+    models were labelled; jcode's claude-haiku-4.5 pair, which already keeps an aggregator's claude
+    on chat/completions, recorded `anthropic/claude-haiku-4.5`. Five scenarios "passed" on a rule
+    whose input was empty — the shape openhands' 40/40 had.
+
+    So the Messages shape is taken only when the CONNECTION is Anthropic (or a custom integration
+    declared anthropic-format). An aggregator serves a claude id over chat/completions perfectly
+    well, and that keeps the row measurable. This is kilo's finding applied where it was missed.
+    _opencode_npm itself is left alone: opencode's own columns were measured with it."""
+    if auth.api_format:
+        return _opencode_npm(auth, model, pr)
+    if pr == "anthropic":
+        return "@ai-sdk/anthropic"
+    if pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+        return "@ai-sdk/openai"          # /v1/responses
+    return "@ai-sdk/openai-compatible"   # /v1/chat/completions, and therefore the relay
+
+
+def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in MIMO_PROVIDERS:
+        raise HTTPException(400, f"unknown mimo provider '{pr}' (one of {sorted(MIMO_PROVIDERS)})")
+    npm = _mimo_npm(auth, model, pr)
+    if auth.base_url and auth.api_key:
+        # EVERY keyed turn rides the relay, the Messages shape included, as opencode's do: the relay
+        # reads x-api-key and sends Anthropic the key that way (#352). The real key never reaches
+        # the CLI's environment, where the agent's shell can read it. The package is chosen before
+        # the swap, from the connection's own shape.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    if auth.api_key:
+        env[_MIMO_KEY_ENV] = auth.api_key
+    qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr,
+                                 backend="mimo", key_env=_MIMO_KEY_ENV, npm=npm)
+    env["MIMOCODE_CONFIG"] = os.path.join(cwd, ".harness", "mimo.json")
+    # mimo's own 23 built-in skills off: several are dead ends here that compete with the skills the
+    # harness mounts. Its pptx/docx/xlsx/pdf-official run on python-pptx and the like, which this
+    # image does not ship and a sandbox cannot pip-install (no route to PyPI): gpt-5.4-mini picked
+    # pptx-official and gave up on the deck three times out of three while officecli, the skill
+    # every other base uses, sat beside it. Its `playwright` competes with the browser plug.
+    # Measured on 0.1.15 with `mimo debug skill`: 37 skills without this, 15 with it, and the
+    # skill from the harness's own skills path present both times.
+    env["MIMOCODE_DISABLE_BUILTIN_SKILLS"] = "1"
+    cmd = ["mimo", "run", "--format", "json", "--model", qualified,
+           # The sandbox is the trust boundary and nobody is attached to answer a prompt — the
+           # same grant claude gets with --dangerously-skip-permissions and pi with --approve.
+           # Measured: without it the turn stops at the first write.
+           "--dangerously-skip-permissions",
+           # Plugins off, for the hole --pure closes on opencode: project config is a file IN the
+           # workspace, so without this a task could write plugin origins into it and have the
+           # NEXT turn execute them.
+           "--pure",
+           # Reasoning parts are emitted only behind this flag, as in opencode's run.ts.
+           "--thinking"]
+    if resume_session_id and _opencode_has_session(env, resume_session_id, share="mimocode"):
+        cmd += ["-s", resume_session_id]
+    elif resume_session_id:
+        # opencode's guard, unchanged: naming a session this database does not hold exits 1 before
+        # the first event, and since every later turn passes the same dead id the conversation
+        # would be wedged for good rather than for one turn.
+        print(f"[resume] mimo: session {resume_session_id} not in this workspace — starting fresh",
               flush=True)
     cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
     return cmd
@@ -7957,6 +8962,159 @@ OPENHANDS_PYTHON = os.environ.get("HR_OPENHANDS_PYTHON",
                                   "/data/agent-tools/openhands-venv/bin/python")
 OPENHANDS_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openhands_driver.py")
 
+# ── qoder: Qoder Cloud Agent, a hosted runtime reached over REST + SSE (api.qoder.com) ────────
+# The first backend whose runtime is not a process this runner spawns. The turn process is
+# runner/qoder_driver.py, an HTTP client to Qoder's Managed API: it creates (or continues) a
+# session there, posts the message, follows the event stream and lands delivered artifacts in the
+# workspace. BACKENDS marks it `remote`, which is what gives it a graceful stop (_stop_proc) so the
+# remote turn is cancelled before the local process is killed.
+#
+# Qoder picks and bills the model itself; a connection carries Qoder's PAT or SAT and nothing else,
+# so the backend has one provider, `qoder`. The public API reports neither token counts nor the
+# served model (only credits), so a turn's result carries no usage and no model, and a `charge`
+# instead — docs/harness-verification.md, "remote runtimes".
+QODER_DEFAULT_MODEL = os.environ.get("QODER_DEFAULT_MODEL", "ultimate")
+QODER_PROVIDERS = {"qoder"}
+QODER_DEFAULT_BASE = "https://api.qoder.com/api/v1/cloud"
+QODER_PYTHON = os.environ.get("HR_QODER_PYTHON", sys.executable)   # stdlib only: the runner's own interpreter
+QODER_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qoder_driver.py")
+QODER_STATE_REL = os.path.join(".harness", "qoder", "state.json")   # the driver's record of its remote ids
+# The built-ins of agent_toolset_20260401, the names tools_disabled matches; pinned equal to
+# qoder_driver.TOOLS and to the gateway's catalog by tests.
+QODER_TOOLS = ("Bash", "DeliverArtifacts", "Edit", "Glob", "Grep", "ImageGen", "ImageSearch", "Read",
+               "WebFetch", "WebSearch", "Write")
+QODER_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
+
+
+def _build_qoder(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                 tools_disabled: list[str] | None = None, agent_doc: str = "",
+                 input_files: list[str] | None = None, skills: list[dict] | None = None) -> list[str]:
+    """One Qoder turn's job, as argv for the driver.
+
+    The harness's instructions travel in the job and become the Agent's `system`: this backend
+    reads no workspace file (the systemone precedent). Disabled tools are withheld by the Agent's
+    tool configuration, the enabled ones `always_allow`, so the remote turn never pauses for a
+    confirmation nobody is here to give. Input files the runner staged are named for the driver to
+    upload and mount; skills are the folders _write_skills produced, for the driver to publish."""
+    pr = provider or "qoder"
+    if pr not in QODER_PROVIDERS:
+        raise HTTPException(400, f"unknown qoder provider '{pr}' (one of {sorted(QODER_PROVIDERS)})")
+    if not auth.api_key:
+        raise HTTPException(400, "qoder needs a PAT or SAT (none configured)")
+    base = (auth.base_url or QODER_DEFAULT_BASE).rstrip("/")
+    relay_base, relay_tok = _qoder_relay_route(base, auth.api_key)
+    env["QODER_API_KEY"] = relay_tok      # the placeholder; the route is found by it, and holds no tap
+    thinking = _TURN_THINKING.get() or {}
+    effort = str(thinking.get("asked") or "")
+    if effort:
+        # Qoder's Agent takes the level by the same names; one it does not know is not sent
+        thinking["applied"] = effort if effort in QODER_EFFORTS else ""
+    job = {"cwd": cwd, "prompt": prompt, "model": model, "base_url": relay_base, "api_key": relay_tok,
+           "resume_session_id": resume_session_id or "",
+           "agent_doc": agent_doc or "",
+           "tools_disabled": [str(t) for t in (tools_disabled or []) if t],
+           "mcp_servers": [s for s in (mcp_servers or []) if isinstance(s, dict)],
+           "input_files": list(input_files or []),
+           "skills": list(skills or []),
+           "effort": effort if effort in QODER_EFFORTS else ""}
+    return [QODER_PYTHON, QODER_DRIVER, json.dumps(job)]
+
+
+# A reasoning model behind a Qoder id can leave its thinking markers in the text Qoder streams: on
+# 0.33.0-rc.19 the `performance` id's answer began "</think> Rendered — full-bleed purple…". Neither
+# marker is the answer: a whole <think>…</think> block goes, and a stray tag of either kind with it.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.S)
+_THINK_TAG = re.compile(r"\s*</?think>\s*")
+
+
+def _without_think(text: str) -> str:
+    return _THINK_TAG.sub(" ", _THINK_BLOCK.sub("", text)).strip() if "think>" in text else text
+
+
+def _qoder_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE driver NDJSON line to canonical claude stream-json events.
+
+    The result carries no usage and no model: Qoder's public API reports neither. It carries
+    `charge` ({amount, unit: "qoder_credits", basis: "snapshot"}) when the session's usage snapshot
+    was readable, and `reason` for an `incomplete` turn (every stop_reason other than end_turn,
+    and an artifact the stream declared that did not land)."""
+    m = obj.get("m")
+    p = obj.get("p") if isinstance(obj.get("p"), dict) else {}
+    if m == "__hr_init":
+        sid = str(p.get("session_id") or "")
+        if sid:
+            state["_qoder_init"] = True
+            return [{"type": "system", "subtype": "init", "session_id": sid, "model": state.get("model")}]
+        return []
+    if m == "session":
+        if state.get("_qoder_init"):
+            return []
+        state["_qoder_init"] = True
+        return [{"type": "system", "subtype": "init", "session_id": str(p.get("session_id") or ""),
+                 "model": state.get("model")}]
+    if m == "resume_lost":
+        return [{"type": "system", "subtype": "resume_lost",
+                 "requested_session_id": str(p.get("requested_session_id") or "")}]
+    if m == "text":
+        txt = str(p.get("text") or "")
+        if "think>" in txt:
+            txt = _THINK_TAG.sub(" ", txt).lstrip()
+        if not txt:
+            return []
+        state["_qoder_text"] = state.get("_qoder_text", "") + txt
+        state["final"] = _without_think(state["_qoder_text"])
+        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+    if m == "tool_use":
+        if state.get("_qoder_text") and not state["_qoder_text"].endswith("\n"):
+            state["_qoder_text"] += "\n\n"
+        return [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": str(p.get("id") or ""), "name": str(p.get("name") or "tool"),
+             "input": p.get("input") if isinstance(p.get("input"), dict) else {}}]}}]
+    if m == "tool_result":
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": str(p.get("tool_use_id") or ""),
+             "is_error": bool(p.get("is_error")), "content": str(p.get("text") or "")}]}}]
+    if m == "mcp_unavailable":
+        servers = [{"name": str(s.get("name"))} for s in (p.get("servers") or [])
+                   if isinstance(s, dict) and s.get("name")]
+        return [{"type": "system", "subtype": "mcp_unavailable", "servers": servers}] if servers else []
+    if m in ("notice", "error"):
+        state.setdefault("_qoder_notices", []).append(str(p.get("text") or p.get("message") or ""))
+        return []
+    if m == "__hr_result":
+        status = str(p.get("status") or "")
+        final = _without_think(str(p.get("final") or "") or state.get("_qoder_text", ""))
+        reason = str(p.get("reason") or "")
+        ev: dict = {"type": "result", "usage": {}}
+        if p.get("charge"):
+            ev["charge"] = p["charge"]
+        if status == "completed":
+            state["final"] = final
+            ev.update(subtype="success", is_error=False, result=final)
+        elif status == "incomplete":
+            state["final"] = final
+            ev.update(subtype="incomplete", is_error=False, result=final or reason, reason=reason)
+        else:
+            # failed, cancelled: the reason is the answer the record shows
+            ev.update(subtype="error", is_error=True, result=reason or final or "the Qoder turn failed",
+                      reason=reason)
+        return [ev]
+    return []
+
+
+def _qoder_eof(state: dict, rc: int) -> list[dict]:
+    """The driver emits its own result, so this fires only when it died before reaching it. The
+    remote session may still be running then: the record says so, with what the driver last said."""
+    notes = [n for n in state.get("_qoder_notices") or [] if n]
+    tail = notes[-1] if notes else f"qoder driver exited {rc} without a result"
+    return [{"type": "result", "subtype": "error", "is_error": True, "usage": {},
+             "result": f"{tail}; the Qoder session may still be running"}]
+
+
+_qoder_to_claude.eof = _qoder_eof   # type: ignore[attr-defined]
+
+
 # ── systemone: the System One Harness (github.com/HarnessRouter/SystemOneHarness, Apache-2.0) ──
 # A loop over a decision model rather than a coding CLI: TypeSafe's Jev answers typed questions with
 # probabilities and writes no text, so the harness compiles the environment's actions into one
@@ -8399,6 +9557,1145 @@ def _minimax_eof(state: dict, rc: int) -> list[dict]:
 
 
 _minimax_to_claude.eof = _minimax_eof   # type: ignore[attr-defined]
+# ── jcode (1jehuang/jcode, Rust, binary `jcode`) ──────────────────────────────────────────────
+# Its own event schema, not a fork of anyone's. Measured on the pinned release v0.90.0
+# (`jcode v0.90.0 (a7f005e8c)`): `jcode … run --ndjson <message>` writes one JSON object per line
+# from src/cli/commands.rs's emit_ndjson_event —
+#   start{session_id,provider,model}  connection_type{connection}  connection_phase{phase}
+#   status_detail{detail}  text_delta{text}  text_replace{text}  tool_start{id,name}
+#   tool_input{delta}  tool_exec{id,name}  tool_done{id,name,output,error}
+#   tokens{input,output,cache_read_input,cache_creation_input}  message_end{stop_reason}
+#   session{session_id}  upstream_provider{provider}  compaction{…}
+#   done{text,usage,model,provider,session_id,…}  error{message,…}
+JCODE_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
+
+# The env names jcode's `openai-compatible` provider reads for a custom endpoint (README, verified
+# live against a gateway). They go in the ENVIRONMENT and not into config.toml on purpose: that is
+# also what makes _relay_served_model work, since it finds the relay route by the placeholder
+# bearer among the turn's env values, and a credential that rides only argv or a file leaves rule 2
+# unevaluable — the defect that let openhands report 40/40 on a check that was not running.
+_JCODE_BASE_ENV = "JCODE_OPENAI_COMPAT_API_BASE"
+_JCODE_KEY_ENV = "OPENAI_COMPAT_API_KEY"
+
+# Every tool id jcode 0.90.0 exposes, measured by asking the model for its own list with
+# --disabled-tools write (write absent, the rest present, which is also the proof that the switch
+# is enforcement and not instruction). Four of these write files (write, edit, replace,
+# apply_patch) and several reach the network (webfetch, websearch, gmail, compile_remote,
+# maintainer_feedback, schedule) — disabling one door is not disabling the capability.
+ALL_JCODE_TOOLS = {
+    "agentgrep", "applet", "apply_patch", "bash", "batch", "bg", "browser", "compile_remote",
+    "conversation_search", "edit", "gmail", "integration_tools", "invalid", "jcode_docs", "ls",
+    "memory", "mcp", "mcp_call", "mcp_search", "maintainer_feedback", "macos_computer_use", "open",
+    "panel", "read", "replace", "schedule", "session_search", "side_panel", "skill_manage",
+    "swarm", "todo", "webfetch", "websearch", "write",
+}
+# Off on every turn, whatever the harness asks: jcode tools that cannot work in a headless Linux
+# sandbox, or that leave it on their own. `browser` drives Firefox through an extension bridge that
+# never connects here, and a model that picks it over the browser plug tries to set it up until the
+# turn's cap: gpt-5.4-mini ran 459 tool calls for two hours on 0.33.0-rc.7, "the browser bridge is
+# not connected", on a task the plug does in a minute. `macos_computer_use` is macOS's,
+# `gmail` signs in through jcode's own Google login rather than the person's plugs, and
+# `maintainer_feedback` writes to jcode's maintainer.
+# `todo` and `memory` are the way into jcode's runaway turns. Its todo tool carries per-item
+# "confidence" and a "closed feedback loop" plan, and a model can keep re-validating against it:
+# grok-4.20 on a three-turn PDF edit made 84 calls in five minutes, 47 of them `todo`, ending "the
+# validation has transcended into the null-eternal"; a person's grok-4.6 turn re-verified "All 11…
+# 12… 13 items" through `todo` and `memory` until stopped (0.33.0-rc.18). With both off, grok-4.20
+# finished all three turns in three runs of three (4 to 12 calls a turn), and claude-sonnet-5.5,
+# gpt-5.4 and grok-4.6 finished faster than with them. No release after the pinned v0.90.0, through
+# v0.95.0, changes either. `memory` is jcode's own store under its home, not this product's memory.
+_JCODE_SANDBOX_OFF = frozenset({"browser", "macos_computer_use", "gmail", "maintainer_feedback",
+                                "todo", "memory"})
+
+
+def _jcode_usage_add(state: dict, ev: dict) -> None:
+    """Accumulate ONE `tokens` event into the turn total, netting the cache out of the input.
+
+    TWO measured facts, both of which a naive reading gets wrong:
+
+    1. `done.usage` is NOT the turn's usage. NdjsonRunState.usage is ASSIGNED on every TokenUsage
+       event rather than accumulated (src/cli/commands.rs), so it holds the LAST request's numbers.
+       A two-request turn reported input 10748 while its two `tokens` events summed to 21357. So
+       the total is built here and `done.usage` is ignored.
+    2. `input` is GROSS. jcode's OpenAI client states it outright — "OpenAI input_tokens is the
+       total, including both cache-read and cache-write subsets" (jcode-provider-openai/src/
+       stream.rs), and jcode-compaction-core repeats the contract — so BOTH cache counters are
+       subtracted to reach this product's fresh-only input. _norm_token_usage subtracts only the
+       read, which would leave the write billed twice."""
+    tot = state.setdefault("_jc_usage", {"input_tokens": 0, "output_tokens": 0,
+                                        "cache_read_tokens": 0, "cache_write_tokens": 0})
+
+    def _n(key: str) -> int:
+        v = ev.get(key)
+        return int(v) if isinstance(v, (int, float)) and v > 0 else 0
+
+    read, write, inp = _n("cache_read_input"), _n("cache_creation_input"), _n("input")
+    tot["cache_read_tokens"] += read
+    tot["cache_write_tokens"] += write
+    tot["input_tokens"] += max(inp - read - write, 0)
+    tot["output_tokens"] += _n("output")
+
+
+def _jcode_usage(state: dict) -> dict:
+    return {k: v for k, v in (state.get("_jc_usage") or {}).items() if v}
+
+
+def _jcode_held_calls(state: dict, upto: str | None = None) -> list[dict]:
+    """Emit the held tool calls, oldest first, with the arguments their `tool_input` pieces built:
+    every one when `upto` is None, else up to and including the call with that id.
+
+    A call is held from `tool_start` because jcode streams its arguments AFTER it, as `tool_input`
+    pieces that carry no id (they belong to the call started last), and a tool_use is final once
+    the gateway has it. Emitting it at tool_start sent every jcode call with `{}`: the console
+    showed a bare "Bash" with nothing to open, and the record kept no command. Measured on v0.90.0
+    against a stub endpoint: tool_start{id,name}, tool_input{delta} x3, tool_exec{id,name},
+    message_end, tool_done{id,output}."""
+    held = state.get("_jc_calls") or []
+    if upto is not None and not any(c["id"] == upto for c in held):
+        return []
+    out = []
+    while held:
+        c = held.pop(0)
+        raw = c["args"].strip()
+        try:
+            inp = json.loads(raw) if raw else {}
+        except ValueError:
+            inp = {"arguments": raw}   # cut short (a killed turn): shown as it arrived, never dropped
+        out.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": c["id"], "name": c["name"],
+             "input": inp if isinstance(inp, dict) else {"arguments": inp}}]}})
+        if c["id"] == upto:
+            break
+    return out
+
+
+def _jcode_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE `jcode run --ndjson` line to zero+ canonical claude stream-json events.
+
+    Text streams from text_delta; `text_replace` is jcode's revision event and replaces what was
+    streamed, so it is not re-emitted (the user already has the old text on screen — the same
+    decision _pi_to_claude makes for a non-prefix revision) but it does become the candidate final.
+    A tool call is held from `tool_start` until its arguments are complete (_jcode_held_calls)."""
+    t = obj.get("type")
+    if t == "start":
+        state["_jc_session"] = obj.get("session_id") or ""
+        return [{"type": "system", "subtype": "init",
+                 "session_id": obj.get("session_id"), "model": state.get("model")}]
+    if t == "session":
+        state["_jc_session"] = obj.get("session_id") or state.get("_jc_session") or ""
+        return []
+    if t == "text_delta":
+        txt = obj.get("text") or ""
+        if not txt:
+            return []
+        state["_jc_text"] = state.get("_jc_text", "") + txt
+        state["final"] = state["_jc_text"]
+        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": txt}]}}]
+    if t == "text_replace":
+        txt = obj.get("text") or ""
+        state["_jc_text"] = txt
+        state["final"] = txt
+        return []
+    if t == "tool_start":
+        # jcode has no step limit of its own (no flag for one), so the turn's budget is counted
+        # here: past it the turn ends incomplete at its budget and the run loop stops the process.
+        # Without it a model that would not stop ran to the turn's wall-clock cap: grok-4.20 made
+        # 84 calls in five minutes on 0.33.0-rc.18, 47 of them `todo`, "the validation has
+        # transcended into the null-eternal", and a person stopped it by hand.
+        n = state["_jc_tool_n"] = state.get("_jc_tool_n", 0) + 1
+        cap = state.get("max_turns")
+        if cap and n > int(cap) and not state.get("_stop"):
+            state["_stop"] = "max_turns"
+            return _jcode_held_calls(state) + [{
+                "type": "result", "subtype": "error_max_turns", "is_error": False,
+                "result": state.get("final", "") or state.get("_jc_text", ""),
+                "usage": _jcode_usage(state)}]
+        state.setdefault("_jc_calls", []).append(
+            {"id": obj.get("id") or "tool", "name": obj.get("name") or "tool", "args": ""})
+        return []
+    if t == "tool_input":
+        held = state.get("_jc_calls")
+        if held:
+            held[-1]["args"] += str(obj.get("delta") or "")
+        return []
+    if t == "tool_exec":
+        return _jcode_held_calls(state, obj.get("id") or "tool")
+    if t == "tool_done":
+        err = obj.get("error")
+        content = str(obj.get("output") or err or "")
+        return _jcode_held_calls(state, obj.get("id") or "tool") + [
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": obj.get("id") or "tool",
+                 "is_error": bool(err), "content": content[:8000]}]}}]
+    if t == "tokens":
+        _jcode_usage_add(state, obj)
+        return []
+    if t == "message_end":
+        # One assistant message ended; the next may follow in the same turn (a tool round trip).
+        # `final` is the LAST message's text, so the buffer resets rather than accumulating a
+        # mid-run aside into the answer. Every call the message made has its arguments by now.
+        state["_jc_text"] = ""
+        return _jcode_held_calls(state)
+    if t == "error":
+        # A REAL error event, which is more than several of these CLIs have: the message names the
+        # endpoint, the model, the auth variable's NAME (never its value), the status and the
+        # provider's own body. No `done` follows it, and the process exits 1.
+        state["_jc_error"] = str(obj.get("message") or "jcode run failed")[:1000]
+        return _jcode_held_calls(state) + [{"type": "result", "subtype": "error", "is_error": True,
+                                            "result": state["_jc_error"], "usage": _jcode_usage(state)}]
+    if t == "done":
+        # `done.text` is the whole final answer, authoritative over what the deltas assembled.
+        final = obj.get("text")
+        if isinstance(final, str) and final:
+            state["final"] = final
+        return _jcode_held_calls(state) + [{"type": "result", "subtype": "success", "is_error": False,
+                 "result": state.get("final", ""), "usage": _jcode_usage(state),
+                 # The CLI echoes the REQUESTED id here, never what the provider answered, so this
+                 # is deliberately NOT set as the served model: the relay's tap is the only honest
+                 # source for rule 2 on this backend, and the run loop fills it in when absent.
+                 }]
+    return []
+
+
+def _jcode_eof(state: dict, rc: int) -> list[dict]:
+    """The stream ended with neither `done` nor `error`: killed, cancelled, or a crash before the
+    emitter ran. The exit code decides, and a failure returns an EMPTY result so the run loop's
+    collected stderr tail — which carries jcode's own `Error: …` block — is the reason rather than
+    a placeholder written here."""
+    held = _jcode_held_calls(state)   # a call the kill cut off still shows what it was running
+    if state.get("_jc_error"):
+        return held
+    usage = _jcode_usage(state)
+    if rc == 0:
+        return held + [{"type": "result", "subtype": "success", "is_error": False,
+                        "result": state.get("final", ""), "usage": usage}]
+    return held + [{"type": "result", "subtype": "error", "is_error": True, "result": "", "usage": usage}]
+
+
+_jcode_to_claude.eof = _jcode_eof   # type: ignore[attr-defined]
+
+
+# ── opensquilla (TokenRhythm/opensquilla, `opensquilla agent`) ─────────────────────────────────
+# Measured on the pinned 0.5.6 release wheel (2026-10-02). It needs no driver process: with
+# `--json --event-stream-stderr` the progress events and the one final object both arrive on the
+# merged stream the run loop already reads, and the per-message detail arrives in the transcript
+# file, which the eof handler reads.
+#
+# THREE THINGS ITS DEFAULTS DO THAT A HARNESS MUST UNDO, each measured rather than inferred:
+#   1. `[squilla_router] enabled = true` by DEFAULT. Its router scores every turn and routes it
+#      across four tiers "to the cheapest capable model" — model substitution as a feature. The
+#      builder writes `enabled = false`, or matrix rule 2 is violated by configuration.
+#   2. A `custom` endpoint is assumed to hold 8192 tokens. The first probe died with
+#      `provider_request_too_large` ("The fixed system instructions exceed the provider request
+#      budget") on a prompt of three sentences, because its own system block and tool schemas are
+#      ~43k characters. The builder declares the window per model.
+#   3. `--session-db-path` defaults to `:memory:`, i.e. no continuity between turns at all.
+#
+# WHAT THE PROGRESS STREAM DOES NOT CARRY, by its own documented design: "The stream does not
+# expose reasoning text, answer text, tool arguments, tool results". `text_delta` really does
+# arrive with no text. So the live half of this backend's stream is the TOOL CALLS and the notices,
+# and the answer text plus each tool's result come out of the transcript at the end. Tool
+# ARGUMENTS are the one thing nothing surfaces: the progress stream omits them and the transcript
+# — which does carry them — is written once, after the run (cli/agent_cmd.py `_write_jsonl`), by
+# which time the call has already been reported. Said here rather than left to be discovered.
+OPENSQUILLA_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
+
+# Its own name for the key of the generic OpenAI-compatible provider (`custom`), and of the generic
+# Messages one. The driver puts the relay's per-turn placeholder here, in the ENVIRONMENT, which is
+# also what lets _relay_served_model and _relay_usage find the route.
+_OPENSQUILLA_KEY_ENV = "CUSTOM_LLM_API_KEY"
+_OPENSQUILLA_ANTHROPIC_KEY_ENV = "CUSTOM_ANTHROPIC_API_KEY"
+# Its own venv (the aider/openhands precedent: it pins a large dependency set), so the executable is
+# named by path rather than looked up on PATH — $TOOLS/bin is what PATH carries, and this lives
+# beside its interpreter.
+OPENSQUILLA_BIN = os.environ.get("HR_OPENSQUILLA_BIN",
+                                 "/data/agent-tools/opensquilla-venv/bin/opensquilla")
+
+
+# The chat-routing directives OpenSquilla's models embed for its channel adapters:
+# `[[reply_to_current]]`, `[[reply_to: <target>]]`, and the one-bracket spelling a model that
+# dropped a pair still means. The project strips them in the channel layer AND in both of its
+# terminal renderers — "terminal surfaces render the raw stream, so without this filter the tag
+# leaks into the transcript as literal text" — but `opensquilla agent --json` strips neither, so
+# without this the tag is part of the answer. Measured on the first live turn: asked to reply with
+# exactly READY, the record said "[[reply_to_current]]\nREADY", which is a scenario that recalls an
+# exact word failing for a reason that has nothing to do with the model. The pattern and what goes
+# with it (trailing spaces and one newline) are the project's own, from
+# cli/tui/backend/directives.py.
+_SQ_DIRECTIVE = re.compile(
+    r"(?:\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]*)\s*\]\]"
+    r"|(?<!\[)\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]*)\s*\](?!\]))[ \t]*\r?\n?")
+
+
+def _opensquilla_text(s: str) -> str:
+    """One assistant text block, with the channel-routing directives taken out."""
+    return _SQ_DIRECTIVE.sub("", s or "").strip()
+
+
+def _opensquilla_paths(cwd: str) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
+    """(state dir, transcript, usage file) — all under .harness/, so all checkpointed and none of
+    them reported to the user as something their task produced."""
+    base = pathlib.Path(cwd, ".harness", "opensquilla")
+    return base, base / "transcript.jsonl", base / "usage.json"
+
+
+def _opensquilla_usage(u: dict | None) -> dict:
+    """Its usage block, netted to this product's contract.
+
+    `input_tokens` is GROSS: on one measured turn cached_tokens 16,764 plus cache_write_tokens
+    8,570 summed to within nine tokens of input_tokens 25,343. cache_write_tokens is only in
+    `model_usage_breakdown`, not at the top level, so it is read from there."""
+    if not isinstance(u, dict):
+        return {}
+    def _n(d: dict, *keys: str) -> int:
+        for k in keys:
+            v = d.get(k)
+            if isinstance(v, (int, float)) and v > 0:
+                return int(v)
+        return 0
+    write = 0
+    for row in (u.get("model_usage_breakdown") or []):
+        if isinstance(row, dict):
+            write += _n(row, "cache_write_tokens")
+    read = _n(u, "cached_tokens", "cache_read_tokens")
+    out = {"input_tokens": max(_n(u, "input_tokens") - read - write, 0),
+           # reasoning_tokens is a SUBSET of output_tokens here (the usage file reports
+           # output 346 with reasoning 143 inside it), so it is not added again.
+           "output_tokens": _n(u, "output_tokens")}
+    if read:
+        out["cache_read_tokens"] = read
+    if write:
+        out["cache_write_tokens"] = write
+    return {k: v for k, v in out.items() if v}
+
+
+def _opensquilla_transcript(state: dict) -> list[dict]:
+    """Replay the transcript as canonical events: the assistant's text, and one tool_result per
+    call with the content the progress stream withheld.
+
+    Read BEFORE anything is torn down — it is read here, at eof, from a file the CLI has already
+    finished writing and closed, which is the ordering openhands' log-tail fallback got wrong
+    (it read after signalling the writer and recorded `SIGTERM … shutting down` as the reason).
+    The shape is pi's, because this project is openclaw/hermes lineage: {type:"message",
+    message:{role, content:[{type:"text"|"toolCall"|…}], usage:{input,output,cacheRead,cacheWrite}}}.
+    """
+    cwd = state.get("cwd") or ""
+    if not cwd:
+        return []
+    state_dir, transcript, _ = _opensquilla_paths(cwd)
+    try:
+        lines = transcript.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    msgs: list[dict] = []
+    for raw in lines:
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            continue
+        try:
+            msgs.append((json.loads(raw) or {}).get("message") or {})
+        except Exception:  # noqa: BLE001 — one unparseable line in a transcript the CLI is still
+            continue       # appending to is a line, not a turn: skip it and read the rest.
+    # THIS turn only. A resumed session's transcript is the whole conversation, rewritten each turn,
+    # and replaying it all put every earlier answer in front of this one and every earlier tool call
+    # and result into its trace (2026-10-13: a sixth turn answered "Hello! How can I help you
+    # today?…" from the first and listed 31 tools). The turn begins after the LAST user message that
+    # carries its prompt (the run loop's state holds it); without it, after the last user message.
+    prompt = str(state.get("prompt") or "").strip()
+    def _user_text(m: dict) -> str:
+        c = m.get("content")
+        return c if isinstance(c, str) else "\n".join(
+            x.get("text") or "" for x in (c or []) if isinstance(x, dict) and x.get("type") == "text")
+    users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+    mine = [i for i in users if prompt and prompt in _user_text(msgs[i])]
+    start = (mine or users or [-1])[-1] + 1
+    out: list[dict] = []
+    final = ""
+    for msg in msgs[start:]:
+        role = msg.get("role")
+        content = msg.get("content") if isinstance(msg.get("content"), list) else []
+        if role == "assistant":
+            text = _opensquilla_text("\n".join(c.get("text") or "" for c in content
+                                               if isinstance(c, dict) and c.get("type") == "text"))
+            if text.strip():
+                # `final` is the LAST assistant text, which is why the final answer is taken from
+                # here and NOT from the stdout object's `text`: that field concatenates the whole
+                # turn's assistant output, so a turn asked to "reply with exactly DONE" answered
+                # "I'll create probe.txt … and verify it.DONE" while the transcript's last
+                # assistant message was exactly "DONE".
+                final = text
+                out.append({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+            # Each call again, now WITH its arguments: the progress stream announced it with none
+            # (tool_use_start carries no input), so its row had nothing to show. The gateway fills
+            # that row in place (same id, same name, no result yet) rather than adding one; the name
+            # is the one the row was given, so the two can never disagree.
+            live = state.get("_sq_calls") or {}
+            filled = state.get("_sq_filled") or set()
+            for c in content:
+                if not (isinstance(c, dict) and c.get("type") == "toolCall" and c.get("id")):
+                    continue
+                if c["id"] in filled:
+                    continue     # its row has had its arguments since it started; a second would duplicate it
+                args = c.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except ValueError:
+                        args = {"arguments": args}
+                if not args:
+                    continue
+                out.append({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "id": c["id"], "name": live.get(c["id"]) or c.get("name") or "tool",
+                     "input": args if isinstance(args, dict) else {"arguments": args}}]}})
+        elif role == "toolResult":
+            body = "\n".join(c.get("text") or "" for c in content
+                             if isinstance(c, dict) and c.get("type") == "text")
+            out.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": msg.get("toolCallId") or "tool",
+                 "is_error": bool(msg.get("isError")), "content": body[:8000]}]}})
+    if final:
+        state["final"] = final
+    return out
+
+
+def _opensquilla_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE line of the merged stream to zero+ canonical claude events.
+
+    Two kinds of object arrive on it: the v1 progress events, each stamped `"_event": true`, and
+    the single final result object `--json` writes to stdout at the end. Only `_event: true` may be
+    read as an event — the project says so, because ordinary diagnostics share the stream — and
+    everything else that parses as JSON and carries a `status` is the final object."""
+    if obj.get("_event") is True:
+        kind = obj.get("kind")
+        if kind == "tool_use_start":
+            tid = obj.get("tool_use_id") or "tool"
+            state.setdefault("_sq_calls", {})[tid] = obj.get("tool_name") or "tool"
+            # The progress stream carries no arguments, by design; the model sent them through the
+            # relay before the tool ran, under this same call id, so the row has them from the start.
+            # When the relay saw none (a route that is not relayed), the row starts empty and the
+            # transcript fills it when the turn ends (_opensquilla_transcript).
+            args = _relay_tool_args(state.get("routes"), tid)
+            if args:
+                state.setdefault("_sq_filled", set()).add(tid)
+            return [{"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tid, "name": obj.get("tool_name") or "tool",
+                 "input": args or {}}]}}]
+        if kind == "router_decision":
+            # The router is turned OFF by the config this builder writes, so this event should
+            # never arrive. If it does, the turn ran on a model nobody asked for: recorded so the
+            # record says which, and the eof handler fails the turn on it rather than reporting a
+            # pass for a substitution.
+            picked = str(obj.get("model") or "")
+            if picked:
+                state.setdefault("_sq_routed", []).append(picked)
+            return []
+        if kind == "error":
+            state["_sq_error"] = str(obj.get("message") or "opensquilla error")[:1000]
+            return []
+        if kind == "warning":
+            # Something the CLI said about how the turn is going, which is neither its answer nor a
+            # failure: "Provider context limit reached; compacting older context before retrying" is
+            # the one measured here. A person reading a turn that took minutes and lost its earlier
+            # context has no other way to learn why, so it becomes a `system/notice` — a subtype the
+            # gateway renders as a note on the reply (it renders resume_lost and mcp_unavailable the
+            # same way, and drops any subtype it does not know, so emitting one it did not render
+            # would be writing to a surface that does not exist).
+            #
+            # De-duplicated HERE rather than in the gateway: its compaction warning repeats once per
+            # retry, and three identical notes on one reply is noise, not information.
+            text = str(obj.get("message") or "").strip()[:300]
+            seen = state.setdefault("_sq_notices", [])
+            if not text or text in seen:
+                return []
+            seen.append(text)
+            return [{"type": "system", "subtype": "notice", "text": text}]
+        return []
+    if isinstance(obj.get("status"), str) and "session_key" in obj:
+        state["_sq_final"] = obj
+        return [{"type": "system", "subtype": "init",
+                 "session_id": obj.get("session_key"), "model": state.get("model")}]
+    return []
+
+
+def _opensquilla_eof(state: dict, rc: int) -> list[dict]:
+    """Everything the user reads comes out here: the transcript's messages, then the result.
+
+    The final object is the status of record — not the exit code, which is 1 for both a provider
+    failure and a usage error — and its `errors[]` carries the reason the agent reported."""
+    evs = _opensquilla_transcript(state)
+    final_obj = state.get("_sq_final") or {}
+    usage = _opensquilla_usage(final_obj.get("usage") if isinstance(final_obj, dict) else None)
+    errs = [str((e or {}).get("message") or "") for e in (final_obj.get("errors") or [])
+            if isinstance(e, dict)]
+    why = state.get("_sq_error") or "; ".join(x for x in errs if x)
+    routed = sorted(set(state.get("_sq_routed") or []))
+    requested = str(state.get("model") or "")
+    other = [m for m in routed if requested and not _same_model(requested, m)]
+    if other and not why:
+        why = f"its router ran {', '.join(other)} instead of {requested}"
+    ok = (str(final_obj.get("status") or "") == "ok") and not why
+    if not final_obj and rc != 0 and not why:
+        # Neither the final object nor an error event arrived: killed, cancelled, or dead before
+        # the emitter. The run loop's stderr tail is the reason; an empty result lets it through.
+        return evs + [{"type": "result", "subtype": "error", "is_error": True,
+                       "result": "", "usage": usage}]
+    return evs + [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                   "result": (state.get("final", "") if ok else (why or state.get("final", ""))),
+                   "usage": usage}]
+
+
+_opensquilla_to_claude.eof = _opensquilla_eof   # type: ignore[attr-defined]
+
+
+def _opensquilla_config(auth: Auth, model: str, state_dir: pathlib.Path, anthropic: bool,
+                        mcp_servers: list[dict] | None) -> None:
+    """Write <state dir>/config.toml: one provider, one model, the router off.
+
+    TOML is written by hand rather than through a library because the runner has no TOML writer and
+    the values are ours: a model id (quoted, and the only place a caller-supplied string lands
+    here), a URL and three booleans."""
+    def q(v: str) -> str:
+        return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    pname = "custom_anthropic" if anthropic else "custom"
+    base = (auth.base_url or "").rstrip("/")
+    lines = [
+        "# written per turn by the harness runner — do not edit, it is overwritten",
+        "[llm]",
+        f"provider = {q(pname)}",
+        f"model = {q(model)}",
+        f"base_url = {q(base)}",
+        "",
+        # Declared because the generic endpoints fall back to 8192 tokens, which its own system
+        # prompt and tool schemas do not fit in (see the comment on this backend above).
+        f"[models.{pname}.{q(model)}]",
+        "context_window = 200000",
+        "max_output_tokens = 32000",
+        "supports_tools = true",
+        "",
+        "[squilla_router]",
+        "# OFF: it routes a turn to another tier's model, and this harness promises the model asked for.",
+        "enabled = false",
+        "auto_thinking = false",
+        "",
+        "[auth]",
+        "# Nothing is listening on a gateway port here; the one process is the agent turn.",
+        'mode = "none"',
+        "",
+        "[memory]",
+        "# \"state\", not the default \"workspace\": the memory tools then read and write their",
+        "# markdown under the state dir (tools/builtin/memory_tools.py branches on exactly this)",
+        "# instead of under the directory the user collects, so memory the agent accumulates is not",
+        "# handed back as the task's output. It does NOT stop the four bootstrap seeds below —",
+        "# ensure_agent_workspace writes those whatever this says; _git_exclude is what covers them.",
+        'source = "state"',
+        "",
+        "[tools]",
+        "# `cron` schedules jobs for opensquilla's own scheduler, which a one-shot `opensquilla agent`",
+        "# turn never runs, so a job made with it never fires. Its description is also the only text in",
+        "# the whole request that is not English (three Chinese example requests), and on 0.33.0-rc.15",
+        "# gpt-5.5 and gpt-5.4 answered English prompts with a Chinese opening line. The global policy's",
+        "# deny list wins over every later layer (tools/policy_helpers.py).",
+        'deny = ["cron"]',
+        "",
+    ]
+    entries = []
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        transport = str(sv.get("transport") or "").lower()
+        if sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            args = [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]
+            entries.append((name, "stdio", str(argv[0]), args, ""))
+        elif url and transport == "sse":
+            entries.append((name, "sse", "", [], url))
+        # A streamable-HTTP server never reaches here: opensquilla's MCPServerEntry takes
+        # transport "stdio" | "sse" only, so _BRIDGED_TRANSPORTS turns http into a stdio launcher
+        # before this runs. One that still carries a bare url has no transport this CLI can speak
+        # and is dropped rather than written as a line it will refuse.
+    if entries:
+        lines += ["[mcp]", "enabled = true", ""]
+        for name, transport, command, args, url in entries:
+            lines += ["[[mcp.servers]]", f"name = {q(name)}", f"transport = {q(transport)}"]
+            if command:
+                lines += [f"command = {q(command)}",
+                          "args = [" + ", ".join(q(a) for a in args) + "]"]
+            if url:
+                lines += [f"url = {q(url)}"]
+            lines += [""]
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "config.toml").write_text("\n".join(lines))
+
+
+# opensquilla's own reply-language rules, in its system prompt template. Measured on 0.33.0-rc.16
+# against gpt-5.4 with plain English prompts: with them, 8 of 8 answers in Chinese, and with the
+# Chinese line alone removed, 4 of 4 in French; with all three removed, 4 of 4 in English (gpt-5.5
+# drifted too, gemini and claude did not). Without them a model answers in the person's language,
+# as on every other base. The template has no override hook (identity/prompt.py loads it from the
+# package directory), so the lines are taken out of the installed file before a turn runs, once per
+# runner, idempotently; installs made before this fix get it too.
+_OPENSQUILLA_LANGUAGE_RULES = re.compile(
+    r"^- (?:Write tool preambles in the same language as the user's current conversation\."
+    r"|Use the conversation's language for all user-visible replies[^\n]*"
+    r"|If the user writes in Chinese, keep replying in Chinese[^\n]*)\n", re.M)
+_OPENSQUILLA_LANGUAGE_DONE: list[bool] = []
+
+
+def _opensquilla_reply_language_fix(venv: pathlib.Path | None = None) -> str:
+    """Remove the three rules from the installed template; what was done, for the log."""
+    if _OPENSQUILLA_LANGUAGE_DONE:
+        return "done"
+    venv = venv or pathlib.Path(OPENSQUILLA_BIN).parent.parent
+    found = sorted(venv.glob("lib/python*/site-packages/opensquilla/identity/templates/system_prompt.j2"))
+    if not found:
+        return "no template"
+    t = found[0]
+    s = t.read_text(encoding="utf-8")
+    new = _OPENSQUILLA_LANGUAGE_RULES.sub("", s)
+    if new != s:
+        t.write_text(new, encoding="utf-8")
+        what = "removed"
+    elif "conversation's language" in s or "replying in Chinese" in s:
+        # a release that reworded them: say so rather than leave the drift unexplained
+        print("[opensquilla] WARNING: its reply-language rules are in a form this runner does not "
+              "know; English prompts may get answers in another language", flush=True)
+        what = "unknown form"
+    else:
+        what = "absent"
+    _OPENSQUILLA_LANGUAGE_DONE.append(True)
+    return what
+
+
+def _build_opensquilla(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                       resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                       tools_disabled: list[str] | None = None,
+                       max_turns: int | None = None) -> list[str]:
+    try:
+        _opensquilla_reply_language_fix()
+    except OSError as e:   # never fails a turn; the turn just keeps opensquilla's own wording
+        print(f"[opensquilla] reply-language rules not changed: {e}", flush=True)
+    pr = provider or "openai-api"
+    if pr not in OPENSQUILLA_PROVIDERS:
+        raise HTTPException(400, f"unknown opensquilla provider '{pr}' "
+                                 f"(one of {sorted(OPENSQUILLA_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"opensquilla provider '{pr}' needs a base_url (none configured)")
+    # Its `custom_anthropic` provider only for a connection that IS Anthropic, as jcode's above.
+    anthropic = auth.api_format == "anthropic" or (not auth.api_format and pr == "anthropic")
+    if auth.api_key:
+        # EVERY keyed turn rides the relay, as jcode's: the real key never reaches the CLI's
+        # environment, where the agent's shell can read it, and the relay is the only tap that can
+        # say which model answered. The Messages provider gets the relay's origin, which works
+        # whichever of /v1/messages or /messages it joins on.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, plain_stream=True)
+        auth = auth.model_copy(update={"base_url": _relay_origin(relay_base) if anthropic else relay_base,
+                                       "api_key": relay_tok})
+    state_dir, transcript, usage_path = _opensquilla_paths(cwd)
+    _opensquilla_config(auth, model, state_dir, anthropic, mcp_servers)
+    env[_OPENSQUILLA_ANTHROPIC_KEY_ENV if anthropic else _OPENSQUILLA_KEY_ENV] = auth.api_key or ""
+    # Both roots, per its own warning about parallel subprocesses: a write-capable agent holds a
+    # profile-wide writer lease, so two turns sharing a state dir conflict instead of queueing.
+    # One session has one workspace, and turns within a session are serialised above the runner, so
+    # the session's own directory is the profile — and the session DATABASE is named explicitly
+    # below, which is what keeps continuity while the profile stays per session.
+    env["OPENSQUILLA_STATE_DIR"] = str(state_dir)
+    env["OPENSQUILLA_GATEWAY_STATE_DIR"] = str(state_dir / "gateway")
+    # The four files `ensure_agent_workspace` seeds into the workspace, unconditionally — it takes a
+    # `seed_templates` flag that no caller passes and no setting reads, so there is nothing to turn
+    # off. MEASURED on the Vercel column (2026-10-06): a turn that wrote NOTHING handed back
+    # SOUL.md, IDENTITY.md, USER.md and MEMORY.md, their cards stayed in the transcript, and by the
+    # artifact turn rule 3 — the rendered cards must BE the turn's stored files — saw five cards
+    # against a record of one. All eight models, identically.
+    _git_exclude(cwd, ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "memory/"],
+                 "the files opensquilla seeds into every workspace, never the task's output")
+    for stale in (transcript, usage_path):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    cmd = [OPENSQUILLA_BIN, "agent", "-m", prompt,
+           "--json", "--event-stream-stderr",
+           "--workspace", cwd,
+           # The sandbox is the trust boundary and nobody is attached to approve anything — the
+           # grant claude gets with --dangerously-skip-permissions. Deliberately NOT
+           # --workspace-lockdown: writes outside the workspace are invisible to the user but they
+           # are also how a task installs a package, and the wall here is the sandbox, not a flag.
+           "--permissions", "bypass",
+           "--transcript-path", str(transcript),
+           "--usage-path", str(usage_path),
+           # Continuity. The default is `:memory:`, i.e. none at all; this file is under .harness/
+           # and therefore travels in the checkpoint. The key is the harness's session id.
+           "--session-db-path", str(state_dir / "sessions.sqlite"),
+           # A provider that answers the same 503 every time should not cost minutes before the
+           # reason reaches the user. Two attempts, which is openhands' lesson applied up front
+           # rather than after a 212-second failure.
+           "--max-provider-retries", "2"]
+    if resume_session_id:
+        cmd += ["--session-id", resume_session_id]
+    if max_turns:
+        cmd += ["--max-iterations", str(int(max_turns))]
+    if tools_disabled:
+        # NOT a per-tool switch: `--permissions` chooses a posture (restricted / bypass / full) and
+        # there is no deny list on the CLI, so the disabled set travels as a standing instruction in
+        # the agent doc instead — the same honest downgrade codex, hermes, dsh and gemini get, and
+        # the reason this base's tool_enforcement is "soft" in the gateway's catalog.
+        pass
+    return cmd
+
+
+# ── nanobot (HKUDS/nanobot, PyPI nanobot-ai) ──────────────────────────────────────────────────
+# Not a coding CLI: a self-hosted personal-agent runtime with a WebUI, chat channels, memory and
+# an agent loop. It is driven IN PROCESS through its published Python SDK by
+# runner/nanobot_driver.py, which emits claude's stream-json directly — so this backend's
+# normaliser is the passthrough, as systemone's is. The driver's docstring holds the measured
+# reasons the SDK is the surface and `nanobot agent -m` is not (no event stream, and its CLI path
+# seeds eight files and a second git repository into the workspace).
+NANOBOT_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
+NANOBOT_PYTHON = os.environ.get("HR_NANOBOT_PYTHON", "/data/agent-tools/nanobot-venv/bin/python")
+# nanobot's agent workspace is a SUBDIRECTORY of the session, and this is the one base where that is
+# true. Its session store refuses to live inside the workspace the agent has file tools over —
+# JsonlSessionStore raises "session storage must be outside the agent workspace" when the sessions
+# root is the workspace or under it — which is a sound rule (the agent must not be able to rewrite
+# its own conversation) and it rules out the arrangement every other base uses here. The
+# conversation still has to travel in the checkpoint, and the checkpoint is a tar of the session
+# directory, so the sessions root has to be under the session directory and NOT under the
+# workspace: the only shape that satisfies both is config (and sessions) in .harness/nanobot/ with
+# the workspace one level down. Found by running the real argv against the real package; a test
+# over the driver's own fake could not have seen it.
+_NANOBOT_WS = "workspace"
+NANOBOT_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nanobot_driver.py")
+# The variable config.json names and the driver's process holds. It is also what makes rule 2
+# answerable on this backend: _relay_served_model finds the relay route by the placeholder bearer
+# among the turn's ENV values, and a credential that lives only in a file leaves it unevaluable.
+_NANOBOT_KEY_ENV = "HR_NANOBOT_RELAY_KEY"
+
+# Every tool the loop registers on 0.3.5, read off its own start-up line ("Registered 22 tools: …").
+# Writing has three doors (write_file, edit_file, apply_patch), shell has three (exec, exec_session,
+# run_cli_app), egress two (web_fetch, web_search), and `spawn` is a subagent that inherits the
+# session's policy — measured: with write_file withheld the model wrote the file with `exec`
+# instead, which is what "disabling a tool withholds EXECUTION of that tool, not the capability"
+# means in practice and why the console says request rather than guarantee for the capability.
+ALL_NANOBOT_TOOLS = (
+    "apply_patch", "create_goal", "edit_file", "exec", "exec_session", "find_files", "grep",
+    "list_dir", "list_exec_sessions", "list_sessions", "message", "my", "read_file",
+    "read_session", "run_cli_app", "search_sessions", "send_session_message", "spawn",
+    "update_goal", "web_fetch", "web_search", "write_file",
+)
+
+
+# The variables `environments.apply_env` puts on a turn so the layer's interpreter and packages are
+# the ones the agent runs. nanobot's shell tool does NOT inherit them: its own `_build_env` says
+# "Build a minimal environment for subprocess execution. On Unix, only HOME/LANG/TERM are passed by
+# default." MEASURED by the environments column (2026-10-10): three of four bases used the layer's
+# pip, npm and apt packages without installing anything, and nanobot failed all three with
+# ModuleNotFoundError — the layer reached the driver process and stopped there. Its exec tool takes
+# an allow-list and a PATH prepend, so the layer is handed to it by name.
+_ENV_LAYER_KEYS = ("PROJECT_ROOT", "HR_ENVIRONMENT", "PYTHONPATH", "VIRTUAL_ENV", "NODE_PATH",
+                   "LD_LIBRARY_PATH")
+
+
+def _nanobot_exec_env(env: dict, caller_keys: list[str] | tuple = ()) -> dict:
+    """nanobot's `tools.exec` entries that carry the environment layer and the harness's own
+    variables into its shell, or {}.
+
+    The harness's variables are named here as well: every other base's shell inherits them, and
+    nanobot's passes only what it is told to. MEASURED by the custom-harness dimension (2026-10-12):
+    the skill's script ran on nanobot and wrote its stamp without the harness's STAMP_NONCE, where
+    the three other bases carried it. Names only: the values stay in the driver's environment."""
+    link = str(env.get("HR_ENVIRONMENT") or "").strip()
+    keys = [k for k in _ENV_LAYER_KEYS if link and env.get(k)]
+    keys += [k for k in caller_keys if env.get(k) is not None and k not in keys]
+    # the layer's own PATH entries, taken as the ones under its directory rather than by
+    # reconstructing what apply_env decided to add
+    prepend = [x for x in str(env.get("PATH") or "").split(":") if x.startswith(link + "/")] if link else []
+    out: dict = {}
+    if keys:
+        out["allowedEnvKeys"] = keys
+    if prepend:
+        out["pathPrepend"] = ":".join(prepend)
+    return out
+
+
+def _nanobot_config(auth: Auth, model: str, cfg_dir: pathlib.Path, workspace: str,
+                    mcp_servers: list[dict] | None, max_turns: int | None,
+                    env: dict | None = None, caller_keys: list[str] | tuple = ()) -> pathlib.Path:
+    """Write <cwd>/.harness/nanobot/config.json and return its path.
+
+    The DIRECTORY is the point, not just the file: nanobot derives its data dir from the config
+    file's parent (`get_data_dir()` is `get_config_path().parent`), so the conversation store lands
+    at .harness/nanobot/sessions/<workspace id>/<key>.jsonl — inside the checkpointed tree and
+    outside the produced-files list, with nothing to configure. Verified by continuing a session
+    from a second process.
+
+    The api key is NAMED, not written: nanobot resolves `${VAR}` references anywhere in the config
+    before use (config/loader.py resolve_config_env_vars, which raises if the variable is unset
+    rather than silently sending an empty key), so the credential stays in the environment — the
+    same discipline opencode's `{env:VAR}` and gjc's apiKey-as-env-name give. The file is in
+    CHECKPOINT_EXCLUDE and .gitignore anyway, because a future build that stopped resolving
+    references must not turn this file into a leak."""
+    base = (auth.base_url or "").rstrip("/")
+    defaults: dict = {
+        "provider": "custom",
+        "model": model,
+        "workspace": workspace,
+        # Its own default is 200k, stated again here so a model with a smaller real window is the
+        # gateway's decision rather than a silent inherited constant.
+        "contextWindowTokens": 200000,
+        "maxTokens": 32000,
+        # EMPTY, and it must stay empty: a fallback model is a substitution, and this product
+        # promises the model that was asked for (matrix rule 2).
+        "fallbackModels": [],
+    }
+    if max_turns:
+        defaults["maxToolIterations"] = int(max_turns)
+    cfg: dict = {
+        # `apiType` is NOT sent: its validator refuses it on any provider but `openai`
+        # ("providers.<name>.api_type is only supported for providers.openai") and the refusal
+        # rejects the WHOLE config, so the turn dies on a field that was only ever decoration.
+        "providers": {"custom": {"apiKey": "${%s}" % _NANOBOT_KEY_ENV, "apiBase": base}},
+        "agents": {"defaults": defaults},
+    }
+    tools: dict = {}
+    mcp = _nanobot_mcp(mcp_servers)
+    if mcp:
+        tools["mcpServers"] = mcp
+    ex = _nanobot_exec_env(env or {}, caller_keys)
+    if ex:
+        tools["exec"] = ex
+    if tools:
+        cfg["tools"] = tools
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    path = cfg_dir / "config.json"
+    path.write_text(json.dumps(cfg, indent=2))
+    return path
+
+
+def _nanobot_mcp(servers: list[dict] | None) -> dict:
+    """nanobot's `tools.mcpServers` map: a name to {command,args,env} for stdio or {url,headers}
+    for a remote one. The transport is INFERRED by nanobot from the url — a path ending in /sse is
+    sse, anything else streamable HTTP (agent/tools/mcp.py connect_mcp_servers) — so no `type` is
+    sent and nanobot is in neither half of _BRIDGED_TRANSPORTS.
+
+    The KEY PATH is the whole of what was wrong here. This wrote a top-level `mcp: {servers: …}`,
+    which nanobot's Config forbids outright: its top level is agents/api/channels/gateway/
+    model_presets/providers/tools/transcription with extra="forbid", so every turn on a harness
+    carrying ANY MCP server died before the first model call with "Invalid configuration … mcp:
+    Unknown setting." Measured by the custom-harness dimension on 2026-10-07; nothing else could
+    have seen it, because no test exercised this function's output against nanobot's own schema and
+    the five routing scenarios never attach a server."""
+    out: dict = {}
+    for i, sv in enumerate(servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry: dict = {"command": str(argv[0]),
+                           "args": [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        elif url:
+            entry = {"url": url}
+            if _mcp_headers(sv):
+                entry["headers"] = _mcp_headers(sv)
+        else:
+            continue
+        out[name] = entry
+    return out
+
+
+def _build_nanobot(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                   resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                   tools_disabled: list[str] | None = None,
+                   max_turns: int | None = None, caller_keys: list[str] | tuple = ()) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in NANOBOT_PROVIDERS:
+        raise HTTPException(400, f"unknown nanobot provider '{pr}' (one of {sorted(NANOBOT_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"nanobot provider '{pr}' needs a base_url (none configured)")
+    if auth.base_url and auth.api_key:
+        # Every keyed turn rides the loopback relay, a custom endpoint included, so the real key
+        # never reaches the driver's environment. nanobot's `custom` provider speaks chat/completions
+        # and names only the model it was asked for, so the relay is also the only honest source of
+        # the served model: it reads the id off the provider's own answer. The credential therefore
+        # has to be reachable in the ENVIRONMENT as well, which it is — _relay_served_model finds
+        # the route by the placeholder bearer among env values, and the openhands defect was exactly
+        # a backend whose token rode somewhere else.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    env[_NANOBOT_KEY_ENV] = auth.api_key or ""
+    cfg_dir = pathlib.Path(cwd, ".harness", "nanobot")
+    work = pathlib.Path(cwd, _NANOBOT_WS)
+    work.mkdir(parents=True, exist_ok=True)
+    # the session's file root is one level up from the agent's cwd; see _visible_root
+    _agent_subdir_set(cwd, _NANOBOT_WS)
+    _adopt_into(cwd, _NANOBOT_WS)
+    # nanobot's own machinery inside the agent's workspace. MEASURED on the Vercel column
+    # (2026-10-06): without this a turn that wrote NOTHING handed the user 25 files — the three
+    # built-in skill bundles, the instruction file and nanobot's workspace id — and all eight
+    # nanobot pairs FAILED their first scenario, because the file cards pushed the answer out of
+    # the transcript the judge reads. Re-measured after: the same turn produces 0.
+    _git_exclude(cwd, [f"{_NANOBOT_WS}/.nanobot/", f"{_NANOBOT_WS}/skills/",
+                       f"{_NANOBOT_WS}/memory/", f"{_NANOBOT_WS}/AGENTS.md"],
+                 "nanobot's own machinery, never the task's output")
+    cfg_path = _nanobot_config(auth, model, cfg_dir, str(work), mcp_servers, max_turns, env, caller_keys)
+    # The session key IS the harness's session id when there is one. The driver always passes a key,
+    # so _nanobot_session_present asks the store rather than reading argv.
+    job = {"config_path": str(cfg_path), "workspace": str(work), "model": model, "prompt": prompt,
+           "session_key": resume_session_id or ("hr-" + uuid.uuid4().hex[:12]),
+           "tools_disabled": list(tools_disabled or [])}
+    return [NANOBOT_PYTHON, NANOBOT_DRIVER, json.dumps(job)]
+
+
+
+def _jcode_has_session(env: dict, session_id: str) -> bool:
+    """Is this conversation in this workspace's session store?
+
+    `$HOME/.jcode/sessions/<id>.json`, and $HOME is already inside the checkpointed workspace, so
+    the file travels with the session. Measured: `--resume` on an id the store does not hold prints
+    `Error: No session found matching '<id>'` and runs nothing, which would reach the runner as a
+    turn that failed for no stated reason."""
+    home = env.get("HOME") or ""
+    if not home or not session_id:
+        return False
+    return (pathlib.Path(home) / ".jcode" / "sessions" / f"{session_id}.json").is_file()
+
+
+_JCODE_ANTHROPIC_LISTED: list[str] | None = None
+
+
+def _jcode_anthropic_listed() -> list[str]:
+    """The Claude ids jcode's Anthropic provider runs, from the binary itself (`jcode model list`, a
+    static catalog: 125 ms with no reachable endpoint), read once per runner process."""
+    global _JCODE_ANTHROPIC_LISTED
+    if _JCODE_ANTHROPIC_LISTED is None:
+        try:
+            with tempfile.TemporaryDirectory(prefix="hr-jcode-models-") as home:
+                r = subprocess.run(["jcode", "model", "list", "--provider", "anthropic-api"], capture_output=True,
+                                   text=True, timeout=30, env={**_child_env(), "HOME": home, "JCODE_NO_TELEMETRY": "1",
+                                                               "ANTHROPIC_AUTH_TOKEN": "placeholder",
+                                                               "ANTHROPIC_BASE_URL": "http://127.0.0.1:9"})
+            _JCODE_ANTHROPIC_LISTED = [ln.strip() for ln in r.stdout.splitlines() if ln.strip().startswith("claude")]
+        except (OSError, subprocess.TimeoutExpired):
+            _JCODE_ANTHROPIC_LISTED = []
+    return _JCODE_ANTHROPIC_LISTED
+
+
+def _jcode_anthropic_model(model: str) -> str:
+    """The id jcode's Anthropic provider is handed for this model, or a refusal.
+
+    jcode runs ONLY the Claude ids its own catalog lists on that provider, and anything else it
+    replaces with its default, claude-opus-5-5, saying so only in its own log ("Model
+    claude-haiku-4-5-20251001 not supported by Anthropic provider"). Measured on the review instance
+    (2026-10-12): a turn asked for claude-haiku-4.5 through a direct Anthropic connection, the
+    connection's wire id was the dated claude-haiku-4-5-20251001, and Opus answered and was billed.
+    A dated id whose undated name jcode lists is the same model under jcode's name; any other id is
+    refused here rather than answered by a different model."""
+    listed = _jcode_anthropic_listed()
+    if not listed or model in listed:
+        return model                     # nothing to check against: the turn runs as asked
+    bare = re.sub(r"-\d{8}$", "", model)
+    if bare in listed:
+        return bare
+    raise HTTPException(400, f"jcode cannot run {model} on an Anthropic connection: its Anthropic provider "
+                             f"runs only the models it lists ({', '.join(x for x in listed if '[' not in x)}) and "
+                             f"would answer with {listed[0]} instead. Serve this model to jcode through an "
+                             f"OpenAI-compatible connection, or use another base.")
+
+
+# The provider key jcode writes into a session for each --provider this runner passes it, read from
+# its own session files (2026-10-12): a turn on the Messages path stores `claude-api`, an
+# OpenAI-compatible one `openai-compatible`.
+_JCODE_PROVIDER_KEY = {"anthropic-api": "claude-api", "openai-compatible": "openai-compatible"}
+
+
+def _jcode_session_model(env: dict, session_id: str, model: str, provider_key: str = "") -> str:
+    """Point a resumed jcode session at the model THIS turn asked for; → what it held before.
+
+    jcode's `--model` and `--provider` are documented as the INITIAL ones ("Interactive sessions can
+    switch providers with /model"), and `jcode run` has no model flag of its own, so on `--resume`
+    the model stored with the session wins and the one the person just picked is ignored in silence.
+
+    MEASURED, with a flat control in the same run (2026-10-07): two turns in one session, haiku then
+    gemini — jcode served `anthropic/claude-haiku-4.5` twice, mimo served each model as asked. The
+    family tour is what exposed it, serving all TWELVE families with openai/gpt-5.4; the five-scenario
+    column had the same evidence and passed anyway, because its switch target is the subset's first
+    id and every jcode pair's `served` list simply had one entry where every mimo pair's had two.
+    Serving a model other than the one that was asked for is the failure this product's rule 2 exists
+    to catch, so the store is corrected rather than the switch being refused.
+
+    The file is jcode's own (`$HOME/.jcode/sessions/<id>.json`, inside the checkpointed home) and the
+    field is the one it writes there itself. Written beside and renamed, keeping the session uid, so a
+    crash cannot leave a half-written session file where jcode expects JSON."""
+    if not model:
+        return ""
+    path = (pathlib.Path(env.get("HOME") or "") / ".jcode" / "sessions" / f"{session_id}.json")
+    try:
+        doc = json.loads(path.read_text())
+    except Exception:  # noqa: BLE001 — no store, unreadable, not JSON: the turn runs as it would have
+        return ""
+    if not isinstance(doc, dict):
+        return ""
+    was = str(doc.get("model") or "")
+    # The top-level field, and ONLY it. jcode also keeps the model in `env_snapshots[]` and in
+    # `model-usage-v1.sqlite3`; both were tried and NEITHER changed the one case this does not fix
+    # (below), so neither is in the tree — an intervention into another program's private state
+    # needs a measurement behind it, and these have none.
+    # WHAT THIS DOES NOT FIX, measured 2026-10-10 with a flat-layout control running the same
+    # script: A on gpt-5.4 served gpt-5.4; B on haiku KILLED mid-flight by a 10s cap; C asked for
+    # gemini and was served HAIKU — the killed turn's model — with this function's own log line
+    # showing it had pointed the store at gemini first. jcode's log has a `model` step inside
+    # `restore_session` that assigns it, and the source is not the session file, not
+    # `env_snapshots[]` and not `model-usage-v1.sqlite3` (all three tried and measured). The binary
+    # is stripped, so the mechanism stops being reachable from here. The normal path IS fixed and
+    # measured; a turn after a KILLED turn stays on the killed turn's model until someone with the
+    # source can say why. mimo, the control, is right on both paths.
+    # The PROVIDER KEY goes with the model. jcode joins the stored key onto the model when it
+    # restores the session, so after a turn on the Messages path (`claude-api`) a turn on an
+    # OpenAI-compatible connection asked its provider for `claude-api:openai/gpt-6.1-sol` and got a
+    # 404 (the five-scenario column's switch row, 2026-10-12); the other way round reaches no base
+    # url at all.
+    held_key = str(doc.get("provider_key") or "")
+    if was == model and (not provider_key or held_key == provider_key):
+        return ""
+    doc["model"] = model
+    if provider_key:
+        doc["provider_key"] = provider_key
+    tmp = path.with_suffix(".hr-tmp")
+    try:
+        tmp.write_text(json.dumps(doc))
+        st = path.stat()
+        os.chmod(tmp, st.st_mode & 0o7777)
+        os.chown(tmp, st.st_uid, st.st_gid)
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001 — the store is jcode's, not ours: if it cannot be rewritten the
+        try:           # turn runs on the model the session already held, which is the behaviour
+            tmp.unlink()   # before this function existed, and the temp file goes rather than staying
+        except OSError:    # beside a file jcode will read.
+            pass
+        return ""
+    return was
+
+
+def _jcode_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
+    """Write $HOME/.jcode/mcp.json, jcode's global MCP config. Returns whether anything was written.
+
+    STDIO ONLY, and that is jcode's own limit, stated in its README: "jcode currently supports
+    stdio (command-based) servers only; HTTP/SSE entries are recognized and skipped with a log
+    line." A remote server would therefore be dropped in silence, so jcode is in
+    _BRIDGED_TRANSPORTS for both http and sse and every remote entry arrives here as the bridge's
+    stdio launcher. Anything still carrying a bare url at this point has no transport this runtime
+    can reach and is skipped rather than written as a line the CLI will ignore."""
+    entries: dict = {}
+    for i, sv in enumerate(servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        cmd = sv.get("command")
+        if not cmd:
+            continue
+        argv = cmd if isinstance(cmd, list) else [str(cmd)]
+        entry: dict = {"command": str(argv[0]),
+                       "args": [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]}
+        envv = sv.get("env")
+        if isinstance(envv, dict) and envv:
+            entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        entries[name] = entry
+    if not entries:
+        return False
+    d = home / ".jcode"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "mcp.json").write_text(json.dumps({"mcpServers": entries}, indent=2))
+    return True
+
+
+def _build_jcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                 tools_disabled: list[str] | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in JCODE_PROVIDERS:
+        raise HTTPException(400, f"unknown jcode provider '{pr}' (one of {sorted(JCODE_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"jcode provider '{pr}' needs a base_url (none configured)")
+    home = pathlib.Path(env.get("HOME") or cwd)
+    # The Messages path is taken ONLY for a connection that IS Anthropic (or one a custom
+    # integration declared as anthropic-format). Deliberately NOT for a claude id on an aggregator,
+    # which is where pi and opencode send one: jcode names only the model it was ASKED for, and an
+    # aggregator's Messages surface does not always say which model served, so a claude row there
+    # could record no served model and rule 2 would be unevaluable on it. An aggregator serves a claude id over
+    # chat/completions perfectly well, so those rows stay on the relay and stay measurable. This is
+    # the kilo finding, applied before it could become a column.
+    anthropic = auth.api_format == "anthropic" or (not auth.api_format and pr == "anthropic")
+    if auth.api_key:
+        # EVERY keyed turn rides the loopback relay, the Messages path and a custom endpoint
+        # included, as opencode's do. The real key never reaches the CLI's environment, where the
+        # agent's shell can read it; the relay reads the placeholder from a bearer or x-api-key
+        # and sends Anthropic the key the way it takes it (#352). It also decides whether rule 2
+        # can be evaluated at all: jcode names only the model it was ASKED for, so the served
+        # model comes from the relay reading the provider's own answer.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    base = (auth.base_url or "").rstrip("/")
+    if anthropic:
+        # jcode's Messages path: ANTHROPIC_BASE_URL overrides the endpoint and ANTHROPIC_AUTH_TOKEN
+        # is sent as a bearer (README). The relay's ORIGIN: whether the client joins /v1/messages
+        # or /messages onto it, the relay strips one /v1 and joins the rest onto the connection's
+        # own base, as for hermes's Anthropic SDK (_relay_origin).
+        env["ANTHROPIC_BASE_URL"] = _relay_origin(base) if auth.api_key else base
+        model = _jcode_anthropic_model(model)
+        if auth.api_key:
+            env["ANTHROPIC_AUTH_TOKEN"] = auth.api_key
+        prov = "anthropic-api"
+    else:
+        if not auth.api_format and not base.endswith("/v1"):
+            base += "/v1"
+        env[_JCODE_BASE_ENV] = base
+        if auth.api_key:
+            env[_JCODE_KEY_ENV] = auth.api_key
+        prov = "openai-compatible"
+    # Anonymous telemetry (install count, version, OS, session activity, tool counts, crash
+    # reasons) is ON by default and prints a notice to stderr on every run. A sandbox running
+    # someone else's task does not phone home.
+    env["JCODE_NO_TELEMETRY"] = "1"
+    cmd = ["jcode",
+           # MANDATORY. Auto-update defaults to true, so without this the binary replaces itself
+           # mid-measurement — the exact failure checklist item 25 was written for. `--auto-update`
+           # takes no value (`--auto-update=false` is a clap usage error), so this is the off switch.
+           "--no-update",
+           # Suppress the status chatter so the stream the runner reads is the NDJSON and nothing else.
+           "--quiet",
+           "--provider", prov, "--model", model]
+    if resume_session_id and _jcode_has_session(env, resume_session_id):
+        # before --resume, not after: the model this turn asked for has to be in the store jcode is
+        # about to read, because its own --model is only the session's INITIAL one.
+        was = _jcode_session_model(env, resume_session_id, model, _JCODE_PROVIDER_KEY.get(prov, ""))
+        if was:
+            print(f"[jcode] session {resume_session_id} held model {was}; this turn asked for "
+                  f"{model}, so the store was pointed at it", flush=True)
+        cmd += ["--resume", resume_session_id]
+    elif resume_session_id:
+        print(f"[resume] jcode: session {resume_session_id} not in this workspace — starting fresh",
+              flush=True)
+    # A real per-tool switch, applied AFTER the tool profile, so it is enforcement rather than
+    # instruction: the model's own list came back without the disabled name. Names outside this
+    # runtime's set are dropped, so a label from another backend narrows nothing.
+    names = sorted(({x.split(" (")[0].strip().lower() for x in (tools_disabled or []) if x and x.strip()}
+                    & ALL_JCODE_TOOLS) | _JCODE_SANDBOX_OFF)
+    cmd += ["--disabled-tools", ",".join(names)]
+    if not _jcode_write_mcp(home, mcp_servers) and mcp_servers:
+        print("[jcode] every configured MCP server was remote and could not be bridged — "
+              "this turn runs without them", flush=True)
+    cmd += ["run", "--ndjson"]
+    cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
+    return cmd
+
 
 
 # Registry — providers/default_model/normalize per backend. The cmd build + run loop is dispatched
@@ -8785,6 +11082,33 @@ BACKENDS = {
     "systemone": {"providers": sorted(SYSTEMONE_PROVIDERS),
                   "default_model": SYSTEMONE_DEFAULT_MODEL,
                   "normalize": _claude_passthrough},
+    # Qoder's runtime is not a process this runner spawns: the driver is an HTTP client to a hosted
+    # session. `remote` is what gives a stop its grace (SIGTERM, then the kill) so the driver can
+    # cancel the remote turn before it dies — see _stop_proc.
+    "qoder": {"providers": sorted(QODER_PROVIDERS), "default_model": QODER_DEFAULT_MODEL,
+              "normalize": _qoder_to_claude, "remote": True},
+    # MiMo Code is an opencode FORK whose `run --format json` stream is opencode's line for line
+    # (measured on 0.1.15), so it shares opencode's normaliser rather than carrying a copy — the
+    # same relationship omp has to pi.
+    "mimo": {"providers": sorted(MIMO_PROVIDERS), "default_model": MIMO_DEFAULT_MODEL,
+             "normalize": _opencode_to_claude},
+    # Gajae-Code speaks pi's `--mode json` events with pi's field names, so _gajae_to_claude
+    # delegates to pi's and adds only the one event pi has no branch for (agent_failed).
+    "gajae": {"providers": sorted(GAJAE_PROVIDERS), "default_model": GAJAE_DEFAULT_MODEL,
+              "normalize": _gajae_to_claude},
+    # jcode's NDJSON is its OWN schema (src/cli/commands.rs emit_ndjson_event), including a `tokens`
+    # event the turn has to ACCUMULATE because its own `done.usage` holds only the last request's.
+    "jcode": {"providers": sorted(JCODE_PROVIDERS), "default_model": JCODE_DEFAULT_MODEL,
+              "normalize": _jcode_to_claude},
+    # opensquilla puts content-free progress events on stderr and one result object on stdout; the
+    # normaliser reads both off the merged stream and its eof replays the transcript the CLI writes.
+    "opensquilla": {"providers": sorted(OPENSQUILLA_PROVIDERS),
+                    "default_model": OPENSQUILLA_DEFAULT_MODEL,
+                    "normalize": _opensquilla_to_claude},
+    # The nanobot driver emits claude's stream-json itself (see nanobot_driver.py), so its
+    # normaliser is the passthrough, as systemone's is.
+    "nanobot": {"providers": sorted(NANOBOT_PROVIDERS), "default_model": NANOBOT_DEFAULT_MODEL,
+                "normalize": _claude_passthrough},
 }
 
 
@@ -8946,16 +11270,52 @@ def _descendant_pids(root: int) -> list[int]:
     return out
 
 
-def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
-    rec["capped"] = True
+# How long a remote backend's driver has between the runner's SIGTERM and its SIGKILL: enough for
+# one cancel call to the remote API and the line that reports it, not enough to hold a stop.
+_REMOTE_STOP_GRACE_S = float(os.environ.get("HR_REMOTE_STOP_GRACE_S", "5") or 5)
+
+
+def _stop_proc(proc: subprocess.Popen, rec: dict) -> None:
+    """End a turn's process the way its backend needs.
+
+    A local CLI is its own runtime: the process group is stopped and killed and the turn is over
+    (_kill_proc_tree). A REMOTE backend's process is a client of a runtime elsewhere, and killing
+    the client leaves that runtime running and billing. So for a backend whose registry entry says
+    `remote`, SIGTERM goes to the driver first and it has _REMOTE_STOP_GRACE_S to cancel the remote
+    turn and say so on stdout — the reader loop is still draining, so the line reaches the record —
+    before the kill the local backends get at once. The same path serves a cancel and the wall-clock
+    cap. SIGTERM precedes the SIGSTOP in _kill_proc_tree on purpose: a stopped process cannot run a
+    handler."""
+    spec = BACKENDS.get(str(rec.get("backend") or "")) or {}
+    if spec.get("remote") and proc.poll() is None:
+        try:
+            proc.send_signal(signal.SIGTERM)
+        except Exception:  # noqa: BLE001
+            pass
+        deadline = time.monotonic() + _REMOTE_STOP_GRACE_S
+        while time.monotonic() < deadline and proc.poll() is None:
+            time.sleep(0.05)
     _kill_proc_tree(proc, str(rec.get("turn_id") or ""))
 
 
+def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
+    rec["capped"] = True
+    _stop_proc(proc, rec)
+
+
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
-                 timeout_seconds: int | None = None, partial: bool = False) -> None:
+                 timeout_seconds: int | None = None, partial: bool = False,
+                 max_turns: int | None = None, prompt: str = "") -> None:
     rec = _turns[turn_id]
     rec["turn_id"] = turn_id
-    state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time()}
+    state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time(),
+             # the relay's notes on this turn's routes (a translator may read what the model sent)
+             "routes": rec.get("routes"),
+             # the turn's step budget, for a CLI that has no limit of its own (_jcode_to_claude)
+             "max_turns": max_turns,
+             # the turn's own prompt, where a transcript of the whole conversation begins this turn
+             # (_opensquilla_transcript)
+             "prompt": prompt}
     result_ev = None
     env = {**env, _TURN_MARK: turn_id}
     try:
@@ -9024,6 +11384,12 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     # Claude's stream-json carries the final assistant text on the result event;
                     # the codex normalizer already fills state['final'], so prefer that.
                     state["final"] = state.get("final") or ev.get("result") or ""
+            if state.get("_stop") and not state.get("_stopped") and proc.poll() is None:
+                # A translator ended the turn itself (a CLI with no step limit of its own went past
+                # the turn's budget): the process is stopped here, and the result event it emitted
+                # says why, so the turn is incomplete at its budget rather than running to the cap.
+                state["_stopped"] = True
+                _kill_proc_tree(proc, turn_id)
         rc = proc.wait()
     finally:
         killer.cancel()
@@ -9409,16 +11775,37 @@ _HERMES_POLL_S = 0.8
 _HERMES_STARTUP_TIMEOUT_S = float(os.environ.get("HERMES_STARTUP_TIMEOUT_S", "90"))
 
 
-_HERMES_SID_LINE = re.compile(r"^session_id:\s*\S+$")
+# hermes's own status lines, never a reason: the `session_id:` it closes every run with, and the
+# "↻ Resumed session <id> (N user messages, M total messages)" it prints when a turn resumes.
+_HERMES_SID_LINE = re.compile(r"^(session_id:\s*\S+|↻ Resumed session \S+.*)$")
 
 
-def _hermes_error_text(err_lines: list[str], rc: int | None, silent_s: float) -> str:
+def _refusal_words(status: int, body: bytes) -> str:
+    """A provider's refusal in its own words: the JSON error's message when there is one, else the
+    body's start, after the status."""
+    text = body.decode("utf-8", "replace").strip()
+    try:
+        j = json.loads(text)
+        err = j.get("error") if isinstance(j, dict) else None
+        msg = (err.get("message") if isinstance(err, dict) else err) or (j.get("message") if isinstance(j, dict) else "")
+        if isinstance(msg, str) and msg.strip():
+            text = msg.strip()
+    except ValueError:
+        pass
+    return f"{status}: {text[:500]}"
+
+
+def _hermes_error_text(err_lines: list[str], rc: int | None, silent_s: float, refusal: str = "") -> str:
     """Why a hermes run failed, from its last stderr lines. The CLI closes every run with a
     `session_id: <id>` line, a failed one too; taken as the reason, it told a person "The last one
-    said: session_id: 20261005_135032_0fb4fd" (the hosted service, 2026-10-05). When the CLI said
-    nothing else, the reason is what is known: it stopped with no final answer, its exit code, and
-    how long it had been silent by then."""
+    said: session_id: 20261005_135032_0fb4fd" (the hosted service, 2026-10-05), and a resumed turn
+    whose provider refused it said only "↻ Resumed session …" (2026-10-13). Neither is a reason.
+    When the CLI said nothing else, the reason is the provider's refusal the relay saw on this
+    turn, if there was one; else what is known: no final answer, the exit code, and how long it had
+    been silent by then."""
     said = "\n".join(x for x in err_lines[-30:] if not _HERMES_SID_LINE.match(x.strip())).strip()
+    if not said and refusal:
+        said = f"The model provider refused the request ({refusal})"
     return (said or f"Hermes ended the turn without a final answer and gave no reason "
                     f"(exit code {rc}, {silent_s:.0f} s after its last message).")[:2000]
 
@@ -9683,7 +12070,9 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     if not use_chat:
         final = "\n".join(out_buf).strip() or final
     ok = rc == 0 and not run_failed and not rec.get("cancelled") and not rec.get("capped") and bool(final.strip())
-    err_txt = _hermes_error_text(err_buf, rc, time.time() - last_msg)
+    refusal = next((str(f.get("last_refusal")) for f in reversed(rec.get("routes") or [])
+                    if isinstance(f, dict) and f.get("last_refusal")), "")
+    err_txt = _hermes_error_text(err_buf, rc, time.time() - last_msg, refusal)
     if rec.get("startup_timeout"):
         # The generic exit_code/stderr text is useless here (the process was killed by US, not a
         # normal failure) — say what actually happened instead of leaving a cryptic "exit_code=-9".
@@ -9924,6 +12313,21 @@ def _collected_init(ws: str) -> None:
             _git(ws, "update-ref", _COLLECTED_REF, head.stdout.strip())
 
 
+def _collected_at_turn_start(ws: str) -> None:
+    """Set the cursor BEFORE the agent runs, so a turn's own commits are past it.
+
+    It used to be set at the first collection, to the HEAD of that moment: an agent that committed
+    its work during a session's first turn (`git add deck.pptx && git commit`, which jcode's models
+    do) had its commit under the cursor, and /produced listed nothing. Measured on 0.33.0-rc.7:
+    gpt-6-sol and gpt-6.1-sol on jcode made the deck every time and handed back no file, on both
+    runs. A repo with no commit yet gets an empty one to point at; later turns already have a
+    cursor, left where the last collection put it."""
+    _git_ensure(ws)
+    if _git(ws, "rev-parse", "-q", "--verify", "HEAD").returncode != 0:
+        _git(ws, "commit", "-q", "--allow-empty", "-m", "harness: session start")
+    _collected_init(ws)
+
+
 def _produced_keep(status: str, path: str) -> bool:
     if not path or path.endswith("/") or status.startswith("D"):
         return False
@@ -9957,6 +12361,8 @@ def _produced_list(ws: str) -> list[dict]:
         path = path.strip().strip('"')
         if _produced_keep(status, path):
             seen.setdefault(path, status.strip() or "?")
+    keep = set(_without_lo_profiles(list(seen)))
+    seen = {k: v for k, v in seen.items() if k in keep}
     # mtime rides on each item so a reader can put the newest first: a response carries at most
     # HARNESS_RESP_MAX_FILES of them, and git's path order handed a Mario run its first 24 frames
     # of 1,400 (hosted, 2026-09-25). 0 when the file is gone (a deletion) or cannot be stat'ed.
@@ -9966,6 +12372,25 @@ def _produced_list(ws: str) -> list[dict]:
         except OSError:
             return 0.0
     return [{"path": k, "status": v, "mtime": _mtime(k)} for k, v in seen.items()]
+
+
+def _produced_visible(ws: str) -> list[dict]:
+    """_produced_list, with every path named the way the AGENT names it.
+
+    git runs on the session dir, which is one level above the agent's workspace on the one base that
+    nests (see _visible_root). A card reading "workspace/report.md" names a directory the user never
+    typed and no other base shows, so the prefix comes off here — the one place the cards and their
+    download both resolve through. A path OUTSIDE the visible root (an app's PUT that no turn has
+    adopted yet) is left alone, and GET /file resolves either shape."""
+    out = _produced_list(ws)
+    root = _visible_root(ws)
+    if root == ws:
+        return out
+    pre = os.path.relpath(root, ws) + "/"
+    for f in out:
+        if f["path"].startswith(pre):
+            f["path"] = f["path"][len(pre):]
+    return out
 
 
 def _produced_ack(ws: str) -> str:
@@ -9984,8 +12409,7 @@ def _produced_ack(ws: str) -> str:
 def produced(identifier: str = "") -> dict:
     """Files changed since the last acknowledged collection — surviving checkpoints, crashes and
     cancels in between. Excludes internal state / scratch / secrets / vcs."""
-    ws = _ws(identifier)
-    out = _produced_list(ws)
+    out = _produced_visible(_ws(identifier))
     return {"files": out, "count": len(out)}
 
 
@@ -9998,7 +12422,12 @@ def produced_ack(identifier: str = "") -> dict:
 @app.get("/file")
 def get_file(path: str, identifier: str = "") -> Response:
     """Raw bytes of a workspace file (for downloading turn-produced container files)."""
-    dest = _safe_join(_ws(identifier), path)
+    ws = _ws(identifier)
+    # the visible root first, because that is how /produced named it; the session root second, so a
+    # path written before the agent's workspace existed still downloads.
+    dest = _safe_join(_visible_root(ws), path)
+    if dest is None or not dest.is_file():
+        dest = _safe_join(ws, path)
     if dest is None or not dest.is_file():
         raise HTTPException(404, "file not found")
     media = mimetypes.guess_type(str(dest))[0] or "application/octet-stream"
@@ -10126,7 +12555,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         # would be a turn in another session's identity.
         raise HTTPException(400, "cwd is decided by the session identifier")
     os.makedirs(cwd, exist_ok=True)
-    _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
+    input_files = _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
+    try:
+        _collected_at_turn_start(_ws(identifier))
+    except Exception as e:  # noqa: BLE001 — the cursor is collection's; a turn never waits on it
+        print(f"[produced] cursor not set at turn start: {str(e)[:160]}", flush=True)
     # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
     # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers
     # from req.skills, so this filter is a parity guard: never write a skill whose name is suppressed.
@@ -10163,7 +12596,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     #     silently dropped wherever it can't be a hard block, so it goes in this set rather than
     #     being left out of it — the same class of gap this comment already names for hermes.
     agent_doc = req.agent_doc or ""
-    if backend in ("codex", "hermes", "dsh", "gemini") and req.tools_disabled:
+    # opensquilla is in this set for the same reason gemini is: `--permissions` picks a posture
+    # (restricted / bypass / full) and there is no per-tool deny list anywhere on its agent CLI, so
+    # UHP §4.3 requires the disabled set be conveyed as a standing instruction rather than silently
+    # dropped. nanobot, mimo, gajae and jcode are NOT here — each has a real switch.
+    if backend in ("codex", "hermes", "dsh", "gemini", "opensquilla") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
         if _off:
             agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
@@ -10172,6 +12609,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     if note:
         agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + note
     turn_environment = environments.resolve(req.environment)   # 409 when nothing is built: before any process starts
+    if turn_environment and spec.get("remote"):
+        # The layer is mounted read-only in THIS sandbox; a remote runtime sees only what its driver
+        # uploads. Said here, before anything starts, rather than run without it.
+        raise HTTPException(400, f"the {backend} backend runs in a remote runtime and cannot mount an environment")
     _write_agent_doc(cwd, backend, agent_doc, installed_skills, environment=turn_environment)
     # The harness's own variables under the runner's, so nothing a caller names shadows the
     # runner's credentials or paths; the platform's HR_ names come after and win (below).
@@ -10331,6 +12772,17 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                resume_session_id=req.resume_session_id,
                                mcp_servers=req.mcp_servers,
                                tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "qoder":
+        model = model or QODER_DEFAULT_MODEL
+        # The agent doc becomes the remote Agent's system prompt; the skill folders _write_skills
+        # staged are published by the driver; the input files the runner landed are uploaded and
+        # mounted by it. Nothing on this box is read by the runtime.
+        cmd = _build_qoder(req.provider, auth, model, req.prompt, cwd, env,
+                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                           tools_disabled=req.tools_disabled, agent_doc=agent_doc,
+                           input_files=input_files,
+                           skills=[{"name": s["name"], "dir": os.path.dirname(os.path.join(cwd, s["entry"]))}
+                                   for s in installed_skills])
     elif backend == "systemone":
         model = model or SYSTEMONE_DEFAULT_MODEL
         cmd = _build_systemone(req.provider, auth, model, req.prompt, cwd, env,
@@ -10366,6 +12818,40 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_kilo(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=skills_dir, tools_disabled=req.tools_disabled)
+    elif backend == "mimo":
+        model = model or MIMO_DEFAULT_MODEL
+        # Same door as opencode's: the `skills` key takes arbitrary paths, so the directory
+        # _write_skills has already produced is named in mimo.json.
+        skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
+        cmd = _build_mimo(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                          skills_dir=skills_dir, tools_disabled=req.tools_disabled)
+    elif backend == "gajae":
+        model = model or GAJAE_DEFAULT_MODEL
+        # Skills are already under .harness/home/.gjc/agent/skills, gjc's own user-global root, so
+        # there is nothing to name on the command line (pi's and omp's arrangement).
+        cmd = _build_gajae(req.provider, auth, model, req.prompt, cwd, env,
+                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                           tools_disabled=req.tools_disabled, vision=bool(req.vision))
+    elif backend == "jcode":
+        model = model or JCODE_DEFAULT_MODEL
+        cmd = _build_jcode(req.provider, auth, model, req.prompt, cwd, env,
+                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                           tools_disabled=req.tools_disabled)
+    elif backend == "opensquilla":
+        model = model or OPENSQUILLA_DEFAULT_MODEL
+        cmd = _build_opensquilla(req.provider, auth, model, req.prompt, cwd, env,
+                                 resume_session_id=req.resume_session_id,
+                                 mcp_servers=req.mcp_servers,
+                                 tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "nanobot":
+        model = model or NANOBOT_DEFAULT_MODEL
+        cmd = _build_nanobot(req.provider, auth, model, req.prompt, cwd, env,
+                             resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                             tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                             # the harness's own variables and the platform's HR_ ones a turn carries
+                             caller_keys=[*_caller_env(req.env),
+                                          *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
     else:
         mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
         # Only a package that is ALSO a Claude Code plugin gets --plugin-dir; an Agent Plugins
@@ -10417,14 +12903,62 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         threading.Thread(target=_run_turn_bg,
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
+                         kwargs={"max_turns": req.max_turns, "prompt": req.prompt or ""},
                          daemon=True).start()
     cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     return {"turn_id": turn_id, "status": "running", "backend": backend, "model": model,
             "host": socket.gethostname(), "max_seconds": cap}
 
 
+class WorkspaceDelete(BaseModel):
+    """What a session delete may carry: the connection of a REMOTE backend, so the objects the
+    session created at that runtime can be deleted too (_remote_purge). Absent for a local one."""
+    auth: Auth | None = None
+    backend: str | None = None
+
+
+def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
+    """Delete what a remote backend's turns created outside this box, before the folder goes.
+
+    The driver recorded every remote id it made in the session's .harness/ state; the same driver,
+    in purge mode, deletes them through the relay (the credential stays here as on a turn). A
+    delete that could not reach the runtime is reported with its ids and logged, never swallowed:
+    the folder is still removed, since the session is already unreadable, but the answer says what
+    is left. None when the session made nothing remote."""
+    state = pathlib.Path(ws) / QODER_STATE_REL
+    if not state.is_file():
+        return None
+    if not (auth and auth.api_key):
+        print(f"[workspace] {ws}: remote Qoder objects recorded but no credential came with the delete; "
+              f"left in place: {state.read_text()[:600]}", flush=True)
+        return {"backend": "qoder", "purged": False, "reason": "no credential", "state": QODER_STATE_REL}
+    base = (auth.base_url or QODER_DEFAULT_BASE).rstrip("/")
+    relay_base, relay_tok = _qoder_relay_route(base, auth.api_key)
+    job = {"purge": True, "cwd": ws, "base_url": relay_base, "api_key": relay_tok}
+    try:
+        proc = subprocess.run([QODER_PYTHON, QODER_DRIVER, json.dumps(job)], capture_output=True, text=True,
+                              timeout=180, **_as_session(ws))
+    except Exception as e:  # noqa: BLE001
+        print(f"[workspace] {ws}: remote purge did not run: {type(e).__name__}: {e}", flush=True)
+        return {"backend": "qoder", "purged": False, "reason": f"purge did not run: {e}"[:300]}
+    report: dict = {}
+    for line in (proc.stdout or "").splitlines():
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("m") == "purge" and isinstance(obj.get("p"), dict):
+            report = obj["p"]
+    failed = report.get("failed") or []
+    if failed or proc.returncode != 0:
+        print(f"[workspace] {ws}: remote purge left objects at Qoder: {json.dumps(failed)[:1500]} "
+              f"(exit {proc.returncode}) {(proc.stderr or '')[-500:]}", flush=True)
+    return {"backend": "qoder", "purged": not failed and proc.returncode == 0,
+            "done": report.get("done") or [], "failed": failed}
+
+
 @app.delete("/workspace")
-async def delete_workspace(identifier: str = "") -> dict:
+async def delete_workspace(identifier: str = "", body: WorkspaceDelete | None = None) -> dict:
     """Remove a session's working folder for good (session delete, Sessions §6).
 
     This lives in the runner and not the gateway on purpose: the gateway runs as an unprivileged
@@ -10432,7 +12966,10 @@ async def delete_workspace(identifier: str = "") -> dict:
     process that made the wall can take it down. The folder is the session's memory on this box;
     the durable tarball is the gateway's to delete. A shared root (sandbox-per-session) is never
     removed. The gateway stops any live turn before asking; turn records here carry no session
-    identity, so this end cannot second-guess that."""
+    identity, so this end cannot second-guess that.
+
+    A session of a REMOTE backend made objects elsewhere too; with the connection in the body they
+    are deleted first (_remote_purge), and the answer carries what that reached."""
     ident = (identifier or "").strip()
     if not ident:
         raise HTTPException(status_code=400, detail="identifier required")
@@ -10448,6 +12985,7 @@ async def delete_workspace(identifier: str = "") -> dict:
     _ws_marker_clear(ident)
     if not os.path.isdir(ws):
         return {"identifier": ident, "removed": False, "reason": "no folder"}
+    remote = await run_in_threadpool(_remote_purge, ws, body.auth if body else None)
     uid = _session_uid(ws)
     shutil.rmtree(ws, ignore_errors=True)
     if uid is not None:
@@ -10457,7 +12995,10 @@ async def delete_workspace(identifier: str = "") -> dict:
             subprocess.run(["groupdel", f"hs{uid}"], capture_output=True)
         except OSError:
             pass
-    return {"identifier": ident, "removed": not os.path.isdir(ws)}
+    out = {"identifier": ident, "removed": not os.path.isdir(ws)}
+    if remote is not None:
+        out["remote"] = remote
+    return out
 
 
 @app.post("/turn/{turn_id}/cancel")
@@ -10472,7 +13013,11 @@ def cancel_turn(turn_id: str) -> dict:
     rec["cancelled"] = True
     proc = rec.get("proc")
     if proc is not None:
-        _kill_proc_tree(proc, turn_id)
+        if (BACKENDS.get(str(rec.get("backend") or "")) or {}).get("remote"):
+            # the grace is waited on a thread of its own, so this answer is not held for it
+            threading.Thread(target=_stop_proc, args=(proc, rec), daemon=True).start()
+        else:
+            _kill_proc_tree(proc, turn_id)
     return {"turn_id": turn_id, "status": "cancelling", "cancelled": True}
 
 

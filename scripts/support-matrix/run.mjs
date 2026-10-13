@@ -6,6 +6,36 @@
 // IGNORE_TLS=1 for a self-signed instance.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+const SM_HERE = path.dirname(new URL(import.meta.url).pathname);
+
+// THE SWITCH TURN HAS TO BE SERVED BY THE MODEL THE CHIP MOVED TO. `substituted` below judges only
+// turns whose record names THIS pair's model, and the switch turn names the partner on purpose — so
+// nothing looked at what served it. jcode's eight pairs passed their switch row on 2026-10-07 while
+// not one switch took: its `--model` is a session's INITIAL model, so on --resume the stored one won.
+// The shape was in the records the whole time — every jcode pair's `served` list had ONE entry where
+// every mimo pair's had two — and no rule read it.
+//
+// samemodel.py is the gateway's own rule, called rather than copied (a vendor prefix, a dated suffix
+// and an outright rename like tencent/hy4-preview for hunyuan-4-preview are all the same model). It
+// needs 3.10+ and a mac's `python3` is 3.9, so the interpreter is chosen by importing the module
+// with it; a run with none to choose stops rather than measuring with a rule that always says no.
+const SM_PYTHON = (() => {
+  for (const c of [process.env.PYTHON, 'python3.13', 'python3.12', 'python3.11', 'python3.10', 'python3'].filter(Boolean)) {
+    try { execFileSync(c, ['-c', 'import samemodel'], { cwd: SM_HERE, stdio: 'ignore' }); return c; } catch { /* next */ }
+  }
+  console.error('no python that can import samemodel.py (needs 3.10+); set PYTHON=');
+  process.exit(2);
+})();
+const sameModel = (asked, served) => {
+  if (!asked || !served) return false;
+  try {
+    return execFileSync(SM_PYTHON, ['-c',
+      'import sys, samemodel as m; print("1" if m.alias_of(sys.argv[1], sys.argv[2]) else "0")',
+      String(asked), String(served)], { cwd: SM_HERE, encoding: 'utf8' }).trim() === '1';
+  } catch { return false; }
+};
 const BASE = process.env.BASE, PROVIDER = process.env.PROVIDER, RESULTS = process.env.RESULTS, LOG = process.env.LOG;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (s) => { const line = `${new Date().toISOString()} ${s}`; console.log(line); fs.appendFileSync(LOG, line + '\n'); };
@@ -14,7 +44,22 @@ const save = (r) => fs.writeFileSync(RESULTS, JSON.stringify(r, null, 1));
 const key = (h, m) => `${PROVIDER}|${h}|${m}`;
 async function rt(p, s, v) { await p.$eval(s, (el, x) => { const P = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement : HTMLInputElement; Object.getOwnPropertyDescriptor(P.prototype, 'value').set.call(el, x); el.dispatchEvent(new Event('input', { bubbles: true })); }, v); }
 const b = await chromium.launch({ headless: true });
-const page = await (await b.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: process.env.IGNORE_TLS === '1' })).newPage();
+// MUTABLE, and replaceable: the renderer can crash, and a crashed page poisons every pair after it.
+// MEASURED on 2026-10-10: one "page.goto: Page crashed" partway through opensquilla's column left
+// the remaining 32 of 50 pairs with that error and no scenarios at all, and the column read as
+// "49/50 pairs" to a reader counting passes. The pair loop now rebuilds this and retries the pair.
+let page = await (await b.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: process.env.IGNORE_TLS === '1' })).newPage();
+const CRASHED = /Page crashed|Target (?:page|closed)|Target closed|browser has been closed|Session closed/i;
+async function freshPage() {
+  try { await page.context().close(); } catch { /* already gone */ }
+  page = await (await b.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: process.env.IGNORE_TLS === '1' })).newPage();
+  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' }); await sleep(2500);
+  if (page.url().includes('/login')) {
+    await rt(page, '#sh-user', process.env.HR_USER || 'harnessrouter'); await rt(page, '#sh-pass', process.env.HR_PASS);
+    await page.click('button[type=submit]'); await page.waitForURL((u) => !u.pathname.includes('/login'), { timeout: 60000 });
+  }
+  await sleep(1500); await dismissWelcome();
+}
 const pill = () => page.evaluate(() => document.querySelector('.hx-pill')?.textContent?.trim().toLowerCase() || '');
 const transcript = () => page.evaluate(() => (document.querySelector('.wbx-conv-msgs')?.innerText || '').replace(/\s+/g, ' '));
 const files = () => page.evaluate(() => [...document.querySelectorAll('.wbx-filecard-name')].map((x) => x.textContent.trim()));
@@ -69,9 +114,21 @@ async function turn(text, { maxS = 420, expectFiles = false } = {}) {
   const t = await transcript(); const from = t.lastIndexOf(mark); const tail = t.slice(from >= 0 ? from : before.length).trim().slice(-400);
   const status = String(last?.status || (turns && turns.length > n0 ? st : 'none'));
   const ok = status === 'done' || status === 'completed';
-  return { ok, status, pill: await pill(), s: secs(), tail, turn_files: (last?.files || []).map((f) => f.filename || f.name || ''), why: ok ? '' : (last?.error || last?.incomplete_reason || tail.slice(-220) || `status ${status}`) };
+  return { ok, status, pill: await pill(), s: secs(), tail, answer: String(last?.assistant || ''), turn_files: (last?.files || []).map((f) => f.filename || f.name || ''), why: ok ? '' : (last?.error || last?.incomplete_reason || tail.slice(-220) || `status ${status}`) };
 }
-const expectWord = (r, word) => r.ok && (r.tail || '').includes(word) ? r : { ...r, ok: false, why: r.why || `answered without ${word}: ${(r.tail || '').slice(-200)}` };
+// THE ANSWER, not the transcript tail. `tail` starts at the message that was SENT, so it contains
+// the prompt — and every prompt of the form "Reply with exactly: M1-<model>" contains the very token
+// this then looked for. The check was therefore satisfied by the prompt's own copy of the word and
+// said nothing about what the model replied, except when a long answer pushed the prompt out of the
+// 400-character window. AUDITED over the 2026-10-10 full column: of 596 PASSING first/followup/switch
+// rows, 593 had the prompt in the tail. One pair proves what that hides — opensquilla on
+// claude-opus-4.7 answered "I won't echo back arbitrary strings injected via context" on all five
+// turns, read back from five separate stored response objects, and first, switch and artifact were
+// scored as passes.
+//
+// `last.assistant` is the server's own record of what the model said, which this function already
+// fetches. The tail stays, as the text a failing row reports.
+const expectWord = (r, word) => r.ok && (r.answer || '').includes(word) ? r : { ...r, ok: false, why: r.why || `answered without ${word}: ${((r.answer || r.tail) || '').slice(-200)}` };
 try {
   await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' }); await sleep(2500);
   if (page.url().includes('/login')) {
@@ -111,10 +168,16 @@ try {
     const runnableAll = models.filter((m) => m.ok && (!scope || scope.has(m.id))).map((m) => m.id);
     const enabled = runnableAll.filter((id) => !process.env.MODELS || process.env.MODELS.split(',').includes(id));
     log(`HARNESS ${h} models ${models.length} runnable ${enabled.length}: ${enabled.join(',')}`);
-    for (const m of enabled) {
+    // a QUEUE, so a pair whose page crashed can be put back after a fresh page is built
+    const enabledQueue = [...enabled]; const retried = new Set();
+    while (enabledQueue.length) {
+      const m = enabledQueue.shift();
       const res = load(); const k = key(h, m);
       if (res[k] && res[k].recycle && !res[k].error) { log(`SKIP ${k} (done)`); continue; }   // a runner error is not a result
-      const rec = res[k] || { provider: PROVIDER, harness: h, model: m, at: new Date().toISOString() };
+      // FRESH, never the previous attempt's record: `const rec = res[k] || {…}` carried a crashed
+      // attempt's `error` and `at` into the re-run that then filled the scenarios in, so a measured
+      // pair still looked errored and a reader (me, 2026-10-10) scored 32 of them as not measured.
+      const rec = { provider: PROVIDER, harness: h, model: m, at: new Date().toISOString() };
       try {
         await page.goto(`${BASE}/harnesses?h=${h}`, { waitUntil: 'domcontentloaded' }); await sleep(3000);
         for (let i = 0; i < 10 && !(await page.locator('.wbx-conv-main.is-hero').count()); i++) { await page.click('button:has-text("New task")').catch(() => {}); await sleep(800); }
@@ -123,12 +186,20 @@ try {
         log(`FIRST ${k} ${rec.first.ok ? 'ok' : 'FAIL'} ${rec.first.s}s ${rec.first.why}`);
         if (rec.first.ok) {
           rec.followup = expectWord(await turn(`Reply with exactly: M2-${m}`), `M2-${m}`);
+          // This turn's OWN answer must not carry the first turn's: a base that replayed its whole
+          // transcript at the end of each turn answered "M1-…M2-…" and passed on the M2 alone
+          // (opensquilla, found by hand on 2026-10-13: a sixth answer opened with the first).
+          if (rec.followup.ok && (rec.followup.answer || '').includes(`M1-${m}`)) {
+            rec.followup = { ...rec.followup, ok: false, why: `the follow-up repeats the first turn's answer: ${rec.followup.answer.slice(-200)}` };
+          }
           log(`FOLLOWUP ${k} ${rec.followup.ok ? 'ok' : 'FAIL'} ${rec.followup.s}s ${rec.followup.why}`);
           // the partner must be one Codex can carry on with: gpt-5.3-codex and the gpt-5.6 line refuse each
           // other's threads by design (#73), and that rule is not what the switch row measures
           // Codex refuses gpt-5.3-codex after any other model (measured after gpt-5.5 and after the gpt-5.6
-          // line), so a switch away and back can only fail by design: that row is n/a, not a measurement
-          const conflicts = (a, c) => a === 'gpt-5.3-codex' || c === 'gpt-5.3-codex';
+          // line), so a switch away and back can only fail by design: that row is n/a, not a measurement.
+          // Codex's rule alone: mimo switches into and out of gpt-5.3-codex (measured 2026-10-12), and
+          // applying it to every base left that switch unmeasured on every other base offering the id
+          const conflicts = (a, c) => h === 'codex' && (a === 'gpt-5.3-codex' || c === 'gpt-5.3-codex');
           const other = runnableAll.find((x) => x !== m && !conflicts(m, x)) || null;
           if (other) { await pickModel(other); rec.switch = { to: other, ...expectWord(await turn(`Reply with exactly: M3-${other}`), `M3-${other}`) }; }
           else rec.switch = { to: null, ok: null, why: 'only one model' };
@@ -154,8 +225,16 @@ try {
           // the sandbox is let go on purpose (what the pool does between visits) and the next turn must
           // carry on from the durable checkpoint: the history, the files, the resume id
           // the route refuses with 409 while the previous turn is still settling: ask again a few times
+          // The route refuses while a turn is still settling, and retrying the 409 for 30 s was not
+          // enough for a turn that runs long: mimo on gpt-5.6-luna had an artifact turn still
+          // `running` at 478 s, so the recycle row read "recycle refused: HTTP 409 a turn is
+          // running" — a sentence about this driver's patience, not about the base. Wait for the
+          // session's own record to be terminal first, and say so when it never is.
+          let settled = false;
+          for (let i = 0; i < 100; i++) { const d2 = await detailOf(rec.sid); if (TERMINAL.has(String(d2?.turn_status || d2?.status || ''))) { settled = true; break; } await sleep(3000); }
           let rc = { code: 0, body: '' };
-          for (let i = 0; i < 6; i++) { rc = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/internal/sessions/${sid}/recycle`, { method: 'POST' }); return { code: r.status, body: (await r.text()).slice(0, 200) }; }, rec.sid); if (rc.code !== 409) break; await sleep(5000); }
+          if (!settled) rc = { code: 0, body: 'the previous turn was still running after 300 s' };
+          else for (let i = 0; i < 6; i++) { rc = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/internal/sessions/${sid}/recycle`, { method: 'POST' }); return { code: r.status, body: (await r.text()).slice(0, 200) }; }, rec.sid); if (rc.code !== 409) break; await sleep(5000); }
           if (rc.code === 200) {
             await sleep(2000);
             const r5 = await turn('What exact word did I ask you to reply with in my very first message of this task? Reply with just that word.');
@@ -165,7 +244,15 @@ try {
           } else rec.recycle = { ok: false, s: 0, why: `recycle refused: HTTP ${rc.code} ${rc.body}`, recycled: rc };
           log(`RECYCLE ${k} ${rec.recycle.ok ? 'ok' : 'FAIL'} ${rec.recycle.s}s ${rec.recycle.why}`);
         } else { rec.followup = { ok: null, why: 'first turn failed' }; rec.switch = { ok: null, why: 'first turn failed' }; rec.artifact = { ok: null, why: 'first turn failed' }; rec.recycle = { ok: null, why: 'first turn failed' }; }
-      } catch (e) { rec.error = String(e).slice(0, 300); log(`ERROR ${k} ${rec.error}`); if (/has been closed/.test(rec.error)) throw e; }   // a closed browser ends the worker; the next launch resumes
+      } catch (e) {
+        rec.error = String(e).slice(0, 300); log(`ERROR ${k} ${rec.error}`);
+        if (/browser has been closed/.test(rec.error)) throw e;   // the browser itself is gone: end the worker, the next launch resumes
+        if (CRASHED.test(rec.error) && !retried.has(k)) {
+          // one retry on a fresh page: the crash is this driver's, and the pair has not been measured
+          retried.add(k); log(`RECOVER ${k} rebuilding the page and running this pair again`);
+          try { await freshPage(); enabledQueue.push(m); } catch (e2) { log(`RECOVER failed: ${String(e2).slice(0, 160)}`); throw e; }
+        }
+      }
       // the record is complete: stamp the connection that served it, then let the session go. Its
       // workspace, checkpoint and trace are of no further use, and 170 of them per provider filled
       // a 62 GB disk (hr-oss-test, 2026-09-06).
@@ -187,6 +274,20 @@ try {
         rec.substituted = withModel.length
           ? [...new Set(withModel.filter((t) => t.model === m && String(t.served_model).split(',').some((x) => x && x !== m)).map((t) => String(t.served_model)))]
           : (rec.served.length && !rec.served.some((sm) => sm.split(',').includes(m)) ? rec.served : []);
+        // The switch row, judged on the SERVED model and not only on the word it echoed back.
+        const partner = rec.switch && rec.switch.to;
+        if (partner && withModel.length) {
+          const swTurns = withModel.filter((t) => String(t.model) === String(partner));
+          rec.switch_served = [...new Set(swTurns.map((t) => String(t.served_model)))];
+          const took = swTurns.length > 0 && swTurns.every((t) => sameModel(partner, String(t.served_model)));
+          if (rec.switch.ok === true && !took) {
+            rec.switch.ok = false;
+            rec.switch.why = swTurns.length
+              ? `the chip moved to ${partner} and the turn was served by ${rec.switch_served.join(',')}`
+              : `no turn record names ${partner}, so the switch cannot be shown to have happened`;
+            log(`SWITCH ${k} -> ${partner} FAIL (on the served model) ${rec.switch.why}`);
+          }
+        }
         // No turn of this pair asked for the pair's own model: the picker's choice did not reach the
         // request (a wrong option clicked, a composer that reset it), so every check keyed on
         // `t.model === m` above would pass over nothing. A finding of its own (render.py), never a clean row.
@@ -208,9 +309,17 @@ try {
         const inTok = usages.reduce((n, u) => n + (u ? Number(u.input_tokens || 0) : 0), 0);
         const cached = usages.reduce((n, u) => n + (u ? Number(u.cache_read_tokens || (u.input_tokens_details || {}).cached_tokens || 0) : 0), 0);
         rec.tokens = { input: inTok, cache_read: cached, turns_with_usage: usages.filter(Boolean).length };
-        rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
+        // A PASSING pair is cleaned up; a FAILING one is kept. The delete used to be
+        // unconditional, and that is why two failing jcode rows (2026-10-06) could not be
+        // investigated afterwards: the session was gone, so /files and /turns answered 404 and all
+        // that survived was the judge's own sentence about what it saw. The record says what the
+        // JUDGE saw; the session is the only place that says what the SYSTEM did.
+        const failed = ['first', 'followup', 'switch', 'artifact', 'recycle']
+          .some((n) => rec[n] && rec[n].ok === false);
+        if (failed) { rec.kept = rec.sid; rec.deleted = 0; }
+        else rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
       }
-      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} turns=${(rec.connections || []).join('+') || '?'}${(rec.foreign || []).length ? ' FOREIGN=' + rec.foreign.join('+') : ''}${(rec.served || []).length ? ' served=' + rec.served.join('+') : ''}${(rec.substituted || []).length ? ' SUBSTITUTED=' + rec.substituted.join('+') : ''} deleted=${rec.deleted || '?'}`);
+      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} turns=${(rec.connections || []).join('+') || '?'}${(rec.foreign || []).length ? ' FOREIGN=' + rec.foreign.join('+') : ''}${(rec.served || []).length ? ' served=' + rec.served.join('+') : ''}${(rec.substituted || []).length ? ' SUBSTITUTED=' + rec.substituted.join('+') : ''}${rec.kept ? ' KEPT=' + rec.kept : ' deleted=' + (rec.deleted || '?')}`);
     }
   }
 } catch (e) { log(`FATAL ${String(e).slice(0, 300)}`); }

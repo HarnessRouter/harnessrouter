@@ -20,7 +20,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'qoder' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -215,9 +215,65 @@ export const OOB: OobHarness[] = [
     models: ['jev-latest', 'jev-preview', 'jev-1.13', 'laya', 'openthai-systemone', 'system-one-phase2'], defaultModel: 'jev-latest', moreModels: 0,
     systemPrompt: 'You act inside a finite set of actions the environment offers each step. Choose the action that moves the goal forward, finish when the goal is reached, and escalate when nothing offered fits.',
     tools: [], skills: [] },
+  { id: 'qoder', name: 'Qoder Cloud Agent', version: 'Managed API', backend: 'qoder', status: 'ready',
+    // Placeholder only: the gateway's catalog wins once fetched. Qoder's own model ids, as its
+    // GET /models lists them for the tenant; the runtime is Qoder's cloud, not a process on this
+    // box, and Qoder picks and bills the model behind an id.
+    models: ['auto', 'ultimate', 'performance', 'efficient', 'smodel', 'qmodel_38max', 'qmodel_latest', 'qmodel', 'kmodel_latest', 'kmodel', 'gmodel', 'gfmodel', 'dmodel', 'dfmodel', 'mmodel'], defaultModel: 'ultimate', moreModels: 0,
+    systemPrompt: 'You are Qoder, an autonomous coding agent running in a cloud sandbox with shell and file access. Read, edit and run what the task needs, and deliver every file the user should receive with DeliverArtifacts.',
+    tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'ImageSearch', 'ImageGen', 'DeliverArtifacts'], skills: [] },
+  { id: 'mimo', name: 'MiMo Code', version: 'v0.1.15', backend: 'mimo', status: 'ready',
+    // Placeholder only, like every list above: the gateway's catalog wins once fetched. MiMo Code is
+    // an opencode fork and reaches what opencode reaches, so the list is opencode's.
+    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'step-3.7-flash', 'nemotron-3.5-lightning'], defaultModel: 'gpt-5.4', moreModels: 0,
+    systemPrompt: 'You are MiMo Code, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
+    tools: [], skills: [] },
+  { id: 'jcode', name: 'jcode', version: 'v0.90.0', backend: 'jcode', status: 'ready',
+    // Placeholder only. jcode speaks one OpenAI shape, chat/completions, through the relay, so the
+    // list is the other chat-completions bases' and the two Responses-only ids are not on it.
+    models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'muse-spark-1.3', 'muse-spark-1.2', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'nemotron-3.5-lightning'], defaultModel: 'gpt-5.4', moreModels: 0,
+    systemPrompt: 'You are jcode, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
+    tools: [], skills: [] },
+  { id: 'opensquilla', name: 'OpenSquilla', version: 'v0.5.6', backend: 'opensquilla', status: 'ready',
+    // Placeholder only; the chat-completions list, for jcode's reason.
+    models: ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-build-0.1', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'nemotron-3.5-lightning'], defaultModel: 'gpt-5.4', moreModels: 0,
+    systemPrompt: 'You are OpenSquilla, an autonomous agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
+    tools: [], skills: [] },
+  { id: 'nanobot', name: 'nanobot', version: 'v0.3.5', backend: 'nanobot', status: 'ready',
+    // Placeholder only; the chat-completions list, for jcode's reason.
+    models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.3', 'grok-4.20', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning'], defaultModel: 'gpt-5.4', moreModels: 0,
+    systemPrompt: 'You are nanobot, an autonomous agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
+    tools: [], skills: [] },
 ];
 
 export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
+
+// ── the instruction file each base actually reads ─────────────────────────────────────────────
+// The NAME of the file the runner writes for a base, which is the label the settings page puts on
+// the instructions box. It has to agree with runner/server.py's `_agent_doc_path`, and until
+// 2026-10-03 it did not: the page labelled qwen and gemini "AGENTS.md" while the runner wrote
+// QWEN.md and GEMINI.md, so a person edited a box named for a file their agent never read.
+// gateway/tests/test_instruction_file_label.py now holds this map to the runner's function, so the
+// next base that chooses its own name cannot drift the same way.
+//
+// systemone and qoder have no file at all: systemone reads no workspace and its instructions travel
+// in the job, and qoder's travel with the hosted session it drives, so the page calls the box
+// "Instructions".
+export const INSTRUCTION_FILE: Record<string, string> = {
+  qwen: 'QWEN.md',
+  gemini: 'GEMINI.md',
+  systemone: 'Instructions',
+  qoder: 'Instructions',
+};
+const AGENTS_MD_BASES = [
+  'codex', 'hermes', 'omp', 'pi', 'opencode', 'kilo', 'dsh', 'qwen', 'cline', 'goose', 'kimi',
+  'minimax', 'aider', 'openhands', 'grok', 'agentzero',
+  'mimo', 'jcode', 'opensquilla', 'nanobot',
+];
+export function instructionFileLabel(baseId: string | null | undefined): string {
+  const id = baseId || '';
+  return INSTRUCTION_FILE[id] || (AGENTS_MD_BASES.includes(id) ? 'AGENTS.md' : 'CLAUDE.md');
+}
 
 // ── model catalog: the GATEWAY owns it, this file does not ────────────────────────────
 // The `models` / `defaultModel` fields above used to be the console's own copy of the
@@ -328,6 +384,10 @@ export interface BaseInfo {
    *  offered actions and reads no documents), so none are offered and none can be added. Absent
    *  on older gateways, which is the same as true. */
   takesSkills?: boolean;
+  /** false means a Task on this base cannot open an environment (Qoder Cloud Agent runs in its own
+   *  cloud, and the layer is mounted on this box only), so none is offered. Absent on older
+   *  gateways, which is the same as true. */
+  takesEnvironments?: boolean;
 }
 
 let _bases: Record<string, BaseInfo> | null = null;

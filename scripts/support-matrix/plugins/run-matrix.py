@@ -39,7 +39,15 @@ HERE = pathlib.Path(__file__).parent
 FIXTURE = HERE / "fixture"
 # Every base the catalog serves. Since #180/#182 every one of them takes a stdio server (pi's
 # adapter and dsh's client spawn it themselves), so no base is expected to refuse any column.
-BASES = ["claude-code", "codex", "hermes", "goose", "gemini", "qwen", "opencode", "kilo", "cline", "omp", "pi", "dsh", "kimi", "minimax", "grok", "aider", "openhands", "cheetahclaws", "agentzero"]
+BASES = ["claude-code", "codex", "hermes", "goose", "gemini", "qwen", "opencode", "kilo", "cline",
+         "omp", "pi", "dsh", "kimi", "minimax", "grok", "aider", "openhands", "cheetahclaws",
+         "agentzero",
+         # 2026-10-02: mimo, jcode, opensquilla and nanobot. Every one of them takes a
+         # stdio server, two of them ONLY through the runner's bridge — jcode has no remote
+         # MCP client at all ("HTTP/SSE entries are recognized and skipped with a log line")
+         # and opensquilla takes stdio and SSE but not streamable HTTP, so both are in
+         # _BRIDGED_TRANSPORTS and a remote column measures the bridge on them.
+         "mimo", "jcode", "opensquilla", "nanobot"]
 NO_STDIO: set[str] = set()
 # The public probe the remote columns call: its SSE end answers PROBE-SSE-<id>, its streamable-HTTP
 # end PROBE-HTTP-<id>. Both are the same fixed server, so a wrong answer is the base, not the probe.
@@ -168,8 +176,16 @@ def run_one(api: Api, base: str, mode: str, model: str, keep: bool, task_timeout
             "input": prompt, "metadata": {"harness_id": created["id"]}, "stream": False,
             "max_step": 12}, timeout=task_timeout)
         answer = text_of(resp) if status == 200 else ""
+        # With --model the row measures THAT model: a turn the gateway served with another one (a
+        # fallback, or the base's default) is not a pass for it, whatever the answer says.
+        meta = (resp.get("metadata") or {}) if isinstance(resp, dict) else {}
+        row["served"] = str(resp.get("model") or "") if isinstance(resp, dict) else ""
+        swapped = model and (row["served"] != model or meta.get("requested_model") or meta.get("model_fallback"))
         if status != 200:
             row["outcome"], row["detail"] = "task failed", f"HTTP {status} {str(resp)[:200]}"
+        elif swapped:
+            row["outcome"] = "other model"
+            row["detail"] = f"asked {model}, served {row['served']!r} {meta.get('requested_model') or ''}".strip()
         elif token in answer:
             row["outcome"] = "pass"
             row["detail"] = answer.strip().splitlines()[-1][:200]
