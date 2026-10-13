@@ -41,7 +41,7 @@ every dimension above on the build that ships, with one exception named below.
 - nemotron-3-super, on all four: does not follow a skill (mimo twice, jcode, opensquilla) and makes
   a deck without the asked-for text or none (mimo, jcode, nanobot).
 
-**Product defects the measurement found, each fixed and measured again** (all in this release, ten in all):
+**Product defects the measurement found, each fixed and measured again** (all in this release, eleven in all):
 - jcode's tool calls reached the console with no arguments: the runner sent each call at
   `tool_start` and dropped the `tool_input` pieces that carry them. Held until complete now; a
   console check (scripts/support-matrix/ui-tool-rows.mjs) opens the Bash row and finds the command.
@@ -69,6 +69,9 @@ every dimension above on the build that ships, with one exception named below.
   in Chinese): its own system prompt's three reply-language rules. The runner takes them out of the
   installed template; English prompts then got English answers (8 of 8) and Chinese prompts Chinese.
   Its `cron` tool, whose scheduler never runs in a one-shot turn, is off too.
+- Every opensquilla answer replayed the conversation so far: the transcript of a resumed session
+  holds every turn and the end-of-turn replay read all of it. It starts at this turn's prompt now,
+  and the suite's follow-up fails an answer that repeats the first turn's.
 - A hermes turn the provider refused said only "↻ Resumed session …": the relay keeps the provider's
   refusal on the route, and the turn's error is that refusal when hermes said nothing else.
 
