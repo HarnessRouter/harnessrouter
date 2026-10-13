@@ -7604,14 +7604,21 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #               (twice each on the build that ships; mimo's other six Gemini ids pass);
     #               gpt-5.4-mini, asked to call a named MCP tool, runs the plugin's skill instead
     #               (once on rc.7, three of four transports on rc.9).
+    #   rc.21       the last runs before 0.33.0 (Richard: "get the failure models out"): on jcode,
+    #               muse-glimmer-30b and muse-spark-1.1 each failed a plugin turn (skill turn
+    #               incomplete; "calling the probe_sse tool now" and no call); in the five-turn
+    #               conversation whose harness instruction asks for a PDF, gpt-6.1-sol (opensquilla),
+    #               gpt-5.6-luna (nanobot) and qfmodel (qoder) answered "say hi" without one.
     "mimo": frozenset({"claude-opus-4.7", "llama-3.3-70b", "llama-4-maverick", "qwen3.8-flash",
                        "gpt-5.6-luna", "hunyuan-4-preview", "nemotron-3-super", "kimi-k3",
                        "mistral-medium-3.5", "gemini-3.5-flash", "gemini-3.6-flash", "gpt-5.4-mini"}),
     "jcode": frozenset({"grok-build-0.1", "hunyuan-4-preview", "kimi-k3", "gemini-3-flash-preview",
-                        "nemotron-3-super", "llama-3.3-70b"}),
+                        "nemotron-3-super", "llama-3.3-70b", "muse-glimmer-30b", "muse-spark-1.1"}),
     "opensquilla": frozenset({"claude-opus-4.7", "grok-4.20", "llama-3.3-70b", "hunyuan-4-preview",
-                              "nemotron-3-super"}),
-    "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5", "nemotron-3-super"}),
+                              "nemotron-3-super", "gpt-6.1-sol"}),
+    "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5", "nemotron-3-super",
+                          "gpt-5.6-luna"}),
+    "qoder": frozenset({"qfmodel"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
