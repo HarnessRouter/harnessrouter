@@ -326,6 +326,8 @@ def test_jcode_tools_that_cannot_work_in_the_sandbox_are_off_on_every_turn():
     cmd = _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
     off = set(cmd[cmd.index("--disabled-tools") + 1].split(","))
     assert off == set(_JCODE_SANDBOX_OFF) and {"browser", "macos_computer_use", "gmail", "maintainer_feedback"} <= off
+    # the way into its runaway turns (grok-4.20: 84 calls, 47 of them todo; with both off, 3 of 3 runs finished)
+    assert {"todo", "memory"} <= off
     assert _JCODE_SANDBOX_OFF <= ALL_JCODE_TOOLS and "bash" not in off and "webfetch" not in off
 
 
@@ -400,6 +402,23 @@ def test_jcode_tool_call_carries_the_arguments_its_input_pieces_built():
     assert [(u["id"], u["name"], u["input"]) for u in uses] == [("call_stub1", "bash", {"command": "echo stub-ok"})]
     kinds = [e["type"] for e in evs]
     assert kinds.index("user") > kinds.index("assistant")   # the call before its result
+
+
+def test_jcode_stops_at_the_turns_step_budget():
+    # jcode has no step limit; grok-4.20 looped 84 calls in five minutes on its todo tool (rc.18).
+    from server import _status_from_result
+    state = {"model": "m", "max_turns": 3}
+    out = []
+    for i in range(5):
+        out += _jcode_to_claude({"id": f"c{i}", "name": "todo", "type": "tool_start"}, state)
+    results = [e for e in out if e.get("type") == "result"]
+    assert len(results) == 1 and results[0]["subtype"] == "error_max_turns"
+    assert state["_stop"] == "max_turns"
+    assert _status_from_result(results[0], -9) == "max_turns"
+    # no budget on record: never stopped by this
+    free = {"model": "m"}
+    assert not [e for i in range(50) for e in _jcode_to_claude({"id": f"c{i}", "name": "bash", "type": "tool_start"}, free)
+                if e.get("type") == "result"]
 
 
 def test_jcode_two_calls_in_one_message_keep_their_own_arguments_and_order():

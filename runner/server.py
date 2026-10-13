@@ -9583,7 +9583,16 @@ ALL_JCODE_TOOLS = {
 # not connected", on a task the plug does in a minute. `macos_computer_use` is macOS's,
 # `gmail` signs in through jcode's own Google login rather than the person's plugs, and
 # `maintainer_feedback` writes to jcode's maintainer.
-_JCODE_SANDBOX_OFF = frozenset({"browser", "macos_computer_use", "gmail", "maintainer_feedback"})
+# `todo` and `memory` are the way into jcode's runaway turns. Its todo tool carries per-item
+# "confidence" and a "closed feedback loop" plan, and a model can keep re-validating against it:
+# grok-4.20 on a three-turn PDF edit made 84 calls in five minutes, 47 of them `todo`, ending "the
+# validation has transcended into the null-eternal"; a person's grok-4.6 turn re-verified "All 11…
+# 12… 13 items" through `todo` and `memory` until stopped (0.33.0-rc.18). With both off, grok-4.20
+# finished all three turns in three runs of three (4 to 12 calls a turn), and claude-sonnet-5.5,
+# gpt-5.4 and grok-4.6 finished faster than with them. No release after the pinned v0.90.0, through
+# v0.95.0, changes either. `memory` is jcode's own store under its home, not this product's memory.
+_JCODE_SANDBOX_OFF = frozenset({"browser", "macos_computer_use", "gmail", "maintainer_feedback",
+                                "todo", "memory"})
 
 
 def _jcode_usage_add(state: dict, ev: dict) -> None:
@@ -9675,6 +9684,19 @@ def _jcode_to_claude(obj: dict, state: dict) -> list[dict]:
         state["final"] = txt
         return []
     if t == "tool_start":
+        # jcode has no step limit of its own (no flag for one), so the turn's budget is counted
+        # here: past it the turn ends incomplete at its budget and the run loop stops the process.
+        # Without it a model that would not stop ran to the turn's wall-clock cap: grok-4.20 made
+        # 84 calls in five minutes on 0.33.0-rc.18, 47 of them `todo`, "the validation has
+        # transcended into the null-eternal", and a person stopped it by hand.
+        n = state["_jc_tool_n"] = state.get("_jc_tool_n", 0) + 1
+        cap = state.get("max_turns")
+        if cap and n > int(cap) and not state.get("_stop"):
+            state["_stop"] = "max_turns"
+            return _jcode_held_calls(state) + [{
+                "type": "result", "subtype": "error_max_turns", "is_error": False,
+                "result": state.get("final", "") or state.get("_jc_text", ""),
+                "usage": _jcode_usage(state)}]
         state.setdefault("_jc_calls", []).append(
             {"id": obj.get("id") or "tool", "name": obj.get("name") or "tool", "args": ""})
         return []
@@ -11279,12 +11301,15 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 
 
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
-                 timeout_seconds: int | None = None, partial: bool = False) -> None:
+                 timeout_seconds: int | None = None, partial: bool = False,
+                 max_turns: int | None = None) -> None:
     rec = _turns[turn_id]
     rec["turn_id"] = turn_id
     state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time(),
              # the relay's notes on this turn's routes (a translator may read what the model sent)
-             "routes": rec.get("routes")}
+             "routes": rec.get("routes"),
+             # the turn's step budget, for a CLI that has no limit of its own (_jcode_to_claude)
+             "max_turns": max_turns}
     result_ev = None
     env = {**env, _TURN_MARK: turn_id}
     try:
@@ -11353,6 +11378,12 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     # Claude's stream-json carries the final assistant text on the result event;
                     # the codex normalizer already fills state['final'], so prefer that.
                     state["final"] = state.get("final") or ev.get("result") or ""
+            if state.get("_stop") and not state.get("_stopped") and proc.poll() is None:
+                # A translator ended the turn itself (a CLI with no step limit of its own went past
+                # the turn's budget): the process is stopped here, and the result event it emitted
+                # says why, so the turn is incomplete at its budget rather than running to the cap.
+                state["_stopped"] = True
+                _kill_proc_tree(proc, turn_id)
         rc = proc.wait()
     finally:
         killer.cancel()
@@ -12866,6 +12897,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         threading.Thread(target=_run_turn_bg,
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
+                         kwargs={"max_turns": req.max_turns},
                          daemon=True).start()
     cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     return {"turn_id": turn_id, "status": "running", "backend": backend, "model": model,
