@@ -9781,6 +9781,25 @@ def _opensquilla_transcript(state: dict) -> list[dict]:
                 # assistant message was exactly "DONE".
                 final = text
                 out.append({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+            # Each call again, now WITH its arguments: the progress stream announced it with none
+            # (tool_use_start carries no input), so its row had nothing to show. The gateway fills
+            # that row in place (same id, same name, no result yet) rather than adding one; the name
+            # is the one the row was given, so the two can never disagree.
+            live = state.get("_sq_calls") or {}
+            for c in content:
+                if not (isinstance(c, dict) and c.get("type") == "toolCall" and c.get("id")):
+                    continue
+                args = c.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except ValueError:
+                        args = {"arguments": args}
+                if not args:
+                    continue
+                out.append({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "id": c["id"], "name": live.get(c["id"]) or c.get("name") or "tool",
+                     "input": args if isinstance(args, dict) else {"arguments": args}}]}})
         elif role == "toolResult":
             body = "\n".join(c.get("text") or "" for c in content
                              if isinstance(c, dict) and c.get("type") == "text")
@@ -9802,6 +9821,7 @@ def _opensquilla_to_claude(obj: dict, state: dict) -> list[dict]:
     if obj.get("_event") is True:
         kind = obj.get("kind")
         if kind == "tool_use_start":
+            state.setdefault("_sq_calls", {})[obj.get("tool_use_id") or "tool"] = obj.get("tool_name") or "tool"
             return [{"type": "assistant", "message": {"content": [
                 {"type": "tool_use", "id": obj.get("tool_use_id") or "tool",
                  "name": obj.get("tool_name") or "tool",

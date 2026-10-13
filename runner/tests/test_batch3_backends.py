@@ -719,6 +719,35 @@ def test_opensquilla_channel_routing_directives_are_not_part_of_the_answer():
     assert _opensquilla_text("see [[notes]] here") == "see [[notes]] here"
 
 
+def test_opensquilla_calls_come_back_with_their_arguments_under_the_live_rows_name():
+    # The progress stream announces a call with no input; its row read `{}` in the console and the
+    # record. The transcript has the arguments, and the end-of-turn replay now sends each call again
+    # under the same id and the name the live row was given, so the gateway fills that row in place.
+    d = _ws()
+    base = pathlib.Path(d, ".harness", "opensquilla"); base.mkdir(parents=True)
+    (base / "transcript.jsonl").write_text("\n".join(json.dumps(x) for x in [
+        {"type": "message", "message": {"role": "assistant", "content": [
+            {"type": "toolCall", "name": "exec", "id": "call_1", "arguments": {"cmd": "echo one"}},
+            {"type": "toolCall", "name": "exec", "id": "call_2", "arguments": "{\"cmd\": \"echo two\"}"},
+            {"type": "toolCall", "name": "noop", "id": "call_3", "arguments": {}}]}},
+        {"type": "message", "message": {"role": "toolResult", "toolCallId": "call_1", "isError": False,
+                                        "content": [{"type": "text", "text": "one"}]}},
+        {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "DONE"}]}},
+    ]))
+    evs, state = _norm(_opensquilla_to_claude, [
+        {"_event": True, "schema_version": 1, "kind": "tool_use_start", "tool_use_id": "call_1", "tool_name": "exec_command"},
+        {"_event": True, "schema_version": 1, "kind": "tool_use_start", "tool_use_id": "call_2", "tool_name": "exec_command"},
+    ], cwd=d)
+    live = [b for e in evs for b in e["message"]["content"] if b.get("type") == "tool_use"]
+    assert [(u["id"], u["input"]) for u in live] == [("call_1", {}), ("call_2", {})]
+    late = [b for e in _opensquilla_transcript(state) if e.get("type") == "assistant"
+            for b in e["message"]["content"] if b.get("type") == "tool_use"]
+    # each call once more, WITH its arguments (a JSON string parsed), named as the live row was; a
+    # call with no arguments is not sent again (there is nothing to fill)
+    assert [(u["id"], u["name"], u["input"]) for u in late] == [
+        ("call_1", "exec_command", {"cmd": "echo one"}), ("call_2", "exec_command", {"cmd": "echo two"})]
+
+
 def test_opensquilla_transcript_answer_has_the_directive_removed():
     d = _ws()
     base = pathlib.Path(d, ".harness", "opensquilla"); base.mkdir(parents=True)

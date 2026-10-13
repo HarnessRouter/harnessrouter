@@ -6194,6 +6194,10 @@ class _RespTranslator:
         self.seq = 0
         self.out_index = -1
         self.output: list[dict] = []
+        # call_id -> (its function_call item, output index), and the call_ids with a result, for the
+        # one late fill of a call's arguments (_handle, "tool_use")
+        self._calls: dict[str, tuple[dict, int]] = {}
+        self._resulted: set[str] = set()
         self.usage: dict | None = None
         # {"amount", "unit", "basis", ...}: what a remote runtime charged for the turn, in its own
         # unit (qoder credits), when its API said; None for every backend whose cost is its tokens.
@@ -6297,11 +6301,26 @@ class _RespTranslator:
             evs.append(self._ev("response.output_text.delta", item_id=self.cur["id"],
                                 output_index=self.cur["oi"], content_index=0, delta=payload))
         elif kind == "tool_use":
+            inp = payload["input"]
+            args = inp if isinstance(inp, str) else json.dumps(inp, default=str)
+            prior = self._calls.get(payload["id"])
+            if (prior and prior[0].get("arguments") in ("", "{}") and args not in ("", "{}")
+                    and prior[0].get("name") == payload["name"] and payload["id"] not in self._resulted):
+                # A call the runner emitted when it started, before its arguments were known, sent
+                # again with them: the arguments go on THAT row, never a second one. opensquilla's
+                # progress stream carries no arguments, and its transcript, which does, is read when
+                # the turn ends. Only an empty row with the same name and no result yet is filled
+                # (some translators fall back to a fixed id such as "tool" when a CLI gives none, and
+                # two different calls must not become one); anything else goes the way it always went.
+                item, oi = prior
+                item["arguments"] = args
+                evs.append(self._ev("response.function_call_arguments.done", item_id=item["id"],
+                                    output_index=oi, arguments=args))
+                evs.append(self._ev("response.output_item.done", output_index=oi, item=item))
+                return evs
             evs += self._close_cur()
             self.out_index += 1
             fid = _rid("fc")
-            inp = payload["input"]
-            args = inp if isinstance(inp, str) else json.dumps(inp, default=str)
             shell = {"id": fid, "type": "function_call", "call_id": payload["id"],
                      "name": payload["name"], "arguments": "", "status": "in_progress"}
             done = {**shell, "arguments": args, "status": "completed"}
@@ -6312,7 +6331,9 @@ class _RespTranslator:
                                 output_index=self.out_index, arguments=args))
             evs.append(self._ev("response.output_item.done", output_index=self.out_index, item=done))
             self.output.append(done)
+            self._calls.setdefault(payload["id"], (done, self.out_index))
         elif kind == "tool_result":
+            self._resulted.add(payload["call_id"])
             evs += self._close_cur()
             self.out_index += 1
             oid = _rid("fco")
