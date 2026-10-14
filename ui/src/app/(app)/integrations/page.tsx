@@ -18,6 +18,7 @@ import { SkelRows } from '@/components/Skel';
 import { getSession } from '@/lib/auth';
 import { authHeaders } from '@/lib/chat';
 import { PLATFORM_ADMIN_ORGS, SELF_HOSTED } from '@/lib/edition';
+import { OOB } from '@/lib/harness';
 
 interface ModelRow { canonical: string; provider_id: string }
 interface Integration {
@@ -81,6 +82,13 @@ interface MediaCandidate {
 interface MediaChain { capability: string; unit: string; candidates: MediaCandidate[] }
 
 const SECRET = '__secret__';
+
+/** The bases' names as the console shows them everywhere else ("Claude Code", not the gateway's
+ *  `claude`), from its own list of bases; an id that list does not know is shown as it is. */
+function baseNames(backends: string[]): string[] {
+  const names = new Map(OOB.filter((h) => h.backend).map((h) => [h.backend as string, h.name]));
+  return [...new Set(backends.map((b) => names.get(b) || b))].sort((a, b) => a.localeCompare(b));
+}
 
 export default function IntegrationsPage() {
   const router = useRouter();
@@ -558,7 +566,7 @@ export default function IntegrationsPage() {
                         </button>
                         <p className="field-help">
                           {meta?.format_backends?.[editing.config.api_format]?.length
-                            ? `Compatible harness bases: ${meta.format_backends[editing.config.api_format].join(', ')}.`
+                            ? `Compatible harness bases: ${baseNames(meta.format_backends[editing.config.api_format]).join(', ')}.`
                             : 'Compatibility information is unavailable for this API format.'}
                           {' '}If another connection serves the same model id, choose this connection under Model routing.
                         </p>

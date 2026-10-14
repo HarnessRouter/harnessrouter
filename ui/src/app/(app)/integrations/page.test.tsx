@@ -50,9 +50,9 @@ test('saves arbitrary ids and wire-only rows, skipping empty rows', async () => 
 
 test('updates compatible bases from metadata when the format changes', async () => {
   await openCustom();
-  expect(screen.getByText(/Compatible harness bases: pi\./)).toBeTruthy();
+  expect(screen.getByText(/Compatible harness bases: Pi\./)).toBeTruthy();
   fireEvent.change(screen.getByLabelText('API format'), { target: { value: 'responses' } });
-  expect(screen.getByText(/Compatible harness bases: codex\./)).toBeTruthy();
+  expect(screen.getByText(/Compatible harness bases: Codex\./)).toBeTruthy();
   fireEvent.change(screen.getByLabelText('API format'), { target: { value: 'anthropic' } });
-  expect(screen.getByText(/Compatible harness bases: claude\./)).toBeTruthy();
+  expect(screen.getByText(/Compatible harness bases: Claude Code\./)).toBeTruthy();
 });
