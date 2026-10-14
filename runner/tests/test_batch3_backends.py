@@ -1377,8 +1377,11 @@ def test_nanobots_shell_gets_the_turns_image_credential_by_name():
     """The image skill reads HR_IMAGE_* from the shell; nanobot's shell had none of them and the
     skill answered "image generation is not configured for this Harness" (0.33.0, 2026-10-14)."""
     d = _ws()
-    env = {"HR_IMAGE_BASE_URL": "http://127.0.0.1:8080/v1/llm", "HR_IMAGE_KEY": "hrtc-turn", "HR_IMAGE_MODEL": "gpt-image-2"}
+    env = {"HR_IMAGE_BASE_URL": "http://127.0.0.1:8080/v1/llm", "HR_IMAGE_KEY": "hrtc-turn", "HR_IMAGE_MODEL": "gpt-image-2",
+           "OFFICECLI_RESIDENT_FLUSH": "each"}
     _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
     text = pathlib.Path(d, ".harness", "nanobot", "config.json").read_text()
-    assert json.loads(text)["tools"]["exec"]["allowedEnvKeys"] == ["HR_IMAGE_BASE_URL", "HR_IMAGE_KEY", "HR_IMAGE_MODEL"]
+    # and officecli's write-through: without it a short deck turn handed back an empty deck
+    assert json.loads(text)["tools"]["exec"]["allowedEnvKeys"] == ["HR_IMAGE_BASE_URL", "HR_IMAGE_KEY", "HR_IMAGE_MODEL",
+                                                                   "OFFICECLI_RESIDENT_FLUSH"]
     assert "hrtc-turn" not in text                                 # names only

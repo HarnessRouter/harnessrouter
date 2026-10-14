@@ -275,12 +275,14 @@ def test_the_turns_image_credential_reaches_the_shell_by_name():
     HR_IMAGE_* names were never passed to zeroclaw's shell."""
     with tempfile.TemporaryDirectory() as d:
         env = {"PATH": "/usr/bin", "HR_IMAGE_BASE_URL": "http://127.0.0.1:8080/v1/llm", "HR_IMAGE_KEY": "hrtc-x",
-               "HR_IMAGE_MODEL": "gpt-image-2"}
+               "HR_IMAGE_MODEL": "gpt-image-2", "OFFICECLI_RESIDENT_FLUSH": "each"}
         srv._build_zeroclaw("openrouter", srv.Auth(api_key="sk-or-real", base_url="https://openrouter.ai/api/v1"),
                             "anthropic/claude-haiku-4.5", "hi", d, env)
         text = (pathlib.Path(d) / ".harness" / "zeroclaw" / "config.toml").read_text()
     keys = tomllib.loads(text)["risk_profiles"]["hr"]["shell_env_passthrough"]
     assert {"HR_IMAGE_BASE_URL", "HR_IMAGE_KEY", "HR_IMAGE_MODEL"} <= set(keys) and "hrtc-x" not in text
+    # officecli's write-through: without it seven deck turns handed back the empty file it created
+    assert "OFFICECLI_RESIDENT_FLUSH" in keys
 
 
 def test_an_emoji_in_an_mcp_argument_leaves_the_config_readable():
