@@ -10710,7 +10710,7 @@ def _zeroclaw_config(base_url: str, model: str, cwd: str, mcp_servers: list[dict
         # 'path' parameter"), and the turn spent three model calls on one file. Every provider this
         # backend is wired to takes native tool calls on chat/completions, so they are switched on.
         "native_tools = true", "",
-        "[agents.hr]",
+        "[agents.zeroclaw]",   # the agent alias names the agent in its persona (zeroclaw_driver._AGENT)
         "enabled = true",
         'model_provider = "custom.hr"',
         'risk_profile = "hr"',
@@ -10725,7 +10725,7 @@ def _zeroclaw_config(base_url: str, model: str, cwd: str, mcp_servers: list[dict
     # Office skill was dropped from every session for its install.sh. The skills here are the
     # image's and the harness author's own, and their scripts run in the same shell either way.
     lines += ["", "[skills]", "allow_scripts = true"]
-    lines += ["", "[agents.hr.workspace]", f"path = {_toml(str(agent_ws))}", "",
+    lines += ["", "[agents.zeroclaw.workspace]", f"path = {_toml(str(agent_ws))}", "",
               "[risk_profiles.hr]", 'level = "full"', 'allowed_commands = ["*"]',
               "block_high_risk_commands = false",
               # zeroclaw's defaults are `workspace_only = true` and a path denylist that holds /etc
