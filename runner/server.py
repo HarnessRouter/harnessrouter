@@ -47,6 +47,7 @@ import base64
 import contextvars
 import hashlib
 import http.client
+import ipaddress
 import http.server
 import datetime
 import json
@@ -5085,6 +5086,36 @@ def _relay_usage(env: dict) -> dict:
     return {}
 
 
+# A local model server's own discovery endpoints (Ollama, llama.cpp, LM Studio, vLLM), as the path
+# after the relay's /v1 collapse. hermes takes this relay for one: it listens on 127.0.0.1, and
+# hermes's is_local_endpoint() calls any loopback base a local server, so before its first model call
+# it asks for these, in rounds (agent init's Ollama num_ctx, then the context length lookup). Each
+# went to the provider to be told 404: measured 2026-10-14 with hermes-agent 0.19.0 through this
+# relay, 10 of them on OpenRouter (1.5 s) and 22 on Anthropic (1.3 s) before the model was asked
+# anything; on hosted, where the broker refused each, 5.5 s a turn. They are answered here, at once,
+# with what a provider answers. /models stays forwarded: hermes reads the model's context length
+# from it.
+_LOCAL_SERVER_PROBES = frozenset({"api/tags", "api/show", "api/v1/models", "props", "version"})
+
+
+def _upstream_is_local_server(base: str) -> bool:
+    """True when the route's real upstream is one hermes itself would call a local model server
+    (its is_local_endpoint: loopback, an unqualified or container host name, a private, link-local
+    or Tailscale address). A person's own Ollama or llama.cpp behind a custom connection is one, and
+    there the probes are real questions, so they keep going upstream as before."""
+    host = (urllib.parse.urlsplit(base if "://" in base else f"http://{base}").hostname or "").lower()
+    if not host or host in ("localhost", "0.0.0.0") or "." not in host:
+        return True
+    if host.endswith((".docker.internal", ".containers.internal", ".lima.internal")):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return (addr.is_private or addr.is_loopback or addr.is_link_local
+            or (addr.version == 4 and addr in ipaddress.ip_network("100.64.0.0/10")))
+
+
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -5127,6 +5158,15 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         headers.setdefault("accept", "*/*")
         if flags.get("passthrough"):
             self._passthrough(base, key, tail, headers, body)
+            return
+        if (tail.split("?", 1)[0].strip("/").lower() in _LOCAL_SERVER_PROBES
+                and not _upstream_is_local_server(base)):
+            data = b'{"error": {"message": "Not found", "type": "invalid_request_error"}}'
+            self.send_response(404)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
         if tail.split("?", 1)[0] == "/messages" and not flags.get("bedrock_anthropic"):
             # An Anthropic Messages call (goose's and hermes's anthropic providers, litellm's
