@@ -350,3 +350,84 @@ def test_relay_applies_two_repairs_cumulatively_and_scopes_effort_per_model():
         assert "stream_options" not in calls[-1] and len(calls) == 4     # no extra 400 round-trip
     finally:
         up.shutdown()
+
+# ── a local model server's discovery probes (hermes x any provider, 2026-10-14) ─────────────────
+# hermes calls the loopback relay a local model server and asks it Ollama/llama.cpp/LM Studio/vLLM
+# discovery paths before its first model call: 10 on OpenRouter, 22 on Anthropic, each a provider
+# 404. On a provider that is not itself a local server the relay answers them at once; a person's own
+# local server behind a custom connection still gets them, as before.
+
+_PROBES = [("GET", "/api/tags"), ("GET", "/v1/props"), ("GET", "/props"), ("GET", "/version"),
+           ("GET", "/api/v1/models"), ("POST", "/api/show")]
+
+
+def _call(base, tok, method, path):
+    root = base.removesuffix("/v1")
+    req = urllib.request.Request(root + path, data=b'{"name": "m"}' if method == "POST" else None,
+                                 method=method, headers={"authorization": f"Bearer {tok}",
+                                                         "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+def test_upstream_is_local_server_follows_hermes():
+    from server import _upstream_is_local_server as local
+    for base in ("http://127.0.0.1:11434/v1", "http://localhost:8080", "http://ollama:11434/v1",
+                 "http://host.docker.internal:11434/v1", "http://192.168.1.20:8000/v1",
+                 "http://10.0.0.5/v1", "http://172.20.0.3:1234", "http://100.101.2.3:11434",
+                 "http://[::1]:8080/v1", "http://169.254.1.1"):
+        assert local(base), base
+    for base in ("https://openrouter.ai/api/v1", "https://api.anthropic.com/v1",
+                 "https://x.openai.azure.com/openai/v1", "https://8.8.8.8/v1", "https://provider.invalid/v1"):
+        assert not local(base), base
+
+
+def test_probes_are_answered_by_the_relay_when_the_provider_is_not_local():
+    # provider.invalid never resolves: an answer can only have come from the relay itself
+    base, tok = _hermes_relay_route("https://provider.invalid/v1", "sk-real")
+    for method, path in _PROBES:
+        status, data = _call(base, tok, method, path)
+        assert status == 404, (method, path, status)
+        assert json.loads(data)["error"]["message"] == "Not found"
+    # the model listing is not a probe: it still goes upstream (and fails to resolve here)
+    status, data = _call(base, tok, "GET", "/v1/models")
+    assert status != 404 or b"Not found" not in data
+
+
+def test_probes_still_reach_a_local_server_behind_a_custom_connection():
+    seen = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def _answer(self):
+            seen.append((self.command, self.path))
+            data = b'{"models": []}'
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):  # noqa: N802
+            self._answer()
+
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            self._answer()
+
+        def log_message(self, *a):
+            pass
+
+    up = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = _hermes_relay_route(f"http://127.0.0.1:{up.server_address[1]}/v1", "sk-real")
+        for method, path in _PROBES:
+            assert _call(base, tok, method, path)[0] == 200, (method, path)
+        assert len(seen) == len(_PROBES)
+    finally:
+        up.shutdown()

@@ -47,6 +47,7 @@ import base64
 import contextvars
 import hashlib
 import http.client
+import ipaddress
 import http.server
 import datetime
 import json
@@ -929,6 +930,9 @@ def _git(ws: str, *args: str, check: bool = False, env: dict | None = None) -> s
 # Config the runner rewrites every turn and that can carry MCP credentials (see CHECKPOINT_EXCLUDE).
 _PER_TURN_CONFIG = (".harness/opencode.json", ".harness/kilo.json", ".harness/mcp.json",
                     ".harness/mcp-bridge/")
+# A base's own state directory outside the CLI home, which it rewrites on every turn (see
+# _git_ensure). Not in the checkpoint repo; in the tar like .harness/home.
+_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/")
 
 
 def _git_ensure(ws: str) -> None:
@@ -967,6 +971,13 @@ def _git_ensure(ws: str) -> None:
         # prompt (ctx_window) on every save, so committing it would put a new copy of the system
         # prompt into .git/objects each turn. It travels in the tar like the CLI home does.
         ".harness/agentzero/",
+        # The same for every base whose own store changes on each turn: committed, each turn put
+        # a new copy of the whole store into .git/objects. MEASURED on 0.33.0 (2026-10-14): a
+        # 15-turn opensquilla session had an 8.3 MB .git for 4 MB of state (its SQLite stores,
+        # transcript and logs in every commit); goose committed its sessions.db WAL and its raw
+        # request logs, nanobot its whole conversation file, on every turn. They travel in the
+        # tar instead, which carries the session's whole tree.
+        *_STATE_DIRS,
         "",
     ]))
     if not (p / ".git").exists():
@@ -981,6 +992,7 @@ def _git_ensure(ws: str) -> None:
         # The same for the per-turn config files: a session checkpointed before they were ignored
         # tracks them, and an ignore rule alone would keep committing each turn's credentials.
         _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *_PER_TURN_CONFIG)
+        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *_STATE_DIRS)
         tracked = bool(_git(ws, "ls-files", "--", ".harness/home").stdout.strip())
         if tracked:
             _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
@@ -5085,6 +5097,36 @@ def _relay_usage(env: dict) -> dict:
     return {}
 
 
+# A local model server's own discovery endpoints (Ollama, llama.cpp, LM Studio, vLLM), as the path
+# after the relay's /v1 collapse. hermes takes this relay for one: it listens on 127.0.0.1, and
+# hermes's is_local_endpoint() calls any loopback base a local server, so before its first model call
+# it asks for these, in rounds (agent init's Ollama num_ctx, then the context length lookup). Each
+# went to the provider to be told 404: measured 2026-10-14 with hermes-agent 0.19.0 through this
+# relay, 10 of them on OpenRouter (1.5 s) and 22 on Anthropic (1.3 s) before the model was asked
+# anything; on hosted, where the broker refused each, 5.5 s a turn. They are answered here, at once,
+# with what a provider answers. /models stays forwarded: hermes reads the model's context length
+# from it.
+_LOCAL_SERVER_PROBES = frozenset({"api/tags", "api/show", "api/v1/models", "props", "version"})
+
+
+def _upstream_is_local_server(base: str) -> bool:
+    """True when the route's real upstream is one hermes itself would call a local model server
+    (its is_local_endpoint: loopback, an unqualified or container host name, a private, link-local
+    or Tailscale address). A person's own Ollama or llama.cpp behind a custom connection is one, and
+    there the probes are real questions, so they keep going upstream as before."""
+    host = (urllib.parse.urlsplit(base if "://" in base else f"http://{base}").hostname or "").lower()
+    if not host or host in ("localhost", "0.0.0.0") or "." not in host:
+        return True
+    if host.endswith((".docker.internal", ".containers.internal", ".lima.internal")):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return (addr.is_private or addr.is_loopback or addr.is_link_local
+            or (addr.version == 4 and addr in ipaddress.ip_network("100.64.0.0/10")))
+
+
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -5127,6 +5169,15 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         headers.setdefault("accept", "*/*")
         if flags.get("passthrough"):
             self._passthrough(base, key, tail, headers, body)
+            return
+        if (tail.split("?", 1)[0].strip("/").lower() in _LOCAL_SERVER_PROBES
+                and not _upstream_is_local_server(base)):
+            data = b'{"error": {"message": "Not found", "type": "invalid_request_error"}}'
+            self.send_response(404)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
         if tail.split("?", 1)[0] == "/messages" and not flags.get("bedrock_anthropic"):
             # An Anthropic Messages call (goose's and hermes's anthropic providers, litellm's
@@ -10296,6 +10347,20 @@ ALL_NANOBOT_TOOLS = (
 # an allow-list and a PATH prepend, so the layer is handed to it by name.
 _ENV_LAYER_KEYS = ("PROJECT_ROOT", "HR_ENVIRONMENT", "PYTHONPATH", "VIRTUAL_ENV", "NODE_PATH",
                    "LD_LIBRARY_PATH")
+# The names the runner itself puts on a turn for the agent's shell to use: the image skill's
+# per-turn broker credential (HR_IMAGE_*, see run_turn) and, on a harness that drives another, the
+# platform API and its calibration credential. Every base whose shell inherits the turn's
+# environment has them; one that builds its own (nanobot) must be told. MEASURED on 0.33.0
+# (2026-10-14): nanobot found the imagegen script and it answered "image generation is not
+# configured for this Harness", with the integration in place and pi making the same image.
+# And the image's own setting for its Office tool: OFFICECLI_RESIDENT_FLUSH=each makes every officecli
+# command write through to disk (the Dockerfile sets it, the officecli skill relies on it). Without
+# it officecli keeps the document open in a background process and writes it only once that process
+# goes idle; MEASURED on zeroclaw (2026-10-14), a ten-second deck turn ended first, and seven decks
+# were handed back as the empty file `officecli create` had made. nanobot's shell lacked it too.
+_TURN_SHELL_KEYS = ("HR_IMAGE_BASE_URL", "HR_IMAGE_KEY", "HR_IMAGE_MODEL",
+                    "HR_API_URL", "HR_INNER_HARNESS", "HR_CALIBRATION_TOKEN",
+                    "OFFICECLI_RESIDENT_FLUSH")
 
 
 def _nanobot_exec_env(env: dict, caller_keys: list[str] | tuple = ()) -> dict:
@@ -10309,6 +10374,7 @@ def _nanobot_exec_env(env: dict, caller_keys: list[str] | tuple = ()) -> dict:
     link = str(env.get("HR_ENVIRONMENT") or "").strip()
     keys = [k for k in _ENV_LAYER_KEYS if link and env.get(k)]
     keys += [k for k in caller_keys if env.get(k) is not None and k not in keys]
+    keys += [k for k in _TURN_SHELL_KEYS if env.get(k) and k not in keys]
     # the layer's own PATH entries, taken as the ones under its directory rather than by
     # reconstructing what apply_env decided to add
     prepend = [x for x in str(env.get("PATH") or "").split(":") if x.startswith(link + "/")] if link else []
