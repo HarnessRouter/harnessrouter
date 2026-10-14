@@ -42,6 +42,9 @@ _MODEL_LEVELS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # (unlike the larger 5.5 models, OpenRouter lets it be turned off); high and xhigh think more.
     (r"^claude-(haiku-[45][.-]5|sonnet-4[.-]6|opus-4[.-][78]|sonnet-5|opus-5)", ("none", "low", "medium", "high", "xhigh")),
     # Google. The pro model and the 3.7 and 3.8 flash models only work thinking, and refuse `minimal`.
+    # Gemini 4 Argon, measured on Google's OpenAI-compatible surface 2026-10-14: none, low, medium and
+    # high answered; minimal ("Thinking level MINIMAL is not supported") and xhigh were refused.
+    (r"^gemini-4-argon$", ("none", "low", "medium", "high")),
     (r"^gemini-3\.1-pro|^gemini-3\.[78]-flash$", ("low", "medium", "high")),
     (r"^gemini-3(\.[156])?-flash(-lite|-preview)?$", ("none", "minimal", "low", "medium", "high")),
     (r"^grok-4\.[356]$", ("minimal", "low", "medium", "high", "xhigh")),          # cannot be turned off
