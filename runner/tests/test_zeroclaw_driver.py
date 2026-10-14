@@ -89,7 +89,7 @@ def test_a_turn_becomes_claude_stream_json():
         events, sent, rc = _run(pathlib.Path(d), {"prompt": str(FIX / "write-file.ndjson")})
     assert rc == 0
     assert [r["method"] for r in sent] == ["initialize", "session/new", "session/prompt"]
-    assert sent[1]["params"] == {"cwd": d, "agentAlias": "hr"}
+    assert sent[1]["params"] == {"cwd": d, "agentAlias": "zeroclaw"}
     assert sent[2]["params"]["prompt"] == [{"type": "text", "text": "write hello.txt"}]
     init = events[0]
     assert init == {"type": "system", "subtype": "init", "session_id": "new-session-uuid", "model": "claude-haiku-4.5"}
@@ -183,8 +183,8 @@ def test_the_risk_profile_runs_unattended_and_withholds_what_it_must():
     assert cfg["runtime_profiles"]["hr"]["max_tool_iterations"] == 7
     # the shell gets the variables it needs by name: PATH and the harness's own
     assert "PATH" in rp["shell_env_passthrough"]
-    assert cfg["agents"]["hr"]["workspace"]["path"].endswith(".harness/zeroclaw/agent")
-    assert "mcp" not in cfg and "acp_enable_mcp" not in cfg["agents"]["hr"]
+    assert cfg["agents"]["zeroclaw"]["workspace"]["path"].endswith(".harness/zeroclaw/agent")
+    assert "mcp" not in cfg and "acp_enable_mcp" not in cfg["agents"]["zeroclaw"]
 
 
 def test_the_harness_variables_reach_the_shell_by_name():
@@ -198,7 +198,7 @@ def test_mcp_needs_all_three_switches_or_no_server_connects():
                {"name": "remote", "url": "https://mcp.example/sse", "headers": {"Authorization": "Bearer b"}}]
     with tempfile.TemporaryDirectory() as d:
         _, _, cfg = _build(d, mcp_servers=servers)
-    agent = cfg["agents"]["hr"]
+    agent = cfg["agents"]["zeroclaw"]
     assert agent["acp_enable_mcp"] is True and agent["mcp_bundles"] == ["hr"]
     assert cfg["mcp_bundles"]["hr"]["servers"] == ["probe", "remote"]
     stdio, sse = cfg["mcp"]["servers"]

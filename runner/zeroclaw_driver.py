@@ -44,7 +44,10 @@ import sys
 import threading
 
 _OUT = sys.stdout
-_AGENT = "hr"           # the one [agents.<alias>] server.py writes
+# The one [agents.<alias>] server.py writes. zeroclaw names the agent after it in the persona files it
+# seeds ("You are **hr**. That is your name."): an agent that introduced itself by the runner's own
+# config key, so it carries the product's name.
+_AGENT = "zeroclaw"
 _SESSION_NOT_FOUND = -32000
 # What zeroclaw appends to the answer when a turn reaches `max_tool_iterations` (its English locale,
 # crates/zeroclaw-runtime/locales/en/cli.ftl `turn-max-iterations-reached`). It then asks the model
