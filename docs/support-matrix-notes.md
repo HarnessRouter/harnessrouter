@@ -29,6 +29,43 @@ offered model, the same lists as here.
   nanobot argument), and the model catalog route (0.6 s here, the same as the bases route; hosted's
   slowness came from its remote secret store).
 
+## zeroclaw reviewed on the review instance (2026-10-14, 0.34.0-rc.1 to rc.5)
+
+Every model zeroclaw offered went through the five console scenarios, the plugin package (skill, stdio
+MCP, rows, SSE, streamable HTTP), the browser column and a one-slide deck carrying a stamp; on top, the
+family tour (13 of 13 families in one conversation), the environments column (3 of 3), the
+custom-harness dimension, and the five-turn PDF conversation (5 of 5). Each fix below was measured
+before and after on the same instance; the section further down (2026-10-13) is the contributor's own.
+
+- **Paths.** zeroclaw's risk profile defaults to `workspace_only = true` and a denylist holding /etc
+  and /usr: `head /etc/os-release`, `ls /env` and a python3 under /usr were refused as "forbidden
+  absolute paths outside the workspace". Both are opened; the session's OS user is the boundary.
+- **Skills with scripts were skipped** ("script-like files are blocked by skill security policy"):
+  the Office skill, for its install.sh. `[skills] allow_scripts = true`.
+- **The shell starts empty** and passes only the names it is given: the image skill's `HR_IMAGE_*`
+  ("image generation is not configured for this Harness") and `OFFICECLI_RESIDENT_FLUSH` (seven
+  decks handed back empty: officecli wrote on idle, after a ten-second turn had ended) are named now.
+- **The step budget read as success.** zeroclaw summarises and stops with `end_turn` at
+  `max_tool_iterations`; its note in the answer now ends the turn as `max_steps`.
+- **34 tools, not 20.** Captured from the request zeroclaw sends (a fake chat/completions server):
+  cron and schedule, channel and session messaging, pushover, git_forge, backup, canvas, weather,
+  and none of the memory tools the first list named. `allowed_tools` is the measured set of 14
+  (MCP tools are admitted on top of it); `delegate` fails ("Missing 'agent' parameter"); `llm_task`
+  takes a model override and `deliver_file` hands back a copy the driver drops, so both are never offered.
+- **"You are hr".** zeroclaw names the agent after its config alias in the persona it seeds; the
+  alias is `zeroclaw` now.
+- **State in the checkpoint repo**, every turn (three SQLite stores, the trace log, persona files,
+  copied skills): `.harness/zeroclaw/` rides the tar (#460 did the same for nanobot, opensquilla, goose).
+- **Not offered:** grok-4.20 (no deck twice: "invalid semantic completion", no text and no tool call);
+  nemotron-3-super (no deck; off every sibling base already); qwen3.8-flash (answered the follow-up
+  with the first turn's codeword, and provider errors on the artifact after an outage had cleared).
+- **Known and left:** zeroclaw keeps a turn's messages only when the turn succeeds, so after a cancel
+  the next turn does not know what the cancelled one did.
+- **The PDF conversation's first turn** ("follow your instruction: say hi" under an instruction to make
+  a PDF): GPT models answer "hi" without a PDF on zeroclaw, pi and opencode alike (32 of 55 zeroclaw
+  models, every family represented). It is a property of the prompt, not of a base, and was not used
+  to take models off; the rest of the conversation passes on every model tried.
+
 ## The four new bases offer only what they run reliably (2026-10-12, 0.33.0-rc.5 to rc.11, the review instance)
 
 The rule from here on, for every base: a base offers the models it was measured to run reliably on

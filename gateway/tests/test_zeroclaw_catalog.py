@@ -51,6 +51,6 @@ def test_zeroclaw_is_chat_completions_only():
 def test_a_model_the_matrix_failed_twice_is_not_offered():
     assert "llama-3.3-70b" not in A._MODEL_CATALOG["zeroclaw"]["models"]
     # no deck from either (review instance, 2026-10-14)
-    assert not {"grok-4.20", "nemotron-3-super"} & set(A._MODEL_CATALOG["zeroclaw"]["models"])
+    assert not {"grok-4.20", "nemotron-3-super", "qwen3.8-flash"} & set(A._MODEL_CATALOG["zeroclaw"]["models"])
     # withheld per base, not from the catalog: other bases still offer it
     assert any("llama-3.3-70b" in e["models"] for b, e in A._MODEL_CATALOG.items() if b != "zeroclaw")

@@ -7643,7 +7643,10 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                     semantic completion" (no text and no tool call, after its own retries).
     #   nemotron-3-super  made no deck (no .pptx), no browser call on its first browser run, and a
     #                     provider error on its first artifact; off all four sibling bases already.
-    "zeroclaw": frozenset({"llama-3.3-70b", "grok-4.20", "nemotron-3-super"}),
+    #   qwen3.8-flash     answered the follow-up with the first turn's codeword ("M1" for "M2"), the
+    #                     mix-up that took it off mimo, and failed its artifact on provider errors after
+    #                     an outage had cleared (rc.2, rc.4, rc.5: no clean run).
+    "zeroclaw": frozenset({"llama-3.3-70b", "grok-4.20", "nemotron-3-super", "qwen3.8-flash"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
