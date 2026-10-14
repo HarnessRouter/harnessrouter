@@ -7637,7 +7637,13 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     # echo — twice in a row ("The provided functions are insufficient for me to complete this task",
     # then "I cannot perform this task as it requires additional information that is not provided"),
     # with zeroclaw's tool list in the request. Fourteen other models passed all five scenarios.
-    "zeroclaw": frozenset({"llama-3.3-70b"}),
+    # Measured on every offered model on the review instance (0.34.0-rc.1 to rc.4, 2026-10-14: five
+    # scenarios, the plugin package, the browser, a one-slide deck, the family tour):
+    #   grok-4.20         made no deck twice: zeroclaw's "The model provider returned an invalid
+    #                     semantic completion" (no text and no tool call, after its own retries).
+    #   nemotron-3-super  made no deck (no .pptx), no browser call on its first browser run, and a
+    #                     provider error on its first artifact; off all four sibling bases already.
+    "zeroclaw": frozenset({"llama-3.3-70b", "grok-4.20", "nemotron-3-super"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
