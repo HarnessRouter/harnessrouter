@@ -24,6 +24,23 @@ from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
 
+def declared_only(schema: dict | None, arguments: dict) -> dict:
+    """The arguments a CLOSED tool schema declares, and nothing a model added beside them.
+
+    jcode's own tools all take an `intent` argument, and a model working in jcode writes one into
+    remote tools' calls too. The browser's tools are closed (additionalProperties false), so this
+    bridge's own input check refused them ("Input validation error: Additional properties are not
+    allowed ('intent' was unexpected)"): three refused browser calls in one jcode turn on gpt-5.4
+    before the model looked the schema up and left it out (review instance, 2026-10-14), and on
+    hosted the agent answered without the browser (gpt-5.4 and claude-sonnet-5). An argument the
+    tool never declared carries nothing it reads, so it is left out; whether the rest is right is
+    the remote server's call, not this bridge's."""
+    if (not isinstance(schema, dict) or schema.get("additionalProperties") is not False
+            or not isinstance(schema.get("properties"), dict)):
+        return arguments
+    return {k: v for k, v in arguments.items() if k in schema["properties"]}
+
+
 async def main() -> int:
     url = os.environ.get("HR_MCP_URL", "")
     if not url:
@@ -44,16 +61,23 @@ async def main() -> int:
             init = await session.initialize()
             caps = init.capabilities
             server = Server(init.serverInfo.name if init.serverInfo else "bridge")
+            schemas: dict[str, dict] = {}
 
             @server.list_tools()
             async def list_tools() -> list[types.Tool]:
-                return (await session.list_tools()).tools
+                tools = (await session.list_tools()).tools
+                schemas.update({t.name: t.inputSchema or {} for t in tools})
+                return tools
 
-            @server.call_tool()
+            # The remote server judges a call's arguments; this bridge only leaves out what a closed
+            # schema never declared (declared_only), so its own check is off.
+            @server.call_tool(validate_input=False)
             async def call_tool(name: str, arguments: dict | None) -> types.CallToolResult:
                 # The remote result travels whole: a tool that declares an output schema answers
                 # with structured content too, and the SDK on this side checks for it.
-                result = await session.call_tool(name, arguments or {})
+                if name not in schemas:      # a client that calls before it lists: learn the schemas once
+                    schemas.update({t.name: t.inputSchema or {} for t in (await session.list_tools()).tools})
+                result = await session.call_tool(name, declared_only(schemas.get(name), arguments or {}))
                 return types.CallToolResult(content=result.content, structuredContent=result.structuredContent,
                                             isError=bool(result.isError))
 
