@@ -539,7 +539,11 @@ def _isolate_session(ws: str) -> None:
 _CALLER_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Prefixes the runner sets for the agent's own credentials, and the dynamic loader's; names that
 # would redirect an interpreter's imports, a process's trust roots or its network path.
-_CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "AWS_", "AZURE_", "LD_", "DYLD_")
+_CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "AWS_", "AZURE_", "LD_", "DYLD_",
+                        # zeroclaw reads ZEROCLAW_<section>__<key> as config overrides (the runner puts
+                        # the relay key there), so a harness variable named so could move its endpoint
+                        # or its excluded tools, or stop it from starting
+                        "ZEROCLAW_")
 _CALLER_ENV_RESERVED_NAMES = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "PWD", "TMPDIR",
                               "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
                               "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
@@ -960,7 +964,7 @@ _PER_TURN_CONFIG = (".harness/opencode.json", ".harness/kilo.json", ".harness/mc
                     ".harness/mcp-bridge/")
 # A base's own state directory outside the CLI home, which it rewrites on every turn (see
 # _git_ensure). Not in the checkpoint repo; in the tar like .harness/home.
-_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/")
+_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/", ".harness/zeroclaw/")
 
 
 def _git_ensure(ws: str) -> None:
@@ -10587,17 +10591,21 @@ _ZEROCLAW_KEY_ENV = "ZEROCLAW_providers__models__custom__hr__api_key"
 # in the sandbox at all — MEASURED on 0.8.5 in the image: browser_open "Failed to open system browser",
 # browser "agent-browser CLI is unavailable", screenshot "No screenshot tool found" — so offering them
 # is a picker row that fails on use (rule 4). The instance's browser plugin is the browser here.
+# llm_task takes a `model` argument ("Optional model override", crates/zeroclaw-tools/src/llm_task.rs)
+# and sends it through the relay: model_switch's door again. deliver_file hands a file back to an ACP
+# client as an embedded blob, which this driver drops (a turn's files come back from the workspace,
+# where the file already is), and zeroclaw keeps a second copy of it beside the original.
 _ZEROCLAW_NEVER = ("ask_user", "escalate_to_human", "reaction", "poll",
-                   "model_switch", "model_routing_config", "proxy_config",
-                   "browser_open", "browser", "screenshot")
+                   "model_switch", "model_routing_config", "proxy_config", "llm_task",
+                   "browser_open", "browser", "screenshot", "deliver_file")
 # The tools zeroclaw 0.8.5 offers a session under the config server.py writes, as the agent itself
 # listed them (and each cross-checked against its registration in crates/zeroclaw-tools), minus
 # _ZEROCLAW_NEVER. web_fetch, web_search_tool (DuckDuckGo) and http_request were each seen to work
 # in the image. Pinned equal to the gateway's _BASE_CATALOG["zeroclaw"] tool ids by its tests.
 ALL_ZEROCLAW_TOOLS = (
     "shell", "file_read", "file_write", "file_edit", "glob_search", "content_search",
-    "git_operations", "deliver_file", "web_fetch", "web_search_tool", "http_request",
-    "image_info", "calculator", "TodoWrite", "llm_task",
+    "git_operations", "web_fetch", "web_search_tool", "http_request",
+    "image_info", "calculator", "TodoWrite",
     "spawn_subagent", "delegate", "memory_store", "memory_recall", "memory_forget",
 )
 # The variables a turn's shell needs that zeroclaw does not pass on by itself. Its shell tool builds
@@ -10611,18 +10619,18 @@ _ZEROCLAW_SHELL_KEYS = ("PATH", "PROJECT_ROOT", "HR_ENVIRONMENT", "PYTHONPATH", 
 
 
 def _toml(v) -> str:
-    """A TOML value. JSON's string and array syntax is TOML's basic string and array syntax for the
-    values written here (no control characters survive json.dumps unescaped, and TOML reads every
-    JSON escape it produces), so json.dumps is the encoder rather than a hand-rolled one."""
+    """A TOML value. Strings go through _toml_str (grok's encoder: characters as themselves, since
+    json.dumps's default escapes a character outside the BMP as a surrogate pair, which TOML
+    refuses, so one emoji in an MCP argument made the whole file unreadable)."""
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, int):
         return str(v)
     if isinstance(v, dict):
-        return "{ " + ", ".join(f"{json.dumps(str(k))} = {_toml(x)}" for k, x in v.items()) + " }"
+        return "{ " + ", ".join(f"{_toml_str(k)} = {_toml(x)}" for k, x in v.items()) + " }"
     if isinstance(v, (list, tuple)):
         return "[" + ", ".join(_toml(x) for x in v) + "]"
-    return json.dumps(str(v))
+    return _toml_str(v)
 
 
 def _zeroclaw_mcp(servers: list[dict] | None) -> list[dict]:
@@ -10703,9 +10711,21 @@ def _zeroclaw_config(base_url: str, model: str, cwd: str, mcp_servers: list[dict
         # MCP is opt-in per agent on ACP (`acp_enable_mcp`, off by default), and a server reaches an
         # agent only through a bundle the agent names: three switches, and a missing one is silent.
         lines += ['mcp_bundles = ["hr"]', "acp_enable_mcp = true"]
+    # A skill folder holding a script file is skipped unless scripts are allowed ("install.sh:
+    # script-like files are blocked by skill security policy"): MEASURED on 0.8.5, the built-in
+    # Office skill was dropped from every session for its install.sh. The skills here are the
+    # image's and the harness author's own, and their scripts run in the same shell either way.
+    lines += ["", "[skills]", "allow_scripts = true"]
     lines += ["", "[agents.hr.workspace]", f"path = {_toml(str(agent_ws))}", "",
               "[risk_profiles.hr]", 'level = "full"', 'allowed_commands = ["*"]',
               "block_high_risk_commands = false",
+              # zeroclaw's defaults are `workspace_only = true` and a path denylist that holds /etc
+              # and /usr (crates/zeroclaw-config/src/schema.rs, RiskProfileConfig::default). MEASURED
+              # on 0.8.5: `head -2 /etc/os-release`, `ls /env` and a python3 under /usr were all
+              # refused as "forbidden absolute paths outside the workspace", and an environment's
+              # script runs by its absolute path under /env. The boundary here is the session's own
+              # OS user and its workspace, as for every other base.
+              "workspace_only = false", "forbidden_paths = []",
               f"excluded_tools = {_toml(disabled)}",
               f"shell_env_passthrough = {_toml(sorted(set(shell_keys)))}", "",
               "[runtime_profiles.hr]"]
@@ -10738,6 +10758,7 @@ def _build_zeroclaw(provider: str, auth: Auth, model: str, prompt: str, cwd: str
     env[_ZEROCLAW_KEY_ENV] = auth.api_key or ""
     shell_keys = [k for k in _ZEROCLAW_SHELL_KEYS if env.get(k)]
     shell_keys += [k for k in caller_keys if env.get(k) is not None and k not in shell_keys]
+    shell_keys += [k for k in _TURN_SHELL_KEYS if env.get(k) and k not in shell_keys]
     cfg_dir = _zeroclaw_config(auth.base_url, model, cwd, mcp_servers, tools_disabled, max_turns, shell_keys)
     job = {"zeroclaw": ZEROCLAW_BIN, "config_dir": str(cfg_dir), "cwd": cwd, "model": model,
            "prompt": prompt, "resume_session_id": resume_session_id or ""}

@@ -17295,15 +17295,16 @@ _BASE_CATALOG: dict[str, dict] = {
                           "with shell and file access, reading and editing files and running "
                           "commands to complete the task end to end."),
         # The tools zeroclaw 0.8.5 offers a session under the runner's config, as the agent listed
-        # them, pinned equal to the runner's ALL_ZEROCLAW_TOOLS. The ten the runner never offers
-        # (interactive callbacks, model or route switches, and the three that need a desktop) are not
+        # them, pinned equal to the runner's ALL_ZEROCLAW_TOOLS. The twelve the runner never offers
+        # (interactive callbacks, model or route switches, the three that need a desktop, and the ACP
+        # file handback) are not
         # here: there is nothing to turn off.
         "tools": [("shell", "Shell"), ("file_read", "File Read"), ("file_write", "File Write"),
                   ("file_edit", "Edit"), ("glob_search", "Find"), ("content_search", "Search"),
-                  ("git_operations", "Git"), ("deliver_file", "Deliver File"),
+                  ("git_operations", "Git"),
                   ("web_fetch", "Web Fetch"), ("web_search_tool", "Web Search"),
                   ("http_request", "HTTP Request"), ("image_info", "Image Info"), ("calculator", "Calculator"),
-                  ("TodoWrite", "Todo"), ("llm_task", "LLM Task"),
+                  ("TodoWrite", "Todo"),
                   ("spawn_subagent", "Subagent"), ("delegate", "Delegate"),
                   ("memory_store", "Memory Store"), ("memory_recall", "Memory Recall"),
                   ("memory_forget", "Memory Forget")],

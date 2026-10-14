@@ -1247,7 +1247,8 @@ def test_a_layer_with_only_some_of_the_variables_passes_only_those():
     assert ex["pathPrepend"] == "/env/y/.venv/bin"
 
 
-@pytest.mark.parametrize("build", ["_build_mimo", "_build_jcode", "_build_opensquilla", "_build_nanobot"])
+@pytest.mark.parametrize("build", ["_build_mimo", "_build_jcode", "_build_opensquilla", "_build_nanobot",
+                                   "_build_zeroclaw"])
 def test_the_provider_key_never_reaches_the_cli_whatever_the_connection_shape(build):
     """The CLI's environment is the agent's shell's, and its config files ride the workspace
     checkpoint: the real key belongs in neither, on any connection a base is offered. A direct

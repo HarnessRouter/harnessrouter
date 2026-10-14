@@ -1349,7 +1349,7 @@ install_backends() {
   # binary and replaces one left by an older image.
   ZEROCLAW_PIN="${HR_ZEROCLAW_VERSION:-0.8.5}"; ZEROCLAW_PIN="${ZEROCLAW_PIN#v}"
   if wanted zeroclaw && [ "$("$(backend_bin zeroclaw)" --version 2>/dev/null | awk '{print $2}')" != "$ZEROCLAW_PIN" ]; then
-    echo "[harnessrouter] installing zeroclaw $ZEROCLAW_PIN (Apache-2.0, version-pinned, digest-verified)…"
+    echo "[harnessrouter] installing zeroclaw $ZEROCLAW_PIN (Apache-2.0, version-pinned$([ "$ZEROCLAW_PIN" = 0.8.5 ] || [ -n "${HR_ZEROCLAW_SHA256:-}" ] && echo ", digest-verified"))…"
     try_install "zeroclaw" install_zeroclaw || true
   fi
   [ -x "$(backend_bin zeroclaw)" ] && export HR_ZEROCLAW_BIN="$(backend_bin zeroclaw)"

@@ -38,7 +38,7 @@ WHAT THIS DRIVER OWES THE TURN, and where each answer comes from:
 from __future__ import annotations
 
 import json
-import os
+import re
 import subprocess
 import sys
 import threading
@@ -46,6 +46,11 @@ import threading
 _OUT = sys.stdout
 _AGENT = "hr"           # the one [agents.<alias>] server.py writes
 _SESSION_NOT_FOUND = -32000
+# What zeroclaw appends to the answer when a turn reaches `max_tool_iterations` (its English locale,
+# crates/zeroclaw-runtime/locales/en/cli.ftl `turn-max-iterations-reached`). It then asks the model
+# for a summary and stops with `end_turn`, so the stop reason alone reads as a finished turn.
+# MEASURED on 0.8.5 with a step budget of 2 and a five-file task: two files, the note, `end_turn`.
+_MAX_ITERATIONS = re.compile(r"\*Turn stopped: reached maximum tool iterations \(\d+\)\.\*")
 
 
 def _emit(ev: dict) -> None:
@@ -196,6 +201,10 @@ def _run(job: dict) -> int:
             _emit({"type": "result", "subtype": "error", "is_error": True, "result": answer or stop,
                    "reason": stop, "usage": {}})
             return 1
+        if _MAX_ITERATIONS.search(answer):
+            # the step budget, as every base reports it: the turn stopped, it did not fail
+            _emit({"type": "result", "subtype": "error_max_turns", "is_error": False, "result": answer, "usage": {}})
+            return 0
         _emit({"type": "result", "subtype": "success", "is_error": False, "result": answer, "usage": {}})
         return 0
     finally:
