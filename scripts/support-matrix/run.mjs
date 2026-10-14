@@ -270,10 +270,13 @@ try {
         // judged per turn against what THAT turn asked for: the switch scenario runs a partner model on
         // purpose, and its served name is not a substitution of this pair's id. A feed without the
         // per-turn model (older gateways) falls back to the pair's id never being served at all.
+        // Judged by the gateway's own rule (sameModel), as the switch row below is: an aggregator's
+        // name for the model asked for (anthropic/claude-fable-5.1 for claude-fable-5-1, OpenRouter)
+        // is that model. A strict string compare flagged every such pair (2026-10-14).
         const withModel = turnsList.filter((t) => t && t.served_model && t.model);
         rec.substituted = withModel.length
-          ? [...new Set(withModel.filter((t) => t.model === m && String(t.served_model).split(',').some((x) => x && x !== m)).map((t) => String(t.served_model)))]
-          : (rec.served.length && !rec.served.some((sm) => sm.split(',').includes(m)) ? rec.served : []);
+          ? [...new Set(withModel.filter((t) => t.model === m && String(t.served_model).split(',').some((x) => x && !sameModel(m, x))).map((t) => String(t.served_model)))]
+          : (rec.served.length && !rec.served.some((sm) => sm.split(',').some((x) => sameModel(m, x))) ? rec.served : []);
         // The switch row, judged on the SERVED model and not only on the word it echoed back.
         const partner = rec.switch && rec.switch.to;
         if (partner && withModel.length) {

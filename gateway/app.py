@@ -7644,7 +7644,13 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     # echo — twice in a row ("The provided functions are insufficient for me to complete this task",
     # then "I cannot perform this task as it requires additional information that is not provided"),
     # with zeroclaw's tool list in the request. Fourteen other models passed all five scenarios.
-    "zeroclaw": frozenset({"llama-3.3-70b"}),
+    # Measured on every offered model on the review instance (0.34.0-rc.1 to rc.4, 2026-10-14: five
+    # scenarios, the plugin package, the browser, a one-slide deck, the family tour):
+    #   grok-4.20         made no deck twice: zeroclaw's "The model provider returned an invalid
+    #                     semantic completion" (no text and no tool call, after its own retries).
+    #   nemotron-3-super  made no deck (no .pptx), no browser call on its first browser run, and a
+    #                     provider error on its first artifact; off all four sibling bases already.
+    "zeroclaw": frozenset({"llama-3.3-70b", "grok-4.20", "nemotron-3-super"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
@@ -17302,19 +17308,16 @@ _BASE_CATALOG: dict[str, dict] = {
                           "with shell and file access, reading and editing files and running "
                           "commands to complete the task end to end."),
         # The tools zeroclaw 0.8.5 offers a session under the runner's config, as the agent listed
-        # them, pinned equal to the runner's ALL_ZEROCLAW_TOOLS. The twelve the runner never offers
-        # (interactive callbacks, model or route switches, the three that need a desktop, and the ACP
-        # file handback) are not
-        # here: there is nothing to turn off.
+        # them, pinned equal to the runner's ALL_ZEROCLAW_TOOLS, which is also the turn's allow-list:
+        # the twenty tools zeroclaw would offer beyond it (scheduling, channels, outside accounts and
+        # the rest; see the runner) are never offered, so there is nothing here to turn off.
         "tools": [("shell", "Shell"), ("file_read", "File Read"), ("file_write", "File Write"),
                   ("file_edit", "Edit"), ("glob_search", "Find"), ("content_search", "Search"),
                   ("git_operations", "Git"),
                   ("web_fetch", "Web Fetch"), ("web_search_tool", "Web Search"),
                   ("http_request", "HTTP Request"), ("image_info", "Image Info"), ("calculator", "Calculator"),
                   ("TodoWrite", "Todo"),
-                  ("spawn_subagent", "Subagent"), ("delegate", "Delegate"),
-                  ("memory_store", "Memory Store"), ("memory_recall", "Memory Recall"),
-                  ("memory_forget", "Memory Forget")],
+                  ("spawn_subagent", "Subagent")],
         # "hard": the runner writes the disabled tools into the risk profile's `excluded_tools`,
         # which removes them from the tool list the model is offered (measured: an excluded tool is
         # absent from the agent's own list) and is the one door that also removes MCP tools. As on
