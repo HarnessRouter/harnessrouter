@@ -85,6 +85,14 @@ def test_the_model_ids_are_qoders_and_in_no_other_picker():
     assert gw._backend_of_harness({"base": "qoder"}) == "qoder"
 
 
+def test_only_the_ids_that_deliver_their_file_are_offered():
+    # qfmodel answered without the PDF its instruction asked for (rc.21); efficient, kmodel and
+    # qmodel_latest built a deck and never delivered it (the hosted column, 2026-10-14)
+    models = gw._MODEL_CATALOG["qoder"]["models"]
+    assert not {"qfmodel", "efficient", "kmodel", "qmodel_latest"} & set(models)
+    assert len(models) == 12 and "ultimate" in models
+
+
 def test_the_connection_is_owner_trust_only(monkeypatch):
     conn = {"name": "integration:q", "backend": "qoder", "provider": "qoder", "api_key": "pat", "base_url": gw._PROVIDER_BASE["qoder"]}
     monkeypatch.setattr(gw, "SANDBOX_TRUST", "owner")
