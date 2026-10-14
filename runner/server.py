@@ -10353,8 +10353,14 @@ _ENV_LAYER_KEYS = ("PROJECT_ROOT", "HR_ENVIRONMENT", "PYTHONPATH", "VIRTUAL_ENV"
 # environment has them; one that builds its own (nanobot) must be told. MEASURED on 0.33.0
 # (2026-10-14): nanobot found the imagegen script and it answered "image generation is not
 # configured for this Harness", with the integration in place and pi making the same image.
+# And the image's own setting for its Office tool: OFFICECLI_RESIDENT_FLUSH=each makes every officecli
+# command write through to disk (the Dockerfile sets it, the officecli skill relies on it). Without
+# it officecli keeps the document open in a background process and writes it only once that process
+# goes idle; MEASURED on zeroclaw (2026-10-14), a ten-second deck turn ended first, and seven decks
+# were handed back as the empty file `officecli create` had made. nanobot's shell lacked it too.
 _TURN_SHELL_KEYS = ("HR_IMAGE_BASE_URL", "HR_IMAGE_KEY", "HR_IMAGE_MODEL",
-                    "HR_API_URL", "HR_INNER_HARNESS", "HR_CALIBRATION_TOKEN")
+                    "HR_API_URL", "HR_INNER_HARNESS", "HR_CALIBRATION_TOKEN",
+                    "OFFICECLI_RESIDENT_FLUSH")
 
 
 def _nanobot_exec_env(env: dict, caller_keys: list[str] | tuple = ()) -> dict:
