@@ -6,7 +6,9 @@ Vercel AI Gateway serves it and drives Claude Code). On this tree `_integration_
 made that choice since 2026-09-06; this pins it for the case hosted hit, with hosted's turn
 failure sentences for a turn that ran on no connection. The example model is now claude-haiku-5.5,
 which stands where Opus 5.5 stood then: TokenRouter lists Opus 5.5 since 2026-10-07 and does not list
-Haiku 5.5, which OpenRouter and Vercel serve."""
+Haiku 5.5, which OpenRouter and Vercel serve. OpenRouter has driven Claude Code since 2026-10-13 (its
+/api/v1/messages answers the Anthropic shape), so the integration that cannot drive the base is now an
+Azure AI Foundry one whose operator added a row for the model."""
 import asyncio
 import sys
 from pathlib import Path
@@ -23,10 +25,13 @@ def _async(v):
 
 DOC = [{"name": "TokenRouter Sponsorship", "provider": "tokenrouter", "config": {"api_key": "sk-t", "base_url": "https://tr.example/v1"}},
        {"name": "OpenRouter", "provider": "openrouter", "config": {"api_key": "sk-o", "base_url": "https://openrouter.ai/api/v1"}},
-       {"name": "Vercel AI Gateway", "provider": "vercel", "config": {"api_key": "sk-v", "base_url": "https://ai-gateway.vercel.sh/v1"}}]
+       {"name": "Vercel AI Gateway", "provider": "vercel", "config": {"api_key": "sk-v", "base_url": "https://ai-gateway.vercel.sh/v1"}},
+       {"name": "Foundry", "provider": "azure-foundry", "rows_v": 2,
+        "config": {"api_key": "sk-a", "base_url": "https://foundry.example/openai/v1"},
+        "models": [{"canonical": "claude-haiku-5.5", "provider_id": "claude-haiku-5-5"}]}]
 
 
-def _world(monkeypatch, doc=DOC, route="OpenRouter"):
+def _world(monkeypatch, doc=DOC, route="Foundry"):
     monkeypatch.setattr(gw, "_effective_model_map", lambda: _async({"claude-haiku-5.5": route}))
     monkeypatch.setattr(gw, "_integrations_doc", lambda: _async([dict(i) for i in doc]))
 
@@ -34,22 +39,35 @@ def _world(monkeypatch, doc=DOC, route="OpenRouter"):
 def test_the_vendor_tables_know_who_serves_haiku_5_5():
     assert "claude-haiku-5.5" in gw._integration_models(DOC[1]) and "claude-haiku-5.5" in gw._integration_models(DOC[2])
     assert "claude-haiku-5.5" not in gw._integration_models(DOC[0])
-    assert ("openrouter", "claude") not in gw._INTEGRATION_WIRING and ("vercel", "claude") in gw._INTEGRATION_WIRING
+    assert "claude-haiku-5.5" in gw._integration_models(DOC[3])
+    assert ("azure-foundry", "claude") not in gw._INTEGRATION_WIRING and ("vercel", "claude") in gw._INTEGRATION_WIRING
 
 
 def test_a_base_the_mapped_integration_cannot_drive_runs_on_another_that_serves_the_model(monkeypatch):
-    _world(monkeypatch)
+    _world(monkeypatch, doc=[DOC[0], DOC[2], DOC[3]])
     conn = asyncio.run(gw._mapped_integration_conn("claude", "claude-haiku-5.5"))
     assert conn and conn["name"] == "integration:Vercel AI Gateway"
     assert conn["provider"] == gw._INTEGRATION_WIRING[("vercel", "claude")] and conn["model"] == "anthropic/claude-haiku-5.5"
     # a base the mapped integration drives keeps the map's choice
     conn = asyncio.run(gw._mapped_integration_conn("hermes", "claude-haiku-5.5"))
-    assert conn and conn["name"] == "integration:OpenRouter"
+    assert conn and conn["name"] == "integration:Foundry"
 
 
 def test_an_integration_without_the_model_is_passed_over(monkeypatch):
-    _world(monkeypatch, doc=DOC[:2])
+    _world(monkeypatch, doc=[DOC[0], DOC[3]])
     assert asyncio.run(gw._mapped_integration_conn("claude", "claude-haiku-5.5")) is None
+
+
+def test_openrouter_drives_claude_code_on_its_messages_endpoint(monkeypatch):
+    """OpenRouter serves Anthropic's Messages shape at /api/v1/messages: a model mapped to it runs
+    Claude Code there, on the vendor/slug id, with the /v1 the CLI appends itself left for the runner
+    to strip."""
+    assert gw._INTEGRATION_WIRING[("openrouter", "claude")] == "tokenrouter"
+    _world(monkeypatch, route="OpenRouter")
+    conn = asyncio.run(gw._mapped_integration_conn("claude", "claude-haiku-5.5"))
+    assert conn and conn["name"] == "integration:OpenRouter"
+    assert conn["provider"] == "tokenrouter" and conn["model"] == "anthropic/claude-haiku-5.5"
+    assert conn["base_url"] == "https://openrouter.ai/api/v1"
 
 
 def test_a_turn_that_ran_on_no_connection_says_so_in_words():
