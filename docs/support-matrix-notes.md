@@ -6,6 +6,31 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## Gemini 4 Argon (2026-10-14, the day Google announced it)
+
+Read off each vendor's own list that day: Google AI Studio `gemini-4-argon` (generateContent,
+1,048,576 input tokens, thinking), OpenRouter and Vercel `google/gemini-4-argon` ($2 / $10 per
+million; Vercel also lists flex and priority tiers). TokenRouter and LLMTR do not list it. A one-line
+completion through each of the three came back as `gemini-4-argon` itself.
+
+Thinking levels, by `reasoning_effort` on Google's OpenAI-compatible surface: none, low, medium and
+high answered; minimal ("Thinking level MINIMAL is not supported") and xhigh were refused. OpenRouter
+refuses none ("Reasoning is mandatory"), as for every Gemini; Vercel took every level.
+
+Measured on the review instance (0.34.0-rc.5), on every base that offers the Gemini family (22,
+zeroclaw included), one provider column at a time with the instance's route for the model pointed at
+that integration:
+
+| | Google AI Studio | OpenRouter | Vercel AI Gateway |
+|---|---|---|---|
+| five scenarios (first, follow-up, switch, artifact, recycle) | 22 of 22 | 22 of 22 | 22 of 22 |
+
+Every Argon turn was served by `gemini-4-argon` (Google) or `google/gemini-4-argon` (the aggregators).
+Gemini CLI runs on a Google connection only, so its OpenRouter and Vercel rows ran on Google; goose and
+cheetahclaws cannot be driven by a Google connection, so their Google row ran on OpenRouter. On the
+instance's own route (Vercel), every one of the 22 also passed the plugin package (skill, stdio MCP,
+rows, SSE, streamable HTTP), the browser column and a one-slide deck carrying a stamp. Offered on all 22.
+
 ## After 0.33.0: three Qoder ids taken off, two fixes from the hosted service's column (2026-10-14)
 
 The hosted service measured the five bases of 0.33.0 on its own connections: first turn, follow-up
