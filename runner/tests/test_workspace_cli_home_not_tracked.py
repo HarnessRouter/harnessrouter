@@ -163,3 +163,31 @@ def test_an_index_released_but_a_tip_not_yet_rewritten_still_sheds_and_only_once
     head = _git(str(d), "rev-parse", "HEAD").stdout.strip()
     _git_ensure(str(d))                                                       # and it does not run twice
     assert _git(str(d), "rev-parse", "HEAD").stdout.strip() == head
+
+
+def test_a_bases_own_state_stays_out_of_the_repo_and_an_old_session_lets_go_of_it():
+    """nanobot's conversation file, opensquilla's stores and logs, goose's session database: each
+    rewritten on every turn, so a commit per turn put a new copy of each into .git/objects (a
+    15-turn opensquilla session: 8.3 MB of .git for 4 MB of state, 2026-10-14). They ride the tar."""
+    d = pathlib.Path(tempfile.mkdtemp())
+    _git_ensure(str(d))
+    (d / "out.txt").write_text("deliverable")
+    state = [d / ".harness" / "nanobot" / "sessions" / "w" / "k.jsonl",
+             d / ".harness" / "opensquilla" / "sessions.sqlite",
+             d / ".harness" / "goose" / "data" / "sessions" / "sessions.db"]
+    for f in state:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"\x01" * 256)
+    _git(str(d), "add", "-A")
+    _git(str(d), "commit", "-q", "-m", "checkpoint")
+    tracked = _git(str(d), "ls-files").stdout.split()
+    assert "out.txt" in tracked and not any(p.startswith((".harness/nanobot", ".harness/opensquilla", ".harness/goose")) for p in tracked)
+    # a session checkpointed before the rule tracks them; the next _git_ensure releases them
+    subprocess.run(["git", "-C", str(d), "add", "-f", "--", *[str(f.relative_to(d)) for f in state]], check=True)
+    subprocess.run(["git", "-C", str(d), "commit", "-q", "-m", "old checkpoint"], check=True)
+    _git_ensure(str(d))
+    _git(str(d), "add", "-A")
+    _git(str(d), "commit", "-q", "-m", "next checkpoint")
+    tracked = _git(str(d), "ls-files").stdout.split()
+    assert "out.txt" in tracked and not any(p.startswith(".harness/") for p in tracked), tracked
+    assert all(f.exists() for f in state)                          # released from the index, not from disk
