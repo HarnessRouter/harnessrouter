@@ -7225,7 +7225,7 @@ GEMINI_HELPER_ALIASES = {
 # explicitly (a plain default alone left gemini-2.5-flash rewritten, measured 2026-09-06 on 0.58.0).
 # Every listed id is pinned, and the turn's own model with it, so no context can retarget any of
 # them; a served model that still differs fails the turn (see _gemini_to_claude).
-GEMINI_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+GEMINI_MODELS = ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
                  "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
                  "gemini-3-flash-preview")
 
