@@ -10604,16 +10604,24 @@ _ZEROCLAW_KEY_ENV = "ZEROCLAW_providers__models__custom__hr__api_key"
 _ZEROCLAW_NEVER = ("ask_user", "escalate_to_human", "reaction", "poll",
                    "model_switch", "model_routing_config", "proxy_config", "llm_task",
                    "browser_open", "browser", "screenshot", "deliver_file")
-# The tools zeroclaw 0.8.5 offers a session under the config server.py writes, as the agent itself
-# listed them (and each cross-checked against its registration in crates/zeroclaw-tools), minus
-# _ZEROCLAW_NEVER. web_fetch, web_search_tool (DuckDuckGo) and http_request were each seen to work
-# in the image. Pinned equal to the gateway's _BASE_CATALOG["zeroclaw"] tool ids by its tests.
+# The tools a zeroclaw turn offers, and the only ones: the config's `allowed_tools` (MCP tools,
+# `<server>__<tool>`, are admitted by zeroclaw on top of it). CAPTURED, not asked of the agent: a
+# fake chat/completions server recorded the request zeroclaw 0.8.5 sends under this config (2026-10-14).
+# With only _ZEROCLAW_NEVER excluded it sent 34 tools, among them cron_add/list/remove/run/runs/update
+# and schedule (no scheduler runs in a one-shot turn), channel_room, send_message_to_peer, send_via and
+# sessions_current/history/list/send (no channels; claude-sonnet-5.5 spent a turn reading an empty
+# session store and made no PDF), pushover and git_forge (accounts of their own), backup, canvas and
+# weather; and no memory_store/recall/forget at all, which the first list named. Each tool here was
+# seen to work in the image; delegate was not ("Missing 'agent' parameter": there is no other agent).
+# Pinned equal to the gateway's _BASE_CATALOG["zeroclaw"] tool ids by its tests.
 ALL_ZEROCLAW_TOOLS = (
     "shell", "file_read", "file_write", "file_edit", "glob_search", "content_search",
     "git_operations", "web_fetch", "web_search_tool", "http_request",
-    "image_info", "calculator", "TodoWrite",
-    "spawn_subagent", "delegate", "memory_store", "memory_recall", "memory_forget",
+    "image_info", "calculator", "TodoWrite", "spawn_subagent",
 )
+# What `allowed_tools` holds when a harness turns every tool off: an empty list is zeroclaw's "no
+# constraint", so a name no tool has keeps the list closed (MCP tools are still admitted).
+_ZEROCLAW_NO_TOOLS = "no_builtin_tools"
 # The variables a turn's shell needs that zeroclaw does not pass on by itself. Its shell tool builds
 # a minimal environment — MEASURED: a variable in the driver's environment came back empty in the
 # shell, PATH was reset to the system default and only names in `shell_env_passthrough` arrived —
@@ -10732,6 +10740,7 @@ def _zeroclaw_config(base_url: str, model: str, cwd: str, mcp_servers: list[dict
               # script runs by its absolute path under /env. The boundary here is the session's own
               # OS user and its workspace, as for every other base.
               "workspace_only = false", "forbidden_paths = []",
+              f"allowed_tools = {_toml(sorted(set(ALL_ZEROCLAW_TOOLS) - set(disabled)) or [_ZEROCLAW_NO_TOOLS])}",
               f"excluded_tools = {_toml(disabled)}",
               f"shell_env_passthrough = {_toml(sorted(set(shell_keys)))}", "",
               "[runtime_profiles.hr]"]

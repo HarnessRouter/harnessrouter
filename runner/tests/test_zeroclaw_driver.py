@@ -180,6 +180,8 @@ def test_the_risk_profile_runs_unattended_and_withholds_what_it_must():
     rp = cfg["risk_profiles"]["hr"]
     assert rp["level"] == "full" and rp["allowed_commands"] == ["*"] and rp["block_high_risk_commands"] is False
     assert set(rp["excluded_tools"]) == {"web_fetch", *srv._ZEROCLAW_NEVER}
+    # and only the measured tools are offered at all: an allow-list, less the ones turned off
+    assert rp["allowed_tools"] == sorted(set(srv.ALL_ZEROCLAW_TOOLS) - {"web_fetch"})
     assert cfg["runtime_profiles"]["hr"]["max_tool_iterations"] == 7
     # the shell gets the variables it needs by name: PATH and the harness's own
     assert "PATH" in rp["shell_env_passthrough"]
@@ -301,3 +303,16 @@ def test_a_harness_variable_cannot_reach_zeroclaws_config_overrides():
 def test_zeroclaws_state_rides_the_tar_and_not_the_checkpoint_repo():
     """Its three SQLite stores, trace log, persona files and copied skills were committed on every turn."""
     assert ".harness/zeroclaw/" in srv._STATE_DIRS
+
+
+def test_only_the_measured_tools_are_offered_and_none_means_none():
+    """zeroclaw sent 34 tools with only an exclusion list (cron, channels, sessions, pushover, weather
+    and more, captured 2026-10-14); `allowed_tools` is the list now, and an empty one is zeroclaw's
+    "no constraint", so every tool turned off still leaves it closed."""
+    with tempfile.TemporaryDirectory() as d:
+        _, _, cfg = _build(d)
+    assert cfg["risk_profiles"]["hr"]["allowed_tools"] == sorted(srv.ALL_ZEROCLAW_TOOLS)
+    assert not {"delegate", "memory_store", "cron_add", "schedule", "sessions_history", "pushover"} & set(srv.ALL_ZEROCLAW_TOOLS)
+    with tempfile.TemporaryDirectory() as d:
+        _, _, cfg = _build(d, tools_disabled=list(srv.ALL_ZEROCLAW_TOOLS))
+    assert cfg["risk_profiles"]["hr"]["allowed_tools"] == [srv._ZEROCLAW_NO_TOOLS]
