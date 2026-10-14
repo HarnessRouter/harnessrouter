@@ -63,3 +63,26 @@ def test_the_connections_disabled_tools_join_the_harness_list_for_the_turn():
     conn = {"provider": "tokenrouter", "disabled_tools": "web_search, image_generation"}
     conn_off = [t.strip() for t in str(conn.get("disabled_tools") or "").split(",") if t.strip()]
     assert sorted(set(["Bash"]) | set(conn_off)) == ["Bash", "image_generation", "web_search"]
+
+
+def test_custom_format_metadata_matches_routing_compatibility():
+    custom = next(c for c in gw._provider_catalog_public() if c['id'] == 'custom')
+    assert custom['format_backends'] == {
+        fmt: sorted(bases) for fmt, bases in gw._CUSTOM_FORMAT_BACKENDS.items()
+    }
+
+
+def test_uncatalogued_custom_model_is_available_only_on_compatible_bases(monkeypatch):
+    integ = {'name': 'proxy', 'provider': 'custom',
+             'config': {'api_format': 'openai', 'base_url': 'https://proxy.example/v1'},
+             'models': [{'canonical': 'gpt-4.1-mini', 'provider_id': 'endpoint-mini'}]}
+
+    async def docs(): return [integ]
+    async def model_map(): return {'gpt-4.1-mini': 'proxy'}
+
+    monkeypatch.setattr(gw, '_integrations_doc', docs)
+    monkeypatch.setattr(gw, '_effective_model_map', model_map)
+    assert gw._integration_models(integ) == {'gpt-4.1-mini': 'endpoint-mini'}
+    conn = asyncio.run(gw._mapped_integration_conn('pi', 'gpt-4.1-mini'))
+    assert conn and conn['model'] == 'endpoint-mini'
+    assert asyncio.run(gw._mapped_integration_conn('codex', 'gpt-4.1-mini')) is None
