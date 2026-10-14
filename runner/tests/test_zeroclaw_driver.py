@@ -14,7 +14,6 @@ What each test pins is one thing that would otherwise be wrong SILENTLY:
   * the instruction file and skills written where zeroclaw never reads them
 """
 import json
-import os
 import pathlib
 import sqlite3
 import subprocess
@@ -237,3 +236,66 @@ def test_the_backend_is_registered_with_the_passthrough_normaliser():
     assert spec["normalize"] is srv._claude_passthrough
     assert set(spec["providers"]) == srv.ZEROCLAW_PROVIDERS
     assert not set(srv._ZEROCLAW_NEVER) & set(srv.ALL_ZEROCLAW_TOOLS)
+
+
+# ── found reviewing #456 on the review instance (0.34.0-rc.1, 2026-10-14) ───────────────────────
+
+def test_a_turn_that_reaches_the_step_budget_says_so():
+    """zeroclaw summarises and stops with `end_turn` at max_tool_iterations, appending its own note;
+    the turn read as a finished one where every other base reports the step budget."""
+    with tempfile.TemporaryDirectory() as d:
+        fx = pathlib.Path(d) / "capped.ndjson"
+        fx.write_text(json.dumps({"jsonrpc": "2.0", "id": "PROMPT", "result": {
+            "content": "Made a.txt and b.txt.\n\n*Turn stopped: reached maximum tool iterations (2).*",
+            "sessionId": "s", "stopReason": "end_turn"}}) + "\n")
+        events, _, rc = _run(pathlib.Path(d), {"prompt": str(fx)})
+    assert rc == 0 and events[-1]["subtype"] == "error_max_turns" and events[-1]["is_error"] is False
+    assert "Made a.txt" in events[-1]["result"]
+
+
+def test_the_shell_reaches_any_path_its_user_can_and_skills_keep_their_scripts():
+    """zeroclaw's defaults refused /etc, /usr and an environment's /env as "forbidden absolute paths
+    outside the workspace", and skipped the Office skill for its install.sh."""
+    with tempfile.TemporaryDirectory() as d:
+        _, _, cfg = _build(d)
+    rp = cfg["risk_profiles"]["hr"]
+    assert rp["workspace_only"] is False and rp["forbidden_paths"] == []
+    assert cfg["skills"]["allow_scripts"] is True
+
+
+def test_no_tool_lets_the_model_pick_another_model_or_hand_back_a_second_copy():
+    with tempfile.TemporaryDirectory() as d:
+        _, _, cfg = _build(d)
+    assert {"llm_task", "deliver_file"} <= set(cfg["risk_profiles"]["hr"]["excluded_tools"])
+    assert not {"llm_task", "deliver_file"} & set(srv.ALL_ZEROCLAW_TOOLS)
+
+
+def test_the_turns_image_credential_reaches_the_shell_by_name():
+    """The image skill answered "image generation is not configured for this Harness": its
+    HR_IMAGE_* names were never passed to zeroclaw's shell."""
+    with tempfile.TemporaryDirectory() as d:
+        env = {"PATH": "/usr/bin", "HR_IMAGE_BASE_URL": "http://127.0.0.1:8080/v1/llm", "HR_IMAGE_KEY": "hrtc-x",
+               "HR_IMAGE_MODEL": "gpt-image-2"}
+        srv._build_zeroclaw("openrouter", srv.Auth(api_key="sk-or-real", base_url="https://openrouter.ai/api/v1"),
+                            "anthropic/claude-haiku-4.5", "hi", d, env)
+        text = (pathlib.Path(d) / ".harness" / "zeroclaw" / "config.toml").read_text()
+    keys = tomllib.loads(text)["risk_profiles"]["hr"]["shell_env_passthrough"]
+    assert {"HR_IMAGE_BASE_URL", "HR_IMAGE_KEY", "HR_IMAGE_MODEL"} <= set(keys) and "hrtc-x" not in text
+
+
+def test_an_emoji_in_an_mcp_argument_leaves_the_config_readable():
+    servers = [{"name": "probe", "command": ["node", "srv.js"], "args": ["--title", "launch \U0001F680"],
+                "env": {"GREETING": "hi \U0001F44B"}}]
+    with tempfile.TemporaryDirectory() as d:
+        _, _, cfg = _build(d, mcp_servers=servers)       # tomllib raised on the surrogate pair before
+    sv = cfg["mcp"]["servers"][0]
+    assert sv["args"] == ["srv.js", "--title", "launch \U0001F680"] and sv["env"]["GREETING"] == "hi \U0001F44B"
+
+
+def test_a_harness_variable_cannot_reach_zeroclaws_config_overrides():
+    assert srv._caller_env({"ZEROCLAW_providers__models__custom__hr__uri": "http://evil", "STAMP": "x"}) == {"STAMP": "x"}
+
+
+def test_zeroclaws_state_rides_the_tar_and_not_the_checkpoint_repo():
+    """Its three SQLite stores, trace log, persona files and copied skills were committed on every turn."""
+    assert ".harness/zeroclaw/" in srv._STATE_DIRS

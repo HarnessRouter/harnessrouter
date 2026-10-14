@@ -1247,7 +1247,8 @@ def test_a_layer_with_only_some_of_the_variables_passes_only_those():
     assert ex["pathPrepend"] == "/env/y/.venv/bin"
 
 
-@pytest.mark.parametrize("build", ["_build_mimo", "_build_jcode", "_build_opensquilla", "_build_nanobot"])
+@pytest.mark.parametrize("build", ["_build_mimo", "_build_jcode", "_build_opensquilla", "_build_nanobot",
+                                   "_build_zeroclaw"])
 def test_the_provider_key_never_reaches_the_cli_whatever_the_connection_shape(build):
     """The CLI's environment is the agent's shell's, and its config files ride the workspace
     checkpoint: the real key belongs in neither, on any connection a base is offered. A direct
@@ -1370,3 +1371,14 @@ def test_nanobots_shell_gets_the_harnesss_own_variables_by_name():
     assert ex["allowedEnvKeys"] == ["STAMP_NONCE", "HR_API_URL"]     # names only, none that is unset
     assert "n-123" not in text                                     # the value stays in the environment
     assert "pathPrepend" not in ex                                 # no environment layer, no PATH entry
+
+
+def test_nanobots_shell_gets_the_turns_image_credential_by_name():
+    """The image skill reads HR_IMAGE_* from the shell; nanobot's shell had none of them and the
+    skill answered "image generation is not configured for this Harness" (0.33.0, 2026-10-14)."""
+    d = _ws()
+    env = {"HR_IMAGE_BASE_URL": "http://127.0.0.1:8080/v1/llm", "HR_IMAGE_KEY": "hrtc-turn", "HR_IMAGE_MODEL": "gpt-image-2"}
+    _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    text = pathlib.Path(d, ".harness", "nanobot", "config.json").read_text()
+    assert json.loads(text)["tools"]["exec"]["allowedEnvKeys"] == ["HR_IMAGE_BASE_URL", "HR_IMAGE_KEY", "HR_IMAGE_MODEL"]
+    assert "hrtc-turn" not in text                                 # names only
