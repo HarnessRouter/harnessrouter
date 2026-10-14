@@ -2307,6 +2307,143 @@ def me10(ctx):
     return f"{len(g.get('nodes') or [])} nodes, {len(g.get('edges') or [])} edges around {a['id']} on entities={prov['graph']['entities']}"
 
 
+def _instant(s):
+    """An ISO time as an instant, so `Z` and `+00:00` spellings of one moment compare equal."""
+    from datetime import datetime
+    return datetime.fromisoformat(str(s).replace("Z", "+00:00")) if s else None
+
+
+@check("ME-11", "A fact that holds one value ends what it replaced, keeps a disagreement, takes its place in the past, and says what it did",
+       "full", f"{SPEC}/memories.md#44-facts-that-change")
+def me11(ctx):
+    prov = _memories_supported(ctx)
+    if not prov.get("holds"):
+        raise Skip("this provider does not declare holds: it keeps the attributes as written")
+    base = f"/v1/memories/{_memory_child(ctx)['id']}/records"
+    who = "Corvel " + uuid.uuid4().hex[:6]
+    e = ctx.client.post(base, body={"type": "entity", "title": who})
+    assert e.status == 200, f"POST an entity returned HTTP {e.status}: {e.text[:200]}"
+    t0, t1, t15, t2 = "2023-01-01T00:00:00Z", "2024-01-01T00:00:00Z", "2024-03-01T00:00:00Z", "2024-06-01T00:00:00Z"
+
+    def fact(city, t):
+        r = ctx.client.post(base, body={
+            "type": "fact", "title": f"{who} lives in {city}", "references": [{"rel": "subject", "record_id": e.json["id"]}],
+            "attributes": {"predicate": "home_city", "value": city, "holds": "one", "stated_at": t}, "time": {"valid_from": t}})
+        assert r.status == 200, f"POST a fact that holds one value returned HTTP {r.status}: {r.text[:200]}"
+        f = r.json or {}
+        assert isinstance(f.get("closed"), list) and isinstance(f.get("conflicts"), list), (
+            f"the answer to remembering a fact that holds one value carries closed and conflicts, as lists; got {str(f)[:200]}")
+        return f
+
+    def read(rid):
+        return ctx.client.get(f"{base}/{rid}").json or {}
+
+    def ends(rid):
+        return _instant((read(rid).get("time") or {}).get("valid_to"))
+
+    a = fact("Lisbon", t1)
+    assert a["closed"] == [] and a["conflicts"] == [], f"the first value ended or met nothing; got {a['closed']} {a['conflicts']}"
+    b = fact("Porto", t2)
+    assert b["closed"] == [a["id"]] and b["conflicts"] == [], (
+        f"Porto from June must end Lisbon and meet nothing; got closed={b['closed']} conflicts={b['conflicts']}")
+    lis = read(a["id"])
+    assert _instant((lis.get("time") or {}).get("valid_to")) == _instant(t2), f"Lisbon must end where Porto began; got {lis.get('time')}"
+    w = lis.get("written_by") or {}
+    assert w.get("kind") == "provider" and w.get("on_behalf_of"), (
+        f"the version that ended Lisbon is the server's own, on behalf of whoever wrote Porto; got written_by={w}")
+    assert "closed" not in lis and "conflicts" not in lis, "closed and conflicts belong to the write's answer and are never stored"
+    if (prov.get("history") or {}).get("content") == "versions":
+        h = (ctx.client.get(f"{base}/{a['id']}/history").json or {}).get("data") or []
+        first = next((v for v in h if v.get("version") == a.get("version")), None)
+        assert first and (first.get("time") or {}).get("valid_to") is None, (
+            "the version before the end keeps the world time it had: as the memory stood then, Lisbon had not ended")
+    c = fact("Braga", t2)
+    assert c["conflicts"] == [b["id"]] and c["closed"] == [], (
+        f"Braga from the same day as Porto must be linked to it and end nothing; got closed={c['closed']} conflicts={c['conflicts']}")
+    refs = lambda rid: {(x.get("rel"), x.get("record_id")) for x in read(rid).get("references") or []}  # noqa: E731
+    assert ("contradicts", b["id"]) in refs(c["id"]) and ("contradicts", c["id"]) in refs(b["id"]), (
+        "contradicts says the same from either end: it must be kept on both records")
+    assert ends(b["id"]) is None and ends(c["id"]) is None, "a disagreement closes neither side"
+    d = fact("Faro", t0)
+    assert d["closed"] == [] and d["conflicts"] == [], f"a fact about the past ends nothing that followed it; got {d['closed']} {d['conflicts']}"
+    assert ends(d["id"]) == _instant(t1), (
+        "Faro must end where Lisbon began, though Lisbon has itself ended: two values of one may not hold at once")
+    co = fact("Coimbra", t15)
+    assert co["closed"] == [a["id"]] and co["conflicts"] == [], (
+        f"Coimbra from March falls inside Lisbon's time and must end it there; got closed={co['closed']} conflicts={co['conflicts']}")
+    assert ends(a["id"]) == _instant(t15) and ends(co["id"]) == _instant(t2), (
+        "Lisbon must now end in March, and Coimbra where Porto began")
+    return f"five facts on {who}: ended, linked, placed in the past, and placed inside an earlier value"
+
+
+@check("ME-12", "A record found on one side of a disagreement brings the other", "full", f"{SPEC}/memories.md#63-the-response")
+def me12(ctx):
+    prov = _memories_supported(ctx)
+    child = _memory_child(ctx)
+    base = f"/v1/memories/{child['id']}/records"
+    who = "Hollin" + uuid.uuid4().hex[:6]
+    x = ctx.client.post(base, body={"type": "fact", "content": f"{who} signed the warehouse lease in May."})
+    assert x.status == 200, f"POST records returned HTTP {x.status}: {x.text[:200]}"
+    y = ctx.client.post(base, body={"type": "fact", "content": f"{who} has never signed a lease.",
+                                    "references": [{"rel": "contradicts", "record_id": x.json["id"]}]})
+    assert y.status == 200, f"POST a fact that contradicts another returned HTTP {y.status}: {y.text[:200]}"
+    ids = {x.json["id"], y.json["id"]}
+    back = {(ref.get("rel"), ref.get("record_id")) for ref in (ctx.client.get(f"{base}/{x.json['id']}").json or {}).get("references") or []}
+    assert ("contradicts", y.json["id"]) in back, "contradicts written on one record must be kept on the other as well"
+    signals = (prov.get("recall") or {}).get("signals") or []
+    body = {"query": f"did {who} sign the lease?", "limit": 1} if "query" in signals else {"text": who, "limit": 1}
+    deadline, res = time.time() + 40, {}
+    while True:
+        r = ctx.client.post(f"/v1/memories/{child['id']}/recall", body=body)
+        assert r.status == 200, f"POST recall returned HTTP {r.status}: {r.text[:200]}"
+        res = r.json or {}
+        got = [x2 for x2 in res.get("results") or [] if (x2.get("record") or {}).get("id") in ids]
+        if got or time.time() > deadline:
+            break
+        time.sleep(2)
+    ctx.validate(res, "MemoryRecall")
+    assert got, f"neither side of the disagreement was recalled with {body}"
+    seen = {(g.get("record") or {}).get("id"): g for g in got}
+    assert set(seen) == ids, (
+        f"with limit 1 the best hit must bring the other side of the disagreement; got {sorted(seen)}")
+    pulled = [g for g in got if g.get("why") == ["contradicts"]]
+    assert len(pulled) == 1 and pulled[0].get("score") is None, (
+        "the side brought along is marked why [\"contradicts\"] with no score, once")
+    return f"limit 1 answered both sides of {who}'s lease"
+
+
+@check("ME-13", "A memory's standing records are read newest first, within a budget, from that memory alone", "full",
+       f"{SPEC}/memories.md#91-what-a-session-does")
+def me13(ctx):
+    prov = _memories_supported(ctx)
+    root, child = ctx.state["memory_root"], _memory_child(ctx)
+    r = ctx.client.get(f"/v1/memories/{child['id']}/prime?budget=4000")
+    assert r.status == 200, f"GET prime returned HTTP {r.status}: {r.text[:200]}"
+    ctx.validate(r.json or {}, "MemoryPrime")
+    if not prov.get("prime"):
+        assert (r.json or {}).get("records") == [], "a provider that does not prime answers the prime read with an empty list"
+        return "this provider does not prime, and answers an empty list"
+    base = f"/v1/memories/{child['id']}/records"
+    rule = ctx.client.post(base, body={"type": "procedure", "title": "Write dates as 1 March 2024", "attributes": {"standing": True}})
+    time.sleep(1.1)
+    pref = ctx.client.post(base, body={"type": "fact", "title": "Prefers answers of three sentences or fewer",
+                                       "attributes": {"standing": True, "predicate": "prefers"}})
+    plain = ctx.client.post(base, body={"type": "fact", "title": "The office closes at six"})
+    assert rule.status == pref.status == plain.status == 200, "writing the standing records was refused"
+    got = (ctx.client.get(f"/v1/memories/{child['id']}/prime?budget=4000").json or {})
+    ids = [x.get("id") for x in got.get("records") or []]
+    assert pref.json["id"] in ids and rule.json["id"] in ids and plain.json["id"] not in ids, (
+        f"the prime read is the standing records and nothing else; got {ids}")
+    assert ids.index(pref.json["id"]) < ids.index(rule.json["id"]), "standing records come newest first"
+    assert got.get("truncated") is False and int(got.get("tokens") or 0) > 0, f"tokens and truncated as the read counted them; got {got}"
+    tight = ctx.client.get(f"/v1/memories/{child['id']}/prime?budget=1").json or {}
+    assert [x.get("id") for x in tight.get("records") or []] == [pref.json["id"]] and tight.get("truncated") is True, (
+        "within a budget too small for any, the newest standing record still fits and the read says it left the rest out")
+    above = [x.get("id") for x in (ctx.client.get(f"/v1/memories/{root['id']}/prime").json or {}).get("records") or []]
+    assert pref.json["id"] not in above, "the prime read is of the memory alone unless depth widens it"
+    return f"{len(ids)} standing records, newest first; a budget of one token kept the newest"
+
+
 @check("ME-08", "A memory moves with its subtree, and deleting it takes the subtree", "full",
        f"{SPEC}/memories.md#2-the-memory-object")
 def me08(ctx):
