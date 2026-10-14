@@ -257,3 +257,102 @@ def test_a_servers_auth_reaches_every_base_as_its_authorization_header(tmp_path)
     rn._gemini_settings(tmp_path / "gemini", sv)
     assert json.loads((tmp_path / "gemini" / ".gemini" / "settings.json").read_text())["mcpServers"]["plugs"]["headers"] == want
     assert 'http_headers = { "Authorization" = "Bearer tok" }' in rn._codex_mcp_toml(sv)
+
+
+def _bridge_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("mcp_bridge", str(pathlib.Path(rn.__file__).with_name("mcp_bridge.py")))
+    br = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(br)
+    return br
+
+
+def test_the_bridge_leaves_out_what_a_closed_tool_never_declared():
+    """jcode's model writes its own `intent` argument into a remote tool's call; the browser's tools
+    are closed, and the bridge's own check refused each such call (three in one jcode turn on
+    gpt-5.4, 2026-10-14). The bridge forwards only what a closed schema declares."""
+    br = _bridge_module()
+    closed = {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"], "additionalProperties": False}
+    assert br.declared_only(closed, {"url": "https://example.com/", "intent": "open it"}) == {"url": "https://example.com/"}
+    opened = {"type": "object", "properties": {"url": {"type": "string"}}}
+    assert br.declared_only(opened, {"url": "u", "intent": "i"}) == {"url": "u", "intent": "i"}     # an open schema takes extras
+    allowed = {**closed, "additionalProperties": True}
+    assert br.declared_only(allowed, {"url": "u", "intent": "i"}) == {"url": "u", "intent": "i"}    # extras allowed: kept
+    assert br.declared_only(None, {"a": 1}) == {"a": 1}                                           # an unknown tool: unchanged
+    # a free-form object argument travels whole: only top-level names a closed schema never declared go
+    rows = {"type": "object", "properties": {"sql": {"type": "string"}, "row": {"type": "object"}}, "additionalProperties": False}
+    got = br.declared_only(rows, {"sql": "select 1", "row": {"any": 1, "nested": {"x": [1, {"y": None}]}}, "intent": "q"})
+    assert got == {"sql": "select 1", "row": {"any": 1, "nested": {"x": [1, {"y": None}]}}}
+
+
+def test_a_closed_tool_called_with_an_extra_argument_runs_through_the_real_bridge(tmp_path):
+    """End to end: a streamable-HTTP server with one closed tool (the browser's shape), the bridge
+    as the stdio server a client launches, and a call carrying jcode's `intent`. Before, the bridge's
+    own check answered "Additional properties are not allowed"; now the server runs the tool with the
+    arguments it declares, whether the client listed the tools first or not."""
+    import asyncio
+    import socket
+    import threading
+    import time
+    from contextlib import asynccontextmanager
+
+    import uvicorn
+    from mcp import ClientSession, StdioServerParameters, types
+    from mcp.client.stdio import stdio_client
+    from mcp.server.lowlevel import Server
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    seen: list[dict] = []
+    remote = Server("probe")
+    navigate = types.Tool(name="navigate", description="Open a page.", inputSchema={
+        "type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"], "additionalProperties": False})
+
+    @remote.list_tools()
+    async def _tools() -> list[types.Tool]:
+        return [navigate]
+
+    @remote.call_tool()                    # the server keeps its own check: it is the one that judges
+    async def _call(name: str, arguments: dict) -> list[types.TextContent]:
+        seen.append(dict(arguments))
+        return [types.TextContent(type="text", text=f"opened {arguments['url']}")]
+
+    manager = StreamableHTTPSessionManager(app=remote, json_response=True, stateless=True)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        async with manager.run():
+            yield
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    web = uvicorn.Server(uvicorn.Config(Starlette(routes=[Mount("/mcp", app=manager.handle_request)], lifespan=lifespan),
+                                        host="127.0.0.1", port=port, log_level="error"))
+    t = threading.Thread(target=web.run, daemon=True)
+    t.start()
+    deadline = time.time() + 15
+    while not web.started and time.time() < deadline:
+        time.sleep(0.05)
+    assert web.started, "the probe server did not start"
+
+    async def drive(list_first: bool):
+        params = StdioServerParameters(command=sys.executable, args=[str(pathlib.Path(rn.__file__).with_name("mcp_bridge.py"))],
+                                       env={**os.environ, "HR_MCP_URL": f"http://127.0.0.1:{port}/mcp/", "HR_MCP_TRANSPORT": "http"})
+        async with stdio_client(params) as (r, w):
+            async with ClientSession(r, w) as client:
+                await client.initialize()
+                if list_first:
+                    assert [x.name for x in (await client.list_tools()).tools] == ["navigate"]
+                return await client.call_tool("navigate", {"url": "https://example.com/", "intent": "open the page"})
+
+    try:
+        for list_first in (True, False):
+            got = asyncio.run(drive(list_first))
+            assert not got.isError, got.content[0].text
+            assert got.content[0].text == "opened https://example.com/"
+        assert seen == [{"url": "https://example.com/"}, {"url": "https://example.com/"}]
+    finally:
+        web.should_exit = True
+        t.join(timeout=10)
