@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { IBM_Plex_Sans, IBM_Plex_Mono, Schibsted_Grotesk, Inter, JetBrains_Mono } from 'next/font/google';
+import localFont from 'next/font/local';
 
 // Unified with the HarnessRouter marketing landing: paper theme + accent blue (#285AFF)
 // and IBM Plex Sans/Mono with a Schibsted Grotesk display face for the wordmark.
@@ -18,11 +18,37 @@ import './hr-billing.css';
 // un-migrated pages inherit the v2 look without edits. See harness_router_v2_design/CLAUDE.md.
 import './v2.css';
 
-const sans = IBM_Plex_Sans({ variable: '--font-ibm-sans', subsets: ['latin'], weight: ['400', '500', '600', '700'] });
-const mono = IBM_Plex_Mono({ variable: '--font-ibm-mono', subsets: ['latin'], weight: ['400', '500', '600'] });
-const display = Schibsted_Grotesk({ variable: '--font-grotesk', subsets: ['latin'], weight: 'variable' });
-const inter = Inter({ variable: '--font-inter', subsets: ['latin'], weight: ['400', '500', '600', '700'] });
-const jbmono = JetBrains_Mono({ variable: '--font-jbmono', subsets: ['latin'], weight: ['400', '500', '600'] });
+// The faces come from the pinned @fontsource packages (OFL-1.1, the license inside each package), not
+// from Google at build time: next/font/google downloads every face while the console builds, and a
+// failed download fails the build ("An error occurred in `next/font`. TypeError: Cannot read
+// properties of null (reading '1')", main after #467 on 2026-10-15, and the console check before
+// it). The same faces, weights and Latin subset, under the same variables. next/font takes only
+// literals here, so each file is written out.
+const sans = localFont({ variable: '--font-ibm-sans', display: 'swap', src: [
+  { path: '../../node_modules/@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2', weight: '400', style: 'normal' },
+  { path: '../../node_modules/@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-500-normal.woff2', weight: '500', style: 'normal' },
+  { path: '../../node_modules/@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-600-normal.woff2', weight: '600', style: 'normal' },
+  { path: '../../node_modules/@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-700-normal.woff2', weight: '700', style: 'normal' },
+] });
+const mono = localFont({ variable: '--font-ibm-mono', display: 'swap', src: [
+  { path: '../../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2', weight: '400', style: 'normal' },
+  { path: '../../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff2', weight: '500', style: 'normal' },
+  { path: '../../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-600-normal.woff2', weight: '600', style: 'normal' },
+] });
+// Schibsted Grotesk is one variable file, 400 to 900 (its own @font-face says so).
+const display = localFont({ variable: '--font-grotesk', display: 'swap', weight: '400 900', style: 'normal',
+  src: '../../node_modules/@fontsource-variable/schibsted-grotesk/files/schibsted-grotesk-latin-wght-normal.woff2' });
+const inter = localFont({ variable: '--font-inter', display: 'swap', src: [
+  { path: '../../node_modules/@fontsource/inter/files/inter-latin-400-normal.woff2', weight: '400', style: 'normal' },
+  { path: '../../node_modules/@fontsource/inter/files/inter-latin-500-normal.woff2', weight: '500', style: 'normal' },
+  { path: '../../node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2', weight: '600', style: 'normal' },
+  { path: '../../node_modules/@fontsource/inter/files/inter-latin-700-normal.woff2', weight: '700', style: 'normal' },
+] });
+const jbmono = localFont({ variable: '--font-jbmono', display: 'swap', src: [
+  { path: '../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2', weight: '400', style: 'normal' },
+  { path: '../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2', weight: '500', style: 'normal' },
+  { path: '../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-600-normal.woff2', weight: '600', style: 'normal' },
+] });
 
 const SITE = 'https://app.harnessrouter.ai';
 // Self-hosted bills nothing and indexes nothing — a private box must not describe itself in
