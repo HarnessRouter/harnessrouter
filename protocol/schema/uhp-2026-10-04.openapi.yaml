@@ -782,6 +782,25 @@ paths:
               schema: { $ref: '#/components/schemas/MemoryJob' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /v1/memories/{memory_id}/prime:
+    parameters:
+      - $ref: '#/components/parameters/MemoryId'
+    get:
+      tags: [Memories]
+      operationId: primeMemory
+      summary: "The memory's standing records, newest first, within a token budget"
+      description: "Needs `read`. The memory alone unless `depth` widens it."
+      parameters:
+        - { name: budget, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: depth, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryPrime' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /v1/memories/{memory_id}/records:
     parameters:
       - $ref: '#/components/parameters/MemoryId'
@@ -2769,6 +2788,8 @@ components:
             name: { type: string, description: 'What a person calls the source.' }
           additionalProperties: true
         trust: { type: string, const: untrusted }
+        closed: { type: array, items: { type: string }, description: 'Only on the answer to remembering a fact whose `holds` is `one`: the records it ended. Never stored.' }
+        conflicts: { type: array, items: { type: string }, description: 'Only on the answer to remembering a fact whose `holds` is `one`: the records it was linked to with `contradicts`. Never stored.' }
       additionalProperties: true
     MemoryContentPart:
       type: object
@@ -2779,6 +2800,7 @@ components:
         text: { type: string, description: 'The words of a text part, or the words that stand for a file.' }
         text_source: { type: string, enum: [stated, derived] }
         role: { type: string, enum: [user, assistant, system, tool] }
+        name: { type: string, description: 'Who said it, when the role alone does not: two people in one conversation are both `user`.' }
         file:
           type: object
           required: [id]
@@ -2825,6 +2847,11 @@ components:
             required: [content]
             properties:
               content: { oneOf: [ { type: string, description: Shorthand for one text part. }, { type: array, items: { $ref: '#/components/schemas/MemoryContentPart' } } ] }
+              time:
+                type: object
+                properties:
+                  valid_from: { type: [string, 'null'], description: 'When it happened. Left out, now.' }
+                additionalProperties: true
               attributes: { type: object, additionalProperties: true }
     MemoryJob:
       type: object
@@ -2832,9 +2859,16 @@ components:
       properties:
         object: { type: string, const: memory.job }
         id: { type: string }
-        status: { type: string, enum: [pending, completed, failed] }
+        memory_id: { type: string }
+        status: { type: string, enum: [queued, running, pending, completed, failed], description: '`pending` when the provider cannot tell queued from running.' }
         error: { type: string }
-        data: { type: array, items: { $ref: '#/components/schemas/MemoryRecord' } }
+        data: { type: array, items: { $ref: '#/components/schemas/MemoryRecord' }, description: The records the job wrote. }
+        closed: { type: array, items: { type: string }, description: 'Records ended by a `one` fact the job wrote.' }
+        conflicts: { type: array, items: { type: string }, description: 'Records linked with `contradicts` by a `one` fact the job wrote.' }
+        usage: { type: object, additionalProperties: true, description: 'Tokens, when a model did the work: `input_tokens`, `output_tokens`.' }
+        created_at: { type: integer }
+        started_at: { type: [integer, 'null'] }
+        finished_at: { type: [integer, 'null'] }
     MemoryWriter:
       type: object
       description: 'Who wrote a record, stamped by the server from the authenticated caller. `kind` and `id` joined by a colon are the principal a grant would name.'
@@ -2850,6 +2884,13 @@ components:
       type: object
       description: 'One of `{field, op, value}`, `{and: [...]}` or `{or: [...]}`.'
       additionalProperties: true
+    MemoryPrime:
+      type: object
+      required: [records, tokens, truncated]
+      properties:
+        records: { type: array, items: { $ref: '#/components/schemas/MemoryRecord' } }
+        tokens: { type: integer, description: The provider's own estimate of what the records cost. }
+        truncated: { type: boolean, description: True when a standing record was left out. }
     MemoryRecallRequest:
       type: object
       properties:
@@ -3027,6 +3068,8 @@ components:
         id: { type: string }
         isolation: { type: string, enum: [container, enforced_filter] }
         derivation: { type: string, enum: [write_time, background, agent, none] }
+        prime: { type: boolean, description: 'Whether the provider answers the prime read with its standing records.' }
+        holds: { type: boolean, description: 'Whether the provider ends and links facts by `attributes.holds`.' }
         observe: { type: object, additionalProperties: true }
         recall: { type: object, additionalProperties: true }
         history: { type: object, additionalProperties: true }

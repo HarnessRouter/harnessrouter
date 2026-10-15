@@ -212,7 +212,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 #
 # gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
 # this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -249,6 +249,7 @@ backend_bin() {
     jcode)  echo "$TOOLS/bin/jcode" ;;
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
     nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
+    zeroclaw) echo "$TOOLS/bin/zeroclaw" ;;
   esac
 }
 
@@ -873,6 +874,45 @@ install_goose() {
   rm -rf "$gs_tmp"
 }
 
+# zeroclaw (Apache-2.0, zeroclaw-labs/zeroclaw) ships prebuilt Rust binaries on GitHub releases, with
+# a SHA256SUMS beside them. Pinned EXACTLY to the release runner/zeroclaw_driver.py was measured
+# against (its ACP methods, the session/update shapes, the session store, the config schema), and
+# verified against digests pinned HERE, read off that release's own SHA256SUMS on 2026-10-13 — the
+# goose pattern, which does not trust a checksum file that can be re-uploaded beside the asset it
+# describes. The archive also carries zerocode, zerorelay and a web bundle; only zeroclaw is kept.
+install_zeroclaw() {
+  case "$(uname -m)" in
+    x86_64)        zc_arch="x86_64";  zc_sha="9dbb53af95132e3a934ab61b229fb7aec3565f1c9bf31851f1698be9160655f9" ;;
+    aarch64|arm64) zc_arch="aarch64"; zc_sha="aaa7e2c656dedf651217a70ea487e1e65f51b4ca771d114e60bf409165700986" ;;
+    *) echo "unsupported architecture $(uname -m) for zeroclaw"; return 1 ;;
+  esac
+  zc_ver="${HR_ZEROCLAW_VERSION:-0.8.5}"; zc_ver="${zc_ver#v}"
+  if [ "$zc_ver" != "0.8.5" ]; then
+    if [ -n "${HR_ZEROCLAW_SHA256:-}" ]; then
+      zc_sha="$HR_ZEROCLAW_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_ZEROCLAW_VERSION=$zc_ver overrides the pinned 0.8.5, and no"
+      echo "[harnessrouter]       HR_ZEROCLAW_SHA256 was given — this zeroclaw archive is UNVERIFIED."
+      zc_sha=""
+    fi
+  fi
+  zc_url="https://github.com/zeroclaw-labs/zeroclaw/releases/download/v${zc_ver}/zeroclaw-${zc_arch}-unknown-linux-gnu.tar.gz"
+  zc_tmp="$(mktemp -d)"
+  curl -fsSL "$zc_url" -o "$zc_tmp/zeroclaw.tar.gz" || { rm -rf "$zc_tmp"; return 1; }
+  if [ -n "$zc_sha" ]; then
+    zc_have="$(sha256sum "$zc_tmp/zeroclaw.tar.gz" | awk '{print $1}')"
+    if [ "$zc_sha" != "$zc_have" ]; then
+      echo "zeroclaw $zc_ver: archive digest mismatch for $zc_arch (want $zc_sha, have $zc_have)"
+      rm -rf "$zc_tmp"; return 1
+    fi
+  fi
+  tar -xzf "$zc_tmp/zeroclaw.tar.gz" -C "$zc_tmp" zeroclaw || { rm -rf "$zc_tmp"; return 1; }
+  [ -f "$zc_tmp/zeroclaw" ] || { echo "release archive contained no zeroclaw binary"; rm -rf "$zc_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin" && install -m 755 "$zc_tmp/zeroclaw" "$TOOLS/bin/zeroclaw" \
+    || { rm -rf "$zc_tmp"; return 1; }
+  rm -rf "$zc_tmp"
+}
+
 # omp (Oh My Pi, MIT) ships standalone prebuilt binaries on GitHub releases, with a SHA256SUMS.txt
 # beside them. Pinned EXACTLY, like every other backend here: upstream releases almost daily
 # (18.1.8 through 18.1.13 in five days), and 18.1.13 is the release the runner's omp code was
@@ -1304,6 +1344,15 @@ install_backends() {
     try_install "nanobot" install_nanobot || true
   fi
   [ -x "$TOOLS/nanobot-venv/bin/python" ] && export HR_NANOBOT_PYTHON="$TOOLS/nanobot-venv/bin/python"
+
+  # `zeroclaw --version` prints "zeroclaw 0.8.5", so comparing it to the pin both installs a missing
+  # binary and replaces one left by an older image.
+  ZEROCLAW_PIN="${HR_ZEROCLAW_VERSION:-0.8.5}"; ZEROCLAW_PIN="${ZEROCLAW_PIN#v}"
+  if wanted zeroclaw && [ "$("$(backend_bin zeroclaw)" --version 2>/dev/null | awk '{print $2}')" != "$ZEROCLAW_PIN" ]; then
+    echo "[harnessrouter] installing zeroclaw $ZEROCLAW_PIN (Apache-2.0, version-pinned$([ "$ZEROCLAW_PIN" = 0.8.5 ] || [ -n "${HR_ZEROCLAW_SHA256:-}" ] && echo ", digest-verified"))…"
+    try_install "zeroclaw" install_zeroclaw || true
+  fi
+  [ -x "$(backend_bin zeroclaw)" ] && export HR_ZEROCLAW_BIN="$(backend_bin zeroclaw)"
   # Both venv bases are reached by PATH from the runner, so the interpreter and the console script
   # are named explicitly — $TOOLS/bin is what PATH carries, and neither of these lives there.
   [ -x "$TOOLS/opensquilla-venv/bin/opensquilla" ] && export HR_OPENSQUILLA_BIN="$TOOLS/opensquilla-venv/bin/opensquilla"

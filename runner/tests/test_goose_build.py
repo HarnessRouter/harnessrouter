@@ -26,6 +26,7 @@ import tempfile
 import time
 import uuid
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -242,6 +243,42 @@ def test_resume_only_once_the_session_is_in_this_workspace():
     cmd2 = _build_goose("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
                         "gpt-5.4", "again", d, {}, resume_session_id=_GOOSE_SESSION_NAME)
     assert "-r" in cmd2
+
+
+@pytest.mark.parametrize("provider,api_format,expected", [
+    ("anthropic", None, "anthropic"),
+    ("openai-api", "anthropic", "anthropic"),
+    ("openai-api", "openai", "openai"),
+    ("tokenrouter", None, "openai"),
+])
+@pytest.mark.parametrize("session", ["new", "resumed", "missing"])
+def test_turn_provider_overrides_the_saved_session(tmp_path, provider, api_format, expected, session):
+    """#375: Goose 1.50.0 prefers a saved provider to config.yaml on resume. The CLI
+    override must name this turn's wire provider, including for a custom Messages endpoint.
+    A new or lost session must use the same provider as a resumed one."""
+    cwd = str(tmp_path)
+    previous = "openai" if expected == "anthropic" else "anthropic"
+    if session == "resumed":
+        db_path = _sessions_db(cwd, ("existing-session", _GOOSE_SESSION_NAME))
+        with sqlite3.connect(db_path) as db:
+            db.execute("ALTER TABLE sessions ADD COLUMN provider_name TEXT")
+            db.execute("UPDATE sessions SET provider_name = ?", (previous,))
+    env = {}
+    cmd = _build_goose(provider, Auth(api_key="sk-test", base_url="https://up.example/v1",
+                                      api_format=api_format),
+                       "test-model", "continue", cwd, env,
+                       resume_session_id=_GOOSE_SESSION_NAME if session != "new" else None)
+    cfg = yaml.safe_load((_goose_root(cwd) / "config" / "config.yaml").read_text())
+    assert cfg["GOOSE_PROVIDER"] == expected
+    assert "--provider" in cmd, "config.yaml cannot override a resumed session's provider"
+    assert cmd[cmd.index("--provider") + 1] == expected
+    assert ("-r" in cmd) == (session == "resumed")
+    key = "ANTHROPIC_API_KEY" if expected == "anthropic" else "OPENAI_API_KEY"
+    assert env[key].startswith("hr-relay-")
+    if session == "resumed":
+        # The runner selects the provider through the CLI, without rewriting Goose's database.
+        with sqlite3.connect(db_path) as db:
+            assert db.execute("SELECT provider_name FROM sessions").fetchone() == (previous,)
 
 
 def test_session_lookup_asks_the_database():
