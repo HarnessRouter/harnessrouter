@@ -58,7 +58,7 @@ def test_the_route_keeps_the_connection_base_exactly(tmp_path):
 
 
 def test_openai_and_azure_ride_the_relay_too(tmp_path):
-    """They kept a direct route until 0.34.1, and a turn on them finished with no served model:
+    """They kept a direct route until 2026-10-15, and a turn on them finished with no served model:
     Codex reports none and the relay is where it is read (gpt-5.5 on Azure, 0.33.0-rc.15)."""
     for provider, var, base in (("openai", "OPENAI_API_KEY", "https://api.openai.com/v1"),
                                 ("azure", "AZURE_OPENAI_API_KEY", "https://res.openai.azure.com/openai/v1")):

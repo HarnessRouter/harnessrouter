@@ -2719,7 +2719,7 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
     # through Vercel the tool then received empty objects with gpt-6-luna and gpt-6.1-sol (two of
     # two, 2026-10-05; not with gpt-5.4, whose tool definitions Codex defers behind a tool search),
     # and the repair lives in the relay (_with_free_form_objects). OpenAI's own endpoint and Azure's
-    # were intact as Codex sends it and kept a direct route until 0.34.1, but the relay is also the
+    # were intact as Codex sends it and kept a direct route until 2026-10-15, but the relay is also the
     # one place a turn's served model is read: Codex reports none, so a turn on those two finished
     # unlabelled and the matrix could not tell which model had answered (gpt-5.5 on Azure). The
     # CLI is given a loopback URL and a placeholder, so the connection's key is not in its

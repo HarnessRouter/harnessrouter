@@ -6,6 +6,34 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## hermes and Codex on Azure name the model that served them (2026-10-15)
+
+The open item from 0.33.0-rc.15: hermes switching into gpt-5.5 on Azure finished with no served
+model, four of four, and Codex the same, so the same-model rule could not judge those turns. Neither
+CLI reports one; the relay reads it, and both bases called Azure directly (Codex also OpenAI's own
+endpoint). Both now ride the relay at the connection's own base. Found on the way: the turn's route
+was the first placeholder in the environment, and hermes registers its image question route first,
+so a hermes turn whose image questions ride the relay read its served model, usage and finish
+reason off the image model.
+
+Measured on 0.34.0 in a side container on the test VM (codex and hermes only, a fresh volume), one
+turn each straight to the runner, gpt-5.5 on the instance's Azure resource, "Reply with exactly the
+word: pong", the hermes turn with its image questions routed through the relay. Then the same image
+with this change's runner, then the stock one again with the provider's cache warm:
+
+| Turn | 0.34.0 | with the change | 0.34.0, cache warm |
+|---|---|---|---|
+| codex (exec) | no model; 11,637 in | gpt-5.5; 1,525 in + 10,112 cached | no model; 11,637 in |
+| codex (app-server) | no model; 12,372 in | gpt-5.5; 1,236 in + 11,136 cached | no model; 1,236 in + 11,136 cached |
+| hermes | no model; 421 in | gpt-5.5; 421 in + 10,240 cached | no model; 421 in |
+
+So the usage changes too. Codex's exec stream counts cached input as input (every cached token at
+the full price) and hermes's counters leave cached input out; the provider's own split, read by the
+relay, replaces both, as it already did on every relayed route. Codex's app-server already split
+its own count and gains only the served model. Codex compacts a long thread locally behind the
+relay; on an Azure URL it had used the provider's /responses/compact (0.154.0). It sends
+`store: false` either way.
+
 ## Muse Wonder (2026-10-14 and 15)
 
 Meta announced two models. Muse Wonder Full has no API: Meta serves it only inside its own Muse Code
