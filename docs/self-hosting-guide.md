@@ -271,11 +271,17 @@ integration there is nothing to set.
 
 Pick the **Custom** provider. It asks for the API format the endpoint speaks (OpenAI Chat
 Completions, OpenAI Responses for Codex, or Anthropic Messages), the endpoint URL, the key, and
-the **models** it serves. Each model row pairs the id a harness picks (the same ids every other
-provider uses, `gpt-5.5`, `claude-opus-4.8`) with the name this endpoint wants on the wire. That
+the **models** it serves. In **Model**, type any id, including one absent from the suggested
+catalog. Each row pairs that id, which a harness picks, with the name this endpoint wants on the wire. That
 name is an arbitrary string per row and is sent verbatim: a bare vendor id, a deployment alias, a
 versioned SKU. Leave it blank to send the model id as it is. No transform is applied, because the
-name a proxy expects is a fact about that proxy and nothing else.
+name a proxy expects is a fact about that proxy and nothing else. If only **Name on the wire**
+is filled in, the console also uses it as the model id when saving; completely empty rows are skipped.
+
+The form lists the compatible harness bases below the model rows for the selected API format.
+Choose one of those bases to use the model. If another connection serves the same id, select
+this connection under **Model routing**. Model ids are entered manually; the form does not fetch
+the endpoint's model list.
 
 The mapping is a property of the connection, not of a harness: a harness picks a model by its id,
 the connection decides how that id is written for its endpoint. Two harnesses that need different
@@ -359,18 +365,18 @@ offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
 |---|---|
-| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
-| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
-| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, System One, CheetahClaws |
-| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
-| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
+| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw |
+| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw |
+| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, System One, CheetahClaws, ZeroClaw |
+| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw |
+| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw |
 | `typesafe` | System One (Jev on TypeSafe's own API: `jev-latest`, `jev-preview`) |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot |
-| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits) |
-| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot |
-| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot |
-| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, CheetahClaws (OpenAI format) |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw |
+| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits) |
+| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw |
+| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw |
+| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, CheetahClaws (OpenAI format) |
 
 </details>
 
@@ -952,7 +958,7 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot ...  # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw ...  # the default
 docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
