@@ -664,11 +664,21 @@ async def _internal_callers_only(request: Request, call_next):
 # re-tarred) AND on a real DISK, not a RAM-backed tmpfs (which would defeat the memory saving).
 # Default: a dedicated dir on the container's disk-backed rootfs (same overlay as /workspace on
 # ACA Dynamic Sessions), created at import. Override with HARNESS_SPOOL_DIR if the runtime differs.
-SPOOL_DIR = os.environ.get("HARNESS_SPOOL_DIR", "/var/tmp/harness-spool")
-try:
-    os.makedirs(SPOOL_DIR, exist_ok=True)
-except OSError:
-    SPOOL_DIR = None   # fall back to the OS tmpdir if that path isn't writable
+def _spool_dir(path: str) -> str | None:
+    """`path`, created if missing, when this process can create files in it; else None, which
+    tempfile reads as the OS tmpdir. An EXISTING directory counts only if it is writable: on the
+    hosted service an image build imported this module as root, which left the default path
+    root-owned at 755, and the runner, running as another user, then failed every checkpoint and
+    every hydrate with EACCES at mkstemp (2026-10-14). This image runs the runner as root and imports
+    nothing at build time, but a container started with `--user` meets the same directory."""
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return None
+    return path if os.access(path, os.W_OK | os.X_OK) else None
+
+
+SPOOL_DIR = _spool_dir(os.environ.get("HARNESS_SPOOL_DIR", "/var/tmp/harness-spool"))
 _SPOOL_STALE_S = 3600  # a spool file older than this can't belong to a live transfer
 
 
