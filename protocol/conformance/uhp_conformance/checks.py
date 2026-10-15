@@ -2029,8 +2029,12 @@ def me01(ctx):
     ctx.validate(root, "Memory")
     ctx.validate(child, "Memory")
     assert str(root.get("id") or "").strip(), "a memory must carry an id"
-    assert child.get("parent_id") == root["id"] and child.get("ancestors") == [root["id"]], (
-        f"the child must name its parent and its ancestors root first; got parent_id={child.get('parent_id')!r} ancestors={child.get('ancestors')!r}")
+    # the suite's own memory need not be a root of the server's tree: a server whose memories are
+    # its own workspaces places a new one inside the caller's, so the child's ancestors are the
+    # memory's own ancestors and then the memory, root first
+    want = [*(root.get("ancestors") or []), root["id"]]
+    assert child.get("parent_id") == root["id"] and child.get("ancestors") == want, (
+        f"the child must name its parent and its ancestors root first ({want}); got parent_id={child.get('parent_id')!r} ancestors={child.get('ancestors')!r}")
     assert child.get("provider") == root.get("provider"), "a child created without a provider must take its parent's"
     assert set(root.get("privileges") or []) == {"read", "write", "create", "delete"}, (
         f"whoever creates a memory holds all four privileges on it; got {root.get('privileges')!r}")
