@@ -2,6 +2,14 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.10.4.post11 (2026-10-15)
+
+No change to the protocol, the schema or any verdict a conformant server gets. ME-01 assumed the
+memory the suite creates is a root of the server's tree and asked its child for exactly one
+ancestor. A server whose memories are its own workspaces places a new memory inside the caller's,
+which the chapter allows, and would have failed for that alone. The child's ancestors are now
+expected to be the memory's own ancestors and then the memory, root first.
+
 ## Conformance suite 2026.10.4.post9 (2026-10-06)
 
 No change to the protocol, the schema or any verdict a conformant server gets.
