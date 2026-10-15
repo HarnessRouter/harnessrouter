@@ -6,6 +6,57 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## Muse Wonder (2026-10-14 and 15)
+
+Meta announced two models. Muse Wonder Full has no API: Meta serves it only inside its own Muse Code
+subscription, so no connection can reach it and it is not in the catalog. Muse Wonder is, as
+`muse-wonder-1.0` (Meta's own API id), read off each vendor's own list and then called with a tool,
+streamed and not:
+
+| Provider | Id | Result |
+|---|---|---|
+| Vercel AI Gateway | `meta/muse-wonder-1.0` | answers as itself, tool arguments whole |
+| OpenRouter | `meta/muse-wonder` | answers as itself, tool arguments whole ($4 / $20 per million) |
+| TokenRouter | either name | "No available channel" |
+| LLMTR | | not listed |
+
+It cannot be turned off. OpenRouter refuses `none` ("Reasoning is mandatory for this endpoint") and
+Vercel accepts it and thinks anyway. One question that needs work, two samples a level, the
+provider's own reasoning-token count:
+
+| Level | OpenRouter | Vercel |
+|---|---|---|
+| none | refused | 606, 661 |
+| minimal | 474, 313 | 706, 502 |
+| low | 1082, 922 | 531, 457 |
+| medium | 1149, 1782 | 1181, 1360 |
+| high | 1419, 1245 | 1085, 1321 |
+| xhigh | 1517, 1425 | 1563, 826 |
+
+So its levels are minimal to xhigh, and a turn that asks for none gets minimal.
+
+Measured on the review instance (0.34.0-rc.7) on every base that offers the Meta family (21), one
+provider column at a time with the instance's route for the model pointed at that integration:
+
+| | OpenRouter | Vercel AI Gateway |
+|---|---|---|
+| five scenarios (first, follow-up, switch, artifact, recycle) | 21 of 21 | 21 of 21 |
+
+Then the plugin package (skill, stdio MCP, rows, SSE, streamable HTTP), the browser column and a
+one-slide deck carrying a stamp, on the instance's own route (Vercel). Seventeen bases passed all
+three. Four failed, each on every turn that met the failure, and do not offer it:
+
+- **agentzero:** "Agent stopped after 5 consecutive unusable model responses", on the skill turn, both
+  browser tries and the deck.
+- **aider:** the model writes the command it means to run behind its sentence, the code fence opened
+  mid-line ("as directed.```bash"), so aider finds nothing to run: all five plugin turns, both
+  browser tries, and no deck.
+- **openhands:** its next request carries two outputs for one tool call, and the provider refuses it
+  ("Duplicate function_call_output for call_id ..."): the four MCP transports, both browser tries and
+  the deck. Every other model passes on the same base and route.
+- **cheetahclaws:** the five scenarios, the plugin package and the browser passed, but no deck came
+  within the ten-minute limit, twice.
+
 ## Gemini 4 Argon (2026-10-14, the day Google announced it)
 
 Read off each vendor's own list that day: Google AI Studio `gemini-4-argon` (generateContent,
