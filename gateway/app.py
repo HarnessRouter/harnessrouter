@@ -6618,6 +6618,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gemini-3.5-flash":      "google/gemini-3.5-flash",
         "gemini-3.5-flash-lite": "google/gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite": "google/gemini-3.1-flash-lite",
+        "gemini-4-argon":        "google/gemini-4-argon",
         "gemini-3.1-pro-preview": "google/gemini-3.1-pro-preview",
         "gemini-3-flash-preview": "google/gemini-3-flash-preview",
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
@@ -6794,6 +6795,7 @@ _TOKENROUTER_NO_CHANNEL = {
     "llama-4-maverick", "llama-3.3-70b",
     # TokenRouter's /v1/models on 2026-09-06 lists eight Gemini text models and not this one.
     "gemini-3.1-flash-lite",
+    "gemini-4-argon",   # not on TokenRouter's /v1/models (2026-10-14): Google, OpenRouter and Vercel serve it
 }
 # Image models, kept OUT of _VENDOR_MODELS on purpose: those tables feed the chat model pickers
 # and the per-backend catalogs, and an image model offered as a chat model is a broken choice a
@@ -6970,7 +6972,7 @@ _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v) for c, v in _SHARED_SLUG
 # the id it was asked for, so every other base would have run 3.8 under the 3.7 name. TokenRouter,
 # Vercel and OpenRouter still serve it as itself.
 _GOOGLE_ANSWERS_AS_ANOTHER = {"gemini-3.7-flash"}
-_VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview")
+_VENDOR_MODELS["google"] = {m: m for m in ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview")
                             if m not in _GOOGLE_ANSWERS_AS_ANOTHER}
 
 
@@ -6988,7 +6990,7 @@ _MODEL_ORDER: tuple[str, ...] = (
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8",
     "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
     # Google
-    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+    "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
     "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
     "gemini-3-flash-preview",
     # xAI
@@ -7167,7 +7169,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
-                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
+                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                           "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
@@ -7197,7 +7199,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
-                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
+                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
@@ -7217,7 +7219,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
-                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
                           "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
     # Measured on the self-hosted instance, 2026-09-06 support matrix (five scenarios per pair):
@@ -7248,7 +7250,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                   "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                   "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                   "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                   "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                   "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
                   "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
@@ -7274,7 +7276,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                  "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                  "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
@@ -7302,7 +7304,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                     "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                     "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                     "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                     "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                     "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
                     "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
@@ -7323,7 +7325,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                  "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
                  "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
@@ -7345,7 +7347,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                       "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                       "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                      "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                      "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                       "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
                       "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
                       "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
@@ -7365,7 +7367,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
                          "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
-                         "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+                         "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
                          "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
                          # muse-spark 1.1 and 1.3 are excluded: on the family tour (hr-test,
                          # 2026-09-26, three attempts) each ran the same edit into a loop of 90-odd
@@ -7394,7 +7396,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
-                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
@@ -7419,14 +7421,14 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
-                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
                           "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
-                      "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                      "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
@@ -7449,7 +7451,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # The default is the newest flash, honest like the rest.
     "gemini": {"default": "gemini-3.8-flash",
                "models": ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                           "gemini-3-flash-preview"]},
     # omp (Oh My Pi) is pi's lineage and speaks the OpenAI and Anthropic shapes through the same
     # loopback relay, so it reaches what pi reaches; the list is pi's, and the support matrix
@@ -7497,7 +7499,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
                          "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash",
-                         "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                         "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                          "gemini-3-flash-preview",
                          "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
                          "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",

@@ -11,7 +11,7 @@ def test_google_serves_the_catalog_gemini_by_its_own_id():
     table = gw._vendor_models("google")
     # the Gemini chat family, each served by Google under its plain id (read from /v1beta/models 2026-09-06),
     # but not an id Google answers with another model (gemini-3.7-flash comes back as 3.8, 2026-10-08)
-    assert set(table) == {"gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+    assert set(table) == {"gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash",
                           "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
                           "gemini-3-flash-preview"}
     assert "gemini-3.7-flash" not in gw._integration_models({"provider": "google"})
@@ -107,8 +107,9 @@ def test_llmtr_and_the_aggregators_carry_fable_5_1_and_llmtr_the_gemini_family()
     for agg in ("tokenrouter", "openrouter", "vercel", "llmtr"):
         assert gw._VENDOR_MODELS[agg]["claude-fable-5-1"] == "anthropic/claude-fable-5.1", agg
     # the whole family, including the id Google itself now answers with another model (not measured on LLMTR)
+    # (not Gemini 4 Argon: LLMTR's /v1/models did not list it on 2026-10-14)
     assert {m for m in gw._VENDOR_MODELS["llmtr"] if m.startswith("gemini")} == (set(gw._VENDOR_MODELS["google"])
-                                                                                 | gw._GOOGLE_ANSWERS_AS_ANOTHER)
+                                                                                 | gw._GOOGLE_ANSWERS_AS_ANOTHER) - {"gemini-4-argon"}
     for h, c in gw._MODEL_CATALOG.items():
         if "claude-fable-5" in c["models"]:
             assert "claude-fable-5-1" in c["models"], h
