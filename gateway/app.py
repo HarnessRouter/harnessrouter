@@ -5644,6 +5644,9 @@ def _provider_catalog_public() -> list[dict]:
                                for c, v in _VENDOR_MODELS.get(pid, {}).items()],
                     # The custom provider's rows name any canonical; the form offers this list.
                     "canonicals": _catalog_canonicals() if pid == "custom" else [],
+                    **({"format_backends": {fmt: sorted(bases)
+                                            for fmt, bases in _CUSTOM_FORMAT_BACKENDS.items()}}
+                       if pid == "custom" else {}),
                     "backends": backends})
     return out
 

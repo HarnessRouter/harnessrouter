@@ -18,6 +18,7 @@ import { SkelRows } from '@/components/Skel';
 import { getSession } from '@/lib/auth';
 import { authHeaders } from '@/lib/chat';
 import { PLATFORM_ADMIN_ORGS, SELF_HOSTED } from '@/lib/edition';
+import { OOB } from '@/lib/harness';
 
 interface ModelRow { canonical: string; provider_id: string }
 interface Integration {
@@ -46,6 +47,7 @@ interface ProviderMeta {
   models: ModelRow[];
   /** For the custom provider: every canonical id a harness can ask for, the choices of its rows. */
   canonicals?: string[];
+  format_backends?: Record<string, string[]>;
   backends: string[];
 }
 interface Doc {
@@ -80,6 +82,13 @@ interface MediaCandidate {
 interface MediaChain { capability: string; unit: string; candidates: MediaCandidate[] }
 
 const SECRET = '__secret__';
+
+/** The bases' names as the console shows them everywhere else ("Claude Code", not the gateway's
+ *  `claude`), from its own list of bases; an id that list does not know is shown as it is. */
+function baseNames(backends: string[]): string[] {
+  const names = new Map(OOB.filter((h) => h.backend).map((h) => [h.backend as string, h.name]));
+  return [...new Set(backends.map((b) => names.get(b) || b))].sort((a, b) => a.localeCompare(b));
+}
 
 export default function IntegrationsPage() {
   const router = useRouter();
@@ -419,13 +428,7 @@ export default function IntegrationsPage() {
                                 <option value="anthropic">Anthropic Messages</option>
                               </select>
                               <p className="field-help">
-                                {editing.config['api_format'] === 'anthropic'
-                                  ? 'Anthropic Messages format works with Claude Code, OpenCode, Pi, and DSH backends.'
-                                  : editing.config['api_format'] === 'responses'
-                                  ? 'OpenAI Responses format is what Codex speaks; only Codex can drive it. The endpoint gets /responses appended.'
-                                  : editing.config['api_format'] === 'openai'
-                                  ? 'OpenAI Chat Completions format works with Hermes, OpenCode, Pi, Qwen Code, Cline, Oh My Pi and DSH backends. Codex and Claude Code cannot drive a chat endpoint.'
-                                  : 'If you use Claude Code, choose Anthropic Messages format.'}
+                                Choose the API format your endpoint accepts. Compatible harness bases are listed below.
                               </p>
                             </div>
                           );
@@ -540,15 +543,15 @@ export default function IntegrationsPage() {
                         <label>Models</label>
                         <p className="field-help">
                           The models this endpoint serves, and the name it wants for each one. Leave the
-                          name blank to send the model id as it is.
+                          name blank to send the model id as it is. Type any model id or choose a suggestion.
                         </p>
+                        <datalist id="custom-model-ids">
+                          {choices.map((c) => <option key={c} value={c} />)}
+                        </datalist>
                         {rows.map((r, idx) => (
                           <div className="itg-model-row" key={idx}>
-                            <select className="select" aria-label="Model" value={r.canonical}
-                              onChange={(e) => setRows(rows.map((x, i) => i === idx ? { ...x, canonical: e.target.value } : x))}>
-                              <option value="">Choose a model</option>
-                              {choices.map((c) => <option key={c} value={c}>{c}</option>)}
-                            </select>
+                            <input type="text" list="custom-model-ids" aria-label="Model" placeholder="Model id" value={r.canonical}
+                              onChange={(e) => setRows(rows.map((x, i) => i === idx ? { ...x, canonical: e.target.value } : x))} />
                             <input type="text" aria-label="Name on the wire" placeholder={r.canonical || 'same as the model id'}
                               value={r.provider_id === r.canonical ? '' : r.provider_id}
                               onChange={(e) => setRows(rows.map((x, i) => i === idx ? { ...x, provider_id: e.target.value } : x))} />
@@ -561,6 +564,12 @@ export default function IntegrationsPage() {
                         <button type="button" className="button" onClick={() => setRows([...rows, { canonical: '', provider_id: '' }])}>
                           <iconify-icon icon="tabler:plus"></iconify-icon>Add model
                         </button>
+                        <p className="field-help">
+                          {meta?.format_backends?.[editing.config.api_format]?.length
+                            ? `Compatible harness bases: ${baseNames(meta.format_backends[editing.config.api_format]).join(', ')}.`
+                            : 'Compatibility information is unavailable for this API format.'}
+                          {' '}If another connection serves the same model id, choose this connection under Model routing.
+                        </p>
                       </div>
                     );
                   }
@@ -633,7 +642,10 @@ export default function IntegrationsPage() {
                       [k, v === editingOriginal ? editing.name.trim() : v]));
                     if (await persist({
                       integrations: [...rest, { ...editing, name: editing.name.trim(),
-                        models: (editing.models || []).filter((m) => m.canonical.trim()) }],
+                        models: (editing.models || []).map((m) => ({
+                          ...m,
+                          canonical: m.canonical.trim() || (editing.provider === 'custom' ? m.provider_id.trim() : ''),
+                        })).filter((m) => m.canonical) }],
                       model_map: mm,
                     })) setEditing(null);
                   }}>{busy ? 'Saving…' : editingOriginal ? 'Save' : 'Create'}</button>

@@ -271,11 +271,17 @@ integration there is nothing to set.
 
 Pick the **Custom** provider. It asks for the API format the endpoint speaks (OpenAI Chat
 Completions, OpenAI Responses for Codex, or Anthropic Messages), the endpoint URL, the key, and
-the **models** it serves. Each model row pairs the id a harness picks (the same ids every other
-provider uses, `gpt-5.5`, `claude-opus-4.8`) with the name this endpoint wants on the wire. That
+the **models** it serves. In **Model**, type any id, including one absent from the suggested
+catalog. Each row pairs that id, which a harness picks, with the name this endpoint wants on the wire. That
 name is an arbitrary string per row and is sent verbatim: a bare vendor id, a deployment alias, a
 versioned SKU. Leave it blank to send the model id as it is. No transform is applied, because the
-name a proxy expects is a fact about that proxy and nothing else.
+name a proxy expects is a fact about that proxy and nothing else. If only **Name on the wire**
+is filled in, the console also uses it as the model id when saving; completely empty rows are skipped.
+
+The form lists the compatible harness bases below the model rows for the selected API format.
+Choose one of those bases to use the model. If another connection serves the same id, select
+this connection under **Model routing**. Model ids are entered manually; the form does not fetch
+the endpoint's model list.
 
 The mapping is a property of the connection, not of a harness: a harness picks a model by its id,
 the connection decides how that id is written for its endpoint. Two harnesses that need different
