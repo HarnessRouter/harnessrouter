@@ -57,12 +57,20 @@ def test_the_route_keeps_the_connection_base_exactly(tmp_path):
         rs._HERMES_RELAY["routes"].pop(tok, None)
 
 
-def test_openai_and_azure_keep_their_direct_route(tmp_path):
+def test_openai_and_azure_ride_the_relay_too(tmp_path):
+    """They kept a direct route until 0.34.1, and a turn on them finished with no served model:
+    Codex reports none and the relay is where it is read (gpt-5.5 on Azure, 0.33.0-rc.15)."""
     for provider, var, base in (("openai", "OPENAI_API_KEY", "https://api.openai.com/v1"),
                                 ("azure", "AZURE_OPENAI_API_KEY", "https://res.openai.azure.com/openai/v1")):
         env, cfg = _prepare(tmp_path, provider, rs.Auth(api_key="sk-direct", base_url=base))
-        assert env[var] == "sk-direct"
-        assert f'base_url = "{base}"' in cfg and "127.0.0.1" not in cfg
+        tok = env[var]
+        try:
+            assert tok.startswith("hr-relay-")
+            assert "sk-direct" not in json.dumps(env) and "sk-direct" not in cfg
+            assert base not in cfg and 'base_url = "http://127.0.0.1:' in cfg
+            assert rs._HERMES_RELAY["routes"][tok][:2] == (base, "sk-direct")
+        finally:
+            rs._HERMES_RELAY["routes"].pop(tok, None)
 
 
 def test_the_account_fingerprint_follows_the_connection_not_the_route(tmp_path):
