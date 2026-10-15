@@ -144,8 +144,11 @@ class Provider:
     async def history(self, mid: str, rid: str) -> list[dict]:
         self._no("keep history")
 
-    async def prime(self, mid: str) -> dict:
-        return {"text": "", "tokens": 0}
+    async def prime(self, mid: str, budget: int) -> dict:
+        """The memory's standing records (attributes.standing true, active), newest first, cut to
+        `budget` tokens with the first always kept: {"records", "tokens", "truncated"}. A provider
+        that keeps none answers an empty list, which is what declaring `prime: false` means."""
+        return {"records": [], "tokens": 0, "truncated": False}
 
     async def queries(self, mid: str) -> list[dict]:
         return []
@@ -442,6 +445,40 @@ async def reach_below(org: str, memory: dict, principals: list[str], depth: int 
                         found.append(k)
         frontier, level = nxt, level + 1
     return found, cut
+
+
+def tokens_of(text: str) -> int:
+    """An estimate of the tokens a text costs: an ASCII character a quarter of a token, any other
+    two thirds (Chinese runs near 1.5 characters a token), rounded up."""
+    ascii_n = sum(1 for ch in text if ord(ch) < 128)
+    return -(-(ascii_n * 3 + (len(text) - ascii_n) * 8) // 12)
+
+
+def record_words(r: dict) -> str:
+    """What a record says, as one text: its title and the words of its parts."""
+    parts = [str(r.get("title") or "")] + [str(p.get("text") or "") for p in r.get("content") or [] if isinstance(p, dict)]
+    return "\n".join(x for x in parts if x)
+
+
+async def prime(org: str, memories: list[dict], budget: int) -> dict:
+    """The standing records of a set of memories, newest first, cut to one budget: each provider
+    is asked for its own, then the whole is ordered by when each was written and cut again, the
+    first always kept. Each record names the memory it is in."""
+    rows, truncated = [], False
+    for m in memories:
+        got = await (await provider_of(m)).prime(str(m["id"]), budget)
+        truncated = truncated or bool(got.get("truncated"))
+        rows += [(r, str(m["id"])) for r in got.get("records") or []]
+    rows.sort(key=lambda x: str(((x[0].get("time") or {}).get("written_at")) or ""), reverse=True)
+    kept, used = [], 0
+    for r, mid in rows:
+        cost = tokens_of(record_words(r))
+        if kept and used + cost > budget:
+            truncated = True
+            continue
+        kept.append({**r, "memory_id": r.get("memory_id") or mid})
+        used += cost
+    return {"records": kept, "tokens": used, "truncated": truncated}
 
 
 async def recall(org: str, memories: list[dict], req: dict) -> dict:

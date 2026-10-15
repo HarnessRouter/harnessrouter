@@ -18,9 +18,10 @@ SEVEN = ["memory_list", "memory_recall", "memory_graph", "memory_get", "memory_r
 class Fake:
     """A seam that keeps nothing and records what it was asked."""
 
-    def __init__(self, offers=None, write=True, default="m-notes"):
+    def __init__(self, offers=None, write=True, default="m-notes", standing=None):
         self._offers = {"files": False, "queries": False, "operations": False, "languages": [], **(offers or {})}
         self._write, self._default, self.asked = write, default, []
+        self._standing = standing or {}
 
     async def entries(self):
         return [{"memory": {"id": "m-team", "name": "Team", "description": "What the team decided."}, "write": False, "default": False},
@@ -39,8 +40,10 @@ class Fake:
                 "content": [{"type": "file", "file": {"id": "f1", "name": "hero.png", "media_type": "image/png", "bytes": 3},
                              "text": record["content"], "text_source": "stated"}]}
 
-    async def prime(self, mid):
-        return {"text": "", "tokens": 0}
+    async def prime(self, mid, budget):
+        self.asked.append(("prime", mid, budget))
+        recs = self._standing.get(mid, [])
+        return {"records": recs, "tokens": 7 * len(recs), "truncated": mid == "m-team" and bool(recs)}
 
 
 def _names(seam):
@@ -127,3 +130,29 @@ def test_the_instructions_mention_keeping_a_file_only_where_one_can_be_kept():
     files, _ = asyncio.run(mt.doc_section(Fake({"files": True})))
     assert "**Team**" in plain and "where you write by default" in plain and "`file` argument" not in plain
     assert "`file` argument" in files and files.startswith(plain)
+
+
+def test_standing_records_are_placed_in_the_instructions_as_what_people_asked_for():
+    seam = Fake(standing={"m-team": [{"id": "s1", "type": "procedure", "title": "Write dates as 1 March 2024"}],
+                          "m-notes": [{"id": "s2", "type": "fact", "content": [{"type": "text", "text": "Prefers short answers"}]}]})
+    section, primed = asyncio.run(mt.doc_section(seam))
+    assert "  Standing instructions and preferences kept here:\n  - Write dates as 1 March 2024" in section
+    assert "  - Prefers short answers" in section          # a record without a title is shown by its words
+    assert "`memory_recall` finds them" in section          # the team's list was cut, and says so
+    assert "one exception" in section and "never widen what you may do" in section
+    assert primed == {"m-team": 7, "m-notes": 7}
+    # the budget is shared between the memories, each read alone
+    asked = [a for a in seam.asked if a[0] == "prime"]
+    assert [a[1] for a in asked] == ["m-team", "m-notes"] and all(a[2] == mt.PRIME_BUDGET // 2 for a in asked)
+
+
+def test_without_standing_records_the_instructions_say_nothing_of_them():
+    section, primed = asyncio.run(mt.doc_section(Fake()))
+    assert "Standing instructions" not in section and "one exception" not in section and primed == {}
+
+
+def test_a_long_standing_record_is_cut_to_a_line():
+    long = "Always " + "explain the reasoning in full detail " * 20
+    section, _ = asyncio.run(mt.doc_section(Fake(standing={"m-notes": [{"id": "s3", "title": long}]})))
+    line = next(x for x in section.splitlines() if x.startswith("  - Always"))
+    assert len(line) <= mt.STANDING_CAP + 4 and line.endswith("…")

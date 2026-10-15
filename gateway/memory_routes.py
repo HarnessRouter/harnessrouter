@@ -343,6 +343,23 @@ async def recall(mid: str, request: Request) -> dict:
     return await _answer(org, m, pr, res, {str(x["id"]): x for x in reach})
 
 
+@router.get("/v1/memories/{mid}/prime")
+@guarded
+async def prime(mid: str, request: Request, budget: int = 4000, depth: int = 0) -> dict:
+    """The memory's standing records, its instructions and preferences, newest first within a budget
+    of tokens: the memory alone unless `depth` widens it, as it widens a recall."""
+    org, _, _, pr = await _who(request)
+    m, _ = await mp.need(org, mid, pr, "read")
+    if budget < 1 or depth < 0:
+        raise _uhp_error(422, "memory_invalid", "`budget` is a number of tokens, at least 1; `depth` is 0 or more levels below.",
+                         "budget" if budget < 1 else "depth")
+    reach, _ = await mp.reach_below(org, m, pr, depth)
+    got = await mp.prime(org, reach, budget)
+    seen: dict = {}
+    recs = [await mp.present(org, str(r["memory_id"]), r, pr, seen) for r in got["records"]]
+    return {"object": "memory.prime", "records": recs, "tokens": got["tokens"], "truncated": got["truncated"]}
+
+
 @router.post("/v1/memories/{mid}/graph")
 @guarded
 async def graph(mid: str, request: Request) -> dict:

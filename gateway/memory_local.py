@@ -155,8 +155,9 @@ class Local:
             return await prov.operate(mid, rid, name, body, self.writer)
         return await self._do(go())
 
-    async def prime(self, mid):
+    async def prime(self, mid, budget):
         async def go():
-            m = await mp._load(self.org, mid)
-            return await (await mp.provider_of(m)).prime(mid) if m else {"text": "", "tokens": 0}
+            m, _ = await mp.need(self.org, mid, self.pr, "read")
+            got = await mp.prime(self.org, [m], budget)
+            return {**got, "records": [await mp.present(self.org, mid, r, self.pr) for r in got["records"]]}
         return await self._do(go())

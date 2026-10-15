@@ -12,7 +12,7 @@ import re
 import time
 import uuid
 
-from memory_plane import MemoryError, Provider, said
+from memory_plane import MemoryError, Provider, record_words, said, tokens_of
 
 _OPEN = None
 
@@ -33,7 +33,6 @@ class FixtureProvider(Provider):
         self.mem: dict[str, list[dict]] = {}          # memory id -> every version of every record
         self.named: dict[str, dict[str, dict]] = {}
         self.runs: dict[str, list[dict]] = {}
-        self.primed: dict[str, str] = {}
 
     def capabilities(self) -> dict:
         return {"id": self.id, "isolation": "container", "derivation": "background",
@@ -51,7 +50,7 @@ class FixtureProvider(Provider):
         self.mem.setdefault(mid, [])
 
     async def drop(self, mid):
-        for d in (self.mem, self.named, self.runs, self.primed):
+        for d in (self.mem, self.named, self.runs):
             d.pop(mid, None)
 
     def _rows(self, mid) -> list[dict]:
@@ -218,9 +217,18 @@ class FixtureProvider(Provider):
         abstain = bool(q) and not any(x["score"] >= 0.5 for x in results)
         return {"results": results, "degraded": degraded, "abstain": abstain}
 
-    async def prime(self, mid):
-        text = self.primed.get(mid, "")
-        return {"text": text, "tokens": len(text.split())}
+    async def prime(self, mid, budget):
+        heads = [r for r in self._current(mid) if r.get("status") == "active" and (r.get("attributes") or {}).get("standing") is True]
+        heads.sort(key=lambda r: str((r.get("time") or {}).get("written_at") or ""), reverse=True)
+        kept, used, cut = [], 0, False
+        for r in heads:
+            cost = tokens_of(record_words(r))
+            if kept and used + cost > budget:
+                cut = True
+                continue
+            kept.append(r)
+            used += cost
+        return {"records": kept, "tokens": used, "truncated": cut}
 
     # ── queries: the "language" is a JSON filter with {param} placeholders ───────────────────────
     async def queries(self, mid):

@@ -8,6 +8,7 @@ read must be absent from every answer he gets, not merely refused when he asks f
 from __future__ import annotations
 
 import os
+import time
 import sys
 
 import pytest
@@ -520,3 +521,29 @@ def test_content_is_an_ordered_list_of_text_and_file_parts(people):
         assert r.status_code == 422 and _code(r) == "memory_invalid", (bad, r.text)
     caps = next(p for p in ada.get("/v1/memories/providers").json()["data"] if p["id"] == "fixture")
     assert caps["content"] == {"media": ["*/*"], "bytes": "referenced", "describes": []}
+
+
+def test_a_memory_s_standing_records_are_read_newest_first_within_a_budget_from_that_memory_alone(people):
+    ada, bob = people
+    mk = lambda **b: ada.post("/v1/memories", json={"provider": "fixture", **b}).json()["id"]   # noqa: E731
+    desk = mk(name="Desk", description="How the desk works.")
+    client = mk(name="Client", description="One client.", parent_id=desk)
+    post = lambda mid, **b: ada.post(f"/v1/memories/{mid}/records", json=b).json()   # noqa: E731
+    rule = post(client, type="procedure", title="Quote this client in euros", attributes={"standing": True})
+    time.sleep(0.01)
+    pref = post(client, type="fact", title="The client prefers one weekly summary", attributes={"standing": True, "predicate": "prefers"})
+    post(client, type="fact", title="The client's office closes at six")
+    top = post(desk, type="procedure", title="Never discount below twenty percent", attributes={"standing": True})
+    got = ada.get(f"/v1/memories/{client}/prime").json()
+    assert got["object"] == "memory.prime" and [r["id"] for r in got["records"]] == [pref["id"], rule["id"]]
+    assert got["truncated"] is False and got["tokens"] > 0 and all(r["trust"] == "untrusted" for r in got["records"])
+    tight = ada.get(f"/v1/memories/{client}/prime?budget=1").json()
+    assert [r["id"] for r in tight["records"]] == [pref["id"]] and tight["truncated"] is True
+    # the memory alone: the parent's own standing record, but not the child's, until depth widens it
+    assert [r["id"] for r in ada.get(f"/v1/memories/{desk}/prime").json()["records"]] == [top["id"]]
+    wide = ada.get(f"/v1/memories/{desk}/prime?depth=1").json()["records"]
+    assert [r["id"] for r in wide] == [top["id"], pref["id"], rule["id"]]
+    assert {r["memory_id"] for r in wide} == {desk, client}
+    assert _code(ada.get(f"/v1/memories/{client}/prime?budget=0")) == "memory_invalid"
+    # what a caller may not read stays as if it did not exist
+    assert bob.get(f"/v1/memories/{client}/prime").status_code == 404
