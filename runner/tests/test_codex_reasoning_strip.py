@@ -145,10 +145,16 @@ def test_a_resumed_session_keeps_every_provider_id_it_ran_under(tmp_path, monkey
     cfg = (home / ".codex" / "config.toml").read_text()
     assert 'model_provider = "hr-openai"' in cfg and "[model_providers.hr-openai]" in cfg
     assert "[model_providers.hr-tokenrouter]" in cfg and "[model_providers.azure]" in cfg
-    assert cfg.count('base_url = "https://broker.example/v1/llm"') == 3, "every alias points at this turn's endpoint"
+    # this turn's endpoint is its relay route (see _codex_prepare_env)
+    route = cfg.split('base_url = "', 1)[1].split('"', 1)[0]
+    assert route.startswith("http://127.0.0.1:") and "broker.example" not in cfg
+    assert cfg.count(f'base_url = "{route}"') == 3, "every alias points at this turn's endpoint"
     fresh = {"HOME": str(tmp_path / "fresh")}
     _codex_prepare_env("openai", Auth(api_key="sk-x", base_url="https://broker.example/v1/llm"), "gpt-5.4-mini", str(tmp_path), fresh, resume=False)
     assert "[model_providers.hr-tokenrouter]" not in (tmp_path / "fresh" / ".codex" / "config.toml").read_text(), "a fresh session declares only its own"
+    from server import _HERMES_RELAY
+    for e in (env, fresh):
+        _HERMES_RELAY["routes"].pop(e.get("OPENAI_API_KEY"), None)
 
 
 def test_a_failure_names_the_providers_refusal_over_the_clis_retries():

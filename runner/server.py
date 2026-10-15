@@ -2714,17 +2714,22 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         marker.write_text(fp)
     except OSError:
         pass
-    # A connection that is not OpenAI's own or Azure's rides the relay, as it does for every other
-    # base. Codex groups a server's MCP tools in a namespace and adds an empty `properties` to each
-    # object node of their schemas; through Vercel the tool then received empty objects with
-    # gpt-6-luna and gpt-6.1-sol (two of two, 2026-10-05; not with gpt-5.4, whose tool definitions
-    # Codex defers behind a tool search), and the repair lives in the relay
-    # (_with_free_form_objects). The CLI is given a loopback URL and a placeholder, so the
-    # connection's key is no longer in its environment either. OpenAI's own endpoint and Azure's
-    # keep the direct route: both were intact as Codex sends it. The account fingerprint above is
-    # taken from the connection itself, never from the route, which is new on every turn.
+    # Every connection rides the relay, as it does for every other base. Codex groups a server's MCP
+    # tools in a namespace and adds an empty `properties` to each object node of their schemas;
+    # through Vercel the tool then received empty objects with gpt-6-luna and gpt-6.1-sol (two of
+    # two, 2026-10-05; not with gpt-5.4, whose tool definitions Codex defers behind a tool search),
+    # and the repair lives in the relay (_with_free_form_objects). OpenAI's own endpoint and Azure's
+    # were intact as Codex sends it and kept a direct route until 2026-10-15, but the relay is also the
+    # one place a turn's served model is read: Codex reports none, so a turn on those two finished
+    # unlabelled and the matrix could not tell which model had answered (gpt-5.5 on Azure). The
+    # CLI is given a loopback URL and a placeholder, so the connection's key is not in its
+    # environment either. One thing Codex decides from the URL: on an Azure host (or a provider
+    # named "azure") it compacts a long thread through the provider's /responses/compact
+    # (codex-rs/model-provider/src/provider.rs, 0.154.0); behind the loopback it compacts locally,
+    # as it does on every other connection. The account fingerprint above is taken from the
+    # connection itself, never from the route, which is new on every turn.
     cli_base, cli_key = base_url, auth.api_key
-    if p == "tokenrouter" and auth.api_key:
+    if auth.api_key:
         cli_base, cli_key = _hermes_relay_route(base_url, auth.api_key, exact_base=True)
     # codex only speaks the OpenAI Responses API now — current releases removed
     # `wire_api = "chat"` entirely, so a custom chat-completions endpoint cannot be driven by
@@ -5052,39 +5057,37 @@ def _finish_reason_in(data: bytes) -> str:
     return hits[-1].decode().replace("-", "_") if hits else ""
 
 
+def _turn_relay_flags(env: dict) -> dict:
+    """The flags of this turn's chat route, {} when the turn did not ride the relay. The route is
+    found by the placeholder bearer the CLI was handed, whichever variable the backend keeps it in.
+
+    A helper model's route is passed over. hermes registers one for its image questions
+    (HR_VISION_API_KEY, marked `aux`), and registers it BEFORE the chat route, so the first bearer
+    in the environment was the image route's: a hermes turn whose image questions ride the relay
+    read its served model, usage and finish reason off the model it asks about pictures, "" until
+    it asked one and the image model after. Rule 2 of docs/harness-verification.md reads the
+    second as a substitution, a finding invented out of nothing."""
+    for v in env.values():
+        if isinstance(v, str) and v.startswith("hr-relay-"):
+            route = _HERMES_RELAY["routes"].get(v)
+            if route and not (route[2] or {}).get("aux"):
+                return route[2] or {}
+    return {}
+
+
 def _relay_last_finish(env: dict) -> str:
     """The finish_reason of the LAST provider answer on this turn's route, as the relay saw it.
     A "content_filter" here is the provider declining the request; a CLI that reports it as an
     empty answer (goose: "The model returned an empty response") has hidden a failure."""
-    for v in env.values():
-        if isinstance(v, str) and v.startswith("hr-relay-"):
-            route = _HERMES_RELAY["routes"].get(v)
-            if route:
-                # normalised the way _finish_reason_in normalises, so a caller compares one
-                # spelling whoever wrote the flag (Vercel says "content-filter", OpenAI
-                # "content_filter")
-                return str((route[2] or {}).get("last_finish") or "").replace("-", "_")
-    return ""
+    # normalised the way _finish_reason_in normalises, so a caller compares one spelling whoever
+    # wrote the flag (Vercel says "content-filter", OpenAI "content_filter")
+    return str(_turn_relay_flags(env).get("last_finish") or "").replace("-", "_")
 
 
 def _relay_served_model(env: dict) -> str:
     """What the relay saw the provider serve on this turn's route, "" when the turn did not ride
-    the relay or nothing answered yet. The route is found by the placeholder bearer the CLI was
-    handed, whichever variable the backend keeps it in.
-
-    ONE relay token per env is the invariant this rests on — the first one found is taken as the
-    turn's chat route. It holds for every backend that reaches here: only _hermes_prepare_env
-    registers a second route (the auxiliary vision model, HR_VISION_API_KEY), and hermes runs on
-    _run_hermes_bg, which does not call this. A backend that ever hands its CLI two relay bearers
-    must distinguish them here first: reading the vision route would stamp the image model as the
-    turn's served model, which rule 2 of docs/harness-verification.md reads as a substitution —
-    a finding invented out of nothing."""
-    for v in env.values():
-        if isinstance(v, str) and v.startswith("hr-relay-"):
-            route = _HERMES_RELAY["routes"].get(v)
-            if route:
-                return str((route[2] or {}).get("served_model") or "")
-    return ""
+    the relay or nothing answered yet (see _turn_relay_flags for which route that is)."""
+    return str(_turn_relay_flags(env).get("served_model") or "")
 
 
 def _fill_relay_usage(ev: dict, env: dict) -> None:
@@ -5136,20 +5139,15 @@ def _stamp_thinking(ev: dict, rec: dict) -> None:
 
 def _relay_usage(env: dict) -> dict:
     """The tokens the provider reported on this turn's route, summed over its calls; {} when the
-    turn did not ride the relay or nothing carried usage. Found by the placeholder bearer, exactly
-    as _relay_served_model finds the served model, and subject to the same one-route invariant.
+    turn did not ride the relay or nothing carried usage. Read off the same route as the served
+    model (_turn_relay_flags).
 
     This is the usage of every backend whose own stream reports none (kimi, aider): the provider's
     statement of what it counted, read off the bytes as they pass, rather than a number the CLI
     estimated or nothing at all. A backend that reports its own usage keeps it; this only fills a
     result event that arrived empty."""
-    for v in env.values():
-        if isinstance(v, str) and v.startswith("hr-relay-"):
-            route = _HERMES_RELAY["routes"].get(v)
-            if route:
-                u = (route[2] or {}).get("usage")
-                return dict(u) if isinstance(u, dict) and u else {}
-    return {}
+    u = _turn_relay_flags(env).get("usage")
+    return dict(u) if isinstance(u, dict) and u else {}
 
 
 # A local model server's own discovery endpoints (Ollama, llama.cpp, LM Studio, vLLM), as the path
@@ -6102,9 +6100,10 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     _build_grok for the one client that needs it). `usage_no_nulls` rewrites a null token count in an
     answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls).
     `exact_base` joins the client's resource onto the connection's base as stored, for a client that
-    was calling that base directly before it had a route (Codex): the same URL, with the relay between.
-    `aux` marks a route for a helper model (hermes's image questions): the turn's thinking level is
-    the main model's and stays off it."""
+    was calling that base directly before it had a route (Codex, and hermes on Azure): the same URL,
+    with the relay between. `aux` marks a route for a helper model (hermes's image questions): the
+    turn's thinking level is the main model's and stays off it, and what it serves is not the turn's
+    (_turn_relay_flags passes it over)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -6121,7 +6120,7 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         flags = {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
-                 **({} if aux else _turn_effort())}
+                 **({"aux": True} if aux else _turn_effort())}
         _HERMES_RELAY["routes"][tok] = (upstream, api_key, flags if aux else _turn_route(flags))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
@@ -6202,9 +6201,20 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
         elif auth.api_key:
             env["ANTHROPIC_API_KEY"] = auth.api_key
     elif p == "azure-foundry":  # Azure OpenAI (gpt family) — OpenAI-style endpoint + key
-        if auth.api_key:
+        if auth.api_key and auth.base_url:
+            # Through the relay, as every other hermes route. This one called Azure directly with the
+            # connection's key in the CLI's environment, and the relay is the one place a turn's
+            # served model is read: hermes reports none, so every hermes turn on Azure finished
+            # unlabelled and the matrix could not tell which model had answered (gpt-5.5, four of
+            # four on 0.33.0-rc.15). hermes's azure-foundry provider is the OpenAI SDK on the base it
+            # is given, a bearer key; its own Azure rules read the URL for two things the runner
+            # already settles by model (api_mode, written for the Responses family, and the
+            # max_completion_tokens spelling, which hermes also infers from a gpt-5 name).
+            env["AZURE_FOUNDRY_BASE_URL"], env["AZURE_FOUNDRY_API_KEY"] = _hermes_relay_route(
+                auth.base_url, auth.api_key, exact_base=True)
+        elif auth.api_key:
             env["AZURE_FOUNDRY_API_KEY"] = auth.api_key
-        if auth.base_url:
+        elif auth.base_url:
             env["AZURE_FOUNDRY_BASE_URL"] = auth.base_url
     elif p == "openrouter":  # OpenRouter aggregator (vendor/model ids)
         if auth.api_key:
@@ -12072,6 +12082,12 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         res_txt = "\n\n".join(x for x in (state["final"].strip(), err_txt) if x)[:4000] or err_txt
     ev = {"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
           "result": res_txt, "usage": usage}      # surface the error in the trace
+    # What the relay saw the provider say, as on the exec path: the app-server reports no served
+    # model either.
+    served = _relay_served_model(env)
+    if served:
+        ev["model"] = served
+    _fill_relay_usage(ev, env)
     _stamp_thinking(ev, rec)
     append(ev)
     rec["result"] = state["final"]
