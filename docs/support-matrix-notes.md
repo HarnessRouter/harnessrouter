@@ -29,6 +29,43 @@ offered model, the same lists as here.
   nanobot argument), and the model catalog route (0.6 s here, the same as the bases route; hosted's
   slowness came from its remote secret store).
 
+## zeroclaw reviewed on the review instance (2026-10-14, 0.34.0-rc.1 to rc.5)
+
+Every model zeroclaw offered went through the five console scenarios, the plugin package (skill, stdio
+MCP, rows, SSE, streamable HTTP), the browser column and a one-slide deck carrying a stamp; on top, the
+family tour (13 of 13 families in one conversation), the environments column (3 of 3), the
+custom-harness dimension, and the five-turn PDF conversation (5 of 5). Each fix below was measured
+before and after on the same instance; the section further down (2026-10-13) is the contributor's own.
+
+- **Paths.** zeroclaw's risk profile defaults to `workspace_only = true` and a denylist holding /etc
+  and /usr: `head /etc/os-release`, `ls /env` and a python3 under /usr were refused as "forbidden
+  absolute paths outside the workspace". Both are opened; the session's OS user is the boundary.
+- **Skills with scripts were skipped** ("script-like files are blocked by skill security policy"):
+  the Office skill, for its install.sh. `[skills] allow_scripts = true`.
+- **The shell starts empty** and passes only the names it is given: the image skill's `HR_IMAGE_*`
+  ("image generation is not configured for this Harness") and `OFFICECLI_RESIDENT_FLUSH` (seven
+  decks handed back empty: officecli wrote on idle, after a ten-second turn had ended) are named now.
+- **The step budget read as success.** zeroclaw summarises and stops with `end_turn` at
+  `max_tool_iterations`; its note in the answer now ends the turn as `max_steps`.
+- **34 tools, not 20.** Captured from the request zeroclaw sends (a fake chat/completions server):
+  cron and schedule, channel and session messaging, pushover, git_forge, backup, canvas, weather,
+  and none of the memory tools the first list named. `allowed_tools` is the measured set of 14
+  (MCP tools are admitted on top of it); `delegate` fails ("Missing 'agent' parameter"); `llm_task`
+  takes a model override and `deliver_file` hands back a copy the driver drops, so both are never offered.
+- **"You are hr".** zeroclaw names the agent after its config alias in the persona it seeds; the
+  alias is `zeroclaw` now.
+- **State in the checkpoint repo**, every turn (three SQLite stores, the trace log, persona files,
+  copied skills): `.harness/zeroclaw/` rides the tar (#460 did the same for nanobot, opensquilla, goose).
+- **Not offered:** grok-4.20 (no deck twice: "invalid semantic completion", no text and no tool call);
+  nemotron-3-super (no deck; off every sibling base already); qwen3.8-flash (answered the follow-up
+  with the first turn's codeword, and provider errors on the artifact after an outage had cleared).
+- **Known and left:** zeroclaw keeps a turn's messages only when the turn succeeds, so after a cancel
+  the next turn does not know what the cancelled one did.
+- **The PDF conversation's first turn** ("follow your instruction: say hi" under an instruction to make
+  a PDF): GPT models answer "hi" without a PDF on zeroclaw, pi and opencode alike (32 of 55 zeroclaw
+  models, every family represented). It is a property of the prompt, not of a base, and was not used
+  to take models off; the rest of the conversation passes on every model tried.
+
 ## The four new bases offer only what they run reliably (2026-10-12, 0.33.0-rc.5 to rc.11, the review instance)
 
 The rule from here on, for every base: a base offers the models it was measured to run reliably on
@@ -3908,3 +3945,104 @@ environment names. It could not read them — `control.db` and `graph.db` are `0
 `0700`, and a session uid already has traverse, so file contents are governed by each file's own
 mode either way. The half that stops a session renaming or replacing another session's directory
 (which needs write on the parent, not on the target) is untouched by that change.
+
+## zeroclaw, a new base (2026-10-13, refs #442)
+
+zeroclaw (zeroclaw-labs/zeroclaw, Apache-2.0) is a Rust personal-agent runtime, pinned to 0.8.5
+(released 2026-09-05) and installed from its GitHub release archive, verified against digests
+pinned in `docker/entrypoint.sh` (read off that release's own SHA256SUMS). It is driven through its
+ACP server, `zeroclaw acp`, by `runner/zeroclaw_driver.py`, which re-emits claude's stream-json, so
+the normaliser is the passthrough. It speaks chat/completions through its `custom` provider and rides
+the loopback relay, so it is wired row for row with nanobot and is in `CHAT_ONLY_BACKENDS`.
+
+### Why ACP, and what the probes showed (against OpenRouter, claude-haiku-4.5)
+
+- **`zeroclaw agent -m` cannot hold a conversation.** It prints the final answer as prose, and its
+  `--session-state-file` is read only by the interactive REPL, so every one-shot run starts from the
+  system prompt alone. ACP keeps sessions in `data/sessions/acp-sessions.db`, and `session/resume` in
+  a later process seeds the agent with them: a second process named the file the first had written.
+- **The model is the config's, and the config is rewritten every turn.** `session/resume` rebuilds the
+  agent from the current `config.toml`, so a switch is a new `model` line. The switch rows below were
+  served by the partner model on both pairs.
+- **zeroclaw seeds seven files into its agent workspace** (AGENTS.md, SOUL.md, IDENTITY.md, USER.md,
+  TOOLS.md, MEMORY.md, HEARTBEAT.md). With the agent workspace equal to the session directory all
+  seven came back as produced files. The agent workspace is now `.harness/zeroclaw/agent` and the ACP
+  `cwd` is the session directory: the file and shell tools are rooted at the `cwd` (`pwd` answered the
+  session directory; a relative `file_write` landed there), and the instruction file and skills are
+  read from the agent workspace. A sentinel written into `.harness/zeroclaw/agent/AGENTS.md` before
+  the first turn was repeated by the agent, and the file was left as written.
+- **Its shell refused ordinary commands even at level `full`.** `touch` and anything chained with `&&`
+  answered "Command not allowed by security policy". The risk profile uses zeroclaw's documented
+  trusted mode (`allowed_commands = ["*"]`, `block_high_risk_commands = false`); the session already
+  runs as its own OS user in its own directory.
+- **Its shell passes on only what it is told to.** A variable in the driver's environment came back
+  empty and PATH was reset to the system default; names in `shell_env_passthrough` arrived. The runner
+  names PATH, the environment layer's variables and the harness's own (nanobot's arrangement).
+- **A custom endpoint gets prompt-guided tools by default.** Through the relay the model wrote its
+  calls as `<tool_call>` text with invented `<tool_result>` lines, two of three arrived without their
+  arguments ("Missing 'path' parameter"), and one file took three model calls (read off the session's
+  stored transcript). zeroclaw's provider factory defaults a `custom` endpoint to prompt-guided tools
+  (its own test: "custom OpenAI-compatible endpoints must default to prompt-guided tools"). The runner
+  sets `native_tools = true`; the same turn then made one native call and used half the input tokens.
+- **The context budget was left at zeroclaw's default (32,000 tokens), on a measurement.** A six-turn
+  session on claude-haiku-4.5, four turns of it reading a 6 KB file, reached about 35,000 input tokens
+  per model call; zeroclaw recorded no trim or compaction event, all 17 messages stayed in the store,
+  and the last turn recalled a codeword from the first. A much longer session may still trim: zeroclaw
+  then sends `_zeroclaw/history_trimmed`, which the driver does not yet surface.
+- **The thinking level and attached images need nothing of their own.** The relay applies the turn's
+  level to every request body it carries (`runner/reasoning.py`), and an attached image arrives as a
+  file in the workspace, as on nanobot.
+- **Failure reporting (checklist item 8).** A provider failure is a JSON-RPC error on the prompt
+  (`-32603`, "The model provider custom.hr rejected its credentials", measured with a bad key), and a
+  session the store does not hold is `-32000 Session not found` on `session/resume`. Both are
+  structured, so nothing is parsed out of prose. The driver fails the turn on the first, and starts a
+  new session on the second while `_resume_lost` reports the lost history.
+- **Usage and the served model come from the relay.** The ACP stream carries no usage and names only
+  the configured model. Neither the key nor anything derived from it was found in any file zeroclaw
+  wrote.
+- **Interactive tools are never offered.** `ask_user`, `escalate_to_human`, `reaction` and `poll` call
+  back to the ACP client and wait for a person; `model_switch`, `model_routing_config` and
+  `proxy_config` let the model change what serves the turn. All seven are in `excluded_tools` on every
+  turn, and an excluded tool is absent from the list the agent reports.
+
+### Measured (self-hosted, image built from this branch's final commit, 2026-10-13)
+
+| Dimension | Result |
+|---|---|
+| Five scenarios, OpenRouter, claude-haiku-4.5 and gpt-5.4-mini | 10 of 10, every turn on `integration:openrouter`, none unlabelled |
+| Custom harness (skill + script, disabled tool, MCP over streamable HTTP) | pass: skill reached, script ran through `shell` with the harness's variable, `web_fetch` disabled and unused, `deepwiki__read_wiki_structure` called |
+| Install on a first start | `installing zeroclaw 0.8.5 …`, digest verified, listed among backends available |
+| Five scenarios, 15 more OpenRouter models (the cheap and mid tier of every family) | 14 of 15; llama-3.3-70b is not offered (below) |
+| Plugin matrix (`plugins/run-matrix.py --mode all`, gpt-5.4-mini) | 5 of 5: skills, stdio MCP, rows, remote SSE, remote streamable HTTP |
+| Family tour, one conversation over ten families | 10 of 10, every turn served by its family; two passed on a retest (below) |
+| Cancel mid-turn (a turn inside `sleep 120`) | cancelled at once; the driver, `zeroclaw acp`, its shell and `sleep` were all gone 5 s later; the next turn in the session recalled the first |
+| zeroclaw's own web tools in the image | `web_fetch`, `web_search_tool` (DuckDuckGo) and `http_request` work |
+
+- **Finding, prompt cache on Claude:** claude-haiku-4.5 read 7% of its input from cache against 70% for
+  gpt-5.4-mini. zeroclaw's chat/completions requests carry no `cache_control`, so Anthropic models on
+  an aggregator cache little. The agentzero, aider and cline rows report the same for the same reason.
+
+- **llama-3.3-70b is not offered.** On OpenRouter it declined the first turn, a one-line echo, twice in
+  a row ("The provided functions are insufficient for me to complete this task", then "I cannot perform
+  this task as it requires additional information that is not provided"), with zeroclaw's tool list in
+  the request. It is in `_NOT_OFFERED["zeroclaw"]`, as it is on goose, hermes, jcode, kilo, mimo, nanobot,
+  opensquilla and pi.
+- **The family tour's two retests.** kimi-k2.7-code's first turn failed with zeroclaw's "The model
+  provider returned an invalid semantic completion": the provider returned no text and no tool call on
+  the stream and again on zeroclaw's non-streaming fallback. The turn failed with that reason rather
+  than completing empty. muse-glimmer-30b's first turn completed without rebuilding the deck. Both
+  passed on a retest in the same conversation.
+- **Three tools need a desktop and are not offered.** In the image, `browser_open` failed with "Failed
+  to open system browser", `browser` with "agent-browser CLI is unavailable" and `screenshot` with "No
+  screenshot tool found". They are in `_ZEROCLAW_NEVER` (rule 4).
+- **The instance's own MCP server is reached over loopback.** On nanobot, reaching it needed
+  `_BRIDGE_LOOPBACK_BACKENDS`. zeroclaw connected to `http://127.0.0.1:8080/v1/mcp/plugs` directly and
+  called `plugs__browser_navigate`. The browser column itself could not be judged on this instance: the
+  plug answered "The browser service is not set up on this deployment", and nanobot, run as a control,
+  failed the same way.
+
+### Not yet measured
+
+The expensive models of the catalog (Sonnet, Opus, Fable, the GPT sol and terra lines, Gemini Pro), the
+other providers (the direct Anthropic and OpenAI connections, Vercel, TokenRouter), the browser column
+on an instance with a browser service, the environments column and the benchmark dimension.

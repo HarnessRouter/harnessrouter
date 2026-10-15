@@ -1517,6 +1517,14 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("tokenrouter", "nanobot"): "tokenrouter", ("vercel", "nanobot"): "tokenrouter",
     ("llmtr", "nanobot"): "tokenrouter",       ("custom", "nanobot"): "openai-api",
     ("google", "nanobot"): "openai-api",       ("harnessrouter", "nanobot"): "tokenrouter",
+    # zeroclaw speaks ONE OpenAI shape too — its `custom` provider posts chat/completions — through
+    # the loopback relay, so it is wired row for row with nanobot.
+    ("anthropic", "zeroclaw"): "anthropic",    ("openai", "zeroclaw"): "openai",
+    ("azure-foundry", "zeroclaw"): "azure",
+    ("openrouter", "zeroclaw"): "openai-api",
+    ("tokenrouter", "zeroclaw"): "tokenrouter", ("vercel", "zeroclaw"): "tokenrouter",
+    ("llmtr", "zeroclaw"): "tokenrouter",      ("custom", "zeroclaw"): "openai-api",
+    ("google", "zeroclaw"): "openai-api",      ("harnessrouter", "zeroclaw"): "tokenrouter",
 }
 
 
@@ -5559,7 +5567,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     # kilo passes api_format to the same ai-sdk package choice opencode makes (_opencode_npm).
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
                "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
-               "mimo", "jcode", "opensquilla", "nanobot"},
+               "mimo", "jcode", "opensquilla", "nanobot", "zeroclaw"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
@@ -7541,7 +7549,7 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
 # only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
 # relay so its served model stays readable — see _build_jcode.)
-for _b in ("jcode", "opensquilla", "nanobot"):
+for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw"):
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
@@ -7632,6 +7640,20 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5", "nemotron-3-super",
                           "gpt-5.6-luna"}),
     "qoder": frozenset({"qfmodel", "efficient", "kmodel", "qmodel_latest"}),
+    # zeroclaw (0.8.5, 2026-10-13): llama-3.3-70b on OpenRouter declines the FIRST turn — a one-line
+    # echo — twice in a row ("The provided functions are insufficient for me to complete this task",
+    # then "I cannot perform this task as it requires additional information that is not provided"),
+    # with zeroclaw's tool list in the request. Fourteen other models passed all five scenarios.
+    # Measured on every offered model on the review instance (0.34.0-rc.1 to rc.4, 2026-10-14: five
+    # scenarios, the plugin package, the browser, a one-slide deck, the family tour):
+    #   grok-4.20         made no deck twice: zeroclaw's "The model provider returned an invalid
+    #                     semantic completion" (no text and no tool call, after its own retries).
+    #   nemotron-3-super  made no deck (no .pptx), no browser call on its first browser run, and a
+    #                     provider error on its first artifact; off all four sibling bases already.
+    #   qwen3.8-flash     answered the follow-up with the first turn's codeword ("M1" for "M2"), the
+    #                     mix-up that took it off mimo, and failed its artifact on provider errors after
+    #                     an outage had cleared (rc.2, rc.4, rc.5: no clean run).
+    "zeroclaw": frozenset({"llama-3.3-70b", "grok-4.20", "nemotron-3-super", "qwen3.8-flash"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
@@ -7661,7 +7683,7 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # agentzero too: its model is litellm's openai provider (Agent Zero's `other`, a0_api_mode chat).
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
                       "cheetahclaws", "grok", "agentzero",
-                      "jcode", "opensquilla", "nanobot")
+                      "jcode", "opensquilla", "nanobot", "zeroclaw")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -17281,6 +17303,29 @@ _BASE_CATALOG: dict[str, dict] = {
         # construction would have withheld the built-ins and let every MCP tool through. Measured:
         # with write_file withheld the model wrote the file with `exec` instead, which is the honest
         # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
+    "zeroclaw": {
+        "label": "ZeroClaw", "backend": "zeroclaw", "status": "ready",
+        "system_prompt": ("You are ZeroClaw, an autonomous agent. You work on a real git workspace "
+                          "with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # The tools zeroclaw 0.8.5 offers a session under the runner's config, as the agent listed
+        # them, pinned equal to the runner's ALL_ZEROCLAW_TOOLS, which is also the turn's allow-list:
+        # the twenty tools zeroclaw would offer beyond it (scheduling, channels, outside accounts and
+        # the rest; see the runner) are never offered, so there is nothing here to turn off.
+        "tools": [("shell", "Shell"), ("file_read", "File Read"), ("file_write", "File Write"),
+                  ("file_edit", "Edit"), ("glob_search", "Find"), ("content_search", "Search"),
+                  ("git_operations", "Git"),
+                  ("web_fetch", "Web Fetch"), ("web_search_tool", "Web Search"),
+                  ("http_request", "HTTP Request"), ("image_info", "Image Info"), ("calculator", "Calculator"),
+                  ("TodoWrite", "Todo"),
+                  ("spawn_subagent", "Subagent")],
+        # "hard": the runner writes the disabled tools into the risk profile's `excluded_tools`,
+        # which removes them from the tool list the model is offered (measured: an excluded tool is
+        # absent from the agent's own list) and is the one door that also removes MCP tools. As on
+        # every base, withholding a tool withholds that tool, not the capability: with file_write
+        # off, `shell` can still write a file.
         "tool_enforcement": "hard",
     },
 }
