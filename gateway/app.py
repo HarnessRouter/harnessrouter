@@ -7381,8 +7381,9 @@ _MODEL_CATALOG: dict[str, dict] = {
                          # tool calls after the CLI compacted the conversation, never finished, and
                          # was stopped at the ten-minute cap; 1.2 sits between them and is not offered
                          # either. muse-glimmer-30b is untested here and stays offered. Muse Wonder
-                         # is another model and is measured here on its own.
-                         "muse-wonder-1.0", "muse-glimmer-30b",
+                         # passed the five scenarios and the plugin package here but made no deck
+                         # within the ten-minute limit, twice (0.34.0-rc.7, 2026-10-15): not offered.
+                         "muse-glimmer-30b",
                          "llama-3.3-70b", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
                          "qwen3.7-max", "qwen3.7-plus", "glm-5.3", "glm-5.3-flash", "mistral-medium-3.5",
@@ -7665,6 +7666,20 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                     an outage had cleared (rc.2, rc.4, rc.5: no clean run).
     "zeroclaw": frozenset({"llama-3.3-70b", "grok-4.20", "nemotron-3-super", "qwen3.8-flash"}),
 }
+# Muse Wonder (muse-wonder-1.0), on every base that offers the Meta family, review instance
+# 0.34.0-rc.7 (2026-10-15): the five scenarios passed on all 21 through OpenRouter and through Vercel;
+# the plugin package, the browser and a one-slide deck on the instance's own route (Vercel) took it
+# off three more bases than cheetahclaws, each failure repeated on every turn that met it:
+#   agentzero   "Agent stopped after 5 consecutive unusable model responses": the skill turn, both
+#               browser tries, the deck.
+#   aider       writes the command it means to run behind its sentence, the code fence opened
+#               mid-line ("as directed.```bash"), so aider finds nothing to run: all five plugin
+#               turns, both browser tries, no deck.
+#   openhands   its next request carries two outputs for one tool call and the provider refuses it
+#               ("Duplicate function_call_output for call_id ..."): the four MCP transports, both
+#               browser tries, the deck. Every other model passes on the same base and route.
+for _b in ("agentzero", "aider", "openhands"):
+    _NOT_OFFERED[_b] = _NOT_OFFERED.get(_b, frozenset()) | {"muse-wonder-1.0"}
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
     _e["models"] = _ordered_models(m for m in (_e.get("models") or []) if m not in _gone)   # one order everywhere, see _MODEL_ORDER

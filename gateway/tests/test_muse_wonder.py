@@ -17,9 +17,20 @@ def test_each_vendor_that_serves_it_names_it_as_it_does():
     assert not any("full" in m for t in gw._VENDOR_MODELS.values() for m in t if m.startswith("muse-wonder"))
 
 
-def test_every_base_that_offers_a_muse_model_offers_it_first_in_its_family():
+# Measured on every base that offers the Meta family (0.34.0-rc.7, 2026-10-15): these four failed a
+# dimension on every turn that met it (gateway/app.py, _NOT_OFFERED and the cheetahclaws entry).
+NOT_HERE = {"agentzero", "aider", "openhands", "cheetahclaws"}
+
+
+def test_it_leads_the_meta_family_wherever_it_passed_and_is_off_where_it_failed():
+    offered = set()
     for b, c in gw._MODEL_CATALOG.items():
         muse = [m for m in c["models"] if m.startswith("muse")]
-        if muse:
+        if b in NOT_HERE:
+            assert "muse-wonder-1.0" not in c["models"], b
+        elif muse:
             assert muse[0] == "muse-wonder-1.0", (b, muse)
+            offered.add(b)
+    assert len(offered) == 17, sorted(offered)
+    assert all("muse-wonder-1.0" in gw._NOT_OFFERED[b] for b in ("agentzero", "aider", "openhands"))
     assert gw._MODEL_ORDER.count("muse-wonder-1.0") == 1
