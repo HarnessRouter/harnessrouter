@@ -138,6 +138,16 @@ def test_levels_are_named_only_for_models_that_were_measured():
         assert levels and all(lv in reasoning.LEVELS for lv in levels), model
 
 
+def test_muse_wonder_has_the_levels_both_routes_answered_under_either_name():
+    # OpenRouter's meta/muse-wonder and Vercel's meta/muse-wonder-1.0 are one model; neither route
+    # turns it off, so a turn that asks for none gets its lowest level.
+    for wire in ("meta/muse-wonder", "meta/muse-wonder-1.0", "muse-wonder-1.0"):
+        assert reasoning.levels_for(wire) == ("minimal", "low", "medium", "high", "xhigh"), wire
+    for route in ("openrouter", "vercel"):
+        assert reasoning.level_on(route, "meta/muse-wonder", "none") == "minimal"
+        assert reasoning.level_on(route, "meta/muse-wonder-1.0", "xhigh") == "xhigh"
+
+
 # ── the relay ────────────────────────────────────────────────────────────────────────────────
 
 class _Upstream:

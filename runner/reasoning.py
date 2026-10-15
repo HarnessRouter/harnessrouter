@@ -51,12 +51,17 @@ _MODEL_LEVELS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (r"^mistral-medium-3[.-]5$", ("none", "high")),
     (r"^step-3\.7-flash$", ("minimal", "low", "medium", "high", "xhigh")),        # cannot be turned off
     (r"^muse-spark-1\.3$", ("low", "high")),
+    # muse-wonder-1.0 (2026-10-14, two samples a level): cannot be turned off, OpenRouter refuses
+    # `none` ("Reasoning is mandatory") and Vercel accepts it and thinks anyway. OpenRouter thinks
+    # more at each step (minimal ~400 tokens, low ~1000, xhigh ~1450); Vercel in two tiers.
+    (r"^muse-wonder-1\.0$", ("minimal", "low", "medium", "high", "xhigh")),
     (r"^minimax-m3$|^ling-3\.0-flash$|^nemotron-3\.5-lightning$", ("none", "high")),
     (r"^hy3$|^hunyuan-3$", ("none", "low", "high")),
 )
 
 # A provider's own name for a model where its bare id differs from the catalog's.
-_ALIASES = {"gemini-3-flash": "gemini-3-flash-preview", "grok-4.20-reasoning": "grok-4.20"}
+_ALIASES = {"gemini-3-flash": "gemini-3-flash-preview", "grok-4.20-reasoning": "grok-4.20",
+            "muse-wonder": "muse-wonder-1.0"}
 
 # What a route cannot do for a model that has the level elsewhere: (route, bare-id pattern, levels).
 _ROUTE_LACKS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
