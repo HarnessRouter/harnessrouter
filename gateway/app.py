@@ -7613,6 +7613,12 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #               incomplete; "calling the probe_sse tool now" and no call); in the five-turn
     #               conversation whose harness instruction asks for a PDF, gpt-6.1-sol (opensquilla),
     #               gpt-5.6-luna (nanobot) and qfmodel (qoder) answered "say hi" without one.
+    #   hosted      the hosted service's own column after 0.33.0 (2026-10-14: first turn, follow-up
+    #               and a one-slide .pptx per model on Qoder's cloud, failures retested once):
+    #               qoder's efficient, kmodel and qmodel_latest built the deck in Qoder's sandbox and
+    #               answered without delivering it (DeliverArtifacts, the only way a file comes back),
+    #               so the person got no file: qmodel_latest on both tries, the other two on one of two.
+    #               Qoder serves these ids to every instance the same way, so they go here too.
     "mimo": frozenset({"claude-opus-4.7", "llama-3.3-70b", "llama-4-maverick", "qwen3.8-flash",
                        "gpt-5.6-luna", "hunyuan-4-preview", "nemotron-3-super", "kimi-k3",
                        "mistral-medium-3.5", "gemini-3.5-flash", "gemini-3.6-flash", "gpt-5.4-mini"}),
@@ -7622,7 +7628,7 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
                               "nemotron-3-super", "gpt-6.1-sol"}),
     "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5", "nemotron-3-super",
                           "gpt-5.6-luna"}),
-    "qoder": frozenset({"qfmodel"}),
+    "qoder": frozenset({"qfmodel", "efficient", "kmodel", "qmodel_latest"}),
 }
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())

@@ -251,7 +251,7 @@ memory, or with the same provider.
 
 **Records and references are the graph.** There is no second structure for entities and
 relationships: a record is a node, and a reference is an edge from the record that holds it to the
-record it names. `rel` says what the edge means. Five names have a defined meaning; any other is
+record it names. `rel` says what the edge means. Six names have a defined meaning; any other is
 carried unchanged.
 
 | `rel` | From | To | Meaning |
@@ -261,6 +261,12 @@ carried unchanged.
 | `about` | any record | an `entity` | This record concerns that entity |
 | `subject` | a `fact` | an `entity` | Who or what the fact says something of |
 | `object` | a `fact` | an `entity` | Who or what it relates the subject to |
+| `contradicts` | a `fact` | a `fact` | The two cannot both be true, and nothing says that one replaced the other ([§4.4](#44-facts-that-change)) |
+
+`contradicts` says the same thing from either end, so a server that keeps it keeps it on both
+records. Neither record is closed by it: a memory that holds a disagreement shows it rather than
+deciding it. Like every reference it runs between records, not versions, and survives a revision of
+either.
 
 A relationship between two entities that has something to say is therefore a **`fact`** with a
 `subject` and an `object`: "Dana is head of procurement at Quillon Freight" is a fact whose subject
@@ -312,13 +318,59 @@ A record's `content` is an ordered list of **parts**. Two kinds of part are defi
   ([§5](#5-operations)), by whoever may read the record.
 - **A string is shorthand** for one text part on a write. What is read back is always the list,
   so a client handles one shape.
-- **A part may name who said it**: `role` is `user`, `assistant`, `system` or `tool`. A turn of a
-  conversation is observed ([§5.1](#51-two-ways-to-write)) as it happened, each part under its
+- **A part may name who said it**: `role` is `user`, `assistant`, `system` or `tool`, and `name`
+  says who when the role alone does not: two people in one conversation are both `user`. A turn of
+  a conversation is observed ([§5.1](#51-two-ways-to-write)) as it happened, each part under its
   role, files included, with no shape of its own.
 - **A provider keeps what it says it keeps.** Its capability document lists the media types it
   keeps in `content.media` ([§10.2](#102-the-capability-document)). A write that carries a file of
   a media type the provider does not keep is refused with `memory_unsupported`; it is never stored
   without the file.
+
+### 4.4 Facts that change
+
+What was true changes: a person moves, buys a fourth bike, says the opposite of what they said
+before. A fact's `attributes` may carry these keys, defined here so that every writer and every
+server mean the same thing by them. Any other key is the writer's own.
+
+| Key | Meaning |
+|---|---|
+| `predicate` | What kind of thing the fact says of its subject, as a short phrase: `home_city`, `pets`, `job`. A server MAY compare predicates in a normalized form (case, spacing, a plural), so a writer that reuses the word already held for a subject is understood |
+| `value` | The value, briefly: `Chicago`, `a golden retriever named Max` |
+| `holds` | `one` when the subject has one value of the predicate at a time (a home city, a job); `many` when values add up (pets, trips). Absent, nothing in this section applies |
+| `stated_at` | When the source said it: the time of the turn or the document it came from. It is not `time.valid_from`, which is when it became true |
+| `as_said` | The time as the source put it: "last week" |
+| `precision` | How exact `time.valid_from` is: `instant`, `day`, `week`, `month` or `year` |
+| `standing` | `true` on an instruction or a preference that applies, without being asked for, until it is changed ([§9.1](#91-what-a-session-does)). Any record may carry it |
+
+A fact remembered without `time.valid_from` became true when it was said: a server takes
+`stated_at` for it.
+
+**One value at a time.** A server that declares `holds` ([§10.2](#102-the-capability-document))
+places a fact whose `holds` is `one`, with subject S, predicate P and `valid_from` T, among the
+active facts on S and P whose `holds` is `one`. Each was true from its `valid_from` until its
+`valid_to`, or until now when that is null:
+
+- One that was true **at** T, having become true before it, has ended at T, unless it has the same
+  value and the new fact only says it again. The server writes a new version of it with `valid_to`
+  set to T. That version is the server's own, `written_by` the provider `on_behalf_of` the writer
+  of the new fact; the version before it keeps the world time it had
+  ([§5.3](#53-nothing-is-overwritten)).
+- One that became true **at** T with another value cannot be true with it, and nothing says which
+  replaced which. Both stay, and the server links them with `contradicts`.
+- When one became true **after** T, the new fact is history: it is kept with `valid_to` set to the
+  earliest such `valid_from`.
+
+So a fact that arrives late, about the past, takes its place in the past: it ends what it replaced
+then, and what came after it still comes after it.
+
+The answer to remembering a `one` fact carries `closed`, the ids of the records it ended, and
+`conflicts`, the ids it was linked to with `contradicts`: both lists, empty when nothing happened,
+and neither is stored on the record. A `many` fact ends nothing by being remembered; what stops
+being true (a bike sold) is ended by a `revise` that sets its `valid_to`.
+
+A record's current world time is its head's. Its history shows each version with the world time
+the memory believed when that version was written.
 
 ## 5. Operations
 
@@ -326,6 +378,7 @@ A record's `content` is an ordered list of **parts**. Two kinds of part are defi
 |---|---|
 | `POST /v1/memories/{id}/observe` | **observe**: append episodes; the provider decides what to derive from them |
 | `GET /v1/memories/{id}/jobs/{job}` | What an `observe` that answered `202` has written since |
+| `GET /v1/memories/{id}/prime` | What the memory gives an agent without being asked: its standing records ([§9.1](#91-what-a-session-does)) |
 | `POST /v1/memories/{id}/records` | **remember**: write one record as stated |
 | `POST /v1/memories/{id}/recall` | **recall**: search this memory and what is below it ([§6](#6-recall)) |
 | `POST /v1/memories/{id}/graph` | **graph**: records as nodes and their references as edges, around one record or for the whole memory ([§6.6](#66-the-graph)) |
@@ -344,10 +397,46 @@ A record's `content` is an ordered list of **parts**. Two kinds of part are defi
 - **`observe`** hands the provider raw episodes and nothing more. Whether a fact is extracted from
   them, when, and by what, is the provider's business. It is what a server calls after a turn
   ([§9.1](#91-what-a-session-does)). When the provider derives after it answers, `observe` answers
-  `202` with `job: { id, status }` and no records yet; the job, read at its own route, carries
-  `status` (`pending`, `completed`, `failed`) and the records it produced. A provider is not
-  required to keep the episode itself as a record: one that keeps only what it derived says so
+  `202` with `job: { id, status }` and no records yet. A provider is not required to keep the
+  episode itself as a record: one that keeps only what it derived says so
   ([§10.2](#102-the-capability-document)), and a client that needs the raw input later keeps it.
+
+An episode is `{ content, time, attributes }`: its parts as they happened, each under its role and
+name ([§4.3](#43-content)), and `time.valid_from`, when it happened (left out, now). A conversation
+is observed one session to an episode, in the order the sessions happened; a provider MAY keep a
+session as one record and each of its turns as a record `part_of` it. Observing again an episode
+the memory already holds keeps nothing twice and derives nothing again, unless what was derived
+from it failed.
+
+```json
+{ "episodes": [ {
+  "content": [
+    { "type": "text", "role": "user", "name": "Caroline", "text": "I adopted a dog last week." },
+    { "type": "text", "role": "user", "name": "Melanie", "text": "What's its name?" }
+  ],
+  "time": { "valid_from": "2023-05-08T13:56:00Z" },
+  "attributes": { "session": "s2" }
+} ] }
+```
+
+A job, read at its own route, says how the derivation went:
+
+```json
+{ "object": "memory.job", "id": "hjob_41c0…", "memory_id": "hmem_7c1e…",
+  "status": "completed", "error": "",
+  "data": [ { "id": "hrec_…", "type": "fact", "title": "Caroline adopted a dog", … } ],
+  "closed": [], "conflicts": [],
+  "usage": { "input_tokens": 6200, "output_tokens": 900 },
+  "created_at": 1790570000, "started_at": 1790570002, "finished_at": 1790570031 }
+```
+
+- `status` is `queued`, `running`, `completed` or `failed`, as a consolidation run's is
+  ([§9.2](#92-consolidation-runs)). A provider that cannot tell queued from running says
+  `pending`.
+- `data` is the records the job wrote; `closed` and `conflicts` are what writing them did
+  ([§4.4](#44-facts-that-change)); `usage` is present when a model did the work.
+- A failed job says why in `error` and leaves the episodes kept. Observing them again starts a new
+  job.
 - **`remember`** writes the record the caller states, as stated. It is what an agent calls when it
   decides something is worth keeping.
 
@@ -476,6 +565,10 @@ Any one may be given alone. Given together, the provider fuses them into one ran
 - `memory` names the memory each result is in: the one asked, or one below it. It is where the
   caller goes next.
 - `why` names the signals that produced each result.
+- A result whose record has a `contradicts` reference brings the record at its other end, when the
+  caller may read it and it is active: after the ranked results, once however many results name
+  it, with `score` null and `why` `["contradicts"]`, and not counted against `limit`. A reader who
+  finds one side of a disagreement is shown the other.
 - `degraded` lists what the request asked for and was not done (`"text:not_supported"`,
   `"subtree:capped_at_200_memories"`). A server MUST NOT ignore part of a request silently.
 - `parent` is absent on a root, and equally absent when the caller may not read the parent: the two
@@ -691,14 +784,37 @@ A harness adds two settings of its own:
 
 | Moment | Called by | What happens |
 |---|---|---|
-| **Prime** | server, at session start and after the conversation is compacted | The server reads what the provider marks as always-relevant in each memory the agent was granted and places it, with each memory's `name`, `description` and children, in the agent's instructions |
+| **Prime** | server, at session start and after the conversation is compacted | The server reads the standing records of each memory the agent was granted and places them, with each memory's `name`, `description` and children, in the agent's instructions |
 | **Tools** | agent, during a turn | `memory_list`, `memory_recall`, `memory_graph`, `memory_get`, `memory_remember`, `memory_revise`, `memory_forget`, `memory_run_query` for the named queries a memory lists, `memory_operate` for a type's operations, and `memory_query` where a provider offers free queries. Write tools are offered only to an agent that holds `write` somewhere. The memories it was granted are where the agent starts; from each it may walk to the parent and the children a response names, and on from there, as far as its own privileges reach. The server checks every step |
 | **Observe** | server, when a turn ends | The turn (what was asked, what was answered, which tools ran) is sent to the default memory as episodes. No model is involved on the server's side |
 | **Consolidate** | server, on a schedule or when idle | The server asks the provider to do its background work. What that is belongs to the provider |
 
-How much a provider returns for priming is the provider's decision. The server records what it
-placed, per memory, in tokens, with the turn, so
-the cost is visible even where it is not set by the client.
+A memory's standing records are its instructions and preferences: the active records whose
+`attributes.standing` is `true` ([§4.4](#44-facts-that-change)). They are read at their own route,
+so a server that runs the agent and does not keep its memories asks the server that does:
+
+```http
+GET /v1/memories/{id}/prime?budget=4000
+```
+
+```json
+{ "records": [ { "id": "hrec_…", "type": "procedure",
+                 "title": "Format every code snippet with syntax highlighting",
+                 "attributes": { "standing": true }, … } ],
+  "tokens": 412, "truncated": false }
+```
+
+- The records are newest first, taken in that order until the next would pass `budget` tokens;
+  the first always fits. `tokens` is what the provider counted, an estimate it states and does not
+  have to meet exactly; `truncated` is true when a standing record was left out.
+- It reads the memory alone. `depth` widens it as it widens `recall`
+  ([§6.2](#62-the-request)), and a server priming an agent reads each memory of the agent's
+  granted listing ([§9](#9-an-agent-and-its-memories)) at depth 0, the budget divided between them:
+  a company's root would otherwise put every team's preferences into every turn.
+- It needs `read`, and returns only what the caller may read.
+
+The server records what it placed, per memory, in tokens, with the turn, so the cost is visible
+even where it is not set by the client.
 
 Priming is not repeated every turn. Instructions that change every turn defeat prompt caching, and
 retrieval during a turn is what the tools are for.
@@ -776,7 +892,7 @@ GET /v1/memories/providers
   "history": { "content": "versions", "structure": "versions" },
   "revise": "native", "forget": "native",
   "erase": { "unreachable": "reported" },
-  "prime": true, "consolidate": "runs",
+  "prime": true, "consolidate": "runs", "holds": true,
   "queries": { "named": true,
                "free": { "languages": ["cypher"], "write": false } },
   "types": true,
@@ -796,6 +912,11 @@ GET /v1/memories/providers
   them in what it is given and relates them itself), `stated` (it keeps the ones a writer states
   and finds none of its own) or `none` (it keeps no record of that type). The graph read
   ([§6.6](#66-the-graph)) works on all three.
+- **`prime`** is true when the provider answers the prime read ([§9.1](#91-what-a-session-does));
+  one that does not answers it with an empty list.
+- **`holds`** is true when the provider ends and links facts by `holds`
+  ([§4.4](#44-facts-that-change)). One that does not keeps the attributes as written, answers
+  neither `closed` nor `conflicts`, and leaves `contradicts` to whoever writes it.
 
 ### 10.3 What an adapter owes
 
