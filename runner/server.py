@@ -400,6 +400,25 @@ def _nanobot_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
         return False
 
 
+def _zeroclaw_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Ask zeroclaw's own ACP session store for the conversation: a row in acp_sessions with this
+    uuid is exactly what `session/resume` loads. Read-only, so a turn never contends for the lock
+    the ACP server takes."""
+    db = pathlib.Path(cwd) / _ZEROCLAW_DIR / "data" / "sessions" / "acp-sessions.db"
+    if not db.is_file() or not session_id:
+        return False
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            return con.execute("SELECT 1 FROM acp_sessions WHERE session_uuid = ?",
+                               (session_id,)).fetchone() is not None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+
+
+
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
@@ -426,6 +445,9 @@ _SESSION_PRESENT = {
     "jcode": _argv_session_present,
     "opensquilla": _opensquilla_session_present,
     "nanobot": _nanobot_session_present,
+    # zeroclaw: the driver asks for `session/resume` on every turn that has an id and starts a new
+    # session when the store says it is not there, so the store is asked here too.
+    "zeroclaw": _zeroclaw_session_present,
 }
 
 
@@ -517,7 +539,11 @@ def _isolate_session(ws: str) -> None:
 _CALLER_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Prefixes the runner sets for the agent's own credentials, and the dynamic loader's; names that
 # would redirect an interpreter's imports, a process's trust roots or its network path.
-_CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "AWS_", "AZURE_", "LD_", "DYLD_")
+_CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "AWS_", "AZURE_", "LD_", "DYLD_",
+                        # zeroclaw reads ZEROCLAW_<section>__<key> as config overrides (the runner puts
+                        # the relay key there), so a harness variable named so could move its endpoint
+                        # or its excluded tools, or stop it from starting
+                        "ZEROCLAW_")
 _CALLER_ENV_RESERVED_NAMES = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "PWD", "TMPDIR",
                               "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
                               "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
@@ -638,11 +664,21 @@ async def _internal_callers_only(request: Request, call_next):
 # re-tarred) AND on a real DISK, not a RAM-backed tmpfs (which would defeat the memory saving).
 # Default: a dedicated dir on the container's disk-backed rootfs (same overlay as /workspace on
 # ACA Dynamic Sessions), created at import. Override with HARNESS_SPOOL_DIR if the runtime differs.
-SPOOL_DIR = os.environ.get("HARNESS_SPOOL_DIR", "/var/tmp/harness-spool")
-try:
-    os.makedirs(SPOOL_DIR, exist_ok=True)
-except OSError:
-    SPOOL_DIR = None   # fall back to the OS tmpdir if that path isn't writable
+def _spool_dir(path: str) -> str | None:
+    """`path`, created if missing, when this process can create files in it; else None, which
+    tempfile reads as the OS tmpdir. An EXISTING directory counts only if it is writable: on the
+    hosted service an image build imported this module as root, which left the default path
+    root-owned at 755, and the runner, running as another user, then failed every checkpoint and
+    every hydrate with EACCES at mkstemp (2026-10-14). This image runs the runner as root and imports
+    nothing at build time, but a container started with `--user` meets the same directory."""
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return None
+    return path if os.access(path, os.W_OK | os.X_OK) else None
+
+
+SPOOL_DIR = _spool_dir(os.environ.get("HARNESS_SPOOL_DIR", "/var/tmp/harness-spool"))
 _SPOOL_STALE_S = 3600  # a spool file older than this can't belong to a live transfer
 
 
@@ -765,6 +801,11 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       # SESSIONS live in the same directory and MUST travel, so the exclusion is
                       # the file, not the directory.
                       "./.harness/nanobot/config.json",
+                      # zeroclaw's config.toml carries no provider key (it is an environment
+                      # override), but its [[mcp.servers]] entries carry a server's env and headers
+                      # as written, and those commonly hold a bearer token. Rewritten every turn, so
+                      # nothing is lost by leaving it out; its data dir beside it MUST travel.
+                      "./.harness/zeroclaw/config.toml",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -850,6 +891,7 @@ GAJAE_DEFAULT_MODEL = os.environ.get("GAJAE_DEFAULT_MODEL", "gpt-5.4")
 JCODE_DEFAULT_MODEL = os.environ.get("JCODE_DEFAULT_MODEL", "gpt-5.4")
 OPENSQUILLA_DEFAULT_MODEL = os.environ.get("OPENSQUILLA_DEFAULT_MODEL", "gpt-5.4")
 NANOBOT_DEFAULT_MODEL = os.environ.get("NANOBOT_DEFAULT_MODEL", "gpt-5.4")
+ZEROCLAW_DEFAULT_MODEL = os.environ.get("ZEROCLAW_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -932,7 +974,7 @@ _PER_TURN_CONFIG = (".harness/opencode.json", ".harness/kilo.json", ".harness/mc
                     ".harness/mcp-bridge/")
 # A base's own state directory outside the CLI home, which it rewrites on every turn (see
 # _git_ensure). Not in the checkpoint repo; in the tar like .harness/home.
-_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/")
+_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/", ".harness/zeroclaw/")
 
 
 def _git_ensure(ws: str) -> None:
@@ -965,6 +1007,7 @@ def _git_ensure(ws: str) -> None:
         ".harness/home/.config/jcode/",
         ".harness/opensquilla/.env", ".harness/opensquilla/secrets.toml",
         ".harness/nanobot/config.json",
+        ".harness/zeroclaw/config.toml",
         "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
         ".harness/home/",
         # Agent Zero's whole base, for the #193 reason: its chat.json stores the full rendered
@@ -1468,6 +1511,12 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # still. Written down here rather than quietly: see the PR body's follow-up.
         rootrels = [f"{_NANOBOT_WS}/skills"]
         entryroot = f"{_NANOBOT_WS}/skills"
+    elif backend == "zeroclaw":
+        # <agent workspace>/skills/<name>/SKILL.md, the per-agent root zeroclaw loads for a session
+        # (docs/book/src/tools/skills.md). The agent workspace is under .harness/ (_ZEROCLAW_AGENT_WS),
+        # so the bundle is never a produced file.
+        rootrels = [str(_ZEROCLAW_AGENT_WS / "skills")]
+        entryroot = str(_ZEROCLAW_AGENT_WS / "skills")
     else:
         # dsh has no skill loader; the AGENTS.md block below is the only door.
         # aider lands here on purpose too, and for a stronger reason: it has no skill loader AND no
@@ -1845,6 +1894,12 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # The one base whose agent workspace is a subdirectory of the session (see _NANOBOT_WS):
         # the file has to be where THAT workspace is, or it is written and never read.
         return pathlib.Path(cwd) / _NANOBOT_WS / "AGENTS.md"
+    if backend == "zeroclaw":
+        # zeroclaw reads AGENTS.md (with SOUL.md, IDENTITY.md and the rest of its persona set) from
+        # the per-agent workspace, not the ACP cwd (system_prompt.rs). Measured on 0.8.5: a sentinel
+        # written here before the first turn was repeated by the agent, and the file was left as
+        # written while zeroclaw seeded the other six beside it.
+        return pathlib.Path(cwd) / _ZEROCLAW_AGENT_WS / "AGENTS.md"
     if backend == "qwen":
         return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
     if backend == "gemini":
@@ -7225,7 +7280,7 @@ GEMINI_HELPER_ALIASES = {
 # explicitly (a plain default alone left gemini-2.5-flash rewritten, measured 2026-09-06 on 0.58.0).
 # Every listed id is pinned, and the turn's own model with it, so no context can retarget any of
 # them; a served model that still differs fails the turn (see _gemini_to_claude).
-GEMINI_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+GEMINI_MODELS = ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
                  "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
                  "gemini-3-flash-preview")
 
@@ -10523,6 +10578,221 @@ def _build_nanobot(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
     return [NANOBOT_PYTHON, NANOBOT_DRIVER, json.dumps(job)]
 
 
+# ── zeroclaw (zeroclaw-labs/zeroclaw, Apache-2.0, a Rust binary) ─────────────────────────────────
+# A self-hosted personal-agent runtime, driven through its ACP server (`zeroclaw acp`, JSON-RPC over
+# stdio) by runner/zeroclaw_driver.py, which emits claude's stream-json directly — so this backend's
+# normaliser is the passthrough, as nanobot's is. The driver's docstring holds the measured reasons
+# ACP is the surface and `zeroclaw agent -m` is not (prose only, and no conversation across runs).
+ZEROCLAW_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
+ZEROCLAW_BIN = os.environ.get("HR_ZEROCLAW_BIN", "/data/agent-tools/bin/zeroclaw")
+ZEROCLAW_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zeroclaw_driver.py")
+# Everything zeroclaw keeps lives under one directory in the session's .harness/: config.toml, its
+# data dir (the ACP session store at data/sessions/acp-sessions.db, its cost and trace logs) and the
+# per-agent workspace. That last one is NOT the agent's working directory — the ACP `cwd` is the
+# session directory, and zeroclaw's file and shell tools are rooted there (measured: `pwd` answered
+# the session dir and a relative file_write landed in it). The agent workspace is where zeroclaw
+# READS its instruction files and skills, and where it SEEDS its own: on the first turn it wrote
+# AGENTS.md, SOUL.md, IDENTITY.md, USER.md, TOOLS.md, MEMORY.md and HEARTBEAT.md there. Measured with
+# the agent workspace equal to the session dir, all seven came back as files the task produced;
+# under .harness/ none does, and a runner-written AGENTS.md there is read and left as written.
+_ZEROCLAW_DIR = pathlib.Path(".harness", "zeroclaw")
+_ZEROCLAW_AGENT_WS = _ZEROCLAW_DIR / "agent"
+# The variable zeroclaw's env-override walker maps onto [providers.models.custom.hr].api_key, so the
+# credential is never written to config.toml. It is also what makes rule 2 answerable on this
+# backend: _relay_served_model finds the relay route by the placeholder bearer among the turn's ENV
+# values.
+_ZEROCLAW_KEY_ENV = "ZEROCLAW_providers__models__custom__hr__api_key"
+# Tools that are never offered. The first four call back to the ACP client and wait for a person
+# (ask_user, escalate_to_human, reaction, poll); a runner turn has none, so the call would hang the
+# turn until zeroclaw's own timeout. The last three let the MODEL change what serves the turn —
+# model_switch and model_routing_config pick another model, proxy_config another route — and a turn
+# that ran on a model nobody asked for is a substitution (matrix rule 2). The last three cannot work
+# in the sandbox at all — MEASURED on 0.8.5 in the image: browser_open "Failed to open system browser",
+# browser "agent-browser CLI is unavailable", screenshot "No screenshot tool found" — so offering them
+# is a picker row that fails on use (rule 4). The instance's browser plugin is the browser here.
+# llm_task takes a `model` argument ("Optional model override", crates/zeroclaw-tools/src/llm_task.rs)
+# and sends it through the relay: model_switch's door again. deliver_file hands a file back to an ACP
+# client as an embedded blob, which this driver drops (a turn's files come back from the workspace,
+# where the file already is), and zeroclaw keeps a second copy of it beside the original.
+_ZEROCLAW_NEVER = ("ask_user", "escalate_to_human", "reaction", "poll",
+                   "model_switch", "model_routing_config", "proxy_config", "llm_task",
+                   "browser_open", "browser", "screenshot", "deliver_file")
+# The tools a zeroclaw turn offers, and the only ones: the config's `allowed_tools` (MCP tools,
+# `<server>__<tool>`, are admitted by zeroclaw on top of it). CAPTURED, not asked of the agent: a
+# fake chat/completions server recorded the request zeroclaw 0.8.5 sends under this config (2026-10-14).
+# With only _ZEROCLAW_NEVER excluded it sent 34 tools, among them cron_add/list/remove/run/runs/update
+# and schedule (no scheduler runs in a one-shot turn), channel_room, send_message_to_peer, send_via and
+# sessions_current/history/list/send (no channels; claude-sonnet-5.5 spent a turn reading an empty
+# session store and made no PDF), pushover and git_forge (accounts of their own), backup, canvas and
+# weather; and no memory_store/recall/forget at all, which the first list named. Each tool here was
+# seen to work in the image; delegate was not ("Missing 'agent' parameter": there is no other agent).
+# Pinned equal to the gateway's _BASE_CATALOG["zeroclaw"] tool ids by its tests.
+ALL_ZEROCLAW_TOOLS = (
+    "shell", "file_read", "file_write", "file_edit", "glob_search", "content_search",
+    "git_operations", "web_fetch", "web_search_tool", "http_request",
+    "image_info", "calculator", "TodoWrite", "spawn_subagent",
+)
+# What `allowed_tools` holds when a harness turns every tool off: an empty list is zeroclaw's "no
+# constraint", so a name no tool has keeps the list closed (MCP tools are still admitted).
+_ZEROCLAW_NO_TOOLS = "no_builtin_tools"
+# The variables a turn's shell needs that zeroclaw does not pass on by itself. Its shell tool builds
+# a minimal environment — MEASURED: a variable in the driver's environment came back empty in the
+# shell, PATH was reset to the system default and only names in `shell_env_passthrough` arrived —
+# which is nanobot's `_build_env` shape exactly, so the same list is handed over by name: the
+# environment layer's variables, PATH (the layer's bin dirs and the installed tools), and the
+# harness's own variables. Names only: the values stay in the driver's environment.
+_ZEROCLAW_SHELL_KEYS = ("PATH", "PROJECT_ROOT", "HR_ENVIRONMENT", "PYTHONPATH", "VIRTUAL_ENV",
+                        "NODE_PATH", "LD_LIBRARY_PATH", "TMPDIR")
+
+
+def _toml(v) -> str:
+    """A TOML value. Strings go through _toml_str (grok's encoder: characters as themselves, since
+    json.dumps's default escapes a character outside the BMP as a surrogate pair, which TOML
+    refuses, so one emoji in an MCP argument made the whole file unreadable)."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, dict):
+        return "{ " + ", ".join(f"{_toml_str(k)} = {_toml(x)}" for k, x in v.items()) + " }"
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_toml(x) for x in v) + "]"
+    return _toml_str(v)
+
+
+def _zeroclaw_mcp(servers: list[dict] | None) -> list[dict]:
+    """zeroclaw's `[[mcp.servers]]` entries: stdio (`command`/`args`/`env`) or a remote server over
+    `http` or `sse` (`url`/`headers`). Unlike nanobot it takes the transport by name, so it is sent."""
+    out: list[dict] = []
+    for i, sv in enumerate(servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry: dict = {"name": name, "transport": "stdio", "command": str(argv[0]),
+                           "args": [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        elif url:
+            kind = str(sv.get("transport") or sv.get("type") or "").lower()
+            entry = {"name": name, "transport": "sse" if kind == "sse" or url.rstrip("/").endswith("/sse") else "http",
+                     "url": url}
+            if _mcp_headers(sv):
+                entry["headers"] = _mcp_headers(sv)
+        else:
+            continue
+        out.append(entry)
+    return out
+
+
+def _zeroclaw_config(base_url: str, model: str, cwd: str, mcp_servers: list[dict] | None,
+                     tools_disabled: list[str] | None, max_turns: int | None,
+                     shell_keys: list[str] | tuple = ()) -> pathlib.Path:
+    """Write <cwd>/.harness/zeroclaw/config.toml and return its directory (zeroclaw's --config-dir).
+
+    Rewritten on every turn, so a model switch is a new `model` here: `session/resume` rebuilds the
+    agent from the CURRENT config and seeds it with the stored history. The api key is not in the
+    file (_ZEROCLAW_KEY_ENV); MCP headers and env can be, so the file is in CHECKPOINT_EXCLUDE.
+
+    What the risk profile says, and why:
+      * level "full" — a supervised profile asks the ACP client before a tool runs, and there is
+        nobody to answer.
+      * allowed_commands ["*"] with block_high_risk_commands false — zeroclaw's documented trusted
+        mode. Without it its shell refused `touch` and anything chained with `&&` even at level full
+        (measured: "Command not allowed by security policy"). The session already runs as its own
+        OS user in its own directory, which is the boundary every other base relies on.
+      * excluded_tools — the harness's disabled tools plus _ZEROCLAW_NEVER. It is applied to the
+        tool list the model is offered (measured: an excluded tool is not among the tools the agent
+        lists), and it is the one door that covers MCP tools too: the profile's allow-list
+        auto-admits `<server>__<tool>` names, and only excluded_tools subtracts them."""
+    d = pathlib.Path(cwd) / _ZEROCLAW_DIR
+    agent_ws = pathlib.Path(cwd) / _ZEROCLAW_AGENT_WS
+    agent_ws.mkdir(parents=True, exist_ok=True)
+    disabled = sorted({str(x).split(" (")[0].strip() for x in (tools_disabled or []) if x} | set(_ZEROCLAW_NEVER))
+    mcp = _zeroclaw_mcp(mcp_servers)
+    lines = [
+        "# Written by the HarnessRouter runner on every turn; edits here do not survive the next one.",
+        "schema_version = 3", "",
+        "[providers.models.custom.hr]",
+        f"uri = {_toml((base_url or '').rstrip('/'))}",
+        f"model = {_toml(model)}",
+        # A `custom` endpoint defaults to PROMPT-GUIDED tools: the tool list is described in the
+        # system prompt and the model is asked to write <tool_call> blocks as text (zeroclaw's own
+        # factory test: "custom OpenAI-compatible endpoints must default to prompt-guided tools").
+        # MEASURED through the relay on 0.8.5 (claude-haiku-4.5): the model wrote the calls as prose
+        # with invented <tool_result> lines, two of three arrived without their arguments ("Missing
+        # 'path' parameter"), and the turn spent three model calls on one file. Every provider this
+        # backend is wired to takes native tool calls on chat/completions, so they are switched on.
+        "native_tools = true", "",
+        "[agents.zeroclaw]",   # the agent alias names the agent in its persona (zeroclaw_driver._AGENT)
+        "enabled = true",
+        'model_provider = "custom.hr"',
+        'risk_profile = "hr"',
+        'runtime_profile = "hr"',
+    ]
+    if mcp:
+        # MCP is opt-in per agent on ACP (`acp_enable_mcp`, off by default), and a server reaches an
+        # agent only through a bundle the agent names: three switches, and a missing one is silent.
+        lines += ['mcp_bundles = ["hr"]', "acp_enable_mcp = true"]
+    # A skill folder holding a script file is skipped unless scripts are allowed ("install.sh:
+    # script-like files are blocked by skill security policy"): MEASURED on 0.8.5, the built-in
+    # Office skill was dropped from every session for its install.sh. The skills here are the
+    # image's and the harness author's own, and their scripts run in the same shell either way.
+    lines += ["", "[skills]", "allow_scripts = true"]
+    lines += ["", "[agents.zeroclaw.workspace]", f"path = {_toml(str(agent_ws))}", "",
+              "[risk_profiles.hr]", 'level = "full"', 'allowed_commands = ["*"]',
+              "block_high_risk_commands = false",
+              # zeroclaw's defaults are `workspace_only = true` and a path denylist that holds /etc
+              # and /usr (crates/zeroclaw-config/src/schema.rs, RiskProfileConfig::default). MEASURED
+              # on 0.8.5: `head -2 /etc/os-release`, `ls /env` and a python3 under /usr were all
+              # refused as "forbidden absolute paths outside the workspace", and an environment's
+              # script runs by its absolute path under /env. The boundary here is the session's own
+              # OS user and its workspace, as for every other base.
+              "workspace_only = false", "forbidden_paths = []",
+              f"allowed_tools = {_toml(sorted(set(ALL_ZEROCLAW_TOOLS) - set(disabled)) or [_ZEROCLAW_NO_TOOLS])}",
+              f"excluded_tools = {_toml(disabled)}",
+              f"shell_env_passthrough = {_toml(sorted(set(shell_keys)))}", "",
+              "[runtime_profiles.hr]"]
+    if max_turns:
+        lines.append(f"max_tool_iterations = {int(max_turns)}")
+    if mcp:
+        lines += ["", "[mcp_bundles.hr]", f"servers = {_toml([s['name'] for s in mcp])}"]
+        for s in mcp:
+            lines += ["", "[[mcp.servers]]"] + [f"{k} = {_toml(v)}" for k, v in s.items()]
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.toml").write_text("\n".join(lines) + "\n")
+    return d
+
+
+def _build_zeroclaw(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                    resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                    tools_disabled: list[str] | None = None, max_turns: int | None = None,
+                    caller_keys: list[str] | tuple = ()) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in ZEROCLAW_PROVIDERS:
+        raise HTTPException(400, f"unknown zeroclaw provider '{pr}' (one of {sorted(ZEROCLAW_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"zeroclaw provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        # Every keyed turn rides the loopback relay, so the real key never reaches zeroclaw, and the
+        # relay's taps supply what its ACP stream does not: the served model (rule 2) and fresh,
+        # cached and output tokens. zeroclaw's `custom` provider speaks chat/completions.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, stream_usage=True)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    env[_ZEROCLAW_KEY_ENV] = auth.api_key or ""
+    shell_keys = [k for k in _ZEROCLAW_SHELL_KEYS if env.get(k)]
+    shell_keys += [k for k in caller_keys if env.get(k) is not None and k not in shell_keys]
+    shell_keys += [k for k in _TURN_SHELL_KEYS if env.get(k) and k not in shell_keys]
+    cfg_dir = _zeroclaw_config(auth.base_url, model, cwd, mcp_servers, tools_disabled, max_turns, shell_keys)
+    job = {"zeroclaw": ZEROCLAW_BIN, "config_dir": str(cfg_dir), "cwd": cwd, "model": model,
+           "prompt": prompt, "resume_session_id": resume_session_id or ""}
+    return [sys.executable, ZEROCLAW_DRIVER, json.dumps(job)]
+
+
 
 def _jcode_has_session(env: dict, session_id: str) -> bool:
     """Is this conversation in this workspace's session store?
@@ -11178,6 +11448,9 @@ BACKENDS = {
     # normaliser is the passthrough, as systemone's is.
     "nanobot": {"providers": sorted(NANOBOT_PROVIDERS), "default_model": NANOBOT_DEFAULT_MODEL,
                 "normalize": _claude_passthrough},
+    # The zeroclaw driver emits claude's stream-json itself (see zeroclaw_driver.py).
+    "zeroclaw": {"providers": sorted(ZEROCLAW_PROVIDERS), "default_model": ZEROCLAW_DEFAULT_MODEL,
+                 "normalize": _claude_passthrough},
 }
 
 
@@ -12921,6 +13194,13 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                              # the harness's own variables and the platform's HR_ ones a turn carries
                              caller_keys=[*_caller_env(req.env),
                                           *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
+    elif backend == "zeroclaw":
+        model = model or ZEROCLAW_DEFAULT_MODEL
+        cmd = _build_zeroclaw(req.provider, auth, model, req.prompt, cwd, env,
+                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                              tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                              caller_keys=[*_caller_env(req.env),
+                                           *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
     else:
         mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
         # Only a package that is ALSO a Claude Code plugin gets --plugin-dir; an Agent Plugins

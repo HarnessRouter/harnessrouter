@@ -420,3 +420,12 @@ def test_a_route_the_gateway_names_wins_over_the_base(monkeypatch):
         assert "effort_route" not in rs._HERMES_RELAY["routes"][tok][2]
     finally:
         rs._TURN_THINKING.reset(token); rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_gemini_4_argon_takes_the_levels_google_answered():
+    """Measured 2026-10-14 on Google's OpenAI-compatible surface: none, low, medium, high answered;
+    minimal and xhigh refused. OpenRouter refuses `none` for every Gemini ("Reasoning is mandatory")."""
+    assert reasoning.levels_for("gemini-4-argon") == ("none", "low", "medium", "high")
+    assert reasoning.level_on("google", "gemini-4-argon", "minimal") == "low"
+    assert reasoning.level_on("openrouter", "gemini-4-argon", "none") == "low"
+    assert reasoning.level_on("vercel", "gemini-4-argon", "high") == "high"

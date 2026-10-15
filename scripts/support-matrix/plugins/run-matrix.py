@@ -47,7 +47,9 @@ BASES = ["claude-code", "codex", "hermes", "goose", "gemini", "qwen", "opencode"
          # MCP client at all ("HTTP/SSE entries are recognized and skipped with a log line")
          # and opensquilla takes stdio and SSE but not streamable HTTP, so both are in
          # _BRIDGED_TRANSPORTS and a remote column measures the bridge on them.
-         "mimo", "jcode", "opensquilla", "nanobot"]
+         "mimo", "jcode", "opensquilla", "nanobot",
+         # zeroclaw takes stdio, http and sse servers natively ([[mcp.servers]] `transport`)
+         "zeroclaw"]
 NO_STDIO: set[str] = set()
 # The public probe the remote columns call: its SSE end answers PROBE-SSE-<id>, its streamable-HTTP
 # end PROBE-HTTP-<id>. Both are the same fixed server, so a wrong answer is the base, not the probe.
