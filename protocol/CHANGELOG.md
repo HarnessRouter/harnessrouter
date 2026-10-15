@@ -136,6 +136,41 @@ its privileges on each. It is stated in what the caller may do, not in how acces
 server that lets a member in by a role answers it as one that keeps a grant per memory does. §9
 names it as what an agent's tools are built from. Conformance: ME-01 asks it.
 
+**Facts that change (§4.4), standing records and observed conversations, found while preparing
+three public memory benchmarks for the second server.** A memory that keeps facts has to tell an update
+("I moved to Porto") from an addition ("I got a fourth bike") and from a disagreement ("I have
+never written a route", after describing one), keep the time something was said apart from the
+time it became true, and give an agent its standing instructions without being asked. The chapter
+had a word for none of these, so every writer and every server would have invented its own. Now:
+
+- A fact's attributes have defined keys: `predicate`, `value`, `holds` (`one` or `many`),
+  `stated_at`, `as_said`, `precision`, and `standing` (on any record). Without `time.valid_from`, a
+  fact became true when it was said. A server that declares `holds` places a `one` fact among the
+  others on its subject and predicate by their world time: what was true at T ends at T (a version
+  of the server's own, `on_behalf_of` the writer), a different value from the same instant is
+  linked with `contradicts` and both stay, and a fact about the past ends where the next value
+  began. The answer to the write says what it did, in `closed` and `conflicts`, never stored.
+- `contradicts` is a defined `rel`, kept on both records. A recall result on one side brings the
+  other, after the ranked results, with `score` null and `why` `["contradicts"]`, outside `limit`.
+- `GET /v1/memories/{id}/prime` reads a memory's standing records, newest first, within a token
+  budget, from that memory alone unless `depth` widens it; a server priming an agent reads each
+  memory it was granted at depth 0. The capability `prime` says whether a provider answers it.
+- An observed episode carries `time.valid_from`, a content part may carry `name` beside `role`, and
+  a conversation is observed one session to an episode, in order. A job says `queued`, `running`,
+  `completed` or `failed` (`pending` stays for a provider that cannot tell the first two apart),
+  with what it wrote, `closed`, `conflicts` and `usage`.
+- A revision no longer changes the world time of the version it replaces: that version gets only
+  its belief-time stamp, so `as_of` reads what the memory believed then. Stated because the second
+  server's store did otherwise; its existing histories needed no repair.
+
+Additive: every request and object valid before is valid now. Schema: `MemoryContentPart.name`, the
+episode's `time`, `MemoryJob` (`memory_id`, `closed`, `conflicts`, `usage`, times; `queued` and
+`running`), `MemoryRecord.closed` and `.conflicts` on a write's answer, `MemoryProvider.prime` and
+`.holds`, `MemoryPrime` and its path. Suite `2026.10.4.post10`: ME-11 (five facts on one subject:
+ended, linked, placed in the past, placed inside an earlier value), ME-12 (both sides of a
+disagreement from a recall of one), ME-13 (the prime read: only standing records, newest first, a
+budget, the memory alone).
+
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:
   it holds records and may have child memories. A grant gives a principal privileges (`read`,

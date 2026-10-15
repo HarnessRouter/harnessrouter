@@ -8626,13 +8626,16 @@ def _build_goose(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     # Otherwise every turn pays an extra background model call to invent a session name we never
     # read — the name is ours, set with -n below.
     env["GOOSE_DISABLE_SESSION_NAMING"] = "true"
-    _goose_config(root, model, mcp_servers, tools_disabled, provider="anthropic" if native else "openai")
+    goose_provider = "anthropic" if native else "openai"
+    _goose_config(root, model, mcp_servers, tools_disabled, provider=goose_provider)
     # -n names the session on a fresh run and selects it on a resume (get_or_create_session_id
     # matches s.name == name || s.id == name), so it is the handle in both directions and nothing
     # has to be read back out of the stream. --session-id is NOT usable here: it sits in the same
     # clap group, which is multiple = false, and it is rejected outright without --resume.
+    # Goose prefers the session's saved provider to config.yaml on resume. Override it on every
+    # turn so a switch of connection uses the provider matching this turn's endpoint and key.
     cmd = ["goose", "run", "--output-format", "stream-json", "--model", model,
-           "-n", _GOOSE_SESSION_NAME, "-t", prompt]
+           "-n", _GOOSE_SESSION_NAME, "-t", prompt, "--provider", goose_provider]
     if max_turns:
         # The harness's step budget, which the gateway sends as max_turns (its max_step, default
         # 40). goose's own default is 1000, so without this the budget an operator set is ignored

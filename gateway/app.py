@@ -1275,6 +1275,10 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("azure-foundry", "codex"): "azure",       ("azure-foundry", "hermes"): "azure-foundry",
     ("bedrock", "claude"): "bedrock",          ("bedrock", "hermes"): "bedrock",
     ("openrouter", "codex"): "tokenrouter",    ("openrouter", "hermes"): "openrouter",
+    # OpenRouter answers Anthropic's Messages shape too, at https://openrouter.ai/api/v1/messages
+    # (2026-10-13: 200 with an Anthropic message envelope for anthropic/claude-sonnet-4.6, and a
+    # Claude Code turn completed through it), so it drives Claude Code the way Vercel does.
+    ("openrouter", "claude"): "tokenrouter",
     ("tokenrouter", "claude"): "tokenrouter",  ("tokenrouter", "codex"): "tokenrouter",
     ("tokenrouter", "hermes"): "openai-api",
     ("openai", "codex"): "openai",             ("openai", "hermes"): "openai-api",
@@ -5648,6 +5652,9 @@ def _provider_catalog_public() -> list[dict]:
                                for c, v in _VENDOR_MODELS.get(pid, {}).items()],
                     # The custom provider's rows name any canonical; the form offers this list.
                     "canonicals": _catalog_canonicals() if pid == "custom" else [],
+                    **({"format_backends": {fmt: sorted(bases)
+                                            for fmt, bases in _CUSTOM_FORMAT_BACKENDS.items()}}
+                       if pid == "custom" else {}),
                     "backends": backends})
     return out
 
