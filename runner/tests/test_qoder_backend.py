@@ -55,6 +55,8 @@ class Stub:
         self.vault_creds: dict[str, list[dict]] = {}    # vault id -> its credentials
         self.env_delete_409 = False
         self.fail_deletes = False       # every DELETE of a vault/skill/file answers 500
+        self.bad_link = ""              # a download link to answer instead of the blob's http one
+        self.blob_refusals = 0          # the storage host refuses this many link fetches (403, a lapsed link)
         self.hang_streams = False
         self.script: list[list[dict]] = [[]]          # the stages a NEW session gets
         self.token_seen: set[str] = set()
@@ -110,6 +112,9 @@ class Stub:
                     fid = path.split("/blob/", 1)[1]
                     if "authorization" in hdrs:
                         return self._err(400, "test", "a presigned download must carry no credential")
+                    if stub.blob_refusals:
+                        stub.blob_refusals -= 1
+                        return self._err(403, "AccessDenied", "Request has expired")
                     data = stub.blobs.get(fid)
                     return self._send(200, data, "application/octet-stream") if data is not None else self._err(404, "not_found_error", "no blob")
                 tok = hdrs.get("authorization", "").removeprefix("Bearer ")
@@ -186,7 +191,7 @@ class Stub:
                     if parts[1] not in stub.blobs:
                         return self._err(404, "not_found_error", "no file")
                     host = self.headers.get("host")
-                    return self._send(200, {"url": f"http://{host}/blob/{parts[1]}", "expires_at": "2099-01-01T00:00:00Z"})
+                    return self._send(200, {"url": stub.bad_link or f"http://{host}/blob/{parts[1]}", "expires_at": "2099-01-01T00:00:00Z"})
                 if len(parts) == 2 and parts[0] == "files" and method == "DELETE":
                     return self._send(200, {"id": parts[1], "type": "file_deleted"})
                 if parts == ["sessions"] and method == "POST":
@@ -543,7 +548,7 @@ def test_the_recorded_live_session_maps_field_for_field(tmp_path, monkeypatch):
     first = [e for e in events[:events.index(next(e for e in events if e["type"] == "session.updated"))]]
     done = False
     for e in first:
-        done = turn.handle(e["id"], e["type"], json.dumps(e), "", [True]) or done
+        done = turn.handle(e["id"], e, "", [True]) or done
     assert done, "the first turn's status_idle ends it"
     kinds = [x["m"] for x in emitted]
     assert kinds.count("tool_use") == 2 and kinds.count("tool_result") == 2 and "text" in kinds
@@ -579,7 +584,7 @@ def test_each_turn_is_charged_what_it_added_to_the_sessions_running_total(tmp_pa
         turn = drv.Turn({"cwd": str(tmp_path), "base_url": "http://127.0.0.1:1", "api_key": "x", "prompt": "p"})
         turn.session_id = "sess_live"
         for e in part:
-            turn.handle(e["id"], e["type"], json.dumps(e), "", [True])
+            turn.handle(e["id"], e, "", [True])
         turn.result("completed", "")
         charges.append([x["p"]["charge"] for x in emitted if x["m"] == "__hr_result"][0])
     assert [c["amount"] for c in charges] == [0.35, 0.26]
@@ -629,15 +634,41 @@ def test_a_file_still_not_delivered_after_the_ask_makes_the_turn_incomplete(tmp_
     assert len(stub.posted("POST", f"/sessions/{sess_id(stub)}/events")) == 2       # asked once, not again
 
 
-def test_a_download_link_that_is_not_a_web_address_lands_nothing(tmp_path, monkeypatch):
-    """urllib opens file:, ftp: and data: URLs as readily as https:. The link comes from Qoder's
-    answer; one that is not a web address would land a file of this box as the artifact."""
+def test_a_download_link_that_is_not_a_web_address_lands_nothing(tmp_path, stub):
+    """A client that opened file:, ftp: or data: URLs as readily as https: would land a file of
+    this box as the artifact. The link comes from Qoder's answer; the SDK refuses one that is not
+    a web address, and the driver reports it as such and writes nothing."""
     secret = tmp_path / "secret.txt"
     secret.write_text("not for the workspace")
-    turn = drv.Turn({"cwd": str(tmp_path / "ws"), "base_url": "http://127.0.0.1:1", "api_key": "x", "prompt": "p"})
-    monkeypatch.setattr(turn.api, "request", lambda *a, **k: {"url": secret.as_uri()})
+    stub.blobs["file_x"] = b"x"
+    stub.bad_link = secret.as_uri()
+    turn = drv.Turn({"cwd": str(tmp_path / "ws"), "base_url": stub.base, "api_key": "x", "prompt": "p"})
     got, why = turn._download("file_x", "secret.txt", tmp_path / "ws" / "part")
     assert got is None and "not a web address" in why and not (tmp_path / "ws" / "part").exists()
+
+
+def test_a_lapsed_download_link_is_asked_for_again_while_a_refused_file_is_not(tmp_path, stub):
+    """The storage host answers a lapsed presigned link with 403, and the SDK raises that as the
+    same class as the API's own 403. The link's refusal gets one fresh link; the API's refusal of
+    the file ends the download at once."""
+    stub.blobs["file_x"] = b"report"
+    stub.blob_refusals = 1
+    turn = drv.Turn({"cwd": str(tmp_path / "ws"), "base_url": stub.base, "api_key": "x", "prompt": "p"})
+    part = tmp_path / "ws" / "part"
+    got, why = turn._download("file_x", "report.txt", part)
+    assert (got, why) == (6, "") and part.read_bytes() == b"report"
+    assert len([c for c in stub.calls if c[1] == "/files/file_x/content"]) == 2
+    # twice refused: the second link fails too, and the reason says it was the link
+    stub.calls.clear()
+    stub.blob_refusals = 2
+    got, why = turn._download("file_x", "report.txt", tmp_path / "ws" / "part2")
+    assert got is None and "refused the download link (403)" in why
+    assert len([c for c in stub.calls if c[1] == "/files/file_x/content"]) == 2
+    # the API's own refusal (no such file) is not retried
+    stub.calls.clear()
+    got, why = turn._download("file_gone", "gone.txt", tmp_path / "ws" / "part3")
+    assert got is None and "404" in why
+    assert len([c for c in stub.calls if c[1] == "/files/file_gone/content"]) == 1
 
 
 # ── input files ───────────────────────────────────────────────────────────────────────────────────
@@ -874,6 +905,46 @@ def test_a_stalled_passthrough_stream_is_closed_not_narrated(monkeypatch):
         srv.shutdown()
 
 
+def test_a_delete_with_a_body_through_the_relay_does_not_corrupt_the_next_request(stub):
+    """Qoder's SDK sends `{}` as a DELETE's body. The relay's do_DELETE forwarded the request and
+    left those two bytes unread on the keep-alive socket, so the NEXT request on the connection
+    opened with "{}DELETE" and the stub answered 501 (found when the purge moved onto the SDK:
+    the artifact file, the agent and the skill all "failed" behind one session delete)."""
+    import http.client as hc
+    stub.sessions["sess_1"] = {"id": "sess_1", "status": "idle", "archived_at": None, "stages": [], "stage": 0, "events": [], "resources": []}
+    base, tok = rs._qoder_relay_route(stub.base, "real-pat")
+    try:
+        host, port = base.split("//", 1)[1].split("/", 1)[0].split(":")
+        conn = hc.HTTPConnection(host, int(port), timeout=10)
+        conn.request("DELETE", "/v1/sessions/sess_1", body=b"{}",
+                     headers={"authorization": f"Bearer {tok}", "content-type": "application/json"})
+        first = conn.getresponse()
+        assert first.status == 200 and json.loads(first.read())["type"] == "session_deleted"
+        conn.request("GET", "/v1/sessions/sess_1", headers={"authorization": f"Bearer {tok}"})
+        second = conn.getresponse()
+        assert second.status == 200, second.read()[:200]      # not 501 "Unsupported method ('{}GET')"
+        assert json.loads(second.read())["id"] == "sess_1"
+    finally:
+        rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_every_message_carries_an_idempotency_key_and_the_sdks_own_headers_pass_the_relay(tmp_path, stub):
+    """The API's guard against a retried POST running twice is the Idempotency-Key header, which
+    is also the SDK's own condition for retrying a POST at all; every user.message carries one, a
+    fresh one per message. The route is the SDK's, so its User-Agent reaches Qoder."""
+    stub.script = [[RUNNING, {"type": "agent.message", "content": [{"type": "text", "text": "one"}]}, IDLE]]
+    base, tok = rs._qoder_relay_route(stub.base, "real-pat")
+    try:
+        lines, _ = run_driver({"cwd": str(tmp_path), "prompt": "first"}, stub, base=base, token=tok)
+        assert result_of(normalise(lines)[0])["subtype"] == "success"
+        msgs = [c for c in stub.calls if c[0] == "POST" and c[1].endswith("/events")]
+        assert msgs and all(len(c[3].get("idempotency-key", "")) == 32 for c in msgs)
+        assert all(c[3].get("user-agent", "").startswith("qca-python/") for c in msgs)
+        assert "real-pat" in stub.token_seen and tok not in stub.token_seen
+    finally:
+        rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
 # ── the builder ───────────────────────────────────────────────────────────────────────────────────
 def test_the_builder_hands_the_driver_the_relay_and_a_placeholder_never_the_key(tmp_path):
     env: dict = {}
@@ -961,6 +1032,42 @@ def test_the_purge_reaches_every_recorded_id_and_reports_what_it_could_not(tmp_p
     assert proc.returncode == 1 and report["failed"]
     assert any(f["what"] == "delete vault vault_1" and "500" in f["error"] for f in report["failed"]), report
     assert "delete session sess_1 (already gone)" in report["done"]
+
+
+def test_without_the_sdk_a_turn_fails_in_words_and_a_purge_names_what_it_left(tmp_path, stub):
+    # The interpreter the runner falls back to (its own) has no qca-sdk: a turn must fail with the
+    # reason, and a purge must report every recorded id rather than die in a traceback, since the
+    # runner removes the folder, and the state with it, whatever the purge answers.
+    def run_without_sdk(job: dict):
+        job = {"base_url": stub.base, "api_key": "placeholder", "model": "ultimate", **job}
+        boot = ("import runpy, sys; sys.modules['qca'] = None; sys.modules['qca.managed'] = None; "
+                "sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')")
+        proc = subprocess.run([sys.executable, "-c", boot, DRIVER, json.dumps(job)],
+                              capture_output=True, text=True, timeout=30)
+        return [json.loads(ln) for ln in proc.stdout.splitlines() if ln.strip().startswith("{")], proc
+
+    lines, proc = run_without_sdk({"cwd": str(tmp_path), "prompt": "hi"})
+    res = [l for l in lines if l["m"] == "__hr_result"][-1]["p"]
+    assert res["status"] == "failed" and "qca-sdk" in res["reason"]
+    assert not stub.calls
+    write_state(tmp_path)
+    lines, proc = run_without_sdk({"purge": True, "cwd": str(tmp_path)})
+    assert proc.returncode == 1 and "Traceback" not in proc.stderr
+    report = [l for l in lines if l["m"] == "purge"][-1]["p"]
+    assert report["done"] == [] and "qca-sdk" in report["failed"][0]["error"]
+    for rid in ("sess_1", "file_art", "file_in", "agent_1", "vault_1", "skill_1", "env_1"):
+        assert rid in report["failed"][0]["what"], rid
+    assert not stub.calls
+
+
+def test_a_workspace_that_cannot_be_written_fails_the_turn_in_words(tmp_path, stub):
+    # The SDK raises its own classes for the network, so an OSError that reaches the top is this
+    # box's: it ends the turn with a result that says so, never a traceback with no result.
+    (tmp_path / ".harness").mkdir()
+    (tmp_path / ".harness" / "qoder").write_text("a file where the state's folder goes")
+    lines, proc = run_driver({"cwd": str(tmp_path), "prompt": "hi"}, stub)
+    res = [l for l in lines if l["m"] == "__hr_result"][-1]["p"]
+    assert res["status"] == "failed" and res["reason"].startswith("the workspace: ") and "Traceback" not in proc.stderr
 
 
 def test_delete_workspace_purges_at_qoder_with_the_connection_it_is_sent(tmp_path, stub, monkeypatch):

@@ -240,10 +240,10 @@ backend_bin() {
     systemone) echo "$TOOLS/systemone-venv/bin/python" ;;
     cheetahclaws) echo "$TOOLS/cheetahclaws-venv/bin/cheetahclaws-ready" ;;
     agentzero) echo "$TOOLS/agentzero-venv/bin/agentzero-ready" ;;
-    # qoder has NO binary: its runtime is Qoder's cloud, and the turn process is runner/qoder_driver.py
-    # on the runner's own interpreter (stdlib only). Nothing is installed, pinned or verified for it,
-    # and the image's interpreter is what "installed" means here.
-    qoder) echo "$PY" ;;
+    # qoder has no binary of its own: its runtime is Qoder's cloud, and the turn process is
+    # runner/qoder_driver.py on Qoder's SDK, in a venv of its own (install_qoder). The venv's
+    # interpreter is what "installed" means here.
+    qoder) echo "$TOOLS/qoder-venv/bin/python" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
     gajae)  echo "$TOOLS/bin/gjc" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
@@ -336,6 +336,70 @@ if aider.__version__ != want:
   # what the boot compares against the pin, so a half-built venv is rebuilt rather than trusted.
   printf '#!/bin/sh\necho %s\n' "$AIDER_PIN" > "$TOOLS/aider-venv/bin/aider-ready" \
     && chmod +x "$TOOLS/aider-venv/bin/aider-ready"
+}
+
+# Qoder Cloud Agents' Python SDK, MIT (QoderAI/qoder-cloud-agents-sdk-python, PyPI `qca-sdk`), pinned
+# to 0.6.0. The qoder backend's runtime is Qoder's cloud; what this box needs is the client the
+# driver (runner/qoder_driver.py) speaks it with, in a venv of its own so its httpx/pydantic/anyio
+# stay off the runner's. VERIFIED the way cheetahclaws is: the wheel is downloaded on its own and
+# compared against the digest pinned here (PyPI's sha256 for qca_sdk-0.6.0-py3-none-any.whl,
+# 2026-10-16) before it is installed; an operator who overrides the version supplies HR_QODER_SHA256
+# for it, or is told the wheel is unverified. The import check asserts the client and the methods the
+# driver reaches for, so an SDK refactor fails the install here rather than the first live turn.
+QODER_PIN="${HR_QODER_SDK_VERSION:-0.6.0}"
+if [ "$QODER_PIN" = "0.6.0" ]; then
+  QODER_SHA256="${HR_QODER_SHA256:-97d76fece7a489394e3dc237fece652bb6130f7cf5b1870aa6e9216e4ac8773f}"
+else
+  QODER_SHA256="${HR_QODER_SHA256:-}"
+fi
+install_qoder() {
+  qd_py="${HR_QODER_BASE_PYTHON:-python3}"
+  rm -rf "$TOOLS/qoder-venv"
+  "$qd_py" -m venv "$TOOLS/qoder-venv" || return 1
+  qd_tmp="$(mktemp -d)"
+  "$TOOLS/qoder-venv/bin/pip" download -q --disable-pip-version-check --no-deps \
+    --only-binary=:all: -d "$qd_tmp" "qca-sdk==$QODER_PIN" || { rm -rf "$qd_tmp"; return 1; }
+  qd_whl="$qd_tmp/qca_sdk-$QODER_PIN-py3-none-any.whl"
+  [ -f "$qd_whl" ] || { echo "qca-sdk $QODER_PIN: no wheel was downloaded"; rm -rf "$qd_tmp"; return 1; }
+  if [ -n "$QODER_SHA256" ]; then
+    qd_have="$(sha256sum "$qd_whl" | awk '{print $1}')"
+    if [ "$QODER_SHA256" != "$qd_have" ]; then
+      echo "qca-sdk $QODER_PIN: wheel digest mismatch (want $QODER_SHA256, have $qd_have)"
+      rm -rf "$qd_tmp"; return 1
+    fi
+  fi
+  "$TOOLS/qoder-venv/bin/pip" install -q --disable-pip-version-check "$qd_whl" \
+    || { rm -rf "$qd_tmp"; return 1; }
+  rm -rf "$qd_tmp"
+  "$TOOLS/qoder-venv/bin/python" -c '
+import sys, importlib.metadata as md
+want = sys.argv[1]
+have = md.version("qca-sdk")
+if have != want:
+    sys.exit("qca-sdk %s installed, wanted %s" % (have, want))
+# every call runner/qoder_driver.py makes, on the client it makes them on
+import qca
+from qca.managed import Managed
+for name in ("APIStatusError", "APIConnectionError", "APITimeoutError", "APIResponseValidationError", "APIError"):
+    getattr(qca, name)
+m = Managed(pat="probe", base_url="http://127.0.0.1:9/")
+for path in ("environments.create", "environments.delete", "environments.archive",
+             "vaults.create", "vaults.delete", "vaults.credentials.create", "vaults.credentials.list", "vaults.credentials.archive",
+             "agents.create", "agents.retrieve", "agents.update", "agents.archive",
+             "sessions.create", "sessions.retrieve", "sessions.update", "sessions.cancel", "sessions.delete",
+             "sessions.resources.add", "sessions.events.send", "sessions.events.list", "sessions.events.stream",
+             "files.upload", "files.download", "files.delete",
+             "skills.create", "skills.versions.create", "skills.delete"):
+    obj = m
+    for part in path.split("."):
+        obj = getattr(obj, part)
+    if not callable(obj):
+        sys.exit("qca-sdk %s: %s is not callable" % (have, path))
+' "$QODER_PIN" || return 1
+  # Written LAST, after the install and the checks proved the venv good: the marker is what the
+  # boot compares against the pin, so a half-built venv is rebuilt rather than trusted.
+  printf '#!/bin/sh\necho %s\n' "$QODER_PIN" > "$TOOLS/qoder-venv/bin/qoder-ready" \
+    && chmod +x "$TOOLS/qoder-venv/bin/qoder-ready"
 }
 
 # CheetahClaws, Apache-2.0 (SAIL-Research-Lab/cheetahclaws, PyPI `cheetahclaws`), pinned to 3.5.88.
@@ -1282,6 +1346,17 @@ install_backends() {
     try_install "CheetahClaws" install_cheetahclaws || true
   fi
   [ -x "$TOOLS/cheetahclaws-venv/bin/python" ] && export HR_CHEETAHCLAWS_PYTHON="$TOOLS/cheetahclaws-venv/bin/python"
+  # The qoder backend's SDK, ~15 MB with its dependencies. The marker names the version the venv was
+  # built for, so a pin bump rebuilds it; the session lives at Qoder and in the workspace, not here.
+  if wanted qoder && [ "$("$TOOLS/qoder-venv/bin/qoder-ready" 2>/dev/null)" != "$QODER_PIN" ]; then
+    echo "[harnessrouter] installing the Qoder Cloud Agents SDK qca-sdk $QODER_PIN (MIT)…"
+    if [ -z "$QODER_SHA256" ]; then
+      echo "[harnessrouter] WARN: HR_QODER_SDK_VERSION=$QODER_PIN overrides the pinned 0.6.0, and no"
+      echo "[harnessrouter]       HR_QODER_SHA256 was given — this qca-sdk wheel is UNVERIFIED."
+    fi
+    try_install "Qoder SDK" install_qoder || true
+  fi
+  [ -x "$TOOLS/qoder-venv/bin/python" ] && export HR_QODER_PYTHON="$TOOLS/qoder-venv/bin/python"
   if wanted agentzero && [ "$("$TOOLS/agentzero-venv/bin/agentzero-ready" 2>/dev/null)" != "$AGENTZERO_PIN" ]; then
     echo "[harnessrouter] installing Agent Zero $AGENTZERO_PIN (MIT) — ~640 MB, this takes a minute or two…"
     try_install "Agent Zero" install_agentzero || true
