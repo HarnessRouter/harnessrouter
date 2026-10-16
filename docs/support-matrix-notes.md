@@ -4108,3 +4108,95 @@ No column and no other dimension. Two model ids served as themselves; `gpt-5.4-m
 its loop detector, which is recorded above as the base's own behaviour rather than a routing
 finding. Its MCP transports are Stdio and Http only (read off `McpTransportConfig`), so SSE is
 bridged — that path has not been exercised against a live server here.
+
+## docker-agent: Docker's own runtime, where the config IS the harness (2026-10-16) — behaviour measured, NO column yet
+
+Docker Agent v1.150.0, added as the twenty-ninth base and the first one whose whole turn — provider,
+model, instructions, toolsets, skills, MCP servers — comes from a YAML file this runner writes per
+turn. Measured against the pinned release binary, first through a recording proxy and then end to
+end through the runner's own argv and relay. **No support-matrix column has run.**
+
+### What it is
+`docker-agent run --exec --json` streams its own NDJSON: `tool_call` (id, name, arguments),
+`tool_call_response` (tool_call_id, response), `agent_choice`, `token_usage`, `stream_stopped`,
+plus the TUI's own progress (`team_info`, `toolset_info`, `mcp_init_*`, `message_added`,
+`hook_*`, `partial_tool_call`) which is not rendered. `user_message` is the prompt played back.
+
+Three things about that stream had to be measured rather than assumed:
+- **`agent_choice` is a DELTA.** A two-sentence answer arrived as nineteen of them across two
+  message ids. Read as whole messages, a turn's reply became its LAST fragment — "RST" for an
+  answer of "DA-E2E-FIRST", which is what the first end-to-end run reported. They are buffered and
+  flushed as one text block when the message changes, when a tool call interrupts, or at the end,
+  so the order a reader sees is the order things happened.
+- **`token_usage` is per REQUEST, and its top-level numbers move with the CONTEXT, not with what
+  was billed** (3059 then 3157 on a two-request turn). The turn's usage is the sum of each event's
+  `last_message`, which is jcode's defect read before it could happen here.
+- **`partial_tool_call`** is one call arriving in fragments; rendering those would put a row on the
+  transcript per keystroke.
+
+### The session id is the harness's own
+`--session <id>` takes an id that does not exist yet and creates it, so the gateway's session id
+travels unchanged — no mapping, no second identifier. The flip side is that an id the store has lost
+is created silently as a NEW conversation, so `_docker_agent_session_present` asks the sqlite store
+(read-only, by the id, whatever table holds it) and `_resume_lost` tells the user when the
+conversation is gone. That is opencode's lesson, where four hosted sessions answered three recalls
+each from an empty history and nothing said so.
+
+A mid-session model switch needs nothing special: the YAML is rewritten per turn and the resumed
+session does not pin the model — measured (claude-haiku-5.5, then gemini-3-flash on turn two, both
+read off the relay).
+
+### Defaults closed per turn
+- `TELEMETRY_ENABLED=false` — the CLI's own first-run message names that variable, and it is NOT
+  `DOCKER_AGENT_`-prefixed (`pkg/telemetry/utils.go`). A probe that set the prefixed name got the
+  banner anyway, which is how the right name was found.
+- `DOCKER_AGENT_AUTO_INSTALL=false` — a toolset whose command is missing otherwise fetches it from
+  the aqua registry at the moment the model calls it.
+- `DOCKER_AGENT_AUTO_UPDATE=false` — opt-in upstream, said out loud because a pinned binary that
+  can replace itself is how Muse Code's version changed under a measurement.
+- Its data and config dirs are pinned under `.harness/docker-agent/`, and $HOME is already
+  redirected there, which catches the cache path those two do not cover.
+
+### The config needs version 8, and the schema repair the relay already had
+`providers:` does not exist before config version 8: version 2 is refused with a hint naming the
+version to use. And its filesystem toolset declares `excludePatterns` as an optional array with no
+`items`, which Google's validator refuses outright
+("GenerateContentRequest.tools[0].function_declarations[5].parameters.properties[excludePatterns].items:
+field predicate failed"). The relay's `_with_gemini_schemas` already repairs exactly that shape
+once a channel names it; this backend's route asks for it up front rather than paying one failed
+request per gemini turn.
+
+### Tool policy is by TOOLSET
+Its runtime groups tools into toolsets (filesystem, shell, todo, think here) and a toolset's
+`tools` key is an INCLUDE list — there is no per-tool deny. So a disabled tool is removed from its
+toolset's list, and a toolset with nothing left is dropped entirely (an empty include list means
+"include nothing"). Measured through the product: with write_file, edit_file and shell withheld,
+the model reported that none of its remaining tools could create or edit a file, and nothing was
+written. The fifteen tools the four toolsets bring are the catalog's list, read off a turn's own
+request.
+
+The custom-harness dimension needed its spares spelled out too: `think` and the four todo tools
+(`create_todo`, `create_todos`, `update_todos`, `list_todos`) matched none of `PREFERRED`, so
+`pickDisabled` fell through to `read_multiple_files` — a file tool, one of the kinds the fixture
+needs. It now lands on `create_todo`.
+
+### End to end (2026-10-16)
+Three turns in one session: the first answered with the AGENTS.md token (its prompt-files lookup
+reads the file this runner writes, named in `add_prompt_files`); the second, on a different model,
+wrote `e2e.txt`, recalled the first turn's word and recorded five tool calls; the third, with
+write_file, edit_file and shell withheld, refused to write and said so. Session presence read False
+before the first turn and True after it. The produced-files list held the agent doc and the agent's
+own file, with everything the CLI writes for itself under `.harness/`.
+
+### Install
+GitHub release, pinned to v1.150.0, one ~145 MB static binary per platform. **Upstream publishes no
+checksums**, so the digests are computed here and pinned beside the version (install_goose's
+arrangement, not install_omp's), compared against the real assets first. `install_docker_agent` was
+run on a linux container, where what it installed reported `docker-agent version v1.150.0`. There is
+no `--version` flag: the subcommand is `version`.
+
+### What is NOT measured
+No column, no other dimension. Two model ids served as themselves. Its `--sandbox` / `--cloud`
+modes, its sub-agents, its RAG and its MCP catalog are all untouched here: a turn gets the four
+toolsets above and nothing else. Its remote MCP transport ("streamable" or "sse") has not been
+exercised against a live server, so SSE is bridged like the other bases' until it is.

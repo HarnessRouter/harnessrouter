@@ -55,6 +55,10 @@ run, by you, under their own licenses:
   Agent Zero (agentzero)      MIT, "Copyright (c) 2025 Agent Zero, s.r.o" (agent0ai/agent-zero; the
                               tagged source archive, with its Python dependencies from PyPI under
                               their own licenses)
+  Docker Agent (docker-agent) Apache-2.0 (docker/docker-agent; the static binary from its GitHub
+                              releases, pinned by version and by a digest computed here — upstream
+                              publishes no checksums beside the assets). No mark of its own is
+                              redistributed: the console falls back to its generic glyph.
   VT Code (vtcode)            Apache-2.0 (vinhnx/VTCode; the release tarball from its GitHub
                               releases, verified against the per-asset SHA256 upstream publishes
                               beside it). The console's VT Code mark,

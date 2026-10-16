@@ -1,4 +1,4 @@
-"""The bases added in batch 4: vibe (mistral-vibe) and vtcode (VT Code).
+"""The bases added in batch 4: vibe (mistral-vibe), vtcode (VT Code) and docker-agent.
 
 Everything asserted here was MEASURED against the pinned build named beside it, on 2026-10-14/15,
 through a proxy that recorded what the CLI actually sent — not read off documentation. The fixtures
@@ -14,7 +14,7 @@ Each test pins one thing that would otherwise fail SILENTLY:
   * the export this turn wrote, never the one the last turn left behind
   * the credential in the ENVIRONMENT, which is what makes served-model and usage readable
 
-Pinned builds: mistral-vibe 2.26.1 · vtcode 0.177.0
+Pinned builds: mistral-vibe 2.26.1 · vtcode 0.177.0 · docker-agent v1.150.0
 """
 import json
 import pathlib
@@ -28,7 +28,10 @@ from server import (ALL_VIBE_TOOLS, ALL_VTCODE_TOOLS, Auth, BACKENDS,  # noqa: E
                     _BRIDGED_TRANSPORTS, _vibe_eof, _vibe_home, _vibe_out,
                     _vibe_session_present, _vibe_to_claude, _resume_lost, _write_skills,
                     _vtcode_config_path, _vtcode_eof, _vtcode_home, _vtcode_is_summary,
-                    _vtcode_session_present, _vtcode_to_claude, _vtcode_usage)
+                    _vtcode_session_present, _vtcode_to_claude, _vtcode_usage,
+                    ALL_DOCKER_AGENT_TOOLS, _build_docker_agent, _docker_agent_eof,
+                    _docker_agent_home, _docker_agent_session_db,
+                    _docker_agent_session_present, _docker_agent_to_claude)
 
 UP = "https://up.example/v1"
 FIX = pathlib.Path(__file__).resolve().parent / "fixtures" / "batch4"
@@ -473,3 +476,148 @@ def test_the_usage_field_its_picker_does_not_know_is_mapped_by_hand():
 def test_vtcode_tools_are_the_five_its_own_schema_command_reports():
     assert set(ALL_VTCODE_TOOLS) == {"exec_command", "write_stdin", "apply_patch", "search_tools",
                                      "record_decision"}
+
+
+# ══ docker-agent (Docker Agent v1.150.0) ══════════════════════════════════════════════════════
+
+def _da_norm(lines, model="gpt-5.4", cwd=""):
+    state: dict = {"model": model, "final": "", "cwd": cwd}
+    out = []
+    for ln in lines:
+        out += _docker_agent_to_claude(ln, state)
+    return out, state
+
+
+def _da_cfg(ws: str) -> str:
+    return (_docker_agent_home(ws) / "agent.yaml").read_text()
+
+
+def test_docker_agent_is_registered_and_reads_agents_md():
+    assert "docker-agent" in BACKENDS
+    assert BACKENDS["docker-agent"]["normalize"] is _docker_agent_to_claude
+    assert getattr(BACKENDS["docker-agent"]["normalize"], "eof", None) is _docker_agent_eof
+    ws = _ws()
+    assert _agent_doc_path(ws, "docker-agent") == pathlib.Path(ws) / "AGENTS.md"
+
+
+def test_the_config_needs_version_eight_for_a_provider_section():
+    # version 2 is refused outright, with a hint naming the version that supports `providers`
+    ws = _ws()
+    _build_docker_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    cfg = _da_cfg(ws)
+    assert 'version: "8"' in cfg
+    assert "providers:" in cfg and 'api_type: openai_chatcompletions' in cfg
+    assert 'token_key: "HR_DOCKER_AGENT_RELAY_KEY"' in cfg
+    assert "add_prompt_files:" in cfg and "- AGENTS.md" in cfg
+
+
+def test_the_harness_session_id_is_the_clis_own_and_the_store_is_asked_about_it():
+    ws, env = _ws(), {}
+    sid = "hr-e2e-session-1"
+    cmd = _build_docker_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws,
+                              env, resume_session_id=sid)
+    assert cmd[cmd.index("--session") + 1] == sid, "no mapping: the id travels as it is"
+    assert cmd[cmd.index("--session-db") + 1] == str(_docker_agent_session_db(ws))
+    # --session CREATES an unknown id as a new conversation, so the store decides, not the argv
+    assert _docker_agent_session_present(ws, cmd, sid) is False
+    assert _resume_lost("docker-agent", cmd, sid, ws) == sid
+    import sqlite3
+    db = _docker_agent_session_db(ws)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE sessions (id TEXT, title TEXT)")
+    con.execute("INSERT INTO sessions VALUES (?, ?)", (sid, "t"))
+    con.commit(); con.close()
+    assert _docker_agent_session_present(ws, cmd, sid) is True
+    assert _resume_lost("docker-agent", cmd, sid, ws) is None
+    # and an id nothing wrote is still absent
+    assert _docker_agent_session_present(ws, cmd, "hr-never-ran") is False
+
+
+def test_a_turn_without_a_resume_id_gets_one_of_its_own():
+    ws = _ws()
+    cmd = _build_docker_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    assert cmd[cmd.index("--session") + 1].startswith("hr-")
+
+
+def test_a_disabled_tool_is_withheld_by_narrowing_its_toolsets_include_list():
+    ws = _ws()
+    _build_docker_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                        tools_disabled=["write_file", "edit_file"])
+    cfg = _da_cfg(ws)
+    assert "      - type: filesystem" in cfg
+    assert '"read_file"' in cfg and '"write_file"' not in cfg and '"edit_file"' not in cfg
+    # a toolset with nothing left is left out entirely (an empty include list means "none")
+    _build_docker_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                        tools_disabled=["shell"])
+    cfg = _da_cfg(ws)
+    assert "- type: shell" not in cfg
+    assert "- type: filesystem" in cfg, "the other toolsets are untouched"
+
+
+def test_the_defaults_that_phone_home_or_fetch_a_binary_are_off():
+    ws, env = _ws(), {}
+    _build_docker_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, env)
+    # the CLI's own first-run message names this variable, and it is not DOCKER_AGENT_-prefixed
+    assert env["TELEMETRY_ENABLED"] == "false"
+    assert env["DOCKER_AGENT_AUTO_UPDATE"] == "false"
+    assert env["DOCKER_AGENT_AUTO_INSTALL"] == "false"
+    assert env["DOCKER_AGENT_DATA_DIR"].endswith("/.harness/docker-agent/data")
+
+
+def test_its_real_stream_becomes_a_tool_call_an_answer_and_usage():
+    evs, state = _da_norm(_fixture("docker-agent-write-file.ndjson"), cwd=_ws())
+    assert evs[0]["subtype"] == "init" and evs[0]["session_id"] == "da-probe-1"
+    calls = [b for e in evs for b in (e.get("message", {}).get("content") or [])
+             if b.get("type") == "tool_use"]
+    results = [b for e in evs for b in (e.get("message", {}).get("content") or [])
+               if b.get("type") == "tool_result"]
+    assert [c["name"] for c in calls] == ["write_file"]
+    assert calls[0]["input"] == {"path": "da.txt", "content": "DOCKER\n"}
+    assert results[0]["tool_use_id"] == calls[0]["id"] and results[0]["is_error"] is False
+    assert state["final"] == "DONE"
+    res = _docker_agent_eof(state, 0)[-1]
+    assert res["subtype"] == "success"
+    # the SUM of the two requests' own numbers, not the last event's running context
+    assert res["usage"]["input_tokens"] == 3059 + 3157
+    assert res["usage"]["output_tokens"] == 76 + 5
+
+
+def test_an_answer_that_arrives_in_fragments_is_one_message():
+    """Its `agent_choice` is a DELTA: a two-sentence answer came in nineteen of them across two
+    message ids. Read as whole messages, a turn's reply became its last fragment — "RST" for an
+    answer of "DA-E2E-FIRST", measured end to end before this was fixed."""
+    evs, state = _da_norm(_fixture("docker-agent-answer-deltas.ndjson"), cwd=_ws())
+    texts = [b["text"] for e in evs for b in (e.get("message", {}).get("content") or [])
+             if b.get("type") == "text"]
+    assert len(texts) == 2, texts            # two messages, nineteen fragments
+    assert texts[0].startswith("E2EDA") and "read the file" in texts[0]
+    assert 'single word, "MADE"' in texts[1]
+    assert state["final"] == texts[1]
+    # and the text that preceded a tool call comes BEFORE it in the stream
+    kinds = [b.get("type") for e in evs for b in (e.get("message", {}).get("content") or [])]
+    assert kinds.index("text") < kinds.index("tool_use")
+
+
+def test_the_prompt_echo_and_the_tui_progress_are_not_rendered():
+    evs, _ = _da_norm(_fixture("docker-agent-write-file.ndjson"), cwd=_ws())
+    # user_message is the prompt played back; partial_tool_call is one call arriving in fragments
+    assert not [e for e in evs if e.get("type") == "user"
+                and any(b.get("type") == "text" for b in e["message"]["content"])]
+    calls = [b for e in evs for b in (e.get("message", {}).get("content") or [])
+             if b.get("type") == "tool_use"]
+    assert len(calls) == 1, "partial_tool_call must not put a row per fragment on the transcript"
+
+
+def test_an_abnormal_stop_fails_the_turn_with_its_reason():
+    state = {"model": "gpt-5.4", "final": "half an answer", "cwd": _ws()}
+    _docker_agent_to_claude({"type": "stream_stopped", "reason": "max_iterations",
+                             "finish_reason": "length"}, state)
+    res = _docker_agent_eof(state, 0)[-1]
+    assert res["is_error"] is True and "max_iterations" in res["result"]
+
+
+def test_the_tools_are_the_ones_its_toolsets_declare():
+    assert "write_file" in ALL_DOCKER_AGENT_TOOLS and "shell" in ALL_DOCKER_AGENT_TOOLS
+    assert "think" in ALL_DOCKER_AGENT_TOOLS and "list_todos" in ALL_DOCKER_AGENT_TOOLS
+    assert len(ALL_DOCKER_AGENT_TOOLS) == 15

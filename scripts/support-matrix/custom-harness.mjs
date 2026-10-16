@@ -14,7 +14,7 @@ import { chromium } from 'playwright';
 import crypto from 'node:crypto';
 
 const BASE = process.env.BASE;
-const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,cheetahclaws,agentzero,mimo,jcode,opensquilla,nanobot,qoder,vibe,vtcode').split(',');   // every built-in chat harness (systemone runs decision models only)
+const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,cheetahclaws,agentzero,mimo,jcode,opensquilla,nanobot,qoder,vibe,vtcode,docker-agent').split(',');   // every built-in chat harness (systemone runs decision models only)
 const RESULTS = process.env.RESULTS || 'results-custom.json';
 // A harness's other kind of tool is an MCP server. A self-contained instance hosts only the
 // database and media servers, one needing a database and the other costing real money per call, so
@@ -130,8 +130,12 @@ const results = {};
 // `exec` alone does not match it), `write_stdin` feeds that shell, and `search_tools` is how its
 // DEFERRED tools — an MCP server's among them — become callable at all. Without these the choice
 // fell on exec_command, the tool the fixture runs its script with.
-const NEEDED_ID = /^(bash|shell|exec|exec_session|execute|run_command|run_terminal_command|terminal|code_execution_tool|python.*|node.*|run_typescript|exec_command|write_stdin|read|read_file|write|write_file|edit|file_edit(or)?|text_editor|str_replace.*|create_file|view|search_replace|apply_patch|glob|grep|list_dir|ls|skills?_?tool|skill|task|search_tool|search_tools|search_tool_functions|use_tool|mcp.*)$/i;
-const PREFERRED = /^(todo_write|todowrite|todo|web_?fetch|web_?search|browser.*|board_.*|link_pr|goal|wait)$/i;
+const NEEDED_ID = /^(bash|shell|exec|exec_session|execute|run_command|run_terminal_command|terminal|code_execution_tool|python.*|node.*|run_typescript|exec_command|write_stdin|read|read_file|write|write_file|edit|file_edit(or)?|text_editor|str_replace.*|create_file|view|search_replace|apply_patch|glob|grep|list_dir|list_directory|directory_tree|read_multiple_files|ls|skills?_?tool|skill|task|search_tool|search_tools|search_tool_functions|use_tool|mcp.*)$/i;
+// docker-agent spells its spares differently again: `think`, and four todo tools whose names are
+// create_todo / create_todos / update_todos / list_todos rather than the bare `todo` above. Without
+// them the choice fell through to read_multiple_files, a FILE tool, which is one of the four kinds
+// the fixture needs.
+const PREFERRED = /^(todo_write|todowrite|todo|create_todos?|update_todos|list_todos|think|web_?fetch|web_?search|browser.*|board_.*|link_pr|goal|wait)$/i;
 const pickDisabled = (tools) => {
   const names = (tools || []).map((t) => String((t && t.name) || t || '')).filter(Boolean);
   return names.find((n) => PREFERRED.test(n)) || names.find((n) => !NEEDED_ID.test(n)) || null;

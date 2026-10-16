@@ -1346,6 +1346,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # vibe speaks ONE shape, OpenAI chat/completions, so every connection reaches it that way —
     # including a direct Anthropic key, whose OpenAI-compatible surface lives under /v1 (cline's
     # and qwen's route). Its `anthropic` provider type is that surface, not Messages.
+    # docker-agent, the same reach again: one OpenAI shape through the relay, named in the YAML
+    # this runner writes per turn.
+    ("anthropic", "docker-agent"): "anthropic",   ("openai", "docker-agent"): "openai",
+    ("azure-foundry", "docker-agent"): "azure",
+    ("openrouter", "docker-agent"): "openai-api",
+    ("tokenrouter", "docker-agent"): "tokenrouter", ("vercel", "docker-agent"): "tokenrouter",
+    ("llmtr", "docker-agent"): "tokenrouter",
+    ("custom", "docker-agent"): "openai-api",
+    ("harnessrouter", "docker-agent"): "tokenrouter",
     # vtcode, the same reach as vibe's and for the same reason: one OpenAI shape, through the
     # relay, with the provider named in its config rather than inferred from the model id.
     ("anthropic", "vtcode"): "anthropic",      ("openai", "vtcode"): "openai",
@@ -5581,7 +5590,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     # has no Messages client at all (Backend is MISTRAL | GENERIC), so the openai set alone.
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
                "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
-               "mimo", "jcode", "opensquilla", "nanobot", "vibe", "vtcode"},
+               "mimo", "jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
@@ -7572,7 +7581,13 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # each served as itself, including on the mid-session switch its resume would otherwise have taken
 # back. gpt-5.4-mini also ran, and is where its own loop detector stopped a turn — a weaker model
 # re-verifying a finished task, not a routing failure.
-for _b in ("jcode", "opensquilla", "nanobot", "vibe", "vtcode"):
+# docker-agent is the same reach once more: its provider is declared `api_type:
+# openai_chatcompletions` and every keyed turn rides the relay. MEASURED on it (2026-10-16, the
+# Vercel gateway through the runner's own relay): claude-haiku-5.5 and gemini-3-flash, each asked
+# for and each served as itself, across a mid-session model switch — and the gemini turn needed the
+# relay's schema repair, because its filesystem toolset declares an optional array parameter
+# Google's validator refuses.
+for _b in ("jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent"):
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
@@ -7696,9 +7711,12 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # vtcode: its custom provider takes api_format "auto" | "openai-chat" | "openai-responses" |
 # "anthropic-messages", and this runner declares openai-chat — so a Responses-API-only id would be
 # a picker row that fails on send here too.
+# docker-agent: its provider config takes api_type `openai_chatcompletions` or
+# `openai_responses`, and this runner declares chat/completions — so a Responses-API-only id would
+# be a picker row that fails on send here too.
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
                       "cheetahclaws", "grok", "agentzero",
-                      "jcode", "opensquilla", "nanobot", "vibe", "vtcode")
+                      "jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -17318,6 +17336,29 @@ _BASE_CATALOG: dict[str, dict] = {
         # construction would have withheld the built-ins and let every MCP tool through. Measured:
         # with write_file withheld the model wrote the file with `exec` instead, which is the honest
         # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
+    "docker-agent": {
+        "label": "Docker Agent", "backend": "docker-agent", "status": "ready",
+        "system_prompt": ("You are an autonomous coding agent working in a real git workspace "
+                          "with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # The fifteen tools the four toolsets this runner declares bring to the model, measured off
+        # a turn's own request on v1.150.0 and held equal to the runner's ALL_DOCKER_AGENT_TOOLS by
+        # gateway/tests/test_docker_agent_tools.py. Its runtime groups tools into TOOLSETS, and a
+        # tool is withheld by narrowing its toolset's include list — there is no per-tool deny, so
+        # a tool id that is not one of these fifteen would disable nothing.
+        "tools": [("read_file", "File Read"), ("read_multiple_files", "File Read Many"),
+                  ("write_file", "File Write"), ("edit_file", "Edit"),
+                  ("list_directory", "List"), ("directory_tree", "Tree"),
+                  ("search_files_content", "Search"), ("create_directory", "Make Directory"),
+                  ("remove_directory", "Remove Directory"), ("shell", "Shell"),
+                  ("create_todo", "Todo Create"), ("create_todos", "Todos Create"),
+                  ("update_todos", "Todos Update"), ("list_todos", "Todos List"),
+                  ("think", "Think")],
+        # "hard", measured through the product's own path: with write_file, edit_file and shell
+        # withheld, the model reported that none of its remaining tools could create or edit a file
+        # and nothing was written.
         "tool_enforcement": "hard",
     },
     "vtcode": {

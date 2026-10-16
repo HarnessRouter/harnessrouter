@@ -70,7 +70,7 @@ def test_this_batchs_four_bases_are_there():
 
 def test_this_batchs_bases_are_there():
     # batch 4, the same check as above for the bases added with it
-    for b in ("vibe", "vtcode"):
+    for b in ("vibe", "vtcode", "docker-agent"):
         assert b in _bases_in_dimension(), b
 
 
@@ -102,6 +102,9 @@ def test_the_tools_this_batchs_bases_run_the_fixture_WITH_are_never_withheld():
         # reaches an MCP server's tools at all (they are DEFERRED until it is called). That leaves
         # record_decision as the spare, which is what pickDisabled lands on.
         "vtcode": ("exec_command", "apply_patch", "search_tools"),
+        # docker-agent: `shell` runs the skill's script and `write_file` is how it writes. Its
+        # `think` and the four todo tools are the spares the dimension may withhold.
+        "docker-agent": ("shell", "write_file", "read_file"),
     }
     for base, ids in needs.items():
         published = _tool_ids(A._BASE_CATALOG[base])

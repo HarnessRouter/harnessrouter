@@ -400,6 +400,48 @@ def _nanobot_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
         return False
 
 
+def _docker_agent_home(cwd: str) -> pathlib.Path:
+    return pathlib.Path(cwd) / ".harness" / "docker-agent"
+
+
+def _docker_agent_session_db(cwd: str) -> pathlib.Path:
+    return _docker_agent_home(cwd) / "sessions.db"
+
+
+def _docker_agent_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Whether the session store really holds this conversation.
+
+    `--session <id>` CREATES an id the store does not have, silently and as an empty conversation,
+    so this is asked of the store rather than inferred from the argv. The store is the CLI's own
+    sqlite file; it is queried read-only with the same predicate the CLI matches on (its id), and
+    sqlite reads the WAL itself so there is no second file to look at (goose's lesson, where
+    searching the bytes for a session NAME matched a workspace path and failed a turn)."""
+    db = _docker_agent_session_db(cwd)
+    if not session_id or not db.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            tables = [r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            for table in tables:
+                cols = [r[1] for r in con.execute(f"PRAGMA table_info('{table}')").fetchall()]
+                for col in cols:
+                    if col.lower() in ("id", "session_id", "sessionid"):
+                        row = con.execute(
+                            f"SELECT 1 FROM \"{table}\" WHERE \"{col}\" = ? LIMIT 1",
+                            (session_id,)).fetchone()
+                        if row:
+                            return True
+        finally:
+            con.close()
+    except sqlite3.Error:
+        # A store this runner cannot read is not a conversation it can promise; the turn then runs
+        # as a new one and the user is told (_resume_lost).
+        return False
+    return False
+
+
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
@@ -432,6 +474,9 @@ _SESSION_PRESENT = {
     # vtcode: the same arrangement — _build_vtcode only emits the `resume` subcommand when
     # _vtcode_session_present found the id in .vtcode/sessions.
     "vtcode": _argv_session_present,
+    # docker-agent passes --session on EVERY turn (an id its store does not have is created with
+    # that id, as a new conversation), so the argv says nothing: its store is asked instead.
+    "docker-agent": _docker_agent_session_present,
 }
 
 
@@ -1492,6 +1537,13 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # still. Written down here rather than quietly: see the PR body's follow-up.
         rootrels = [f"{_NANOBOT_WS}/skills"]
         entryroot = f"{_NANOBOT_WS}/skills"
+    elif backend == "docker-agent":
+        # $HOME/.agents/skills/<name>/SKILL.md — the global root in its own discovery order
+        # (pkg/skills: a repository's .agents/skills, .claude/skills and .github/skills, then the
+        # home one), with $HOME redirected to .harness/home. The repository roots sit in the
+        # workspace, where a harness skill would be handed back as a deliverable.
+        rootrels = [".harness/home/.agents/skills"]
+        entryroot = ".harness/home/.agents/skills"
     elif backend == "vtcode":
         # ~/.agents/skills/<name>/SKILL.md — the USER root in its own discovery order (repository
         # `.agents/skills` first, then this one), with $HOME redirected to .harness/home. Not the
@@ -1715,6 +1767,10 @@ _BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "g
                        # vtcode's McpTransportConfig has exactly two variants, Stdio and Http, so
                        # an SSE server has no client there either.
                        "vtcode": ("sse",),
+                       # docker-agent's remote toolset takes transport_type "streamable" or "sse",
+                       # and the product's own servers are streamable; an SSE one is bridged for
+                       # the same reason as the others until that path is measured.
+                       "docker-agent": ("sse",),
                        # opensquilla's MCPServerEntry takes transport "stdio" | "sse" only, so a
                        # streamable-HTTP server has no client here either.
                        "opensquilla": ("http",)}
@@ -1948,7 +2004,13 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
                                    # vtcode reads AGENTS.md from the workspace with no flag once
                                    # the folder is trusted (`vtcode init` writes one itself);
                                    # measured, an instruction in it was obeyed in the answer
-                                   "vtcode")
+                                   "vtcode",
+                                   # docker-agent reads it through its own prompt-files lookup,
+                                   # which walks up from the working directory for AGENTS.md and
+                                   # CLAUDE.md; the config this runner writes names AGENTS.md in
+                                   # `add_prompt_files`, so the name is the runner's choice and
+                                   # this is it.
+                                   "docker-agent")
         else "CLAUDE.md")
 
 
@@ -11993,6 +12055,319 @@ def _build_vtcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
 
 
 
+# ── Docker Agent (docker/docker-agent, Go) ────────────────────────────────────────────────────
+# Docker's own agent builder and runtime, the successor to cagent. A turn is
+# `docker-agent run --exec --json`, which streams NDJSON of its own shape, and everything about the
+# run — the provider, the model, the agent's instructions, its toolsets, its skills, its MCP
+# servers — comes from a YAML config this builder writes per turn.
+#
+# MEASURED on v1.150.0 (2026-10-16) against the Vercel AI Gateway through a recording proxy:
+#   * `providers.<name>` with `provider: openai`, `api_type: openai_chatcompletions`, `base_url`
+#     and `token_key` is the relay door, and the config needs `version: "8"` for that section to
+#     exist at all — version 2 is refused with a hint naming the version that supports it.
+#   * `--session <id>` takes an id that does NOT exist yet and creates it, so the harness's own
+#     session id is the CLI's: no mapping, and the gateway's resume id needs no translation. The
+#     store is a sqlite file named by `--session-db`, which lives under .harness/ and therefore
+#     travels in the checkpoint; _docker_agent_session_present asks that file whether the
+#     conversation is really there, because an id the store has lost is created silently as a NEW
+#     conversation (opencode's lesson, where four sessions answered three recalls each from an
+#     empty history).
+#   * Its stream is read as: `tool_call` (id + name + arguments), `tool_call_response`
+#     (tool_call_id + response), `agent_choice` (the assistant's answer), `token_usage` (per
+#     REQUEST, see _docker_agent_usage), `stream_stopped` (reason + finish_reason). `user_message`
+#     is the prompt played back and is not rendered.
+#   * Fifteen tools reach the model from the four toolsets this config declares, measured off the
+#     request itself rather than from the docs (ALL_DOCKER_AGENT_TOOLS below). A toolset's `tools`
+#     key is an include list, which is how a disabled tool is withheld — there is no per-tool deny.
+#   * Its filesystem toolset declares `excludePatterns` as an optional array (`anyOf` with no
+#     `items`), which Google's validator refuses outright:
+#     "GenerateContentRequest.tools[0].function_declarations[5].parameters.properties
+#     [excludePatterns].items: field predicate failed". The relay already repairs exactly this
+#     shape once a channel's validator names it (_with_gemini_schemas), and this backend's route
+#     asks for it up front rather than paying the first failure on every gemini turn.
+DOCKER_AGENT_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+DOCKER_AGENT_BIN = os.environ.get("HR_DOCKER_AGENT_BIN", "/data/agent-tools/bin/docker-agent")
+DOCKER_AGENT_DEFAULT_MODEL = os.environ.get("DOCKER_AGENT_DEFAULT_MODEL", "gpt-5.4")
+_DA_PROVIDER = "harness"
+_DA_AGENT = "root"
+_DA_KEY_ENV = "HR_DOCKER_AGENT_RELAY_KEY"
+# Each toolset this config declares, and the tools it brings. MEASURED off a turn's own request on
+# v1.150.0; the gateway's catalog publishes the same list, held to it by
+# gateway/tests/test_docker_agent_tools.py. The grouping matters because a tool is withheld by
+# narrowing its TOOLSET's include list — the runtime has no per-tool deny.
+_DOCKER_AGENT_TOOLSETS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("filesystem", ("read_file", "read_multiple_files", "write_file", "edit_file",
+                    "list_directory", "directory_tree", "search_files_content",
+                    "create_directory", "remove_directory")),
+    ("shell", ("shell",)),
+    ("todo", ("create_todo", "create_todos", "update_todos", "list_todos")),
+    ("think", ("think",)),
+)
+ALL_DOCKER_AGENT_TOOLS = tuple(t for _set, tools in _DOCKER_AGENT_TOOLSETS for t in tools)
+
+
+def _docker_agent_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
+                         tools_disabled: list[str] | None, max_turns: int | None) -> pathlib.Path:
+    """Write .harness/docker-agent/agent.yaml for this turn and return its path."""
+    disabled = {str(t) for t in (tools_disabled or ())}
+
+    def q(v) -> str:
+        """One YAML scalar, always quoted. The only caller-supplied strings that reach this are a
+        model id, a URL, an MCP server name and a tool name, and quoting them all is what keeps a
+        value with a colon in it from becoming a mapping."""
+        return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    lines = [
+        "# written per turn by the harness runner — do not edit, it is overwritten",
+        # The `providers` section does not exist before config version 8: version 2 is refused
+        # with a hint that names the version to use.
+        'version: "8"',
+        "",
+        "providers:",
+        f"  {_DA_PROVIDER}:",
+        "    provider: openai",
+        "    api_type: openai_chatcompletions",
+        f"    base_url: {q((auth.base_url or '').rstrip('/'))}",
+        f"    token_key: {q(_DA_KEY_ENV)}",
+        "",
+        "models:",
+        "  turn:",
+        f"    provider: {q(_DA_PROVIDER)}",
+        f"    model: {q(model)}",
+        "",
+        "agents:",
+        f"  {_DA_AGENT}:",
+        "    model: turn",
+        "    description: the harness turn",
+        "    instruction: |",
+        "      You are an autonomous coding agent working in a real git workspace with shell and",
+        "      file access. Read and edit files and run commands to complete the task end to end.",
+        # The workspace contract the runner writes, loaded by the CLI itself rather than inlined
+        # here: its prompt-files lookup walks up from the working directory for these names.
+        "    add_prompt_files:",
+        "      - AGENTS.md",
+        # Its own skill discovery: $HOME/.agents/skills, where _write_skills puts the bundle.
+        "    skills: true",
+    ]
+    if max_turns:
+        lines.append(f"    max_iterations: {int(max_turns)}")
+    lines.append("    toolsets:")
+    for name, tools in _DOCKER_AGENT_TOOLSETS:
+        kept = [t for t in tools if t not in disabled]
+        if not kept:
+            # every tool in this toolset was withheld: the toolset itself is left out, which is
+            # the only way to say that here (an empty include list means "include nothing", and
+            # the runtime reads a missing key as "all of them")
+            continue
+        lines.append(f"      - type: {name}")
+        if len(kept) != len(tools):
+            lines.append("        tools:")
+            lines += [f"          - {q(t)}" for t in kept]
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if sv.get("command"):
+            cmdv = sv["command"]
+            argv = cmdv if isinstance(cmdv, list) else [str(cmdv)]
+            args = [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]
+            lines += ["      - type: mcp", f"        name: {q(name)}",
+                      f"        command: {q(str(argv[0]))}"]
+            if args:
+                lines.append("        args:")
+                lines += [f"          - {q(a)}" for a in args]
+            continue
+        if not url:
+            continue
+        lines += ["      - type: mcp", f"        name: {q(name)}", "        remote:",
+                  f"          url: {q(url)}",
+                  # streamable HTTP is what the product's own servers speak; an SSE server a
+                  # harness declares is bridged to stdio before this runs.
+                  '          transport_type: "streamable"']
+        hdrs = _mcp_headers(sv)
+        if hdrs:
+            lines.append("          headers:")
+            lines += [f"            {q(k)}: {q(v)}" for k, v in hdrs.items()]
+    lines.append("")
+    path = _docker_agent_home(cwd) / "agent.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines))
+    return path
+
+
+def _docker_agent_usage(state: dict) -> dict:
+    """The turn's usage: the SUM of what each request reported, not the last one's.
+
+    Its `token_usage` event carries a running `context_length` at the top and the request's own
+    numbers under `last_message` — and the top-level `input_tokens` moves with the context rather
+    than with what was billed (3059 then 3157 on a two-request turn). jcode's defect was reading
+    exactly that kind of field: the summary looked authoritative and under-reported the turn by
+    more than half. So each event's `last_message` is accumulated here."""
+    return _norm_token_usage({
+        "input_tokens": state.get("_da_in", 0),
+        "output_tokens": state.get("_da_out", 0),
+        "cached_input_tokens": state.get("_da_cache_read", 0),
+        "cache_creation_input_tokens": state.get("_da_cache_write", 0),
+    }) if state.get("_da_in") or state.get("_da_out") else {}
+
+
+def _docker_agent_flush(state: dict) -> list[dict]:
+    """Emit the buffered answer fragments as one assistant text block (see the agent_choice branch)."""
+    buf = state.pop("_da_buf", None)
+    text = str((buf or {}).get("text") or "").strip()
+    if not text:
+        return []
+    state["final"] = text
+    return [{"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}]
+
+
+def _docker_agent_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE line of `docker-agent run --exec --json` to zero+ canonical claude events."""
+    t = str(obj.get("type") or "")
+    if t == "stream_started":
+        sid = str(obj.get("session_id") or "")
+        if sid and not state.get("_da_sid"):
+            state["_da_sid"] = sid
+            return [{"type": "system", "subtype": "init", "session_id": sid,
+                     "model": state.get("model")}]
+        return []
+    if t == "token_usage":
+        last = ((obj.get("usage") or {}).get("last_message") or {}) if isinstance(obj.get("usage"), dict) else {}
+        state["_da_in"] = state.get("_da_in", 0) + int(last.get("input_tokens") or 0)
+        state["_da_out"] = state.get("_da_out", 0) + int(last.get("output_tokens") or 0)
+        state["_da_cache_read"] = state.get("_da_cache_read", 0) + int(last.get("cached_input_tokens") or 0)
+        state["_da_cache_write"] = state.get("_da_cache_write", 0) + int(last.get("cached_write_tokens") or 0)
+        if last.get("finish_reason"):
+            state["_da_finish"] = str(last["finish_reason"])
+        return []
+    if t == "tool_call":
+        out = _docker_agent_flush(state)
+        call = obj.get("tool_call") if isinstance(obj.get("tool_call"), dict) else {}
+        fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args) if args.strip() else {}
+            except ValueError:
+                args = {"arguments": args}
+        return out + [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": str(call.get("id") or "tool"),
+             "name": str(fn.get("name") or "tool"),
+             "input": args if isinstance(args, dict) else {"arguments": args}}]}}]
+    if t == "tool_call_response":
+        res = obj.get("result") if isinstance(obj.get("result"), dict) else {}
+        body = obj.get("response")
+        if not isinstance(body, str):
+            body = res.get("output") if isinstance(res.get("output"), str) else json.dumps(res, default=str)
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": str(obj.get("tool_call_id") or "tool"),
+             "is_error": bool(res.get("error") or obj.get("error")),
+             "content": str(body or "")[:8000]}]}}]
+    if t == "agent_choice":
+        # A DELTA, not a message: a long answer arrives as several of these sharing one
+        # `message_id`. Read as whole messages, a turn's reply became its LAST fragment — "RST" for
+        # an answer of "DA-E2E-FIRST" (measured end to end, 2026-10-16). They are buffered here and
+        # flushed as one text block when the message changes, when a tool call interrupts it, or
+        # when the stream ends, which keeps the order the reader sees.
+        text = str(obj.get("content") or "")
+        if not text:
+            return []
+        mid = str(obj.get("message_id") or "")
+        buf = state.get("_da_buf")
+        out = []
+        if buf is not None and buf.get("mid") != mid:
+            out = _docker_agent_flush(state)
+            buf = None
+        if buf is None:
+            buf = {"mid": mid, "text": ""}
+            state["_da_buf"] = buf
+        buf["text"] += text
+        return out
+    if t == "error":
+        state["_da_error"] = str(obj.get("error") or obj.get("message") or "")[:1000]
+        return []
+    if t == "stream_stopped":
+        out = _docker_agent_flush(state)
+        reason = str(obj.get("reason") or "")
+        state["_da_stopped"] = reason or "normal"
+        if reason and reason != "normal" and not state.get("_da_error"):
+            state["_da_error"] = f"the run stopped: {reason}"
+        return out
+    # team_info, toolset_info, agent_info, mcp_init_*, message_added, hook_*, partial_tool_call:
+    # the TUI's own progress. partial_tool_call in particular is the same call arriving in
+    # fragments, and rendering those would put a row on the transcript per keystroke.
+    return []
+
+
+def _docker_agent_eof(state: dict, rc: int) -> list[dict]:
+    # A run killed mid-answer leaves fragments buffered; they are the answer as far as it got.
+    evs = _docker_agent_flush(state)
+    usage = _docker_agent_usage(state)
+    why = state.get("_da_error") or ""
+    ok = rc == 0 and not why
+    return evs + [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                   "result": state.get("final", "") if ok else (why or state.get("final", "")),
+                   "usage": usage}]
+
+
+_docker_agent_to_claude.eof = _docker_agent_eof   # type: ignore[attr-defined]
+
+
+def _build_docker_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                        resume_session_id: str | None = None,
+                        mcp_servers: list[dict] | None = None,
+                        tools_disabled: list[str] | None = None,
+                        max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in DOCKER_AGENT_PROVIDERS:
+        raise HTTPException(400, f"unknown docker-agent provider '{pr}' "
+                                 f"(one of {sorted(DOCKER_AGENT_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"docker-agent provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        # gemini_schemas up front: its filesystem toolset declares an optional array parameter
+        # with no `items`, which Google's validator refuses, and the relay's repair is the same one
+        # grok's route asks for (measured on this base, 2026-10-16).
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key,
+                                                    gemini_schemas=True)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    cfg = _docker_agent_config(auth, model, cwd, mcp_servers, tools_disabled, max_turns)
+    env[_DA_KEY_ENV] = auth.api_key or ""
+    # Its own state (the model catalogue it caches, the first-run marker, the install id) under
+    # .harness/, so the workspace the user collects holds none of it. $HOME is already redirected
+    # there by the runner, which is what catches the paths these two do not cover (its cache dir).
+    env["DOCKER_AGENT_DATA_DIR"] = str(_docker_agent_home(cwd) / "data")
+    env["DOCKER_AGENT_CONFIG_DIR"] = str(_docker_agent_home(cwd) / "config")
+    # "We collect anonymous usage data … To disable: set TELEMETRY_ENABLED=false" — the CLI's own
+    # words on first run, and the variable is exactly that, not a DOCKER_AGENT_-prefixed one
+    # (pkg/telemetry/utils.go). A turn here talks to one place.
+    env["TELEMETRY_ENABLED"] = "false"
+    env["OTEL_SDK_DISABLED"] = "true"
+    # Self-update is opt-in upstream (it runs only when DOCKER_AGENT_AUTO_UPDATE is truthy), and
+    # this says so out loud: a pinned binary that can replace itself mid-column is how Muse Code's
+    # version changed under a measurement.
+    env["DOCKER_AGENT_AUTO_UPDATE"] = "false"
+    # A toolset whose command is missing otherwise fetches it from the aqua registry at the moment
+    # the model calls it. Every stdio MCP command this runner writes is already on this box (the
+    # bridge's interpreter), so there is nothing to fetch and a download inside a turn is not
+    # something a person asked for.
+    env["DOCKER_AGENT_AUTO_INSTALL"] = "false"
+    sid = resume_session_id or ("hr-" + uuid.uuid4().hex)
+    cmd = [DOCKER_AGENT_BIN, "run",
+           # No TUI, and the stream this runner parses rather than the human one.
+           "--exec", "--json",
+           # Nobody is attached to approve a tool call; the sandbox is the boundary.
+           "--yolo",
+           # The harness's session id IS the CLI's: an id the store does not have is created with
+           # that id, so there is no mapping to keep and no second identifier to lose.
+           "--session", sid,
+           "--session-db", str(_docker_agent_session_db(cwd)),
+           str(cfg), prompt]
+    return cmd
+
+
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -12102,6 +12477,13 @@ BACKENDS = {
     # why _codex_to_claude cannot be reused for it.
     "vtcode": {"providers": sorted(VTCODE_PROVIDERS), "default_model": VTCODE_DEFAULT_MODEL,
                "normalize": _vtcode_to_claude},
+    # Docker Agent's `run --exec --json` is its own NDJSON (tool_call / tool_call_response /
+    # agent_choice / token_usage / stream_stopped), with its usage reported per REQUEST — see
+    # _docker_agent_usage for why the turn's numbers are accumulated rather than read off the last
+    # event.
+    "docker-agent": {"providers": sorted(DOCKER_AGENT_PROVIDERS),
+                     "default_model": DOCKER_AGENT_DEFAULT_MODEL,
+                     "normalize": _docker_agent_to_claude},
 }
 
 
@@ -13848,6 +14230,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                  resume_session_id=req.resume_session_id,
                                  mcp_servers=req.mcp_servers,
                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "docker-agent":
+        model = model or DOCKER_AGENT_DEFAULT_MODEL
+        cmd = _build_docker_agent(req.provider, auth, model, req.prompt, cwd, env,
+                                  resume_session_id=req.resume_session_id,
+                                  mcp_servers=req.mcp_servers,
+                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "vtcode":
         model = model or VTCODE_DEFAULT_MODEL
         cmd = _build_vtcode(req.provider, auth, model, req.prompt, cwd, env,

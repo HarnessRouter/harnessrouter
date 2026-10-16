@@ -212,7 +212,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 #
 # gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
 # this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder,vibe,vtcode}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder,vibe,vtcode,docker-agent}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -250,6 +250,7 @@ backend_bin() {
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
     vtcode) echo "$TOOLS/bin/vtcode" ;;
+    docker-agent) echo "$TOOLS/bin/docker-agent" ;;
     nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
   esac
 }
@@ -1170,6 +1171,51 @@ install_vtcode() {
   fi
 }
 
+# Docker Agent (Apache-2.0, docker/docker-agent) from its GitHub release: one static binary per
+# platform, ~145 MB, and UPSTREAM PUBLISHES NO CHECKSUMS beside them — so the digests are computed
+# here and pinned, which is install_goose's arrangement rather than install_omp's. They were
+# compared against the real assets before being written down.
+install_docker_agent() {
+  da_ver="${HR_DOCKER_AGENT_VERSION:-1.150.0}"; da_ver="${da_ver#v}"
+  case "$(uname -m)" in
+    x86_64|amd64)
+      da_asset="docker-agent-linux-amd64"
+      da_want="791fa6bac9f829847f00ab948f838bf54d11e0830988a5e5bce88d65ea65f2d1" ;;
+    aarch64|arm64)
+      da_asset="docker-agent-linux-arm64"
+      da_want="12ae093844531a60f32c344f4afb90bc92a010ea8438a5a760b3e79f8e81c8e7" ;;
+    *) echo "docker-agent: no binary pinned for $(uname -m)"; return 1 ;;
+  esac
+  # An override has no digest of ours, so it SAYS the bytes are unverified rather than pretending
+  # the check ran (goose's installer sets the precedent).
+  if [ -n "${HR_DOCKER_AGENT_VERSION:-}" ] && [ "$da_ver" != "1.150.0" ]; then
+    if [ -n "${HR_DOCKER_AGENT_SHA256:-}" ]; then da_want="$HR_DOCKER_AGENT_SHA256"; else
+      echo "[harnessrouter] WARN: HR_DOCKER_AGENT_VERSION=$da_ver without HR_DOCKER_AGENT_SHA256 — the binary is NOT verified"
+      da_want=""
+    fi
+  fi
+  da_tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/docker/docker-agent/releases/download/v${da_ver}/${da_asset}" \
+    -o "$da_tmp/docker-agent" || { rm -rf "$da_tmp"; return 1; }
+  if [ -n "$da_want" ]; then
+    da_have="$(sha256sum "$da_tmp/docker-agent" | awk '{print $1}')"
+    if [ "$da_want" != "$da_have" ]; then
+      echo "docker-agent $da_ver: checksum mismatch for $da_asset (want $da_want, have $da_have)"
+      rm -rf "$da_tmp"; return 1
+    fi
+  fi
+  mkdir -p "$TOOLS/bin"
+  install -m 0755 "$da_tmp/docker-agent" "$TOOLS/bin/docker-agent" || { rm -rf "$da_tmp"; return 1; }
+  rm -rf "$da_tmp"
+  # RUN it and compare the version it REPORTS: `docker-agent version` prints
+  # "docker-agent version v<version>" — there is no --version flag.
+  da_got="$("$TOOLS/bin/docker-agent" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if [ "$da_got" != "$da_ver" ]; then
+    echo "docker-agent installed but reports '${da_got:-nothing}', wanted $da_ver"
+    rm -f "$TOOLS/bin/docker-agent"; return 1
+  fi
+}
+
 # Run an install and, if it fails, SAY WHY.
 #
 # This was `>/dev/null 2>&1 || true`, and the silence cost a day of someone's life: a root-owned
@@ -1413,6 +1459,12 @@ install_backends() {
     try_install "Mistral Vibe" install_vibe || true
   fi
   [ -x "$TOOLS/vibe-venv/bin/vibe" ] && export HR_VIBE_BIN="$TOOLS/vibe-venv/bin/vibe"
+
+  DOCKER_AGENT_PIN="${HR_DOCKER_AGENT_VERSION:-1.150.0}"
+  if wanted docker-agent && [ "$("$(backend_bin docker-agent)" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$DOCKER_AGENT_PIN" ]; then
+    echo "[harnessrouter] installing Docker Agent $DOCKER_AGENT_PIN (Apache-2.0, version-pinned) — ~145 MB…"
+    try_install "Docker Agent" install_docker_agent || true
+  fi
 
   VTCODE_PIN="${HR_VTCODE_VERSION:-0.177.0}"
   if wanted vtcode && [ "$("$(backend_bin vtcode)" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$VTCODE_PIN" ]; then
