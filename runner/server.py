@@ -442,6 +442,40 @@ def _docker_agent_session_present(cwd: str, cmd: list[str], session_id: str) -> 
     return False
 
 
+def _dcode_state_db(cwd: str) -> pathlib.Path:
+    """The CLI's own store, under the redirected HOME."""
+    return pathlib.Path(cwd) / ".harness" / "home" / ".deepagents" / ".state" / "sessions.db"
+
+
+def _dcode_threads(cwd: str) -> list[str]:
+    """Thread ids this workspace has, newest first, read from the CLI's own table.
+
+    `dcode_thread_workspaces` holds one row per thread with the cwd it ran in. Asking it is how the
+    runner learns the id of the conversation it just started (there is nothing in the output that
+    carries it) and whether an id it was asked to continue is still there."""
+    db = _dcode_state_db(cwd)
+    if not db.is_file():
+        return []
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = con.execute(
+                "SELECT thread_id FROM dcode_thread_workspaces WHERE cwd = ? "
+                "ORDER BY created_at DESC", (str(pathlib.Path(cwd).resolve()),)).fetchall()
+            if not rows:
+                rows = con.execute("SELECT thread_id FROM dcode_thread_workspaces "
+                                   "ORDER BY created_at DESC").fetchall()
+            return [str(r[0]) for r in rows if r and r[0]]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return []
+
+
+def _dcode_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    return bool(session_id) and session_id in _dcode_threads(cwd)
+
+
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
@@ -477,6 +511,9 @@ _SESSION_PRESENT = {
     # docker-agent passes --session on EVERY turn (an id its store does not have is created with
     # that id, as a new conversation), so the argv says nothing: its store is asked instead.
     "docker-agent": _docker_agent_session_present,
+    # dcode's thread id is not in its output at all: the store is the only place it exists, and
+    # _build_dcode passes -r only when the thread is in it.
+    "dcode": _dcode_session_present,
 }
 
 
@@ -1537,6 +1574,12 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # still. Written down here rather than quietly: see the PR body's follow-up.
         rootrels = [f"{_NANOBOT_WS}/skills"]
         entryroot = f"{_NANOBOT_WS}/skills"
+    elif backend == "dcode":
+        # $HOME/.deepagents/agent/skills/<name>/SKILL.md — the user-level skills directory of its
+        # default agent profile (get_user_skills_dir), with $HOME redirected to .harness/home. Not
+        # a project directory: those live in the workspace the user collects.
+        rootrels = [".harness/home/.deepagents/agent/skills"]
+        entryroot = ".harness/home/.deepagents/agent/skills"
     elif backend == "docker-agent":
         # $HOME/.agents/skills/<name>/SKILL.md — the global root in its own discovery order
         # (pkg/skills: a repository's .agents/skills, .claude/skills and .github/skills, then the
@@ -2010,7 +2053,13 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
                                    # CLAUDE.md; the config this runner writes names AGENTS.md in
                                    # `add_prompt_files`, so the name is the runner's choice and
                                    # this is it.
-                                   "docker-agent")
+                                   "docker-agent",
+                                   # dcode reads the project's AGENTS.md through
+                                   # find_project_agent_md — but only when the workspace is a git
+                                   # PROJECT, which every session here is (measured both ways: no
+                                   # token in the answer in a plain directory, the token in it
+                                   # after git init).
+                                   "dcode")
         else "CLAUDE.md")
 
 
@@ -12368,6 +12417,148 @@ def _build_docker_agent(provider: str, auth: Auth, model: str, prompt: str, cwd:
 
 
 
+# ── deepagents-code (langchain-ai/deepagents, PyPI deepagents-code, `dcode`) ──────────────────
+# LangChain's terminal coding agent on their Deep Agents SDK. Its headless mode is `dcode -n
+# "<task>" -q`, which prints the ANSWER and nothing else — there is no event stream, so this is the
+# second base here with a deliberately reduced trace (aider is the first): the turn's tool calls do
+# not appear in the record, and what does appear is the answer, the produced files, and the usage
+# and served model the relay stamps.
+#
+# MEASURED on 0.1.84 (2026-10-16) against the Vercel AI Gateway through a recording proxy:
+#   * The model is `-M openai:<id>`, and with OPENAI_BASE_URL and OPENAI_API_KEY in the environment
+#     that is langchain-openai pointed at the relay. It posts to **/v1/responses**, not
+#     chat/completions, which is why this base is NOT in CHAT_ONLY_BACKENDS: a Responses-only id is
+#     reachable here, as it is on codex.
+#   * `-r <thread_id>` continues a conversation and a DIFFERENT `-M` on that resume is honoured —
+#     measured both ways (the first turn's word recalled while the request asked for the second
+#     model). Unlike vibe, vtcode and jcode, nothing pins the model to the session.
+#   * The thread id is NOT in the output. It is in the CLI's own store, `dcode_thread_workspaces`
+#     in $HOME/.deepagents/.state/sessions.db, one row per thread with the cwd it ran in — which is
+#     where _dcode_thread_id reads it and where _dcode_session_present asks whether a conversation
+#     is really there.
+#   * It reads the project's AGENTS.md — but only when the workspace is a PROJECT: its lookup is
+#     `find_project_agent_md(project_root)` and the root is the git repository, so the same file in
+#     a plain directory reached nobody. Measured both ways (no token in the answer before
+#     `git init`, the token in it after), and every session here is a git repository.
+#   * stdin: `dcode threads list --json` with an inherited stdin hung for eight minutes and
+#     returned at once with it closed — the same shape vtcode showed, and the reason _run_turn_bg
+#     closes stdin for every turn now.
+#   * Its answer is prose, so the turn runs through runner/dcode_driver.py — which keeps the CLI's
+#     two streams apart (the runner merges them, and here stdout IS the answer) and reads the thread
+#     id out of the store. The driver emits claude's stream-json, so this backend's normaliser is
+#     the passthrough, as systemone's and nanobot's are.
+#   * Fourteen tools reach the model, measured off a turn's own request: ls, read_file, write_file,
+#     edit_file, delete, glob, grep, execute, task, compact_conversation, update_goal, js_eval,
+#     fetch_url, get_current_thread_id. Only EIGHT of them can be withheld (see
+#     ALL_DCODE_TOOLS below), and the catalog offers exactly those eight.
+DCODE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+DCODE_BIN = os.environ.get("HR_DCODE_BIN", "/data/agent-tools/dcode-venv/bin/dcode")
+DCODE_PYTHON = os.environ.get("HR_DCODE_PYTHON", "/data/agent-tools/dcode-venv/bin/python")
+DCODE_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dcode_driver.py")
+DCODE_DEFAULT_MODEL = os.environ.get("DCODE_DEFAULT_MODEL", "gpt-5.4")
+# The tools a person can really switch off here, and the switch each one travels on:
+#   --allow-fs-tools  the filesystem set, which must always include read_file (the CLI requires it)
+#   -S / its absence  `execute`, the shell: it is OFF unless a shell allow-list is passed
+#   --no-interpreter  `js_eval`
+# The other six a turn declares — read_file, task, compact_conversation, update_goal, fetch_url and
+# get_current_thread_id — have no switch, so they are NOT offered: a tool id the runtime cannot
+# withhold would be reported as off by the console and disable nothing (UHP §4.3).
+_DCODE_FS_TOOLS = ("ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep")
+ALL_DCODE_TOOLS = ("ls", "write_file", "edit_file", "delete", "glob", "grep", "execute", "js_eval")
+
+
+def _dcode_config(cwd: str) -> None:
+    """Write $HOME/.deepagents/config.toml: the warnings off, so a successful turn's stream is the
+    answer and nothing else (the CLI prints its Tavily notice and the suppression recipe itself)."""
+    home = pathlib.Path(cwd) / ".harness" / "home" / ".deepagents"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text(
+        "# written per turn by the harness runner — do not edit, it is overwritten\n"
+        "[warnings]\n"
+        'suppress = ["tavily", "ripgrep"]\n'
+        "\n[startup]\n"
+        "# A workspace .env is the task's own file, and this CLI applies it to the PROCESS\n"
+        "# environment by default; a cloned repository's .env is not something a turn should\n"
+        "# inherit (the project's own documentation calls this defense in depth).\n"
+        "read_project_dotenv = false\n")
+
+
+def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                 tools_disabled: list[str] | None = None,
+                 max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in DCODE_PROVIDERS:
+        raise HTTPException(400, f"unknown dcode provider '{pr}' (one of {sorted(DCODE_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"dcode provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    _dcode_config(cwd)
+    # langchain-openai's own variables, which is what `-M openai:<id>` resolves through.
+    env["OPENAI_BASE_URL"] = (auth.base_url or "").rstrip("/")
+    env["OPENAI_API_KEY"] = auth.api_key or ""
+    # Every default that would phone home, change the binary, or write into the user's own files:
+    env["DEEPAGENTS_CODE_NO_UPDATE_CHECK"] = "1"
+    env["DEEPAGENTS_CODE_AUTO_UPDATE"] = "0"
+    env["DEEPAGENTS_CODE_PLUGIN_AUTO_UPDATE"] = "0"
+    env["DEEPAGENTS_CODE_PRICES_AUTO_UPDATE"] = "0"
+    # "the memory prompt tells the agent to proactively persist learnings to the AGENTS.md memory
+    # files" — the user's instruction file is the harness's, written fresh every turn, so an agent
+    # editing it would be editing something the next turn overwrites.
+    env["DEEPAGENTS_CODE_MEMORY_AUTO_SAVE"] = "0"
+    env["DEEPAGENTS_CODE_READ_PROJECT_DOTENV"] = "0"
+    # ripgrep is installed with the CLI (see install_dcode); this stops a download inside a turn if
+    # a volume ever comes up without it, at the cost of the slower search path.
+    env["DEEPAGENTS_CODE_OFFLINE"] = "1"
+    # LangSmith tracing is on by default in its own right; --no-tracing covers the session and this
+    # covers the SDK underneath it.
+    env["LANGSMITH_TRACING"] = "false"
+    env["LANGCHAIN_TRACING_V2"] = "false"
+    disabled = {str(t) for t in (tools_disabled or ())}
+    cmd = [DCODE_BIN,
+           "-n", prompt,
+           # the answer and nothing else; the record's text is this stream
+           "-q",
+           "--no-tracing",
+           "-M", f"openai:{model}",
+           "--max-retries", "2"]
+    if "execute" not in disabled:
+        # The shell is OFF in headless mode unless an allow-list is given, and the sandbox is the
+        # boundary here, so the list is "all" — this is the switch a disabled `execute` travels on.
+        cmd += ["-S", "all"]
+    if "js_eval" in disabled:
+        cmd.append("--no-interpreter")
+    fs_kept = [t for t in _DCODE_FS_TOOLS if t not in disabled]
+    if len(fs_kept) != len(_DCODE_FS_TOOLS):
+        # read_file is required to be in the list by the CLI itself, so it is never withheld — and
+        # it is not offered as a toggle either (see ALL_DCODE_TOOLS).
+        if "read_file" not in fs_kept:
+            fs_kept = ["read_file", *fs_kept]
+        cmd += ["--allow-fs-tools", ",".join(fs_kept)]
+    if mcp_servers:
+        cfg = _write_mcp_config_claude(cwd, mcp_servers)
+        if cfg:
+            cmd += ["--mcp-config", cfg, "--trust-project-mcp"]
+    else:
+        # Nothing declared: its auto-discovery would otherwise pick up a config in the workspace,
+        # which is the task's own file rather than the harness's declaration.
+        cmd.append("--no-mcp")
+    if max_turns:
+        cmd += ["--max-turns", str(int(max_turns))]
+    if resume_session_id and _dcode_session_present(cwd, cmd, resume_session_id):
+        cmd += ["-r", resume_session_id]
+    # The driver runs that argv and turns its two streams into events (see dcode_driver.py).
+    job = {"argv": cmd, "cwd": str(pathlib.Path(cwd).resolve()),
+           "db": str(_dcode_state_db(cwd)), "model": model,
+           # A cap of its own, under the runner's: the CLI's --timeout exits 124, which the driver
+           # reports as the limit rather than as an unexplained failure.
+           "timeout": MAX_TURN_SECONDS}
+    return [DCODE_PYTHON, DCODE_DRIVER, json.dumps(job, separators=(",", ":"))]
+
+
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -12484,6 +12675,10 @@ BACKENDS = {
     "docker-agent": {"providers": sorted(DOCKER_AGENT_PROVIDERS),
                      "default_model": DOCKER_AGENT_DEFAULT_MODEL,
                      "normalize": _docker_agent_to_claude},
+    # deepagents-code prints prose, so runner/dcode_driver.py runs it and emits claude's
+    # stream-json itself — the passthrough, as systemone's and nanobot's are.
+    "dcode": {"providers": sorted(DCODE_PROVIDERS), "default_model": DCODE_DEFAULT_MODEL,
+              "normalize": _claude_passthrough},
 }
 
 
@@ -14230,6 +14425,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                  resume_session_id=req.resume_session_id,
                                  mcp_servers=req.mcp_servers,
                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "dcode":
+        model = model or DCODE_DEFAULT_MODEL
+        cmd = _build_dcode(req.provider, auth, model, req.prompt, cwd, env,
+                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                           tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "docker-agent":
         model = model or DOCKER_AGENT_DEFAULT_MODEL
         cmd = _build_docker_agent(req.provider, auth, model, req.prompt, cwd, env,

@@ -4200,3 +4200,60 @@ No column, no other dimension. Two model ids served as themselves. Its `--sandbo
 modes, its sub-agents, its RAG and its MCP catalog are all untouched here: a turn gets the four
 toolsets above and nothing else. Its remote MCP transport ("streamable" or "sse") has not been
 exercised against a live server, so SSE is bridged like the other bases' until it is.
+
+## dcode (deepagents-code): implemented, NOT offered — its headless mode cannot continue a conversation (2026-10-16)
+
+LangChain's `deepagents-code` 0.1.84 (`dcode`) was built as far as the runner — the builder, the
+store reader, `runner/dcode_driver.py` — and is deliberately **not** registered in the gateway, the
+console, the installer or either measurement dimension. `runner/tests/test_dcode_not_offered.py`
+pins that state so a half-registration cannot pass unnoticed, the way gajae's does.
+
+### Why
+`dcode -n "<task>"` always starts a fresh thread. Its own source says so, about `--rubric`:
+
+> `--rubric` cannot reach that state: it requires `-n`, and `run_non_interactive` takes no resume or
+> thread-id argument, so it always starts a fresh thread with no checkpointed goal. … Add the
+> combined check here if the non-interactive path ever gains thread resumption.
+
+MEASURED against that, because a comment is a claim too: five turns in one workspace, each passing
+`-r <thread_id>` for a thread whose row and 22 checkpoints were in the store. Five NEW rows in
+`dcode_thread_workspaces`, and every recall answered "this thread has no earlier message". Moving
+`-r` before `-n` instead of after it changed nothing.
+
+So a base on this path passes `first turn` and fails `follow-up`, `switch` and `recycle` — three of
+the matrix's five scenarios — and offering it would be a base that cannot do what the product
+promises.
+
+### The first reading of this was wrong, which is the part worth keeping
+An earlier probe "resumed" and recalled the right word. It looked like continuity and was not: the
+question was *what word did I ask you to put in the file*, and the file was sitting in the workspace
+for the agent to read. The control that settled it asks for something only the conversation could
+carry (*what word did I ask you to reply with*), and the memory file that could otherwise have
+carried it — `$HOME/.deepagents/agent/AGENTS.md`, which this CLI's memory prompt writes "learnings"
+into by default — was empty on both sides. A recall question answerable from the workspace measures
+the workspace.
+
+### What it would take to offer it
+`dcode --acp` runs an ACP server over stdio whose sessions ARE LangGraph threads, and that server is
+constructed with `load_sessions=True` (main.py:3703) — so `session/load` can continue a thread
+across processes, which is exactly what one-process-per-turn needs. ACP also carries tool calls, so
+the trace would be better than the `-q` text this groundwork reads. The work is an ACP client in the
+runner (initialize → session/new or session/load → session/prompt → the session/update stream), and
+it would be reusable: mistral-vibe ships `vibe-acp`, docker-agent has `acp`, VT Code has `acp`.
+
+### What was measured and is worth keeping either way
+- `-M openai:<id>` with OPENAI_BASE_URL and OPENAI_API_KEY is langchain-openai pointed at the relay,
+  and it posts to **/v1/responses**, not chat/completions.
+- It reads the project's `AGENTS.md` only when the workspace is a git PROJECT (its lookup is
+  `find_project_agent_md(project_root)`); in a plain directory the same file reached nobody.
+  Measured both ways.
+- `dcode threads list --json` with an inherited stdin hung for eight minutes and returned at once
+  with it closed — the second base this batch where stdin was the whole problem.
+- Fourteen tools reach the model (ls, read_file, write_file, edit_file, delete, glob, grep, execute,
+  task, compact_conversation, update_goal, js_eval, fetch_url, get_current_thread_id) and only eight
+  can be withheld, each on a different switch: the filesystem set through `--allow-fs-tools` (which
+  must keep read_file), `execute` by withholding `-S`, `js_eval` through `--no-interpreter`.
+- Defaults that would have cost something: LangSmith tracing (on), the update check, the plugin and
+  price auto-updates, the project `.env` applied to the process environment, and
+  `MEMORY_AUTO_SAVE` — the agent is otherwise told to persist learnings into the AGENTS.md the
+  harness rewrites every turn.

@@ -1,0 +1,9 @@
+# written per turn by the harness runner — do not edit, it is overwritten
+[warnings]
+suppress = ["tavily", "ripgrep"]
+
+[startup]
+# A workspace .env is the task's own file, and this CLI applies it to the PROCESS
+# environment by default; a cloned repository's .env is not something a turn should
+# inherit (the project's own documentation calls this defense in depth).
+read_project_dotenv = false
