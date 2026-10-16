@@ -3526,6 +3526,10 @@ unchanged; what changed:
 - Live on the SDK transport (Global, `efficient`): a first turn with Write + DeliverArtifacts in
   21 s, the artifact landed, charge 0.23 credits; the purge deleted the session, the file and the
   Agent and archived the Environment.
+- `install_qoder` run as written in the image's base (`python:3.12-slim`): the venv built in 17 s,
+  the marker says 0.6.0, the import check passed, a wrong digest was refused with both digests
+  named; the driver run on that venv's interpreter from inside the container completed a live turn
+  (artifact landed, 0.42 credits) and its purge.
 
 ### Not yet confirmed with Qoder (the driver's defaults until then)
 
