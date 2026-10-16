@@ -14,7 +14,7 @@ import { chromium } from 'playwright';
 import crypto from 'node:crypto';
 
 const BASE = process.env.BASE;
-const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,cheetahclaws,agentzero,mimo,jcode,opensquilla,nanobot,qoder,vibe').split(',');   // every built-in chat harness (systemone runs decision models only)
+const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,cheetahclaws,agentzero,mimo,jcode,opensquilla,nanobot,qoder,vibe,vtcode').split(',');   // every built-in chat harness (systemone runs decision models only)
 const RESULTS = process.env.RESULTS || 'results-custom.json';
 // A harness's other kind of tool is an MCP server. A self-contained instance hosts only the
 // database and media servers, one needing a database and the other costing real money per call, so
@@ -126,7 +126,11 @@ const results = {};
 // scope and `search_tool_functions` looks a tool up by name, and together they are how that runtime
 // reaches an MCP server's tools — so withholding either would break the fixture's MCP half for the
 // dimension's own reason, not the base's (mimo's exec sandbox, one spelling further on).
-const NEEDED_ID = /^(bash|shell|exec|exec_session|execute|run_command|run_terminal_command|terminal|code_execution_tool|python.*|node.*|run_typescript|read|read_file|write|write_file|edit|file_edit(or)?|text_editor|str_replace.*|create_file|view|search_replace|apply_patch|glob|grep|list_dir|ls|skills?_?tool|skill|task|search_tool|search_tool_functions|use_tool|mcp.*)$/i;
+// vtcode adds three more spellings of the same three kinds: `exec_command` is its shell (and
+// `exec` alone does not match it), `write_stdin` feeds that shell, and `search_tools` is how its
+// DEFERRED tools — an MCP server's among them — become callable at all. Without these the choice
+// fell on exec_command, the tool the fixture runs its script with.
+const NEEDED_ID = /^(bash|shell|exec|exec_session|execute|run_command|run_terminal_command|terminal|code_execution_tool|python.*|node.*|run_typescript|exec_command|write_stdin|read|read_file|write|write_file|edit|file_edit(or)?|text_editor|str_replace.*|create_file|view|search_replace|apply_patch|glob|grep|list_dir|ls|skills?_?tool|skill|task|search_tool|search_tools|search_tool_functions|use_tool|mcp.*)$/i;
 const PREFERRED = /^(todo_write|todowrite|todo|web_?fetch|web_?search|browser.*|board_.*|link_pr|goal|wait)$/i;
 const pickDisabled = (tools) => {
   const names = (tools || []).map((t) => String((t && t.name) || t || '')).filter(Boolean);

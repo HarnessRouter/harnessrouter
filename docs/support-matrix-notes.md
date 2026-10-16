@@ -4004,3 +4004,107 @@ other 54 in its catalog are offered so a column can measure them here, and the `
 wiring row is the one probed directly (gemini-3.8-flash, 2026-10-15) rather than through an
 aggregator. A turn's input is large — 11.5k tokens on a three-word prompt, 20k characters of system
 prompt — which is worth knowing before reading its usage numbers against another base's.
+
+## vtcode: a codex frame over its own items, and two refusals that were the CLIENT's request shape (2026-10-16) — behaviour measured, NO column yet
+
+VT Code 0.177.0, added as the twenty-eighth base. Measured against the pinned release tarball on
+the Vercel AI Gateway, first through a recording proxy and then end to end through the runner's own
+argv and relay. **No support-matrix column has run.**
+
+### What it is, and what its own docs get wrong about it
+`vtcode exec --json` streams NDJSON that its documentation calls "the non-interactive Codex schema".
+The FRAME is codex's (`thread.started`, `turn.started|completed|failed`,
+`item.started|updated|completed`); the ITEMS are its own — `tool_invocation`, `tool_output`,
+`harness`, `error` where codex has `command_execution` and `mcp_tool_call`. So it carries its own
+normaliser, the same relationship gemini-cli has to claude's stream-json. Only `item.completed` is
+read: the other two are the same item with less of it.
+
+A turn's LAST `agent_message` is **not its answer**: the harness appends a summary block (`Task: …`
+/ `Agent Type: …` / `Final Status: …`), and `--last-message-file` writes THAT, not the model's
+reply. The normaliser keeps the last message that is not the summary, or every turn's answer would
+be machine prose with the real one pushed out of the transcript a judge reads.
+
+### Four defaults that each had to be closed
+- **stdin.** `vtcode exec --json "<prompt>"` with an inherited stdin made no model call at all for
+  as long as it was left running; the identical argv with stdin closed answered in seconds. The
+  runner now closes stdin for EVERY backend's turn (`_run_turn_bg`), which is the right default for
+  a surface where every CLI is handed its prompt in argv — a CLI that waits on stdin otherwise
+  waits until the turn's wall-clock cap with no output. Its ripgrep and ast-grep installers were
+  the other two suspects and were ruled out by isolating them.
+- **Its continuation loop.** With `continuation_policy = "all"` (the default) a task tracker decides
+  when a turn is finished: a weaker model (gpt-5.4-mini) spent seven turns re-verifying a completed
+  task until the CLI's own loop detector stopped the run (`outcome_code: "loop_detected"`). Off,
+  with `orchestration_mode = "single"`, a capable model answered in three requests. One turn, one
+  answer, is this product's contract — and the record still says `loop_detected` honestly when its
+  detector fires.
+- **`--max-tool-calls` defaults to TEN** per session, which a real task passes long before it is
+  done. The turn's own step budget is the harness's.
+- **Workspace trust.** exec mode refuses an untrusted workspace and the alternative is a TTY prompt
+  a turn cannot answer; `VTCODE_TRUST_WORKSPACE=full-auto` is what grants it. Its memories
+  subsystem (its own model calls on finished threads) and its ATIF telemetry are off.
+
+### The provider and the model have to be named, twice
+Its model→provider resolution reads a vendor prefix: `--model google/gemini-3-flash` alone sent it
+to its BUILT-IN gemini provider and it asked for a `GEMINI_API_KEY` nobody set. And `exec resume`
+restores the model the session STARTED on — a resumed turn whose config named another model was
+refused outright ("Invalid model identifier: 'anthropic/claude-haiku-5.5'") because that id was no
+longer in the provider's list. So every invocation names the provider, the key's env var and the
+model, and the config's `models` list carries the turn's id. That is the third base in two batches
+with the resumed-model shape (checklist item 42).
+
+### What two providers refused was its own request shape, not ours — and the relay repairs it
+On a turn that had already done its work, the next request was refused with a 400 by **all three
+families tried**:
+- `anthropic/claude-haiku-5.5` — "This model does not support assistant message prefill. The
+  conversation must end with a user message";
+- `google/gemini-3-flash` and `openai/gpt-5.4-mini` — "user message must have content", param
+  `messages.5.content`.
+The cause is in the body: it appends its "## Environment" block as a trailing SYSTEM message, and
+it leaves an EMPTY user turn after a tool result. Both are now repaired in the relay, keyed on what
+the provider says rather than on who said it (`_drop_empty_messages`, `_trailing_system_as_user`) —
+the lesson from grok's root-combinator repair, which was gated on the one family it was measured
+on. Two things about the repair are worth recording because each was a bug first:
+- an empty CONTENT ARRAY (`content: []`) is what it actually sends, and the first version read any
+  list as "structured, leave alone", so the repair never fired on the body it was written for;
+- the flag has to be applied to LATER requests too, not only to the retry: the first request was
+  repaired and sent again while the next three were refused untouched. A repair that fixes one
+  request and not the turn is not a repair.
+With both in place, eight consecutive requests were answered 200 and all three turns of the
+end-to-end run succeeded.
+
+### End to end, with the runner's own argv and relay (2026-10-16)
+Three turns in one session, replayed through the shipped normaliser:
+1. first turn — success, `served_model anthropic/claude-haiku-5.5`, usage non-zero, the AGENTS.md
+   token in the answer;
+2. follow-up with a DIFFERENT model — same session id, `served_model google/gemini-3-flash`, the
+   first turn's word recalled, `e2e.txt` written;
+3. the same session with `exec_command` withheld — the model reported that the only tools it had
+   were the other four, the one call it made anyway came back `outcome: "hook_denied"` with nothing
+   run, and the turn's record carries that as a note rather than as a tool row (the vibe rule: a
+   turn's tool list means "what ran", and the custom-harness dimension reads exactly that list).
+
+Its session registry is pinned with `VTCODE_DATA` under `.harness/vtcode/data`: by default it lands
+in the platform's application-support directory, which is inside the redirected HOME but not a path
+this runner can check for a session without guessing the platform. Its workspace state
+(`.vtcode/`, the event store and the task tracker) is excluded from the produced-files list and
+travels in the checkpoint.
+
+### The custom-harness dimension needed three more spellings
+`pickDisabled` chooses what to withhold from a base's own tool list, excluding what the fixture
+needs — and `exec_command`, `write_stdin` and `search_tools` matched none of its patterns, so it
+picked `exec_command`: the tool the fixture runs its script with. It now lands on
+`record_decision`, the spare. `search_tools` matters most of the three: this runtime DEFERS
+code_search, web_search, web_fetch, cron and every MCP tool behind it, so withholding it would take
+the MCP half of the row with it.
+
+### Install
+GitHub release, pinned to 0.177.0, one tarball per target, compared against the `.sha256` upstream
+publishes beside each asset. `install_vtcode` was run on a linux container, where what it installed
+reported 0.177.0; it finds the executable in the archive rather than assuming its depth, which is
+jcode's lesson (a 505-byte launcher on PATH with no binary beside it).
+
+### What is NOT measured
+No column and no other dimension. Two model ids served as themselves; `gpt-5.4-mini` ran but hit
+its loop detector, which is recorded above as the base's own behaviour rather than a routing
+finding. Its MCP transports are Stdio and Http only (read off `McpTransportConfig`), so SSE is
+bridged — that path has not been exercised against a live server here.

@@ -1346,6 +1346,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # vibe speaks ONE shape, OpenAI chat/completions, so every connection reaches it that way —
     # including a direct Anthropic key, whose OpenAI-compatible surface lives under /v1 (cline's
     # and qwen's route). Its `anthropic` provider type is that surface, not Messages.
+    # vtcode, the same reach as vibe's and for the same reason: one OpenAI shape, through the
+    # relay, with the provider named in its config rather than inferred from the model id.
+    ("anthropic", "vtcode"): "anthropic",      ("openai", "vtcode"): "openai",
+    ("azure-foundry", "vtcode"): "azure",
+    ("openrouter", "vtcode"): "openai-api",
+    ("tokenrouter", "vtcode"): "tokenrouter",  ("vercel", "vtcode"): "tokenrouter",
+    ("llmtr", "vtcode"): "tokenrouter",
+    ("custom", "vtcode"): "openai-api",
+    ("harnessrouter", "vtcode"): "tokenrouter",
     ("anthropic", "vibe"): "anthropic",        ("openai", "vibe"): "openai",
     ("azure-foundry", "vibe"): "azure",
     ("openrouter", "vibe"): "openai-api",
@@ -5572,7 +5581,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     # has no Messages client at all (Backend is MISTRAL | GENERIC), so the openai set alone.
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
                "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
-               "mimo", "jcode", "opensquilla", "nanobot", "vibe"},
+               "mimo", "jcode", "opensquilla", "nanobot", "vibe", "vtcode"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
@@ -7557,7 +7566,13 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # gemini-3-flash, each asked for and each served as itself, including on the model switch a resumed
 # session would otherwise have swallowed. Every other id here is offered so the matrix can measure
 # it on this base, and no column has run yet.
-for _b in ("jcode", "opensquilla", "nanobot", "vibe"):
+# vtcode is the same reach again: its custom provider is declared `api_format =
+# "openai-chat"` and every keyed turn rides the relay. MEASURED on it (2026-10-16, the Vercel
+# gateway through the runner's own relay): claude-haiku-5.5 and gemini-3-flash, each asked for and
+# each served as itself, including on the mid-session switch its resume would otherwise have taken
+# back. gpt-5.4-mini also ran, and is where its own loop detector stopped a turn — a weaker model
+# re-verifying a finished task, not a routing failure.
+for _b in ("jcode", "opensquilla", "nanobot", "vibe", "vtcode"):
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
@@ -7678,9 +7693,12 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # vibe's provider `backend = "generic"` posts to /chat/completions (its generic LLM backend joins
 # that resource onto the provider's api_base), and its only other backend is Mistral's own API, so
 # a Responses-API-only id would be a picker row that fails on send here too.
+# vtcode: its custom provider takes api_format "auto" | "openai-chat" | "openai-responses" |
+# "anthropic-messages", and this runner declares openai-chat — so a Responses-API-only id would be
+# a picker row that fails on send here too.
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
                       "cheetahclaws", "grok", "agentzero",
-                      "jcode", "opensquilla", "nanobot", "vibe")
+                      "jcode", "opensquilla", "nanobot", "vibe", "vtcode")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -17300,6 +17318,27 @@ _BASE_CATALOG: dict[str, dict] = {
         # construction would have withheld the built-ins and let every MCP tool through. Measured:
         # with write_file withheld the model wrote the file with `exec` instead, which is the honest
         # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
+    "vtcode": {
+        "label": "VT Code", "backend": "vtcode", "status": "ready",
+        "system_prompt": ("You are VT Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # All five tools its own `vtcode schema tools` reports on 0.177.0, held equal to the
+        # runner's ALL_VTCODE_TOOLS by gateway/tests/test_vtcode_tools.py. Everything else this
+        # runtime can do — code_search, web_search, web_fetch, cron, an MCP server's tools — is
+        # DEFERRED behind `search_tools`, which the model calls to have them defined; that is why
+        # this list is short and why a judge reading tool names sees `search_tools` where another
+        # base would show the tool itself.
+        "tools": [("exec_command", "Shell"), ("write_stdin", "Shell Input"),
+                  ("apply_patch", "Apply Patch"), ("search_tools", "Tool Lookup"),
+                  ("record_decision", "Record Decision")],
+        # "hard", and withheld at the strongest door of the three this product has seen: exec
+        # mode treats `[automation.full_auto].allowed_tools` as a hard execution boundary, so a
+        # disabled tool is not even DECLARED to the model — measured with exec_command withheld,
+        # where the model reported that the only tools it had were the other four. A call it made
+        # anyway came back `outcome: "hook_denied"` with nothing run.
         "tool_enforcement": "hard",
     },
     "vibe": {

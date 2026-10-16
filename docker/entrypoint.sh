@@ -212,7 +212,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 #
 # gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
 # this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder,vibe}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder,vibe,vtcode}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -249,6 +249,7 @@ backend_bin() {
     jcode)  echo "$TOOLS/bin/jcode" ;;
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
+    vtcode) echo "$TOOLS/bin/vtcode" ;;
     nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
   esac
 }
@@ -1128,6 +1129,47 @@ install_vibe() {
   fi
 }
 
+# VT Code (Apache-2.0, vinhnx/VTCode) from its GitHub release: one tarball per target, with a
+# `.sha256` beside each asset — so the bytes are compared against what UPSTREAM publishes rather
+# than against a digest of our own (the install_omp precedent; install_goose computes its own only
+# because that project publishes none).
+install_vtcode() {
+  vt_ver="${HR_VTCODE_VERSION:-0.177.0}"; vt_ver="${vt_ver#v}"
+  case "$(uname -m)" in
+    x86_64|amd64) vt_target="x86_64-unknown-linux-gnu" ;;
+    aarch64|arm64) vt_target="aarch64-unknown-linux-gnu" ;;
+    *) echo "vtcode: no release tarball for $(uname -m)"; return 1 ;;
+  esac
+  vt_base="https://github.com/vinhnx/VTCode/releases/download/${vt_ver}"
+  vt_tar="vtcode-${vt_ver}-${vt_target}.tar.gz"
+  vt_tmp="$(mktemp -d)"
+  curl -fsSL "$vt_base/$vt_tar" -o "$vt_tmp/$vt_tar" || { rm -rf "$vt_tmp"; return 1; }
+  curl -fsSL "$vt_base/vtcode-${vt_ver}-${vt_target}.sha256" -o "$vt_tmp/want" \
+    || { rm -rf "$vt_tmp"; return 1; }
+  vt_want="$(tr -d '\r' < "$vt_tmp/want" | awk '{print $1}' | head -1)"
+  vt_have="$(sha256sum "$vt_tmp/$vt_tar" | awk '{print $1}')"
+  if [ -z "$vt_want" ] || [ "$vt_want" != "$vt_have" ]; then
+    echo "vtcode $vt_ver: checksum mismatch for $vt_tar (want ${vt_want:-none}, have $vt_have)"
+    rm -rf "$vt_tmp"; return 1
+  fi
+  tar xzf "$vt_tmp/$vt_tar" -C "$vt_tmp" || { rm -rf "$vt_tmp"; return 1; }
+  # The archive holds the binary plus a man/ tree; find the executable rather than assuming its
+  # depth — jcode's Linux tarball was a launcher plus a sibling .bin where its macOS one was a
+  # single binary, and "install the file called <name>*" put a 505-byte shim on PATH.
+  vt_bin="$(find "$vt_tmp" -type f -name vtcode -perm -u+x | head -1)"
+  [ -n "$vt_bin" ] || { echo "vtcode $vt_ver: no vtcode executable in $vt_tar"; rm -rf "$vt_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin"
+  install -m 0755 "$vt_bin" "$TOOLS/bin/vtcode" || { rm -rf "$vt_tmp"; return 1; }
+  rm -rf "$vt_tmp"
+  # RUN what was installed and compare the version it REPORTS: `vtcode --version` prints
+  # "vtcode-core <version>".
+  vt_got="$("$TOOLS/bin/vtcode" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if [ "$vt_got" != "$vt_ver" ]; then
+    echo "vtcode installed but reports '${vt_got:-nothing}', wanted $vt_ver"
+    rm -f "$TOOLS/bin/vtcode"; return 1
+  fi
+}
+
 # Run an install and, if it fails, SAY WHY.
 #
 # This was `>/dev/null 2>&1 || true`, and the silence cost a day of someone's life: a root-owned
@@ -1371,6 +1413,12 @@ install_backends() {
     try_install "Mistral Vibe" install_vibe || true
   fi
   [ -x "$TOOLS/vibe-venv/bin/vibe" ] && export HR_VIBE_BIN="$TOOLS/vibe-venv/bin/vibe"
+
+  VTCODE_PIN="${HR_VTCODE_VERSION:-0.177.0}"
+  if wanted vtcode && [ "$("$(backend_bin vtcode)" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$VTCODE_PIN" ]; then
+    echo "[harnessrouter] installing VT Code $VTCODE_PIN (Apache-2.0, version-pinned) — ~31 MB…"
+    try_install "VT Code" install_vtcode || true
+  fi
   # Both venv bases are reached by PATH from the runner, so the interpreter and the console script
   # are named explicitly — $TOOLS/bin is what PATH carries, and neither of these lives there.
   [ -x "$TOOLS/opensquilla-venv/bin/opensquilla" ] && export HR_OPENSQUILLA_BIN="$TOOLS/opensquilla-venv/bin/opensquilla"
