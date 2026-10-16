@@ -212,7 +212,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 #
 # gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
 # this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder,vibe}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -248,6 +248,7 @@ backend_bin() {
     gajae)  echo "$TOOLS/bin/gjc" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
+    vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
     nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
   esac
 }
@@ -1069,6 +1070,64 @@ for name in ("Nanobot", "STREAM_EVENT_TEXT_DELTA", "STREAM_EVENT_REASONING_DELTA
 ' "$nb_ver" || { rm -rf "$TOOLS/nanobot-venv"; return 1; }
 }
 
+# Mistral Vibe (Apache-2.0, mistralai/mistral-vibe) from PyPI, pinned to the release the runner's
+# code was measured against: the programmatic flags, the session-journal entry shapes, the export
+# fields and the agent-profile door that carries a turn's model.
+#
+# Its own venv, for opensquilla's reason, and THE WHEEL IS FETCHED BY URL AND COMPARED TO A PINNED
+# DIGEST rather than installed by name: `pip install mistral-vibe==X` trusts whatever the index
+# serves under that name today, and the wheels are platform-specific (cp312-abi3, a compiled CLI
+# inside), so the digest is per architecture. Upstream publishes no checksum file of its own; these
+# are PyPI's own recorded hashes for 2.26.1, read from its JSON API. Its dependencies are pinned
+# exactly in the package's own metadata (every requirement is ==), so resolving them from the index
+# is deterministic even though they are not hashed here.
+install_vibe() {
+  vb_ver="${HR_VIBE_VERSION:-2.26.1}"; vb_ver="${vb_ver#v}"
+  case "$(uname -m)" in
+    x86_64|amd64)
+      vb_whl="mistral_vibe-${vb_ver}-cp312-abi3-manylinux_2_28_x86_64.whl"
+      vb_want="1ceb43e38a2e82cb8c54e1032b011874f8422e998cf87b4a3fdf58704133de55" ;;
+    aarch64|arm64)
+      vb_whl="mistral_vibe-${vb_ver}-cp312-abi3-manylinux_2_28_aarch64.whl"
+      vb_want="896a432651b922b7e16f01e26b4fce55b4ebd7a5ca122cf82c1e9d6a8a849821" ;;
+    *) echo "vibe: no wheel pinned for $(uname -m)"; return 1 ;;
+  esac
+  # A version override has no digest here, so it SAYS the bytes are unverified rather than
+  # pretending the check ran (goose's installer sets the precedent).
+  if [ -n "${HR_VIBE_VERSION:-}" ] && [ "$vb_ver" != "2.26.1" ]; then
+    if [ -n "${HR_VIBE_SHA256:-}" ]; then vb_want="$HR_VIBE_SHA256"; else
+      echo "[harnessrouter] WARN: HR_VIBE_VERSION=$vb_ver without HR_VIBE_SHA256 — the wheel is NOT verified"
+      vb_want=""
+    fi
+  fi
+  vb_tmp="$(mktemp -d)"
+  vb_url="https://pypi.org/simple/mistral-vibe/"
+  # The file URL is read out of PyPI's simple index rather than hard-coded: the hash is what pins
+  # the artifact, and the CDN path for a file is not part of the release's identity.
+  vb_href="$(curl -fsSL -H 'Accept: text/html' "$vb_url" | grep -o "https://files.pythonhosted.org/[^\"#]*${vb_whl}" | head -1)"
+  [ -n "$vb_href" ] || { echo "vibe $vb_ver: $vb_whl is not in the index"; rm -rf "$vb_tmp"; return 1; }
+  curl -fsSL "$vb_href" -o "$vb_tmp/$vb_whl" || { rm -rf "$vb_tmp"; return 1; }
+  if [ -n "$vb_want" ]; then
+    vb_have="$(sha256sum "$vb_tmp/$vb_whl" | awk '{print $1}')"
+    if [ "$vb_want" != "$vb_have" ]; then
+      echo "vibe $vb_ver: checksum mismatch for $vb_whl (want $vb_want, have $vb_have)"
+      rm -rf "$vb_tmp"; return 1
+    fi
+  fi
+  "${HR_VIBE_BASE_PYTHON:-python3}" -m venv "$TOOLS/vibe-venv" \
+    || { rm -rf "$vb_tmp" "$TOOLS/vibe-venv"; return 1; }
+  "$TOOLS/vibe-venv/bin/pip" install -q --disable-pip-version-check "$vb_tmp/$vb_whl" \
+    || { rm -rf "$vb_tmp" "$TOOLS/vibe-venv"; return 1; }
+  rm -rf "$vb_tmp"
+  # RUN WHAT WAS INSTALLED and compare the version it REPORTS: an installer that exits 0 without a
+  # working executable is the same lie as a check with no input (jcode's 505-byte shim).
+  vb_got="$("$TOOLS/vibe-venv/bin/vibe" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if [ "$vb_got" != "$vb_ver" ]; then
+    echo "vibe installed but reports '${vb_got:-nothing}', wanted $vb_ver"
+    rm -rf "$TOOLS/vibe-venv"; return 1
+  fi
+}
+
 # Run an install and, if it fails, SAY WHY.
 #
 # This was `>/dev/null 2>&1 || true`, and the silence cost a day of someone's life: a root-owned
@@ -1304,6 +1363,14 @@ install_backends() {
     try_install "nanobot" install_nanobot || true
   fi
   [ -x "$TOOLS/nanobot-venv/bin/python" ] && export HR_NANOBOT_PYTHON="$TOOLS/nanobot-venv/bin/python"
+
+  VIBE_PIN="${HR_VIBE_VERSION:-2.26.1}"
+  if wanted vibe && [ "$("$TOOLS/vibe-venv/bin/vibe" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$VIBE_PIN" ]; then
+    rm -rf "$TOOLS/vibe-venv"
+    echo "[harnessrouter] installing Mistral Vibe $VIBE_PIN (Apache-2.0, version-pinned)…"
+    try_install "Mistral Vibe" install_vibe || true
+  fi
+  [ -x "$TOOLS/vibe-venv/bin/vibe" ] && export HR_VIBE_BIN="$TOOLS/vibe-venv/bin/vibe"
   # Both venv bases are reached by PATH from the runner, so the interpreter and the console script
   # are named explicitly — $TOOLS/bin is what PATH carries, and neither of these lives there.
   [ -x "$TOOLS/opensquilla-venv/bin/opensquilla" ] && export HR_OPENSQUILLA_BIN="$TOOLS/opensquilla-venv/bin/opensquilla"

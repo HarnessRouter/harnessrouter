@@ -1343,6 +1343,21 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "aider"): "tokenrouter",
     ("custom", "aider"): "openai-api",
     ("google", "aider"): "openai-api",
+    # vibe speaks ONE shape, OpenAI chat/completions, so every connection reaches it that way —
+    # including a direct Anthropic key, whose OpenAI-compatible surface lives under /v1 (cline's
+    # and qwen's route). Its `anthropic` provider type is that surface, not Messages.
+    ("anthropic", "vibe"): "anthropic",        ("openai", "vibe"): "openai",
+    ("azure-foundry", "vibe"): "azure",
+    ("openrouter", "vibe"): "openai-api",
+    ("tokenrouter", "vibe"): "tokenrouter",    ("vercel", "vibe"): "tokenrouter",
+    ("llmtr", "vibe"): "tokenrouter",
+    ("custom", "vibe"): "openai-api",
+    # PROBED rather than assumed, which is this table's own rule: a turn on 2.26.1 against
+    # generativelanguage.googleapis.com/v1beta/openai completed on gemini-3.8-flash with usage
+    # reported (2026-10-15). The id matters — `gemini-3-flash`, which that endpoint does not serve,
+    # came back as a 404 the CLI reported as an infrastructure_failure, not as a silent fallback.
+    ("google", "vibe"): "openai-api",
+    ("harnessrouter", "vibe"): "tokenrouter",
     ("anthropic", "kimi"): "anthropic",        ("openai", "kimi"): "openai",
     ("azure-foundry", "kimi"): "azure",
     ("openrouter", "kimi"): "openai-api",
@@ -5553,9 +5568,11 @@ _CUSTOM_FORMAT_BACKENDS = {
     # Anthropic, so a custom integration declaring the anthropic format would be offered a path the
     # runner does not take for it — unlisted rather than nearly true.
     # kilo passes api_format to the same ai-sdk package choice opencode makes (_opencode_npm).
+    # vibe: a custom OpenAI endpoint is exactly what its `generic` provider backend speaks, and it
+    # has no Messages client at all (Backend is MISTRAL | GENERIC), so the openai set alone.
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
                "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
-               "mimo", "jcode", "opensquilla", "nanobot"},
+               "mimo", "jcode", "opensquilla", "nanobot", "vibe"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
@@ -7534,7 +7551,13 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
 # only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
 # relay so its served model stays readable — see _build_jcode.)
-for _b in ("jcode", "opensquilla", "nanobot"):
+# vibe (mistral-vibe) is the same shape: its `generic` backend is an OpenAI chat/completions
+# client and every keyed turn rides the relay, so its wire reach is kimi's. MEASURED on it so far
+# (2026-10-14/15, an OpenAI-compatible gateway through a recording proxy): claude-haiku-5.5 and
+# gemini-3-flash, each asked for and each served as itself, including on the model switch a resumed
+# session would otherwise have swallowed. Every other id here is offered so the matrix can measure
+# it on this base, and no column has run yet.
+for _b in ("jcode", "opensquilla", "nanobot", "vibe"):
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
@@ -7652,9 +7675,12 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # grok: the runner's one custom model is `api_backend = "chat_completions"` (Grok Build can speak the
 # Responses and Messages APIs too, but that is not the model the runner defines).
 # agentzero too: its model is litellm's openai provider (Agent Zero's `other`, a0_api_mode chat).
+# vibe's provider `backend = "generic"` posts to /chat/completions (its generic LLM backend joins
+# that resource onto the provider's api_base), and its only other backend is Mistral's own API, so
+# a Responses-API-only id would be a picker row that fails on send here too.
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
                       "cheetahclaws", "grok", "agentzero",
-                      "jcode", "opensquilla", "nanobot")
+                      "jcode", "opensquilla", "nanobot", "vibe")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -17274,6 +17300,31 @@ _BASE_CATALOG: dict[str, dict] = {
         # construction would have withheld the built-ins and let every MCP tool through. Measured:
         # with write_file withheld the model wrote the file with `exec` instead, which is the honest
         # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
+    "vibe": {
+        "label": "Mistral Vibe", "backend": "vibe", "status": "ready",
+        "system_prompt": ("You are Vibe, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The tools a turn actually declares to the provider, read off the requests of a measured
+        # turn on 2.26.1 rather than from the docs, and held equal to the runner's ALL_VIBE_TOOLS by
+        # gateway/tests/test_vibe_tools.py. Two of them are DISPATCHERS and are listed as such:
+        # `run_typescript` runs a script with the tool registry in scope and `search_tool_functions`
+        # looks a tool up by name, which is how this runtime reaches an MCP server's tools — so a
+        # judge reading tool NAMES alone will not see an MCP call here (mimo's lesson).
+        "tools": [("bash", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit", "Edit"), ("skill", "Skill"), ("todo", "Todo"),
+                  ("run_typescript", "Run TypeScript"),
+                  ("search_tool_functions", "Tool Lookup"),
+                  ("unified_harness_scratchpad", "Scratchpad")],
+        # "hard", measured at the door, and the MECHANISM is worth stating because it is not the
+        # usual one: a disabled tool is still DECLARED to the model, and the call is refused
+        # (`tool_denied`, nothing written) rather than the tool being withheld. The effect is
+        # withheld, which is what this claim is about; the runner turns such a refusal into a note
+        # on the reply instead of a tool row, so the turn's tool list still means "what ran".
+        # The usual limit is not overstated either: withholding a tool withholds that tool, not the
+        # capability — a model left with `bash` can still write a file with a shell command.
         "tool_enforcement": "hard",
     },
 }

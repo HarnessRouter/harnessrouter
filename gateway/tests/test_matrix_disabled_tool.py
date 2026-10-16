@@ -68,6 +68,12 @@ def test_this_batchs_four_bases_are_there():
         assert b in _bases_in_dimension(), b
 
 
+def test_this_batchs_bases_are_there():
+    # batch 4, the same check as above for the bases added with it
+    for b in ("vibe",):
+        assert b in _bases_in_dimension(), b
+
+
 def test_gajae_is_not(the_dimension=None):
     # it is implemented and not offered; a base the server cannot serve produces a column of
     # failures that say nothing about it (see test_gajae_not_offered.py)
@@ -85,6 +91,12 @@ def test_the_tools_this_batchs_bases_run_the_fixture_WITH_are_never_withheld():
         "jcode": ("bash", "write"),
         "opensquilla": ("exec", "write_file"),
         "nanobot": ("exec", "write_file"),
+        # vibe: measured off a real turn's own request, where these are the names it declares. Its
+        # two DISPATCHERS matter here too — `run_typescript` runs a script with the tool registry
+        # in scope and `search_tool_functions` looks a tool up by name, which is how this runtime
+        # reaches an MCP server — so they are named as tools the fixture needs rather than left to
+        # a regex that does not match them.
+        "vibe": ("bash", "write_file", "run_typescript", "search_tool_functions"),
     }
     for base, ids in needs.items():
         published = _tool_ids(A._BASE_CATALOG[base])

@@ -55,6 +55,11 @@ run, by you, under their own licenses:
   Agent Zero (agentzero)      MIT, "Copyright (c) 2025 Agent Zero, s.r.o" (agent0ai/agent-zero; the
                               tagged source archive, with its Python dependencies from PyPI under
                               their own licenses)
+  Mistral Vibe (vibe)         Apache-2.0 (mistralai/mistral-vibe; the wheel from PyPI, pinned by
+                              version and hash). The console's Vibe mark,
+                              ui/public/logos/vibe.svg, is that project's own editor glyph
+                              (distribution/zed/icons/mistral_vibe.svg), unchanged, under the same
+                              license.
 
 Claude Code is distributed under Anthropic's terms and may not be redistributed inside a
 public image; hermes-agent's publisher declared no license before 0.19.0. Installing the

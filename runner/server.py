@@ -426,6 +426,9 @@ _SESSION_PRESENT = {
     "jcode": _argv_session_present,
     "opensquilla": _opensquilla_session_present,
     "nanobot": _nanobot_session_present,
+    # vibe: _build_vibe asks its own session store (_vibe_session_present) and passes --resume only
+    # when the conversation is there, so the id in argv IS that lookup's conclusion.
+    "vibe": _argv_session_present,
 }
 
 
@@ -753,6 +756,18 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       "./.harness/home/.jcode/auth.json",
                       "./.harness/home/.jcode/credentials.json",
                       "./.harness/home/.config/jcode",
+                      # vibe: its config.toml is rewritten at the start of every turn and can
+                      # carry an MCP server's Authorization header (the same standing as
+                      # opencode.json and kilo.json above), and $VIBE_HOME/.env is the file its own
+                      # `vibe --setup` writes an API key into — the runner never writes it, the
+                      # relay's placeholder rides the environment, but a task could run the wizard.
+                      # The per-turn export directory is excluded because --output-dir ALSO copies
+                      # the whole session journal into it, which would travel in every checkpoint
+                      # beside the real store under home/logs (the same bloat opencode's snapshot
+                      # repo caused). The export itself is read before the turn ends.
+                      "./.harness/vibe/home/config.toml",
+                      "./.harness/vibe/home/.env",
+                      "./.harness/vibe/out",
                       # opensquilla stores provider keys in its profile .env and its onboarding
                       # writes api_key straight into config.toml. The driver passes the relay
                       # placeholder in the environment instead, but `opensquilla onboard` or
@@ -1468,6 +1483,15 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # still. Written down here rather than quietly: see the PR body's follow-up.
         rootrels = [f"{_NANOBOT_WS}/skills"]
         entryroot = f"{_NANOBOT_WS}/skills"
+    elif backend == "vibe":
+        # $VIBE_HOME/skills/<name>/SKILL.md — one of the two GLOBAL skill directories in its own
+        # discovery list (the other is ~/.agents/skills), and VIBE_HOME is already this session's
+        # .harness/vibe/home, so the bundle is inside a loader path, inside the excluded tree and
+        # inside the checkpoint. NOT the project's .vibe/skills, its third source: that one sits in
+        # the workspace, where every skill would come back to the user as a deliverable of their own
+        # task (goose's lesson), and it is read only in a trusted folder anyway.
+        rootrels = [".harness/vibe/home/skills"]
+        entryroot = ".harness/vibe/home/skills"
     else:
         # dsh has no skill loader; the AGENTS.md block below is the only door.
         # aider lands here on purpose too, and for a stronger reason: it has no skill loader AND no
@@ -1667,6 +1691,10 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # dropped in silence and the agent simply never has those tools.
 _BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "grok": ("sse",),
                        "cheetahclaws": ("http",), "jcode": ("http", "sse"),
+                       # vibe's mcp_servers take transport "http" | "streamable-http" | "stdio":
+                       # the product's own servers are streamable HTTP, which it speaks, and an SSE
+                       # server a harness declares has no client there at all.
+                       "vibe": ("sse",),
                        # opensquilla's MCPServerEntry takes transport "stdio" | "sse" only, so a
                        # streamable-HTTP server has no client here either.
                        "opensquilla": ("http",)}
@@ -1888,10 +1916,15 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         #                 "keep AGENTS.md project rules only"
         #   nanobot     — its own workspace template set writes AGENTS.md, so that is the name its
         #                 context builder reads
+        # vibe reads the AGENTS.md files from the project root down, and merges them into the system
+        # prompt under their own heading — but ONLY in a trusted folder: a programmatic run without
+        # --trust says on stderr that project configuration "will be ignored", and the contract
+        # never reaches the model. _build_vibe passes --trust for exactly this reason, and the pair
+        # was measured together (an instruction in this file was obeyed in the answer).
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
                                    "goose", "kimi", "aider", "openhands", "kilo", "grok",
                                    "agentzero",
-                                   "mimo", "gajae", "jcode", "opensquilla", "nanobot")
+                                   "mimo", "gajae", "jcode", "opensquilla", "nanobot", "vibe")
         else "CLAUDE.md")
 
 
@@ -11076,6 +11109,392 @@ def _agentzero_eof(state: dict, rc: int) -> list[dict]:
 _agentzero_to_claude.eof = _agentzero_eof   # type: ignore[attr-defined]
 
 
+# ── mistral-vibe (mistralai/mistral-vibe, PyPI mistral-vibe) ──────────────────────────────────
+# Mistral's own coding CLI, and the first base here whose programmatic mode is a written contract:
+# `vibe -p` with `--output streaming` puts one JSON session-journal entry per line on stdout, and
+# `--output-dir` writes an export.json carrying the outcome, the session id, the usage and the
+# reason a run ended. It is nobody's fork — no event stream this runner already parses — so it
+# carries its own normaliser.
+#
+# MEASURED on 2.26.1 against an OpenAI-compatible gateway (2026-10-14/15), every claim from a real
+# turn through a recording proxy rather than from the docs:
+#   * `[[providers]] backend = "generic"` with `api_base` + `api_key_env_var` IS an OpenAI
+#     chat/completions client, so every keyed turn rides the loopback relay and the placeholder
+#     bearer lives in the turn's ENVIRONMENT, which is where _relay_served_model and _relay_usage
+#     look for the route (a credential that rides only argv leaves both empty — openhands' lesson).
+#   * A programmatic run does NOT read the project's AGENTS.md unless `--trust` is passed: stderr
+#     says so and the workspace contract never reaches the model. With it, an instruction written
+#     in AGENTS.md was obeyed in the answer.
+#   * There is NO --model flag, and on `--resume` the SESSION's model beats the config's
+#     `active_model`: a resumed run whose config.toml named a second model asked the provider for
+#     the model the session started with, and its own export agreed. What does change the model on
+#     a resumed session is an agent profile — `$VIBE_HOME/agents/<name>.toml` with `active_model`,
+#     chosen with `--agent` — measured in both directions: the request carried the profile's model
+#     (google/gemini-3-flash where the session had started on anthropic/claude-haiku-5.5), the
+#     conversation was still there, and the AGENTS.md contract still applied. That is why this
+#     builder writes a profile per turn and not only a config. Without it the harness's model
+#     switch would be dropped in silence, which is matrix rule 2 broken by configuration.
+#   * A provider failure is NOT narrated as assistant text (goose's and claude's trap): a 401
+#     upstream was ONE attempt, exit 1, an empty stream, and `error {message, code}` beside
+#     `outcome: "config_error"` in export.json. The reason reaches the user from there.
+#   * Usage is spelled input_tokens / output_tokens / cached_input_tokens / total_tokens, and its
+#     input is GROSS (the cache is a subset), which is what _norm_token_usage nets.
+#   * A turn declares NINE tools, the same nine with nothing disabled and with two tools disabled:
+#     search_tool_functions, run_typescript, read_file, write_file, edit, bash, skill, todo and
+#     unified_harness_scratchpad. Two of them are DISPATCHERS — `run_typescript` runs a script with
+#     the tool registry in scope, `search_tool_functions` looks a tool up by name — which is how
+#     this runtime reaches the rest, including an MCP server's tools, so a judge that reads tool
+#     NAMES alone will not see an MCP call here (mimo's lesson, item 41 of the checklist).
+#   * `--disabled-tools` IS enforced, and NOT by withholding the declaration, which is the first
+#     thing measured here that contradicted its own first reading. With write_file and edit
+#     disabled: the request still declared both, the model called write_file, and the call came
+#     back `status: "failed"`, `decision: "skip"`, `error.code: "tool_denied"` with nothing
+#     written — the policy beats --auto-approve and the profile's bypass. So the tool's EFFECT is
+#     withheld rather than the tool, which is still enforcement (and still only of that tool: a
+#     model left with `bash` can write a file with a shell command). A first pass here read
+#     "web_search disappeared from the list" as proof of withholding; web_search is not among the
+#     nine and was never declared, so that check had no input — item 18, caught by re-measuring
+#     against a tool the base really has.
+VIBE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+VIBE_BIN = os.environ.get("HR_VIBE_BIN", "/data/agent-tools/vibe-venv/bin/vibe")
+VIBE_DEFAULT_MODEL = os.environ.get("VIBE_DEFAULT_MODEL", "gpt-5.4")
+# The provider and profile names inside the config this builder writes. Both are ours: VIBE_HOME is
+# per session and lives under .harness/, so nothing here can collide with a user's own file.
+_VIBE_PROVIDER = "harness"
+_VIBE_AGENT = "harness"
+# The variable config.toml names and the turn's process holds (see the relay note above).
+_VIBE_KEY_ENV = "HR_VIBE_RELAY_KEY"
+# Every tool the unified harness declares, read off the requests of a measured turn. The gateway's
+# catalog carries the same list; gateway/tests/test_vibe_tools.py holds the two equal.
+ALL_VIBE_TOOLS = ("search_tool_functions", "run_typescript", "read_file", "write_file", "edit",
+                  "bash", "skill", "todo", "unified_harness_scratchpad")
+
+
+def _vibe_home(cwd: str) -> pathlib.Path:
+    """VIBE_HOME for this session: config.toml, agents/, skills/ and the session store.
+
+    Under `.harness/` so it is excluded from the produced-files list and still travels in the
+    checkpoint, which is what keeps `--resume` working across a sandbox recycle."""
+    return pathlib.Path(cwd) / ".harness" / "vibe" / "home"
+
+
+def _vibe_out(cwd: str) -> pathlib.Path:
+    """Where `--output-dir` puts this turn's export.json (read by the eof handler)."""
+    return pathlib.Path(cwd) / ".harness" / "vibe" / "out"
+
+
+def _vibe_sessions(cwd: str) -> pathlib.Path:
+    return _vibe_home(cwd) / "logs" / "session"
+
+
+def _vibe_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Whether this session's store really holds the conversation `--resume` would continue.
+
+    Asked of the store rather than of the bytes (goose's lesson): the unified store keeps one
+    directory per session id with a meta.json in it, and a legacy store keeps its own directory of
+    the same name, so a directory with that name under the session root is the predicate the CLI
+    itself matches on."""
+    if not session_id:
+        return False
+    root = _vibe_sessions(cwd)
+    for cand in (root / "unified" / session_id, root / session_id):
+        if cand.is_dir():
+            return True
+    return False
+
+
+def _vibe_toml(v) -> str:
+    """One TOML scalar. Written by hand because the runner has no TOML writer and the values are
+    ours: a model id, a URL, an env-var name and booleans."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int) and not isinstance(v, bool):
+        return str(v)
+    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _vibe_config(auth: Auth, model: str, home: pathlib.Path,
+                 mcp_servers: list[dict] | None) -> None:
+    """Write $VIBE_HOME/config.toml: one provider, one model, and every default that would
+    otherwise spend the turn's money or change the turn's model turned off."""
+    q = _vibe_toml
+    base = (auth.base_url or "").rstrip("/")
+    lines = [
+        "# written per turn by the harness runner — do not edit, it is overwritten",
+        f"active_model = {q(model)}",
+        # The posture the turn runs with; --auto-approve on the command line grants the tool calls.
+        'default_agent = "accept-edits"',
+        "",
+        "# Mistral's telemetry sends traces to the provider's endpoint, authenticated with the",
+        "# provider's API key, on by default. A turn here talks to one place: the relay.",
+        "enable_telemetry = false",
+        "# A pinned CLI that offers to update itself is a CLI that can change under a measurement",
+        "# (Muse Code's launcher did exactly that mid-column, checklist item 25).",
+        "enable_update_checks = false",
+        "enable_auto_update = false",
+        "# Nobody is attached to a headless turn.",
+        "enable_notifications = false",
+        "",
+        "[session_logging]",
+        "# OFF: a generated session title is a SECOND model call on this turn's route, which would",
+        "# bill the user for a title and put a model call in the record nobody asked for.",
+        "generate_titles = false",
+        "",
+        f"[[providers]]",
+        f"name = {q(_VIBE_PROVIDER)}",
+        f"api_base = {q(base)}",
+        f"api_key_env_var = {q(_VIBE_KEY_ENV)}",
+        "# \"generic\" is its OpenAI chat/completions client; \"mistral\" would speak Mistral's own",
+        "# API, which no connection here serves.",
+        'backend = "generic"',
+        "",
+        f"[[models]]",
+        f"name = {q(model)}",
+        f"provider = {q(_VIBE_PROVIDER)}",
+        # alias defaults to name (ModelConfig._default_alias_to_name), and active_model matches on
+        # the alias — so one id names the model everywhere and there is no indirection to get wrong.
+        "# Declared because the window is otherwise unknown here, which leaves compaction with no",
+        "# threshold to derive; the real limit is the provider's and it refuses what does not fit.",
+        "max_context_length = 200000",
+        "",
+    ]
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        transport = str(sv.get("transport") or "").lower()
+        if sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            args = [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]
+            lines += ["[[mcp_servers]]", f"name = {q(name)}", 'transport = "stdio"',
+                      f"command = {q(str(argv[0]))}",
+                      "args = [" + ", ".join(q(a) for a in args) + "]", ""]
+            continue
+        if not url:
+            continue
+        # The product's own servers (database, media, plugs) are streamable HTTP, which this CLI
+        # speaks natively; an SSE server a harness declares has no client here, so
+        # _BRIDGED_TRANSPORTS turns it into a stdio launcher before this runs.
+        lines += ["[[mcp_servers]]", f"name = {q(name)}",
+                  'transport = "streamable-http"' if transport != "sse" else 'transport = "sse"',
+                  f"url = {q(url)}", ""]
+        # The bearer the gateway minted for this turn goes through the shared helper, which is the
+        # one place a server's headers come from: eight writers once kept their own copy and
+        # dropped `auth`, and those bases had no browser at all.
+        hdrs = _mcp_headers(sv)
+        if hdrs:
+            lines += [f"[mcp_servers.auth]", 'type = "static"',
+                      "headers = { " + ", ".join(f"{q(k)} = {q(v)}" for k, v in hdrs.items()) + " }",
+                      ""]
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text("\n".join(lines))
+
+
+def _vibe_profile(home: pathlib.Path, model: str) -> None:
+    """Write $VIBE_HOME/agents/<_VIBE_AGENT>.toml — the turn's model, and the one door that beats a
+    resumed session's stored model (measured; see the note on this backend)."""
+    d = home / "agents"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{_VIBE_AGENT}.toml").write_text("\n".join([
+        "# written per turn by the harness runner — do not edit, it is overwritten",
+        "# A resumed session restores the model it started on, and the config layer does not",
+        "# override it. This profile does, which is how a harness's model switch reaches the",
+        "# provider on turn two.",
+        f"active_model = {_vibe_toml(model)}",
+        # The sandbox is the trust boundary and nobody is attached to approve anything — the same
+        # grant --auto-approve gives, stated in the profile so a run that loses the flag still has it.
+        "bypass_tool_permissions = true",
+        "",
+    ]))
+
+
+def _vibe_export(cwd: str) -> dict:
+    """This turn's export.json, or {} when the run died before writing one."""
+    try:
+        with open(_vibe_out(cwd) / "export.json", encoding="utf-8") as fh:
+            obj = json.load(fh)
+        return obj if isinstance(obj, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _vibe_usage(u: dict | None) -> dict:
+    """The export's usage → the canonical shape.
+
+    Its three names — input_tokens, output_tokens, cached_input_tokens — are all already in
+    _norm_token_usage's picker, so this is a pass-through rather than a mapping; it is a function
+    anyway because its INPUT is gross (the cached read sits inside input_tokens) and the netting
+    that makes billing right happens in there. A cache WRITE count it does not report at all, so
+    those tokens are billed as fresh input, which is the honest reading of what we are told."""
+    return _norm_token_usage(u if isinstance(u, dict) else None)
+
+
+def _vibe_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE session-journal entry to zero+ canonical claude events.
+
+    Entries arrive complete (`generationStatus: "completed"`), one line each, and each carries its
+    own id; they are de-duplicated by that id so a re-emitted entry cannot double a tool row or an
+    answer. `message` is a turn's prose, `effect` is a tool call with its input and its result in
+    one object, and the session id rides every entry — the first one is where system/init comes
+    from, because this CLI has no init event of its own."""
+    kind = obj.get("type")
+    sid = obj.get("sessionId")
+    out: list[dict] = []
+    if sid and not state.get("_vibe_init"):
+        state["_vibe_init"] = sid
+        out.append({"type": "system", "subtype": "init", "session_id": sid,
+                    "model": state.get("model")})
+    eid = str(obj.get("id") or "")
+    seen = state.setdefault("_vibe_seen", set())
+    if eid and eid in seen:
+        return out
+    if eid:
+        seen.add(eid)
+    if kind == "message":
+        role = obj.get("role")
+        text = "\n".join(b.get("text") or "" for b in (obj.get("content") or [])
+                         if isinstance(b, dict) and b.get("type") == "text").strip()
+        if role == "assistant" and text:
+            state["final"] = text
+            out.append({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": text}]}})
+        # A `user` entry is this turn's own prompt played back. It is NOT rendered: the gateway
+        # already stores what was sent, and a judge that reads the transcript tail must not be able
+        # to satisfy a recall check with the prompt's own copy of the answer (the rig defect that
+        # made 593 of 596 rows pass, batch 3).
+        return out
+    if kind == "effect":
+        detail = obj.get("detail") if isinstance(obj.get("detail"), dict) else {}
+        st = obj.get("state") if isinstance(obj.get("state"), dict) else {}
+        name = str(detail.get("toolName") or obj.get("title") or "tool")
+        args = detail.get("input")
+        if str(((st.get("error") or {}) if isinstance(st.get("error"), dict) else {}).get("code")
+               or "") == "tool_denied":
+            # The tool policy refused this call: `status: "failed"`, `decision: "skip"`,
+            # `error.code: "tool_denied"`, and nothing happened (measured with write_file and edit
+            # disabled — the file was not written).
+            #
+            # It is NOT recorded as a tool call. On every other base here a disabled tool is
+            # withheld from the model, so a turn's tool list means "what ran"; this runtime instead
+            # declares the tool and refuses the call, and recording the attempt as a call would make
+            # this base's list mean something different from all the others'. The custom-harness
+            # dimension reads exactly that list to decide whether a withheld tool stayed unused, so
+            # a row would have failed for a call that never happened.
+            # The attempt is not swallowed either: it becomes the `system/notice` the gateway
+            # renders as a note on the reply, so a person reading a turn where the model tried to
+            # use a tool their harness switched off is told so.
+            text = f"{name} was refused: this harness has it switched off"
+            seen_notice = state.setdefault("_vibe_denied", [])
+            if text in seen_notice:
+                return out
+            seen_notice.append(text)
+            return out + [{"type": "system", "subtype": "notice", "text": text}]
+        out.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": eid or name, "name": name,
+             "input": args if isinstance(args, dict) else {"input": args}}]}})
+        status = str(st.get("status") or "")
+        if status:
+            body = st.get("outputText")
+            if not body:
+                payload = st.get("output")
+                body = payload if isinstance(payload, str) else json.dumps(payload, default=str)
+            ok = bool((st.get("display") or {}).get("success", status == "completed"))
+            out.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": eid or name, "is_error": not ok,
+                 "content": str(body or "")[:8000]}]}})
+        return out
+    return out
+
+
+def _vibe_eof(state: dict, rc: int) -> list[dict]:
+    """The verdict comes from export.json, not from the exit code alone.
+
+    The CLI's exit codes are a documented contract (0 finished, 1 usage/config, 2 the model API or
+    the runtime, 3 a limit or a refusal, 4 an aborted socket run), and the export says which of
+    those it was in words: `outcome`, plus `error {message, code}` when there is one. A run killed
+    before it wrote an export leaves an empty reason on purpose, so the run loop's stderr tail is
+    what the user reads instead of a placeholder of ours."""
+    exp = _vibe_export(state.get("cwd") or "")
+    usage = _vibe_usage(exp.get("usage"))
+    err = exp.get("error") if isinstance(exp.get("error"), dict) else {}
+    why = str((err or {}).get("message") or "").strip()
+    outcome = str(exp.get("outcome") or "")
+    ok = rc == 0 and outcome == "finished" and not why
+    if not exp:
+        return [{"type": "result", "subtype": "success" if rc == 0 else "error",
+                 "is_error": rc != 0, "result": state.get("final", ""), "usage": usage}]
+    if not ok and not why:
+        # A limit or a refusal: the outcome IS the reason, and it is the only one there is.
+        why = {"turn_limit": "the turn limit was reached",
+               "token_limit": "the token budget was reached",
+               "price_limit": "the price limit was reached",
+               "deadline": "the time limit was reached",
+               "terminated": "the run was stopped",
+               "length": "the conversation or the answer hit the model's token limit",
+               "refusal": "the model refused the request",
+               "aborted": "the run was aborted"}.get(outcome, outcome)
+    return [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+             "result": state.get("final", "") if ok else (why or state.get("final", "")),
+             "usage": usage}]
+
+
+_vibe_to_claude.eof = _vibe_eof   # type: ignore[attr-defined]
+
+
+def _build_vibe(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                tools_disabled: list[str] | None = None,
+                max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in VIBE_PROVIDERS:
+        raise HTTPException(400, f"unknown vibe provider '{pr}' (one of {sorted(VIBE_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"vibe provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        # Every keyed turn rides the relay: the connection's real key never reaches the CLI's
+        # environment, where the agent's own shell could read it, and the relay is the only tap
+        # that can say which model actually answered.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    home, out = _vibe_home(cwd), _vibe_out(cwd)
+    _vibe_config(auth, model, home, mcp_servers)
+    _vibe_profile(home, model)
+    env["VIBE_HOME"] = str(home)
+    env[_VIBE_KEY_ENV] = auth.api_key or ""
+    # Last turn's export must not be able to answer for this one: the eof handler reads this file,
+    # and a run that dies before writing it would otherwise be scored by the previous turn's
+    # outcome — a stale pass, which is worse than no verdict at all. The whole directory goes,
+    # because --output-dir also copies the session journal into it and that copy grows with the
+    # conversation.
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True, exist_ok=True)
+    cmd = [VIBE_BIN, "-p", prompt,
+           # Without it a programmatic run ignores the project's AGENTS.md, which is where the
+           # harness's whole workspace contract lives (measured; stderr says so).
+           "--trust",
+           # The profile carries this turn's model, and beats a resumed session's own (measured).
+           "--agent", _VIBE_AGENT,
+           "--output", "streaming",
+           "--auto-approve",
+           "--output-dir", str(out)]
+    if resume_session_id and _vibe_session_present(cwd, cmd, resume_session_id):
+        cmd += ["--resume", resume_session_id]
+    if max_turns:
+        cmd += ["--max-turns", str(int(max_turns))]
+    for t in (tools_disabled or []):
+        name = str(t or "").strip()
+        if name:
+            # Measured: a named tool is still DECLARED to the model and its calls are refused with
+            # `tool_denied`, nothing written — the effect is withheld, which is what makes this
+            # base's tool_enforcement "hard" rather than an instruction, and why the normaliser
+            # turns a refused call into a notice instead of a tool row.
+            cmd += ["--disabled-tools", name]
+    return cmd
+
+
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -11175,6 +11594,11 @@ BACKENDS = {
     # normaliser is the passthrough, as systemone's is.
     "nanobot": {"providers": sorted(NANOBOT_PROVIDERS), "default_model": NANOBOT_DEFAULT_MODEL,
                 "normalize": _claude_passthrough},
+    # mistral-vibe's `--output streaming` is its own session-journal shape (one entry per line,
+    # `message` and `effect`), and the turn's verdict is in the export.json its eof handler reads
+    # rather than in the stream — so it carries its own normaliser and its own eof.
+    "vibe": {"providers": sorted(VIBE_PROVIDERS), "default_model": VIBE_DEFAULT_MODEL,
+             "normalize": _vibe_to_claude},
 }
 
 
@@ -12910,6 +13334,13 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                  resume_session_id=req.resume_session_id,
                                  mcp_servers=req.mcp_servers,
                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "vibe":
+        model = model or VIBE_DEFAULT_MODEL
+        # Skills are already under $VIBE_HOME/skills, one of its own global roots, so there is
+        # nothing to name on the command line (pi's and gajae's arrangement).
+        cmd = _build_vibe(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                          tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "nanobot":
         model = model or NANOBOT_DEFAULT_MODEL
         cmd = _build_nanobot(req.provider, auth, model, req.prompt, cwd, env,

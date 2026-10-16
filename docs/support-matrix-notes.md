@@ -3906,3 +3906,101 @@ environment names. It could not read them — `control.db` and `graph.db` are `0
 `0700`, and a session uid already has traverse, so file contents are governed by each file's own
 mode either way. The half that stops a session renaming or replacing another session's directory
 (which needs write on the parent, not on the target) is untouched by that change.
+
+## vibe: Mistral's own CLI, and a model switch a resumed session would have swallowed (2026-10-14/15) — behaviour measured, NO column yet
+
+`mistral-vibe` 2.26.1, added as the twenty-seventh base. Measured against the pinned wheel through a
+proxy that recorded every request the CLI made, on the Vercel AI Gateway and on Google's
+OpenAI-compatible endpoint. **No support-matrix column has run**: every number below is from those
+probes and from the runner's own argv end to end, not from a console sweep.
+
+### What it is
+Not a fork of anything this runner already drives. Its programmatic mode is a written contract:
+`vibe -p` with `--output streaming` puts one JSON session-journal entry per line on stdout
+(`message` for prose, `effect` for a tool call with its input, its result and the approval decision
+in one object), and `--output-dir` writes an `export.json` with the outcome, the session id, the
+usage and the reason the run ended. Exit codes are documented per outcome (0 finished, 1
+usage/config, 2 the model API or the runtime, 3 a limit or a refusal, 4 an aborted socket run). Its
+`[[providers]] backend = "generic"` is an OpenAI chat/completions client, so every keyed turn rides
+the loopback relay and rule 2 is answerable: the relay stamped `anthropic/claude-haiku-5.5` and
+`google/gemini-3-flash` on the turns that asked for them.
+
+### The two defaults that would have been defects, both closed
+- **A programmatic run does not read the project's `AGENTS.md`.** Without `--trust` the CLI says so
+  on stderr ("project configuration (AGENTS.md) will be ignored") and the harness's whole workspace
+  contract reaches nobody; the turn still completes, so nothing would have failed. With `--trust`,
+  an instruction written in that file was obeyed in the answer. `_build_vibe` passes it.
+- **There is no `--model` flag, and a resumed session restores the model it started on.** A resumed
+  run whose `config.toml` named a second model asked the provider for the FIRST model and its own
+  export agreed — matrix rule 2 broken by configuration, not by bug, and invisible in the reply.
+  What does change it is an agent profile: `$VIBE_HOME/agents/<name>.toml` with `active_model`,
+  selected with `--agent`. Measured both ways (the request carried the profile's model where the
+  session had started on another, the conversation was intact and the AGENTS.md contract still
+  applied), so the builder writes a profile per turn as well as a config. Checklist item 42's shape
+  exactly, found by running two turns with different models and reading what the provider was asked.
+
+Also turned off per turn, each a default: `enable_telemetry` (traces to Mistral's endpoint,
+authenticated with the provider's key), `enable_update_checks` / `enable_auto_update` (a pinned CLI
+that updates itself changes under a measurement — Muse Code's launcher did exactly that),
+`enable_notifications`, and `[session_logging] generate_titles`, which is a SECOND model call on the
+turn's own route to name the session.
+
+### Tool enforcement, and a first reading that was wrong
+A turn declares NINE tools — `search_tool_functions`, `run_typescript`, `read_file`, `write_file`,
+`edit`, `bash`, `skill`, `todo`, `unified_harness_scratchpad` — the same nine with nothing disabled
+and with two disabled. Two are DISPATCHERS (`run_typescript` runs a script with the tool registry in
+scope, `search_tool_functions` looks a tool up by name), which is how the runtime reaches everything
+else including an MCP server's tools, so a judge reading tool NAMES alone will not see an MCP call
+here. The custom-harness dimension's `NEEDED_ID` now covers both, or `pickDisabled` could withhold
+the MCP path and fail the row for the dimension's reason.
+
+`--disabled-tools` is enforced, and **not** by withholding the declaration: with `write_file` and
+`edit` disabled the request still declared both, the model called `write_file`, and the call came
+back `status: "failed"`, `decision: "skip"`, `error.code: "tool_denied"` with nothing written. The
+policy beats `--auto-approve` and the profile's `bypass_tool_permissions`. So the tool's EFFECT is
+withheld, which is what `hard` claims, and the usual limit holds — a model left with `bash` can
+still write a file with a shell command.
+
+The first version of this note said `--disabled-tools web_search` proved withholding because
+web_search vanished from the declared list. It had never been in it: web_search is not among the
+nine. That check had no input (checklist item 18), and the real mechanism only appeared when the
+measurement was retaken against a tool the base actually has.
+
+Because of that mechanism, a refused call is recorded as the `system/notice` the gateway renders on
+the reply, not as a tool row: on every other base a disabled tool is withheld, so a turn's tool list
+means "what ran", and the custom-harness dimension reads exactly that list to decide whether a
+withheld tool stayed unused. Recording the attempt would have failed a row for a call that never
+happened; swallowing it would hide from the user that their own switch stopped the agent.
+
+### End to end, with the runner's own argv and the runner's own relay (2026-10-15)
+Three turns in one session, through `_build_vibe` and `_hermes_relay_route`, against the Vercel
+gateway, replayed back through the shipped normaliser:
+1. first turn — success, `served_model anthropic/claude-haiku-5.5`, usage non-zero;
+2. follow-up with a DIFFERENT model — same session id, `served_model google/gemini-3-flash`, the
+   first turn's word recalled, the AGENTS.md token in the answer, and `e2e.txt` written;
+3. the same session with `write_file` and `edit` disabled — the write refused, no file, the notice
+   on the reply, no tool row.
+The produced-files list after all three held exactly the agent doc and the file the agent wrote:
+everything the CLI writes for itself is under `.harness/vibe/`, which `_PRODUCED_EXCLUDE_PREFIX`
+already drops (item 36's check, answered before a column rather than after it).
+
+Its `config.toml` (which can carry an MCP server's Authorization header), `$VIBE_HOME/.env` (what
+its own setup wizard writes a key into) and the per-turn export directory are in
+`CHECKPOINT_EXCLUDE`; the session store under `$VIBE_HOME/logs/session` is NOT, because that is what
+makes `--resume` survive a sandbox recycle.
+
+### Install
+PyPI, pinned to 2.26.1, and the wheel is fetched by URL and compared to a per-architecture digest
+(PyPI's own recorded hashes: `1ceb43e3…` x86_64, `896a4326…` aarch64) rather than installed by name
+— the wheels are platform-specific, cp312-abi3 with a compiled CLI inside, and `pip install
+mistral-vibe==X` trusts whatever the index serves under that name today. Both digests were compared
+against the real assets, and `install_vibe` itself was run on a `python:3.12-slim` container, where
+the installed binary reported `vibe 2.26.1`.
+
+### What is NOT measured
+No support-matrix column, no custom-harness run, no plugin, browser, environments or family-tour
+dimension. Two model ids have been served as themselves (claude-haiku-5.5, gemini-3-flash); the
+other 54 in its catalog are offered so a column can measure them here, and the `("google", "vibe")`
+wiring row is the one probed directly (gemini-3.8-flash, 2026-10-15) rather than through an
+aggregator. A turn's input is large — 11.5k tokens on a three-word prompt, 20k characters of system
+prompt — which is worth knowing before reading its usage numbers against another base's.
