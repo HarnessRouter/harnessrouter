@@ -239,8 +239,12 @@ free have to be built, and several of the registration points above have no obje
 
 **Not applicable, and the base says so rather than skipping it:**
 
-- *15, the installer.* There is no binary. `docker/entrypoint.sh` installs nothing for it, and the
-  catalog entry's notes say the runtime is remote.
+- *15, the installer.* There is no binary of the runtime to install; what is installed is the
+  CLIENT the driver speaks it with. qoder's driver runs on Qoder's own Python SDK (`qca-sdk`),
+  which `docker/entrypoint.sh` installs into a venv of its own (`install_qoder`), pinned and
+  verified the way cheetahclaws' wheel is (the wheel's sha256 beside the version, an import check
+  of every method the driver calls), with `backend_bin` the venv's interpreter. The catalog
+  entry's notes say the runtime is remote.
 - *3 and 4, `_write_skills` and `_agent_doc_path` as places a loader looks.* Nothing on this box
   loads anything. Skills are staged under `.harness/skills/` for the DRIVER to publish (qoder:
   as Skill resources bound on the session's Agent, reused by content hash); the harness's
@@ -316,8 +320,13 @@ free have to be built, and several of the registration points above have no obje
   and NONE of the taps, because a session object through the model-call taps would record the
   CONFIGURED model as the served one and the matrix would score a check the backend cannot make.
   A stalled pass-through stream is closed, not narrated with an error event the driver would read
-  as the API's own. DELETE is forwarded. On the hosted service a sandbox never holds a vendor
-  credential, so this is not optional there.
+  as the API's own. DELETE is forwarded WITH its body: a client that sends one (Qoder's SDK sends
+  `{}`) left two bytes on the keep-alive socket when the relay did not read them, and the next
+  request on that connection opened with `{}DELETE`, a 501 that three purge steps "failed" on. On
+  the hosted service a sandbox never holds a vendor credential, so this is not optional there. A
+  vendor SDK on the route changes none of this: it takes the relay as its base URL and the
+  placeholder as its token, and the SDK's own guards (retrying a POST only under an
+  `Idempotency-Key`, refusing a download link that is not a web address) are the driver's for free.
 
 ## What the matrix did not see, and what changed (2026-09-30)
 

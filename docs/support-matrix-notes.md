@@ -3503,14 +3503,39 @@ driver's mapping off it.
   region. The catalog carries the sixteen public ids; `ultimate` and `efficient` have completed
   turns.
 
+### The transport: Qoder's Python SDK (2026-10-16)
+
+The driver's wire moved from a hand-written `urllib` client to Qoder's own SDK (`qca-sdk` 0.6.0,
+MIT, PyPI), installed into `$TOOLS/qoder-venv` by `install_qoder` with the wheel's sha256 pinned
+and an import check of every method the driver calls. The per-turn contract, the state file, the
+business rules (cancel, artifacts, names as input, hard across turns, purge) and all 43 tests are
+unchanged; what changed:
+
+- Every `user.message` carries an `Idempotency-Key` (a fresh UUID), which is what the SDK itself
+  requires before it retries a POST — so the "is the message POST idempotent" question below is
+  answered by the vendor's own client: that header is the mechanism.
+- The SDK fetches and follows the artifact's presigned link itself and refuses one that is not an
+  http(s) URL; the driver's own check of the same became the SDK's.
+- The reconnect loop stays in the driver (a stream that ends without a terminal event is decided by
+  the session's status, which the SDK's ResumableStream does not consult); the SDK's SSE decoder,
+  typed calls and error classes replace the hand-rolled ones.
+- A bug the switch found: the relay's `do_DELETE` did not read a DELETE's body. The SDK sends `{}`,
+  the two bytes stayed on the keep-alive socket, and the next request opened with `{}DELETE` — a
+  501 from upstream that made a purge report three failures behind one session delete. Fixed and
+  pinned by a test.
+- Live on the SDK transport (Global, `efficient`): a first turn with Write + DeliverArtifacts in
+  21 s, the artifact landed, charge 0.23 credits; the purge deleted the session, the file and the
+  Agent and archived the Environment.
+
 ### Not yet confirmed with Qoder (the driver's defaults until then)
 
 The presigned artifact URL's lifetime (a lapsed link is re-requested, never a failure in itself);
 whether a delivered artifact can carry directory structure (flat names are written); the session
 idle TTL and auto-archive (an archived or missing session is `resume_lost`); the billing of failed
-and cancelled runs (no figure is given for them); whether `POST /sessions/{id}/events` is
-idempotent as a contract (the message is never sent twice, the history decides); the files
-reference's text-only rule against the message schema's image `file_id`.
+and cancelled runs (no figure is given for them); the files reference's text-only rule against the
+message schema's image `file_id`. Answered since: `POST /sessions/{id}/events` is idempotent under
+an `Idempotency-Key` header — the vendor's own SDK sends one and retries a POST only under one —
+and every message the driver sends carries it (the history is now the fallback, not the guard).
 
 ### Versions and the column
 

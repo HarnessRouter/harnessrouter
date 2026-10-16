@@ -55,6 +55,7 @@ class Stub:
         self.vault_creds: dict[str, list[dict]] = {}    # vault id -> its credentials
         self.env_delete_409 = False
         self.fail_deletes = False       # every DELETE of a vault/skill/file answers 500
+        self.bad_link = ""              # a download link to answer instead of the blob's http one
         self.hang_streams = False
         self.script: list[list[dict]] = [[]]          # the stages a NEW session gets
         self.token_seen: set[str] = set()
@@ -186,7 +187,7 @@ class Stub:
                     if parts[1] not in stub.blobs:
                         return self._err(404, "not_found_error", "no file")
                     host = self.headers.get("host")
-                    return self._send(200, {"url": f"http://{host}/blob/{parts[1]}", "expires_at": "2099-01-01T00:00:00Z"})
+                    return self._send(200, {"url": stub.bad_link or f"http://{host}/blob/{parts[1]}", "expires_at": "2099-01-01T00:00:00Z"})
                 if len(parts) == 2 and parts[0] == "files" and method == "DELETE":
                     return self._send(200, {"id": parts[1], "type": "file_deleted"})
                 if parts == ["sessions"] and method == "POST":
@@ -543,7 +544,7 @@ def test_the_recorded_live_session_maps_field_for_field(tmp_path, monkeypatch):
     first = [e for e in events[:events.index(next(e for e in events if e["type"] == "session.updated"))]]
     done = False
     for e in first:
-        done = turn.handle(e["id"], e["type"], json.dumps(e), "", [True]) or done
+        done = turn.handle(e["id"], e, "", [True]) or done
     assert done, "the first turn's status_idle ends it"
     kinds = [x["m"] for x in emitted]
     assert kinds.count("tool_use") == 2 and kinds.count("tool_result") == 2 and "text" in kinds
@@ -579,7 +580,7 @@ def test_each_turn_is_charged_what_it_added_to_the_sessions_running_total(tmp_pa
         turn = drv.Turn({"cwd": str(tmp_path), "base_url": "http://127.0.0.1:1", "api_key": "x", "prompt": "p"})
         turn.session_id = "sess_live"
         for e in part:
-            turn.handle(e["id"], e["type"], json.dumps(e), "", [True])
+            turn.handle(e["id"], e, "", [True])
         turn.result("completed", "")
         charges.append([x["p"]["charge"] for x in emitted if x["m"] == "__hr_result"][0])
     assert [c["amount"] for c in charges] == [0.35, 0.26]
@@ -629,13 +630,15 @@ def test_a_file_still_not_delivered_after_the_ask_makes_the_turn_incomplete(tmp_
     assert len(stub.posted("POST", f"/sessions/{sess_id(stub)}/events")) == 2       # asked once, not again
 
 
-def test_a_download_link_that_is_not_a_web_address_lands_nothing(tmp_path, monkeypatch):
-    """urllib opens file:, ftp: and data: URLs as readily as https:. The link comes from Qoder's
-    answer; one that is not a web address would land a file of this box as the artifact."""
+def test_a_download_link_that_is_not_a_web_address_lands_nothing(tmp_path, stub):
+    """A client that opened file:, ftp: or data: URLs as readily as https: would land a file of
+    this box as the artifact. The link comes from Qoder's answer; the SDK refuses one that is not
+    a web address, and the driver reports it as such and writes nothing."""
     secret = tmp_path / "secret.txt"
     secret.write_text("not for the workspace")
-    turn = drv.Turn({"cwd": str(tmp_path / "ws"), "base_url": "http://127.0.0.1:1", "api_key": "x", "prompt": "p"})
-    monkeypatch.setattr(turn.api, "request", lambda *a, **k: {"url": secret.as_uri()})
+    stub.blobs["file_x"] = b"x"
+    stub.bad_link = secret.as_uri()
+    turn = drv.Turn({"cwd": str(tmp_path / "ws"), "base_url": stub.base, "api_key": "x", "prompt": "p"})
     got, why = turn._download("file_x", "secret.txt", tmp_path / "ws" / "part")
     assert got is None and "not a web address" in why and not (tmp_path / "ws" / "part").exists()
 
@@ -872,6 +875,46 @@ def test_a_stalled_passthrough_stream_is_closed_not_narrated(monkeypatch):
     finally:
         rs._HERMES_RELAY["routes"].pop(tok, None)
         srv.shutdown()
+
+
+def test_a_delete_with_a_body_through_the_relay_does_not_corrupt_the_next_request(stub):
+    """Qoder's SDK sends `{}` as a DELETE's body. The relay's do_DELETE forwarded the request and
+    left those two bytes unread on the keep-alive socket, so the NEXT request on the connection
+    opened with "{}DELETE" and the stub answered 501 (found when the purge moved onto the SDK:
+    the artifact file, the agent and the skill all "failed" behind one session delete)."""
+    import http.client as hc
+    stub.sessions["sess_1"] = {"id": "sess_1", "status": "idle", "archived_at": None, "stages": [], "stage": 0, "events": [], "resources": []}
+    base, tok = rs._qoder_relay_route(stub.base, "real-pat")
+    try:
+        host, port = base.split("//", 1)[1].split("/", 1)[0].split(":")
+        conn = hc.HTTPConnection(host, int(port), timeout=10)
+        conn.request("DELETE", "/v1/sessions/sess_1", body=b"{}",
+                     headers={"authorization": f"Bearer {tok}", "content-type": "application/json"})
+        first = conn.getresponse()
+        assert first.status == 200 and json.loads(first.read())["type"] == "session_deleted"
+        conn.request("GET", "/v1/sessions/sess_1", headers={"authorization": f"Bearer {tok}"})
+        second = conn.getresponse()
+        assert second.status == 200, second.read()[:200]      # not 501 "Unsupported method ('{}GET')"
+        assert json.loads(second.read())["id"] == "sess_1"
+    finally:
+        rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_every_message_carries_an_idempotency_key_and_the_sdks_own_headers_pass_the_relay(tmp_path, stub):
+    """The API's guard against a retried POST running twice is the Idempotency-Key header, which
+    is also the SDK's own condition for retrying a POST at all; every user.message carries one, a
+    fresh one per message. The route is the SDK's, so its User-Agent reaches Qoder."""
+    stub.script = [[RUNNING, {"type": "agent.message", "content": [{"type": "text", "text": "one"}]}, IDLE]]
+    base, tok = rs._qoder_relay_route(stub.base, "real-pat")
+    try:
+        lines, _ = run_driver({"cwd": str(tmp_path), "prompt": "first"}, stub, base=base, token=tok)
+        assert result_of(normalise(lines)[0])["subtype"] == "success"
+        msgs = [c for c in stub.calls if c[0] == "POST" and c[1].endswith("/events")]
+        assert msgs and all(len(c[3].get("idempotency-key", "")) == 32 for c in msgs)
+        assert all(c[3].get("user-agent", "").startswith("qca-python/") for c in msgs)
+        assert "real-pat" in stub.token_seen and tok not in stub.token_seen
+    finally:
+        rs._HERMES_RELAY["routes"].pop(tok, None)
 
 
 # ── the builder ───────────────────────────────────────────────────────────────────────────────────

@@ -5910,7 +5910,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         self._forward(None)
 
     def do_DELETE(self):   # noqa: N802 — a remote runtime's objects are deleted through its API
-        self._forward(None)
+        # A DELETE may carry a body (Qoder's SDK sends `{}`); left unread, those bytes stay on the
+        # keep-alive socket and open the NEXT request's line ("{}DELETE", a 501 from the upstream).
+        n = int(self.headers.get("content-length") or 0)
+        self._forward(self.rfile.read(n) if n else None)
 
     def log_message(self, *a):  # diagnostics belong on stderr, never stdout
         pass
@@ -9095,7 +9098,11 @@ OPENHANDS_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ope
 QODER_DEFAULT_MODEL = os.environ.get("QODER_DEFAULT_MODEL", "ultimate")
 QODER_PROVIDERS = {"qoder"}
 QODER_DEFAULT_BASE = "https://api.qoder.com/api/v1/cloud"
-QODER_PYTHON = os.environ.get("HR_QODER_PYTHON", sys.executable)   # stdlib only: the runner's own interpreter
+# The driver speaks Qoder's SDK (qca-sdk), installed by docker/entrypoint.sh into its own venv
+# (pinned and verified there, like every other backend's package); its interpreter is what runs
+# the driver. The runner's own interpreter serves where that venv is not built (tests).
+QODER_PYTHON = os.environ.get("HR_QODER_PYTHON") or (
+    "/data/agent-tools/qoder-venv/bin/python" if os.path.exists("/data/agent-tools/qoder-venv/bin/python") else sys.executable)
 QODER_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qoder_driver.py")
 QODER_STATE_REL = os.path.join(".harness", "qoder", "state.json")   # the driver's record of its remote ids
 # The built-ins of agent_toolset_20260401, the names tools_disabled matches; pinned equal to
