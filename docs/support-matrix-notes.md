@@ -3526,6 +3526,13 @@ unchanged; what changed:
 - Live on the SDK transport (Global, `efficient`): a first turn with Write + DeliverArtifacts in
   21 s, the artifact landed, charge 0.23 credits; the purge deleted the session, the file and the
   Agent and archived the Environment.
+- Found in review, each pinned by a test that fails without it: the SDK raises the storage host's
+  answer to the presigned link with the same class as the API's own, so a lapsed link (a 403 at the
+  store) read as the file refused and was not asked for again; a refusal of the request that
+  carries no credential is now the link's, and gets one fresh link as before. A purge on an
+  interpreter without the SDK died in a traceback while the runner removed the folder; it now
+  reports every recorded id as left. An OSError that reaches the top (the SDK wraps the network's)
+  ends the turn as the workspace's, not without a result.
 - `install_qoder` run as written in the image's base (`python:3.12-slim`): the venv built in 17 s,
   the marker says 0.6.0, the import check passed, a wrong digest was refused with both digests
   named; the driver run on that venv's interpreter from inside the container completed a live turn

@@ -105,6 +105,11 @@ class NetError(Exception):
     """Nothing answered: the connection was refused, dropped, or timed out."""
 
 
+class LinkRefused(Exception):
+    """The storage host refused a presigned download link; a lapsed one is refused there (403 on
+    most stores), and the rule is that a fresh link is asked for, never that the file is gone."""
+
+
 # ── the SDK ─────────────────────────────────────────────────────────────────────────────────────
 def _plain(obj):
     """A pydantic model (or a list of them) as JSON-compatible dicts, extras included; anything
@@ -252,6 +257,11 @@ class Client:
         try:
             return self.m.files.download(fid)
         except x.APIStatusError as e:
+            if "authorization" not in e.request.headers:
+                # The SDK makes two requests here and raises the same class for both. The storage
+                # request is the one that carries no credential (the presigned link is the
+                # authority), so a refusal there is the link's, not the file's.
+                raise LinkRefused(f"the storage host refused the download link ({e.status_code})") from None
             body = e.body if isinstance(e.body, dict) else {}
             err = body.get("error") if isinstance(body.get("error"), dict) else {}
             raise ApiError(int(e.status_code), str(err.get("type") or ""), str(err.get("message") or e)[:300],
@@ -957,7 +967,7 @@ class Turn:
                 why = f"{original}: {e}"
                 if e.status in (0, 404, 410, 403):
                     break
-            except (NetError, OSError) as e:
+            except (NetError, LinkRefused, OSError) as e:
                 why = f"{original}: download failed: {type(e).__name__}: {e}"[:300]
             except Exception as e:  # noqa: BLE001 — the storage host dropped mid-body (httpx's own errors)
                 why = f"{original}: download failed: {type(e).__name__}: {e}"[:300]
@@ -1237,8 +1247,18 @@ def purge(job: dict) -> int:
     """Delete at Qoder everything the session's turns created there, in dependency order; every
     failure is reported with its id, never swallowed. Exit 0 when nothing failed."""
     cwd = str(job.get("cwd") or os.getcwd())
-    api = Client(str(job.get("base_url") or ""), str(job.get("api_key") or ""))
     st = load_state(cwd)
+    try:
+        api = Client(str(job.get("base_url") or ""), str(job.get("api_key") or ""))
+    except ImportError as e:
+        # Without the SDK nothing can be deleted, and the runner removes the folder (and this
+        # state with it) whatever the answer is: the report names every recorded id, so what is
+        # left at Qoder is in the runner's log rather than in a traceback.
+        _emit("purge", {"done": [], "failed": [{
+            "what": "everything recorded: " + json.dumps(st)[:1200],
+            "error": f"the Qoder SDK (qca-sdk) is not installed in this interpreter: {e}"[:300]}],
+            "state": STATE_REL})
+        return 1
     done: list[str] = []
     failed: list[dict] = []
 
@@ -1319,6 +1339,11 @@ def main() -> int:
         return 0
     except NetError as e:
         turn.result("failed", f"Qoder did not answer: {e}"[:1000])
+        return 0
+    except OSError as e:
+        # this box, not Qoder: a workspace file that could not be read or written. The SDK raises
+        # its own classes for the network, so what is left here is local, and said so.
+        turn.result("failed", f"the workspace: {type(e).__name__}: {e}"[:1000])
         return 0
 
 

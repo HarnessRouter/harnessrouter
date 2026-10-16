@@ -56,6 +56,7 @@ class Stub:
         self.env_delete_409 = False
         self.fail_deletes = False       # every DELETE of a vault/skill/file answers 500
         self.bad_link = ""              # a download link to answer instead of the blob's http one
+        self.blob_refusals = 0          # the storage host refuses this many link fetches (403, a lapsed link)
         self.hang_streams = False
         self.script: list[list[dict]] = [[]]          # the stages a NEW session gets
         self.token_seen: set[str] = set()
@@ -111,6 +112,9 @@ class Stub:
                     fid = path.split("/blob/", 1)[1]
                     if "authorization" in hdrs:
                         return self._err(400, "test", "a presigned download must carry no credential")
+                    if stub.blob_refusals:
+                        stub.blob_refusals -= 1
+                        return self._err(403, "AccessDenied", "Request has expired")
                     data = stub.blobs.get(fid)
                     return self._send(200, data, "application/octet-stream") if data is not None else self._err(404, "not_found_error", "no blob")
                 tok = hdrs.get("authorization", "").removeprefix("Bearer ")
@@ -643,6 +647,30 @@ def test_a_download_link_that_is_not_a_web_address_lands_nothing(tmp_path, stub)
     assert got is None and "not a web address" in why and not (tmp_path / "ws" / "part").exists()
 
 
+def test_a_lapsed_download_link_is_asked_for_again_while_a_refused_file_is_not(tmp_path, stub):
+    """The storage host answers a lapsed presigned link with 403, and the SDK raises that as the
+    same class as the API's own 403. The link's refusal gets one fresh link; the API's refusal of
+    the file ends the download at once."""
+    stub.blobs["file_x"] = b"report"
+    stub.blob_refusals = 1
+    turn = drv.Turn({"cwd": str(tmp_path / "ws"), "base_url": stub.base, "api_key": "x", "prompt": "p"})
+    part = tmp_path / "ws" / "part"
+    got, why = turn._download("file_x", "report.txt", part)
+    assert (got, why) == (6, "") and part.read_bytes() == b"report"
+    assert len([c for c in stub.calls if c[1] == "/files/file_x/content"]) == 2
+    # twice refused: the second link fails too, and the reason says it was the link
+    stub.calls.clear()
+    stub.blob_refusals = 2
+    got, why = turn._download("file_x", "report.txt", tmp_path / "ws" / "part2")
+    assert got is None and "refused the download link (403)" in why
+    assert len([c for c in stub.calls if c[1] == "/files/file_x/content"]) == 2
+    # the API's own refusal (no such file) is not retried
+    stub.calls.clear()
+    got, why = turn._download("file_gone", "gone.txt", tmp_path / "ws" / "part3")
+    assert got is None and "404" in why
+    assert len([c for c in stub.calls if c[1] == "/files/file_gone/content"]) == 1
+
+
 # ── input files ───────────────────────────────────────────────────────────────────────────────────
 def test_input_files_are_uploaded_and_mounted_and_a_binary_one_fails_the_turn_up_front(tmp_path, stub):
     (tmp_path / "spec.md").write_text("# spec")
@@ -1004,6 +1032,42 @@ def test_the_purge_reaches_every_recorded_id_and_reports_what_it_could_not(tmp_p
     assert proc.returncode == 1 and report["failed"]
     assert any(f["what"] == "delete vault vault_1" and "500" in f["error"] for f in report["failed"]), report
     assert "delete session sess_1 (already gone)" in report["done"]
+
+
+def test_without_the_sdk_a_turn_fails_in_words_and_a_purge_names_what_it_left(tmp_path, stub):
+    # The interpreter the runner falls back to (its own) has no qca-sdk: a turn must fail with the
+    # reason, and a purge must report every recorded id rather than die in a traceback, since the
+    # runner removes the folder, and the state with it, whatever the purge answers.
+    def run_without_sdk(job: dict):
+        job = {"base_url": stub.base, "api_key": "placeholder", "model": "ultimate", **job}
+        boot = ("import runpy, sys; sys.modules['qca'] = None; sys.modules['qca.managed'] = None; "
+                "sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')")
+        proc = subprocess.run([sys.executable, "-c", boot, DRIVER, json.dumps(job)],
+                              capture_output=True, text=True, timeout=30)
+        return [json.loads(ln) for ln in proc.stdout.splitlines() if ln.strip().startswith("{")], proc
+
+    lines, proc = run_without_sdk({"cwd": str(tmp_path), "prompt": "hi"})
+    res = [l for l in lines if l["m"] == "__hr_result"][-1]["p"]
+    assert res["status"] == "failed" and "qca-sdk" in res["reason"]
+    assert not stub.calls
+    write_state(tmp_path)
+    lines, proc = run_without_sdk({"purge": True, "cwd": str(tmp_path)})
+    assert proc.returncode == 1 and "Traceback" not in proc.stderr
+    report = [l for l in lines if l["m"] == "purge"][-1]["p"]
+    assert report["done"] == [] and "qca-sdk" in report["failed"][0]["error"]
+    for rid in ("sess_1", "file_art", "file_in", "agent_1", "vault_1", "skill_1", "env_1"):
+        assert rid in report["failed"][0]["what"], rid
+    assert not stub.calls
+
+
+def test_a_workspace_that_cannot_be_written_fails_the_turn_in_words(tmp_path, stub):
+    # The SDK raises its own classes for the network, so an OSError that reaches the top is this
+    # box's: it ends the turn with a result that says so, never a traceback with no result.
+    (tmp_path / ".harness").mkdir()
+    (tmp_path / ".harness" / "qoder").write_text("a file where the state's folder goes")
+    lines, proc = run_driver({"cwd": str(tmp_path), "prompt": "hi"}, stub)
+    res = [l for l in lines if l["m"] == "__hr_result"][-1]["p"]
+    assert res["status"] == "failed" and res["reason"].startswith("the workspace: ") and "Traceback" not in proc.stderr
 
 
 def test_delete_workspace_purges_at_qoder_with_the_connection_it_is_sent(tmp_path, stub, monkeypatch):
