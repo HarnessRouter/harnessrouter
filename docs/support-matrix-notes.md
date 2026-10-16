@@ -4257,3 +4257,59 @@ it would be reusable: mistral-vibe ships `vibe-acp`, docker-agent has `acp`, VT 
   price auto-updates, the project `.env` applied to the process environment, and
   `MEMORY_AUTO_SAVE` — the agent is otherwise told to persist learnings into the AGENTS.md the
   harness rewrites every turn.
+
+## fast-agent: a framework with no tools of its own, and a store that pins the model (2026-10-16) — behaviour measured, NO column yet
+
+`fast-agent-mcp` 0.10.45, added as the thirtieth base. Measured through a recording proxy and then
+end to end through the runner's own argv and relay. **No support-matrix column has run**, and the
+runner-side unit tests for this base are still to write (the e2e and the captured ATIF fixture are
+in place: `runner/tests/fixtures/batch4/fast-agent-three-turns.atif.json`).
+
+### What it is
+`fast-agent go -m "<task>" --quiet` prints the answer; `--trajectory-output … --trajectory-format
+atif` writes the whole turn as a structured record — steps, each step's tool calls AND their
+results, per-step token metrics, the session id. So the stream carries nothing and the EOF carries
+everything: `_fast_agent_eof` reads that file, which is opensquilla's arrangement.
+
+### Five things that each had to be measured
+- **It ships no tools.** A first turn asked to write a file answered "I can't create files in this
+  conversation because I have no file-system tool", and its request declared ZERO tools: this
+  framework's tools come from MCP servers. `-x` turns on a local runtime with four (bash, process,
+  read_text_file, edit_file) and the file was written.
+- **The agent's working directory is its HOME, not the workspace.** A turn asked for `e2e.txt`
+  wrote it into `.harness/fast-agent/` — which this product excludes from the produced-files list,
+  so the user's deliverable would not have existed for them. `--workspace <session dir>` fixes it.
+- **`--workspace` then moved the session store INTO the workspace** (`<cwd>/.fast-agent`,
+  overriding `FAST_AGENT_HOME`), so `--home` is named explicitly as well; the store belongs under
+  `.harness/`, excluded from deliverables and carried in the checkpoint.
+- **A resumed session restores its own model** (the fourth base in this batch with that shape): it
+  lives in `session.json` at `continuation.agents.<name>.model` / `.model_spec`, and the builder
+  writes this turn's model there before `--resume` reads it. Nothing else in that file is touched —
+  `shell_enabled` looked like the way to withhold the shell and is NOT, because `--no-shell` does
+  it on the command line, so writing it would be a change with no measurement behind it.
+- **Withholding the shell needs `--no-shell`, not the absence of `-x`**: on a resumed session,
+  omitting `-x` left bash in place and the model ran the command; with `--no-shell` the request
+  declared no bash at all and the model said it could not. Measured both ways, which is why this
+  base's `tool_enforcement` is "hard".
+
+Its trajectory on a resumed session holds EVERY turn of the conversation (nine steps across three),
+so the eof cuts at the last `user` step carrying this turn's own prompt — without that, each reply
+arrived with every earlier reply glued in front of it.
+
+### End to end (2026-10-16)
+Three turns in one session: the first answered with the instruction-file token; the second, on a
+different model, wrote `e2e.txt` into the workspace, recalled the first turn's word and recorded its
+tool call; the third, with bash withheld, made no tool call and said it could not run the command.
+Served models read off the relay on each (claude-haiku-5.5, gemini-3-flash, claude-haiku-5.5).
+
+### Install
+PyPI, pinned to 0.10.45, the wheel fetched by URL and compared to PyPI's own recorded digest
+(`b88aac3f…`, verified against the real asset); pure-python, so one digest covers every
+architecture. Its own venv. The install check also asserts that its generic client still reads
+`GENERIC_BASE_URL`, which is the relay door. **The installer has not yet been run on a linux
+container**, unlike the other three bases in this batch.
+
+### What is NOT measured
+No column, no other dimension, no MCP server exercised (its client takes stdio, sse and streamable
+http with headers, so nothing is bridged — untested against a live server here), and two model ids
+served as themselves.

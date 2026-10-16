@@ -33,6 +33,8 @@ const LOGO: Record<string, string> = {
   vibe: '/logos/vibe.svg',   // Vibe's own mark (distribution/zed/icons/mistral_vibe.svg in the Apache-2.0 mistralai/mistral-vibe repository), the glyph Mistral ships for editor surfaces. Like jcode's it is a BLACK mark on transparency and upstream ships no light variant, so it carries no contrast on a dark surface
   mimo: '/logos/mimo.png',   // Xiaomi MiMo's own square mark: the site icon of mimo.xiaomi.com (the "Xiaomi" over "MiMO" wordmark, white on black) is 32 px only, so it is drawn again at 192 px from the full-size wordmark that mimo.xiaomi.com/coder serves (coder/assets/logo.png), in the same layout (Richard, 2026-10-12)
 };
+// No entry for fast-agent either: its repository ships no mark (the two files with "logo" in the
+// name are design sketches in plan/), so the generic glyph is the honest fallback.
 // No entry for docker-agent: its repository ships no mark of its own, and the Docker whale is
 // Docker's trademark rather than the project's icon — so it falls back to the generic glyph, as
 // mimo does, instead of this map pointing at a file that is not ours to redistribute.

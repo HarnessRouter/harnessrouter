@@ -476,6 +476,28 @@ def _dcode_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
     return bool(session_id) and session_id in _dcode_threads(cwd)
 
 
+def _fast_agent_home(cwd: str) -> pathlib.Path:
+    """$FAST_AGENT_HOME for this session: its sessions/ and processes/ live here.
+
+    Its default is `./.fast-agent` — in the workspace, where the session store would be handed back
+    to the user as a deliverable on every turn (goose's lesson). Under .harness/ it is excluded
+    from the produced list and still travels in the checkpoint, which is what --resume needs."""
+    return pathlib.Path(cwd) / ".harness" / "fast-agent"
+
+
+def _fast_agent_traj(cwd: str) -> pathlib.Path:
+    return _fast_agent_home(cwd) / "turn.atif.json"
+
+
+def _fast_agent_session_file(cwd: str, session_id: str) -> pathlib.Path:
+    return _fast_agent_home(cwd) / "sessions" / session_id / "session.json"
+
+
+def _fast_agent_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Whether the session store holds this conversation: its own file, not a search of bytes."""
+    return bool(session_id) and _fast_agent_session_file(cwd, session_id).is_file()
+
+
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
     "opencode": _argv_session_present,
@@ -514,6 +536,9 @@ _SESSION_PRESENT = {
     # dcode's thread id is not in its output at all: the store is the only place it exists, and
     # _build_dcode passes -r only when the thread is in it.
     "dcode": _dcode_session_present,
+    # fast-agent: _build_fast_agent passes --resume only when the session's own file is in the
+    # store, so the argv is that lookup's conclusion.
+    "fast-agent": _argv_session_present,
 }
 
 
@@ -1574,6 +1599,12 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # still. Written down here rather than quietly: see the PR body's follow-up.
         rootrels = [f"{_NANOBOT_WS}/skills"]
         entryroot = f"{_NANOBOT_WS}/skills"
+    elif backend == "fast-agent":
+        # .harness/fast-agent/skills/<name>/SKILL.md — a directory of our own, named on the
+        # command line with --skills, which is the one place this framework takes skills from
+        # (there is no home-directory convention to guess at).
+        rootrels = [".harness/fast-agent/skills"]
+        entryroot = ".harness/fast-agent/skills"
     elif backend == "dcode":
         # $HOME/.deepagents/agent/skills/<name>/SKILL.md — the user-level skills directory of its
         # default agent profile (get_user_skills_dir), with $HOME redirected to .harness/home. Not
@@ -2059,7 +2090,11 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
                                    # PROJECT, which every session here is (measured both ways: no
                                    # token in the answer in a plain directory, the token in it
                                    # after git init).
-                                   "dcode")
+                                   "dcode",
+                                   # fast-agent has no instruction-file convention at all: the
+                                   # file the runner writes is passed as the agent's instruction
+                                   # with -i, which is aider's arrangement, so the name is ours.
+                                   "fast-agent")
         else "CLAUDE.md")
 
 
@@ -12559,6 +12594,306 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
 
 
 
+# ── fast-agent (evalstate/fast-agent, PyPI fast-agent-mcp) ────────────────────────────────────
+# An MCP-first agent framework with a one-shot CLI: `fast-agent go -m "<task>" --quiet` prints the
+# answer, and `--trajectory-output` writes the whole turn as ATIF — a structured record with the
+# steps, each step's tool calls AND their results, each step's token metrics and the session id. So
+# this base's stream carries nothing and its EOF carries everything: _fast_agent_eof reads that file
+# (opensquilla's arrangement, where the CLI's own transcript is replayed at the end of the turn).
+#
+# MEASURED on 0.10.45 (2026-10-16) against the Vercel AI Gateway through a recording proxy:
+#   * `GENERIC_BASE_URL` + `GENERIC_API_KEY` with `--model generic.<id>` is its OpenAI-compatible
+#     client pointed at the relay (`llm_generic.py` reads exactly those two).
+#   * **It has no tools at all by default.** A first turn asked to write a file answered "I can't
+#     create files in this conversation because I have no file-system tool", and the request
+#     declared ZERO tools: its tools come from MCP servers. `-x` (`--shell`) turns on the local
+#     runtime, and with it a turn declares four — bash, process, read_text_file, edit_file — and
+#     the file was written. Every turn here passes it.
+#   * `--resume <session_id>` continues a conversation (measured with a question the workspace
+#     could not answer), and sessions live under `$FAST_AGENT_HOME/sessions/<id>/` — a directory
+#     whose default is `./.fast-agent`, i.e. inside the workspace the user collects, which is why
+#     FAST_AGENT_HOME is set per session.
+#   * A resumed session RESTORES ITS OWN MODEL: turn two with `--model generic.google/gemini-3-flash`
+#     asked the provider for the first turn's claude id. The model is in the session's own
+#     `session.json` (`continuation.agents.<name>.model` and `.model_spec`), so this builder writes
+#     this turn's model there before `--resume` reads it — the fourth base in this batch with that
+#     shape (checklist item 42), and the second where the door is the store.
+#   * Its MCP client takes stdio, sse AND streamable http with `headers`, so nothing is bridged.
+FAST_AGENT_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+FAST_AGENT_BIN = os.environ.get("HR_FAST_AGENT_BIN",
+                                "/data/agent-tools/fast-agent-venv/bin/fast-agent")
+FAST_AGENT_DEFAULT_MODEL = os.environ.get("FAST_AGENT_DEFAULT_MODEL", "gpt-5.4")
+# The agent's name inside the session store, which is also the key under
+# `continuation.agents` that carries the model. It is ours: `--name` sets it.
+_FA_AGENT = "harness"
+# Its OpenAI-compatible client's own two variables (llm_generic.py).
+_FA_BASE_ENV = "GENERIC_BASE_URL"
+_FA_KEY_ENV = "GENERIC_API_KEY"
+# The three tools a person can really switch off here, and the switch each travels on:
+#   bash            `-x` is withheld, which takes the whole local shell runtime with it
+#   read_text_file  shell.enable_read_text_file = false
+#   edit_file       shell.write_text_file_mode = "off"
+# `process` is NOT offered: it is the shell runtime's second tool and has no switch of its own, so
+# a toggle for it would either disable nothing or silently take bash away too.
+ALL_FAST_AGENT_TOOLS = ("bash", "read_text_file", "edit_file")
+
+
+def _fast_agent_set_model(cwd: str, session_id: str, model: str) -> bool:
+    """Point the session's stored model at THIS turn's model, before --resume reads it.
+
+    MEASURED: without this a resumed turn asks the provider for the model the session started on,
+    and the harness's switch is dropped in silence — matrix rule 2 broken by the store. The file is
+    plain JSON with no checksum of its own; only the two model fields change, the agent's history
+    and its prompt are left exactly as they are, and it is written beside and renamed so a crash
+    cannot leave half a session behind.
+
+    Nothing ELSE is written into it. The same file also carries `shell_enabled`, and setting that
+    looked like the way to withhold the shell on a resumed turn — but `--no-shell` does it on the
+    command line, measured, so writing into another program's state for it would be a change with
+    no measurement behind it (the lesson of the opensquilla `[memory] source` claim)."""
+    path = _fast_agent_session_file(cwd, session_id)
+    try:
+        with path.open(encoding="utf-8") as fh:
+            doc = json.load(fh)
+        agents = ((doc.get("continuation") or {}).get("agents") or {})
+        if not isinstance(agents, dict) or not agents:
+            return False
+        changed = False
+        for spec in agents.values():
+            if not isinstance(spec, dict):
+                continue
+            if spec.get("model") != model:
+                spec["model"] = model
+                changed = True
+            want = f"generic.{model}"
+            if spec.get("model_spec") != want:
+                spec["model_spec"] = want
+                changed = True
+        if not changed:
+            return False
+        tmp = path.with_suffix(".json.hr-tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        os.replace(tmp, path)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _fast_agent_config(cwd: str, tools_disabled: list[str] | None,
+                       mcp_servers: list[dict] | None) -> pathlib.Path:
+    """Write the fastagent.config.yaml this turn runs with.
+
+    Only three things are in it: the tool switches a harness's disabled set travels on, the MCP
+    servers it declared, and the logger turned down so the answer is the only thing on stdout."""
+    disabled = {str(t) for t in (tools_disabled or ())}
+
+    def q(v) -> str:
+        return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    lines = ["# written per turn by the harness runner — do not edit, it is overwritten",
+             "logger:",
+             "  progress_display: false",
+             "  show_chat: false",
+             "  show_tools: false",
+             "",
+             ]
+    if "bash" not in disabled:
+        # Only when the shell runtime is on at all: read_text_file and the edit tool are the
+        # two the config withholds, and the shell itself is withheld by not passing -x (see
+        # _build_fast_agent), so a `shell:` section would have nothing to say.
+        read_ok = "false" if "read_text_file" in disabled else "true"
+        edit_mode = '"off"' if "edit_file" in disabled else '"auto"'
+        lines += ["shell:",
+                  f"  enable_read_text_file: {read_ok}",
+                  f"  write_text_file_mode: {edit_mode}",
+                  ""]
+    entries = []
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if sv.get("command"):
+            cmdv = sv["command"]
+            argv = cmdv if isinstance(cmdv, list) else [str(cmdv)]
+            args = [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]
+            body = [f"    transport: \"stdio\"", f"    command: {q(str(argv[0]))}"]
+            if args:
+                body.append("    args: [" + ", ".join(q(a) for a in args) + "]")
+            entries.append((name, body))
+            continue
+        if not url:
+            continue
+        transport = "sse" if str(sv.get("transport") or "").lower() == "sse" else "http"
+        body = [f"    transport: {q(transport)}", f"    url: {q(url)}"]
+        hdrs = _mcp_headers(sv)
+        if hdrs:
+            # Through the shared helper, the one place a server's headers come from.
+            body.append("    headers:")
+            body += [f"      {q(k)}: {q(v)}" for k, v in hdrs.items()]
+        entries.append((name, body))
+    if entries:
+        lines += ["mcp:", "  servers:"]
+        for name, body in entries:
+            lines.append(f"  {' ' * 2}{name}:")
+            lines += body
+        lines.append("")
+    path = _fast_agent_home(cwd) / "fastagent.config.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines))
+    return path
+
+
+def _fast_agent_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Nothing comes off the stream: `--quiet` prints prose, and the turn's record is the ATIF file
+    the eof handler reads. A JSON line here would only be an answer that happens to be JSON."""
+    return []
+
+
+def _fast_agent_eof(state: dict, rc: int) -> list[dict]:
+    """The whole turn, out of the ATIF trajectory: the session id, the steps, the usage.
+
+    Each agent step's `message` is CUMULATIVE — a two-step turn reported "FAOK" and then
+    "FAOK\\n\\nDONE" — so a step that only extends the previous one contributes its new text and not
+    the whole of it again (docker-agent's delta lesson, in another spelling)."""
+    path = _fast_agent_traj(str(state.get("cwd") or ""))
+    try:
+        with path.open(encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        doc = {}
+    evs: list[dict] = []
+    sid = str(doc.get("session_id") or "")
+    if sid:
+        evs.append({"type": "system", "subtype": "init", "session_id": sid,
+                    "model": state.get("model")})
+    # A resumed session's trajectory holds every turn of the conversation (measured: nine steps
+    # across three turns), and a turn's record must hold its own. The boundary is this turn's own
+    # prompt: everything up to and including the LAST user step carrying it belongs to the turns
+    # before. Without this, each reply arrived with every earlier reply glued in front of it.
+    steps = [x for x in (doc.get("steps") or []) if isinstance(x, dict)]
+    prompt = str(state.get("prompt") or "")
+    if prompt:
+        cut = max((i for i, x in enumerate(steps)
+                   if x.get("source") == "user" and str(x.get("message") or "") == prompt),
+                  default=-1)
+        steps = steps[cut + 1:]
+    seen_text = ""
+    for step in steps:
+        if step.get("source") != "agent":
+            continue
+        text = str(step.get("message") or "")
+        new = text[len(seen_text):] if text.startswith(seen_text) else text
+        if new.strip():
+            evs.append({"type": "assistant",
+                        "message": {"content": [{"type": "text", "text": new.strip()}]}})
+            state["final"] = (state.get("final", "") + "\n" + new.strip()).strip()
+        if text:
+            seen_text = text
+        for call in (step.get("tool_calls") or []):
+            if not isinstance(call, dict):
+                continue
+            args = call.get("arguments")
+            evs.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": str(call.get("tool_call_id") or "tool"),
+                 "name": str(call.get("function_name") or "tool"),
+                 "input": args if isinstance(args, dict) else {"arguments": args}}]}})
+        for res in ((step.get("observation") or {}).get("results") or []):
+            if not isinstance(res, dict):
+                continue
+            evs.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": str(res.get("source_call_id") or "tool"),
+                 "is_error": bool((res.get("extra") or {}).get("is_error")),
+                 "content": str(res.get("content") or "")[:8000]}]}})
+    fm = doc.get("final_metrics") if isinstance(doc.get("final_metrics"), dict) else {}
+    usage = _norm_token_usage({"input_tokens": fm.get("total_prompt_tokens") or 0,
+                               "output_tokens": fm.get("total_completion_tokens") or 0,
+                               "cached_input_tokens": fm.get("total_cached_tokens") or 0})
+    ok = rc == 0 and bool(doc)
+    # No trajectory at all means the CLI died before writing one; the run loop's stderr tail is the
+    # reason, and an empty result lets it through rather than shadowing it.
+    return evs + [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                   "result": state.get("final", "") if ok else "", "usage": usage}]
+
+
+_fast_agent_to_claude.eof = _fast_agent_eof   # type: ignore[attr-defined]
+
+
+def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                      resume_session_id: str | None = None,
+                      mcp_servers: list[dict] | None = None,
+                      tools_disabled: list[str] | None = None,
+                      max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in FAST_AGENT_PROVIDERS:
+        raise HTTPException(400, f"unknown fast-agent provider '{pr}' "
+                                 f"(one of {sorted(FAST_AGENT_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"fast-agent provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    home = _fast_agent_home(cwd)
+    home.mkdir(parents=True, exist_ok=True)
+    cfg = _fast_agent_config(cwd, tools_disabled, mcp_servers)
+    env["FAST_AGENT_HOME"] = str(home)
+    env[_FA_BASE_ENV] = (auth.base_url or "").rstrip("/")
+    env[_FA_KEY_ENV] = auth.api_key or ""
+    traj = _fast_agent_traj(cwd)
+    # Last turn's trajectory must not be able to answer for this one: the eof reads this file.
+    try:
+        traj.unlink()
+    except OSError:
+        pass
+    disabled = {str(t) for t in (tools_disabled or ())}
+    doc = _agent_doc_path(cwd, "fast-agent")
+    cmd = [FAST_AGENT_BIN, "go",
+           "--name", _FA_AGENT,
+           # WITHOUT THIS the agent works in its own home: measured end to end, a turn asked to
+           # write e2e.txt wrote it into .harness/fast-agent/ (its `working_dir` in the trajectory's
+           # tool metadata), which this product excludes from the produced-files list — so the
+           # user's deliverable would simply not exist for them. The workspace root is the session
+           # directory, and the home stays under .harness/ because FAST_AGENT_HOME says so.
+           "--workspace", str(pathlib.Path(cwd).resolve()),
+           # ...and the home NAMED, not left to the environment: with --workspace given the home
+           # resolved under it (`<cwd>/.fast-agent`) and FAST_AGENT_HOME was ignored, so the
+           # session store landed in the directory the user collects. The flag beats both.
+           "--home", str(home),
+           "--model", f"generic.{model}",
+           # The harness's workspace contract IS this agent's instruction: it has no
+           # instruction-file convention of its own, so the file the runner writes is named here
+           # (aider's arrangement).
+           "-i", str(doc),
+           "-m", prompt,
+           # the answer on stdout and nothing else; the record comes from the trajectory
+           "--quiet",
+           "-c", str(cfg),
+           "--trajectory-output", str(traj),
+           "--trajectory-format", "atif"]
+    if "bash" in disabled:
+        # EXPLICITLY off, not merely un-asked-for: a resumed session brings its shell runtime back,
+        # so a turn that only omitted -x had bash anyway and ran the command it was supposed to be
+        # unable to run. With --no-shell on the same resumed session the request declared no bash at
+        # all and the model said so. Both measured.
+        cmd.append("--no-shell")
+    else:
+        # Without it this framework has NO tools of its own at all: they come from MCP servers, and
+        # `-x` is what turns on the local shell and file runtime (measured — a turn without it
+        # answered that it had no file-system tool, and its request declared zero tools).
+        cmd.append("-x")
+    if resume_session_id and _fast_agent_session_present(cwd, cmd, resume_session_id):
+        # The store is pointed at this turn's model first, because --resume restores the
+        # session's own and the --model flag does not override it (measured).
+        _fast_agent_set_model(cwd, resume_session_id, model)
+        cmd += ["--resume", resume_session_id]
+    skills = pathlib.Path(cwd) / ".harness" / "fast-agent" / "skills"
+    if skills.is_dir():
+        cmd += ["--skills", str(skills)]
+    return cmd
+
+
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -12679,6 +13014,11 @@ BACKENDS = {
     # stream-json itself — the passthrough, as systemone's and nanobot's are.
     "dcode": {"providers": sorted(DCODE_PROVIDERS), "default_model": DCODE_DEFAULT_MODEL,
               "normalize": _claude_passthrough},
+    # fast-agent's stream is prose and its RECORD is the ATIF trajectory it writes, so the
+    # normaliser passes every line and the eof reads that file — opensquilla's arrangement.
+    "fast-agent": {"providers": sorted(FAST_AGENT_PROVIDERS),
+                   "default_model": FAST_AGENT_DEFAULT_MODEL,
+                   "normalize": _fast_agent_to_claude},
 }
 
 
@@ -14425,6 +14765,12 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                  resume_session_id=req.resume_session_id,
                                  mcp_servers=req.mcp_servers,
                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "fast-agent":
+        model = model or FAST_AGENT_DEFAULT_MODEL
+        cmd = _build_fast_agent(req.provider, auth, model, req.prompt, cwd, env,
+                                resume_session_id=req.resume_session_id,
+                                mcp_servers=req.mcp_servers,
+                                tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "dcode":
         model = model or DCODE_DEFAULT_MODEL
         cmd = _build_dcode(req.provider, auth, model, req.prompt, cwd, env,

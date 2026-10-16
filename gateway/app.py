@@ -1346,6 +1346,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # vibe speaks ONE shape, OpenAI chat/completions, so every connection reaches it that way —
     # including a direct Anthropic key, whose OpenAI-compatible surface lives under /v1 (cline's
     # and qwen's route). Its `anthropic` provider type is that surface, not Messages.
+    # fast-agent, the same reach: one OpenAI shape through the relay, pointed at it by the two
+    # environment variables its generic client reads.
+    ("anthropic", "fast-agent"): "anthropic",   ("openai", "fast-agent"): "openai",
+    ("azure-foundry", "fast-agent"): "azure",
+    ("openrouter", "fast-agent"): "openai-api",
+    ("tokenrouter", "fast-agent"): "tokenrouter", ("vercel", "fast-agent"): "tokenrouter",
+    ("llmtr", "fast-agent"): "tokenrouter",
+    ("custom", "fast-agent"): "openai-api",
+    ("harnessrouter", "fast-agent"): "tokenrouter",
     # docker-agent, the same reach again: one OpenAI shape through the relay, named in the YAML
     # this runner writes per turn.
     ("anthropic", "docker-agent"): "anthropic",   ("openai", "docker-agent"): "openai",
@@ -5590,7 +5599,8 @@ _CUSTOM_FORMAT_BACKENDS = {
     # has no Messages client at all (Backend is MISTRAL | GENERIC), so the openai set alone.
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
                "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
-               "mimo", "jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent"},
+               "mimo", "jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent",
+               "fast-agent"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
@@ -7587,7 +7597,12 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # for and each served as itself, across a mid-session model switch — and the gemini turn needed the
 # relay's schema repair, because its filesystem toolset declares an optional array parameter
 # Google's validator refuses.
-for _b in ("jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent"):
+# fast-agent's `generic` provider is its OpenAI-compatible client (GENERIC_BASE_URL +
+# GENERIC_API_KEY), so its reach is the same chat/completions one. MEASURED on it (2026-10-16,
+# through the runner's own relay): claude-haiku-5.5 and gemini-3-flash, each asked for and each
+# served as itself, including on a mid-session switch its own session store would otherwise have
+# taken back.
+for _b in ("jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent", "fast-agent"):
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
@@ -7716,7 +7731,9 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # be a picker row that fails on send here too.
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
                       "cheetahclaws", "grok", "agentzero",
-                      "jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent")
+                      "jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent",
+                      # fast-agent: its `generic` provider is a chat/completions client
+                      "fast-agent")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -17336,6 +17353,25 @@ _BASE_CATALOG: dict[str, dict] = {
         # construction would have withheld the built-ins and let every MCP tool through. Measured:
         # with write_file withheld the model wrote the file with `exec` instead, which is the honest
         # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
+    "fast-agent": {
+        "label": "fast-agent", "backend": "fast-agent", "status": "ready",
+        "system_prompt": ("You are an autonomous coding agent. You work on a real git workspace "
+                          "with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # THREE tools, and the list is short for a measured reason: this framework ships no tools
+        # of its own — they come from MCP servers — and `-x` turns on a local runtime that declares
+        # four (bash, process, read_text_file, edit_file). Only three of those have a switch:
+        # `--no-shell` withholds bash, and the config withholds read_text_file
+        # (`enable_read_text_file`) and the edit tool (`write_text_file_mode: off`). `process` is
+        # the shell runtime's second tool with no switch of its own, so offering it would either
+        # disable nothing or take bash away too — and a toggle that does neither of the things it
+        # says is what UHP §4.3 forbids.
+        "tools": [("bash", "Shell"), ("read_text_file", "File Read"), ("edit_file", "Edit")],
+        # "hard", measured at the door on a RESUMED session, which is where it nearly went wrong:
+        # omitting -x was not enough (the session brings its runtime back), and with --no-shell the
+        # request declared no bash at all and the model said it could not run the command.
         "tool_enforcement": "hard",
     },
     "docker-agent": {

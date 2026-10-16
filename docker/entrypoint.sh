@@ -212,7 +212,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 #
 # gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
 # this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder,vibe,vtcode,docker-agent}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder,vibe,vtcode,docker-agent,fast-agent}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -251,6 +251,7 @@ backend_bin() {
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
     vtcode) echo "$TOOLS/bin/vtcode" ;;
     docker-agent) echo "$TOOLS/bin/docker-agent" ;;
+    fast-agent) echo "$TOOLS/fast-agent-venv/bin/fast-agent" ;;
     nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
   esac
 }
@@ -1171,6 +1172,52 @@ install_vtcode() {
   fi
 }
 
+# fast-agent (Apache-2.0, evalstate/fast-agent) from PyPI as fast-agent-mcp, pinned to the release
+# the runner's code was measured against. Its own venv, for opensquilla's reason: it pins a large
+# dependency set (mcp, anthropic, openai, google-genai, a2a-sdk) and must not share the runner's
+# interpreter. The wheel is fetched by URL and compared to PyPI's own recorded digest, as vibe's is;
+# it is a pure-python wheel, so one digest covers every architecture.
+install_fast_agent() {
+  fa_ver="${HR_FAST_AGENT_VERSION:-0.10.45}"; fa_ver="${fa_ver#v}"
+  fa_whl="fast_agent_mcp-${fa_ver}-py3-none-any.whl"
+  fa_want="b88aac3f2a4060abae7bfd41e64a66269e6b86367dd90f3e8905ce75f0bcea94"
+  if [ -n "${HR_FAST_AGENT_VERSION:-}" ] && [ "$fa_ver" != "0.10.45" ]; then
+    if [ -n "${HR_FAST_AGENT_SHA256:-}" ]; then fa_want="$HR_FAST_AGENT_SHA256"; else
+      echo "[harnessrouter] WARN: HR_FAST_AGENT_VERSION=$fa_ver without HR_FAST_AGENT_SHA256 — the wheel is NOT verified"
+      fa_want=""
+    fi
+  fi
+  fa_tmp="$(mktemp -d)"
+  fa_href="$(curl -fsSL -H 'Accept: text/html' "https://pypi.org/simple/fast-agent-mcp/" | grep -o "https://files.pythonhosted.org/[^\"#]*${fa_whl}" | head -1)"
+  [ -n "$fa_href" ] || { echo "fast-agent $fa_ver: $fa_whl is not in the index"; rm -rf "$fa_tmp"; return 1; }
+  curl -fsSL "$fa_href" -o "$fa_tmp/$fa_whl" || { rm -rf "$fa_tmp"; return 1; }
+  if [ -n "$fa_want" ]; then
+    fa_have="$(sha256sum "$fa_tmp/$fa_whl" | awk '{print $1}')"
+    if [ "$fa_want" != "$fa_have" ]; then
+      echo "fast-agent $fa_ver: checksum mismatch for $fa_whl (want $fa_want, have $fa_have)"
+      rm -rf "$fa_tmp"; return 1
+    fi
+  fi
+  "${HR_FAST_AGENT_BASE_PYTHON:-python3}" -m venv "$TOOLS/fast-agent-venv" \
+    || { rm -rf "$fa_tmp" "$TOOLS/fast-agent-venv"; return 1; }
+  "$TOOLS/fast-agent-venv/bin/pip" install -q --disable-pip-version-check "$fa_tmp/$fa_whl" \
+    || { rm -rf "$fa_tmp" "$TOOLS/fast-agent-venv"; return 1; }
+  rm -rf "$fa_tmp"
+  # RUN what was installed and compare the version it REPORTS, and prove the two surfaces this
+  # backend depends on: the generic client's own env-var names and the ATIF trajectory writer.
+  "$TOOLS/fast-agent-venv/bin/python" -c '
+import sys, importlib.metadata as md
+have = md.version("fast-agent-mcp")
+if have != sys.argv[1]:
+    sys.exit("fast-agent-mcp %s installed, wanted %s" % (have, sys.argv[1]))
+from fast_agent.llm.provider.openai import llm_generic
+src = open(llm_generic.__file__).read()
+for name in ("GENERIC_BASE_URL",):
+    if name not in src:
+        sys.exit("fast-agent-mcp %s no longer reads %s, which the runner sets" % (have, name))
+' "$fa_ver" || { rm -rf "$TOOLS/fast-agent-venv"; return 1; }
+}
+
 # Docker Agent (Apache-2.0, docker/docker-agent) from its GitHub release: one static binary per
 # platform, ~145 MB, and UPSTREAM PUBLISHES NO CHECKSUMS beside them — so the digests are computed
 # here and pinned, which is install_goose's arrangement rather than install_omp's. They were
@@ -1459,6 +1506,14 @@ install_backends() {
     try_install "Mistral Vibe" install_vibe || true
   fi
   [ -x "$TOOLS/vibe-venv/bin/vibe" ] && export HR_VIBE_BIN="$TOOLS/vibe-venv/bin/vibe"
+
+  FAST_AGENT_PIN="${HR_FAST_AGENT_VERSION:-0.10.45}"
+  if wanted fast-agent && [ "$("$TOOLS/fast-agent-venv/bin/python" -c 'import importlib.metadata as m;print(m.version("fast-agent-mcp"))' 2>/dev/null)" != "$FAST_AGENT_PIN" ]; then
+    rm -rf "$TOOLS/fast-agent-venv"
+    echo "[harnessrouter] installing fast-agent $FAST_AGENT_PIN (Apache-2.0, version-pinned)…"
+    try_install "fast-agent" install_fast_agent || true
+  fi
+  [ -x "$TOOLS/fast-agent-venv/bin/fast-agent" ] && export HR_FAST_AGENT_BIN="$TOOLS/fast-agent-venv/bin/fast-agent"
 
   DOCKER_AGENT_PIN="${HR_DOCKER_AGENT_VERSION:-1.150.0}"
   if wanted docker-agent && [ "$("$(backend_bin docker-agent)" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$DOCKER_AGENT_PIN" ]; then

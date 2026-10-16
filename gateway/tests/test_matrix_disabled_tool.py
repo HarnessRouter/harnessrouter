@@ -70,7 +70,7 @@ def test_this_batchs_four_bases_are_there():
 
 def test_this_batchs_bases_are_there():
     # batch 4, the same check as above for the bases added with it
-    for b in ("vibe", "vtcode", "docker-agent"):
+    for b in ("vibe", "vtcode", "docker-agent", "fast-agent"):
         assert b in _bases_in_dimension(), b
 
 
@@ -105,6 +105,11 @@ def test_the_tools_this_batchs_bases_run_the_fixture_WITH_are_never_withheld():
         # docker-agent: `shell` runs the skill's script and `write_file` is how it writes. Its
         # `think` and the four todo tools are the spares the dimension may withhold.
         "docker-agent": ("shell", "write_file", "read_file"),
+        # fast-agent publishes exactly three and the fixture needs all three: bash runs the
+        # skill's script, read_text_file reads, edit_file writes. So its row records the claim as
+        # unmeasurable rather than withholding one of them — which is what pickDisabled returning
+        # null means, and what the dimension already does for aider.
+        "fast-agent": ("bash", "read_text_file", "edit_file"),
     }
     for base, ids in needs.items():
         published = _tool_ids(A._BASE_CATALOG[base])
