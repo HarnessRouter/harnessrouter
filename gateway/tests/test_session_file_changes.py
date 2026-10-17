@@ -170,12 +170,19 @@ async def test_selfhosted_changes_the_live_directory_and_then_the_checkpoint():
 
 
 @pytest.mark.asyncio
-async def test_selfhosted_uses_the_path_the_runner_found():
-    """nanobot: the runner found deck.json one level down, which is where the checkpoint has it."""
+async def test_selfhosted_changes_the_nesting_base_s_checkpoint_where_its_files_are():
+    """nanobot: the runner answers the session-relative path (workspace/deck.json); the checkpoint is
+    changed by the caller's path, which tar_change looks for one level down itself. Passing the
+    runner's spelling looked for workspace/workspace/deck.json, found nothing, and changed nothing."""
+    marker = {".harness/agent-subdir": b"workspace"}
     blob, ws, _calls = _selfhosted(_Resp(200, {"path": "workspace/deck.json"}),
-                                   {"workspace/deck.json": b"{}", "deck.json.bak": b""})
+                                   {**marker, "workspace/deck.json": b"{}", "deck.json.bak": b""})
     assert await ws.delete("s", "deck.json") == B.WS_OK
-    assert set(_files(blob.objects[("ckpt", "sessions/s/workspace.tgz")])) == {"deck.json.bak"}
+    assert set(_files(blob.objects[("ckpt", "sessions/s/workspace.tgz")])) == {".harness/agent-subdir", "deck.json.bak"}
+    blob, ws, _calls = _selfhosted(_Resp(200, {"path": "workspace/a.md", "to": "workspace/b/a.md"}),
+                                   {**marker, "workspace/a.md": b"A"})
+    assert await ws.move("s", "a.md", "b/a.md") == B.WS_OK
+    assert _files(blob.objects[("ckpt", "sessions/s/workspace.tgz")])["workspace/b/a.md"] == b"A"
 
 
 @pytest.mark.asyncio
@@ -193,13 +200,26 @@ async def test_selfhosted_with_no_checkpoint_yet():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,outcome", [(404, B.WS_NOT_FOUND), (409, B.WS_EXISTS),
-                                            (400, B.WS_BAD_PATH), (500, B.WS_FAILED)])
+@pytest.mark.parametrize("status,outcome", [(409, B.WS_EXISTS), (400, B.WS_BAD_PATH), (500, B.WS_FAILED)])
 async def test_selfhosted_a_refusal_touches_no_checkpoint(status, outcome):
     blob, ws, _ = _selfhosted(_Resp(status), {"a": b"a"})
     before = dict(blob.objects)
     assert await ws.delete("s", "a") == outcome
     assert blob.objects == before
+
+
+@pytest.mark.asyncio
+async def test_selfhosted_a_reaped_live_directory_leaves_the_change_to_the_checkpoint():
+    """The live directory is reaped after HR_WORKSPACE_TTL_HOURS; the checkpoint still holds the file,
+    and the next turn restores from it. The runner's 404 is not the answer then."""
+    blob, ws, _ = _selfhosted(_Resp(404), {"notes.md": b"n", "keep": b"k"})
+    assert await ws.delete("s", "notes.md") == B.WS_OK
+    assert _files(blob.objects[("ckpt", "sessions/s/workspace.tgz")]) == {"keep": b"k"}
+    assert await ws.move("s", "keep", "kept") == B.WS_OK
+    assert _files(blob.objects[("ckpt", "sessions/s/workspace.tgz")]) == {"kept": b"k"}
+    assert await ws.delete("s", "nowhere") == B.WS_NOT_FOUND
+    _blob, ws, _ = _selfhosted(_Resp(404))                        # no checkpoint either
+    assert await ws.delete("s", "x") == B.WS_NOT_FOUND
 
 
 @pytest.mark.asyncio
@@ -278,8 +298,8 @@ async def test_the_tombstone_replaces_the_app_s_own_copy(captures):
     cid = B.app_capture_id("sheet.json")
     assert f"containers/s/{cid}" in captures.store
     await A._put_tombstone("s", "sheet.json")
-    assert f"containers/s/{cid}" not in captures.store            # the bytes are gone
-    assert json.loads(captures.store[f"containers/s/{cid}.meta"])["deleted"] is True
+    assert f"containers/s/{cid}" not in captures.store and f"containers/s/{cid}.meta" not in captures.store
+    assert json.loads(captures.store[A._tomb_key("s", "sheet.json")])["filename"] == "sheet.json"
 
 
 @pytest.mark.asyncio
@@ -606,11 +626,12 @@ async def test_a_delete_of_what_is_already_gone_still_records_it(routes, capture
 async def test_the_gateway_records_a_rewritten_checkpoint_s_sha_on_the_session(monkeypatch):
     seen = []
 
-    async def _upsert(sid, props):
-        seen.append((sid, props))
-    monkeypatch.setattr(A, "_vertex_upsert", _upsert)
+    class _Graph:
+        async def upsert(self, label, vid, props, *, raise_on_fail=False):
+            seen.append((label, vid, props, raise_on_fail))
+    monkeypatch.setattr(A.BACKING, "graph", _Graph(), raising=False)
     await A._checkpoint_rewritten("s", "abc")
-    assert seen == [("s", {"ws_sha": "abc"})]
+    assert seen == [("HarnessSession", "s", {"ws_sha": "abc"}, True)]
 
 
 @pytest.mark.asyncio
@@ -620,14 +641,30 @@ async def test_a_removed_directory_compacts_what_it_hides(captures):
     await A._put_tombstone("s", "d/old", await A._capture_state("s"))
     await A._put_tombstone("s", "d", await A._capture_state("s"))
     metas = {json.loads(v)["filename"] for k, v in captures.store.items() if k.endswith(".meta")}
-    assert metas == {"d", "keep.json"}
+    tombs = {json.loads(v)["filename"] for k, v in captures.store.items() if k.startswith("ws-removed/")}
+    assert metas == {"keep.json"} and tombs == {"d"}
 
 
 @pytest.mark.asyncio
-async def test_every_capture_is_read_not_a_first_page(captures):
-    for i in range(260):
+async def test_every_tombstone_is_read_beside_the_capture_window(captures):
+    """The captures stay a first page of 200 metas; the tombstones live apart and are read in full,
+    so none can fall out of a window and let the file it hid come back."""
+    for i in range(250):
         captures(f"cfile_{i:04d}", f"f{i}.md", b"x", 100.0)
-    assert len(await A._cfile_by_name("s")) == 260
+    for i in range(30):
+        await A._put_tombstone("s", f"gone{i}.md")
+    await A._put_tombstone("s", "f0.md")
+    caps, tombs = await A._capture_state("s")
+    assert len(tombs) == 31 and "f0.md" not in caps and len(caps) == 199
+
+
+@pytest.mark.asyncio
+async def test_a_delete_of_a_path_that_never_existed_stores_nothing(routes, captures):
+    routes["fake"].outcome = B.WS_NOT_FOUND
+    for i in range(5):
+        with pytest.raises(Exception):
+            await A.delete_session_file("s", f"never{i}.md", request=None)
+    assert not [k for k in captures.store if k.startswith("ws-removed/")]
 
 
 @pytest.mark.asyncio
@@ -652,3 +689,46 @@ async def test_the_read_fallback_scans_the_captures_once(captures, monkeypatch):
     monkeypatch.setattr(A, "_owned_session", _owned)
     assert (await A.read_session_file("s", "notes/a.md", request=None)).body == b"legacy"
     assert calls == ["s"]
+
+
+def test_a_hard_link_to_a_removed_file_keeps_its_bytes(tmp_path):
+    """tar stores a second hard link as a pointer to the first member's name. Removing or renaming that
+    member left a pointer to nothing, and an archive no restore can unpack."""
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz") as tf:
+        info = tarfile.TarInfo("./a.txt"); info.size = 1
+        tf.addfile(info, io.BytesIO(b"A"))
+        for n in ("./b.txt", "./c.txt"):
+            ln = tarfile.TarInfo(n); ln.type, ln.linkname = tarfile.LNKTYPE, "./a.txt"
+            tf.addfile(ln)
+    outcome, raw = B.tar_change(out.getvalue(), "delete", "a.txt")
+    assert outcome == B.WS_OK
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
+        tf.extractall(tmp_path / "del", filter="data")
+    assert (tmp_path / "del" / "b.txt").read_bytes() == b"A" and (tmp_path / "del" / "c.txt").read_bytes() == b"A"
+    outcome, raw = B.tar_change(out.getvalue(), "move", "a.txt", "d/a.txt")
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
+        tf.extractall(tmp_path / "mv", filter="data")
+    assert (tmp_path / "mv" / "d" / "a.txt").read_bytes() == b"A" and (tmp_path / "mv" / "b.txt").read_bytes() == b"A"
+
+
+def test_a_new_folder_on_the_nesting_base_goes_in_the_agent_s_directory():
+    """Where the runner now makes it, so the live directory and the checkpoint agree."""
+    outcome, raw = B.tar_change(_tar(_NANOBOT), "mkdir", "slides/old")
+    assert outcome == B.WS_OK and "workspace/slides/old" in _files(raw)
+    raw = _tar({**_NANOBOT, "workspace/notes": b"a file"})
+    assert B.tar_change(raw, "mkdir", "notes/x") == (B.WS_EXISTS, None)
+
+
+@pytest.mark.asyncio
+async def test_a_sha_that_cannot_be_recorded_leaves_the_archive_as_it_was():
+    """Rewriting under a sha that still matches the warm sandbox would be undone by its next checkpoint."""
+    blob, ws = _hosted({"a.txt": b"a"})
+    before = dict(blob.objects)
+
+    async def _down(_sid, _sha):
+        raise RuntimeError("graph store down")
+    ws.on_rewrite = _down
+    assert await ws.delete("s", "a.txt") == B.WS_FAILED
+    assert not await ws.write("s", "b.txt", b"b")
+    assert blob.objects == before

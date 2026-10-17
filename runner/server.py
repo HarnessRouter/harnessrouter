@@ -12800,6 +12800,22 @@ def get_file(path: str, identifier: str = "") -> Response:
     return Response(content=dest.read_bytes(), media_type=media)
 
 
+def _make_dirs(d: pathlib.Path, uid: int | None) -> list[pathlib.Path]:
+    """mkdir -p `d`, every directory it creates owned by the session's uid (a root-owned directory in
+    a session's workspace is one its own process cannot write into) → the directories it created.
+    Raises what Path.mkdir raises, so a FILE where a directory would go is the caller's to answer."""
+    missing: list[pathlib.Path] = []
+    probe = d
+    while not probe.exists():
+        missing.append(probe)
+        probe = probe.parent
+    d.mkdir(parents=True, exist_ok=True)
+    if uid is not None:
+        for m in missing:
+            os.chown(m, uid, uid)
+    return missing
+
+
 @app.put("/file")
 async def put_file(request: Request, path: str, identifier: str = "") -> dict:
     """Write ONE file into a session's workspace, as that session.
@@ -12817,19 +12833,12 @@ async def put_file(request: Request, path: str, identifier: str = "") -> dict:
     pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
     _isolate_session(ws)
     uid = _session_uid(ws)
-    missing: list[pathlib.Path] = []
-    probe = dest.parent
-    while not probe.exists():
-        missing.append(probe)
-        probe = probe.parent
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    _make_dirs(dest.parent, uid)
     tmp = dest.parent / f".hr-put-{uuid.uuid4().hex[:8]}"
     try:
         tmp.write_bytes(data)
         os.chmod(tmp, 0o644)
         if uid is not None:
-            for d in missing:
-                os.chown(d, uid, uid)
             os.chown(tmp, uid, uid)
         os.replace(tmp, dest)
     except OSError as e:
@@ -12864,8 +12873,10 @@ def _ws_excluded(ws: str) -> tuple[str, ...]:
 
 
 def _ws_protected(rel: str, pats: tuple[str, ...]) -> bool:
-    """`rel` is one of those patterns' paths, under one, or a directory holding one (the gateway's
-    backing.ws_protected, the same rule over the checkpoint)."""
+    """`rel` is one of those patterns' paths, under one, or a directory holding one. The gateway's
+    backing.ws_protected applies the same rule to the checkpoint; the two processes ship separately
+    (the runner image carries no gateway code), so it is written twice, and
+    runner/tests/test_file_changes.py holds the two equal over the same cases."""
     for q in pats:
         d = q.rstrip("/")
         if rel == d or (q.endswith("/") and rel.startswith(q)) or d.startswith(rel + "/"):
@@ -12935,32 +12946,27 @@ def delete_file(path: str, identifier: str = "") -> dict:
 
 @app.post("/file/mkdir")
 def mkdir_file(path: str, identifier: str = "") -> dict:
-    """Create a directory (and any missing parents) at the session root, where PUT /file writes,
-    owned by the session's uid. One that already exists is success; a FILE in the way is 409."""
+    """Create a directory (and any missing parents), owned by the session's uid. One that already
+    exists is success; a FILE in the way is 409. A new one goes in the user's root — the agent's
+    directory on a nesting base, where the checkpoint's copy of the change puts it too."""
     ws = _ws(identifier)
-    dest = _safe_leaf(ws, path)
+    if _safe_leaf(ws, path) is None:
+        raise HTTPException(400, "path escapes the workspace")
+    pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
+    _isolate_session(ws)
+    dest = _existing(ws, path) or _safe_leaf(_visible_root(ws), path)
     if dest is None:
         raise HTTPException(400, "path escapes the workspace")
     _refuse_protected(ws, dest)
     if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
         raise HTTPException(409, "a file is at that path")
-    pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
-    _isolate_session(ws)
-    uid = _session_uid(ws)
-    missing: list[pathlib.Path] = []
-    probe = dest
-    while not probe.exists():
-        missing.append(probe)
-        probe = probe.parent
     try:
-        dest.mkdir(parents=True, exist_ok=True)
-        if uid is not None:
-            for d in missing:
-                os.chown(d, uid, uid)
+        made = _make_dirs(dest, _session_uid(ws))
+    except (FileExistsError, NotADirectoryError) as e:
+        raise HTTPException(409, f"mkdir failed: {str(e)[:200]}")
     except OSError as e:
-        raise HTTPException(409 if isinstance(e, (FileExistsError, NotADirectoryError)) else 500,
-                            f"mkdir failed: {str(e)[:200]}")
-    return {"ok": True, "path": str(dest.relative_to(pathlib.Path(ws).resolve())), "created": bool(missing)}
+        raise HTTPException(500, f"mkdir failed: {str(e)[:200]}")
+    return {"ok": True, "path": str(dest.relative_to(pathlib.Path(ws).resolve())), "created": bool(made)}
 
 
 @app.post("/file/move")
@@ -12984,17 +12990,8 @@ def move_file(path: str, to: str, identifier: str = "") -> dict:
     _refuse_protected(ws, src, dest)
     if dest.exists() or dest.is_symlink():
         raise HTTPException(409, "something is already at the destination")
-    uid = _session_uid(ws)
-    missing: list[pathlib.Path] = []
-    probe = dest.parent
-    while not probe.exists():
-        missing.append(probe)
-        probe = probe.parent
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if uid is not None:
-            for d in missing:
-                os.chown(d, uid, uid)
+        _make_dirs(dest.parent, _session_uid(ws))
         os.rename(src, dest)
     except (FileExistsError, NotADirectoryError) as e:
         # a FILE where one of the destination's folders would be

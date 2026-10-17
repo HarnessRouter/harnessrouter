@@ -5271,9 +5271,11 @@ async def _session_purge(sid: str, v: dict | None, index: dict | None = None) ->
             await BACKING.graph.delete(rid, "HarnessResponse")
     # 3) everything stored under its id: the checkpoint and the media scene (sessions/<sid>/ in
     # the session store), the change list (sessions/<sid>/ in the response store), the files its
-    # tasks produced (containers/<sid>/) and their rendered previews (previews/<sid>/)
+    # tasks produced (containers/<sid>/), their rendered previews (previews/<sid>/), and the record of
+    # what an app removed from its workspace (ws-removed/<sid>/)
     for kb, prefix in ((BLOB_KB, f"sessions/{sid}/"), (RESP_BLOB_KB, f"sessions/{sid}/"),
-                       (RESP_BLOB_KB, f"containers/{sid}/"), (RESP_BLOB_KB, f"previews/{sid}/")):
+                       (RESP_BLOB_KB, f"containers/{sid}/"), (RESP_BLOB_KB, f"previews/{sid}/"),
+                       (RESP_BLOB_KB, f"ws-removed/{sid}/")):
         with contextlib.suppress(Exception):
             for it in await _blob_list_all(prefix, kb=kb):
                 await _blob_delete(str(it.get("file_id") or ""), kb=kb)
@@ -10741,9 +10743,6 @@ async def _ws_files(sid: str) -> dict[str, bytes] | None:
     return out
 
 
-_CAPTURE_META_CAP = 5000
-
-
 async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
     """filename -> (captured `cfile_…` id, written_by_an_app) for this session, from the blob metas.
 
@@ -10756,9 +10755,8 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
     the person already replaced. Ties keep the previous last-one-wins order, so a pair of legacy
     metas with no stamp resolves exactly as it did before.
 
-    A DELETE (or the source of a move) leaves a tombstone: a meta with `deleted`, under the app's id
-    for that path. It hides every capture of that path, and of anything under it when it was a
-    directory, that is not newer than it. Without it the by-path read fell back to the agent's old
+    A DELETE (or the source of a move) leaves a tombstone (_put_tombstone). It hides every capture of
+    that path, and of anything under it when it was a directory, that is not newer than it. Without it the by-path read fell back to the agent's old
     capture of a file the app had just removed, and the next restore put the app's own copy back."""
     return (await _capture_state(sid))[0]
 
@@ -10766,22 +10764,29 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
 async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[str, float]]:
     """(_newest_captures, the tombstones: path -> when it was removed).
 
-    EVERY meta, not a first page: the listing's order is the store's, not the newest first, so a
-    window let a session with many captures (and tombstones, one per removed path) lose a real
-    capture or a tombstone at random. Read a few at a time; a delete compacts what it supersedes
-    (_put_tombstone), so the count tracks the files the session has, not its history."""
+    The captures are the window they always were (a first page of 200 metas). The tombstones are
+    kept under their own prefix and read IN FULL: inside that window a tombstone could fall out of
+    it at random, and the file it hid would come back. There are few of them (one per removed path,
+    and a removed directory drops those under it), so reading all of them is cheap."""
     out: dict[str, tuple[str, bool]] = {}
     newest: dict[str, float] = {}
-    tombs: dict[str, float] = {}
-    listing = await _blob_list_all(f"containers/{sid}/", kb=RESP_BLOB_KB, hard_cap=_CAPTURE_META_CAP)
-    metas = [i for i in listing if str(i.get("file_id", "")).endswith(".meta")]
     gate = asyncio.Semaphore(16)
 
     async def _get(fid: str) -> bytes | None:
         async with gate:
             return await _blob_get(fid, kb=RESP_BLOB_KB)
-    bodies = await asyncio.gather(*(_get(it["file_id"]) for it in metas[:_CAPTURE_META_CAP]))
-    for it, meta_b in zip(metas, bodies):
+    listing = await _blob_list(f"containers/{sid}/", limit=200, kb=RESP_BLOB_KB)
+    metas = [i for i in (listing.get("items") or []) if str(i.get("file_id", "")).endswith(".meta")][:200]
+    tomb_ids = [i["file_id"] for i in await _blob_list_all(_tomb_prefix(sid), kb=RESP_BLOB_KB)]
+    bodies = await asyncio.gather(*(_get(it["file_id"]) for it in metas), *(_get(t) for t in tomb_ids))
+    tombs: dict[str, float] = {}
+    for meta_b in bodies[len(metas):]:
+        try:
+            t = json.loads(meta_b or b"")
+            tombs[str(t["filename"])] = max(float(t["removed_at"]), tombs.get(str(t["filename"]), 0.0))
+        except Exception:  # noqa: BLE001
+            continue
+    for it, meta_b in zip(metas, bodies[: len(metas)]):
         if not meta_b:
             continue
         try:
@@ -10789,12 +10794,9 @@ async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[st
         except Exception:  # noqa: BLE001
             continue
         fname = meta.get("filename")
-        if not fname:
+        if not fname or meta.get("deleted"):
             continue
         ts = float(meta.get("written_at") or 0.0)
-        if meta.get("deleted"):
-            tombs[str(fname)] = max(ts, tombs.get(str(fname), 0.0))
-            continue
         if str(fname) in newest and ts < newest[str(fname)]:
             continue
         newest[str(fname)] = ts
@@ -10805,6 +10807,14 @@ async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[st
     return out, tombs
 
 
+def _tomb_prefix(sid: str) -> str:
+    return f"ws-removed/{sid}/"
+
+
+def _tomb_key(sid: str, path: str) -> str:
+    return _tomb_prefix(sid) + hashlib.sha256(path.encode()).hexdigest()[:32]
+
+
 def _tombstoned(name: str, ts: float, tombs: dict[str, float]) -> bool:
     """Was `name` (as of `ts`) removed by one of these tombstones: its own, or a directory's above it?"""
     return any(ts <= t and (name == p or name.startswith(p + "/")) for p, t in tombs.items())
@@ -10812,36 +10822,32 @@ def _tombstoned(name: str, ts: float, tombs: dict[str, float]) -> bool:
 
 async def _put_tombstone(sid: str, path: str,
                          state: tuple[dict[str, tuple[str, bool]], dict[str, float]] | None = None) -> bool:
-    """Record that an app removed `path` (see _newest_captures) → whether it was stored. It lands on
-    the app's own id for the path, so the app's copy of the file goes with it rather than lingering
-    beside it.
+    """Record that an app removed `path` (see _newest_captures) → whether it was stored.
 
-    The data blob goes only AFTER the store accepted the tombstone: deleting the copy without the
-    record would leave the agent's older captures of the path unhidden, and the by-path read would
-    serve the file the app just removed.
+    The app's own copy of the path is dropped only AFTER the store accepted the record: without the
+    record, the agent's older captures of the path would be unhidden and the by-path read would serve
+    the file the app just removed.
 
-    Then it compacts, so the metas track the files the session has rather than its history: the app's
-    copies under a removed directory, and tombstones of paths under it, are hidden by this one and
-    are dropped. The agent's captures stay (a turn's record names them)."""
-    cfile = backing.app_capture_id(path)
-    meta = json.dumps({"filename": path, "written_at": time.time(), "source": "app",
-                       "deleted": True}).encode()
+    Then it compacts: the app's copies under a removed directory, and the records of paths under it,
+    are hidden by this one and are dropped. The agent's captures stay (a turn's record names them)."""
+    body = json.dumps({"filename": path, "removed_at": time.time()}).encode()
     try:
-        if not await _blob_put(f"containers/{sid}/{cfile}.meta", meta, kb=RESP_BLOB_KB):
+        if not await _blob_put(_tomb_key(sid, path), body, kb=RESP_BLOB_KB):
             print(f"[workspace] tombstone rejected sid={sid} path={path}", flush=True)
             return False
-        await _blob_delete(f"containers/{sid}/{cfile}", kb=RESP_BLOB_KB)
     except Exception as e:  # noqa: BLE001
         print(f"[workspace] tombstone failed sid={sid} path={path}: {e}", flush=True)
         return False
     caps, tombs = state or ({}, {})
-    under = [n for n, (_cid, app_) in caps.items() if app_ and n.startswith(path + "/")]
-    for name in under + [t for t in tombs if t.startswith(path + "/")]:
-        cid = backing.app_capture_id(name)
+    keys = [f"containers/{sid}/{backing.app_capture_id(path)}{x}" for x in ("", ".meta")]
+    for name, (_cid, app_) in caps.items():
+        if app_ and name.startswith(path + "/"):
+            keys += [f"containers/{sid}/{backing.app_capture_id(name)}{x}" for x in ("", ".meta")]
+    keys += [_tomb_key(sid, t) for t in tombs if t.startswith(path + "/")]
+    for key in keys:
         try:
-            await _blob_delete(f"containers/{sid}/{cid}.meta", kb=RESP_BLOB_KB)
-            await _blob_delete(f"containers/{sid}/{cid}", kb=RESP_BLOB_KB)
-        except Exception:  # noqa: BLE001 — compaction is housekeeping; the tombstone already hides it
+            await _blob_delete(key, kb=RESP_BLOB_KB)
+        except Exception:  # noqa: BLE001 — housekeeping; the record already hides it
             pass
     return True
 
@@ -11294,8 +11300,9 @@ def _ws_outcome(outcome: str, path: str, to: str = "") -> None:
 async def _checkpoint_rewritten(sid: str, sha: str) -> None:
     """The hosted backing rewrote the session's checkpoint: record its sha as the session's, so a
     sandbox kept warm with the old workspace is restored rather than trusted (CheckpointWorkspaceFiles
-    ._store says why)."""
-    await _vertex_upsert(sid, {"ws_sha": sha})
+    ._store says why). It must RAISE when the store refuses: the backing then leaves the archive as it
+    was rather than rewriting it under a sha that still matches the warm sandbox."""
+    await BACKING.graph.upsert("HarnessSession", sid, {"ws_sha": sha}, raise_on_fail=True)
 
 
 if hasattr(BACKING.workspace, "on_rewrite"):
@@ -11369,10 +11376,12 @@ async def delete_session_file(sid: str, path: str, request: Request) -> dict:
     async with _ws_change_lock(sid):
         outcome = await BACKING.workspace.delete(sid, member)
         if outcome == backing.WS_NOT_FOUND:
-            # Nothing to remove, but the removal is still recorded: a delete whose tombstone the
-            # store refused is repeated this way, and a durable copy of a file the reaped workspace
-            # no longer holds must not keep answering the by-path read.
-            await _put_tombstone(sid, member, await _capture_state_or_none(sid))
+            # Nothing to remove, but a durable copy of the path may still answer the by-path read
+            # (a delete whose record the store refused, repeated): record the removal when there is
+            # one to hide, and only then, so a run of deletes of paths that never existed stores nothing.
+            state = await _capture_state_or_none(sid)
+            if state and any(n == member or n.startswith(member + "/") for n in state[0]):
+                await _put_tombstone(sid, member, state)
         _ws_outcome(outcome, member)
         _ws_changed(sid)
         if not await _put_tombstone(sid, member, await _capture_state_or_none(sid)):

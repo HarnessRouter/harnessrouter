@@ -198,3 +198,32 @@ def test_a_move_under_a_file_is_409(ws, c):
     (ws / "a.md").write_text("a")
     r = c.post("/file/move", params={"identifier": "s", "path": "a.md", "to": "notes.txt/a.md"})
     assert r.status_code == 409 and (ws / "a.md").exists()
+
+
+def test_a_new_folder_on_the_nesting_base_goes_in_the_agent_s_directory(ws, c):
+    """Where the checkpoint's copy of the change puts it (backing.tar_change), so the two agree."""
+    _nanobot(ws)
+    r = c.post("/file/mkdir", params={"identifier": "s", "path": "slides/old"})
+    assert r.status_code == 200 and r.json()["path"] == "workspace/slides/old"
+    assert (ws / "workspace" / "slides" / "old").is_dir() and not (ws / "slides").exists()
+    (ws / "workspace" / "notes").write_text("a file")
+    assert c.post("/file/mkdir", params={"identifier": "s", "path": "notes/x"}).status_code == 409
+
+
+def test_an_existing_root_folder_is_found_before_a_new_one_is_made(ws, c):
+    """A folder an app's PUT made at the root between turns is the one mkdir answers for."""
+    _nanobot(ws)
+    (ws / "data").mkdir()
+    r = c.post("/file/mkdir", params={"identifier": "s", "path": "data"})
+    assert r.status_code == 200 and r.json()["created"] is False and not (ws / "workspace" / "data").exists()
+
+
+@pytest.mark.parametrize("rel", ["skills", "skills/x", "workspace/skills", "workspace/skills/s/SKILL.md",
+                                 "workspace", "workspace/deck.json", "SOUL.md", "SOUL.md.bak", "memory",
+                                 "memory/a", "memo", "workspace/AGENTS.md", "workspace/AGENTS.mdx"])
+def test_the_protection_rule_is_the_gateway_s(rel):
+    """The runner and the gateway's checkpoint path each apply it; the two must agree."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "gateway"))
+    import backing  # noqa: E402
+    pats = ("workspace/skills/", "workspace/AGENTS.md", "SOUL.md", "memory/")
+    assert server._ws_protected(rel, pats) == backing.ws_protected(rel, pats)

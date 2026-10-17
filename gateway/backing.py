@@ -588,7 +588,8 @@ def tar_change(raw: bytes | None, op: str, member: str, to: str = "") -> tuple[s
                 return WS_BAD_PATH, None
             drop = found
         elif op == "mkdir":
-            target = found or member
+            # a new folder goes where the runner makes it: in the agent's directory on a nesting base
+            target = found or (f"{sub}/{member}" if sub and member.split("/", 1)[0] != sub else member)
             if _protected(target):
                 return WS_BAD_PATH, None
             if found:
@@ -608,14 +609,40 @@ def tar_change(raw: bytes | None, op: str, member: str, to: str = "") -> tuple[s
             rename = (found, dst)
         else:
             raise ValueError(op)
+        regular = {n: m for m, n in zip(members, names) if m.isreg()}
+        carried: dict[str, str] = {}      # a removed file -> the link that now holds its bytes
+
+        def _renamed(n: str) -> str:
+            return rename[1] + n[len(rename[0]):] if rename[0] and _under(n, rename[0]) else n
+
         out = io.BytesIO()
         with tarfile.open(fileobj=out, mode="w:gz") as dst_tar:
             for m, n in zip(members, names):
                 if drop and _under(n, drop):
                     continue
-                if rename[0] and _under(n, rename[0]):
-                    m.name = ("./" if m.name.startswith("./") else "") + rename[1] + n[len(rename[0]):]
-                dst_tar.addfile(m, src.extractfile(m) if m.isfile() else None)
+                dot = "./" if m.name.startswith("./") else ""
+                new = _renamed(n)
+                m.name = dot + new
+                data = None
+                if m.islnk():
+                    # A hard link is stored as a pointer to an EARLIER member's name. One left pointing
+                    # at a removed or renamed member makes an archive no restore can unpack.
+                    ldot = "./" if m.linkname.startswith("./") else ""
+                    target = m.linkname[2:] if ldot else m.linkname
+                    if drop and _under(target, drop):
+                        if target in carried:
+                            m.linkname = ldot + carried[target]
+                        elif target in regular:
+                            data = src.extractfile(m)        # resolves to the target's bytes
+                            m.type, m.linkname, m.size = tarfile.REGTYPE, "", regular[target].size
+                            carried[target] = new
+                        else:
+                            continue
+                    else:
+                        m.linkname = ldot + _renamed(target)
+                elif m.isfile():
+                    data = src.extractfile(m)
+                dst_tar.addfile(m, data)
             if add is not None:
                 dst_tar.addfile(add)
         return WS_OK, out.getvalue()
@@ -707,36 +734,52 @@ class RunnerWorkspaceFiles:
         except Exception:      # noqa: BLE001
             return WS_FAILED
         outcome = {200: WS_OK, 404: WS_NOT_FOUND, 409: WS_EXISTS, 400: WS_BAD_PATH}.get(r.status_code, WS_FAILED)
+        if outcome == WS_NOT_FOUND:
+            # Not in the live directory. That directory is reaped after HR_WORKSPACE_TTL_HOURS while
+            # the checkpoint keeps the file, and the next turn restores from the checkpoint, so the
+            # change is the checkpoint's to make. A path in neither is a 404.
+            return await self._change_checkpoint(sid, op, member, dest, live=False)
         if outcome != WS_OK:
             return outcome
-        # The runner answers where it found the path (the nesting base's user files live one level
-        # down), which is also where the path sits in the archive.
         try:
             got = r.json()
         except ValueError:
             got = {}
-        await self._change_checkpoint(sid, op, str(got.get("path") or member), str(got.get("to") or dest))
+        # The checkpoint is changed by the caller's path, not the one the runner answers: tar_change
+        # resolves it the way the runner did (the agent's directory first on a nesting base), and
+        # the runner's session-relative spelling would be looked for one level down a second time.
+        await self._change_checkpoint(sid, op, member, dest)
         return WS_UNCHANGED if op == "mkdir" and got.get("created") is False else WS_OK
 
-    async def _change_checkpoint(self, sid: str, op: str, member: str, to: str) -> None:
+    async def _change_checkpoint(self, sid: str, op: str, member: str, to: str, live: bool = True) -> str:
+        """Apply the change to the checkpoint → its outcome. After a live change (`live`) the change
+        already stands, so an archive that cannot follow is logged rather than failed; without one,
+        the archive is the only copy and its outcome is the answer."""
         if not self.blob or not self.ckpt_kb or not self.key_for:
-            return
+            return WS_OK if live else WS_NOT_FOUND
         key = self.key_for(sid)
         try:
             async with _ckpt_lock(sid):
                 raw = await self.blob.get(self.ckpt_kb, key)
                 if not raw:
-                    return        # no turn has ended yet: the live directory is the only copy
+                    # no turn has ended yet: the live directory is the only copy
+                    return WS_OK if live else WS_NOT_FOUND
                 outcome, tar = await asyncio.to_thread(tar_change, raw, op, member, to)
                 if outcome in (WS_NOT_FOUND, WS_UNCHANGED):
-                    return        # not in the checkpoint (made since it was taken), or already so
+                    # not in the checkpoint (made since it was taken), or already so
+                    return WS_OK if live else outcome
                 if outcome == WS_OK and await self.blob.put(self.ckpt_kb, key, tar):
-                    return
+                    return WS_OK
+                if not live:
+                    return outcome if outcome != WS_OK else WS_FAILED
             why = outcome if outcome != WS_OK else "store refused"
         except Exception as e:   # noqa: BLE001
+            if not live:
+                return WS_FAILED
             why = f"{type(e).__name__}: {e}"
         # The live change stands, but a restore from this checkpoint would undo it. Say so.
         print(f"[workspace] checkpoint {op} not applied sid={sid} path={member}: {why}", flush=True)
+        return WS_OK
 
     async def _capture(self, sid: str, member: str, data: bytes) -> None:
         """Persist the app's copy of this file so it outlives the live directory.
@@ -793,19 +836,23 @@ class CheckpointWorkspaceFiles:
         self.on_rewrite = on_rewrite
 
     async def _store(self, sid: str, key: str, tar: bytes) -> bool:
-        """Put a rewritten archive, and say so. A sandbox kept warm from the last turn still holds the
-        OLD workspace, and hydrate skips the restore when the sandbox's sha matches the session's.
-        Left as it was, the next turn would run on the old files and its checkpoint would write
-        them back over this change: a deleted file restored, a moved one at both names. The new
-        sha matches no sandbox, so the next turn restores this archive."""
-        if not await self.blob.put(self.kb, key, tar):
-            return False
+        """Put a rewritten archive. A sandbox kept warm from the last turn still holds the OLD
+        workspace, and hydrate skips the restore when the sandbox's sha matches the session's. Left as
+        it was, the next turn would run on the old files and its checkpoint would write them back
+        over this change: a deleted file restored, a moved one at both names.
+
+        So the new archive's sha is recorded FIRST, and the archive is stored only once it is. A sha
+        that cannot be recorded stops the change before anything moved (the caller sees a failure,
+        and a retry starts clean); an archive that cannot be stored after it leaves a sha that
+        matches no sandbox, which costs the next turn a full restore of the old archive and nothing
+        else."""
         if self.on_rewrite is not None:
             try:
                 await self.on_rewrite(sid, hashlib.sha256(tar).hexdigest())
             except Exception as e:   # noqa: BLE001
-                print(f"[workspace] checkpoint sha not recorded sid={sid}: {e}", flush=True)
-        return True
+                print(f"[workspace] checkpoint sha not recorded sid={sid}: {e}; not rewritten", flush=True)
+                return False
+        return bool(await self.blob.put(self.kb, key, tar))
 
     async def read(self, sid: str, path: str) -> bytes | None:
         member = _safe_member(path)
