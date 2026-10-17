@@ -627,7 +627,11 @@ def tar_change(raw: bytes | None, op: str, member: str, to: str = "") -> tuple[s
                 return WS_BAD_PATH, None
             if _exists(dst) or _file_above(dst):
                 return WS_EXISTS, None
+            if any(_protected(c) for c in present[1:]):
+                return WS_BAD_PATH, None
             rename = (found, dst)
+            # a second copy (at the root of a nesting base) would be adopted back under the old name
+            drop = tuple(present[1:])
         else:
             raise ValueError(op)
         regular = {n: m for m, n in zip(members, names) if m.isreg()}
@@ -924,7 +928,12 @@ class CheckpointWorkspaceFiles:
                         # a file the agent already has, on a nesting base, is replaced where it is
                         # (in its directory), not shadowed by a second copy at the root
                         sub = _tar_subdir(src)
-                        if sub and f"{sub}/{member}" in names:
+                        top = member.split("/", 1)[0]
+                        if sub and (f"{sub}/{member}" in names or (
+                                "/" in member and member not in names
+                                and any(_under(n, f"{sub}/{top}") for n in names))):
+                            # where it is, or — a new file — in a folder the agent already has, which
+                            # adoption would not move a root copy into
                             target = f"{sub}/{member}"
                         for m, name in zip(members, names):
                             if name == target:

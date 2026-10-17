@@ -12836,6 +12836,16 @@ async def put_file(request: Request, path: str, identifier: str = "") -> dict:
     have = _existing(ws, path)
     if have is not None and have.is_file() and not have.is_symlink():
         dest = have
+    elif have is None:
+        # A NEW file whose top folder the agent's directory already has goes into that folder:
+        # adoption moves a root entry only when its name is free in the agent's directory, so it
+        # would never reach the agent.
+        vis = _visible_root(ws)
+        top = (path or "").strip().strip("/").split("/", 1)[0]
+        if vis != ws and "/" in (path or "").strip().strip("/") and (pathlib.Path(vis) / top).is_dir():
+            inside = _safe_join(vis, path)
+            if inside is not None:
+                dest = inside
     data = await request.body()
     pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
     _isolate_session(ws)
@@ -12999,9 +13009,10 @@ def move_file(path: str, to: str, identifier: str = "") -> dict:
     ws = _ws(identifier)
     if _safe_leaf(ws, path) is None or _safe_leaf(ws, to) is None:
         raise HTTPException(400, "path escapes the workspace")
-    src = _existing(ws, path)
-    if src is None:
+    found = _copies(ws, path)
+    if not found:
         raise HTTPException(404, "nothing at that path")
+    src, others = found[0], found[1:]
     vis = pathlib.Path(_visible_root(ws)).resolve()
     root = vis if vis != pathlib.Path(ws).resolve() and src.is_relative_to(vis) else pathlib.Path(ws).resolve()
     dest = _safe_leaf(str(root), to)
@@ -13009,12 +13020,19 @@ def move_file(path: str, to: str, identifier: str = "") -> dict:
         raise HTTPException(400, "path escapes the workspace")
     if dest == src or dest.is_relative_to(src):
         raise HTTPException(400, "a path cannot move inside itself")
-    _refuse_protected(ws, src, dest)
+    _refuse_protected(ws, src, dest, *others)
     if dest.exists() or dest.is_symlink():
         raise HTTPException(409, "something is already at the destination")
     try:
         _make_dirs(dest.parent, _session_uid(ws))
         os.rename(src, dest)
+        # A second copy at the root of a nesting base (an app's PUT from before writes went where the
+        # file is) would be adopted back under the old name next turn: the old name is gone.
+        for p in others:
+            if p.is_dir() and not p.is_symlink():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
     except (FileExistsError, NotADirectoryError) as e:
         # a FILE where one of the destination's folders would be
         raise HTTPException(409, f"move failed: {str(e)[:200]}")

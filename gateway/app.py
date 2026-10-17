@@ -11248,6 +11248,8 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
 
     async with _ws_change_lock(sid):
         ok = await BACKING.workspace.write(sid, path, data)
+        if ok:
+            _ws_changed(sid)
     if not ok:
         # The only ways to get here are a path that tried to leave the workspace and a storage
         # failure. Both are the caller's problem to see, not something to swallow.
@@ -11293,6 +11295,10 @@ def _ws_outcome(outcome: str, path: str, to: str = "") -> None:
         raise uhp_error(409, "file_exists", f"Something is already at '{at}', or a file is where one of "
                         "its folders would go.", "to" if to else "path")
     if outcome == backing.WS_BAD_PATH:
+        if to:
+            # the backing refused the source or the destination, and does not say which
+            raise uhp_error(400, "invalid_input", "Neither the path nor `to` may be one of the agent's "
+                            "own files, and a path cannot move inside itself.")
         raise uhp_error(400, "invalid_input", "That path must be inside the session workspace, and not "
                         "one of the agent's own files.", "path")
     raise uhp_error(502, "internal_error", "The session workspace could not be changed. Try again.")
@@ -11413,19 +11419,21 @@ async def _capture_state_or_none(sid: str):
 
 
 async def _carry_captures(sid: str, src: str, dst: str, state=None) -> None:
-    """The durable copies of a moved file go to the new name, as the app's.
+    """An app's durable copy of a moved file goes to the new name.
 
-    The app's, because self-hosted that copy can be NEWER than the checkpoint (an app saved between
-    turns) and a restore re-applies it from the capture: left under the old name it would be hidden
-    by the move's tombstone, and the restore would bring back the checkpoint's older copy at the new
-    name. The agent's too, because once the live directory is reaped a by-path read is answered from
-    the captures: the read of the new name would 404 until the next turn, while the old name's copy
-    is hidden. Carried as the app's, a copy is also re-applied on the next restore, which writes
-    back the content the checkpoint already holds at that name. Hosted, app writes go into the
-    archive and leave no capture of their own."""
+    Self-hosted, that copy can be NEWER than the checkpoint (an app saved between turns), and a
+    restore re-applies it from the capture rather than from the archive. Left under the old name it
+    would be hidden by the move's tombstone, and the restore would bring back the checkpoint's older
+    copy at the new name, losing the app's last save. Hosted, app writes go into the archive and
+    leave no capture, so there is nothing to carry.
+
+    Only the APP's: an agent's capture carried as the app's would be re-applied on every restore,
+    over whatever the agent later did with the file. So once the live directory is reaped, the
+    by-path read of a moved agent file answers 404 at its new name until the next turn restores it
+    (the checkpoint has it there)."""
     caps = (state or ({}, {}))[0]
-    for name, (cid, _from_app) in caps.items():
-        if not (name == src or name.startswith(src + "/")):
+    for name, (cid, from_app) in caps.items():
+        if not from_app or not (name == src or name.startswith(src + "/")):
             continue
         try:
             got = await _container_file_bytes(sid, cid)

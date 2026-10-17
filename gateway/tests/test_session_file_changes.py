@@ -343,17 +343,16 @@ async def test_a_removed_path_does_not_come_back_by_its_bare_name(captures, monk
 
 
 @pytest.mark.asyncio
-async def test_a_move_carries_the_durable_copies_to_the_new_name(captures):
-    """The app's (a restore re-applies it) and the agent's (a reaped workspace's by-path read is
-    answered from the captures, and the new name would 404 until the next turn)."""
+async def test_a_move_carries_the_app_s_copy_and_not_the_agent_s(captures):
+    """The app's, because a restore re-applies it. Not the agent's: carried as the app's it would be
+    re-applied on every restore, over whatever the agent later did with the file."""
     await B.put_app_capture(A.BACKING.blob, "kb", "s", "d/sheet.json", b"typed since the checkpoint")
     captures("cfile_agent", "d/other.md", b"agent's", 100.0)
     await A._carry_captures("s", "d", "archive/d", await A._capture_state("s"))
     await A._put_tombstone("s", "d")
     by = await A._cfile_by_name("s")
-    assert set(by) == {"archive/d/sheet.json", "archive/d/other.md"}
+    assert set(by) == {"archive/d/sheet.json"}
     assert captures.store[f"containers/s/{by['archive/d/sheet.json']}"] == b"typed since the checkpoint"
-    assert captures.store[f"containers/s/{by['archive/d/other.md']}"] == b"agent's"
 
 
 # ── the routes ────────────────────────────────────────────────────────────────────────────────
@@ -777,3 +776,39 @@ async def test_a_put_waits_for_a_change_of_the_same_session(routes, monkeypatch)
     await asyncio.gather(A.delete_session_file("s", "n.md", request=None),
                          A.write_session_file("s", "n.md", A.WorkspaceWrite(content="x"), request=None))
     assert order == ["delete start", "delete end", "put"]
+
+
+def test_a_move_on_the_nesting_base_leaves_no_copy_under_the_old_name():
+    outcome, raw = B.tar_change(_tar({**_NANOBOT, "a.md": b"root", "workspace/a.md": b"agent"}),
+                                "move", "a.md", "b.md")
+    files = _files(raw)
+    assert outcome == B.WS_OK and files["workspace/b.md"] == b"agent"
+    assert "a.md" not in files and "workspace/a.md" not in files
+
+
+@pytest.mark.asyncio
+async def test_a_hosted_put_of_a_new_file_goes_into_a_folder_the_agent_has():
+    """Adoption moves a root entry only when its name is free in the agent's directory, so a root
+    notes/new.md beside workspace/notes/ would never reach the agent."""
+    blob, ws = _hosted({**_NANOBOT, "workspace/notes/old.md": b"o"})
+    assert await ws.write("s", "notes/new.md", b"n")
+    files = _files(blob.objects[("kb", "sessions/s/workspace.tgz")])
+    assert files["workspace/notes/new.md"] == b"n" and "notes/new.md" not in files
+
+
+@pytest.mark.asyncio
+async def test_a_refused_move_does_not_blame_one_side(routes):
+    routes["fake"].outcome = B.WS_BAD_PATH
+    with pytest.raises(Exception) as e:
+        await A.move_session_file("s", "notes.md", A.WorkspaceMove(to="skills/notes.md"), request=None)
+    assert e.value.status_code == 400 and e.value.detail["param"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_put_refreshes_the_cached_listing(routes, monkeypatch):
+    class _Ws(_Fake):
+        async def write(self, sid, path, data):
+            return True
+    monkeypatch.setattr(A.BACKING, "workspace", _Ws(), raising=False)
+    await A.write_session_file("s", "n.md", A.WorkspaceWrite(content="x"), request=None)
+    assert routes["changed"] == ["s"]

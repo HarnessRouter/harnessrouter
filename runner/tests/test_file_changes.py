@@ -245,3 +245,21 @@ def test_a_delete_on_the_nesting_base_removes_every_copy(ws, c):
     (ws / "workspace" / "notes.md").write_text("agent")
     assert c.delete("/file", params={"identifier": "s", "path": "notes.md"}).status_code == 200
     assert not (ws / "notes.md").exists() and not (ws / "workspace" / "notes.md").exists()
+
+
+def test_a_move_on_the_nesting_base_leaves_no_copy_under_the_old_name(ws, c):
+    """A root copy left behind would be adopted back under the old name next turn."""
+    _nanobot(ws)
+    (ws / "a.md").write_text("root")
+    (ws / "workspace" / "a.md").write_text("agent")
+    r = c.post("/file/move", params={"identifier": "s", "path": "a.md", "to": "b.md"})
+    assert r.status_code == 200 and (ws / "workspace" / "b.md").read_text() == "agent"
+    assert not (ws / "a.md").exists() and not (ws / "workspace" / "a.md").exists()
+
+
+def test_a_put_of_a_new_file_goes_into_a_folder_the_agent_has(ws, c):
+    _nanobot(ws)
+    (ws / "workspace" / "notes").mkdir()
+    r = c.put("/file", params={"identifier": "s", "path": "notes/new.md"}, content=b"n")
+    assert r.status_code == 200 and (ws / "workspace" / "notes" / "new.md").read_bytes() == b"n"
+    assert not (ws / "notes").exists()
