@@ -137,3 +137,64 @@ def test_the_nesting_base_finds_user_files_one_level_down(ws, c):
     assert (ws / "workspace" / "old" / "deck.json").exists()
     r = c.delete("/file", params={"identifier": "s", "path": "old"})
     assert r.status_code == 200 and r.json()["path"] == "workspace/old"
+
+
+# ── what the review of #478 found ─────────────────────────────────────────────────────────────
+def _nanobot(ws):
+    (ws / ".harness").mkdir()
+    (ws / ".harness" / "agent-subdir").write_text("workspace")
+    (ws / ".git" / "info").mkdir(parents=True)
+    (ws / ".git" / "info" / "exclude").write_text(
+        "# runner\nworkspace/.nanobot/\nworkspace/skills/\nworkspace/memory/\nworkspace/AGENTS.md\n")
+    (ws / "workspace" / "skills" / "s").mkdir(parents=True)
+    (ws / "workspace" / "skills" / "s" / "SKILL.md").write_text("skill")
+    (ws / "workspace" / "AGENTS.md").write_text("doc")
+    (ws / "workspace" / "deck.json").write_text("{}")
+
+
+def test_the_nesting_base_s_own_directory_is_not_a_user_path(ws, c):
+    """DELETE workspace would have removed nanobot's whole working directory."""
+    _nanobot(ws)
+    assert c.delete("/file", params={"identifier": "s", "path": "workspace"}).status_code == 404
+    assert c.post("/file/move", params={"identifier": "s", "path": "workspace", "to": "w2"}).status_code == 404
+    assert (ws / "workspace" / "deck.json").exists() and (ws / "workspace" / "skills").is_dir()
+
+
+@pytest.mark.parametrize("call", [
+    ("delete", {"path": "skills"}), ("delete", {"path": "AGENTS.md"}),
+    ("delete", {"path": "skills/s/SKILL.md"}), ("move", {"path": "skills", "to": "s2"}),
+    ("move", {"path": "deck.json", "to": "skills/deck.json"}), ("mkdir", {"path": "memory/new"})])
+def test_the_base_s_excluded_machinery_is_refused(ws, c, call):
+    _nanobot(ws)
+    op, params = call
+    if op == "delete":
+        r = c.delete("/file", params={"identifier": "s", **params})
+    else:
+        r = c.post(f"/file/{op}", params={"identifier": "s", **params})
+    assert r.status_code == 400
+    assert (ws / "workspace" / "skills" / "s" / "SKILL.md").exists() and (ws / "workspace" / "AGENTS.md").exists()
+
+
+def test_a_flat_base_s_excluded_files_are_refused(ws, c):
+    (ws / ".git" / "info").mkdir(parents=True)
+    (ws / ".git" / "info" / "exclude").write_text("SOUL.md\nmemory/\n")
+    (ws / "SOUL.md").write_text("s")
+    (ws / "notes.md").write_text("n")
+    assert c.delete("/file", params={"identifier": "s", "path": "SOUL.md"}).status_code == 400
+    assert c.delete("/file", params={"identifier": "s", "path": "notes.md"}).status_code == 200
+    assert (ws / "SOUL.md").exists()
+
+
+def test_a_file_written_at_the_root_between_turns_is_still_reachable(ws, c):
+    """An app's PUT lands at the session root until the next turn adopts it into the agent's directory."""
+    _nanobot(ws)
+    (ws / "sheet.json").write_text("rows")
+    r = c.post("/file/move", params={"identifier": "s", "path": "sheet.json", "to": "kept.json"})
+    assert r.status_code == 200 and (ws / "kept.json").read_text() == "rows"
+
+
+def test_a_move_under_a_file_is_409(ws, c):
+    (ws / "notes.txt").write_text("n")
+    (ws / "a.md").write_text("a")
+    r = c.post("/file/move", params={"identifier": "s", "path": "a.md", "to": "notes.txt/a.md"})
+    assert r.status_code == 409 and (ws / "a.md").exists()

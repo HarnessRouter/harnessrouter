@@ -39,6 +39,7 @@ import sqlite3
 import tarfile
 import time
 import uuid
+import weakref
 from pathlib import Path
 from typing import Protocol
 
@@ -102,12 +103,45 @@ class WorkspaceFiles(Protocol):
     async def write(self, sid: str, path: str, data: bytes) -> bool: ...
     # The three below answer one of the WS_* outcomes rather than a bool: a route has to tell "nothing
     # there" (404) from "already there" (409) from a path it must refuse (400) from storage failing.
+    # mkdir answers WS_UNCHANGED for a directory that was already there.
     async def delete(self, sid: str, path: str) -> str: ...
     async def mkdir(self, sid: str, path: str) -> str: ...
     async def move(self, sid: str, path: str, to: str) -> str: ...
 
 
 WS_OK, WS_NOT_FOUND, WS_EXISTS, WS_BAD_PATH, WS_FAILED = "ok", "not_found", "exists", "bad_path", "failed"
+WS_UNCHANGED = "unchanged"
+
+# The name a nesting base gives its agent's directory in `.harness/agent-subdir` (nanobot's
+# `workspace`): ONE plain directory name, or no subdir at all. The gateway's listing reads the same
+# marker with this same rule (app.py, _ws_rules), so the files a change can reach are the files the
+# listing shows.
+WS_SUBDIR_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def ws_protected(rel: str, pats: tuple[str, ...]) -> bool:
+    """Is `rel` (relative to the session directory) a base's own machinery, as the runner lists it
+    in `.git/info/exclude` — or a directory with some inside it? nanobot's skills and memory,
+    opensquilla's SOUL.md: the listing never shows them, and a delete or a move must not reach them
+    by naming them, or by naming a folder that holds them."""
+    for q in pats:
+        d = q.rstrip("/")
+        if rel == d or (q.endswith("/") and rel.startswith(q)) or d.startswith(rel + "/"):
+            return True
+    return False
+
+
+def _ckpt_lock(sid: str) -> asyncio.Lock:
+    """One rewrite of a session's checkpoint at a time IN THIS PROCESS. Every change reads the whole
+    archive and writes a new one, so two at once would each start from the same archive and the
+    second write would drop the first change while both answered 200."""
+    lock = _CKPT_LOCKS.get(sid)
+    if lock is None:
+        lock = _CKPT_LOCKS[sid] = asyncio.Lock()
+    return lock
+
+
+_CKPT_LOCKS: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
 
 
 class Backing:
@@ -497,56 +531,97 @@ def tar_change(raw: bytes | None, op: str, member: str, to: str = "") -> tuple[s
 
     A path names a file or a directory, and a directory is everything under it: a tarball made by
     `tar -C ws .` lists the directory's own entry, but one rewritten by `write` may hold only the
-    files, so both shapes count as the directory existing. The base that nests its workspace
-    (`.harness/agent-subdir`, nanobot) keeps the user's files one level down, so a path is looked
-    for there first and at the session root second, the order the runner's GET /file uses, and a
-    move stays on the side its source was found."""
-    # (entry, its path without "./", its bytes): the bytes travel WITH the entry, so a renamed
-    # member keeps its own content
-    entries: list[tuple[tarfile.TarInfo, str, bytes | None]] = []
-    if raw:
-        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as src:
-            for m in src.getmembers():
-                f = src.extractfile(m) if m.isfile() else None
-                entries.append((m, _tar_name(m), f.read() if f else None))
-    sub = next((d.decode(errors="replace").strip() for _m, n, d in entries
-                if n == ".harness/agent-subdir" and d), "")
-    if sub and (_safe_member(sub) != sub or "/" in sub):
-        sub = ""
+    files, so both shapes count as the directory existing.
 
-    def _exists(p: str) -> bool:
-        return any(_under(n, p) for _m, n, _d in entries)
+    WHICH paths a change may reach is the listing's rule, read from the same two files the listing
+    reads (`.harness/agent-subdir`, `.git/info/exclude`). The base that nests its workspace (nanobot)
+    keeps the user's files one level down, so a path is looked for there first. The session root is
+    second, for a file an app wrote between turns (it lands there until the next turn adopts it),
+    but never the agent's directory itself: `workspace` at the root IS nanobot's whole working
+    directory, its skills, memory and instruction file with the user's files. A move stays on the
+    side its source was found. Nothing the base excludes as its own machinery is touched.
 
-    found = next((c for c in ([f"{sub}/{member}"] if sub else []) + [member] if _exists(c)), "")
-    if op == "delete":
-        if not found:
-            return WS_NOT_FOUND, None
-        entries = [e for e in entries if not _under(e[1], found)]
-    elif op == "mkdir":
-        if found:
-            is_file = any(n == found and m.isfile() for m, n, _d in entries)
-            return (WS_EXISTS, None) if is_file else (WS_OK, None)
-        d = tarfile.TarInfo(member)
-        d.type, d.mode, d.mtime = tarfile.DIRTYPE, 0o755, int(time.time())
-        entries.append((d, member, None))
-    elif op == "move":
-        if not found:
-            return WS_NOT_FOUND, None
-        dst = f"{sub}/{to}" if sub and found != member else to
-        if _under(dst, found):
-            return WS_BAD_PATH, None
-        if _exists(dst):
-            return WS_EXISTS, None
-        for m, n, _d in entries:
-            if _under(n, found):
-                m.name = ("./" if m.name.startswith("./") else "") + dst + n[len(found):]
-    else:
-        raise ValueError(op)
-    out = io.BytesIO()
-    with tarfile.open(fileobj=out, mode="w:gz") as dst_tar:
-        for m, _n, data in entries:
-            dst_tar.addfile(m, io.BytesIO(data or b"") if m.isfile() else None)
-    return WS_OK, out.getvalue()
+    Streamed, as `write` is: the member list is read first and each member's bytes are copied
+    straight across on the second pass, so memory is the two compressed archives and one member,
+    never the whole unpacked workspace."""
+    src = tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") if raw else None
+    try:
+        members = src.getmembers() if src else []
+        names = [_tar_name(m) for m in members]
+
+        def _small(name: str) -> str:
+            for m, n in zip(members, names):
+                if n == name and m.isreg() and m.size <= 64 * 1024:
+                    f = src.extractfile(m)
+                    return f.read().decode(errors="replace") if f else ""
+            return ""
+
+        sub = _small(".harness/agent-subdir").strip()
+        if not WS_SUBDIR_RE.fullmatch(sub):
+            sub = ""
+        pats = tuple(ln.strip() for ln in _small(".git/info/exclude").splitlines()
+                     if ln.strip() and not ln.startswith("#"))
+        files = {n for m, n in zip(members, names) if not m.isdir()}
+
+        def _protected(p: str) -> bool:
+            # a path at the root of a nesting base is ADOPTED into the agent's directory next turn,
+            # so it is also checked as it will be there
+            return ws_protected(p, pats) or bool(sub and not _under(p, sub) and ws_protected(f"{sub}/{p}", pats))
+
+        def _exists(p: str) -> bool:
+            return any(_under(n, p) for n in names)
+
+        def _file_above(p: str) -> bool:
+            """A FILE where one of p's directories would be: an archive holding both `notes.txt` and
+            `notes.txt/a.md` cannot be unpacked, and every later restore of the session would fail."""
+            parts = p.split("/")
+            return any("/".join(parts[:k]) in files for k in range(1, len(parts)))
+
+        cands = ([f"{sub}/{member}"] if sub else []) + \
+                ([member] if not sub or member.split("/", 1)[0] != sub else [])
+        found = next((c for c in cands if _exists(c)), "")
+        drop, rename, add = "", ("", ""), None
+        if op == "delete":
+            if not found:
+                return WS_NOT_FOUND, None
+            if _protected(found):
+                return WS_BAD_PATH, None
+            drop = found
+        elif op == "mkdir":
+            target = found or member
+            if _protected(target):
+                return WS_BAD_PATH, None
+            if found:
+                return (WS_EXISTS, None) if found in files else (WS_UNCHANGED, None)
+            if _file_above(target):
+                return WS_EXISTS, None
+            add = tarfile.TarInfo(target)
+            add.type, add.mode, add.mtime = tarfile.DIRTYPE, 0o755, int(time.time())
+        elif op == "move":
+            if not found:
+                return WS_NOT_FOUND, None
+            dst = f"{sub}/{to}" if sub and found != member else to
+            if _protected(found) or _protected(dst) or _under(dst, found):
+                return WS_BAD_PATH, None
+            if _exists(dst) or _file_above(dst):
+                return WS_EXISTS, None
+            rename = (found, dst)
+        else:
+            raise ValueError(op)
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode="w:gz") as dst_tar:
+            for m, n in zip(members, names):
+                if drop and _under(n, drop):
+                    continue
+                if rename[0] and _under(n, rename[0]):
+                    m.name = ("./" if m.name.startswith("./") else "") + rename[1] + n[len(rename[0]):]
+                dst_tar.addfile(m, src.extractfile(m) if m.isfile() else None)
+            if add is not None:
+                dst_tar.addfile(add)
+        return WS_OK, out.getvalue()
+    finally:
+        if src is not None:
+            src.close()
 
 
 class RunnerWorkspaceFiles:
@@ -641,21 +716,22 @@ class RunnerWorkspaceFiles:
         except ValueError:
             got = {}
         await self._change_checkpoint(sid, op, str(got.get("path") or member), str(got.get("to") or dest))
-        return WS_OK
+        return WS_UNCHANGED if op == "mkdir" and got.get("created") is False else WS_OK
 
     async def _change_checkpoint(self, sid: str, op: str, member: str, to: str) -> None:
         if not self.blob or not self.ckpt_kb or not self.key_for:
             return
         key = self.key_for(sid)
         try:
-            raw = await self.blob.get(self.ckpt_kb, key)
-            if not raw:
-                return            # no turn has ended yet: the live directory is the only copy
-            outcome, tar = await asyncio.to_thread(tar_change, raw, op, member, to)
-            if outcome == WS_NOT_FOUND or (outcome == WS_OK and tar is None):
-                return            # not in the checkpoint (made since it was taken), or already so
-            if outcome == WS_OK and await self.blob.put(self.ckpt_kb, key, tar):
-                return
+            async with _ckpt_lock(sid):
+                raw = await self.blob.get(self.ckpt_kb, key)
+                if not raw:
+                    return        # no turn has ended yet: the live directory is the only copy
+                outcome, tar = await asyncio.to_thread(tar_change, raw, op, member, to)
+                if outcome in (WS_NOT_FOUND, WS_UNCHANGED):
+                    return        # not in the checkpoint (made since it was taken), or already so
+                if outcome == WS_OK and await self.blob.put(self.ckpt_kb, key, tar):
+                    return
             why = outcome if outcome != WS_OK else "store refused"
         except Exception as e:   # noqa: BLE001
             why = f"{type(e).__name__}: {e}"
@@ -710,8 +786,26 @@ class CheckpointWorkspaceFiles:
     LAST one, so appending would work until something read the archive differently, and the bug
     would be a stale file appearing at random."""
 
-    def __init__(self, blob, kb: str, key_for):
+    def __init__(self, blob, kb: str, key_for, on_rewrite=None):
         self.blob, self.kb, self.key_for = blob, kb, key_for
+        # async (sid, sha256 of the new archive) -> None, called after every rewrite. The gateway
+        # sets it to record the archive's sha as the session's checkpoint sha (see _store).
+        self.on_rewrite = on_rewrite
+
+    async def _store(self, sid: str, key: str, tar: bytes) -> bool:
+        """Put a rewritten archive, and say so. A sandbox kept warm from the last turn still holds the
+        OLD workspace, and hydrate skips the restore when the sandbox's sha matches the session's.
+        Left as it was, the next turn would run on the old files and its checkpoint would write
+        them back over this change: a deleted file restored, a moved one at both names. The new
+        sha matches no sandbox, so the next turn restores this archive."""
+        if not await self.blob.put(self.kb, key, tar):
+            return False
+        if self.on_rewrite is not None:
+            try:
+                await self.on_rewrite(sid, hashlib.sha256(tar).hexdigest())
+            except Exception as e:   # noqa: BLE001
+                print(f"[workspace] checkpoint sha not recorded sid={sid}: {e}", flush=True)
+        return True
 
     async def read(self, sid: str, path: str) -> bytes | None:
         member = _safe_member(path)
@@ -741,6 +835,10 @@ class CheckpointWorkspaceFiles:
         if not member:
             return False
         key = self.key_for(sid)
+        async with _ckpt_lock(sid):
+            return await self._write_locked(sid, key, member, data)
+
+    async def _write_locked(self, sid: str, key: str, member: str, data: bytes) -> bool:
         raw = await self.blob.get(self.kb, key)
 
         def _rewrite() -> bytes:
@@ -767,7 +865,7 @@ class CheckpointWorkspaceFiles:
             tar = await asyncio.to_thread(_rewrite)
         except Exception:      # noqa: BLE001
             return False
-        return bool(tar) and await self.blob.put(self.kb, key, tar)
+        return bool(tar) and await self._store(sid, key, tar)
 
     async def delete(self, sid: str, path: str) -> str:
         return await self._change(sid, "delete", path)
@@ -786,14 +884,15 @@ class CheckpointWorkspaceFiles:
         if not member or (op == "move" and not dest):
             return WS_BAD_PATH
         key = self.key_for(sid)
-        try:
-            raw = await self.blob.get(self.kb, key)
-            outcome, tar = await asyncio.to_thread(tar_change, raw, op, member, dest)
-        except Exception:      # noqa: BLE001
-            return WS_FAILED
-        if outcome != WS_OK or tar is None:
-            return outcome
-        return WS_OK if await self.blob.put(self.kb, key, tar) else WS_FAILED
+        async with _ckpt_lock(sid):
+            try:
+                raw = await self.blob.get(self.kb, key)
+                outcome, tar = await asyncio.to_thread(tar_change, raw, op, member, dest)
+            except Exception:      # noqa: BLE001
+                return WS_FAILED
+            if outcome != WS_OK or tar is None:
+                return outcome
+            return WS_OK if await self._store(sid, key, tar) else WS_FAILED
 
 
 def make_backing(*, client_getter, vg_url: str, vg_key: str, vg_tenant: str,

@@ -66,7 +66,7 @@ def test_delete_nothing():
 def test_mkdir():
     outcome, raw = B.tar_change(_tar({"a": b"a"}), "mkdir", "d/e")
     assert outcome == B.WS_OK and _files(raw) == {"a": b"a", "d/e": None}
-    assert B.tar_change(raw, "mkdir", "d/e") == (B.WS_OK, None)       # already there: unchanged
+    assert B.tar_change(raw, "mkdir", "d/e") == (B.WS_UNCHANGED, None)  # already there
     assert B.tar_change(raw, "mkdir", "a") == (B.WS_EXISTS, None)      # a file is in the way
     outcome, raw = B.tar_change(None, "mkdir", "d")                     # no checkpoint yet
     assert outcome == B.WS_OK and _files(raw) == {"d": None}
@@ -326,7 +326,7 @@ async def test_a_removed_path_does_not_come_back_by_its_bare_name(captures, monk
 async def test_a_move_carries_the_app_s_copy_to_the_new_name(captures):
     await B.put_app_capture(A.BACKING.blob, "kb", "s", "d/sheet.json", b"typed since the checkpoint")
     captures("cfile_agent", "d/other.md", b"agent's", 100.0)
-    await A._carry_app_captures("s", "d", "archive/d")
+    await A._carry_app_captures("s", "d", "archive/d", await A._capture_state("s"))
     await A._put_tombstone("s", "d")
     by = await A._cfile_by_name("s")
     assert set(by) == {"archive/d/sheet.json"}
@@ -370,7 +370,8 @@ def routes(monkeypatch, captures):
 async def test_routes_do_the_change_and_answer(routes):
     assert await A.delete_session_file("s", "a.txt", request=None) == \
         {"session_id": "s", "path": "a.txt", "deleted": True}
-    assert await A.mkdir_session_file("s", "d", request=None) == {"session_id": "s", "path": "d", "dir": True}
+    assert await A.mkdir_session_file("s", "d", request=None) == \
+        {"session_id": "s", "path": "d", "dir": True, "created": True}
     assert await A.move_session_file("s", "d", A.WorkspaceMove(to="e"), request=None) == \
         {"session_id": "s", "path": "d", "to": "e", "moved": True}
     assert routes["fake"].calls == [("delete", "a.txt"), ("mkdir", "d"), ("move", "d", "e")]
@@ -466,3 +467,188 @@ async def test_a_capture_that_cannot_be_carried_does_not_stop_the_move(routes, m
     monkeypatch.setattr(A, "_container_file_bytes", _boom)
     assert (await A.move_session_file("s", "sheet.json", A.WorkspaceMove(to="kept.json"), request=None))["moved"]
     assert "sheet.json" not in await A._cfile_by_name("s")
+
+
+# ── what the review of #478 found ─────────────────────────────────────────────────────────────
+_NANOBOT = {".harness/agent-subdir": b"workspace\n",
+            ".git/info/exclude": b"# runner\nworkspace/.nanobot/\nworkspace/skills/\nworkspace/memory/\n"
+                                 b"workspace/AGENTS.md\n",
+            "workspace/AGENTS.md": b"doc", "workspace/skills/s/SKILL.md": b"skill",
+            "workspace/memory/m.md": b"mem", "workspace/deck.json": b"{}"}
+
+
+def test_the_nesting_base_s_own_directory_is_not_a_user_path():
+    """DELETE …/files/workspace on nanobot would have removed the agent's whole working directory."""
+    raw = _tar(_NANOBOT)
+    assert B.tar_change(raw, "delete", "workspace") == (B.WS_NOT_FOUND, None)
+    assert B.tar_change(raw, "move", "workspace", "w2") == (B.WS_NOT_FOUND, None)
+
+
+@pytest.mark.parametrize("op,path,to", [("delete", "skills", ""), ("delete", "AGENTS.md", ""),
+                                        ("delete", "memory/m.md", ""), ("move", "skills", "s2"),
+                                        ("move", "deck.json", "skills/deck.json"),
+                                        ("mkdir", "memory/new", "")])
+def test_the_base_s_excluded_machinery_is_refused(op, path, to):
+    assert B.tar_change(_tar(_NANOBOT), op, path, to) == (B.WS_BAD_PATH, None)
+
+
+def test_a_flat_base_s_excluded_files_are_refused_too():
+    """opensquilla seeds SOUL.md and memory/ at the session root and excludes them."""
+    raw = _tar({".git/info/exclude": b"SOUL.md\nmemory/\n", "SOUL.md": b"s", "memory/x": b"x",
+                "notes.md": b"n"})
+    assert B.tar_change(raw, "delete", "SOUL.md") == (B.WS_BAD_PATH, None)
+    assert B.tar_change(raw, "delete", "memory") == (B.WS_BAD_PATH, None)
+    assert B.tar_change(raw, "delete", "notes.md")[0] == B.WS_OK
+
+
+def test_a_file_written_at_the_root_between_turns_is_still_reachable_on_the_nesting_base():
+    """An app's PUT lands at the session root until the next turn adopts it."""
+    outcome, raw = B.tar_change(_tar({**_NANOBOT, "sheet.json": b"rows"}), "move", "sheet.json", "kept.json")
+    assert outcome == B.WS_OK and _files(raw)["kept.json"] == b"rows"
+
+
+@pytest.mark.parametrize("op,path,to", [("move", "a.md", "notes.txt/a.md"), ("mkdir", "notes.txt/sub", ""),
+                                        ("move", "a.md", "notes.txt/deeper/a.md")])
+def test_nothing_goes_under_a_file(op, path, to):
+    """Such an archive holds `notes.txt` and `notes.txt/a.md`, and no restore can unpack it."""
+    assert B.tar_change(_tar({"notes.txt": b"n", "a.md": b"a"}), op, path, to) == (B.WS_EXISTS, None)
+
+
+def test_a_rewritten_archive_unpacks(tmp_path):
+    _o, raw = B.tar_change(_tar({"./d": None, "./d/x": b"X", "./y": b"Y"}), "move", "d", "e/d")
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
+        tf.extractall(tmp_path, filter="data")
+    assert (tmp_path / "e" / "d" / "x").read_bytes() == b"X" and (tmp_path / "y").read_bytes() == b"Y"
+
+
+@pytest.mark.asyncio
+async def test_a_hosted_rewrite_records_the_new_checkpoint_sha():
+    """A sandbox kept warm with the old workspace passes the hydrate probe on the old sha, and its next
+    checkpoint writes the deleted files back. The new sha matches no sandbox."""
+    import hashlib
+    blob, ws = _hosted({"a.txt": b"a", "b.txt": b"b"})
+    seen = []
+
+    async def _rewritten(sid, sha):
+        seen.append((sid, sha))
+    ws.on_rewrite = _rewritten
+    assert await ws.delete("s", "a.txt") == B.WS_OK
+    assert await ws.write("s", "c.txt", b"c")
+    assert await ws.delete("s", "missing") == B.WS_NOT_FOUND
+    assert len(seen) == 2
+    assert seen[-1] == ("s", hashlib.sha256(blob.objects[("kb", "sessions/s/workspace.tgz")]).hexdigest())
+
+
+@pytest.mark.asyncio
+async def test_two_changes_at_once_both_land():
+    import asyncio
+
+    class _Slow(_Blob):
+        async def get(self, kb, key):
+            await asyncio.sleep(0.01)
+            return await super().get(kb, key)
+
+    blob = _Slow({("kb", "sessions/s/workspace.tgz"): _tar({"a": b"a", "b": b"b", "c": b"c"})})
+    ws = B.CheckpointWorkspaceFiles(blob, "kb", lambda sid: f"sessions/{sid}/workspace.tgz")
+    assert await asyncio.gather(ws.delete("s", "a"), ws.delete("s", "b")) == [B.WS_OK, B.WS_OK]
+    assert _files(blob.objects[("kb", "sessions/s/workspace.tgz")]) == {"c": b"c"}
+
+
+@pytest.mark.asyncio
+async def test_selfhosted_mkdir_says_when_the_directory_was_there():
+    _blob, ws, _ = _selfhosted(_Resp(200, {"path": "d", "created": False}))
+    assert await ws.mkdir("s", "d") == B.WS_UNCHANGED
+
+
+@pytest.mark.asyncio
+async def test_mkdir_route_answers_created(routes):
+    routes["fake"].outcome = B.WS_UNCHANGED
+    assert (await A.mkdir_session_file("s", "d", request=None))["created"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_move_clash_names_the_destination(routes):
+    routes["fake"].outcome = B.WS_EXISTS
+    with pytest.raises(Exception) as e:
+        await A.move_session_file("s", "a.md", A.WorkspaceMove(to="b.md"), request=None)
+    assert e.value.status_code == 409 and e.value.detail["param"] == "to"
+    assert "'b.md'" in e.value.detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_tombstone_the_store_refused_is_reported_and_keeps_the_copy(routes, captures, monkeypatch):
+    await B.put_app_capture(A.BACKING.blob, "kb", "s", "sheet.json", b"rows")
+    cid = B.app_capture_id("sheet.json")
+
+    async def _refuse(fid, data, **_k):
+        return False
+    monkeypatch.setattr(A, "_blob_put", _refuse)
+    with pytest.raises(Exception) as e:
+        await A.delete_session_file("s", "sheet.json", request=None)
+    assert e.value.status_code == 502
+    assert routes.get("changed") == ["s"]                    # the change itself was made
+    assert f"containers/s/{cid}" in captures.store           # the copy was not dropped unrecorded
+    assert "Repeat the delete" in e.value.detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_delete_of_what_is_already_gone_still_records_it(routes, captures):
+    """The repeat a refused tombstone asks for: the workspace answers 404, the removal is recorded."""
+    captures("cfile_agent", "old.md", b"agent's", 100.0)
+    routes["fake"].outcome = B.WS_NOT_FOUND
+    with pytest.raises(Exception) as e:
+        await A.delete_session_file("s", "old.md", request=None)
+    assert e.value.status_code == 404
+    assert "old.md" not in await A._cfile_by_name("s")
+
+
+@pytest.mark.asyncio
+async def test_the_gateway_records_a_rewritten_checkpoint_s_sha_on_the_session(monkeypatch):
+    seen = []
+
+    async def _upsert(sid, props):
+        seen.append((sid, props))
+    monkeypatch.setattr(A, "_vertex_upsert", _upsert)
+    await A._checkpoint_rewritten("s", "abc")
+    assert seen == [("s", {"ws_sha": "abc"})]
+
+
+@pytest.mark.asyncio
+async def test_a_removed_directory_compacts_what_it_hides(captures):
+    for name in ("d/a.json", "d/b.json", "keep.json"):
+        await B.put_app_capture(A.BACKING.blob, "kb", "s", name, b"x")
+    await A._put_tombstone("s", "d/old", await A._capture_state("s"))
+    await A._put_tombstone("s", "d", await A._capture_state("s"))
+    metas = {json.loads(v)["filename"] for k, v in captures.store.items() if k.endswith(".meta")}
+    assert metas == {"d", "keep.json"}
+
+
+@pytest.mark.asyncio
+async def test_every_capture_is_read_not_a_first_page(captures):
+    for i in range(260):
+        captures(f"cfile_{i:04d}", f"f{i}.md", b"x", 100.0)
+    assert len(await A._cfile_by_name("s")) == 260
+
+
+@pytest.mark.asyncio
+async def test_the_read_fallback_scans_the_captures_once(captures, monkeypatch):
+    captures("cfile_legacy", "a.md", b"legacy", 50.0)
+    calls = []
+    real = A._capture_state
+
+    async def _counted(sid):
+        calls.append(sid)
+        return await real(sid)
+
+    class _Gone:
+        async def read(self, *_a, **_k):
+            return None
+
+    async def _owned(*_a, **_k):
+        return ("org", {})
+
+    monkeypatch.setattr(A, "_capture_state", _counted)
+    monkeypatch.setattr(A.BACKING, "workspace", _Gone(), raising=False)
+    monkeypatch.setattr(A, "_owned_session", _owned)
+    assert (await A.read_session_file("s", "notes/a.md", request=None)).body == b"legacy"
+    assert calls == ["s"]

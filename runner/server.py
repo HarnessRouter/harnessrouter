@@ -12854,14 +12854,62 @@ def _safe_leaf(root: str, rel: str) -> pathlib.Path | None:
     return None if parent is None else parent / name
 
 
+def _ws_excluded(ws: str) -> tuple[str, ...]:
+    """The base's own machinery, as _git_exclude listed it, relative to the session directory."""
+    try:
+        text = pathlib.Path(ws, ".git", "info", "exclude").read_text(errors="replace")
+    except OSError:
+        return ()
+    return tuple(ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#"))
+
+
+def _ws_protected(rel: str, pats: tuple[str, ...]) -> bool:
+    """`rel` is one of those patterns' paths, under one, or a directory holding one (the gateway's
+    backing.ws_protected, the same rule over the checkpoint)."""
+    for q in pats:
+        d = q.rstrip("/")
+        if rel == d or (q.endswith("/") and rel.startswith(q)) or d.startswith(rel + "/"):
+            return True
+    return False
+
+
 def _existing(ws: str, path: str) -> pathlib.Path | None:
     """Where a path the caller names already is: the visible root first, the session root second,
-    the order GET /file reads in."""
-    for root in (_visible_root(ws), ws):
+    the order GET /file reads in.
+
+    The session root is searched on a nesting base only for what _adopt_into would adopt — a file an
+    app wrote there between turns. Never the runner's own entries, and never the agent's directory
+    itself: `workspace` at nanobot's root is the agent's whole working directory, its skills, memory
+    and instructions with the user's files, and a delete of it would take all of them."""
+    vis = _visible_root(ws)
+    roots = [vis]
+    if vis != ws:
+        sub = os.path.basename(vis.rstrip("/"))
+        keep = ({".git", ".gitignore", sub} | _PRODUCED_EXCLUDE_NAMES | _NOISE_SEG
+                | {q.rstrip("/") for q in _PRODUCED_EXCLUDE_PREFIX})
+        if (path or "").strip().strip("/").split("/", 1)[0] not in keep:
+            roots.append(ws)
+    for root in roots:
         p = _safe_leaf(root, path)
         if p is not None and (p.exists() or p.is_symlink()):
             return p
     return None
+
+
+def _refuse_protected(ws: str, *paths: pathlib.Path) -> None:
+    """400 for a path the base excludes as its own. On a nesting base a path at the session root is
+    adopted into the agent's directory at the next turn, so it is also checked as it will be there."""
+    pats = _ws_excluded(ws)
+    if not pats:
+        return
+    base = pathlib.Path(ws).resolve()
+    vis = pathlib.Path(_visible_root(ws)).resolve()
+    sub = str(vis.relative_to(base)) if vis != base else ""
+    for p in paths:
+        rel = str(p.relative_to(base))
+        if _ws_protected(rel, pats) or (sub and not (rel == sub or rel.startswith(sub + "/"))
+                                        and _ws_protected(f"{sub}/{rel}", pats)):
+            raise HTTPException(400, "that is the agent's own machinery, not a workspace file")
 
 
 @app.delete("/file")
@@ -12874,6 +12922,7 @@ def delete_file(path: str, identifier: str = "") -> dict:
     p = _existing(ws, path)
     if p is None:
         raise HTTPException(404, "nothing at that path")
+    _refuse_protected(ws, p)
     try:
         if p.is_dir() and not p.is_symlink():
             shutil.rmtree(p)
@@ -12892,6 +12941,7 @@ def mkdir_file(path: str, identifier: str = "") -> dict:
     dest = _safe_leaf(ws, path)
     if dest is None:
         raise HTTPException(400, "path escapes the workspace")
+    _refuse_protected(ws, dest)
     if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
         raise HTTPException(409, "a file is at that path")
     pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
@@ -12931,6 +12981,7 @@ def move_file(path: str, to: str, identifier: str = "") -> dict:
         raise HTTPException(400, "path escapes the workspace")
     if dest == src or dest.is_relative_to(src):
         raise HTTPException(400, "a path cannot move inside itself")
+    _refuse_protected(ws, src, dest)
     if dest.exists() or dest.is_symlink():
         raise HTTPException(409, "something is already at the destination")
     uid = _session_uid(ws)
@@ -12945,6 +12996,9 @@ def move_file(path: str, to: str, identifier: str = "") -> dict:
             for d in missing:
                 os.chown(d, uid, uid)
         os.rename(src, dest)
+    except (FileExistsError, NotADirectoryError) as e:
+        # a FILE where one of the destination's folders would be
+        raise HTTPException(409, f"move failed: {str(e)[:200]}")
     except OSError as e:
         raise HTTPException(500, f"move failed: {str(e)[:200]}")
     base = pathlib.Path(ws).resolve()
