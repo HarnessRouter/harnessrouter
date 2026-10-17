@@ -343,14 +343,17 @@ async def test_a_removed_path_does_not_come_back_by_its_bare_name(captures, monk
 
 
 @pytest.mark.asyncio
-async def test_a_move_carries_the_app_s_copy_to_the_new_name(captures):
+async def test_a_move_carries_the_durable_copies_to_the_new_name(captures):
+    """The app's (a restore re-applies it) and the agent's (a reaped workspace's by-path read is
+    answered from the captures, and the new name would 404 until the next turn)."""
     await B.put_app_capture(A.BACKING.blob, "kb", "s", "d/sheet.json", b"typed since the checkpoint")
     captures("cfile_agent", "d/other.md", b"agent's", 100.0)
-    await A._carry_app_captures("s", "d", "archive/d", await A._capture_state("s"))
+    await A._carry_captures("s", "d", "archive/d", await A._capture_state("s"))
     await A._put_tombstone("s", "d")
     by = await A._cfile_by_name("s")
-    assert set(by) == {"archive/d/sheet.json"}
+    assert set(by) == {"archive/d/sheet.json", "archive/d/other.md"}
     assert captures.store[f"containers/s/{by['archive/d/sheet.json']}"] == b"typed since the checkpoint"
+    assert captures.store[f"containers/s/{by['archive/d/other.md']}"] == b"agent's"
 
 
 # ── the routes ────────────────────────────────────────────────────────────────────────────────
@@ -616,9 +619,7 @@ async def test_a_delete_of_what_is_already_gone_still_records_it(routes, capture
     """The repeat a refused tombstone asks for: the workspace answers 404, the removal is recorded."""
     captures("cfile_agent", "old.md", b"agent's", 100.0)
     routes["fake"].outcome = B.WS_NOT_FOUND
-    with pytest.raises(Exception) as e:
-        await A.delete_session_file("s", "old.md", request=None)
-    assert e.value.status_code == 404
+    assert (await A.delete_session_file("s", "old.md", request=None))["deleted"] is True
     assert "old.md" not in await A._cfile_by_name("s")
 
 
@@ -732,3 +733,47 @@ async def test_a_sha_that_cannot_be_recorded_leaves_the_archive_as_it_was():
     assert await ws.delete("s", "a.txt") == B.WS_FAILED
     assert not await ws.write("s", "b.txt", b"b")
     assert blob.objects == before
+
+
+def test_a_delete_on_the_nesting_base_removes_every_copy():
+    """A file at the root beside the agent's copy (an app's PUT from before writes went where the file
+    is) would be adopted back next turn if only the agent's copy went."""
+    outcome, raw = B.tar_change(_tar({**_NANOBOT, "notes.md": b"app", "workspace/notes.md": b"agent"}),
+                                "delete", "notes.md")
+    assert outcome == B.WS_OK and not {"notes.md", "workspace/notes.md"} & set(_files(raw))
+
+
+@pytest.mark.asyncio
+async def test_a_hosted_put_replaces_the_nesting_base_s_file_where_it_is():
+    blob, ws = _hosted({**_NANOBOT})
+    assert await ws.write("s", "deck.json", b'{"v":2}')
+    files = _files(blob.objects[("kb", "sessions/s/workspace.tgz")])
+    assert files["workspace/deck.json"] == b'{"v":2}' and "deck.json" not in files
+    assert await ws.read("s", "deck.json") == b'{"v":2}'
+    assert await ws.write("s", "new.json", b"n")                 # a new file: the root, adopted next turn
+    assert _files(blob.objects[("kb", "sessions/s/workspace.tgz")])["new.json"] == b"n"
+    assert await ws.read("s", "new.json") == b"n"
+
+
+@pytest.mark.asyncio
+async def test_a_put_waits_for_a_change_of_the_same_session(routes, monkeypatch):
+    """Under the same lock as delete, mkdir and move: a PUT racing a delete of its path would have
+    its fresh copy dropped by the delete's tombstone."""
+    import asyncio
+    order = []
+
+    class _Ws(_Fake):
+        async def delete(self, sid, path):
+            order.append("delete start")
+            await asyncio.sleep(0.02)
+            order.append("delete end")
+            return B.WS_OK
+
+        async def write(self, sid, path, data):
+            order.append("put")
+            return True
+
+    monkeypatch.setattr(A.BACKING, "workspace", _Ws(), raising=False)
+    await asyncio.gather(A.delete_session_file("s", "n.md", request=None),
+                         A.write_session_file("s", "n.md", A.WorkspaceWrite(content="x"), request=None))
+    assert order == ["delete start", "delete end", "put"]

@@ -12829,6 +12829,13 @@ async def put_file(request: Request, path: str, identifier: str = "") -> dict:
     dest = _safe_join(ws, path)
     if dest is None:
         raise HTTPException(400, "path escapes the workspace")
+    # A file that is already there is replaced WHERE it is. On a nesting base a new file lands at the
+    # session root and the next turn adopts it, but one the agent already has is in its directory:
+    # written at the root it sat beside the agent's copy, which every read found first, and which
+    # adoption would not move over.
+    have = _existing(ws, path)
+    if have is not None and have.is_file() and not have.is_symlink():
+        dest = have
     data = await request.body()
     pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
     _isolate_session(ws)
@@ -12884,9 +12891,9 @@ def _ws_protected(rel: str, pats: tuple[str, ...]) -> bool:
     return False
 
 
-def _existing(ws: str, path: str) -> pathlib.Path | None:
-    """Where a path the caller names already is: the visible root first, the session root second,
-    the order GET /file reads in.
+def _search_roots(ws: str, path: str) -> list[str]:
+    """Where a path the caller names may be: the visible root first, the session root second, the
+    order GET /file reads in.
 
     The session root is searched on a nesting base only for what _adopt_into would adopt — a file an
     app wrote there between turns. Never the runner's own entries, and never the agent's directory
@@ -12900,11 +12907,24 @@ def _existing(ws: str, path: str) -> pathlib.Path | None:
                 | {q.rstrip("/") for q in _PRODUCED_EXCLUDE_PREFIX})
         if (path or "").strip().strip("/").split("/", 1)[0] not in keep:
             roots.append(ws)
-    for root in roots:
+    return roots
+
+
+def _copies(ws: str, path: str) -> list[pathlib.Path]:
+    """Every place the path is, in that order. On a nesting base it can be in both: a file the app
+    wrote at the root between turns beside the agent's copy, which _adopt_into will not move over it."""
+    out = []
+    for root in _search_roots(ws, path):
         p = _safe_leaf(root, path)
         if p is not None and (p.exists() or p.is_symlink()):
-            return p
-    return None
+            out.append(p)
+    return out
+
+
+def _existing(ws: str, path: str) -> pathlib.Path | None:
+    """Where a path the caller names already is (the first of _copies)."""
+    found = _copies(ws, path)
+    return found[0] if found else None
 
 
 def _refuse_protected(ws: str, *paths: pathlib.Path) -> None:
@@ -12930,18 +12950,20 @@ def delete_file(path: str, identifier: str = "") -> dict:
     ws = _ws(identifier)
     if _safe_leaf(ws, path) is None:
         raise HTTPException(400, "path escapes the workspace")
-    p = _existing(ws, path)
-    if p is None:
+    found = _copies(ws, path)
+    if not found:
         raise HTTPException(404, "nothing at that path")
-    _refuse_protected(ws, p)
+    _refuse_protected(ws, *found)
     try:
-        if p.is_dir() and not p.is_symlink():
-            shutil.rmtree(p)
-        else:
-            p.unlink()
+        # every copy: one left at the root of a nesting base would be adopted back next turn
+        for p in found:
+            if p.is_dir() and not p.is_symlink():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
     except OSError as e:
         raise HTTPException(500, f"delete failed: {str(e)[:200]}")
-    return {"ok": True, "path": str(p.relative_to(pathlib.Path(ws).resolve()))}
+    return {"ok": True, "path": str(found[0].relative_to(pathlib.Path(ws).resolve()))}
 
 
 @app.post("/file/mkdir")

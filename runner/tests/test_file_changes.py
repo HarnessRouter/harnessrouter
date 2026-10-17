@@ -227,3 +227,21 @@ def test_the_protection_rule_is_the_gateway_s(rel):
     import backing  # noqa: E402
     pats = ("workspace/skills/", "workspace/AGENTS.md", "SOUL.md", "memory/")
     assert server._ws_protected(rel, pats) == backing.ws_protected(rel, pats)
+
+
+def test_a_put_replaces_the_nesting_base_s_file_where_it_is(ws, c):
+    """Written at the root it sat beside the agent's copy, which every read found first."""
+    _nanobot(ws)
+    r = c.put("/file", params={"identifier": "s", "path": "deck.json"}, content=b'{"v":2}')
+    assert r.status_code == 200 and r.json()["path"] == "workspace/deck.json"
+    assert (ws / "workspace" / "deck.json").read_bytes() == b'{"v":2}' and not (ws / "deck.json").exists()
+    r = c.put("/file", params={"identifier": "s", "path": "new.json"}, content=b"n")
+    assert r.json()["path"] == "new.json"                     # a new file: the root, adopted next turn
+
+
+def test_a_delete_on_the_nesting_base_removes_every_copy(ws, c):
+    _nanobot(ws)
+    (ws / "notes.md").write_text("app")                       # an older PUT, beside the agent's copy
+    (ws / "workspace" / "notes.md").write_text("agent")
+    assert c.delete("/file", params={"identifier": "s", "path": "notes.md"}).status_code == 200
+    assert not (ws / "notes.md").exists() and not (ws / "workspace" / "notes.md").exists()

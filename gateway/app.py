@@ -10794,7 +10794,7 @@ async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[st
         except Exception:  # noqa: BLE001
             continue
         fname = meta.get("filename")
-        if not fname or meta.get("deleted"):
+        if not fname:
             continue
         ts = float(meta.get("written_at") or 0.0)
         if str(fname) in newest and ts < newest[str(fname)]:
@@ -11246,7 +11246,8 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
         raise uhp_error(413, "payload_too_large",
                         f"A workspace file written this way is limited to {_WS_WRITE_MAX} bytes.")
 
-    ok = await BACKING.workspace.write(sid, path, data)
+    async with _ws_change_lock(sid):
+        ok = await BACKING.workspace.write(sid, path, data)
     if not ok:
         # The only ways to get here are a path that tried to leave the workspace and a storage
         # failure. Both are the caller's problem to see, not something to swallow.
@@ -11361,7 +11362,7 @@ async def move_session_file(sid: str, path: str, body: WorkspaceMove, request: R
         _ws_outcome(await BACKING.workspace.move(sid, member, dest), member, dest)
         _ws_changed(sid)
         state = await _capture_state_or_none(sid)
-        await _carry_app_captures(sid, member, dest, state)
+        await _carry_captures(sid, member, dest, state)
         if not await _put_tombstone(sid, member, state):
             _ws_unrecorded("move")
     return {"session_id": sid, "path": member, "to": dest, "moved": True}
@@ -11378,10 +11379,14 @@ async def delete_session_file(sid: str, path: str, request: Request) -> dict:
         if outcome == backing.WS_NOT_FOUND:
             # Nothing to remove, but a durable copy of the path may still answer the by-path read
             # (a delete whose record the store refused, repeated): record the removal when there is
-            # one to hide, and only then, so a run of deletes of paths that never existed stores nothing.
+            # one to hide, and only then, so a run of deletes of paths that never existed stores
+            # nothing. Recorded, it IS the delete the caller asked to repeat, and it answers so.
             state = await _capture_state_or_none(sid)
             if state and any(n == member or n.startswith(member + "/") for n in state[0]):
-                await _put_tombstone(sid, member, state)
+                if not await _put_tombstone(sid, member, state):
+                    _ws_unrecorded("delete")
+                _ws_changed(sid)
+                return {"session_id": sid, "path": member, "deleted": True}
         _ws_outcome(outcome, member)
         _ws_changed(sid)
         if not await _put_tombstone(sid, member, await _capture_state_or_none(sid)):
@@ -11393,13 +11398,11 @@ _WS_CHANGE_LOCKS: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.Wea
 
 
 def _ws_change_lock(sid: str) -> asyncio.Lock:
-    """One delete, mkdir or move per session at a time on this replica: the change, the copies it
-    carries and the tombstone it writes are read-then-write, and two interleaved would each start
-    from the same state. (The backing serialises the archive rewrite itself the same way.)"""
-    lock = _WS_CHANGE_LOCKS.get(sid)
-    if lock is None:
-        lock = _WS_CHANGE_LOCKS[sid] = asyncio.Lock()
-    return lock
+    """One PUT, delete, mkdir or move per session at a time on this replica: the change, the copies
+    it carries and the tombstone it writes are read-then-write, and two interleaved would each start
+    from the same state — a PUT racing a delete of its path would have its fresh copy dropped by the
+    delete's tombstone. (The backing serialises the archive rewrite itself the same way.)"""
+    return backing.keyed_lock(_WS_CHANGE_LOCKS, sid)
 
 
 async def _capture_state_or_none(sid: str):
@@ -11409,17 +11412,20 @@ async def _capture_state_or_none(sid: str):
         return None
 
 
-async def _carry_app_captures(sid: str, src: str, dst: str, state=None) -> None:
-    """An app's durable copy of a moved file goes to the new name.
+async def _carry_captures(sid: str, src: str, dst: str, state=None) -> None:
+    """The durable copies of a moved file go to the new name, as the app's.
 
-    Self-hosted, that copy can be NEWER than the checkpoint (an app saved between turns), and a
-    restore re-applies it from the capture rather than from the archive. Left under the old name it
-    would be hidden by the move's tombstone, and the restore would bring back the checkpoint's older
-    copy at the new name, losing the app's last save. Hosted, app writes go into the archive and
-    leave no capture, so there is nothing to carry."""
+    The app's, because self-hosted that copy can be NEWER than the checkpoint (an app saved between
+    turns) and a restore re-applies it from the capture: left under the old name it would be hidden
+    by the move's tombstone, and the restore would bring back the checkpoint's older copy at the new
+    name. The agent's too, because once the live directory is reaped a by-path read is answered from
+    the captures: the read of the new name would 404 until the next turn, while the old name's copy
+    is hidden. Carried as the app's, a copy is also re-applied on the next restore, which writes
+    back the content the checkpoint already holds at that name. Hosted, app writes go into the
+    archive and leave no capture of their own."""
     caps = (state or ({}, {}))[0]
-    for name, (cid, from_app) in caps.items():
-        if not from_app or not (name == src or name.startswith(src + "/")):
+    for name, (cid, _from_app) in caps.items():
+        if not (name == src or name.startswith(src + "/")):
             continue
         try:
             got = await _container_file_bytes(sid, cid)

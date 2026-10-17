@@ -131,17 +131,23 @@ def ws_protected(rel: str, pats: tuple[str, ...]) -> bool:
     return False
 
 
-def _ckpt_lock(sid: str) -> asyncio.Lock:
-    """One rewrite of a session's checkpoint at a time IN THIS PROCESS. Every change reads the whole
-    archive and writes a new one, so two at once would each start from the same archive and the
-    second write would drop the first change while both answered 200."""
-    lock = _CKPT_LOCKS.get(sid)
+def keyed_lock(registry: "weakref.WeakValueDictionary[str, asyncio.Lock]", key: str) -> asyncio.Lock:
+    """The asyncio.Lock for `key` in `registry`, made on first use and dropped once nobody holds it.
+    IN THIS PROCESS only: replicas do not share it."""
+    lock = registry.get(key)
     if lock is None:
-        lock = _CKPT_LOCKS[sid] = asyncio.Lock()
+        lock = registry[key] = asyncio.Lock()
     return lock
 
 
+# One rewrite of a session's checkpoint at a time. Every change reads the whole archive and writes a
+# new one, so two at once would each start from the same archive and the second write would drop the
+# first change while both answered 200.
 _CKPT_LOCKS: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+
+
+def _ckpt_lock(sid: str) -> asyncio.Lock:
+    return keyed_lock(_CKPT_LOCKS, sid)
 
 
 class Backing:
@@ -512,8 +518,8 @@ def _safe_member(path: str) -> str | None:
 
 def app_capture_id(member: str) -> str:
     """The durable id of an APP's copy of one workspace path. Derived from the path, so saving the
-    same file again replaces its one blob, and a delete's tombstone (see the gateway's
-    _newest_captures) lands on the same id and replaces the app's copy rather than sitting beside it."""
+    same file again replaces its one blob, and a delete (the gateway's _put_tombstone) can find and
+    drop the app's copy of a path by its name alone."""
     return "cfile_" + hashlib.sha256(f"app:{member}".encode()).hexdigest()[:32]
 
 
@@ -523,6 +529,19 @@ def _tar_name(m: tarfile.TarInfo) -> str:
 
 def _under(name: str, member: str) -> bool:
     return name == member or name.startswith(member + "/")
+
+
+def _tar_subdir(tf: tarfile.TarFile) -> str:
+    """The nesting base's agent directory, from the archive's `.harness/agent-subdir`, or ""."""
+    for name in (".harness/agent-subdir", "./.harness/agent-subdir"):
+        try:
+            m = tf.getmember(name)
+        except KeyError:
+            continue
+        f = tf.extractfile(m) if m.isreg() and m.size <= 64 * 1024 else None
+        sub = f.read().decode(errors="replace").strip() if f else ""
+        return sub if WS_SUBDIR_RE.fullmatch(sub) else ""
+    return ""
 
 
 def tar_change(raw: bytes | None, op: str, member: str, to: str = "") -> tuple[str, bytes | None]:
@@ -579,14 +598,16 @@ def tar_change(raw: bytes | None, op: str, member: str, to: str = "") -> tuple[s
 
         cands = ([f"{sub}/{member}"] if sub else []) + \
                 ([member] if not sub or member.split("/", 1)[0] != sub else [])
-        found = next((c for c in cands if _exists(c)), "")
-        drop, rename, add = "", ("", ""), None
+        present = [c for c in cands if _exists(c)]
+        found = present[0] if present else ""
+        drop, rename, add = (), ("", ""), None
         if op == "delete":
             if not found:
                 return WS_NOT_FOUND, None
-            if _protected(found):
+            if any(_protected(c) for c in present):
                 return WS_BAD_PATH, None
-            drop = found
+            # every copy: one left at the root of a nesting base would be adopted back next turn
+            drop = tuple(present)
         elif op == "mkdir":
             # a new folder goes where the runner makes it: in the agent's directory on a nesting base
             target = found or (f"{sub}/{member}" if sub and member.split("/", 1)[0] != sub else member)
@@ -618,7 +639,7 @@ def tar_change(raw: bytes | None, op: str, member: str, to: str = "") -> tuple[s
         out = io.BytesIO()
         with tarfile.open(fileobj=out, mode="w:gz") as dst_tar:
             for m, n in zip(members, names):
-                if drop and _under(n, drop):
+                if any(_under(n, d) for d in drop):
                     continue
                 dot = "./" if m.name.startswith("./") else ""
                 new = _renamed(n)
@@ -629,7 +650,7 @@ def tar_change(raw: bytes | None, op: str, member: str, to: str = "") -> tuple[s
                     # at a removed or renamed member makes an archive no restore can unpack.
                     ldot = "./" if m.linkname.startswith("./") else ""
                     target = m.linkname[2:] if ldot else m.linkname
-                    if drop and _under(target, drop):
+                    if any(_under(target, d) for d in drop):
                         if target in carried:
                             m.linkname = ldot + carried[target]
                         elif target in regular:
@@ -864,7 +885,10 @@ class CheckpointWorkspaceFiles:
 
         def _extract() -> bytes | None:
             with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
-                for name in (member, f"./{member}"):
+                # the agent's directory first on a nesting base, the session root second: the
+                # order the runner's GET /file reads in
+                sub = _tar_subdir(tf)
+                for name in ([f"{sub}/{member}", f"./{sub}/{member}"] if sub else []) + [member, f"./{member}"]:
                     try:
                         f = tf.extractfile(name)
                     except KeyError:
@@ -892,15 +916,22 @@ class CheckpointWorkspaceFiles:
             out = io.BytesIO()
             wrote = False
             with tarfile.open(fileobj=out, mode="w:gz") as dst:
+                target = member
                 if raw:
                     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as src:
-                        for m in src.getmembers():
-                            name = m.name[2:] if m.name.startswith("./") else m.name
-                            if name == member:
+                        members = src.getmembers()
+                        names = [m.name[2:] if m.name.startswith("./") else m.name for m in members]
+                        # a file the agent already has, on a nesting base, is replaced where it is
+                        # (in its directory), not shadowed by a second copy at the root
+                        sub = _tar_subdir(src)
+                        if sub and f"{sub}/{member}" in names:
+                            target = f"{sub}/{member}"
+                        for m, name in zip(members, names):
+                            if name == target:
                                 continue          # replaced below
                             f = src.extractfile(m) if m.isfile() else None
                             dst.addfile(m, f)
-                info = tarfile.TarInfo(member)
+                info = tarfile.TarInfo(target)
                 info.size = len(data)
                 info.mtime = int(time.time())
                 info.mode = 0o644
