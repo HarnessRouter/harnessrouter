@@ -263,6 +263,23 @@ curl "${mgmtBase}/sessions/{session_id}/files?changed=true" \\
   -H "Authorization: Bearer $HARNESSROUTER_API_KEY"`} />
       </Endpoint>
 
+      <Endpoint method="PUT" path="/v1/sessions/{session_id}/files/{path}">
+        <p className="hr-meta">Keep an app&apos;s own state in the workspace the agent also edits. <code>GET</code> reads one
+          file by path (live, while a turn runs too); <code>PUT</code> writes one, with <code>{`{"content": "…"}`}</code>
+          or <code>{`{"content_b64": "…"}`}</code>; <code>DELETE</code> removes a file or a folder and everything in it;
+          <code> POST …/files/&#123;path&#125;:mkdir</code> makes a folder; <code>POST …/files/&#123;path&#125;:move</code> with
+          <code> {`{"to": "archive/deck.json"}`}</code> renames a file or folder, and never overwrites (409
+          <code> file_exists</code>). The next turn sees each change. All but <code>GET</code> answer 409
+          <code> session_busy</code> while a turn runs. Paths stay inside the workspace: <code>..</code> is refused, and the three
+          that remove, make or rename also refuse what the files listing hides (<code>.git</code>, <code>.harness</code>,
+          the harness&apos;s own <code>AGENTS.md</code>).</p>
+        <CodeBlock lang="bash" code={`curl -X POST "${mgmtBase}/sessions/{session_id}/files/deck.json:move" \\
+  -H "Authorization: Bearer $HARNESSROUTER_API_KEY" -H "Content-Type: application/json" \\
+  -d '{"to": "archive/deck.json"}'
+curl -X DELETE "${mgmtBase}/sessions/{session_id}/files/drafts" \\
+  -H "Authorization: Bearer $HARNESSROUTER_API_KEY"`} />
+      </Endpoint>
+
       {/* ── Sessions ────────────────────────────────────────────────────── */}
       <h3 className="apidoc-h3">Sessions (task runs)</h3>
       <Endpoint method="GET" path="/v1/sessions?harness={id}&limit=20">

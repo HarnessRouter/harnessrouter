@@ -54,6 +54,7 @@ import json
 import mimetypes
 import os
 import pathlib
+import posixpath
 import re
 import shlex
 import shutil
@@ -12838,6 +12839,116 @@ async def put_file(request: Request, path: str, identifier: str = "") -> dict:
             pass
         raise HTTPException(500, f"write failed: {str(e)[:200]}")
     return {"ok": True, "path": str(dest.relative_to(ws)), "bytes": len(data)}
+
+
+def _safe_leaf(root: str, rel: str) -> pathlib.Path | None:
+    """_safe_join for a path that is about to be removed or renamed: the PARENT is resolved and
+    checked, the last component is not. _safe_join resolves symlinks all the way, so a link inside
+    the workspace would name its target, and removing "the link" would remove the file it points
+    to. None for an escape, or for the root itself."""
+    rel = (rel or "").strip().strip("/")
+    name = posixpath.basename(rel)
+    if not rel or name in ("", ".", ".."):
+        return None
+    parent = _safe_join(root, posixpath.dirname(rel))
+    return None if parent is None else parent / name
+
+
+def _existing(ws: str, path: str) -> pathlib.Path | None:
+    """Where a path the caller names already is: the visible root first, the session root second,
+    the order GET /file reads in."""
+    for root in (_visible_root(ws), ws):
+        p = _safe_leaf(root, path)
+        if p is not None and (p.exists() or p.is_symlink()):
+            return p
+    return None
+
+
+@app.delete("/file")
+def delete_file(path: str, identifier: str = "") -> dict:
+    """Remove ONE file or directory from a session's workspace, as that session (see PUT /file).
+    A directory goes with everything in it, as an environment's source delete does."""
+    ws = _ws(identifier)
+    if _safe_leaf(ws, path) is None:
+        raise HTTPException(400, "path escapes the workspace")
+    p = _existing(ws, path)
+    if p is None:
+        raise HTTPException(404, "nothing at that path")
+    try:
+        if p.is_dir() and not p.is_symlink():
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+    except OSError as e:
+        raise HTTPException(500, f"delete failed: {str(e)[:200]}")
+    return {"ok": True, "path": str(p.relative_to(pathlib.Path(ws).resolve()))}
+
+
+@app.post("/file/mkdir")
+def mkdir_file(path: str, identifier: str = "") -> dict:
+    """Create a directory (and any missing parents) at the session root, where PUT /file writes,
+    owned by the session's uid. One that already exists is success; a FILE in the way is 409."""
+    ws = _ws(identifier)
+    dest = _safe_leaf(ws, path)
+    if dest is None:
+        raise HTTPException(400, "path escapes the workspace")
+    if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
+        raise HTTPException(409, "a file is at that path")
+    pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
+    _isolate_session(ws)
+    uid = _session_uid(ws)
+    missing: list[pathlib.Path] = []
+    probe = dest
+    while not probe.exists():
+        missing.append(probe)
+        probe = probe.parent
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        if uid is not None:
+            for d in missing:
+                os.chown(d, uid, uid)
+    except OSError as e:
+        raise HTTPException(409 if isinstance(e, (FileExistsError, NotADirectoryError)) else 500,
+                            f"mkdir failed: {str(e)[:200]}")
+    return {"ok": True, "path": str(dest.relative_to(pathlib.Path(ws).resolve())), "created": bool(missing)}
+
+
+@app.post("/file/move")
+def move_file(path: str, to: str, identifier: str = "") -> dict:
+    """Rename a file or directory inside a session's workspace. The destination is on the same side
+    as the source (the nesting base's agent directory, or the session root), must not exist, and
+    must not be inside the source. Missing parent directories are made, as PUT /file makes them."""
+    ws = _ws(identifier)
+    if _safe_leaf(ws, path) is None or _safe_leaf(ws, to) is None:
+        raise HTTPException(400, "path escapes the workspace")
+    src = _existing(ws, path)
+    if src is None:
+        raise HTTPException(404, "nothing at that path")
+    vis = pathlib.Path(_visible_root(ws)).resolve()
+    root = vis if vis != pathlib.Path(ws).resolve() and src.is_relative_to(vis) else pathlib.Path(ws).resolve()
+    dest = _safe_leaf(str(root), to)
+    if dest is None:
+        raise HTTPException(400, "path escapes the workspace")
+    if dest == src or dest.is_relative_to(src):
+        raise HTTPException(400, "a path cannot move inside itself")
+    if dest.exists() or dest.is_symlink():
+        raise HTTPException(409, "something is already at the destination")
+    uid = _session_uid(ws)
+    missing: list[pathlib.Path] = []
+    probe = dest.parent
+    while not probe.exists():
+        missing.append(probe)
+        probe = probe.parent
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if uid is not None:
+            for d in missing:
+                os.chown(d, uid, uid)
+        os.rename(src, dest)
+    except OSError as e:
+        raise HTTPException(500, f"move failed: {str(e)[:200]}")
+    base = pathlib.Path(ws).resolve()
+    return {"ok": True, "path": str(src.relative_to(base)), "to": str(dest.relative_to(base))}
 
 
 @app.get("/capabilities")

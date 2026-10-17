@@ -100,6 +100,14 @@ class WorkspaceFiles(Protocol):
     """
     async def read(self, sid: str, path: str) -> bytes | None: ...
     async def write(self, sid: str, path: str, data: bytes) -> bool: ...
+    # The three below answer one of the WS_* outcomes rather than a bool: a route has to tell "nothing
+    # there" (404) from "already there" (409) from a path it must refuse (400) from storage failing.
+    async def delete(self, sid: str, path: str) -> str: ...
+    async def mkdir(self, sid: str, path: str) -> str: ...
+    async def move(self, sid: str, path: str, to: str) -> str: ...
+
+
+WS_OK, WS_NOT_FOUND, WS_EXISTS, WS_BAD_PATH, WS_FAILED = "ok", "not_found", "exists", "bad_path", "failed"
 
 
 class Backing:
@@ -468,6 +476,79 @@ def _safe_member(path: str) -> str | None:
     return p
 
 
+def app_capture_id(member: str) -> str:
+    """The durable id of an APP's copy of one workspace path. Derived from the path, so saving the
+    same file again replaces its one blob, and a delete's tombstone (see the gateway's
+    _newest_captures) lands on the same id and replaces the app's copy rather than sitting beside it."""
+    return "cfile_" + hashlib.sha256(f"app:{member}".encode()).hexdigest()[:32]
+
+
+def _tar_name(m: tarfile.TarInfo) -> str:
+    return m.name[2:] if m.name.startswith("./") else m.name.rstrip("/")
+
+
+def _under(name: str, member: str) -> bool:
+    return name == member or name.startswith(member + "/")
+
+
+def tar_change(raw: bytes | None, op: str, member: str, to: str = "") -> tuple[str, bytes | None]:
+    """Apply delete, mkdir or move to a checkpoint tarball → (WS_* outcome, the new archive or None
+    when nothing changed).
+
+    A path names a file or a directory, and a directory is everything under it: a tarball made by
+    `tar -C ws .` lists the directory's own entry, but one rewritten by `write` may hold only the
+    files, so both shapes count as the directory existing. The base that nests its workspace
+    (`.harness/agent-subdir`, nanobot) keeps the user's files one level down, so a path is looked
+    for there first and at the session root second, the order the runner's GET /file uses, and a
+    move stays on the side its source was found."""
+    # (entry, its path without "./", its bytes): the bytes travel WITH the entry, so a renamed
+    # member keeps its own content
+    entries: list[tuple[tarfile.TarInfo, str, bytes | None]] = []
+    if raw:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as src:
+            for m in src.getmembers():
+                f = src.extractfile(m) if m.isfile() else None
+                entries.append((m, _tar_name(m), f.read() if f else None))
+    sub = next((d.decode(errors="replace").strip() for _m, n, d in entries
+                if n == ".harness/agent-subdir" and d), "")
+    if sub and (_safe_member(sub) != sub or "/" in sub):
+        sub = ""
+
+    def _exists(p: str) -> bool:
+        return any(_under(n, p) for _m, n, _d in entries)
+
+    found = next((c for c in ([f"{sub}/{member}"] if sub else []) + [member] if _exists(c)), "")
+    if op == "delete":
+        if not found:
+            return WS_NOT_FOUND, None
+        entries = [e for e in entries if not _under(e[1], found)]
+    elif op == "mkdir":
+        if found:
+            is_file = any(n == found and m.isfile() for m, n, _d in entries)
+            return (WS_EXISTS, None) if is_file else (WS_OK, None)
+        d = tarfile.TarInfo(member)
+        d.type, d.mode, d.mtime = tarfile.DIRTYPE, 0o755, int(time.time())
+        entries.append((d, member, None))
+    elif op == "move":
+        if not found:
+            return WS_NOT_FOUND, None
+        dst = f"{sub}/{to}" if sub and found != member else to
+        if _under(dst, found):
+            return WS_BAD_PATH, None
+        if _exists(dst):
+            return WS_EXISTS, None
+        for m, n, _d in entries:
+            if _under(n, found):
+                m.name = ("./" if m.name.startswith("./") else "") + dst + n[len(found):]
+    else:
+        raise ValueError(op)
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz") as dst_tar:
+        for m, _n, data in entries:
+            dst_tar.addfile(m, io.BytesIO(data or b"") if m.isfile() else None)
+    return WS_OK, out.getvalue()
+
+
 class RunnerWorkspaceFiles:
     """Self-hosted: a session's workspace is a live directory on the data volume, and the RUNNER is
     the only principal that touches it. Behind the write-wall each session directory belongs to that
@@ -479,10 +560,11 @@ class RunnerWorkspaceFiles:
     Live, unlike the checkpoint the listing route reads: an app sees a file the moment a tool call
     creates it, rather than when the turn ends."""
 
-    def __init__(self, endpoint: str, key: str, blob=None, kb: str = ""):
+    def __init__(self, endpoint: str, key: str, blob=None, kb: str = "", ckpt_kb: str = "", key_for=None):
         self.endpoint = (endpoint or "").rstrip("/")
         self.key = key
         self.blob, self.kb = blob, kb
+        self.ckpt_kb, self.key_for = ckpt_kb, key_for
         self._client: httpx.AsyncClient | None = None
 
     def _c(self) -> httpx.AsyncClient:
@@ -519,6 +601,67 @@ class RunnerWorkspaceFiles:
         await self._capture(sid, member, data)
         return True
 
+    async def delete(self, sid: str, path: str) -> str:
+        return await self._change(sid, "delete", path)
+
+    async def mkdir(self, sid: str, path: str) -> str:
+        return await self._change(sid, "mkdir", path)
+
+    async def move(self, sid: str, path: str, to: str) -> str:
+        return await self._change(sid, "move", path, to)
+
+    async def _change(self, sid: str, op: str, path: str, to: str = "") -> str:
+        """The live directory first, through the runner (which acts as the session), then the
+        checkpoint tarball.
+
+        The checkpoint is the second half because the live directory is not the only copy: it is
+        reaped after HR_WORKSPACE_TTL_HOURS, and a sandbox that does not hold the last checkpoint
+        is wiped and restored from that tarball. A delete made only in the live directory would
+        come back on that restore, and a move would come back as two copies. `write` closes the
+        same hole with a per-file capture; a delete, a directory or a rename has no file to
+        capture, so the archive itself is changed, as the hosted backing does."""
+        member = _safe_member(path)
+        dest = _safe_member(to) if op == "move" else ""
+        if not member or (op == "move" and not dest) or not self.endpoint:
+            return WS_BAD_PATH
+        params = {"identifier": sid, "path": member, **({"to": dest} if op == "move" else {})}
+        url = f"{self.endpoint}/file" + ("" if op == "delete" else f"/{op}")
+        try:
+            r = await self._c().request("DELETE" if op == "delete" else "POST", url, params=params,
+                                        headers=self._headers())
+        except Exception:      # noqa: BLE001
+            return WS_FAILED
+        outcome = {200: WS_OK, 404: WS_NOT_FOUND, 409: WS_EXISTS, 400: WS_BAD_PATH}.get(r.status_code, WS_FAILED)
+        if outcome != WS_OK:
+            return outcome
+        # The runner answers where it found the path (the nesting base's user files live one level
+        # down), which is also where the path sits in the archive.
+        try:
+            got = r.json()
+        except ValueError:
+            got = {}
+        await self._change_checkpoint(sid, op, str(got.get("path") or member), str(got.get("to") or dest))
+        return WS_OK
+
+    async def _change_checkpoint(self, sid: str, op: str, member: str, to: str) -> None:
+        if not self.blob or not self.ckpt_kb or not self.key_for:
+            return
+        key = self.key_for(sid)
+        try:
+            raw = await self.blob.get(self.ckpt_kb, key)
+            if not raw:
+                return            # no turn has ended yet: the live directory is the only copy
+            outcome, tar = await asyncio.to_thread(tar_change, raw, op, member, to)
+            if outcome == WS_NOT_FOUND or (outcome == WS_OK and tar is None):
+                return            # not in the checkpoint (made since it was taken), or already so
+            if outcome == WS_OK and await self.blob.put(self.ckpt_kb, key, tar):
+                return
+            why = outcome if outcome != WS_OK else "store refused"
+        except Exception as e:   # noqa: BLE001
+            why = f"{type(e).__name__}: {e}"
+        # The live change stands, but a restore from this checkpoint would undo it. Say so.
+        print(f"[workspace] checkpoint {op} not applied sid={sid} path={member}: {why}", flush=True)
+
     async def _capture(self, sid: str, member: str, data: bytes) -> None:
         """Persist the app's copy of this file so it outlives the live directory.
 
@@ -535,21 +678,28 @@ class RunnerWorkspaceFiles:
         rather than whichever the blob listing happened to return last."""
         if not self.blob or not self.kb:
             return
-        cfile = "cfile_" + hashlib.sha256(f"app:{member}".encode()).hexdigest()[:32]
-        meta = json.dumps({"filename": member,
-                           "media_type": mimetypes.guess_type(member)[0] or "application/octet-stream",
-                           "written_at": time.time(),
-                           "source": "app"}).encode()
-        try:
-            if await self.blob.put(self.kb, f"containers/{sid}/{cfile}", data):
-                await self.blob.put(self.kb, f"containers/{sid}/{cfile}.meta", meta)
-                return
-        except Exception as e:   # noqa: BLE001
-            print(f"[workspace] durable capture failed sid={sid} path={member}: {e}", flush=True)
-            return
-        # A live write that was not captured is the old silent-loss shape. Say so rather than
-        # letting it look like a clean save.
-        print(f"[workspace] durable capture rejected sid={sid} path={member}", flush=True)
+        await put_app_capture(self.blob, self.kb, sid, member, data)
+
+
+async def put_app_capture(blob, kb: str, sid: str, member: str, data: bytes) -> bool:
+    """Store an app's durable copy of one workspace file (RunnerWorkspaceFiles._capture says why).
+    Also how a move carries an app's copy to the file's new name."""
+    cfile = app_capture_id(member)
+    meta = json.dumps({"filename": member,
+                       "media_type": mimetypes.guess_type(member)[0] or "application/octet-stream",
+                       "written_at": time.time(),
+                       "source": "app"}).encode()
+    try:
+        if await blob.put(kb, f"containers/{sid}/{cfile}", data):
+            await blob.put(kb, f"containers/{sid}/{cfile}.meta", meta)
+            return True
+    except Exception as e:   # noqa: BLE001
+        print(f"[workspace] durable capture failed sid={sid} path={member}: {e}", flush=True)
+        return False
+    # A live write that was not captured is the old silent-loss shape. Say so rather than
+    # letting it look like a clean save.
+    print(f"[workspace] durable capture rejected sid={sid} path={member}", flush=True)
+    return False
 
 
 class CheckpointWorkspaceFiles:
@@ -619,6 +769,32 @@ class CheckpointWorkspaceFiles:
             return False
         return bool(tar) and await self.blob.put(self.kb, key, tar)
 
+    async def delete(self, sid: str, path: str) -> str:
+        return await self._change(sid, "delete", path)
+
+    async def mkdir(self, sid: str, path: str) -> str:
+        return await self._change(sid, "mkdir", path)
+
+    async def move(self, sid: str, path: str, to: str) -> str:
+        return await self._change(sid, "move", path, to)
+
+    async def _change(self, sid: str, op: str, path: str, to: str = "") -> str:
+        """Rewrite the archive with the change applied, as `write` does: between turns the archive
+        IS the workspace."""
+        member = _safe_member(path)
+        dest = _safe_member(to) if op == "move" else ""
+        if not member or (op == "move" and not dest):
+            return WS_BAD_PATH
+        key = self.key_for(sid)
+        try:
+            raw = await self.blob.get(self.kb, key)
+            outcome, tar = await asyncio.to_thread(tar_change, raw, op, member, dest)
+        except Exception:      # noqa: BLE001
+            return WS_FAILED
+        if outcome != WS_OK or tar is None:
+            return outcome
+        return WS_OK if await self.blob.put(self.kb, key, tar) else WS_FAILED
+
 
 def make_backing(*, client_getter, vg_url: str, vg_key: str, vg_tenant: str,
                  vault_url: str, vault_key: str) -> Backing:
@@ -648,4 +824,5 @@ def make_backing(*, client_getter, vg_url: str, vg_key: str, vg_tenant: str,
         workspace=RunnerWorkspaceFiles(os.environ.get("POOL_MGMT_ENDPOINT", "http://127.0.0.1:8081"),
                                        os.environ.get("HARNESS_INTERNAL_KEY", ""),
                                        local_blob,
-                                       os.environ.get("HARNESS_RESP_BLOB_KB", "harness-responses")))
+                                       os.environ.get("HARNESS_RESP_BLOB_KB", "harness-responses"),
+                                       os.environ.get("HARNESS_BLOB_KB", "harness-sessions"), ws_key))
