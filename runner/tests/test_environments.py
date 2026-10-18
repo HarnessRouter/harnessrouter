@@ -706,3 +706,19 @@ def test_a_write_waiting_on_a_snapshot_or_a_slow_import_leaves_the_runner_answer
         g.join(10)
         assert waited is not None and waited < 1.0, f"the runner did not answer while a git import ran ({waited})"
         assert done["g"].status_code == 200
+
+
+def test_an_npm_range_is_a_name_with_no_pin(monkeypatch):
+    """npm's ranges went through as exact pins, so `lodash@^4.17.0` was checked against the
+    registry's exact versions and refused as "not published" though npm installs it."""
+    for spec in ("lodash@^4.17.0", "lodash@~4.17", "lodash@>=4", "lodash@4.x", "lodash@*", "lodash@1 || 2"):
+        assert E.spec_parts(spec, "npm") == ("lodash", ""), spec
+    for spec, want in (("lodash@4.17.21", ("lodash", "4.17.21")), ("@types/node@24.1.0", ("@types/node", "24.1.0")),
+                       ("lodash@1.0.0-rc.1", ("lodash", "1.0.0-rc.1")), ("lodash", ("lodash", ""))):
+        assert E.spec_parts(spec, "npm") == want, spec
+    answers = {"https://registry.npmjs.org/lodash": (200, {"dist-tags": {"latest": "4.17.21"},
+                                                          "versions": {"4.17.21": {}, "4.17.20": {}}})}
+    monkeypatch.setattr(E, "_http_json", lambda url: answers.get(url, (503, {})))
+    ranged = E.check_package("npm", "lodash@^4.17.0")
+    assert ranged["exists"] is True and ranged["error"] == "" and ranged["version"] == ""
+    assert "not published" in E.check_package("npm", "lodash@9.9.9")["error"]

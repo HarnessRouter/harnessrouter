@@ -579,6 +579,7 @@ _apt_lists_at = 0.0
 
 
 _RANGE_OPS = (">=", "<=", "~=", "!=", ">", "<")
+_NPM_RANGE = re.compile(r"[\^~<>*|\s]|(?:^|\.)[xX](?:\.|$)")
 
 
 def spec_parts(spec: str, manager: str) -> tuple[str, str]:
@@ -588,7 +589,12 @@ def spec_parts(spec: str, manager: str) -> tuple[str, str]:
     s = spec.strip()
     if manager == "npm":
         i = s.rfind("@")
-        return (s[:i], s[i + 1:]) if i > 0 else (s, "")
+        if i <= 0:
+            return s, ""
+        # npm's ranges (^4.17.0, ~4.17, >=1, 1.x, *) are not one version either: the registry's
+        # `versions` names exact ones, so a range read as a pin was "not published".
+        v = s[i + 1:]
+        return s[:i], ("" if _NPM_RANGE.search(v) else v)
     # Ranges before the pin operators: `>=`, `<=`, `~=` and `!=` each end in `=`, so looking for a
     # pin first read `jq>=1.6` as the name `jq>` with the pin `1.6` — neither what the owner
     # declared nor something apt-get, pip or a registry will answer for.
