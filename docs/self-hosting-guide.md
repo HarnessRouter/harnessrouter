@@ -900,8 +900,9 @@ and credentials.
 starter kits are the same; these are the parts that need a service a single box does not have:
 
 - **Billing.** Credits, grants, usage in dollars per task and the per-task spend counters belong to
-  the hosted ledger. Here you pay your providers directly; `max_cost_usd` on a task or a harness
-  still caps a turn, read from the provider prices.
+  the hosted ledger. Here you pay your providers directly, and nothing caps a turn by its cost: a
+  harness that carries `max_cost_usd` is refused as a field it does not have. A turn is bounded by
+  `max_step` and `timeout_seconds`; set spend limits with your provider.
 - **Plugins as accounts.** On the hosted service a plugin is the organization's own account kept by
   a registry and managed only on the Plugins page; here the registry is local to this box, and the
   browser plugin connects without a credential.
