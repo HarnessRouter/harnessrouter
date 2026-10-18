@@ -564,7 +564,11 @@ def test_a_chat_with_no_files_says_a_new_file_needs_no_adding():
     assert aider_driver.NEW_FILE_NOTE in p.files_no_full_files_with_repo_map
     assert "name the ones that need changes and stop" in p.files_no_full_files_with_repo_map
     assert "wait for your approval" not in p.files_no_full_files_with_repo_map_reply
-    assert "write a new file directly" in p.files_no_full_files_with_repo_map_reply
+    assert "write it directly" in p.files_no_full_files_with_repo_map_reply
+    # conditional on a request for a file: a question about one is answered, not acted on (on
+    # 0.35.3-rc.2 an unconditional note made gpt-5.4, gpt-5.5 and gpt-6-sol create the file asked about)
+    assert "If the request asks for a new file" in aider_driver.NEW_FILE_NOTE
+    assert "A question about a file is answered in words" in aider_driver.NEW_FILE_NOTE
     assert shared.files_no_full_files == "I am not sharing any files that you can edit yet."
     assert shared.files_no_full_files_with_repo_map.startswith("Don't try")
     # a coder whose prompts have no repo-map message (aider's ask and architect modes) keeps none

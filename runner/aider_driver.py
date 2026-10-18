@@ -488,9 +488,10 @@ def _file_nudge(names: list) -> str:
             "asks for.")
 
 
-NEW_FILE_NOTE = ("A new file needs no adding to the chat: create it with a SEARCH/REPLACE block "
-                 "that has its path, an empty SEARCH section and the contents in REPLACE, and give "
-                 "the reply the request asks for after it.")
+NEW_FILE_NOTE = ("If the request asks for a new file, it needs no adding to the chat: write it with "
+                 "a SEARCH/REPLACE block that has its path, an empty SEARCH section and the contents "
+                 "in REPLACE, then give the reply the request asks for. A question about a file is "
+                 "answered in words, without creating it.")
 
 
 def _new_files_need_no_add(coder) -> None:
@@ -518,8 +519,8 @@ def _new_files_need_no_add(coder) -> None:
             "name the ones that need changes and stop, and they will be added. Name only files "
             "that need to be edited, not ones that are only context.\n")
         prompts.files_no_full_files_with_repo_map_reply = (
-            "Ok. I will write a new file directly, and name the existing files that need changes "
-            "and stop so they can be added.")
+            "Ok. If a request asks for a new file I will write it directly; for existing files I "
+            "will name the ones that need changes and stop so they can be added.")
     coder.gpt_prompts = prompts
 
 
