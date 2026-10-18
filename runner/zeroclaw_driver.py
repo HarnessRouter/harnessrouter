@@ -135,11 +135,29 @@ class _Turn:
             # final one repeats.
             body = u.get("rawOutput")
             if not isinstance(body, str):
-                body = u.get("body") if isinstance(u.get("body"), str) else json.dumps(body, default=str)
+                if isinstance(u.get("body"), str):
+                    body = u["body"]
+                elif body is None:
+                    # No raw output: ACP carries a tool's output in `content` blocks, and
+                    # json.dumps(None) put the word "null" in the result instead.
+                    body = _tool_content_text(u.get("content"))
+                else:
+                    body = json.dumps(body, default=str)
             _emit({"type": "user", "message": {"content": [
                 {"type": "tool_result", "tool_use_id": str(u.get("toolCallId") or "tool"),
                  "is_error": u.get("status") == "failed", "content": (body or "")[:8000]}]}})
         # plan, history_trimmed and the rest are progress for an IDE, not part of the transcript
+
+
+def _tool_content_text(content) -> str:
+    """The text of an ACP tool call's content blocks ({"type": "content", "content": {"type":
+    "text", "text": ...}}), "" when there is none."""
+    out = []
+    for block in content if isinstance(content, list) else []:
+        inner = block.get("content") if isinstance(block, dict) else None
+        if isinstance(inner, dict) and isinstance(inner.get("text"), str):
+            out.append(inner["text"])
+    return "\n".join(out)
 
 
 def _chunk_text(u: dict) -> str:
