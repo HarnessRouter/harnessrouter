@@ -22,6 +22,7 @@ import urllib.parse
 import collections
 import time
 import uuid
+import weakref
 import zipfile
 
 import base64
@@ -5270,9 +5271,11 @@ async def _session_purge(sid: str, v: dict | None, index: dict | None = None) ->
             await BACKING.graph.delete(rid, "HarnessResponse")
     # 3) everything stored under its id: the checkpoint and the media scene (sessions/<sid>/ in
     # the session store), the change list (sessions/<sid>/ in the response store), the files its
-    # tasks produced (containers/<sid>/) and their rendered previews (previews/<sid>/)
+    # tasks produced (containers/<sid>/), their rendered previews (previews/<sid>/), and the record of
+    # what an app removed from its workspace (ws-removed/<sid>/)
     for kb, prefix in ((BLOB_KB, f"sessions/{sid}/"), (RESP_BLOB_KB, f"sessions/{sid}/"),
-                       (RESP_BLOB_KB, f"containers/{sid}/"), (RESP_BLOB_KB, f"previews/{sid}/")):
+                       (RESP_BLOB_KB, f"containers/{sid}/"), (RESP_BLOB_KB, f"previews/{sid}/"),
+                       (RESP_BLOB_KB, f"ws-removed/{sid}/")):
         with contextlib.suppress(Exception):
             for it in await _blob_list_all(prefix, kb=kb):
                 await _blob_delete(str(it.get("file_id") or ""), kb=kb)
@@ -8261,7 +8264,12 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                "heartbeat": str(time.time()), "runner_turn_id": "",
                                **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
-    await _hydrate(sid, rec)
+    # Under the session's change lock: an app's PUT, delete, mkdir or move that passed its busy check
+    # before this turn was stamped running finishes before the restore reads the workspace, and one
+    # that comes after waits, reads the session again under the lock, and is refused (_ws_busy_now).
+    # In this process only, like the lock itself.
+    async with _ws_change_lock(sid):
+        await _hydrate(sid, rec)
     if rec.get("hydrate_failed_with_checkpoint"):
         # The task has a checkpoint and it could not be restored: the turn does not run. Running it
         # on the wiped workspace started the conversation over without a word (2026-09-06); an
@@ -9155,7 +9163,8 @@ async def recycle_session_sandbox(sid: str) -> dict:
     if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
         raise HTTPException(409, "a turn is running; recycle after it settles")
     rec: dict = {}
-    await _hydrate(sid, rec, force=True)
+    async with _ws_change_lock(sid):       # as a turn's restore is (_resp_execute)
+        await _hydrate(sid, rec, force=True)
     if not rec.get("hydrated"):
         raise HTTPException(502, f"workspace restore failed: {_hydrate_reason(rec)}")
     return {"session_id": sid, "checkpoint_sha": str(v.get("ws_sha") or ""),
@@ -10573,7 +10582,7 @@ def _ws_visible(path: str) -> bool:
 # than keeping a second list in the gateway: `.harness/agent-subdir` names the agent's directory
 # and `.git/info/exclude` carries the base's own machinery patterns (git status honours the same
 # file, which is what keeps the produced-files list clean).
-_WS_SUBDIR_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_WS_SUBDIR_RE = backing.WS_SUBDIR_RE      # one rule with the file routes (backing.tar_change)
 
 
 def _ws_rules(tf) -> tuple[str, tuple[str, ...]]:
@@ -10750,13 +10759,40 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
     NEWEST WINS. Two captures can name the same file — the agent's, taken when a turn ended, and
     the app's, taken when somebody saved between turns — and serving the older one hands back work
     the person already replaced. Ties keep the previous last-one-wins order, so a pair of legacy
-    metas with no stamp resolves exactly as it did before."""
+    metas with no stamp resolves exactly as it did before.
+
+    A DELETE (or the source of a move) leaves a tombstone (_put_tombstone). It hides every capture of
+    that path, and of anything under it when it was a directory, that is not newer than it. Without it the by-path read fell back to the agent's old
+    capture of a file the app had just removed, and the next restore put the app's own copy back."""
+    return (await _capture_state(sid))[0]
+
+
+async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[str, float]]:
+    """(_newest_captures, the tombstones: path -> when it was removed).
+
+    The captures are the window they always were (a first page of 200 metas). The tombstones are
+    kept under their own prefix and read IN FULL: inside that window a tombstone could fall out of
+    it at random, and the file it hid would come back. There are few of them (one per removed path,
+    and a removed directory drops those under it), so reading all of them is cheap."""
     out: dict[str, tuple[str, bool]] = {}
     newest: dict[str, float] = {}
+    gate = asyncio.Semaphore(16)
+
+    async def _get(fid: str) -> bytes | None:
+        async with gate:
+            return await _blob_get(fid, kb=RESP_BLOB_KB)
     listing = await _blob_list(f"containers/{sid}/", limit=200, kb=RESP_BLOB_KB)
-    metas = [i for i in (listing.get("items") or []) if str(i.get("file_id", "")).endswith(".meta")]
-    for it in metas[:200]:
-        meta_b = await _blob_get(it["file_id"], kb=RESP_BLOB_KB)
+    metas = [i for i in (listing.get("items") or []) if str(i.get("file_id", "")).endswith(".meta")][:200]
+    tomb_ids = [i["file_id"] for i in await _blob_list_all(_tomb_prefix(sid), kb=RESP_BLOB_KB)]
+    bodies = await asyncio.gather(*(_get(it["file_id"]) for it in metas), *(_get(t) for t in tomb_ids))
+    tombs: dict[str, float] = {}
+    for meta_b in bodies[len(metas):]:
+        try:
+            t = json.loads(meta_b or b"")
+            tombs[str(t["filename"])] = max(float(t["removed_at"]), tombs.get(str(t["filename"]), 0.0))
+        except Exception:  # noqa: BLE001
+            continue
+    for it, meta_b in zip(metas, bodies[: len(metas)]):
         if not meta_b:
             continue
         try:
@@ -10772,7 +10808,54 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
         newest[str(fname)] = ts
         out[str(fname)] = (it["file_id"].rsplit("/", 1)[-1][: -len(".meta")],
                            meta.get("source") == "app")
-    return out
+    if tombs:
+        out = {n: v for n, v in out.items() if not _tombstoned(n, newest[n], tombs)}
+    return out, tombs
+
+
+def _tomb_prefix(sid: str) -> str:
+    return f"ws-removed/{sid}/"
+
+
+def _tomb_key(sid: str, path: str) -> str:
+    return _tomb_prefix(sid) + hashlib.sha256(path.encode()).hexdigest()[:32]
+
+
+def _tombstoned(name: str, ts: float, tombs: dict[str, float]) -> bool:
+    """Was `name` (as of `ts`) removed by one of these tombstones: its own, or a directory's above it?"""
+    return any(ts <= t and (name == p or name.startswith(p + "/")) for p, t in tombs.items())
+
+
+async def _put_tombstone(sid: str, path: str,
+                         state: tuple[dict[str, tuple[str, bool]], dict[str, float]] | None = None) -> bool:
+    """Record that an app removed `path` (see _newest_captures) → whether it was stored.
+
+    The app's own copy of the path is dropped only AFTER the store accepted the record: without the
+    record, the agent's older captures of the path would be unhidden and the by-path read would serve
+    the file the app just removed.
+
+    Then it compacts: the app's copies under a removed directory, and the records of paths under it,
+    are hidden by this one and are dropped. The agent's captures stay (a turn's record names them)."""
+    body = json.dumps({"filename": path, "removed_at": time.time()}).encode()
+    try:
+        if not await _blob_put(_tomb_key(sid, path), body, kb=RESP_BLOB_KB):
+            print(f"[workspace] tombstone rejected sid={sid} path={path}", flush=True)
+            return False
+    except Exception as e:  # noqa: BLE001
+        print(f"[workspace] tombstone failed sid={sid} path={path}: {e}", flush=True)
+        return False
+    caps, tombs = state or ({}, {})
+    keys = [f"containers/{sid}/{backing.app_capture_id(path)}{x}" for x in ("", ".meta")]
+    for name, (_cid, app_) in caps.items():
+        if app_ and name.startswith(path + "/"):
+            keys += [f"containers/{sid}/{backing.app_capture_id(name)}{x}" for x in ("", ".meta")]
+    keys += [_tomb_key(sid, t) for t in tombs if t.startswith(path + "/")]
+    for key in keys:
+        try:
+            await _blob_delete(key, kb=RESP_BLOB_KB)
+        except Exception:  # noqa: BLE001 — housekeeping; the record already hides it
+            pass
+    return True
 
 
 # Backends whose CLI cannot resume a conversation headless. cline 3.0.60: `--json --id` refuses
@@ -11110,12 +11193,24 @@ async def read_session_file(sid: str, path: str, request: Request) -> Response:
             got = await _container_file_bytes(sid, path)
         else:
             try:
-                byname = await _cfile_by_name(sid)
+                caps, tombs = await _capture_state(sid)
             except Exception:  # noqa: BLE001 — blob store unavailable: keep the honest 404
-                byname = {}
-            cid = byname.get(path) or byname.get(path.rsplit("/", 1)[-1])
+                caps, tombs = {}, {}
+            byname = {name: c for name, (c, _app) in caps.items()}
+            cid = byname.get(path)
+            if not cid and "/" in path and not _tombstoned(path, float("-inf"), tombs):
+                # the bare-filename match is for captures named before paths were kept; a path an
+                # app removed must not come back through it as some other file of the same name
+                cid = byname.get(path.rsplit("/", 1)[-1])
             if cid:
                 got = await _container_file_bytes(sid, cid)
+            if got is None:
+                # The checkpoint, last. A file the agent moved has no capture under its new name, and
+                # once the live directory is reaped (self-hosted) the checkpoint holds the only copy
+                # there until the next turn restores it. A path an app removed is out of the
+                # checkpoint as well (the delete changed it), so this brings nothing back.
+                with contextlib.suppress(Exception):    # blob store unavailable: the honest 404
+                    got = await _container_file_bytes(sid, _wf_id(path))
         if got is not None:
             data, media, _fname = got
             return Response(content=data, media_type=media,
@@ -11148,12 +11243,7 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
     # this shipped broken: it compared v["org"], but a session vertex carries the owner in
     # `tenant`, so every write 404'd on a session the caller could plainly read.
     _org, v = await _owned_session(request, sid)
-
-    live = {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}
-    if live:
-        raise uhp_error(409, "session_busy",
-                        "The agent is working on this session. Wait for the turn to finish "
-                        "before writing to its workspace.")
+    _refuse_if_busy(v)
 
     if body.content_b64 is not None:
         try:
@@ -11169,13 +11259,213 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
         raise uhp_error(413, "payload_too_large",
                         f"A workspace file written this way is limited to {_WS_WRITE_MAX} bytes.")
 
-    ok = await BACKING.workspace.write(sid, path, data)
+    async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
+        ok = await BACKING.workspace.write(sid, path, data)
+        if ok:
+            _ws_changed(sid)
     if not ok:
         # The only ways to get here are a path that tried to leave the workspace and a storage
         # failure. Both are the caller's problem to see, not something to swallow.
         raise uhp_error(400, "write_failed",
                         "Could not write that path. It must be inside the session workspace.")
     return {"session_id": sid, "path": path, "bytes": len(data), "written": True}
+
+
+def _refuse_if_busy(v: dict) -> None:
+    """A workspace change while a turn runs is refused, for every route that changes one (the PUT
+    above says why)."""
+    live = {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}
+    if live:
+        raise uhp_error(409, "session_busy",
+                        "The agent is working on this session. Wait for the turn to finish "
+                        "before writing to its workspace.")
+
+
+async def _ws_busy_now(sid: str) -> None:
+    """_refuse_if_busy again, on the session as it is now, under the change lock. The route's first
+    check read the session before it took the lock. A turn stamped running since then holds that
+    lock while it restores the workspace (_resp_execute), so a change that waited behind it reads it
+    running here and stops, instead of landing under a running turn."""
+    _refuse_if_busy(await _vertex_get(sid) or {})
+
+
+def _changeable(path: str, param: str = "path") -> str:
+    """The workspace path a delete, mkdir or move may touch → itself, normalised; else 400.
+
+    Two rules on top of PUT's. The path must stay inside the workspace, as for PUT. And it must be
+    a path the session SHOWS (_ws_visible, the listing's rule): removing or renaming `.git` or
+    `.harness` would take the session's checkpoint history and the harness's own state with it,
+    which a write cannot do but a recursive delete can."""
+    member = backing._safe_member(path)
+    if not member or not _ws_visible(member):
+        raise uhp_error(400, "invalid_input",
+                        "That path must be inside the session workspace, and not one of its "
+                        "internal files.", param)
+    return member
+
+
+def _ws_outcome(outcome: str, path: str, to: str = "") -> None:
+    """A backing's WS_* answer → the failure it means, or nothing when it worked. For a move, a clash
+    is at the destination, so `to` names it."""
+    if outcome in (backing.WS_OK, backing.WS_UNCHANGED):
+        return
+    if outcome == backing.WS_NOT_FOUND:
+        raise uhp_error(404, "file_not_found", f"No file or directory '{path}' in this session's workspace.", "path")
+    if outcome == backing.WS_EXISTS:
+        at = to or path
+        raise uhp_error(409, "file_exists", f"Something is already at '{at}', or a file is where one of "
+                        "its folders would go.", "to" if to else "path")
+    if outcome == backing.WS_BAD_PATH:
+        if to:
+            # the backing refused the source or the destination, and does not say which
+            raise uhp_error(400, "invalid_input", "Neither the path nor `to` may be one of the agent's "
+                            "own files, and a path cannot move inside itself.")
+        raise uhp_error(400, "invalid_input", "That path must be inside the session workspace, and not "
+                        "one of the agent's own files.", "path")
+    raise uhp_error(502, "internal_error", "The session workspace could not be changed. Try again.")
+
+
+async def _checkpoint_rewritten(sid: str, sha: str) -> None:
+    """The hosted backing rewrote the session's checkpoint: record its sha as the session's, so a
+    sandbox kept warm with the old workspace is restored rather than trusted (CheckpointWorkspaceFiles
+    ._store says why). It must RAISE when the store refuses: the backing then leaves the archive as it
+    was rather than rewriting it under a sha that still matches the warm sandbox."""
+    await BACKING.graph.upsert("HarnessSession", sid, {"ws_sha": sha}, raise_on_fail=True)
+
+
+if hasattr(BACKING.workspace, "on_rewrite"):
+    BACKING.workspace.on_rewrite = _checkpoint_rewritten
+
+
+def _ws_unrecorded(op: str) -> None:
+    """The tombstone was not stored (_put_tombstone logged why): the change stands, and the caller is
+    told it may not last rather than handed a clean 200. A delete can be repeated (its route records
+    the removal even when the path is already gone); a move's source is gone, so it cannot."""
+    again = " Repeat the delete to record it." if op == "delete" else ""
+    raise uhp_error(502, "internal_error", f"The {op} was made, but could not be recorded, so a later "
+                    f"restore of this session could undo it.{again}")
+
+
+def _ws_changed(sid: str) -> None:
+    """What _checkpoint does after the workspace changes: drop this session's cached tarball and
+    file map here and on every replica, so the listing reads the change."""
+    _ws_tar_evict(sid)
+    _WS_FILES_CACHE.pop(sid, None)
+    _bus_publish("_ctrl", "_ctrl", "", sid, "", {"type": "hr.ctrl.ws_invalidate"})
+
+
+class WorkspaceMove(BaseModel):
+    to: str
+
+
+# The action is a suffix on the path (`…/files/notes/old.md:move`), so a path with slashes is still
+# one path parameter: Starlette's {path:path} is `.*` followed by the literal, and backtracks to it.
+@app.post("/v1/sessions/{sid}/files/{path:path}:mkdir")
+async def mkdir_session_file(sid: str, path: str, request: Request) -> dict:
+    """Create a directory in a session's workspace, with any missing parents. One that already
+    exists is success (`created: false`); a FILE at that path, or where one of its parents would
+    be, is 409 `file_exists`."""
+    _org, v = await _owned_session(request, sid)
+    _refuse_if_busy(v)
+    member = _changeable(path)
+    async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
+        outcome = await BACKING.workspace.mkdir(sid, member)
+        _ws_outcome(outcome, member)
+        _ws_changed(sid)
+    return {"session_id": sid, "path": member, "dir": True, "created": outcome == backing.WS_OK}
+
+
+@app.post("/v1/sessions/{sid}/files/{path:path}:move")
+async def move_session_file(sid: str, path: str, body: WorkspaceMove, request: Request) -> dict:
+    """Rename a file or directory in a session's workspace to `to`. The destination must not exist
+    (409 `file_exists`, never an overwrite) and must not be inside the source."""
+    _org, v = await _owned_session(request, sid)
+    _refuse_if_busy(v)
+    member = _changeable(path)
+    dest = _changeable(body.to, "to")
+    if dest == member or dest.startswith(member + "/"):
+        raise uhp_error(400, "invalid_input", "A path cannot move inside itself.", "to")
+    async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
+        _ws_outcome(await BACKING.workspace.move(sid, member, dest), member, dest)
+        _ws_changed(sid)
+        state = await _capture_state_or_none(sid)
+        await _carry_captures(sid, member, dest, state)
+        if not await _put_tombstone(sid, member, state):
+            _ws_unrecorded("move")
+    return {"session_id": sid, "path": member, "to": dest, "moved": True}
+
+
+@app.delete("/v1/sessions/{sid}/files/{path:path}")
+async def delete_session_file(sid: str, path: str, request: Request) -> dict:
+    """Remove a file, or a directory and everything in it, from a session's workspace."""
+    _org, v = await _owned_session(request, sid)
+    _refuse_if_busy(v)
+    member = _changeable(path)
+    async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
+        outcome = await BACKING.workspace.delete(sid, member)
+        if outcome == backing.WS_NOT_FOUND:
+            # Nothing to remove, but a durable copy of the path may still answer the by-path read
+            # (a delete whose record the store refused, repeated): record the removal when there is
+            # one to hide, and only then, so a run of deletes of paths that never existed stores
+            # nothing. Recorded, it IS the delete the caller asked to repeat, and it answers so.
+            state = await _capture_state_or_none(sid)
+            if state and any(n == member or n.startswith(member + "/") for n in state[0]):
+                if not await _put_tombstone(sid, member, state):
+                    _ws_unrecorded("delete")
+                _ws_changed(sid)
+                return {"session_id": sid, "path": member, "deleted": True}
+        _ws_outcome(outcome, member)
+        _ws_changed(sid)
+        if not await _put_tombstone(sid, member, await _capture_state_or_none(sid)):
+            _ws_unrecorded("delete")
+    return {"session_id": sid, "path": member, "deleted": True}
+
+
+_WS_CHANGE_LOCKS: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+
+
+def _ws_change_lock(sid: str) -> asyncio.Lock:
+    """One PUT, delete, mkdir or move per session at a time on this replica: the change, the copies
+    it carries and the tombstone it writes are read-then-write, and two interleaved would each start
+    from the same state — a PUT racing a delete of its path would have its fresh copy dropped by the
+    delete's tombstone. (The backing serialises the archive rewrite itself the same way.)"""
+    return backing.keyed_lock(_WS_CHANGE_LOCKS, sid)
+
+
+async def _capture_state_or_none(sid: str):
+    try:
+        return await _capture_state(sid)
+    except Exception:  # noqa: BLE001 — blob store unavailable: nothing to carry or compact
+        return None
+
+
+async def _carry_captures(sid: str, src: str, dst: str, state=None) -> None:
+    """An app's durable copy of a moved file goes to the new name.
+
+    Self-hosted, that copy can be NEWER than the checkpoint (an app saved between turns), and a
+    restore re-applies it from the capture rather than from the archive. Left under the old name it
+    would be hidden by the move's tombstone, and the restore would bring back the checkpoint's older
+    copy at the new name, losing the app's last save. Hosted, app writes go into the archive and
+    leave no capture, so there is nothing to carry.
+
+    Only the APP's: an agent's capture carried as the app's would be re-applied on every restore,
+    over whatever the agent later did with the file. Once the live directory is reaped, the by-path
+    read finds a moved agent file at its new name in the checkpoint (read_session_file's last
+    fallback)."""
+    caps = (state or ({}, {}))[0]
+    for name, (cid, from_app) in caps.items():
+        if not from_app or not (name == src or name.startswith(src + "/")):
+            continue
+        try:
+            got = await _container_file_bytes(sid, cid)
+            if got:
+                await backing.put_app_capture(BACKING.blob, RESP_BLOB_KB, sid, dst + name[len(src):], got[0])
+        except Exception as e:  # noqa: BLE001 — the move is done; the source's tombstone must still land
+            print(f"[workspace] capture not carried sid={sid} {name} -> {dst}: {e}", flush=True)
 
 
 @app.get("/v1/containers/{container_id}/files/{file_id}/content")
