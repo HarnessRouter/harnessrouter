@@ -13073,7 +13073,11 @@ def move_file(path: str, to: str, identifier: str = "") -> dict:
     if dest == src or dest.is_relative_to(src):
         raise HTTPException(400, "a path cannot move inside itself")
     _refuse_protected(ws, src, dest, *others)
-    if dest.exists() or dest.is_symlink():
+    # _copies(ws, to): on a nesting base the name can be taken on the OTHER side too, by a file an app
+    # put at the session root (it waits there for adoption) or by the agent's own. Moved in beside it,
+    # one of the two shadows the other for good (adoption never moves over a name the agent's
+    # directory has): an overwrite by another name.
+    if dest.exists() or dest.is_symlink() or _copies(ws, to):
         raise HTTPException(409, "something is already at the destination")
     base = pathlib.Path(ws).resolve()
     sparts, dparts = src.relative_to(base).parts, dest.relative_to(base).parts

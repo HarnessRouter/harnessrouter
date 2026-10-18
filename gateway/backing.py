@@ -627,7 +627,12 @@ def tar_change(raw: bytes | None, op: str, member: str, to: str = "") -> tuple[s
             dst = f"{sub}/{to}" if sub and found != member else to
             if _protected(found) or _protected(dst) or _under(dst, found):
                 return WS_BAD_PATH, None
-            if _exists(dst) or _file_above(dst):
+            # On a nesting base the name can be taken on the OTHER side too: a file an app put at the
+            # root (it waits there for adoption) or the agent's own. Moved in beside it, one of the two
+            # shadows the other for good (adoption never moves over a name the agent's directory has),
+            # which is an overwrite by another name.
+            taken = ([f"{sub}/{to}"] if sub else []) + ([to] if not sub or to.split("/", 1)[0] != sub else [])
+            if _exists(dst) or _file_above(dst) or any(_exists(c) for c in taken):
                 return WS_EXISTS, None
             if any(_protected(c) for c in present[1:]):
                 return WS_BAD_PATH, None

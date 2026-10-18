@@ -325,3 +325,16 @@ def test_a_put_of_the_workspace_itself_is_refused(ws, c):
     for p in (".", "/"):
         assert c.put("/file", params={"identifier": "s", "path": p}, content=b"x").status_code == 400
     assert sorted(q.name for q in ws.parent.iterdir()) == ["sess"]
+
+
+@pytest.mark.parametrize("root_file,path,to", [("app.json", "deck.json", "app.json"),
+                                               ("sheet.json", "sheet.json", "deck.json")])
+def test_a_move_onto_a_name_taken_on_the_other_side_is_409(ws, c, root_file, path, to):
+    """nanobot: measured on the 0.35.0-rc.1 candidate, moving the agent's deck.json onto the app's
+    root app.json answered 200, and the moved file shadowed the app's for good (adoption never moves
+    over a name the agent's directory has)."""
+    _nanobot(ws)
+    (ws / root_file).write_text("the app's")
+    r = c.post("/file/move", params={"identifier": "s", "path": path, "to": to})
+    assert r.status_code == 409
+    assert (ws / root_file).read_text() == "the app's" and (ws / "workspace" / "deck.json").read_text() == "{}"

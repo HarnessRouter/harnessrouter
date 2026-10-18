@@ -930,3 +930,14 @@ async def test_a_restore_waits_for_a_change_in_flight(monkeypatch):
     lock.release()
     assert (await task)["hydrated"] is True
     assert order == ["change done", "restore"]
+
+
+@pytest.mark.parametrize("extra,path,to", [({"app.json": b"the app's"}, "deck.json", "app.json"),
+                                           ({"sheet.json": b"rows"}, "sheet.json", "deck.json")])
+def test_a_move_onto_a_name_taken_on_the_other_side_is_refused(extra, path, to):
+    """nanobot: a file an app put at the root waits there for adoption. Moving the agent's deck.json to
+    app.json answered 200 on the candidate (0.35.0-rc.1), and the moved file then shadowed the app's
+    app.json for good, since adoption never moves over a name the agent's directory has. The same the
+    other way round."""
+    raw = _tar({**_NANOBOT, **extra})
+    assert B.tar_change(raw, "move", path, to) == (B.WS_EXISTS, None)
