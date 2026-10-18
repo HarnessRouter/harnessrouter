@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import codecs
 import contextlib
+import copy
 import json
 import os
 import pathlib
@@ -487,6 +488,41 @@ def _file_nudge(names: list) -> str:
             "asks for.")
 
 
+NEW_FILE_NOTE = ("A new file needs no adding to the chat: create it with a SEARCH/REPLACE block "
+                 "that has its path, an empty SEARCH section and the contents in REPLACE, and give "
+                 "the reply the request asks for after it.")
+
+
+def _new_files_need_no_add(coder) -> None:
+    """aider's word for a chat with no files in it is "I am not sharing any files that you can
+    edit yet.", sent as the user every turn. gpt-5.4-mini took it at its word (#379): asked to
+    create hello-aider.txt it answered "I can't create or edit files yet because you haven't
+    shared any editable files in the chat", and said it again after the nudge, and after a second
+    nudge tried for measuring. With the workspace notes' line and the nudge it wrote the file 12 of
+    17 times and 6 answered that way; with this message as well, 21 of 24 and none (2026-10-18).
+
+    When the workspace has files aider sends another: "Don't try and edit any existing code without
+    asking me to add the files to the chat! ... then stop so I can add them", answered for the
+    model with "I will suggest which files need to be edited and then stop and wait for your
+    approval". With notes.md and src/app.py in the workspace gpt-5.4-mini wrote the file 1 of 6
+    (0 of 3 on the build before this change). That one keeps its rule for existing files, which
+    the driver's adding of named files answers, and says a new file is written directly: 4 of 6,
+    gpt-5.4 2 of 2, and appending to notes.md still worked (gpt-5.4 2 of 2). The prompts object is
+    the coder class's own, shared, so it is copied first."""
+    prompts = copy.copy(coder.gpt_prompts)
+    prompts.files_no_full_files = "No files are in the chat yet. " + NEW_FILE_NOTE
+    if getattr(prompts, "files_no_full_files_with_repo_map", None):
+        prompts.files_no_full_files_with_repo_map = (
+            "No files are in the chat yet. " + NEW_FILE_NOTE + "\n"
+            "An existing file has to be in the chat before you edit it: to change existing files, "
+            "name the ones that need changes and stop, and they will be added. Name only files "
+            "that need to be edited, not ones that are only context.\n")
+        prompts.files_no_full_files_with_repo_map_reply = (
+            "Ok. I will write a new file directly, and name the existing files that need changes "
+            "and stop so they can be added.")
+    coder.gpt_prompts = prompts
+
+
 def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     """aider's own reflection loop (Coder.run_one), driven directly.
 
@@ -734,6 +770,7 @@ def main() -> int:
     # a per-model settings file would replace every other setting of the model with the class
     # defaults, so the attribute is set on the object, which is what format_chat_chunks reads.
     coder.main_model.examples_as_sys_msg = True
+    _new_files_need_no_add(coder)
     # NO TEMPERATURE. aider sends `temperature: 0` for every id its settings do not know, and a
     # provider that has retired the field refuses the whole turn: claude-fable-5-1 on TokenRouter
     # answered "`temperature` is deprecated for this model" and the turn died after 171 s of

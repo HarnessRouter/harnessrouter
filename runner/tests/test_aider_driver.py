@@ -546,6 +546,36 @@ def test_a_file_request_answered_with_a_word_and_no_edit_is_nudged_once():
     assert c.sent == [ask, "lint: fix this", nudge]
 
 
+def test_a_chat_with_no_files_says_a_new_file_needs_no_adding():
+    """aider's "I am not sharing any files that you can edit yet." made gpt-5.4-mini refuse to
+    create a file, even after a nudge (#379). The no-files message says a new file is written with
+    an empty SEARCH; the repo-map message keeps aider's text and gains that sentence; aider's
+    shared prompts object is left as it was."""
+    class Prompts:
+        files_no_full_files = "I am not sharing any files that you can edit yet."
+        files_no_full_files_with_repo_map = "Don't try and edit any existing code without asking me to add the files to the chat!\n"
+        files_no_full_files_with_repo_map_reply = "Ok, based on your requests I will suggest which files need to be edited and then stop and wait for your approval."
+    shared = Prompts()
+    coder = types.SimpleNamespace(gpt_prompts=shared)
+    aider_driver._new_files_need_no_add(coder)
+    p = coder.gpt_prompts
+    assert "not sharing" not in p.files_no_full_files and aider_driver.NEW_FILE_NOTE in p.files_no_full_files
+    # with a repo map: a new file is written directly; an existing one is still named and added
+    assert aider_driver.NEW_FILE_NOTE in p.files_no_full_files_with_repo_map
+    assert "name the ones that need changes and stop" in p.files_no_full_files_with_repo_map
+    assert "wait for your approval" not in p.files_no_full_files_with_repo_map_reply
+    assert "write a new file directly" in p.files_no_full_files_with_repo_map_reply
+    assert shared.files_no_full_files == "I am not sharing any files that you can edit yet."
+    assert shared.files_no_full_files_with_repo_map.startswith("Don't try")
+    # a coder whose prompts have no repo-map message (aider's ask and architect modes) keeps none
+    bare = types.SimpleNamespace(gpt_prompts=types.SimpleNamespace(
+        files_no_full_files="x", files_no_full_files_with_repo_map="", files_no_full_files_with_repo_map_reply=""))
+    aider_driver._new_files_need_no_add(bare)
+    assert bare.gpt_prompts.files_no_full_files_with_repo_map == ""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "    _new_files_need_no_add(coder)\n" in src
+
+
 def test_agent_doc_is_written_as_agents_md_even_though_aider_reads_it_via_read():
     assert _agent_doc_path("/ws", "aider").name == "AGENTS.md"
 
