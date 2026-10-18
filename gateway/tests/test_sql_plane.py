@@ -111,6 +111,19 @@ def test_limit_with_offset_is_respected():
     assert not added
 
 
+def test_mysqls_limit_offset_count_is_respected():
+    """MySQL spells an offset as `LIMIT 5, 10`. The tail check knew only `LIMIT n [OFFSET m]`, so it
+    appended a second LIMIT after this one, a syntax error, and the query never ran."""
+    for sql in ("SELECT * FROM t LIMIT 5, 10", "SELECT * FROM t ORDER BY x limit 5 ,10"):
+        out, added = with_limit(sql, 500)
+        assert not added and out == sql
+
+
+def test_a_comma_inside_the_query_is_not_read_as_a_limit():
+    out, added = with_limit("SELECT a, b FROM (SELECT a, b FROM t LIMIT 5, 10) s", 500)
+    assert added and out.rstrip().endswith("LIMIT 500")
+
+
 def test_limit_inside_a_subquery_does_not_count_as_the_outer_one():
     """The outer query is unbounded and must still be capped."""
     out, added = with_limit("SELECT * FROM (SELECT * FROM t LIMIT 10) s", 500)
