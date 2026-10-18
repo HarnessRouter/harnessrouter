@@ -139,3 +139,16 @@ def test_every_model_the_console_offers_on_a_base_is_one_the_gateway_saves():
         backend = app._backend_of_harness({"base": base})
         refused += [(base, m) for m in models + [default] if not app._model_authorized(m, backend)]
     assert not refused, refused
+
+
+def test_a_cost_cap_is_refused_rather_than_saved_and_never_applied(client):
+    """#472: the self-hosting guide said `max_cost_usd` on a harness caps a turn, but nothing in the
+    gateway or the runner reads one. The guide now says what happens: the field is refused by name,
+    so a harness is never saved with a cap that does nothing."""
+    n = _count(client)
+    r = client.post("/v1/harnesses", json={"name": "capped", "base": "pi", "max_cost_usd": 0.5}, headers=H)
+    assert r.status_code in (400, 422), r.text
+    assert "max_cost_usd" in r.text
+    assert _count(client) == n
+    guide = open(os.path.join(os.path.dirname(app.__file__), "..", "docs", "self-hosting-guide.md")).read()
+    assert "still caps a turn" not in guide
