@@ -50,10 +50,12 @@ import http.client
 import ipaddress
 import http.server
 import datetime
+import errno
 import json
 import mimetypes
 import os
 import pathlib
+import posixpath
 import re
 import shlex
 import shutil
@@ -12812,6 +12814,62 @@ def get_file(path: str, identifier: str = "") -> Response:
     return Response(content=dest.read_bytes(), media_type=media)
 
 
+_DIR_NOFOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _open_dir(base: pathlib.Path, parts: tuple[str, ...], uid: int | None = None, make: bool = False,
+              made: list[str] | None = None) -> int:
+    """An fd on the directory `base`/`parts`, reached one name at a time without following a symlink.
+
+    The file routes check a path and then change it, as the runner, which is root under the
+    write-wall. A process the session left running can swap a checked directory for a symlink in
+    between, and a root write, unlink, rename or chown through that link would land outside the
+    session. Opened with O_NOFOLLOW at every step, the swap fails the change instead.
+
+    `make` creates what is missing (mkdir -p), each directory owned by `uid` (a root-owned directory
+    in a workspace is one the session's own process cannot write into), and lists in `made` what it
+    created. A FILE or a symlink where a directory would be raises NotADirectoryError."""
+    fd = os.open(base, _DIR_NOFOLLOW)
+    try:
+        for name in parts:
+            try:
+                nxt = os.open(name, _DIR_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not make:
+                    raise
+                os.mkdir(name, 0o755, dir_fd=fd)
+                if uid is not None:
+                    os.chown(name, uid, uid, dir_fd=fd, follow_symlinks=False)
+                if made is not None:
+                    made.append(name)
+                nxt = os.open(name, _DIR_NOFOLLOW, dir_fd=fd)
+            except OSError as e:
+                if e.errno != errno.ELOOP:
+                    raise
+                # a symlink: Linux answers ELOOP, macOS ENOTDIR; one answer for both
+                raise NotADirectoryError(errno.ENOTDIR, "a symlink is where a directory would be", name) from None
+            os.close(fd)
+            fd = nxt
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _remove_at(base: pathlib.Path, p: pathlib.Path) -> None:
+    """Remove `p` (a path under `base`) as itself: a directory with everything in it, a file or a
+    symlink as the entry it is. Through _open_dir, so nothing swapped in redirects it."""
+    parts = p.relative_to(base).parts
+    fd = _open_dir(base, parts[:-1])
+    try:
+        if stat.S_ISDIR(os.lstat(parts[-1], dir_fd=fd).st_mode):
+            shutil.rmtree(parts[-1], dir_fd=fd)       # fd-based all the way down; links not followed
+        else:
+            os.unlink(parts[-1], dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
 @app.put("/file")
 async def put_file(request: Request, path: str, identifier: str = "") -> dict:
     """Write ONE file into a session's workspace, as that session.
@@ -12825,32 +12883,237 @@ async def put_file(request: Request, path: str, identifier: str = "") -> dict:
     dest = _safe_join(ws, path)
     if dest is None:
         raise HTTPException(400, "path escapes the workspace")
+    # A file that is already there is replaced WHERE it is. On a nesting base a new file lands at the
+    # session root and the next turn adopts it, but one the agent already has is in its directory:
+    # written at the root it sat beside the agent's copy, which every read found first, and which
+    # adoption would not move over.
+    have = _existing(ws, path)
+    if have is not None and have.is_file() and not have.is_symlink():
+        dest = have
+    elif have is None:
+        # A NEW file whose top folder the agent's directory already has goes into that folder:
+        # adoption moves a root entry only when its name is free in the agent's directory, so it
+        # would never reach the agent.
+        vis = _visible_root(ws)
+        top = (path or "").strip().strip("/").split("/", 1)[0]
+        if vis != ws and "/" in (path or "").strip().strip("/") and (pathlib.Path(vis) / top).is_dir():
+            inside = _safe_join(vis, path)
+            if inside is not None:
+                dest = inside
     data = await request.body()
     pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
     _isolate_session(ws)
     uid = _session_uid(ws)
-    missing: list[pathlib.Path] = []
-    probe = dest.parent
-    while not probe.exists():
-        missing.append(probe)
-        probe = probe.parent
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.parent / f".hr-put-{uuid.uuid4().hex[:8]}"
+    base = pathlib.Path(ws).resolve()
+    parts = dest.relative_to(base).parts
+    if not parts:
+        raise HTTPException(400, "the workspace itself is not a file")
+    tmp = f".hr-put-{uuid.uuid4().hex[:8]}"
     try:
-        tmp.write_bytes(data)
-        os.chmod(tmp, 0o644)
-        if uid is not None:
-            for d in missing:
-                os.chown(d, uid, uid)
-            os.chown(tmp, uid, uid)
-        os.replace(tmp, dest)
+        fd = _open_dir(base, parts[:-1], uid, make=True)
+    except OSError as e:
+        raise HTTPException(500, f"write failed: {str(e)[:200]}")
+    try:
+        out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=fd)
+        with os.fdopen(out, "wb") as f:
+            f.write(data)
+            os.fchmod(f.fileno(), 0o644)
+            if uid is not None:
+                os.fchown(f.fileno(), uid, uid)
+        os.replace(tmp, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
     except OSError as e:
         try:
-            tmp.unlink()
+            os.unlink(tmp, dir_fd=fd)
         except OSError:
             pass
         raise HTTPException(500, f"write failed: {str(e)[:200]}")
+    finally:
+        os.close(fd)
     return {"ok": True, "path": str(dest.relative_to(ws)), "bytes": len(data)}
+
+
+def _safe_leaf(root: str, rel: str) -> pathlib.Path | None:
+    """_safe_join for a path that is about to be removed or renamed: the PARENT is resolved and
+    checked, the last component is not. _safe_join resolves symlinks all the way, so a link inside
+    the workspace would name its target, and removing "the link" would remove the file it points
+    to. None for an escape, or for the root itself."""
+    rel = (rel or "").strip().strip("/")
+    name = posixpath.basename(rel)
+    if not rel or name in ("", ".", ".."):
+        return None
+    parent = _safe_join(root, posixpath.dirname(rel))
+    return None if parent is None else parent / name
+
+
+def _ws_excluded(ws: str) -> tuple[str, ...]:
+    """The base's own machinery, as _git_exclude listed it, relative to the session directory."""
+    try:
+        text = pathlib.Path(ws, ".git", "info", "exclude").read_text(errors="replace")
+    except OSError:
+        return ()
+    return tuple(ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#"))
+
+
+def _ws_protected(rel: str, pats: tuple[str, ...]) -> bool:
+    """`rel` is one of those patterns' paths, under one, or a directory holding one. The gateway's
+    backing.ws_protected applies the same rule to the checkpoint; the two processes ship separately
+    (the runner image carries no gateway code), so it is written twice, and
+    runner/tests/test_file_changes.py holds the two equal over the same cases."""
+    for q in pats:
+        d = q.rstrip("/")
+        if rel == d or (q.endswith("/") and rel.startswith(q)) or d.startswith(rel + "/"):
+            return True
+    return False
+
+
+def _search_roots(ws: str, path: str) -> list[str]:
+    """Where a path the caller names may be: the visible root first, the session root second, the
+    order GET /file reads in.
+
+    The session root is searched on a nesting base only for what _adopt_into would adopt — a file an
+    app wrote there between turns. Never the runner's own entries, and never the agent's directory
+    itself: `workspace` at nanobot's root is the agent's whole working directory, its skills, memory
+    and instructions with the user's files, and a delete of it would take all of them."""
+    vis = _visible_root(ws)
+    roots = [vis]
+    if vis != ws:
+        sub = os.path.basename(vis.rstrip("/"))
+        keep = ({".git", ".gitignore", sub} | _PRODUCED_EXCLUDE_NAMES | _NOISE_SEG
+                | {q.rstrip("/") for q in _PRODUCED_EXCLUDE_PREFIX})
+        if (path or "").strip().strip("/").split("/", 1)[0] not in keep:
+            roots.append(ws)
+    return roots
+
+
+def _copies(ws: str, path: str) -> list[pathlib.Path]:
+    """Every place the path is, in that order. On a nesting base it can be in both: a file the app
+    wrote at the root between turns beside the agent's copy, which _adopt_into will not move over it."""
+    out = []
+    for root in _search_roots(ws, path):
+        p = _safe_leaf(root, path)
+        if p is not None and (p.exists() or p.is_symlink()):
+            out.append(p)
+    return out
+
+
+def _existing(ws: str, path: str) -> pathlib.Path | None:
+    """Where a path the caller names already is (the first of _copies)."""
+    found = _copies(ws, path)
+    return found[0] if found else None
+
+
+def _refuse_protected(ws: str, *paths: pathlib.Path) -> None:
+    """400 for a path the base excludes as its own. On a nesting base a path at the session root is
+    adopted into the agent's directory at the next turn, so it is also checked as it will be there."""
+    pats = _ws_excluded(ws)
+    if not pats:
+        return
+    base = pathlib.Path(ws).resolve()
+    vis = pathlib.Path(_visible_root(ws)).resolve()
+    sub = str(vis.relative_to(base)) if vis != base else ""
+    for p in paths:
+        rel = str(p.relative_to(base))
+        if _ws_protected(rel, pats) or (sub and not (rel == sub or rel.startswith(sub + "/"))
+                                        and _ws_protected(f"{sub}/{rel}", pats)):
+            raise HTTPException(400, "that is the agent's own machinery, not a workspace file")
+
+
+@app.delete("/file")
+def delete_file(path: str, identifier: str = "") -> dict:
+    """Remove ONE file or directory from a session's workspace, as that session (see PUT /file).
+    A directory goes with everything in it, as an environment's source delete does."""
+    ws = _ws(identifier)
+    if _safe_leaf(ws, path) is None:
+        raise HTTPException(400, "path escapes the workspace")
+    found = _copies(ws, path)
+    if not found:
+        raise HTTPException(404, "nothing at that path")
+    _refuse_protected(ws, *found)
+    base = pathlib.Path(ws).resolve()
+    try:
+        # every copy: one left at the root of a nesting base would be adopted back next turn
+        for p in found:
+            _remove_at(base, p)
+    except OSError as e:
+        raise HTTPException(500, f"delete failed: {str(e)[:200]}")
+    return {"ok": True, "path": str(found[0].relative_to(base))}
+
+
+@app.post("/file/mkdir")
+def mkdir_file(path: str, identifier: str = "") -> dict:
+    """Create a directory (and any missing parents), owned by the session's uid. One that already
+    exists is success; a FILE in the way is 409. A new one goes in the user's root — the agent's
+    directory on a nesting base, where the checkpoint's copy of the change puts it too."""
+    ws = _ws(identifier)
+    if _safe_leaf(ws, path) is None:
+        raise HTTPException(400, "path escapes the workspace")
+    pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
+    _isolate_session(ws)
+    dest = _existing(ws, path) or _safe_leaf(_visible_root(ws), path)
+    if dest is None:
+        raise HTTPException(400, "path escapes the workspace")
+    _refuse_protected(ws, dest)
+    if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
+        raise HTTPException(409, "a file is at that path")
+    base = pathlib.Path(ws).resolve()
+    made: list[str] = []
+    try:
+        os.close(_open_dir(base, dest.relative_to(base).parts, _session_uid(ws), make=True, made=made))
+    except (FileExistsError, NotADirectoryError) as e:
+        raise HTTPException(409, f"mkdir failed: {str(e)[:200]}")
+    except OSError as e:
+        raise HTTPException(500, f"mkdir failed: {str(e)[:200]}")
+    return {"ok": True, "path": str(dest.relative_to(base)), "created": bool(made)}
+
+
+@app.post("/file/move")
+def move_file(path: str, to: str, identifier: str = "") -> dict:
+    """Rename a file or directory inside a session's workspace. The destination is on the same side
+    as the source (the nesting base's agent directory, or the session root), must not exist, and
+    must not be inside the source. Missing parent directories are made, as PUT /file makes them."""
+    ws = _ws(identifier)
+    if _safe_leaf(ws, path) is None or _safe_leaf(ws, to) is None:
+        raise HTTPException(400, "path escapes the workspace")
+    found = _copies(ws, path)
+    if not found:
+        raise HTTPException(404, "nothing at that path")
+    src, others = found[0], found[1:]
+    vis = pathlib.Path(_visible_root(ws)).resolve()
+    root = vis if vis != pathlib.Path(ws).resolve() and src.is_relative_to(vis) else pathlib.Path(ws).resolve()
+    dest = _safe_leaf(str(root), to)
+    if dest is None:
+        raise HTTPException(400, "path escapes the workspace")
+    if dest == src or dest.is_relative_to(src):
+        raise HTTPException(400, "a path cannot move inside itself")
+    _refuse_protected(ws, src, dest, *others)
+    # _copies(ws, to): on a nesting base the name can be taken on the OTHER side too, by a file an app
+    # put at the session root (it waits there for adoption) or by the agent's own. Moved in beside it,
+    # one of the two shadows the other for good (adoption never moves over a name the agent's
+    # directory has): an overwrite by another name.
+    if dest.exists() or dest.is_symlink() or _copies(ws, to):
+        raise HTTPException(409, "something is already at the destination")
+    base = pathlib.Path(ws).resolve()
+    sparts, dparts = src.relative_to(base).parts, dest.relative_to(base).parts
+    try:
+        sfd = _open_dir(base, sparts[:-1])
+        try:
+            dfd = _open_dir(base, dparts[:-1], _session_uid(ws), make=True)
+            try:
+                os.rename(sparts[-1], dparts[-1], src_dir_fd=sfd, dst_dir_fd=dfd)
+            finally:
+                os.close(dfd)
+        finally:
+            os.close(sfd)
+        # A second copy at the root of a nesting base (an app's PUT from before writes went where the
+        # file is) would be adopted back under the old name next turn: the old name is gone.
+        for p in others:
+            _remove_at(base, p)
+    except (FileExistsError, NotADirectoryError) as e:
+        # a FILE where one of the destination's folders would be
+        raise HTTPException(409, f"move failed: {str(e)[:200]}")
+    except OSError as e:
+        raise HTTPException(500, f"move failed: {str(e)[:200]}")
+    return {"ok": True, "path": str(src.relative_to(base)), "to": str(dest.relative_to(base))}
 
 
 @app.get("/capabilities")
