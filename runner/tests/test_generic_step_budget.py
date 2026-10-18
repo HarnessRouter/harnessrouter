@@ -207,3 +207,34 @@ def test_codex_on_the_app_server_stops_at_its_budget(tmp_path):
 def test_codex_on_the_app_server_within_its_budget_completes(tmp_path):
     rec = _appserver_turn(tmp_path, calls=3, max_turns=400)
     assert rec["status"] == "done" and rec["result"] == "DONE"
+
+
+def test_a_stop_before_any_result_carries_the_translators_running_count(tmp_path, monkeypatch):
+    """pi and dsh count usage as the turn goes (per message, per step): a turn their CLI never got
+    to total still reports what was counted, as their own result would."""
+    monkeypatch.setattr(rs, "_relay_usage", lambda env: {})
+
+    def counting(obj, state):
+        if obj.get("type") == "usage":          # stands for pi's message_end usage
+            rs._pi_usage_add(state, obj["usage"])
+            return []
+        return rs._claude_passthrough(obj, state)
+
+    lines = ["import json,time",
+             f"print({json.dumps(json.dumps({'type': 'usage', 'usage': {'input': 50, 'output': 5}}))}, flush=True)"]
+    lines += [f"print({json.dumps(json.dumps(_tool_use(i)))}, flush=True)" for i in range(4)]
+    lines.append("time.sleep(30)")
+    path = tmp_path / "stream.py"
+    path.write_text("\n".join(lines) + "\n")
+    turn_id = "gen-running-" + uuid.uuid4().hex
+    _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
+                       "started": time.time(), "backend": "pi", "model": "m"}
+    try:
+        _run_turn_bg(turn_id, [sys.executable, str(path)], os.environ.copy(), str(tmp_path),
+                     counting, "m", timeout_seconds=30, max_turns=1, count_steps=True)
+        rec = _turns[turn_id]
+    finally:
+        _turns.pop(turn_id, None)
+    final = _results(rec)[-1]
+    assert rec["status"] == "max_turns" and final["subtype"] == "error_max_turns"
+    assert final["usage"] == {"input_tokens": 50, "output_tokens": 5}

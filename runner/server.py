@@ -3018,12 +3018,7 @@ def _dsh_to_claude(obj: dict, state: dict) -> list[dict]:
                      "model": state.get("model")}]
         return []
     if m == "__hr_result":
-        usage_map = state.get("_dsh_usage") or {}
-        usage: dict = {}
-        for u in usage_map.values():
-            for k, v in u.items():
-                usage[k] = usage.get(k, 0) + v
-        usage = {k: v for k, v in usage.items() if v}
+        usage = _running_usage(state)
         reason = p.get("reason")
         final = p.get("final") or state.get("final", "")
         state["final"] = final
@@ -3384,8 +3379,7 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
             state["_pi_text"] = ""
             return []
         err = state.get("_pi_error")
-        usage = dict(state.get("_pi_usage") or {})
-        usage = {k: v for k, v in usage.items() if v}
+        usage = _running_usage(state)
         served = sorted(set(state.get("_served") or []))
         requested = str(state.get("model") or "")
         other = [m for m in served if requested and not _same_model(requested, m)]
@@ -11689,6 +11683,19 @@ _GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "gajae", "qwen", "gemini", 
                         "opencode", "mimo", "kilo", "qoder"}
 
 
+def _running_usage(state: dict) -> dict:
+    """What a translator has counted of a turn's usage so far: pi's (omp's, gajae's) per message,
+    dsh's per step. It is the turn's usage on their result, and on a budget's stop, which comes
+    before their CLI says anything terminal. {} where nothing is kept as the turn goes."""
+    usage: dict = {}
+    if state.get("_pi_usage"):
+        usage = dict(state["_pi_usage"])
+    for u in (state.get("_dsh_usage") or {}).values():
+        for k, v in u.items():
+            usage[k] = usage.get(k, 0) + v
+    return {k: v for k, v in usage.items() if v}
+
+
 def _count_tool_calls(ev: dict, state: dict) -> int:
     """The tool calls a turn has made so far, counted by id, so a normaliser that reports one call
     twice does not spend the budget twice."""
@@ -11828,10 +11835,12 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 state["final"] = state.get("final") or ev.get("result") or ""
     if result_ev is None and state.get("_stop") == "max_turns":
         # Stopped at its budget before the CLI said anything terminal (codex's turn.completed
-        # never comes once it is killed): the turn's result is the budget's, with what the relay
-        # counted, and no usage at all where nothing counted it.
+        # never comes once it is killed): the turn's result is the budget's, with what its
+        # translator or the relay counted, and no usage at all where nothing counted it.
         result_ev = {"type": "result", "subtype": "error_max_turns", "is_error": False,
                      "result": state.get("final", "")}
+        if _running_usage(state):
+            result_ev["usage"] = _running_usage(state)   # the translator's count so far (pi, dsh)
         _settle(result_ev)
         with _turns_lock:
             rec["events"].append(result_ev)
