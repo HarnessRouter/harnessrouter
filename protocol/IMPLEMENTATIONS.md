@@ -19,7 +19,7 @@ A server runs one or more harnesses behind the contract. Guide: [Implement a ser
 
 <div class="impl-card" id="harnessrouter-ce">
 <div class="impl-head"><a href="https://github.com/HarnessRouter/harnessrouter"><b>HarnessRouter Community Edition</b></a><span class="role role-server">Server</span></div>
-<p>Open-source runner that puts existing harnesses — Codex, Claude Code, Hermes — behind the UHP contract. HarnessRouter · Apache-2.0.</p>
+<p>Open-source server that puts 26 existing harness bases, among them Codex, Claude Code, Hermes, OpenCode and Gemini CLI, behind the UHP contract (<a href="https://github.com/HarnessRouter/harnessrouter/blob/main/docs/support-matrix.md">support matrix</a>). HarnessRouter · Apache-2.0.</p>
 <p class="impl-meta">UHP 2026-09-12</p>
 </div>
 
