@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="660" viewBox="0 0 920 660" role="img" aria-labelledby="title desc" style="color-scheme:only light">
+<title id="title">Five protocols, five connection boundaries</title>
+<desc id="desc">UHP connects a product and a harness. MCP connects an AI application or agent to tools and data. A2A connects agents. ACP connects an editor or client to a coding agent. AG-UI connects a front end to an agent. The rows show roles, not a required stack.</desc>
+<rect width="920" height="660" rx="16" fill="#f8fafc"/>
+<g font-family="sans-serif" fill="#0f172a">
+<text x="40" y="48" font-size="26" font-weight="700">Different protocols connect different boundaries</text>
+<text x="40" y="78" font-size="16" fill="#475569">Roles are illustrative; this is not a required stack.</text>
+<rect x="30" y="105" width="860" height="91" rx="10" fill="#dbeafe" stroke="#cbd5e1"/>
+<text x="50" y="138" font-size="21" font-weight="700">UHP</text>
+<text x="180" y="138" font-size="19">Product</text>
+<path d="M 435 131 H 530 M 435 131 l 9 -6 M 435 131 l 9 6 M 530 131 l -9 -6 M 530 131 l -9 6" fill="none" stroke="#2563eb" stroke-width="2"/>
+<text x="555" y="138" font-size="19">Harness</text>
+<text x="180" y="171" font-size="16" fill="#475569">Tasks, sessions, streaming, files</text>
+<rect x="30" y="206" width="860" height="91" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+<text x="50" y="239" font-size="21" font-weight="700">MCP</text>
+<text x="180" y="239" font-size="19">AI application / agent</text>
+<path d="M 435 232 H 530 M 435 232 l 9 -6 M 435 232 l 9 6 M 530 232 l -9 -6 M 530 232 l -9 6" fill="none" stroke="#2563eb" stroke-width="2"/>
+<text x="555" y="239" font-size="19">Tools and data</text>
+<text x="180" y="272" font-size="16" fill="#475569">Tools, resources and context</text>
+<rect x="30" y="307" width="860" height="91" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+<text x="50" y="340" font-size="21" font-weight="700">A2A</text>
+<text x="180" y="340" font-size="19">Agent</text>
+<path d="M 435 333 H 530 M 435 333 l 9 -6 M 435 333 l 9 6 M 530 333 l -9 -6 M 530 333 l -9 6" fill="none" stroke="#2563eb" stroke-width="2"/>
+<text x="555" y="340" font-size="19">Agent</text>
+<text x="180" y="373" font-size="16" fill="#475569">Delegation and collaboration</text>
+<rect x="30" y="408" width="860" height="91" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+<text x="50" y="441" font-size="21" font-weight="700">ACP</text>
+<text x="180" y="441" font-size="19">Editor / client</text>
+<path d="M 435 434 H 530 M 435 434 l 9 -6 M 435 434 l 9 6 M 530 434 l -9 -6 M 530 434 l -9 6" fill="none" stroke="#2563eb" stroke-width="2"/>
+<text x="555" y="441" font-size="19">Coding agent</text>
+<text x="180" y="474" font-size="16" fill="#475569">Coding-session interaction</text>
+<rect x="30" y="509" width="860" height="91" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+<text x="50" y="542" font-size="21" font-weight="700">AG-UI</text>
+<text x="180" y="542" font-size="19">Front end</text>
+<path d="M 435 535 H 530 M 435 535 l 9 -6 M 435 535 l 9 6 M 530 535 l -9 -6 M 530 535 l -9 6" fill="none" stroke="#2563eb" stroke-width="2"/>
+<text x="555" y="542" font-size="19">Agent</text>
+<text x="180" y="575" font-size="16" fill="#475569">Events and user interaction</text>
+<text x="40" y="640" font-size="14" fill="#475569">ACP here means Agent Client Protocol.</text>
+</g></svg>

@@ -34,6 +34,8 @@ out, tools you have to run yourself. UHP gives you a *task*: work in, and a runn
 its own tools, keeps its own session, and hands back results and files. The unit of exchange is a
 job, not a completion.
 
+See [UHP in the agent protocol ecosystem](ECOSYSTEM.md) for how UHP fits alongside MCP, A2A, ACP and AG-UI.
+
 ## Status of this document
 
 | | |
