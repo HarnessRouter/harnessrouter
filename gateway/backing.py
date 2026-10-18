@@ -786,9 +786,10 @@ class RunnerWorkspaceFiles:
         one, the archive is the only copy and its outcome is the answer.
 
         Two answers hold even after a live change:
-        - A folder made before the first turn has no archive to go into, and that turn's restore
-          empties the live directory (the captures put files back, and a folder has none). So the
-          archive is started with it, as the hosted backing starts one.
+        - A folder made while the session has no checkpoint (its turn ended without one) has no
+          archive to go into, and the next turn's restore empties the live directory (the captures
+          put files back, and a folder has none). So the archive is started with it, as the hosted
+          backing starts one.
         - An archive that REFUSES what the live directory allowed (a file where the folder or the
           destination would go) means the live directory is not the session's workspace: it is a
           reaped one the runner made anew, which the next turn wipes and restores from this archive.
@@ -800,7 +801,7 @@ class RunnerWorkspaceFiles:
             async with _ckpt_lock(sid):
                 raw = await self.blob.get(self.ckpt_kb, key)
                 if not raw and op != "mkdir":
-                    # no turn has ended yet: the live directory is the only copy
+                    # no checkpoint yet: the live directory is the only copy
                     return WS_OK if live else WS_NOT_FOUND
                 outcome, tar = await asyncio.to_thread(tar_change, raw, op, member, to)
                 if outcome in (WS_NOT_FOUND, WS_UNCHANGED):

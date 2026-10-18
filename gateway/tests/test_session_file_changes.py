@@ -199,9 +199,9 @@ async def test_selfhosted_a_file_made_since_the_checkpoint_leaves_it_alone():
 
 @pytest.mark.asyncio
 async def test_selfhosted_with_no_checkpoint_yet():
-    """A delete or a move has no archive to change before the first turn. A folder does: that turn's
-    restore empties the live directory and the captures put back only files, so the archive is
-    started with the folder, as the hosted backing starts one."""
+    """A delete or a move has no archive to change while the session has no checkpoint (its turn ended
+    without one). A folder does: the next turn's restore empties the live directory and the captures
+    put back only files, so the archive is started with the folder, as the hosted backing starts one."""
     blob, ws, _ = _selfhosted(_Resp(200, {"path": "x"}))
     assert await ws.delete("s", "x") == B.WS_OK and blob.objects == {}
     blob, ws, _ = _selfhosted(_Resp(200, {"path": "a", "created": True}))
