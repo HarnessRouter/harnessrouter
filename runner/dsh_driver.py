@@ -178,6 +178,14 @@ def _gemini_schema(node):
         elif members:
             out = {**members[0], **out}
             out.setdefault("type", members[0].get("type") or "string")
+    if isinstance(out.get("enum"), list) and None in out["enum"]:
+        # A nullable enum spelled the JSON-schema way ({"type": ["string", "null"], "enum": [..., null]},
+        # grok's todo_write status) is refused whole: "Enum values must share one supported primitive
+        # type" (gemini-3.5-flash-lite through Vercel, 2026-09-27). The null member is `nullable`.
+        out["enum"] = [x for x in out["enum"] if x is not None]
+        out["nullable"] = True
+        if not out["enum"]:
+            out.pop("enum")
     if "type" not in out and "anyOf" not in out:
         out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
     if out.get("type") == "array" and "items" not in out:

@@ -3274,3 +3274,32 @@ def test_an_import_that_is_not_media_is_refused_rather_than_stored(api, harness,
     r = api.post(base, content=b"this is not a picture")
     assert r.status_code == 415, r.text
     assert api.post(base, content=b"").status_code == 400
+
+
+def test_a_submit_that_answered_without_its_handle_says_which_one_was_missing():
+    """A 200 with no task id, job handle or audio was meant to say so in our own sentence when the
+    provider gave none. provider_message never returns "", so the `or` never reached that sentence
+    and the agent read "the provider answered HTTP 200", which says nothing went wrong."""
+    for shape, said in (("video-generation", "returned no task id"),
+                        ("vercel-video", "returned no job handle"),
+                        ("vercel-speech", "answered with no audio")):
+        with pytest.raises(media_plane.MediaEmpty) as e:
+            media_plane.read_submit({"shape": shape}, 200, {"status": "queued"})
+        assert said in str(e.value), (shape, str(e.value))
+        assert "HTTP 200" not in str(e.value)
+
+
+def test_a_submit_without_its_handle_still_carries_the_providers_own_sentence():
+    with pytest.raises(media_plane.MediaEmpty) as e:
+        media_plane.read_submit({"shape": "video-generation"}, 200, {"error": {"message": "quota exhausted"}})
+    assert "quota exhausted" in str(e.value)
+    assert media_plane.provider_message({}, 503) == "the provider answered HTTP 503"
+
+
+def test_a_render_that_ended_without_a_reason_says_how_it_ended():
+    """The same dead fallback on the poll: a vercel-video job that ended `cancelled` with no message
+    was reported as "the provider answered HTTP 200" instead of "the render ended as cancelled"."""
+    st, _, err, _ = media_plane.read_poll({"shape": "vercel-video"}, 200, {"status": "cancelled"})
+    assert st == "failed" and err == "the render ended as cancelled", err
+    st, _, err, _ = media_plane.read_poll({"shape": "vercel-video"}, 200, {"status": "failed", "error": "nsfw"})
+    assert st == "failed" and "nsfw" in err, err
