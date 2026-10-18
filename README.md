@@ -45,6 +45,8 @@ HarnessRouter implements the [Unified Harness Protocol (UHP)](#the-unified-harne
 
 Eight harness × model configurations on the same task. Each metric compares its best and worst results. The lowest-cost and fastest configurations vary by task. [Methodology](https://harnessrouter.ai/benchmarks)
 
+**26 harness bases today:** Codex, Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Aider, OpenHands, CheetahClaws, Grok Build, Agent Zero, System One, Qoder Cloud Agent, MiMo Code, jcode, OpenSquilla, nanobot and ZeroClaw. The [support matrix](docs/support-matrix.md) shows which run on which provider.
+
 > [!TIP]
 > **Get started:** [Run locally](#quickstart) · [Integrate into your product](#use-the-api-directly) · [Starter kits](#starter-kits) · [Use managed Cloud](https://harnessrouter.ai)
 
