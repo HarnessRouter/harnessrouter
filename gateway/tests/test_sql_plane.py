@@ -233,10 +233,15 @@ def _stub_asyncpg(monkeypatch, conn):
     monkeypatch.setitem(sys.modules, "asyncpg", mod)
 
 
+class _SSCursor:
+    """Stands for aiomysql.SSCursor, the unbuffered cursor class."""
+
+
 class _MysqlCursor:
     def __init__(self, rows):
         self._rows = rows
         self.fetched = None
+        self.closed = False
         self.description = [("x",)]
 
     async def execute(self, sql):
@@ -246,22 +251,23 @@ class _MysqlCursor:
         self.fetched = n
         return self._rows[:n]
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *a):
-        return False
+    async def close(self):
+        # An unbuffered cursor's close() reads the rest of the result off the wire.
+        self.closed = True
 
 
 class _MysqlConn:
     def __init__(self, cursor):
         self._cursor = cursor
+        self.cursor_classes = None
+        self.closed = False
 
-    def cursor(self):   # aiomysql cursors support the async context-manager protocol
+    async def cursor(self, *classes):   # aiomysql's cursor() is awaitable
+        self.cursor_classes = classes
         return self._cursor
 
     def close(self):
-        pass
+        self.closed = True
 
 
 def _stub_aiomysql(monkeypatch, conn):
@@ -274,6 +280,7 @@ def _stub_aiomysql(monkeypatch, conn):
         return conn
 
     mod.connect = connect
+    mod.SSCursor = _SSCursor
     monkeypatch.setitem(sys.modules, "aiomysql", mod)
 
 
@@ -302,11 +309,16 @@ def test_the_mysql_fetch_never_asks_for_more_than_the_cap_plus_one(monkeypatch):
 
     rows = [(i,) for i in range(10_000)]
     cur = _MysqlCursor(rows)
-    _stub_aiomysql(monkeypatch, _MysqlConn(cur))
+    conn = _MysqlConn(cur)
+    _stub_aiomysql(monkeypatch, conn)
     out = asyncio.run(sql_plane._mysql_query(
         "mysql://u@h/db", "SELECT x FROM t LIMIT 0, 18446744073709551615", 5.0, 100))
     assert out["row_count"] == 100 and out["truncated"] is True
     assert cur.fetched == 101, f"driver asked for {cur.fetched} rows, not 101"
+    # The default cursor buffers the whole result inside execute(): only an unbuffered one is bounded.
+    assert conn.cursor_classes == (_SSCursor,)
+    # Closing the unbuffered cursor would read the rest of the result; the connection is closed instead.
+    assert not cur.closed and conn.closed
 
 
 def test_the_postgres_cursor_calls_match_real_asyncpg():
@@ -325,3 +337,12 @@ def test_the_postgres_cursor_calls_match_real_asyncpg():
     assert hasattr(Cursor, "fetch")
     assert not hasattr(Cursor, "close")
     assert not hasattr(Cursor, "__aenter__")
+
+
+def test_the_mysql_cursor_calls_match_real_aiomysql():
+    """Guard for the MySQL stubs above: aiomysql's SSCursor is its unbuffered cursor, and its close()
+    is its own (it reads the rest of the result off the wire), which is why the plane closes the
+    connection instead of the cursor."""
+    aiomysql = pytest.importorskip("aiomysql")
+    assert issubclass(aiomysql.SSCursor, aiomysql.Cursor)
+    assert aiomysql.SSCursor.close is not aiomysql.Cursor.close

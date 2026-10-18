@@ -199,8 +199,10 @@ async def _pg_query(dsn: str, sql: str, timeout: float, max_rows: int) -> dict:
             # real server-side cursor. (asyncpg's Cursor exposes fetch/fetchrow/forward
             # only — there is no Cursor.close() and no async context manager; the portal
             # is bound to this read-only transaction and is destroyed when the block exits.)
-            cur = await conn.cursor(sql)
-            recs = await asyncio.wait_for(cur.fetch(max_rows + 1), timeout=timeout)
+            async def first_rows():
+                cur = await conn.cursor(sql)          # prepares and binds: under the timeout too
+                return await cur.fetch(max_rows + 1)
+            recs = await asyncio.wait_for(first_rows(), timeout=timeout)
         cols = list(recs[0].keys()) if recs else []
         return _rows_out(cols, [tuple(r.values()) for r in recs], max_rows)
     except asyncio.TimeoutError as e:
@@ -224,21 +226,26 @@ async def _mysql_query(dsn: str, sql: str, timeout: float, max_rows: int) -> dic
     try:
         conn = await asyncio.wait_for(aiomysql.connect(**parsed), timeout=timeout)
         await _vet_peer(conn)
-        async with conn.cursor() as cur:
-            # MySQL has no read-only transaction that survives a plain connection cleanly, so the
-            # session is set read-only where the server supports it and the parser carries the
-            # rest. Documented, not pretended.
-            with_suppress = "SET SESSION TRANSACTION READ ONLY"
-            try:
-                await cur.execute(with_suppress)
-            except Exception:
-                pass
-            await asyncio.wait_for(cur.execute(sql), timeout=timeout)
-            # Bounded like the Postgres path: the row cap must not depend on the SQL rewrite,
-            # because a statement's own large LIMIT is never rewritten and fetchall() would
-            # then load every row into memory before slicing.
-            recs = await cur.fetchmany(max_rows + 1)
-            cols = [d[0] for d in (cur.description or [])]
+        # Bounded like the Postgres path: the row cap must not depend on the SQL rewrite, because a
+        # statement's own large LIMIT is never rewritten. The cursor is UNBUFFERED: aiomysql's
+        # default one reads the whole result into memory inside execute(), before any fetch could
+        # bound it. And it is never closed: closing an unbuffered cursor reads the rest of the
+        # result off the wire. Closing the connection (below) drops the rest instead.
+        cur = await conn.cursor(aiomysql.SSCursor)
+        # MySQL has no read-only transaction that survives a plain connection cleanly, so the
+        # session is set read-only where the server supports it and the parser carries the
+        # rest. Documented, not pretended.
+        with_suppress = "SET SESSION TRANSACTION READ ONLY"
+        try:
+            await cur.execute(with_suppress)
+        except Exception:
+            pass
+
+        async def first_rows():
+            await cur.execute(sql)
+            return await cur.fetchmany(max_rows + 1)   # rows stream now: under the timeout too
+        recs = await asyncio.wait_for(first_rows(), timeout=timeout)
+        cols = [d[0] for d in (cur.description or [])]
         return _rows_out(cols, list(recs), max_rows)
     except asyncio.TimeoutError as e:
         raise SqlError(f"The query did not finish within {int(timeout)}s.") from e
