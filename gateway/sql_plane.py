@@ -102,7 +102,8 @@ def check_readonly(sql: str) -> str:
     return raw
 
 
-_LIMIT_TAIL = re.compile(r"\blimit\s+\d+\s*(?:offset\s+\d+\s*)?$", re.I)
+# `LIMIT n`, `LIMIT n OFFSET m`, and MySQL's `LIMIT offset, count`.
+_LIMIT_TAIL = re.compile(r"\blimit\s+\d+\s*(?:(?:offset\s+\d+|,\s*\d+)\s*)?$", re.I)
 
 
 def with_limit(sql: str, max_rows: int) -> tuple[str, bool]:
