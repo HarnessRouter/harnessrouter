@@ -612,6 +612,12 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
             break
         reflections += 1
         message = coder.reflected_message
+        # A reflection is a user message the model sees, and aider writes only the turn's first
+        # one to its chat history, which is what a recycled sandbox restores the conversation
+        # from. Logged here, the restored history is the one the model saw: on 0.35.3-rc.1, after
+        # a nudged turn and a recycle, the history held two replies in a row with no message
+        # between, and gpt-5.4-mini answered "what did my first message ask for" with "HELLO".
+        coder.io.user_input(message)
 
 
 def _write_model_metadata(cwd: str, model: str) -> str | None:

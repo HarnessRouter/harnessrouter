@@ -475,8 +475,12 @@ def test_a_file_request_answered_with_a_word_and_no_edit_is_nudged_once():
     assert "`a.txt`, `b.txt`" in aider_driver._file_nudge(["a.txt", "b.txt"])
 
     gate = aider_driver._Gate([])
-    c = Coder(["DONE", "DONE"], edits=[None, "edit"]); aider_driver._run_turn(c, ask, gate)
+    c = Coder(["DONE", "DONE"], edits=[None, "edit"])
+    logged = []; c.io = types.SimpleNamespace(user_input=logged.append)
+    aider_driver._run_turn(c, ask, gate)
     assert c.sent == [ask, nudge]                                    # nudged, then wrote it
+    # the history a recycled sandbox restores holds every message the model saw, the nudge too
+    assert logged == [ask, nudge]
     pathlib.Path(root, "hello-aider.txt").unlink()
     c = Coder(["DONE", "DONE"]); aider_driver._run_turn(c, ask, gate)
     assert c.sent == [ask, nudge]                                    # once, not twice
