@@ -11967,7 +11967,8 @@ def _codex_thread_request(resume_session_id: str | None, cwd: str, model: str) -
 
 
 def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str,
-                            resume_session_id: str | None, timeout_seconds: int | None) -> None:
+                            resume_session_id: str | None, timeout_seconds: int | None,
+                            max_turns: int | None = None) -> None:
     rec = _turns[turn_id]
     state = {"final": ""}
 
@@ -12088,6 +12089,13 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                 it = p.get("item") or {}
                 for ev in _codex_tool_item(it):     # messages and reasoning yield nothing: already streamed as deltas
                     append(ev)
+                    # The step budget, as _run_turn_bg counts it for `codex exec` (#471): codex has no
+                    # limit of its own, and this is the path the image runs codex on by default.
+                    if (max_turns and ev.get("type") == "assistant"
+                            and _count_tool_calls(ev, state) > int(max_turns)):
+                        state["_stop"] = "max_turns"
+                if state.get("_stop"):
+                    break       # past the budget: the process is stopped below, one turn per process
             elif method == "turn/completed":
                 # Final cumulative usage may also ride the completed turn; read it as a fallback.
                 turn_obj = p.get("turn") or {}
@@ -12137,18 +12145,20 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         return (not low) or ("reconnect" in low) or ("stream closed" in low) or low in ("eof", "connection closed")
     answered = bool(state["final"].strip())
     noise_only = all(_is_reconnect_noise(l) for l in errbuf) if errbuf else True
+    stopped = state.get("_stop") == "max_turns" and not rec.get("cancelled") and not rec.get("capped")
     ok = ((turn_status in ("completed", None)) or (answered and noise_only)) \
         and not rec.get("cancelled") and not rec.get("capped")
     err_txt = ("\n".join(errbuf[-30:]).strip() or f"app-server turn status: {turn_status}")[:2000]
     # On a genuine failure, lead with the agent's own last words (often the real reason, e.g.
     # "workspace is read-only") and follow with the technical error, so the Result row is never a
     # blank "Failed" with no explanation.
-    if ok:
+    if ok or stopped:
         res_txt = state["final"]
     else:
         res_txt = "\n\n".join(x for x in (state["final"].strip(), err_txt) if x)[:4000] or err_txt
-    ev = {"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
-          "result": res_txt, "usage": usage}      # surface the error in the trace
+    # stopped at its budget: incomplete, with the usage the app-server had counted so far
+    ev = {"type": "result", "subtype": "error_max_turns" if stopped else "success" if ok else "error",
+          "is_error": not ok and not stopped, "result": res_txt, "usage": usage}   # surface the error in the trace
     # What the relay saw the provider say, as on the exec path: the app-server reports no served
     # model either.
     served = _relay_served_model(env)
@@ -12159,8 +12169,8 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
     append(ev)
     rec["result"] = state["final"]
     rec["status"] = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
-                     else "done" if ok else "failed")
-    if not ok:
+                     else "max_turns" if stopped else "done" if ok else "failed")
+    if not ok and not stopped:
         rec["error"] = err_txt
         rec["tried"] = [{"connection": "codex-app-server", "error": err_txt[:400]}]  # -> gateway failure msg
     rec["done"] = True
@@ -13585,7 +13595,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
             _turn_by_key[key] = turn_id
     if use_appserver:
         threading.Thread(target=_run_codex_appserver_bg,
-                         args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds),
+                         args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds,
+                               req.max_turns),
                          daemon=True).start()
     elif backend == "hermes":
         threading.Thread(target=_run_hermes_bg,

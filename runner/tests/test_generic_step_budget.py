@@ -146,3 +146,64 @@ def test_the_budget_set_covers_exactly_the_unbounded_bases():
 def test_the_stop_result_reports_incomplete_at_the_gateway_layer():
     ev = {"type": "result", "subtype": "error_max_turns", "is_error": False, "result": ""}
     assert _status_from_result(ev, -9) == "max_turns"
+
+
+_FAKE_APPSERVER = '''
+import json, os, sys, time
+def out(o):
+    print(json.dumps(o), flush=True)
+for line in sys.stdin:
+    m = json.loads(line)
+    meth, mid = m.get("method"), m.get("id")
+    if meth == "initialize":
+        out({"id": mid, "result": {}})
+    elif meth in ("thread/start", "thread/resume"):
+        out({"id": mid, "result": {"thread": {"id": "th1"}}})
+    elif meth == "turn/start":
+        out({"id": mid, "result": {"turn": {"id": "tu1"}}})
+        for i in range(int(os.environ.get("FAKE_CALLS", "4"))):
+            # the model call that asked for the command is counted before the command runs
+            out({"method": "thread/tokenUsage/updated", "params": {"tokenUsage": {"total": {
+                "inputTokens": 100 * (i + 1), "outputTokens": 10 * (i + 1)}}}})
+            out({"method": "item/completed", "params": {"item": {
+                "type": "commandExecution", "id": "c%d" % i, "command": "echo %d" % i,
+                "aggregatedOutput": "ok", "exitCode": 0}}})
+            time.sleep(0.05)
+        out({"method": "item/agentMessage/delta", "params": {"delta": "DONE"}})
+        out({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+'''
+
+
+def _appserver_turn(tmp_path, calls: int, max_turns):
+    """codex on the app-server path, which the image runs codex on by default
+    (HARNESS_CODEX_APPSERVER=1 in docker/entrypoint.sh), against a fake app-server."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "codex"
+    fake.write_text(f"#!{sys.executable}\n" + _FAKE_APPSERVER)
+    fake.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ.get('PATH', '')}", "FAKE_CALLS": str(calls)}
+    turn_id = "gen-appserver-" + uuid.uuid4().hex
+    _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
+                       "started": time.time(), "backend": "codex", "model": "m"}
+    try:
+        rs._run_codex_appserver_bg(turn_id, str(tmp_path), env, "m", "go", None, 30, max_turns)
+        return _turns[turn_id]
+    finally:
+        _turns.pop(turn_id, None)
+
+
+def test_codex_on_the_app_server_stops_at_its_budget(tmp_path):
+    rec = _appserver_turn(tmp_path, calls=4, max_turns=1)
+    final = _results(rec)[-1]
+    assert rec["status"] == "max_turns" and not rec.get("error")
+    assert final["subtype"] == "error_max_turns" and final["is_error"] is False
+    calls = [b for ev in rec["events"] if ev.get("type") == "assistant"
+             for b in ev["message"]["content"] if b.get("type") == "tool_use"]
+    assert len(calls) == 2                                    # stopped at the call past the budget
+    assert final["usage"].get("input_tokens") == 200          # what the app-server had counted
+
+
+def test_codex_on_the_app_server_within_its_budget_completes(tmp_path):
+    rec = _appserver_turn(tmp_path, calls=3, max_turns=400)
+    assert rec["status"] == "done" and rec["result"] == "DONE"
