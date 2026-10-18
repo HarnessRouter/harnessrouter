@@ -18,6 +18,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import subprocess
 import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -277,6 +278,7 @@ def test_the_doc_tells_the_model_how_this_workspace_works_and_names_the_skills_b
     assert "- `cat .harness/skills/plugin-probe/SKILL.md`" in text
     assert "```bash" in text and "Report only output you were actually given" in text
     assert "never by an absolute path" in text
+    assert "A new file is created by writing it" in text and "added to the chat first" in text
     # written fresh each turn on top of the doc the turn wrote: no growth across turns
     doc.write_text("# harness contract\n")
     _build_aider("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
@@ -366,6 +368,178 @@ def test_a_reply_that_announces_work_and_does_none_is_nudged_once():
     c = Coder(["I'll create it.\n\nsfo.md\n```md\n<<<<<<< SEARCH\n=======\n# SFO\n>>>>>>> REPLACE\n```"])
     c.aider_edited_files = {"sfo.md"}; aider_driver._run_turn(c, "make sfo.md", gate)
     assert c.sent == ["make sfo.md"]                                 # it acted: no nudge
+
+
+def test_a_request_that_names_a_file_to_write_is_told_apart_from_a_question():
+    """#379: the request decides, not the reply. A create or write verb opening a clause, and a
+    file name with a lettered extension in the same sentence that does not exist yet; a question,
+    a version number, an abbreviation, an address, a file the request only reads from, a file that
+    exists and a file asked for in an earlier turn are none."""
+    d = tempfile.mkdtemp()
+    pathlib.Path(d, "notes.md").write_text("n\n"); pathlib.Path(d, "utils.py").write_text("x = 1\n")
+    pathlib.Path(d, "data.csv").write_text("a,b\n")
+    pathlib.Path(d, "src").mkdir(); pathlib.Path(d, "src", "app.py").write_text("x = 1\n")
+    pathlib.Path(d, "report.final.md").write_text("r\n")
+    f = lambda text: aider_driver._files_asked_for(text, d)
+    assert f("Create a file named hello-aider.txt containing exactly the word HELLO, then reply DONE.") == ["hello-aider.txt"]
+    assert f("Please write a short poem about autumn into poem.md") == ["poem.md"]
+    assert f("Read the notes, then write it to out/report.md") == ["out/report.md"]
+    assert f("Can you create `config.yaml` with a port of 8080?") == ["config.yaml"]
+    assert f("Write a summary of notes.md into summary.md") == ["summary.md"]
+    assert f("I want you to save the results in results.csv.") == ["results.csv"]
+    assert f("Create a.txt and b.txt, then reply DONE") == ["a.txt", "b.txt"]
+    assert f("what would a hello.txt contain?") == [] and f("how do I create config.yaml?") == []
+    assert f("Reply with exactly: M1-gpt-5.4") == [] and f("Summarize what changed in 0.29.0") == []
+    assert f("Make the tests pass for gpt-5.4-mini") == [] and f("Write a summary of ideas.md") == []
+    assert f("Write a summary of `ideas.md`") == [] and f('Write a summary from "ideas.md"') == []
+    assert f("Write a script, e.g. a bash one-liner, that prints the date") == []
+    assert f("Draft an email to john.doe@acme.com about the launch") == []
+    assert f("Write unit tests for utils.py") == [] and f("Export the table in data.csv to JSON") == []
+    assert f("Create a file. What is hello.txt?") == [] and f("") == [] and f(None) == []
+    assert f("Create notes.v2.txt") == ["notes.v2.txt"]              # every dot kept
+    assert f("Write the output to ./out.txt, then reply DONE") == ["out.txt"]
+    # binary types are not asked for by edit block: a .pptx written as text is a corrupt file
+    assert f("Make a one-slide deck deck.pptx, then reply DONE") == [] and f("Create logo.png") == []
+    # what the requested program reads or produces is not a file to make now
+    assert f("Write a script that parses config.yaml") == []
+    # "and save results.csv" after it reads as the person's own ask, as in "fetch it and save
+    # results.csv", and is kept as one
+    assert f("Write a Python script to load input.json and save results.csv") == ["results.csv"]
+    assert f("Write a Python script that loads input.json and saves results.csv") == []
+    assert f("Save it to the file out.md") == ["out.md"] and f("Write it to out/report.md") == ["out/report.md"]
+    assert f("Create a project with main.py and utils2.py, then reply DONE") == ["main.py", "utils2.py"]
+    assert f("Create docker-compose.prod.yml for the app") == ["docker-compose.prod.yml"]
+    assert f("Create report.final.md with a title") == []            # it exists, whole name
+    assert f("Create .env with FOO=1") == [".env"] and f("Write a Dockerfile, then reply DONE") == ["Dockerfile"]
+    assert f("Write the result to ../out.txt") == []                 # not in the workspace
+    assert f("Write a Node.js script that prints hi") == [] and f("Build a Next.js app") == []
+    assert f("Write a scraper for example.com") == []
+    assert f("Write a function that calls subprocess.run and prints the output") == []
+    assert f("Create a wrapper around requests.Session") == [] and f("Build a .NET console app") == []
+    assert f("Fix the parser and make sure the output goes to parsed.json") == []
+    assert f("Create .gitignore for node") == [".gitignore"] and f("Save it as poem.md.") == ["poem.md"]
+    # a name the scan's cut runs through is not taken as a shorter name
+    long = "Create " + "y" * 290 + " report.css"       # the 300-character scan ends at "report.c"
+    assert f(long) == [] and f(long.replace("y" * 290, "y" * 280)) == ["report.css"]
+    assert f("Create App.js with a root component") == ["App.js"]   # a file, not a framework
+    assert f("Make the header in app.py bold") == []                 # src/app.py is that file
+    # the workspace's own list: git's in a repo of any size, and a list nobody could read counts
+    # every bare name as present
+    g = tempfile.mkdtemp(); pathlib.Path(g, "deep", "er").mkdir(parents=True)
+    pathlib.Path(g, "deep", "er", "util.py").write_text("x\n")
+    subprocess.run(["git", "init", "-q", g], check=True)
+    assert "util.py" in aider_driver._workspace_names(g) and "deep/er/util.py" in aider_driver._workspace_names(g)
+    assert aider_driver._files_asked_for("Write tests for util.py into test_util.py", g) == ["test_util.py"]
+    assert aider_driver._files_asked_for("Create new.py", "/nonexistent", None) == []
+    earlier = ("<conversation_so_far>\nThis is the conversation in this session so far. Continue it; "
+               "do not repeat it.\nuser: create a.txt\nassistant: done\n</conversation_so_far>\n\n")
+    assert f(earlier + "What is in it?") == []
+    assert f(earlier + "Now create b.md please") == ["b.md"]
+    assert f("make " + "x " * 5000 + "out.txt") == []           # the scan is bounded
+
+
+def test_a_file_request_answered_with_a_word_and_no_edit_is_nudged_once():
+    """gpt-5.4 answered the matrix's artifact request with "DONE" and no file, 4 of 4, and gpt-5.5
+    the same (#379). The nudge names the file and asks for the edit block; once per turn, shared
+    with the announcement nudge; never for a question, a reply that asks one, nor a turn that
+    edited or ran something."""
+    root = tempfile.mkdtemp()
+
+    class Coder:
+        def __init__(self, replies, edits=None, gate=None):
+            self.replies = list(replies); self.edits = list(edits or []); self.gate = gate
+            self.reflected_message = None; self.partial_response_content = ""; self.root = root
+            self.aider_edited_files = set(); self.max_reflections = 5
+            self.io = types.SimpleNamespace(user_input=lambda p: None); self.sent = []
+        def init_before_message(self): self.aider_edited_files = set()
+        def send_message(self, m):
+            self.sent.append(m); self.partial_response_content = self.replies.pop(0)
+            step = self.edits.pop(0) if self.edits else None
+            if step and step.startswith("edit"):
+                name = step.partition(":")[2] or "hello-aider.txt"
+                self.aider_edited_files.add(name); pathlib.Path(root, name).write_text("x\n")
+            elif step == "run":                  # the command writes the file, as echo would
+                self.gate.calls.append({"command": "echo HELLO > hello-aider.txt", "approved": True})
+                pathlib.Path(root, "hello-aider.txt").write_text("HELLO\n")
+            elif step == "read":                 # a command that writes nothing
+                self.gate.calls.append({"command": "cat SKILL.md", "approved": True})
+            return iter(())
+    ask = "Create a file named hello-aider.txt containing exactly the word HELLO, then reply DONE."
+    nudge = aider_driver._file_nudge(["hello-aider.txt"])
+    assert "`hello-aider.txt`" in nudge and "SEARCH/REPLACE" in nudge
+    assert "does not need to be added to the chat" in nudge
+    assert "`a.txt`, `b.txt`" in aider_driver._file_nudge(["a.txt", "b.txt"])
+
+    gate = aider_driver._Gate([])
+    c = Coder(["DONE", "DONE"], edits=[None, "edit"]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask, nudge]                                    # nudged, then wrote it
+    pathlib.Path(root, "hello-aider.txt").unlink()
+    c = Coder(["DONE", "DONE"]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask, nudge]                                    # once, not twice
+    c = Coder(["I'll create it now.", "I'll do it."]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask, nudge]                                    # one nudge, the specific one
+    c = Coder(["Paris."]); aider_driver._run_turn(c, "What is the capital of France?", gate)
+    assert c.sent == ["What is the capital of France?"]              # a question is not nudged
+    c = Coder(["It would hold HELLO."]); aider_driver._run_turn(c, "what would a hello.txt contain?", gate)
+    assert len(c.sent) == 1
+    c = Coder(["Which port should it use?"]); aider_driver._run_turn(c, "Create config.yaml for the service", gate)
+    assert len(c.sent) == 1                                          # it asked the person something
+    c = Coder(["Which port should it use? Let me know."]); aider_driver._run_turn(c, "Create config.yaml", gate)
+    assert len(c.sent) == 1
+    c = Coder(["Which port should it listen on?\n\nLet me know and I'll write it."])
+    aider_driver._run_turn(c, "Create config.yaml", gate)
+    assert len(c.sent) == 1                                          # the question, then a sign-off
+    c = Coder(["DONE, it calls https://api.x.com/v1?id=1", "DONE"]); aider_driver._run_turn(c, ask, gate)
+    assert len(c.sent) == 2                                          # a URL's "?" asks nobody
+    c = Coder([""]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask]                                           # a failed call is not repeated
+    g = aider_driver._Gate([])
+    g.calls.append({"command": "echo HELLO > hello-aider.txt", "approved": False})
+    c = Coder(["DONE", "DONE"]); aider_driver._run_turn(c, ask, g)
+    assert c.sent == [ask, nudge]                                    # a refused command ran nothing
+    c = Coder(["DONE"], edits=["edit"]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask]                                           # it wrote the file
+    pathlib.Path(root, "hello-aider.txt").unlink()
+    # two files asked for and one written: nudged for the other alone, once
+    two = "Create a.txt and b.txt, then reply DONE."
+    c = Coder(["DONE", "DONE"], edits=["edit:a.txt", "edit:b.txt"]); aider_driver._run_turn(c, two, gate)
+    assert c.sent == [two, aider_driver._file_nudge(["b.txt"])]
+    assert "`a.txt`" not in c.sent[1] and "it is not written yet" in c.sent[1]
+    pathlib.Path(root, "hello-aider.txt").write_text("HELLO\n")
+    c = Coder(["DONE"]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask]                                           # it is there already
+    pathlib.Path(root, "hello-aider.txt").unlink()
+    g = aider_driver._Gate([])
+    c = Coder(["DONE"], edits=["run"], gate=g); aider_driver._run_turn(c, ask, g)
+    assert c.sent == [ask]                                           # it ran a command for it
+    pathlib.Path(root, "hello-aider.txt").unlink()
+    g = aider_driver._Gate([])
+    c = Coder(["DONE", "DONE"], edits=["read"], gate=g); aider_driver._run_turn(c, ask, g)
+    assert c.sent == [ask, nudge]                                    # a command that made no file
+    # a command run on an earlier pass of the turn counts too: its output came back as a
+    # reflection and the next pass answered with the word
+    g = aider_driver._Gate([])
+    c = Coder(["```bash\necho HELLO > hello-aider.txt\n```", "DONE"], edits=["run"], gate=g)
+    real_send = c.send_message
+    def send(m):
+        out = real_send(m)
+        if len(c.sent) == 1:
+            c.reflected_message = "Output: \n\n" + aider_driver.REFLECT_ASK
+        return out
+    c.send_message = send
+    aider_driver._run_turn(c, ask, g)
+    assert len(c.sent) == 2 and c.sent[1] != nudge                   # the reflection, no nudge after
+    pathlib.Path(root, "hello-aider.txt").unlink()
+    # a pending reflection (a lint result to feed back) is never replaced by the nudge
+    c = Coder(["DONE", "DONE", "DONE"]); real = c.send_message
+    def pending(m):
+        out = real(m)
+        if len(c.sent) == 1:
+            c.reflected_message = "lint: fix this"
+        return out
+    c.send_message = pending
+    aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask, "lint: fix this", nudge]
 
 
 def test_agent_doc_is_written_as_agents_md_even_though_aider_reads_it_via_read():

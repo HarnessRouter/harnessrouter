@@ -38,6 +38,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import time
 
@@ -356,12 +357,132 @@ _ANNOUNCES = re.compile(
 # A reply that stops short and says so in a paragraph of its own: "To complete the task, I still
 # need to click the link" after the first browser output (gpt-5.4, hr-test 0.25.13, 2026-09-28).
 _STOPS_SHORT = re.compile(r"(?:^|\n)\s*to (?:complete|finish) (?:the|this) task,?\s*i (?:still |also )?need to\b", re.I)
+# A reply that asks the person something: a "?" ending a phrase, not one inside a URL's query.
+_ASKS_PERSON = re.compile(r"\?(?=[\s)\]*_\"'”]|\Z)")
 NUDGE = ("Nothing was run or edited. If the task needs files or commands, produce them now in "
          "this reply; otherwise give your final answer.")
 
 
 def _announces_without_acting(text: str) -> bool:
     return bool(_ANNOUNCES.match(text or "") or _STOPS_SHORT.search(text or ""))
+
+
+# A request that names a file to create or write: "Create a file named hello-aider.txt containing
+# exactly the word HELLO, then reply DONE." gpt-5.4 answered that with "DONE", 4 output tokens and
+# no file, 4 of 4, and gpt-5.5 the same; without ", then reply DONE" gpt-5.4 wrote it 3 of 3
+# (issue #379, 2026-10-04). aider gives the model one response per turn and the edit block IS that
+# response, so a request ending on a word to send back gets the word. Keyed on the REQUEST, since
+# the reply ("DONE") reads as a finished answer: the verb opens a clause (the start, after a
+# sentence or a comma, "and", "then", "now", "please", "can you") and a file name with a lettered
+# extension follows in the same sentence. So "how do I create config.yaml?" and "what would
+# hello.txt contain?" are questions and never match, and "Reply with exactly: M1-gpt-5.4" names
+# no file (5.4 is a version, not an extension).
+_CREATE_VERB = re.compile(
+    r"(?:^|[.;:!?]\s+|\n\s*|,\s*|\b(?:and|then|please|kindly|now|also|just|first)\s+"
+    r"|\b(?:can|could|would|will) you\s+(?:please\s+)?|\bi (?:want|need) you to\s+)"
+    r"(?:create|write|make|save|generate|produce|build|draft|put|store|export)\b"
+    r"(?!\s+(?:sure|certain)\b)", re.I)                 # "make sure the output goes to x.json"
+# The rest of the verb's clause, bounded so a long unpunctuated paste costs a short scan: a dot
+# followed by a letter or a slash is inside a file name, not the sentence's end. The clause ends
+# where it starts describing what the thing does: "write a script that parses config.yaml", "write
+# a script to parse config.yaml" ask for a script, not for config.yaml.
+_SENTENCE_END = re.compile(
+    r"[.!?](?![\w/])|\n|\b(?:that|which|who|whose|because|while|if)\b"
+    r"|\bto\s+(?!(?:the|a|an|my|your|this|its|their|our)\b)[a-z]+\b(?![\w./`-])", re.I)
+_SCAN = 300
+# A name ending in a text file type, whole: "report.final.md", "notes.v2.txt". The types are
+# listed, so a module or a method ("subprocess.run", "requests.Session") is not a name, and they are
+# text, since the nudge asks for an edit block and a .pptx or .png written that way is a corrupt
+# file. Or a lowercase dotfile (".env", not ".NET"), or a file named without an extension
+# ("Dockerfile"). A leading "./" is the workspace itself.
+_FILE_TYPES = (
+    "txt|md|markdown|rst|adoc|org|tex|bib|log|py|ipynb|js|mjs|cjs|ts|tsx|jsx|vue|svelte|astro|json|"
+    "jsonl|yaml|yml|toml|ini|cfg|conf|env|csv|tsv|xml|html|htm|css|scss|sass|less|sql|sh|bash|zsh|"
+    "fish|ps1|bat|rb|go|rs|java|kt|kts|swift|c|h|cc|cpp|hpp|cs|php|pl|lua|r|jl|dart|scala|ex|exs|"
+    "erl|hs|ml|proto|graphql|gql|tf|hcl|patch|diff|svg|pem|crt")
+_FILE_NAME = re.compile(
+    r"(?<![\w/.@-])(?:\./)?((?:[\w-]+/)*(?:[\w-]+(?:\.[\w-]+)*\.(?i:" + _FILE_TYPES + r")|\.[a-z][a-z0-9_.-]*"
+    r"|(?:Dockerfile|Makefile|Procfile|Gemfile|Rakefile|Jenkinsfile|Vagrantfile|Containerfile)))"
+    r"(?![\w/@.-]*[\w/@-])")
+# A file the request reads from is not one it asks for: "write a summary of `notes.md`". A file
+# that exists is left out below, which covers "export the table in data.csv" and "write tests for
+# utils.py" without refusing "save it in out.md" or "a project with main.py and utils.py".
+_READS_FROM = re.compile(r"\b(?:of|from|about|than)\s*[`'\"]?\Z", re.I)
+# A framework's name is not a file: "a Next.js app". The frameworks are named, so "create App.js"
+# is still a file.
+_NOT_A_FILE = re.compile(
+    r"(?:Node|Next|Nuxt|Vue|React|Angular|Ember|Backbone|Express|Nest|Three|D3|Chart|Moment|Alpine|"
+    r"Solid|Svelte|Deno|Bun)\.js\Z", re.I)
+_WALK_CAP = 200000
+
+
+def _workspace_names(root: str) -> "set | None":
+    """Every file in the workspace, by path and by bare name, read once per turn. "Write tests for
+    utils.py" means src/utils.py when that is where it is, so a bare name anywhere is that file.
+    git's own list is complete in a tree of any size (the workspace is aider's repo); without git,
+    a walk blind to dot-folders and node_modules, which a request does not mean. None when neither
+    can say: then a bare name counts as present, since no nudge is the turn as it was and a wrong
+    one makes a stray file."""
+    try:
+        out = subprocess.run(["git", "-c", "safe.directory=*", "-C", root, "ls-files", "-z",
+                              "--cached", "--others", "--exclude-standard"],
+                             capture_output=True, timeout=10, check=True).stdout
+        paths = [p for p in out.decode("utf-8", "replace").split("\0") if p]
+    except (OSError, subprocess.SubprocessError):
+        paths = []
+        for d, dirs, files in os.walk(root):
+            dirs[:] = [x for x in dirs if not x.startswith(".") and x != "node_modules"]
+            paths += [os.path.relpath(os.path.join(d, f), root) for f in files]
+            if len(paths) > _WALK_CAP:
+                return None
+    return set(paths) | {p.rsplit("/", 1)[-1] for p in paths}
+
+
+def _exists_in(root: str, name: str, names: "set | None") -> bool:
+    """The name is in the workspace already: at its path, or for a bare name anywhere in it."""
+    if os.path.exists(os.path.join(root, name)):
+        return True
+    if "/" in name:
+        return False
+    return names is None or name in names
+
+
+def _files_asked_for(prompt: str, root: str = ".", names: "set | None | bool" = False) -> list:
+    """The files this turn's request asks to have created or written that do not exist yet.
+
+    A file that exists is left out: the nudge's new-file block would append to it, and a file an
+    earlier turn already made is not this turn's to make again. Earlier turns the gateway puts
+    ahead of the request (for a backend that lost its history) are left out the same way."""
+    text = prompt or ""
+    if names is False:
+        names = _workspace_names(root)
+    if text.startswith("<conversation_so_far>\n"):
+        text = text.rpartition("</conversation_so_far>\n\n")[2]
+    found: list = []
+    for verb in _CREATE_VERB.finditer(text):
+        rest = text[verb.end():verb.end() + _SCAN]
+        stop = _SENTENCE_END.search(rest)
+        # a name the window's cut runs through is half a name
+        cut = not stop and verb.end() + _SCAN < len(text)
+        rest = rest[:stop.start()] if stop else rest
+        for m in _FILE_NAME.finditer(rest):
+            name = m.group(1)
+            if ((cut and m.end() == len(rest)) or _NOT_A_FILE.match(name)
+                    or _READS_FROM.search(rest[:m.start()])
+                    or name in found or _exists_in(root, name, names)):
+                continue
+            found.append(name)
+    return found
+
+
+def _file_nudge(names: list) -> str:
+    listed = ", ".join(f"`{n}`" for n in names)
+    one = len(names) == 1
+    return (f"The request asks for {listed}, and {'it is' if one else 'they are'} not written yet. "
+            f"Write {'it' if one else 'them'} now in this reply with a SEARCH/REPLACE block "
+            "each: the path, an empty SEARCH section and the contents in the REPLACE section. A "
+            "new file does not need to be added to the chat first. Then give the reply the request "
+            "asks for.")
 
 
 def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
@@ -378,13 +499,22 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     the person would type "go ahead" (gpt-5.5 on the hosted service, 2026-09-19: that sentence
     and zero commands; gpt-5.4 twice ended after one message). The nudge is that "go ahead", once
     per turn, only when the reply reads as an announcement, so a plain answer never pays for a
-    second call. Counted against aider's max_reflections like any reflection."""
+    second call. Counted against aider's max_reflections like any reflection.
+
+    The same one nudge when the request names a file to create or write that the turn has not
+    written (#379): the reply ("DONE") reads as an answer, so the request decides. It names the
+    files and asks for the edit blocks, since the general nudge's "otherwise give your final
+    answer" is the way out the model already took. A reply that asks the person
+    something is not nudged. A command counts only by what it left on disk: a turn that read a
+    skill with `cat` and answered "DONE" made no file. One nudge per turn either way."""
     coder.io.user_input(prompt)
     coder.init_before_message()
     message = prompt
     reflections = 0
     reported: set = set()
     nudged = False
+    root = getattr(coder, "root", None) or "."
+    wanted = _files_asked_for(prompt, root)
     while message:
         coder.reflected_message = None
         calls_before = len(gate.calls) if gate is not None else 0
@@ -396,10 +526,20 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
             reported.update(edited)
             _emit("edits", {"files": edited})
         acted = bool(edited) or (gate is not None and len(gate.calls) > calls_before)
-        if (not coder.reflected_message and not nudged and not acted
-                and _announces_without_acting(coder.partial_response_content or "")):
-            nudged = True
-            coder.reflected_message = NUDGE
+        if not coder.reflected_message and not nudged:
+            reply = (coder.partial_response_content or "").rstrip()
+            # Asked for and still not at its path: a turn that wrote a.txt of "a.txt and b.txt" is
+            # nudged for b.txt alone, and a command that wrote the file left it there. A reply that
+            # asks the person something is waiting for them, and an empty one is a failed call
+            # (a provider error, a timeout) that a second call would only repeat.
+            missing = [n for n in wanted if n not in reported
+                       and not os.path.exists(os.path.join(root, n))]
+            if missing and reply and not _ASKS_PERSON.search(strip_edit_blocks(reply)):
+                nudged = True
+                coder.reflected_message = _file_nudge(missing)
+            elif not acted and _announces_without_acting(reply):
+                nudged = True
+                coder.reflected_message = NUDGE
         if not coder.reflected_message:
             break
         if reflections >= coder.max_reflections:
