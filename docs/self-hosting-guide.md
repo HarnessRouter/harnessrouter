@@ -481,7 +481,8 @@ the instance, and are then removed.
 
 | What is deleted | What happens |
 |---|---|
-| A task (a session) | Removed at once, for good: its conversation and trace, its responses, the files it produced and their previews, its list of changed files, its media, the record of every plugin call it made, its checkpoint and its working folder. A marker that holds its id and the time of the delete, and nothing of its content, stays for a day so that a turn still finishing cannot write it back, then goes too. |
+| A task (a session) | Removed at once, for good: its conversation and trace, its responses, the files it produced and their previews, its list of changed files, its media, the record of every plugin call it made, its checkpoint, the record of the files an app removed from its workspace, and its working folder. A marker that holds its id and the time of the delete, and nothing of its content, stays for a day so that a turn still finishing cannot write it back, then goes too. |
+| A file or folder in a task's workspace (`DELETE /v1/sessions/{session_id}/files/{path}`) | Removed at once from the workspace and from its checkpoint, so no later turn sees it, together with the copy an app saved there. A copy that a turn handed back as one of its outputs stays readable from that turn's response until the task is deleted. |
 | An API key | Removed at once. It stops working immediately and leaves the list of keys. |
 | A credential | Removed at once: a plugin's stored secrets when the plugin is removed, a database connection when it is removed from a harness or its harness is deleted, a stored tool token deleted with `DELETE /v1/mcp-secrets/{ref}`. |
 | A harness | Kept 30 days, then removed with its skill bundles and plugin packages. A restored harness comes back without its credentials, since those went at once. The tasks and responses that used it are kept. |
@@ -1186,6 +1187,7 @@ All paths below are relative to the API base above and use the same Bearer key.
 | Stream progress | Set `"stream": true` on the response request for server-sent events |
 | Read session history | `GET /v1/sessions/{session_id}/turns` |
 | Upload inputs or retrieve outputs | `POST /v1/files`; `GET /v1/sessions/{session_id}/files` |
+| Read or change one workspace file between turns | `GET`, `PUT` or `DELETE /v1/sessions/{session_id}/files/{path}` (`PUT` takes `{"content": "..."}` or `{"content_b64": "..."}`; `DELETE` removes a folder with everything in it); `POST /v1/sessions/{session_id}/files/{path}:mkdir` makes a folder and its parents (`created: false` when it was already there); `POST /v1/sessions/{session_id}/files/{path}:move` with `{"to": "<path>"}` renames a file or folder and never overwrites (409 `file_exists`). The next turn sees each change. All but `GET` answer 409 `session_busy` while a turn runs, and every one refuses a path that leaves the workspace; `DELETE`, `:mkdir` and `:move` also refuse the agent's own files (`.git`, `.harness`, a base's skills and memory) |
 | Cancel work | `POST /v1/responses/{response_id}/cancel` |
 | Delete | `DELETE /v1/sessions/{session_id}`, `DELETE /v1/responses/{response_id}`, `DELETE /v1/harnesses/{harness_id}`, `DELETE /v1/files/{file_id}`, `DELETE /v1/mcp-secrets/{ref}`; what each removes and when is in [What a delete removes, and when](#what-a-delete-removes-and-when) |
 | Describe the API | `GET /v1/openapi.json`, the surface above as an OpenAPI document, readable without a login |
