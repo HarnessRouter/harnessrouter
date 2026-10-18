@@ -9281,6 +9281,20 @@ class CreateResponseBody(BaseModel):
     reasoning: dict | None = None       # {"effort": level}: how much the model thinks this turn (the Responses API's field)
 
 
+# Request fields the gateway accepts and does not act on, so a request that carries one is told so in
+# `metadata.ignored_fields` (tasks.md 1.1: ignoring MUST be observable). `tools` and `include` are
+# reserved (tasks.md 1.4). `max_output_tokens` reaches no base: it is kept for the idempotency hash
+# only, and no runner build passes an output-token bound to a harness (#470). A field leaves this
+# list in the change that makes a base apply it.
+_UNAPPLIED_REQUEST_FIELDS = ("tools", "include", "max_output_tokens")
+
+
+def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
+    """The fields of this request the gateway will not act on, in a stable order; `None` means the
+    client did not send the field, so it is not named."""
+    return [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
+
+
 _IDEM_TERMINAL = {"completed", "failed", "incomplete", "cancelled", "error"}
 
 
@@ -9570,7 +9584,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         # remember this turn's response id on the trace + session so a loaded session can resume
         _session_trace.setdefault(sid, {}).update(last_response_id=resp_id)
         # Reserved fields, named on the response rather than dropped in silence (tasks.md 1.4).
-        _ignored = [f for f in ("tools", "include") if getattr(body, f, None) is not None]
+        _ignored = _ignored_request_fields(body)
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
         tr.environment = str((environment or {}).get("id") or "")
         if effort:   # what the turn asked of the model's thinking; "applied" arrives with the result
