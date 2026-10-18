@@ -667,8 +667,11 @@ def check_package(manager: str, spec: str) -> dict:
                 return out
             if st != 200:
                 raise RuntimeError(f"the npm registry answered {st}")
-            out.update(exists=True, latest=str((j.get("dist-tags") or {}).get("latest") or ""))
+            dist_tags = j.get("dist-tags") or {}
+            out.update(exists=True, latest=str(dist_tags.get("latest") or ""))
             versions = set((j.get("versions") or {}).keys())
+            if pin in dist_tags:
+                pin = str(dist_tags[pin])
         else:
             _apt_lists()
             env = _tool_env()

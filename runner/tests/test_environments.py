@@ -722,3 +722,14 @@ def test_an_npm_range_is_a_name_with_no_pin(monkeypatch):
     ranged = E.check_package("npm", "lodash@^4.17.0")
     assert ranged["exists"] is True and ranged["error"] == "" and ranged["version"] == ""
     assert "not published" in E.check_package("npm", "lodash@9.9.9")["error"]
+
+
+def test_an_npm_dist_tag_resolves_to_its_version(monkeypatch):
+    answers = {"https://registry.npmjs.org/lodash": (200, {"dist-tags": {"latest": "4.17.21", "next": "5.0.0-rc.1"},
+                                                          "versions": {"4.17.21": {}, "5.0.0-rc.1": {}}})}
+    monkeypatch.setattr(E, "_http_json", lambda url: answers.get(url, (503, {})))
+
+    tagged = E.check_package("npm", "lodash@latest")
+    assert tagged["exists"] is True and tagged["error"] == "" and tagged["version"] == "4.17.21"
+    assert "no-such-tag is not published" in E.check_package("npm", "lodash@no-such-tag")["error"]
+    assert "9.9.9 is not published" in E.check_package("npm", "lodash@9.9.9")["error"]
