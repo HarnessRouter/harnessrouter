@@ -52,13 +52,13 @@ anything that only inspects a schema.
 
 ## What it checks
 
-76 checks across three classes.
+99 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
-| **Core** | 40 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation, reserved request fields |
-| **Extended** | +8 | Session listing and inspection, file input, artifacts, download headers, path-traversal probes |
-| **Full** | +26 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing, plugins (package round trip, derivation, refusals, export, and a tool call through a plugin's server) |
+| **Core** | 41 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation, reserved request fields |
+| **Extended** | +9 | Session listing and inspection, file input, artifacts, download headers, path-traversal probes |
+| **Full** | +49 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing, plugins (package round trip, derivation, refusals, export, and a tool call through a plugin's server) |
 
 Every check names the section of the specification it enforces, so a failure points at the sentence
 it violates rather than at a test name.
@@ -74,6 +74,11 @@ A few of them are worth calling out, because they catch things a schema check ne
 - **C-03** — a running task really stops. It starts long work, cancels it, and waits for a terminal
   state. A cancel endpoint that returns `200` and leaves the agent running passes every other kind
   of test.
+- **T-11** — a background task polled mid-turn reports `in_progress`. The lifecycle table names
+  five statuses, and a server that answers with its own internal name for the state (`running`)
+  leaves a strict client with nothing to wait for: it waits for `in_progress`, or treats the
+  unknown status as an error. HarnessRouter answered a background POST and every poll until the
+  turn ended with `running` while its own stream emitted `in_progress` for the same turn.
 - **X-07** — artifacts download with `X-Content-Type-Options: nosniff`. Artifacts are
   attacker-influenceable content; served without it, an artifact is stored XSS against the client's
   own origin.
