@@ -171,3 +171,178 @@ def test_a_result_within_the_cap_is_not_marked_truncated(monkeypatch):
     assert out["row_count"] == 10 and out["truncated"] is False
     out = run("SELECT x FROM small", 50)
     assert out["row_count"] == 10 and out["truncated"] is False and out["limit_applied"] == 50
+
+
+# ── the fetch itself is bounded, not just the SQL ──────────────────────────────
+# #493: the row cap was enforced by appending LIMIT to the SQL and slicing after
+# fetchall(). A statement carrying its own large LIMIT (or MySQL's all-rows idiom)
+# was never rewritten, so the driver loaded every row into memory first. The fix
+# bounds the fetch at the driver: the plane must return max_rows rows, mark
+# truncated, and never ask the driver for more than max_rows + 1.
+
+class _PgRecord(dict):
+    pass   # asyncpg Records answer .keys()/.values()
+
+
+class _PgCursor:
+    # Mirrors asyncpg's real Cursor: fetch/fetchrow/forward only. There is deliberately
+    # NO close() here — asyncpg has none, so production code calling cur.close() would
+    # raise AttributeError and fail the test instead of passing silently.
+    def __init__(self, rows):
+        self._rows = rows
+        self.fetched = None
+
+    async def fetch(self, n):
+        self.fetched = n
+        return self._rows[:n]
+
+
+class _PgConn:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    async def cursor(self, sql):
+        # Mirrors asyncpg: Connection.cursor() returns an awaitable CursorFactory,
+        # and awaiting it opens the real server-side cursor.
+        return self._cursor
+
+    def transaction(self, readonly=False):
+        class _Tx:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, *a):
+                return False
+
+        return _Tx()
+
+    async def close(self):
+        pass
+
+
+def _stub_asyncpg(monkeypatch, conn):
+    import sys
+    import types
+
+    mod = types.ModuleType("asyncpg")
+
+    async def connect(dsn):
+        return conn
+
+    mod.connect = connect
+    monkeypatch.setitem(sys.modules, "asyncpg", mod)
+
+
+class _SSCursor:
+    """Stands for aiomysql.SSCursor, the unbuffered cursor class."""
+
+
+class _MysqlCursor:
+    def __init__(self, rows):
+        self._rows = rows
+        self.fetched = None
+        self.closed = False
+        self.description = [("x",)]
+
+    async def execute(self, sql):
+        pass
+
+    async def fetchmany(self, n):
+        self.fetched = n
+        return self._rows[:n]
+
+    async def close(self):
+        # An unbuffered cursor's close() reads the rest of the result off the wire.
+        self.closed = True
+
+
+class _MysqlConn:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.cursor_classes = None
+        self.closed = False
+
+    async def cursor(self, *classes):   # aiomysql's cursor() is awaitable
+        self.cursor_classes = classes
+        return self._cursor
+
+    def close(self):
+        self.closed = True
+
+
+def _stub_aiomysql(monkeypatch, conn):
+    import sys
+    import types
+
+    mod = types.ModuleType("aiomysql")
+
+    async def connect(**kw):
+        return conn
+
+    mod.connect = connect
+    mod.SSCursor = _SSCursor
+    monkeypatch.setitem(sys.modules, "aiomysql", mod)
+
+
+def test_the_postgres_fetch_never_asks_for_more_than_the_cap_plus_one(monkeypatch):
+    """The stand-in engine ignores the appended LIMIT and returns the statement's own
+    huge result; the plane still returns max_rows rows, says truncated, and the driver
+    was asked for exactly max_rows + 1."""
+    import asyncio
+    import sql_plane
+
+    rows = [_PgRecord({"x": i}) for i in range(10_000)]
+    cur = _PgCursor(rows)
+    _stub_asyncpg(monkeypatch, _PgConn(cur))
+    out = asyncio.run(sql_plane._pg_query("postgres://u@h/db", "SELECT x FROM t LIMIT 1000000", 5.0, 100))
+    assert out["row_count"] == 100 and out["truncated"] is True
+    assert cur.fetched == 101, f"driver asked for {cur.fetched} rows, not 101"
+    # No close() assertion: asyncpg's Cursor has no close() — the server-side portal
+    # is bound to the read-only transaction and dies when the block exits.
+
+
+def test_the_mysql_fetch_never_asks_for_more_than_the_cap_plus_one(monkeypatch):
+    """MySQL's all-rows idiom `LIMIT 0, 18446744073709551615` is never rewritten; with a
+    bounded fetchmany the driver still hands over at most max_rows + 1 rows."""
+    import asyncio
+    import sql_plane
+
+    rows = [(i,) for i in range(10_000)]
+    cur = _MysqlCursor(rows)
+    conn = _MysqlConn(cur)
+    _stub_aiomysql(monkeypatch, conn)
+    out = asyncio.run(sql_plane._mysql_query(
+        "mysql://u@h/db", "SELECT x FROM t LIMIT 0, 18446744073709551615", 5.0, 100))
+    assert out["row_count"] == 100 and out["truncated"] is True
+    assert cur.fetched == 101, f"driver asked for {cur.fetched} rows, not 101"
+    # The default cursor buffers the whole result inside execute(): only an unbuffered one is bounded.
+    assert conn.cursor_classes == (_SSCursor,)
+    # Closing the unbuffered cursor would read the rest of the result; the connection is closed instead.
+    assert not cur.closed and conn.closed
+
+
+def test_the_postgres_cursor_calls_match_real_asyncpg():
+    """Regression guard for the #497 review thread: asyncpg's Connection.cursor() returns
+    an awaitable CursorFactory (NOT a Cursor), and Cursor exposes fetch/fetchrow/forward
+    only — no close(), no async context manager. The stub above mirrors this; if a future
+    asyncpg changes the interface, this fails loudly instead of shipping a broken call."""
+    import inspect
+
+    asyncpg = pytest.importorskip("asyncpg")
+    from asyncpg.cursor import Cursor, CursorFactory
+
+    assert not inspect.iscoroutinefunction(asyncpg.Connection.cursor)
+    assert hasattr(CursorFactory, "__await__")
+    assert not hasattr(CursorFactory, "fetch")
+    assert hasattr(Cursor, "fetch")
+    assert not hasattr(Cursor, "close")
+    assert not hasattr(Cursor, "__aenter__")
+
+
+def test_the_mysql_cursor_calls_match_real_aiomysql():
+    """Guard for the MySQL stubs above: aiomysql's SSCursor is its unbuffered cursor, and its close()
+    is its own (it reads the rest of the result off the wire), which is why the plane closes the
+    connection instead of the cursor."""
+    aiomysql = pytest.importorskip("aiomysql")
+    assert issubclass(aiomysql.SSCursor, aiomysql.Cursor)
+    assert aiomysql.SSCursor.close is not aiomysql.Cursor.close
