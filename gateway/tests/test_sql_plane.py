@@ -111,6 +111,19 @@ def test_limit_with_offset_is_respected():
     assert not added
 
 
+def test_mysqls_limit_offset_count_is_respected():
+    """MySQL spells an offset as `LIMIT 5, 10`. The tail check knew only `LIMIT n [OFFSET m]`, so it
+    appended a second LIMIT after this one, a syntax error, and the query never ran."""
+    for sql in ("SELECT * FROM t LIMIT 5, 10", "SELECT * FROM t ORDER BY x limit 5 ,10"):
+        out, added = with_limit(sql, 500)
+        assert not added and out == sql
+
+
+def test_a_comma_inside_the_query_is_not_read_as_a_limit():
+    out, added = with_limit("SELECT a, b FROM (SELECT a, b FROM t LIMIT 5, 10) s", 500)
+    assert added and out.rstrip().endswith("LIMIT 500")
+
+
 def test_limit_inside_a_subquery_does_not_count_as_the_outer_one():
     """The outer query is unbounded and must still be capped."""
     out, added = with_limit("SELECT * FROM (SELECT * FROM t LIMIT 10) s", 500)
@@ -124,3 +137,37 @@ def test_connection_errors_do_not_echo_the_password():
     e = Exception('could not connect to postgresql://app:hunter2@db.internal:5432/analytics')
     cleaned = _clean_db_error(e)
     assert "hunter2" not in cleaned and "://***@" in cleaned
+
+
+# ── a capped answer says it was capped ───────────────────────────────────────────
+
+def _engine_over(monkeypatch, n_rows: int):
+    """A stand-in for the database that honours a trailing LIMIT, as both real engines do."""
+    import asyncio
+    import re as _re
+    import sql_plane
+
+    async def fake(dsn, sql, timeout, max_rows):
+        m = _re.search(r"LIMIT (\d+)\s*$", sql)
+        recs = [(i,) for i in range(n_rows)][: int(m.group(1)) if m else None]
+        return sql_plane._rows_out(["x"], recs, max_rows)
+
+    monkeypatch.setattr(sql_plane, "_pg_query", fake)
+    return lambda sql, max_rows: asyncio.run(sql_plane.run_query("postgres", "", sql, max_rows=max_rows))
+
+
+def test_a_result_cut_by_the_row_cap_is_marked_truncated(monkeypatch):
+    """The cap appended LIMIT max_rows, so the database never returned more than max_rows rows and
+    `truncated` (len(records) > max_rows) could not be true: a caller was handed a partial answer
+    as if it were the whole one."""
+    run = _engine_over(monkeypatch, 100)
+    out = run("SELECT x FROM big", 10)
+    assert out["row_count"] == 10 and out["truncated"] is True and out["limit_applied"] == 10
+
+
+def test_a_result_within_the_cap_is_not_marked_truncated(monkeypatch):
+    run = _engine_over(monkeypatch, 10)
+    out = run("SELECT x FROM small", 10)          # exactly the cap: nothing was left out
+    assert out["row_count"] == 10 and out["truncated"] is False
+    out = run("SELECT x FROM small", 50)
+    assert out["row_count"] == 10 and out["truncated"] is False and out["limit_applied"] == 50
