@@ -11677,9 +11677,20 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
     _stop_proc(proc, rec)
 
 
+# Bases whose runner builders take NO step-budget flag of their own: the generic counter in
+# _run_turn_bg enforces max_turns for these by counting tool calls in the normalised stream and
+# stopping the process at the budget (#471). Bases that pass a native limit flag (claude --max-turns,
+# goose --max-steps, kimi's loop.max_steps, grok, hermes config, minimax, aider, cheetahclaws,
+# systemone, openhands, agentzero) are absent: their budget is the CLI's own. jcode is absent too —
+# its counter in _jcode_to_claude predates this one and emits jcode's own usage, so it stays.
+_GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "gajae", "qwen", "gemini", "cline",
+                        "opencode", "mimo", "kilo", "qoder"}
+
+
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
                  timeout_seconds: int | None = None, partial: bool = False,
-                 max_turns: int | None = None, prompt: str = "") -> None:
+                 max_turns: int | None = None, prompt: str = "",
+                 count_steps: bool = False) -> None:
     rec = _turns[turn_id]
     rec["turn_id"] = turn_id
     state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time(),
@@ -11691,6 +11702,11 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
              # (_opensquilla_transcript)
              "prompt": prompt}
     result_ev = None
+    # The generic step budget (#471): for a base with no limit flag of its own, tool calls are
+    # counted in the normalised stream — every normaliser emits the same Claude-shaped tool_use
+    # blocks — and past the budget the turn ends error_max_turns (which the gateway reports as
+    # incomplete) while the loop below stops the process the way a cancel does.
+    step_cap = int(max_turns) if (count_steps and max_turns) else None
     env = {**env, _TURN_MARK: turn_id}
     try:
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
@@ -11758,6 +11774,22 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     # Claude's stream-json carries the final assistant text on the result event;
                     # the codex normalizer already fills state['final'], so prefer that.
                     state["final"] = state.get("final") or ev.get("result") or ""
+                if step_cap and not state.get("_stop") and ev.get("type") == "assistant":
+                    blocks = (ev.get("message") or {}).get("content")
+                    if isinstance(blocks, list):
+                        state["_gen_tool_n"] = state.get("_gen_tool_n", 0) + sum(
+                            1 for b in blocks
+                            if isinstance(b, dict) and b.get("type") == "tool_use")
+                        if state["_gen_tool_n"] > step_cap:
+                            stop_ev = {"type": "result", "subtype": "error_max_turns",
+                                       "is_error": False, "result": state.get("final", ""),
+                                       "usage": {}}
+                            stop_ev.setdefault("_ts", time.time())
+                            with _turns_lock:
+                                rec["events"].append(stop_ev)
+                            result_ev = stop_ev
+                            state["_stop"] = "max_turns"
+
             if state.get("_stop") and not state.get("_stopped") and proc.poll() is None:
                 # A translator ended the turn itself (a CLI with no step limit of its own went past
                 # the turn's budget): the process is stopped here, and the result event it emitted
@@ -13551,7 +13583,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         threading.Thread(target=_run_turn_bg,
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
-                         kwargs={"max_turns": req.max_turns, "prompt": req.prompt or ""},
+                         kwargs={"max_turns": req.max_turns, "prompt": req.prompt or "",
+                                 "count_steps": backend in _GENERIC_STEP_BUDGET},
                          daemon=True).start()
     cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     return {"turn_id": turn_id, "status": "running", "backend": backend, "model": model,
