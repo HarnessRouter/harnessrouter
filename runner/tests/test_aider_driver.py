@@ -550,6 +550,65 @@ def test_a_file_request_answered_with_a_word_and_no_edit_is_nudged_once():
     assert c.sent == [ask, "lint: fix this", nudge]
 
 
+def test_a_chat_with_no_files_says_a_new_file_needs_no_adding():
+    """aider's "I am not sharing any files that you can edit yet." made gpt-5.4-mini refuse to
+    create a file, even after a nudge (#379). The no-files message says a new file is written with
+    an empty SEARCH; the repo-map message keeps aider's text and gains that sentence; aider's
+    shared prompts object is left as it was."""
+    class Prompts:
+        files_no_full_files = "I am not sharing any files that you can edit yet."
+        files_no_full_files_with_repo_map = "Don't try and edit any existing code without asking me to add the files to the chat!\n"
+        files_no_full_files_with_repo_map_reply = "Ok, based on your requests I will suggest which files need to be edited and then stop and wait for your approval."
+    shared = Prompts()
+    coder = types.SimpleNamespace(gpt_prompts=shared)
+    aider_driver._new_files_need_no_add(coder)
+    p = coder.gpt_prompts
+    assert "not sharing" not in p.files_no_full_files and aider_driver.NEW_FILE_NOTE in p.files_no_full_files
+    # with a repo map: a new file is written directly; an existing one is still named and added
+    assert aider_driver.NEW_FILE_NOTE in p.files_no_full_files_with_repo_map
+    assert "name the ones that need changes and stop" in p.files_no_full_files_with_repo_map
+    assert "wait for your approval" not in p.files_no_full_files_with_repo_map_reply
+    assert "write it directly" in p.files_no_full_files_with_repo_map_reply
+    # conditional on a request for a file: a question about one is answered, not acted on (on
+    # 0.35.3-rc.2 an unconditional note made gpt-5.4, gpt-5.5 and gpt-6-sol create the file asked about)
+    assert "If the request asks for a new file" in aider_driver.NEW_FILE_NOTE
+    assert "A question about a file is answered in words" in aider_driver.NEW_FILE_NOTE
+    assert shared.files_no_full_files == "I am not sharing any files that you can edit yet."
+    assert shared.files_no_full_files_with_repo_map.startswith("Don't try")
+    # a coder whose prompts have no repo-map message (aider's ask and architect modes) keeps none
+    bare = types.SimpleNamespace(gpt_prompts=types.SimpleNamespace(
+        files_no_full_files="x", files_no_full_files_with_repo_map="", files_no_full_files_with_repo_map_reply=""))
+    aider_driver._new_files_need_no_add(bare)
+    assert bare.gpt_prompts.files_no_full_files_with_repo_map == ""
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "    _new_files_need_no_add(coder)\n" in src
+
+
+def test_the_repo_map_follows_the_conversation():
+    """With a file in the workspace aider's repo map and its canned "Ok, I won't try..." reply came
+    ahead of the conversation, and gpt-5.4 asked for the first message's word answered "Ok" 5 of 6
+    times (0.35.3-rc.4). The map now opens the files message after the conversation; nothing of it
+    is dropped, and a workspace with no map is left as it was."""
+    repo = [dict(role="user", content="Here are summaries of some files present in my git repository.\nhello-aider.txt"),
+            dict(role="assistant", content="Ok, I won't try and edit those files without asking first.")]
+    files = [dict(role="user", content="No files are in the chat yet."), dict(role="assistant", content="Ok.")]
+    coder = types.SimpleNamespace(get_repo_messages=lambda: list(repo), get_chat_files_messages=lambda: list(files))
+    aider_driver._repo_map_after_the_conversation(coder)
+    assert coder.get_repo_messages() == []
+    msgs = coder.get_chat_files_messages()
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[0]["content"].startswith("Here are summaries") and msgs[0]["content"].endswith("No files are in the chat yet.")
+    assert "hello-aider.txt" in msgs[0]["content"] and msgs[1]["content"] == "Ok."
+    empty = types.SimpleNamespace(get_repo_messages=lambda: [], get_chat_files_messages=lambda: list(files))
+    aider_driver._repo_map_after_the_conversation(empty)
+    assert empty.get_chat_files_messages() == files                  # an empty workspace: as before
+    none = types.SimpleNamespace(get_repo_messages=lambda: list(repo), get_chat_files_messages=lambda: [])
+    aider_driver._repo_map_after_the_conversation(none)
+    assert none.get_chat_files_messages() == repo                    # no files message: the map alone
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "    _repo_map_after_the_conversation(coder)\n" in src
+
+
 def test_agent_doc_is_written_as_agents_md_even_though_aider_reads_it_via_read():
     assert _agent_doc_path("/ws", "aider").name == "AGENTS.md"
 
