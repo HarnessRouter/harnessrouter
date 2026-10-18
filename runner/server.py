@@ -50,6 +50,7 @@ import http.client
 import ipaddress
 import http.server
 import datetime
+import errno
 import json
 import mimetypes
 import os
@@ -12800,20 +12801,60 @@ def get_file(path: str, identifier: str = "") -> Response:
     return Response(content=dest.read_bytes(), media_type=media)
 
 
-def _make_dirs(d: pathlib.Path, uid: int | None) -> list[pathlib.Path]:
-    """mkdir -p `d`, every directory it creates owned by the session's uid (a root-owned directory in
-    a session's workspace is one its own process cannot write into) → the directories it created.
-    Raises what Path.mkdir raises, so a FILE where a directory would go is the caller's to answer."""
-    missing: list[pathlib.Path] = []
-    probe = d
-    while not probe.exists():
-        missing.append(probe)
-        probe = probe.parent
-    d.mkdir(parents=True, exist_ok=True)
-    if uid is not None:
-        for m in missing:
-            os.chown(m, uid, uid)
-    return missing
+_DIR_NOFOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _open_dir(base: pathlib.Path, parts: tuple[str, ...], uid: int | None = None, make: bool = False,
+              made: list[str] | None = None) -> int:
+    """An fd on the directory `base`/`parts`, reached one name at a time without following a symlink.
+
+    The file routes check a path and then change it, as the runner, which is root under the
+    write-wall. A process the session left running can swap a checked directory for a symlink in
+    between, and a root write, unlink, rename or chown through that link would land outside the
+    session. Opened with O_NOFOLLOW at every step, the swap fails the change instead.
+
+    `make` creates what is missing (mkdir -p), each directory owned by `uid` (a root-owned directory
+    in a workspace is one the session's own process cannot write into), and lists in `made` what it
+    created. A FILE or a symlink where a directory would be raises NotADirectoryError."""
+    fd = os.open(base, _DIR_NOFOLLOW)
+    try:
+        for name in parts:
+            try:
+                nxt = os.open(name, _DIR_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not make:
+                    raise
+                os.mkdir(name, 0o755, dir_fd=fd)
+                if uid is not None:
+                    os.chown(name, uid, uid, dir_fd=fd, follow_symlinks=False)
+                if made is not None:
+                    made.append(name)
+                nxt = os.open(name, _DIR_NOFOLLOW, dir_fd=fd)
+            except OSError as e:
+                if e.errno != errno.ELOOP:
+                    raise
+                # a symlink: Linux answers ELOOP, macOS ENOTDIR; one answer for both
+                raise NotADirectoryError(errno.ENOTDIR, "a symlink is where a directory would be", name) from None
+            os.close(fd)
+            fd = nxt
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _remove_at(base: pathlib.Path, p: pathlib.Path) -> None:
+    """Remove `p` (a path under `base`) as itself: a directory with everything in it, a file or a
+    symlink as the entry it is. Through _open_dir, so nothing swapped in redirects it."""
+    parts = p.relative_to(base).parts
+    fd = _open_dir(base, parts[:-1])
+    try:
+        if stat.S_ISDIR(os.lstat(parts[-1], dir_fd=fd).st_mode):
+            shutil.rmtree(parts[-1], dir_fd=fd)       # fd-based all the way down; links not followed
+        else:
+            os.unlink(parts[-1], dir_fd=fd)
+    finally:
+        os.close(fd)
 
 
 @app.put("/file")
@@ -12850,20 +12891,31 @@ async def put_file(request: Request, path: str, identifier: str = "") -> dict:
     pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
     _isolate_session(ws)
     uid = _session_uid(ws)
-    _make_dirs(dest.parent, uid)
-    tmp = dest.parent / f".hr-put-{uuid.uuid4().hex[:8]}"
+    base = pathlib.Path(ws).resolve()
+    parts = dest.relative_to(base).parts
+    if not parts:
+        raise HTTPException(400, "the workspace itself is not a file")
+    tmp = f".hr-put-{uuid.uuid4().hex[:8]}"
     try:
-        tmp.write_bytes(data)
-        os.chmod(tmp, 0o644)
-        if uid is not None:
-            os.chown(tmp, uid, uid)
-        os.replace(tmp, dest)
+        fd = _open_dir(base, parts[:-1], uid, make=True)
+    except OSError as e:
+        raise HTTPException(500, f"write failed: {str(e)[:200]}")
+    try:
+        out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=fd)
+        with os.fdopen(out, "wb") as f:
+            f.write(data)
+            os.fchmod(f.fileno(), 0o644)
+            if uid is not None:
+                os.fchown(f.fileno(), uid, uid)
+        os.replace(tmp, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
     except OSError as e:
         try:
-            tmp.unlink()
+            os.unlink(tmp, dir_fd=fd)
         except OSError:
             pass
         raise HTTPException(500, f"write failed: {str(e)[:200]}")
+    finally:
+        os.close(fd)
     return {"ok": True, "path": str(dest.relative_to(ws)), "bytes": len(data)}
 
 
@@ -12964,16 +13016,14 @@ def delete_file(path: str, identifier: str = "") -> dict:
     if not found:
         raise HTTPException(404, "nothing at that path")
     _refuse_protected(ws, *found)
+    base = pathlib.Path(ws).resolve()
     try:
         # every copy: one left at the root of a nesting base would be adopted back next turn
         for p in found:
-            if p.is_dir() and not p.is_symlink():
-                shutil.rmtree(p)
-            else:
-                p.unlink()
+            _remove_at(base, p)
     except OSError as e:
         raise HTTPException(500, f"delete failed: {str(e)[:200]}")
-    return {"ok": True, "path": str(found[0].relative_to(pathlib.Path(ws).resolve()))}
+    return {"ok": True, "path": str(found[0].relative_to(base))}
 
 
 @app.post("/file/mkdir")
@@ -12992,13 +13042,15 @@ def mkdir_file(path: str, identifier: str = "") -> dict:
     _refuse_protected(ws, dest)
     if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
         raise HTTPException(409, "a file is at that path")
+    base = pathlib.Path(ws).resolve()
+    made: list[str] = []
     try:
-        made = _make_dirs(dest, _session_uid(ws))
+        os.close(_open_dir(base, dest.relative_to(base).parts, _session_uid(ws), make=True, made=made))
     except (FileExistsError, NotADirectoryError) as e:
         raise HTTPException(409, f"mkdir failed: {str(e)[:200]}")
     except OSError as e:
         raise HTTPException(500, f"mkdir failed: {str(e)[:200]}")
-    return {"ok": True, "path": str(dest.relative_to(pathlib.Path(ws).resolve())), "created": bool(made)}
+    return {"ok": True, "path": str(dest.relative_to(base)), "created": bool(made)}
 
 
 @app.post("/file/move")
@@ -13023,22 +13075,27 @@ def move_file(path: str, to: str, identifier: str = "") -> dict:
     _refuse_protected(ws, src, dest, *others)
     if dest.exists() or dest.is_symlink():
         raise HTTPException(409, "something is already at the destination")
+    base = pathlib.Path(ws).resolve()
+    sparts, dparts = src.relative_to(base).parts, dest.relative_to(base).parts
     try:
-        _make_dirs(dest.parent, _session_uid(ws))
-        os.rename(src, dest)
+        sfd = _open_dir(base, sparts[:-1])
+        try:
+            dfd = _open_dir(base, dparts[:-1], _session_uid(ws), make=True)
+            try:
+                os.rename(sparts[-1], dparts[-1], src_dir_fd=sfd, dst_dir_fd=dfd)
+            finally:
+                os.close(dfd)
+        finally:
+            os.close(sfd)
         # A second copy at the root of a nesting base (an app's PUT from before writes went where the
         # file is) would be adopted back under the old name next turn: the old name is gone.
         for p in others:
-            if p.is_dir() and not p.is_symlink():
-                shutil.rmtree(p)
-            else:
-                p.unlink()
+            _remove_at(base, p)
     except (FileExistsError, NotADirectoryError) as e:
         # a FILE where one of the destination's folders would be
         raise HTTPException(409, f"move failed: {str(e)[:200]}")
     except OSError as e:
         raise HTTPException(500, f"move failed: {str(e)[:200]}")
-    base = pathlib.Path(ws).resolve()
     return {"ok": True, "path": str(src.relative_to(base)), "to": str(dest.relative_to(base))}
 
 

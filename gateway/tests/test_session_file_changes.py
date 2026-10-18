@@ -134,6 +134,10 @@ async def test_hosted_refusals_change_nothing():
     assert await ws.delete("s", "../a.txt") == B.WS_BAD_PATH
     assert await ws.move("s", "a.txt", "../../b") == B.WS_BAD_PATH
     assert await ws.delete("s", "missing") == B.WS_NOT_FOUND
+    # normpath leaves "." and ".." as they are; a member named ".." is one tar refuses to unpack
+    # ("Member name contains '..'", GNU tar), so every later restore of the session would fail
+    assert await ws.write("s", "..", b"x") is False
+    assert await ws.mkdir("s", "..") == B.WS_BAD_PATH and await ws.mkdir("s", ".") == B.WS_BAD_PATH
     assert blob.objects == before
 
 
@@ -195,8 +199,29 @@ async def test_selfhosted_a_file_made_since_the_checkpoint_leaves_it_alone():
 
 @pytest.mark.asyncio
 async def test_selfhosted_with_no_checkpoint_yet():
-    blob, ws, _ = _selfhosted(_Resp(200, {"path": "a"}))
-    assert await ws.mkdir("s", "a") == B.WS_OK and blob.objects == {}
+    """A delete or a move has no archive to change before the first turn. A folder does: that turn's
+    restore empties the live directory and the captures put back only files, so the archive is
+    started with the folder, as the hosted backing starts one."""
+    blob, ws, _ = _selfhosted(_Resp(200, {"path": "x"}))
+    assert await ws.delete("s", "x") == B.WS_OK and blob.objects == {}
+    blob, ws, _ = _selfhosted(_Resp(200, {"path": "a", "created": True}))
+    assert await ws.mkdir("s", "a") == B.WS_OK
+    assert _files(blob.objects[("ckpt", "sessions/s/workspace.tgz")]) == {"a": None}
+
+
+@pytest.mark.asyncio
+async def test_selfhosted_a_checkpoint_that_refuses_what_the_live_directory_allowed_is_the_answer():
+    """The live directory took the change but the checkpoint has a FILE in the way: that live directory
+    is a reaped one the runner made anew, which the next turn wipes and restores from the checkpoint.
+    A 200 would be undone by that turn."""
+    blob, ws, _ = _selfhosted(_Resp(200, {"path": "notes/x", "created": True}), {"notes": b"a file"})
+    before = dict(blob.objects)
+    assert await ws.mkdir("s", "notes/x") == B.WS_EXISTS
+    assert blob.objects == before
+    blob, ws, _ = _selfhosted(_Resp(200, {"path": "a", "to": "b"}), {"a": b"a", "b": b"b"})
+    before = dict(blob.objects)
+    assert await ws.move("s", "a", "b") == B.WS_EXISTS
+    assert blob.objects == before
 
 
 @pytest.mark.asyncio
@@ -380,8 +405,12 @@ def routes(monkeypatch, captures):
     async def _owned(_r, _sid):
         return ("org", state["v"])
 
+    async def _vget(_sid):
+        return state["v"]
+
     fake = _Fake()
     monkeypatch.setattr(A, "_owned_session", _owned)
+    monkeypatch.setattr(A, "_vertex_get", _vget)
     monkeypatch.setattr(A.BACKING, "workspace", fake, raising=False)
     monkeypatch.setattr(A, "_ws_changed", lambda sid: state.setdefault("changed", []).append(sid))
     state["fake"] = fake
@@ -812,3 +841,92 @@ async def test_a_put_refreshes_the_cached_listing(routes, monkeypatch):
     monkeypatch.setattr(A.BACKING, "workspace", _Ws(), raising=False)
     await A.write_session_file("s", "n.md", A.WorkspaceWrite(content="x"), request=None)
     assert routes["changed"] == ["s"]
+
+
+# ── what the maintainer review of #478 found ──────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_a_file_with_no_capture_is_read_from_the_checkpoint(captures, monkeypatch):
+    """A file the agent moved has no capture under its new name. Once the live directory is reaped
+    the checkpoint holds it there, and the by-path read finds it instead of answering 404 until the
+    next turn restores it."""
+    class _Gone:
+        async def read(self, *_a, **_k):
+            return None
+
+    async def _owned(*_a, **_k):
+        return ("org", {})
+
+    async def _bytes(sid, fid):
+        if fid == A._wf_id("archive/report.md"):
+            return b"moved", "text/markdown", "archive/report.md"
+        data = captures.store.get(f"containers/{sid}/{fid}")
+        return (data, "application/octet-stream", fid) if data is not None else None
+
+    monkeypatch.setattr(A.BACKING, "workspace", _Gone(), raising=False)
+    monkeypatch.setattr(A, "_owned_session", _owned)
+    monkeypatch.setattr(A, "_container_file_bytes", _bytes)
+    assert (await A.read_session_file("s", "archive/report.md", request=None)).body == b"moved"
+    captures("cfile_agent", "notes.md", b"captured", 100.0)        # a capture still comes first
+    assert (await A.read_session_file("s", "notes.md", request=None)).body == b"captured"
+    with pytest.raises(Exception) as e:
+        await A.read_session_file("s", "report.md", request=None)
+    assert getattr(e.value, "status_code", None) == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["delete", "mkdir", "move", "put"])
+async def test_a_change_that_waited_behind_a_turn_s_restore_is_refused(routes, monkeypatch, call):
+    """The route's busy check read the session before a turn was stamped running. The turn restores
+    the workspace under the change lock, so the change waits, reads the session again, and stops
+    rather than landing under the running turn."""
+    import asyncio
+
+    class _Ws(_Fake):
+        async def write(self, sid, path, data):
+            self.calls.append(("write", path))
+            return True
+    monkeypatch.setattr(A.BACKING, "workspace", _Ws(), raising=False)
+    routes["fake"] = A.BACKING.workspace
+    sid = f"busy-{call}"           # a lock of its own: one bound to another test's event loop is not
+    run = {"delete": lambda: A.delete_session_file(sid, "a.txt", request=None),
+           "mkdir": lambda: A.mkdir_session_file(sid, "d", request=None),
+           "move": lambda: A.move_session_file(sid, "a.txt", A.WorkspaceMove(to="b.txt"), request=None),
+           "put": lambda: A.write_session_file(sid, "a.txt", A.WorkspaceWrite(content="x"), request=None)}[call]
+    lock = A._ws_change_lock(sid)
+    await lock.acquire()                              # the turn's restore, in progress
+    task = asyncio.create_task(run())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    routes["v"] = {"status": "running", "turn_status": "starting"}
+    lock.release()
+    with pytest.raises(Exception) as e:
+        await task
+    assert e.value.status_code == 409 and e.value.detail["code"] == "session_busy"
+    assert routes["fake"].calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_restore_waits_for_a_change_in_flight(monkeypatch):
+    """A change that passed its busy check before the turn was stamped running finishes before the
+    restore reads the workspace (the recycle route restores the same way a turn does)."""
+    import asyncio
+    order = []
+
+    async def _hydrate(sid, rec, force=False):
+        order.append("restore")
+        rec["hydrated"] = True
+
+    async def _vget(_sid):
+        return {"status": "idle"}
+
+    monkeypatch.setattr(A, "_hydrate", _hydrate)
+    monkeypatch.setattr(A, "_vertex_get", _vget)
+    lock = A._ws_change_lock("recycle-wait")
+    await lock.acquire()                              # a change, in progress
+    task = asyncio.create_task(A.recycle_session_sandbox("recycle-wait"))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    order.append("change done")
+    lock.release()
+    assert (await task)["hydrated"] is True
+    assert order == ["change done", "restore"]

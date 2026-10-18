@@ -511,7 +511,9 @@ def _safe_member(path: str) -> str | None:
     Rejected rather than sanitised: a path that needed cleaning was not the path the caller meant,
     and silently writing somewhere else is worse than refusing."""
     p = (path or "").strip().lstrip("/")
-    if not p or p != posixpath.normpath(p) or p.startswith("../") or "\\" in p:
+    # normpath leaves "." and ".." as they are, so they are named here: written into a checkpoint,
+    # a member called ".." is one that tar refuses to unpack, and every later restore would fail
+    if not p or p in (".", "..") or p != posixpath.normpath(p) or p.startswith("../") or "\\" in p:
         return None
     return p
 
@@ -773,31 +775,47 @@ class RunnerWorkspaceFiles:
         # The checkpoint is changed by the caller's path, not the one the runner answers: tar_change
         # resolves it the way the runner did (the agent's directory first on a nesting base), and
         # the runner's session-relative spelling would be looked for one level down a second time.
-        await self._change_checkpoint(sid, op, member, dest)
+        ckpt = await self._change_checkpoint(sid, op, member, dest)
+        if ckpt in (WS_EXISTS, WS_BAD_PATH):
+            return ckpt
         return WS_UNCHANGED if op == "mkdir" and got.get("created") is False else WS_OK
 
     async def _change_checkpoint(self, sid: str, op: str, member: str, to: str, live: bool = True) -> str:
         """Apply the change to the checkpoint → its outcome. After a live change (`live`) the change
-        already stands, so an archive that cannot follow is logged rather than failed; without one,
-        the archive is the only copy and its outcome is the answer."""
+        already stands, so an archive that cannot be stored is logged rather than failed; without
+        one, the archive is the only copy and its outcome is the answer.
+
+        Two answers hold even after a live change:
+        - A folder made before the first turn has no archive to go into, and that turn's restore
+          empties the live directory (the captures put files back, and a folder has none). So the
+          archive is started with it, as the hosted backing starts one.
+        - An archive that REFUSES what the live directory allowed (a file where the folder or the
+          destination would go) means the live directory is not the session's workspace: it is a
+          reaped one the runner made anew, which the next turn wipes and restores from this archive.
+          The refusal is the answer then, not a 200 that the next turn undoes."""
         if not self.blob or not self.ckpt_kb or not self.key_for:
             return WS_OK if live else WS_NOT_FOUND
         key = self.key_for(sid)
         try:
             async with _ckpt_lock(sid):
                 raw = await self.blob.get(self.ckpt_kb, key)
-                if not raw:
+                if not raw and op != "mkdir":
                     # no turn has ended yet: the live directory is the only copy
                     return WS_OK if live else WS_NOT_FOUND
                 outcome, tar = await asyncio.to_thread(tar_change, raw, op, member, to)
                 if outcome in (WS_NOT_FOUND, WS_UNCHANGED):
                     # not in the checkpoint (made since it was taken), or already so
                     return WS_OK if live else outcome
-                if outcome == WS_OK and await self.blob.put(self.ckpt_kb, key, tar):
+                if outcome in (WS_EXISTS, WS_BAD_PATH):
+                    if live:
+                        print(f"[workspace] checkpoint refused a {op} the live directory allowed "
+                              f"sid={sid} path={member}: {outcome}", flush=True)
+                    return outcome
+                if await self.blob.put(self.ckpt_kb, key, tar):
                     return WS_OK
                 if not live:
-                    return outcome if outcome != WS_OK else WS_FAILED
-            why = outcome if outcome != WS_OK else "store refused"
+                    return WS_FAILED
+            why = "store refused"
         except Exception as e:   # noqa: BLE001
             if not live:
                 return WS_FAILED

@@ -8264,7 +8264,12 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                "heartbeat": str(time.time()), "runner_turn_id": "",
                                **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
-    await _hydrate(sid, rec)
+    # Under the session's change lock: an app's PUT, delete, mkdir or move that passed its busy check
+    # before this turn was stamped running finishes before the restore reads the workspace, and one
+    # that comes after waits, reads the session again under the lock, and is refused (_ws_busy_now).
+    # In this process only, like the lock itself.
+    async with _ws_change_lock(sid):
+        await _hydrate(sid, rec)
     if rec.get("hydrate_failed_with_checkpoint"):
         # The task has a checkpoint and it could not be restored: the turn does not run. Running it
         # on the wiped workspace started the conversation over without a word (2026-09-06); an
@@ -9158,7 +9163,8 @@ async def recycle_session_sandbox(sid: str) -> dict:
     if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
         raise HTTPException(409, "a turn is running; recycle after it settles")
     rec: dict = {}
-    await _hydrate(sid, rec, force=True)
+    async with _ws_change_lock(sid):       # as a turn's restore is (_resp_execute)
+        await _hydrate(sid, rec, force=True)
     if not rec.get("hydrated"):
         raise HTTPException(502, f"workspace restore failed: {_hydrate_reason(rec)}")
     return {"session_id": sid, "checkpoint_sha": str(v.get("ws_sha") or ""),
@@ -11198,6 +11204,13 @@ async def read_session_file(sid: str, path: str, request: Request) -> Response:
                 cid = byname.get(path.rsplit("/", 1)[-1])
             if cid:
                 got = await _container_file_bytes(sid, cid)
+            if got is None:
+                # The checkpoint, last. A file the agent moved has no capture under its new name, and
+                # once the live directory is reaped (self-hosted) the checkpoint holds the only copy
+                # there until the next turn restores it. A path an app removed is out of the
+                # checkpoint as well (the delete changed it), so this brings nothing back.
+                with contextlib.suppress(Exception):    # blob store unavailable: the honest 404
+                    got = await _container_file_bytes(sid, _wf_id(path))
         if got is not None:
             data, media, _fname = got
             return Response(content=data, media_type=media,
@@ -11247,6 +11260,7 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
                         f"A workspace file written this way is limited to {_WS_WRITE_MAX} bytes.")
 
     async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
         ok = await BACKING.workspace.write(sid, path, data)
         if ok:
             _ws_changed(sid)
@@ -11266,6 +11280,14 @@ def _refuse_if_busy(v: dict) -> None:
         raise uhp_error(409, "session_busy",
                         "The agent is working on this session. Wait for the turn to finish "
                         "before writing to its workspace.")
+
+
+async def _ws_busy_now(sid: str) -> None:
+    """_refuse_if_busy again, on the session as it is now, under the change lock. The route's first
+    check read the session before it took the lock. A turn stamped running since then holds that
+    lock while it restores the workspace (_resp_execute), so a change that waited behind it reads it
+    running here and stops, instead of landing under a running turn."""
+    _refuse_if_busy(await _vertex_get(sid) or {})
 
 
 def _changeable(path: str, param: str = "path") -> str:
@@ -11348,6 +11370,7 @@ async def mkdir_session_file(sid: str, path: str, request: Request) -> dict:
     _refuse_if_busy(v)
     member = _changeable(path)
     async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
         outcome = await BACKING.workspace.mkdir(sid, member)
         _ws_outcome(outcome, member)
         _ws_changed(sid)
@@ -11365,6 +11388,7 @@ async def move_session_file(sid: str, path: str, body: WorkspaceMove, request: R
     if dest == member or dest.startswith(member + "/"):
         raise uhp_error(400, "invalid_input", "A path cannot move inside itself.", "to")
     async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
         _ws_outcome(await BACKING.workspace.move(sid, member, dest), member, dest)
         _ws_changed(sid)
         state = await _capture_state_or_none(sid)
@@ -11381,6 +11405,7 @@ async def delete_session_file(sid: str, path: str, request: Request) -> dict:
     _refuse_if_busy(v)
     member = _changeable(path)
     async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
         outcome = await BACKING.workspace.delete(sid, member)
         if outcome == backing.WS_NOT_FOUND:
             # Nothing to remove, but a durable copy of the path may still answer the by-path read
@@ -11428,9 +11453,9 @@ async def _carry_captures(sid: str, src: str, dst: str, state=None) -> None:
     leave no capture, so there is nothing to carry.
 
     Only the APP's: an agent's capture carried as the app's would be re-applied on every restore,
-    over whatever the agent later did with the file. So once the live directory is reaped, the
-    by-path read of a moved agent file answers 404 at its new name until the next turn restores it
-    (the checkpoint has it there)."""
+    over whatever the agent later did with the file. Once the live directory is reaped, the by-path
+    read finds a moved agent file at its new name in the checkpoint (read_session_file's last
+    fallback)."""
     caps = (state or ({}, {}))[0]
     for name, (cid, from_app) in caps.items():
         if not from_app or not (name == src or name.startswith(src + "/")):

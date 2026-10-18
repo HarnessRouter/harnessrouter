@@ -263,3 +263,65 @@ def test_a_put_of_a_new_file_goes_into_a_folder_the_agent_has(ws, c):
     r = c.put("/file", params={"identifier": "s", "path": "notes/new.md"}, content=b"n")
     assert r.status_code == 200 and (ws / "workspace" / "notes" / "new.md").read_bytes() == b"n"
     assert not (ws / "notes").exists()
+
+
+# ── what the maintainer review of #478 found ──────────────────────────────────────────────────
+# The routes check a path and then change it, as the runner, which is root under the write-wall. A
+# process the session left running between turns can swap a checked directory for a symlink in that
+# gap. Each test makes the swap at the gap (the hook the route calls between its check and its
+# change) and holds that nothing outside the workspace is touched: the change fails instead.
+def _outside(ws):
+    out = ws.parent / "outside"
+    out.mkdir()
+    (out / "x.txt").write_text("theirs")
+    return out
+
+
+def _swap_in_link(ws, name, target):
+    import shutil
+    if (ws / name).is_dir():
+        shutil.rmtree(ws / name)
+    os.symlink(target, ws / name)
+
+
+def test_a_delete_does_not_follow_a_directory_swapped_for_a_link(ws, c, monkeypatch):
+    out = _outside(ws)
+    (ws / "d").mkdir()
+    (ws / "d" / "x.txt").write_text("mine")
+    monkeypatch.setattr(server, "_refuse_protected", lambda *_a: _swap_in_link(ws, "d", out))
+    assert c.delete("/file", params={"identifier": "s", "path": "d/x.txt"}).status_code == 500
+    assert (out / "x.txt").read_text() == "theirs"
+
+
+def test_a_move_does_not_follow_a_directory_swapped_for_a_link(ws, c, monkeypatch):
+    out = _outside(ws)
+    (ws / "a.txt").write_text("mine")
+    (ws / "e").mkdir()
+    monkeypatch.setattr(server, "_refuse_protected", lambda *_a: _swap_in_link(ws, "e", out))
+    r = c.post("/file/move", params={"identifier": "s", "path": "a.txt", "to": "e/a.txt"})
+    assert r.status_code == 409                # a link where a directory would be, as a file there is
+    assert not (out / "a.txt").exists() and (ws / "a.txt").read_text() == "mine"
+
+
+def test_a_mkdir_does_not_follow_a_directory_swapped_for_a_link(ws, c, monkeypatch):
+    out = _outside(ws)
+    (ws / "d").mkdir()
+    monkeypatch.setattr(server, "_refuse_protected", lambda *_a: _swap_in_link(ws, "d", out))
+    assert c.post("/file/mkdir", params={"identifier": "s", "path": "d/new"}).status_code == 409
+    assert not (out / "new").exists()
+
+
+def test_a_put_does_not_follow_a_directory_swapped_for_a_link(ws, c, monkeypatch):
+    out = _outside(ws)
+    (ws / "d").mkdir()
+    monkeypatch.setattr(server, "_isolate_session", lambda *_a: _swap_in_link(ws, "d", out))
+    r = c.put("/file", params={"identifier": "s", "path": "d/x.txt"}, content=b"app")
+    assert r.status_code == 500
+    assert (out / "x.txt").read_text() == "theirs" and sorted(p.name for p in out.iterdir()) == ["x.txt"]
+
+
+def test_a_put_of_the_workspace_itself_is_refused(ws, c):
+    """Before, it wrote its temporary file into the directory that holds every session's workspace."""
+    for p in (".", "/"):
+        assert c.put("/file", params={"identifier": "s", "path": p}, content=b"x").status_code == 400
+    assert sorted(q.name for q in ws.parent.iterdir()) == ["sess"]
