@@ -722,3 +722,25 @@ def test_an_npm_range_is_a_name_with_no_pin(monkeypatch):
     ranged = E.check_package("npm", "lodash@^4.17.0")
     assert ranged["exists"] is True and ranged["error"] == "" and ranged["version"] == ""
     assert "not published" in E.check_package("npm", "lodash@9.9.9")["error"]
+
+
+def test_an_npm_dist_tag_resolves_to_its_version(monkeypatch):
+    """#494: `lodash@latest` names a dist-tag, not a version — the check resolves the tag
+    instead of reporting it "not published". An unknown tag keeps the error."""
+    answers = {
+        "https://registry.npmjs.org/lodash": (200, {
+            "dist-tags": {"latest": "4.17.21", "next": "4.17.22-beta.0"},
+            "versions": {"4.17.21": {}, "4.17.20": {}},
+        }),
+    }
+    monkeypatch.setattr(E, "_http_json", lambda url: answers.get(url, (503, {})))
+    tagged = E.check_package("npm", "lodash@latest")
+    assert tagged["exists"] is True and tagged["version"] == "4.17.21" and not tagged["error"]
+    other_tag = E.check_package("npm", "lodash@next")
+    assert other_tag["version"] == "4.17.22-beta.0" and not other_tag["error"]
+    unknown = E.check_package("npm", "lodash@no-such-tag")
+    assert unknown["version"] == "" and "no-such-tag is not published" in unknown["error"]
+    exact = E.check_package("npm", "lodash@9.9.9")
+    assert exact["version"] == "" and "9.9.9 is not published" in exact["error"]
+    pinned = E.check_package("npm", "lodash@4.17.20")
+    assert pinned["version"] == "4.17.20" and not pinned["error"]
