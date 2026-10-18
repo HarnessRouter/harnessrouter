@@ -36,14 +36,14 @@ async def test_by_path_falls_back_to_the_captured_blob(monkeypatch):
     async def _noop():
         return ("org", {})
 
-    async def _byname(_sid):
+    async def _state(_sid):
         assert _sid == sid
-        return {"dashboard.json": "cfile_abc"}
+        return {"dashboard.json": ("cfile_abc", False)}, {}
 
     async def _bytes(_sid, fid):
         return (body, "application/json", "dashboard.json") if fid == "cfile_abc" else None
 
-    monkeypatch.setattr(A, "_cfile_by_name", _byname)
+    monkeypatch.setattr(A, "_capture_state", _state)
     monkeypatch.setattr(A, "_container_file_bytes", _bytes)
 
     r = await A.read_session_file(sid, "dashboard.json", request=None)
@@ -62,10 +62,10 @@ async def test_a_file_that_never_existed_still_404s(monkeypatch):
 
     monkeypatch.setattr(A.BACKING, "workspace", _Gone(), raising=False)
     monkeypatch.setattr(A, "_owned_session", lambda *a, **k: _noop(), raising=False)
-    monkeypatch.setattr(A, "_cfile_by_name", lambda _s: _empty())
+    monkeypatch.setattr(A, "_capture_state", lambda _s: _empty())
 
     async def _empty():
-        return {}
+        return {}, {}
 
     with pytest.raises(Exception):
         await A.read_session_file("hsess_x", "nope.json", request=None)
