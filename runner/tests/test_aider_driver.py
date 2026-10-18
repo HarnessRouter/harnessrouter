@@ -951,3 +951,14 @@ def test_the_models_reasoning_is_not_rendered_as_its_answer():
     assert texts == ["M1-grok-4.20"], texts
     assert "THINKING" not in texts[0]
 
+
+def test_a_prose_line_that_starts_with_a_shells_name_is_kept():
+    """Every line was read as if a fence opened it, so an answer line such as "bash build.sh" or a
+    lone "sh" opened a shell block and everything after it, usually the rest of the answer, was
+    cut from the reply."""
+    for text in ("I created build.sh. Run it with:\nbash build.sh\nIt writes report.pdf.",
+                 "Which shell do you use? I recommend\nbash\nbecause it is everywhere.",
+                 "Two options:\nsh run.sh\nzsh run.sh\nEither works."):
+        assert aider_driver.strip_edit_blocks(text) == text
+    # a real fence is still a block, prose around it kept
+    assert aider_driver.strip_edit_blocks("Run:\nbash build.sh\n```bash\nls\n```\nDone.") == "Run:\nbash build.sh\nDone."

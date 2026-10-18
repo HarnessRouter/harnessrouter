@@ -6,6 +6,14 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## `max_output_tokens` is reported, not applied (2026-10-18, #470)
+
+A request's `max_output_tokens` is accepted and named in `metadata.ignored_fields`; no base receives
+it. That is a decision, not a gap (GOVERNANCE, "A declined field is not a pending one"): a UHP turn
+is many model calls, and a cap on each call's output changes what an agent can do, since it can cut
+a tool call off in the middle of its arguments. A turn's budgets here are `max_step` and
+`timeout_seconds`.
+
 ## hermes and Codex on Azure name the model that served them (2026-10-15)
 
 The open item from 0.33.0-rc.15: hermes switching into gpt-5.5 on Azure finished with no served

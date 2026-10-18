@@ -102,7 +102,8 @@ def check_readonly(sql: str) -> str:
     return raw
 
 
-_LIMIT_TAIL = re.compile(r"\blimit\s+\d+\s*(?:offset\s+\d+\s*)?$", re.I)
+# `LIMIT n`, `LIMIT n OFFSET m`, and MySQL's `LIMIT offset, count`.
+_LIMIT_TAIL = re.compile(r"\blimit\s+\d+\s*(?:(?:offset\s+\d+|,\s*\d+)\s*)?$", re.I)
 
 
 def with_limit(sql: str, max_rows: int) -> tuple[str, bool]:
@@ -271,7 +272,9 @@ async def run_query(engine: str, dsn: str, sql: str, *, timeout: float = DEFAULT
     if engine not in ENGINES:
         raise SqlRefused(f"Unsupported database: {engine}. This build supports {', '.join(ENGINES)}.")
     checked = check_readonly(sql)
-    capped, added = with_limit(checked, max_rows)
+    # One row past the cap is asked for, so _rows_out can see that there was more and say
+    # `truncated`; with LIMIT max_rows the database never returns the row that would tell it.
+    capped, added = with_limit(checked, max_rows + 1)
     out = await (_pg_query if engine == "postgres" else _mysql_query)(dsn, capped, timeout, max_rows)
     out["limit_applied"] = added and max_rows or None
     return out

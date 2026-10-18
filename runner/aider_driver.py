@@ -79,7 +79,9 @@ def _strip_shell_blocks(text: str) -> str:
     out, lines, i = [], (text or "").splitlines(), 0
     while i < len(lines):
         line = lines[i]
-        opener = "```" + line.strip().lstrip("`")     # a fence of any length, read as three
+        # a fence of any length, read as three; a line that does not start with one is prose, even
+        # when it starts with a shell's name ("bash build.sh" in an answer is not a block)
+        opener = ("```" + line.strip().lstrip("`")) if line.strip().startswith("```") else ""
         if opener.strip() in _SHELL_FENCES or any(opener.startswith(f + " ") for f in _SHELL_FENCES):
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
