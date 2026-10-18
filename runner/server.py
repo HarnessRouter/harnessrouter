@@ -7021,7 +7021,8 @@ def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
                 withheld.append(implied)
     cmd += ["--disallowed-tools", ",".join(list(_GROK_ALWAYS_WITHHELD) + withheld)]
     if max_turns:
-        # Unset is unbounded; reaching it ends the run as `error_max_turns`, which reads as failed.
+        # Unset is unbounded; reaching it ends the run as `error_max_turns` with is_error set, and
+        # the run loop reports it by that subtype: incomplete at the budget, not failed (#471).
         cmd += ["--max-turns", str(int(max_turns))]
     if partial:
         cmd.append("--include-partial-messages")
@@ -11681,10 +11682,22 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 # _run_turn_bg enforces max_turns for these by counting tool calls in the normalised stream and
 # stopping the process at the budget (#471). Bases that pass a native limit flag (claude --max-turns,
 # goose --max-steps, kimi's loop.max_steps, grok, hermes config, minimax, aider, cheetahclaws,
-# systemone, openhands, agentzero) are absent: their budget is the CLI's own. jcode is absent too —
-# its counter in _jcode_to_claude predates this one and emits jcode's own usage, so it stays.
+# systemone, openhands, agentzero, opensquilla, nanobot, zeroclaw) are absent: their budget is the
+# CLI's own. jcode is absent too — its counter in _jcode_to_claude predates this one and emits
+# jcode's own usage, so it stays.
 _GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "gajae", "qwen", "gemini", "cline",
                         "opencode", "mimo", "kilo", "qoder"}
+
+
+def _count_tool_calls(ev: dict, state: dict) -> int:
+    """The tool calls a turn has made so far, counted by id, so a normaliser that reports one call
+    twice does not spend the budget twice."""
+    seen = state.setdefault("_tool_ids", set())
+    blocks = (ev.get("message") or {}).get("content")
+    for b in blocks if isinstance(blocks, list) else []:
+        if isinstance(b, dict) and b.get("type") == "tool_use":
+            seen.add(str(b.get("id") or f"#{len(seen)}"))
+    return len(seen)
 
 
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
@@ -11704,10 +11717,29 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     result_ev = None
     # The generic step budget (#471): for a base with no limit flag of its own, tool calls are
     # counted in the normalised stream — every normaliser emits the same Claude-shaped tool_use
-    # blocks — and past the budget the turn ends error_max_turns (which the gateway reports as
-    # incomplete) while the loop below stops the process the way a cancel does.
+    # blocks — and past the budget the loop below stops the process the way a cancel does, and the
+    # turn ends error_max_turns, which the gateway reports as incomplete.
     step_cap = int(max_turns) if (count_steps and max_turns) else None
     env = {**env, _TURN_MARK: turn_id}
+
+    def _settle(ev: dict) -> None:
+        """An event, before it is visible. A result gets what the relay saw and the budget's word."""
+        ev.setdefault("_ts", time.time())
+        if ev.get("type") != "result":
+            return
+        if state.get("_stop") == "max_turns" and ev.get("subtype") != "error_max_turns":
+            # The turn ended at its budget. What the CLI says while it is stopped (a remote
+            # runtime's cancel, with its charge) is still the turn's account, but not its verdict.
+            ev.update(subtype="error_max_turns", is_error=False)
+        if not ev.get("model"):
+            # The CLI did not say what ran; the relay saw the provider say it. Set before
+            # the event is visible, so the gateway never reads it unlabelled.
+            served = _relay_served_model(env)
+            if served:
+                ev["model"] = served
+        _fill_relay_usage(ev, env)
+        _stamp_thinking(ev, rec)
+
     try:
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
         # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
@@ -11755,16 +11787,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             except Exception:  # noqa: BLE001
                 continue
             for ev in normalize(obj, state):
-                ev.setdefault("_ts", time.time())
-                if ev.get("type") == "result" and not ev.get("model"):
-                    # The CLI did not say what ran; the relay saw the provider say it. Set before
-                    # the event is visible, so the gateway never reads it unlabelled.
-                    served = _relay_served_model(env)
-                    if served:
-                        ev["model"] = served
-                if ev.get("type") == "result":
-                    _fill_relay_usage(ev, env)
-                    _stamp_thinking(ev, rec)
+                _settle(ev)
                 with _turns_lock:
                     rec["events"].append(ev)
                 if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
@@ -11774,28 +11797,16 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     # Claude's stream-json carries the final assistant text on the result event;
                     # the codex normalizer already fills state['final'], so prefer that.
                     state["final"] = state.get("final") or ev.get("result") or ""
-                if step_cap and not state.get("_stop") and ev.get("type") == "assistant":
-                    blocks = (ev.get("message") or {}).get("content")
-                    if isinstance(blocks, list):
-                        state["_gen_tool_n"] = state.get("_gen_tool_n", 0) + sum(
-                            1 for b in blocks
-                            if isinstance(b, dict) and b.get("type") == "tool_use")
-                        if state["_gen_tool_n"] > step_cap:
-                            stop_ev = {"type": "result", "subtype": "error_max_turns",
-                                       "is_error": False, "result": state.get("final", ""),
-                                       "usage": {}}
-                            stop_ev.setdefault("_ts", time.time())
-                            with _turns_lock:
-                                rec["events"].append(stop_ev)
-                            result_ev = stop_ev
-                            state["_stop"] = "max_turns"
-
+                if (step_cap and not state.get("_stop") and ev.get("type") == "assistant"
+                        and _count_tool_calls(ev, state) > step_cap):
+                    state["_stop"] = "max_turns"
             if state.get("_stop") and not state.get("_stopped") and proc.poll() is None:
-                # A translator ended the turn itself (a CLI with no step limit of its own went past
-                # the turn's budget): the process is stopped here, and the result event it emitted
-                # says why, so the turn is incomplete at its budget rather than running to the cap.
+                # The turn went past its budget (a CLI with no step limit of its own, counted above
+                # or by its translator): the process is stopped here, the way a cancel stops it, so a
+                # remote runtime is cancelled too, and the turn is incomplete at its budget rather
+                # than running to the cap.
                 state["_stopped"] = True
-                _kill_proc_tree(proc, turn_id)
+                _stop_proc(proc, rec)
         rc = proc.wait()
     finally:
         killer.cancel()
@@ -11809,19 +11820,21 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     eof = getattr(normalize, "eof", None)
     if eof is not None and result_ev is None:
         for ev in eof(state, rc):
-            ev.setdefault("_ts", time.time())
-            if ev.get("type") == "result" and not ev.get("model"):
-                served = _relay_served_model(env)
-                if served:
-                    ev["model"] = served
-            if ev.get("type") == "result":
-                _fill_relay_usage(ev, env)
-                _stamp_thinking(ev, rec)
+            _settle(ev)
             with _turns_lock:
                 rec["events"].append(ev)
             if ev.get("type") == "result":
                 result_ev = ev
                 state["final"] = state.get("final") or ev.get("result") or ""
+    if result_ev is None and state.get("_stop") == "max_turns":
+        # Stopped at its budget before the CLI said anything terminal (codex's turn.completed
+        # never comes once it is killed): the turn's result is the budget's, with what the relay
+        # counted, and no usage at all where nothing counted it.
+        result_ev = {"type": "result", "subtype": "error_max_turns", "is_error": False,
+                     "result": state.get("final", "")}
+        _settle(result_ev)
+        with _turns_lock:
+            rec["events"].append(result_ev)
     if (result_ev is not None and not result_ev.get("is_error")
             and _relay_last_finish(env) == "content_filter"):
         # The provider declined the last request (finish_reason content_filter, seen by the relay)
