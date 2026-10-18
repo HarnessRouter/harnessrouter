@@ -316,3 +316,22 @@ def test_only_the_measured_tools_are_offered_and_none_means_none():
     with tempfile.TemporaryDirectory() as d:
         _, _, cfg = _build(d, tools_disabled=list(srv.ALL_ZEROCLAW_TOOLS))
     assert cfg["risk_profiles"]["hr"]["allowed_tools"] == [srv._ZEROCLAW_NO_TOOLS]
+
+
+def test_a_tool_result_without_raw_output_is_its_content_not_the_word_null(monkeypatch):
+    """A terminal tool_call_update with no rawOutput (ACP carries a tool's output in `content`)
+    was reported as json.dumps(None): a tool result reading "null"."""
+    import zeroclaw_driver as zd
+    seen = []
+    monkeypatch.setattr(zd, "_emit", seen.append)
+
+    def result(update):
+        seen.clear()
+        zd._Turn().update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", **update})
+        return seen[0]["message"]["content"][0]["content"]
+
+    blocks = [{"type": "content", "content": {"type": "text", "text": "wrote hello.txt"}}]
+    assert result({"status": "completed", "content": blocks}) == "wrote hello.txt"
+    assert result({"status": "completed"}) == ""
+    assert result({"status": "failed", "rawOutput": "denied"}) == "denied"          # unchanged
+    assert result({"status": "completed", "rawOutput": {"ok": True}}) == '{"ok": true}'
