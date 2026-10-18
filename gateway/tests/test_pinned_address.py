@@ -137,12 +137,16 @@ def _fake_pg(monkeypatch, peer):
         def transaction(self, readonly=False):
             return _Tx()
 
-        async def fetch(self, sql):
+        async def cursor(self, sql):   # asyncpg: an awaited cursor factory opens the cursor
             ran.append(sql)
-            return []
+            return Cursor()
 
         async def close(self):
             pass
+
+    class Cursor:
+        async def fetch(self, n):
+            return []
 
     async def connect(dsn):
         return Conn()
