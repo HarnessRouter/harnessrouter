@@ -396,7 +396,7 @@ _SCAN = 300
 # file. Or a lowercase dotfile (".env", not ".NET"), or a file named without an extension
 # ("Dockerfile"). A leading "./" is the workspace itself.
 _FILE_TYPES = (
-    "txt|md|markdown|rst|adoc|org|tex|bib|log|py|ipynb|js|mjs|cjs|ts|tsx|jsx|vue|svelte|astro|json|"
+    "txt|md|markdown|rst|adoc|tex|bib|log|py|ipynb|js|mjs|cjs|ts|tsx|jsx|vue|svelte|astro|json|"
     "jsonl|yaml|yml|toml|ini|cfg|conf|env|csv|tsv|xml|html|htm|css|scss|sass|less|sql|sh|bash|zsh|"
     "fish|ps1|bat|rb|go|rs|java|kt|kts|swift|c|h|cc|cpp|hpp|cs|php|pl|lua|r|jl|dart|scala|ex|exs|"
     "erl|hs|ml|proto|graphql|gql|tf|hcl|patch|diff|svg|pem|crt")
@@ -404,10 +404,12 @@ _FILE_NAME = re.compile(
     r"(?<![\w/.@-])(?:\./)?((?:[\w-]+/)*(?:[\w-]+(?:\.[\w-]+)*\.(?i:" + _FILE_TYPES + r")|\.[a-z][a-z0-9_.-]*"
     r"|(?:Dockerfile|Makefile|Procfile|Gemfile|Rakefile|Jenkinsfile|Vagrantfile|Containerfile)))"
     r"(?![\w/@.-]*[\w/@-])")
-# A file the request reads from is not one it asks for: "write a summary of `notes.md`". A file
-# that exists is left out below, which covers "export the table in data.csv" and "write tests for
-# utils.py" without refusing "save it in out.md" or "a project with main.py and utils.py".
-_READS_FROM = re.compile(r"\b(?:of|from|about|than)\s*[`'\"]?\Z", re.I)
+# A file the request reads from, or that the thing asked for is for, is not one it asks for:
+# "write a summary of `notes.md`", "write a scraper for wikipedia.org" (a site whose ending is also
+# a file type: .org is left off the list, and .sh, .rs, .go, .pl, .ml and .cs are code). A file
+# that exists is left out below, which covers "export the table in data.csv" without refusing
+# "save it in out.md" or "a project with main.py and utils.py".
+_READS_FROM = re.compile(r"\b(?:of|from|about|than|for)\s*[`'\"]?\Z", re.I)
 # A framework's name is not a file: "a Next.js app". The frameworks are named, so "create App.js"
 # is still a file.
 _NOT_A_FILE = re.compile(

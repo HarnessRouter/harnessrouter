@@ -414,6 +414,10 @@ def test_a_request_that_names_a_file_to_write_is_told_apart_from_a_question():
     assert f("Write the result to ../out.txt") == []                 # not in the workspace
     assert f("Write a Node.js script that prints hi") == [] and f("Build a Next.js app") == []
     assert f("Write a scraper for example.com") == []
+    # a site whose ending is also a file type (#499 review)
+    assert f("Write a scraper for wikipedia.org") == [] and f("Create a crawler for python.org that saves pages") == []
+    assert f("Build a checker for crates.rs") == [] and f("Write a tool for golang.go") == []
+    assert f("Write lib.rs and main.go") == ["lib.rs", "main.go"] and f("Create deploy.sh") == ["deploy.sh"]
     assert f("Write a function that calls subprocess.run and prints the output") == []
     assert f("Create a wrapper around requests.Session") == [] and f("Build a .NET console app") == []
     assert f("Fix the parser and make sure the output goes to parsed.json") == []
