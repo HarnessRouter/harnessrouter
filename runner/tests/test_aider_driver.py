@@ -580,6 +580,31 @@ def test_a_chat_with_no_files_says_a_new_file_needs_no_adding():
     assert "    _new_files_need_no_add(coder)\n" in src
 
 
+def test_the_repo_map_follows_the_conversation():
+    """With a file in the workspace aider's repo map and its canned "Ok, I won't try..." reply came
+    ahead of the conversation, and gpt-5.4 asked for the first message's word answered "Ok" 5 of 6
+    times (0.35.3-rc.4). The map now opens the files message after the conversation; nothing of it
+    is dropped, and a workspace with no map is left as it was."""
+    repo = [dict(role="user", content="Here are summaries of some files present in my git repository.\nhello-aider.txt"),
+            dict(role="assistant", content="Ok, I won't try and edit those files without asking first.")]
+    files = [dict(role="user", content="No files are in the chat yet."), dict(role="assistant", content="Ok.")]
+    coder = types.SimpleNamespace(get_repo_messages=lambda: list(repo), get_chat_files_messages=lambda: list(files))
+    aider_driver._repo_map_after_the_conversation(coder)
+    assert coder.get_repo_messages() == []
+    msgs = coder.get_chat_files_messages()
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[0]["content"].startswith("Here are summaries") and msgs[0]["content"].endswith("No files are in the chat yet.")
+    assert "hello-aider.txt" in msgs[0]["content"] and msgs[1]["content"] == "Ok."
+    empty = types.SimpleNamespace(get_repo_messages=lambda: [], get_chat_files_messages=lambda: list(files))
+    aider_driver._repo_map_after_the_conversation(empty)
+    assert empty.get_chat_files_messages() == files                  # an empty workspace: as before
+    none = types.SimpleNamespace(get_repo_messages=lambda: list(repo), get_chat_files_messages=lambda: [])
+    aider_driver._repo_map_after_the_conversation(none)
+    assert none.get_chat_files_messages() == repo                    # no files message: the map alone
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "    _repo_map_after_the_conversation(coder)\n" in src
+
+
 def test_agent_doc_is_written_as_agents_md_even_though_aider_reads_it_via_read():
     assert _agent_doc_path("/ws", "aider").name == "AGENTS.md"
 

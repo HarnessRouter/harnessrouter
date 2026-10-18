@@ -524,6 +524,32 @@ def _new_files_need_no_add(coder) -> None:
     coder.gpt_prompts = prompts
 
 
+def _repo_map_after_the_conversation(coder) -> None:
+    """THE CONVERSATION STARTS WITH WHAT THE USER SAID, with files in the workspace as without.
+    aider sends the repo map as a user message, answered for the model with "Ok, I won't try and
+    edit those files without asking first.", AHEAD of the restored conversation (format_chat_chunks
+    puts repo before done), so once the workspace holds a file the first exchange the model sees is
+    aider's. Asked what word the first message of the task asked for, gpt-5.4 answered "Ok" or
+    "exactly" 5 of 6 times after it had written hello-aider.txt, and "M1-gpt-5.4" 6 of 6 with the
+    map moved (0.35.3-rc.4, 2026-10-18). The examples were moved out of the conversation for the
+    same reason. The map now opens the files message that follows
+    the conversation, where the note on what is in the chat already sits: what the model is told
+    about the workspace is the same, only its place moves."""
+    repo_messages = coder.get_repo_messages
+    files_messages = coder.get_chat_files_messages
+
+    def chat_files():
+        files, repo = files_messages(), repo_messages()
+        if not repo:
+            return files
+        if files and files[0]["role"] == "user" and isinstance(files[0]["content"], str):
+            return [dict(files[0], content=repo[0]["content"] + "\n\n" + files[0]["content"])] + files[1:]
+        return repo + files
+
+    coder.get_repo_messages = lambda: []
+    coder.get_chat_files_messages = chat_files
+
+
 def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     """aider's own reflection loop (Coder.run_one), driven directly.
 
@@ -772,6 +798,7 @@ def main() -> int:
     # defaults, so the attribute is set on the object, which is what format_chat_chunks reads.
     coder.main_model.examples_as_sys_msg = True
     _new_files_need_no_add(coder)
+    _repo_map_after_the_conversation(coder)
     # NO TEMPERATURE. aider sends `temperature: 0` for every id its settings do not know, and a
     # provider that has retired the field refuses the whole turn: claude-fable-5-1 on TokenRouter
     # answered "`temperature` is deprecated for this model" and the turn died after 171 s of
