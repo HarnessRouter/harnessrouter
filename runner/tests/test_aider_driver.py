@@ -748,6 +748,24 @@ def test_the_harness_own_files_stay_out_of_the_repo_map():
     assert '"--aiderignore", str(ignore),' in src
 
 
+def test_a_small_binary_file_is_not_taken_for_text():
+    """The leeway for a character cut at the sniff boundary (decode all but the last four bytes)
+    also ran on a file read whole, so a file of four bytes or fewer, or one whose only invalid
+    UTF-8 was in its last bytes, was called text and failed in aider's UTF-8 read."""
+    d = tempfile.mkdtemp()
+    for name, data in (("bom16.txt", b"\xff\xfe"), ("tail.bin", b"hello\x80"), ("one.bin", b"\xc3")):
+        pathlib.Path(d, name).write_bytes(data)
+        assert aider_driver.is_text_file(os.path.join(d, name)) is False, name
+    # a head that fills the sniff and ends inside a multi-byte character is still text
+    big = pathlib.Path(d, "long.md")
+    big.write_bytes(b"a" * 65534 + "€".encode() + b"more")      # the euro sign straddles byte 65536
+    assert aider_driver.is_text_file(str(big)) is True
+    pathlib.Path(d, "accents.md").write_text("café\n", encoding="utf-8")
+    assert aider_driver.is_text_file(os.path.join(d, "accents.md")) is True
+    pathlib.Path(d, "empty.md").write_bytes(b"")
+    assert aider_driver.is_text_file(os.path.join(d, "empty.md")) is True
+
+
 def test_a_binary_file_the_model_names_is_refused_at_aiders_add_prompt():
     """Asked to restyle hello.pptx (hr-test, 2026-09-19), the model named it, aider added it, the
     UTF-8 read failed ("Use --encoding…"), the file was dropped and added again on the next

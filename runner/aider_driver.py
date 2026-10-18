@@ -32,6 +32,7 @@ normalised by _aider_to_claude in server.py.
 """
 from __future__ import annotations
 
+import codecs
 import contextlib
 import json
 import os
@@ -138,13 +139,12 @@ def is_text_file(path: str, sniff: int = 65536) -> bool:
     if b"\x00" in head:
         return False
     try:
-        head.decode("utf-8")
+        # A cut inside a multi-byte sequence at the sniff boundary is not a binary file, so a head
+        # that filled the sniff may end mid-character. A file read whole may not: dropping its last
+        # bytes passed any file of four bytes or fewer, and any whose only bad byte was near its end.
+        codecs.getincrementaldecoder("utf-8")().decode(head, final=len(head) < sniff)
     except UnicodeDecodeError:
-        # a cut inside a multi-byte sequence at the sniff boundary is not a binary file
-        try:
-            head[:-4].decode("utf-8")
-        except UnicodeDecodeError:
-            return False
+        return False
     return True
 
 
