@@ -99,6 +99,21 @@ def test_a_hint_that_names_the_clis_slash_commands_is_cut_from_the_reason():
     assert r.endswith("check your internet connection or the API endpoint URL.")
 
 
+def test_a_path_in_the_reason_is_not_taken_for_a_slash_command():
+    """A sentence naming a path (`/home/hr/x.json`, `/v1/models/foo`) matched the slash-command
+    pattern and was cut, and when it was the only sentence the reason came back empty, so the turn
+    said only that it ended without a completion."""
+    r = drv.failure_reason("[Failed — FileNotFoundError: [Errno 2] No such file or directory: /home/hr/x.json]")
+    assert r == "Failed — FileNotFoundError: [Errno 2] No such file or directory: /home/hr/x.json"
+    r = drv.failure_reason("[Failed — NotFoundError: Error code: 404 at /v1/models/foo]")
+    assert r == "Failed — NotFoundError: Error code: 404 at /v1/models/foo"
+    assert drv.failure_reason("[Loop guard] Model repeated /bin/ls 5 times. Stopping.") == \
+        "Loop guard: Model repeated /bin/ls 5 times. Stopping."
+    # the CLI's own command is still cut, a path beside it or not
+    r = drv.failure_reason("[Failed — NotFoundError: no model at /v1/models/foo. Try /model to pick another.]")
+    assert r == "Failed — NotFoundError: no model at /v1/models/foo."
+
+
 def test_the_verdict_is_the_historys_shape_not_the_text():
     user = {"role": "user", "content": "hi"}
     # a model that WRITES a failure line is still an answer (one completion came back)

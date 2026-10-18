@@ -55,8 +55,9 @@ FAILED_RE = re.compile(r"^\s*\[Failed — (?P<body>.+)\]\s*$", re.S)
 # A sentence that sends the reader to the CLI's own slash commands ("Hint: Check your API key:
 # /config …", "Try /clear and rephrase …"). The person reading the turn record has no such prompt:
 # the rule kimi's "To resume this session" line and aider's "Use /drop" advice already follow. The
-# sentences around it are the reason and stay.
-_SLASH_CMD = re.compile(r"(?:^|\s)/[a-z][\w-]*\b")
+# sentences around it are the reason and stay. A command is one segment: `/home/hr/x.json` or
+# `/v1/models` in an error is a path, and the sentence carrying it is usually the reason itself.
+_SLASH_CMD = re.compile(r"(?:^|\s)/[a-z][\w-]*\b(?!/)")
 LOOP_GUARD = "[Loop guard]"
 
 # Withheld on every turn, because none of them can do its job here. AskUserQuestion blocks on the

@@ -32,6 +32,7 @@ normalised by _aider_to_claude in server.py.
 """
 from __future__ import annotations
 
+import codecs
 import contextlib
 import json
 import os
@@ -78,7 +79,9 @@ def _strip_shell_blocks(text: str) -> str:
     out, lines, i = [], (text or "").splitlines(), 0
     while i < len(lines):
         line = lines[i]
-        opener = "```" + line.strip().lstrip("`")     # a fence of any length, read as three
+        # a fence of any length, read as three; a line that does not start with one is prose, even
+        # when it starts with a shell's name ("bash build.sh" in an answer is not a block)
+        opener = ("```" + line.strip().lstrip("`")) if line.strip().startswith("```") else ""
         if opener.strip() in _SHELL_FENCES or any(opener.startswith(f + " ") for f in _SHELL_FENCES):
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
@@ -136,13 +139,12 @@ def is_text_file(path: str, sniff: int = 65536) -> bool:
     if b"\x00" in head:
         return False
     try:
-        head.decode("utf-8")
+        # A cut inside a multi-byte sequence at the sniff boundary is not a binary file, so a head
+        # that filled the sniff may end mid-character. A file read whole may not: dropping its last
+        # bytes passed any file of four bytes or fewer, and any whose only bad byte was near its end.
+        codecs.getincrementaldecoder("utf-8")().decode(head, final=len(head) < sniff)
     except UnicodeDecodeError:
-        # a cut inside a multi-byte sequence at the sniff boundary is not a binary file
-        try:
-            head[:-4].decode("utf-8")
-        except UnicodeDecodeError:
-            return False
+        return False
     return True
 
 
