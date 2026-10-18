@@ -649,6 +649,7 @@ def check_package(manager: str, spec: str) -> dict:
         raise HTTPException(400, "that is not a package spec")
     name, pin = spec_parts(spec, manager)
     out = {"manager": manager, "name": name, "spec": spec, "exists": None, "latest": "", "version": "", "error": ""}
+    dist_tags: dict = {}   # npm only: PyPI and apt have no dist-tag concept
     try:
         if manager == "pip":
             st, j = _http_json(f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json")
@@ -667,7 +668,8 @@ def check_package(manager: str, spec: str) -> dict:
                 return out
             if st != 200:
                 raise RuntimeError(f"the npm registry answered {st}")
-            out.update(exists=True, latest=str((j.get("dist-tags") or {}).get("latest") or ""))
+            dist_tags = j.get("dist-tags") or {}
+            out.update(exists=True, latest=str(dist_tags.get("latest") or ""))
             versions = set((j.get("versions") or {}).keys())
         else:
             _apt_lists()
@@ -681,7 +683,12 @@ def check_package(manager: str, spec: str) -> dict:
             m = subprocess.run(["apt-cache", "madison", name], capture_output=True, text=True, timeout=60, env=env)
             versions = {ln.split("|")[1].strip() for ln in m.stdout.splitlines() if ln.count("|") >= 2}
         if pin:
-            if pin in versions:
+            # A dist-tag is a name for a version, not a version: resolve it before checking
+            # the published versions, so `lodash@latest` stops reading as "not published".
+            # An unknown tag keeps the error below; only an exact version is looked up.
+            if pin in dist_tags:
+                out["version"] = str(dist_tags[pin])
+            elif pin in versions:
                 out["version"] = pin
             else:
                 out["error"] = f"{name} {pin} is not published; the latest is {out['latest']}"
