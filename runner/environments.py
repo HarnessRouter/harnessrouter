@@ -719,13 +719,35 @@ def build_record(env_id: str, n: int) -> dict | None:
         return None
 
 
+def _build_running(env_id: str, n: int) -> bool:
+    with _builds_lock:
+        t = _builds.get(f"{env_id}:{int(n)}")
+    return bool(t and t.is_alive())
+
+
+def _as_read(env_id: str, n: int, rec: dict) -> dict:
+    """A record that says building with no build thread behind it is a build that stopped. The
+    record is the build's only report, and the thread that writes it is gone: its last write failed
+    (a full disk; _build swallows that one) or the runner restarted under it. Read as it lies, it
+    said building to every read for good, and the gateway, which takes the environment's status
+    from versions(), showed it building for good too. Both reads answer it as failed."""
+    if rec.get("status") != "building" or _build_running(env_id, n):
+        return rec
+    try:
+        stopped = int(os.path.getmtime(version_dir(env_id, n) / ".hr-build.json"))
+    except OSError:
+        stopped = int(time.time())
+    return {**rec, "status": "failed", "stage": "", "finished_at": stopped,
+            "error": "the build stopped before it recorded its end"}
+
+
 def versions(env_id: str) -> list[dict]:
     root = env_dir(env_id) / "versions"
     out = []
     if root.is_dir():
         for e in sorted(root.iterdir(), key=lambda x: int(x.name) if x.name.isdigit() else 0):
             if e.name.isdigit():
-                rec = build_record(env_id, int(e.name)) or {"version": int(e.name), "status": "unknown"}
+                rec = _as_read(env_id, int(e.name), build_record(env_id, int(e.name)) or {"version": int(e.name), "status": "unknown"})
                 out.append({k: rec.get(k) for k in ("version", "status", "started_at", "finished_at", "error", "files", "bytes")
                             } | {"packages": len(rec.get("packages") or [])})
     return out
@@ -1261,7 +1283,7 @@ def r_build_status(env_id: str, version: int) -> dict:
     rec = build_record(env_id, int(version))
     if not rec:
         raise HTTPException(404, "no such build")
-    return rec
+    return _as_read(env_id, int(version), rec)
 
 
 @router.get("/environments/{env_id}/versions")

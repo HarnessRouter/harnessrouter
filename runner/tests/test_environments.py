@@ -332,6 +332,35 @@ def test_a_build_whose_last_write_fails_leaves_the_active_version_as_it_was(stor
     assert _wait("henv_n", 1)["status"] == "failed" and E.active_version("henv_n") is None
 
 
+def test_a_build_that_stopped_without_recording_its_end_reads_as_failed(store, monkeypatch):
+    """The record is the build's only report. When its last write fails (_build swallows that one)
+    or the runner restarts under a build, the record says building with no thread behind it, and
+    every read said building for good. The build's own read and the versions, which the gateway
+    takes the environment's status from, answer it as failed; a build still running is building."""
+    E.write_file("henv_s", "setup.sh", b"#!/bin/sh\necho preparing\nexit 3\n")
+    real = E._write_record
+    monkeypatch.setattr(E, "_write_record", lambda dst, rec: (_ for _ in ()).throw(OSError("no space left on device"))
+                        if rec.get("status") == "failed" else real(dst, rec))
+    E.start_build("henv_s", 1, "stopped")
+    for _ in range(960):
+        with E._builds_lock:
+            if "henv_s:1" not in E._builds:
+                break
+        time.sleep(0.25)
+    assert E.build_record("henv_s", 1)["status"] == "building"        # what the disk still says
+    rec = E.r_build_status("henv_s", 1)
+    assert rec["status"] == "failed" and rec["error"] == "the build stopped before it recorded its end"
+    assert rec["stage"] == "" and rec["finished_at"] >= rec["started_at"]
+    assert [(v["version"], v["status"]) for v in E.versions("henv_s")] == [(1, "failed")]
+
+    class Alive:
+        def is_alive(self):
+            return True
+    monkeypatch.setitem(E._builds, "henv_s:1", Alive())             # the same record while a build runs
+    assert E.r_build_status("henv_s", 1)["status"] == "building"
+    assert E.versions("henv_s")[0]["status"] == "building"
+
+
 def test_the_turn_gets_the_path_the_variables_and_the_instructions(store):
     E.write_file("henv_t", "requirements.txt", b"")
     E.write_file("henv_t", "package.json", json.dumps({"name": "p", "version": "1.0.0", "private": True}).encode())
