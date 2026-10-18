@@ -3842,7 +3842,15 @@ def _hermes_mcp_section(servers: list[dict] | None) -> dict:
 # turn with a fresh env, so each turn registers its upstream and the entry simply outlives the
 # turn (a few dozen bytes per turn, process lifetime — the sandbox recycles long before this
 # matters).
-_HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threading.Lock()}
+_HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threading.Lock(),
+                       # A route's totals (`usage`, `reasoning_tokens`) are folded in by the relay's
+                       # request threads, one per call, and a CLI can have two calls in flight on one
+                       # route (a background call beside the main one, parallel subagents) while the
+                       # turn reads them. Every fold and every read of a total assembled from several
+                       # writes holds this lock, so a reader sees a whole fold or the one before it and
+                       # no increment is lost (#449). A single store of one scalar (last_data,
+                       # served_model, last_finish, a repair flag) needs none.
+                       "totals": threading.Lock()}
 # The thinking of the turn being built, while /turn runs a backend's builder: {"asked": the level
 # the turn asked for ("" for none), "applied": what a backend whose calls never pass the relay set
 # for its CLI (Claude Code, Codex on OpenAI's own endpoint), "routes": the flags of every route the
@@ -4993,7 +5001,8 @@ def _thinking_in_sse_line(line: bytes) -> int | None:
 def _thinking_add(flags: dict, count: int | None) -> None:
     """Fold one call's thinking count into the route's total; the key exists only once a provider gave one."""
     if count is not None:
-        flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + count
+        with _HERMES_RELAY["totals"]:
+            flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + count
 
 
 def _stream_fold(flags: dict, call_usage: dict, call_thinking: int | None, folded: dict) -> None:
@@ -5006,27 +5015,29 @@ def _stream_fold(flags: dict, call_usage: dict, call_thinking: int | None, folde
     was on it. CheetahClaws's in-process driver is such a client, and its turns came back with no
     usage at all (the thinking column on a candidate, 2026-10-05: the relay had read 329 output
     tokens and 312 thinking tokens for a call whose turn recorded none)."""
-    if call_usage:
-        total = flags.setdefault("usage", {})
-        for k, v in call_usage.items():
-            delta = int(v) - int(folded.get(k, 0))
-            if delta or k not in total:          # a zero is still a figure the provider gave
-                total[k] = int(total.get(k, 0)) + delta
-            folded[k] = int(v)
-    if call_thinking is not None:
-        delta = call_thinking - int(folded.get("_thinking", 0))
-        if delta or "_thinking" not in folded:
-            flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + delta
-            folded["_thinking"] = call_thinking
+    with _HERMES_RELAY["totals"]:
+        if call_usage:
+            total = flags.setdefault("usage", {})
+            for k, v in call_usage.items():
+                delta = int(v) - int(folded.get(k, 0))
+                if delta or k not in total:          # a zero is still a figure the provider gave
+                    total[k] = int(total.get(k, 0)) + delta
+                folded[k] = int(v)
+        if call_thinking is not None:
+            delta = call_thinking - int(folded.get("_thinking", 0))
+            if delta or "_thinking" not in folded:
+                flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + delta
+                folded["_thinking"] = call_thinking
 
 
 def _usage_add(flags: dict, call_usage: dict) -> None:
     """Fold one call's usage into the route's running total: a turn is many provider calls."""
     if not call_usage:
         return
-    total = flags.setdefault("usage", {})
-    for k, v in call_usage.items():
-        total[k] = int(total.get(k, 0)) + int(v)
+    with _HERMES_RELAY["totals"]:
+        total = flags.setdefault("usage", {})
+        for k, v in call_usage.items():
+            total[k] = int(total.get(k, 0)) + int(v)
 
 
 def _model_metadata_with_context_length(data: bytes) -> bytes:
@@ -5146,8 +5157,10 @@ def _relay_usage(env: dict) -> dict:
     statement of what it counted, read off the bytes as they pass, rather than a number the CLI
     estimated or nothing at all. A backend that reports its own usage keeps it; this only fills a
     result event that arrived empty."""
-    u = _turn_relay_flags(env).get("usage")
-    return dict(u) if isinstance(u, dict) and u else {}
+    flags = _turn_relay_flags(env)
+    with _HERMES_RELAY["totals"]:                # a whole fold, never part of one (#449)
+        u = flags.get("usage")
+        return dict(u) if isinstance(u, dict) and u else {}
 
 
 # A local model server's own discovery endpoints (Ollama, llama.cpp, LM Studio, vLLM), as the path
