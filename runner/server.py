@@ -50,10 +50,12 @@ import http.client
 import ipaddress
 import http.server
 import datetime
+import errno
 import json
 import mimetypes
 import os
 import pathlib
+import posixpath
 import re
 import shlex
 import shutil
@@ -497,6 +499,24 @@ def _fast_agent_session_present(cwd: str, cmd: list[str], session_id: str) -> bo
     """Whether the session store holds this conversation: its own file, not a search of bytes."""
     return bool(session_id) and _fast_agent_session_file(cwd, session_id).is_file()
 
+def _zeroclaw_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Ask zeroclaw's own ACP session store for the conversation: a row in acp_sessions with this
+    uuid is exactly what `session/resume` loads. Read-only, so a turn never contends for the lock
+    the ACP server takes."""
+    db = pathlib.Path(cwd) / _ZEROCLAW_DIR / "data" / "sessions" / "acp-sessions.db"
+    if not db.is_file() or not session_id:
+        return False
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            return con.execute("SELECT 1 FROM acp_sessions WHERE session_uuid = ?",
+                               (session_id,)).fetchone() is not None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+
+
 
 _SESSION_PRESENT = {
     "claude": _argv_session_present,
@@ -539,6 +559,9 @@ _SESSION_PRESENT = {
     # fast-agent: _build_fast_agent passes --resume only when the session's own file is in the
     # store, so the argv is that lookup's conclusion.
     "fast-agent": _argv_session_present,
+    # zeroclaw: the driver asks for `session/resume` on every turn that has an id and starts a new
+    # session when the store says it is not there, so the store is asked here too.
+    "zeroclaw": _zeroclaw_session_present,
 }
 
 
@@ -630,7 +653,11 @@ def _isolate_session(ws: str) -> None:
 _CALLER_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Prefixes the runner sets for the agent's own credentials, and the dynamic loader's; names that
 # would redirect an interpreter's imports, a process's trust roots or its network path.
-_CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "AWS_", "AZURE_", "LD_", "DYLD_")
+_CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "AWS_", "AZURE_", "LD_", "DYLD_",
+                        # zeroclaw reads ZEROCLAW_<section>__<key> as config overrides (the runner puts
+                        # the relay key there), so a harness variable named so could move its endpoint
+                        # or its excluded tools, or stop it from starting
+                        "ZEROCLAW_")
 _CALLER_ENV_RESERVED_NAMES = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "PWD", "TMPDIR",
                               "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
                               "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
@@ -751,11 +778,21 @@ async def _internal_callers_only(request: Request, call_next):
 # re-tarred) AND on a real DISK, not a RAM-backed tmpfs (which would defeat the memory saving).
 # Default: a dedicated dir on the container's disk-backed rootfs (same overlay as /workspace on
 # ACA Dynamic Sessions), created at import. Override with HARNESS_SPOOL_DIR if the runtime differs.
-SPOOL_DIR = os.environ.get("HARNESS_SPOOL_DIR", "/var/tmp/harness-spool")
-try:
-    os.makedirs(SPOOL_DIR, exist_ok=True)
-except OSError:
-    SPOOL_DIR = None   # fall back to the OS tmpdir if that path isn't writable
+def _spool_dir(path: str) -> str | None:
+    """`path`, created if missing, when this process can create files in it; else None, which
+    tempfile reads as the OS tmpdir. An EXISTING directory counts only if it is writable: on the
+    hosted service an image build imported this module as root, which left the default path
+    root-owned at 755, and the runner, running as another user, then failed every checkpoint and
+    every hydrate with EACCES at mkstemp (2026-10-14). This image runs the runner as root and imports
+    nothing at build time, but a container started with `--user` meets the same directory."""
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return None
+    return path if os.access(path, os.W_OK | os.X_OK) else None
+
+
+SPOOL_DIR = _spool_dir(os.environ.get("HARNESS_SPOOL_DIR", "/var/tmp/harness-spool"))
 _SPOOL_STALE_S = 3600  # a spool file older than this can't belong to a live transfer
 
 
@@ -890,6 +927,11 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       # SESSIONS live in the same directory and MUST travel, so the exclusion is
                       # the file, not the directory.
                       "./.harness/nanobot/config.json",
+                      # zeroclaw's config.toml carries no provider key (it is an environment
+                      # override), but its [[mcp.servers]] entries carry a server's env and headers
+                      # as written, and those commonly hold a bearer token. Rewritten every turn, so
+                      # nothing is lost by leaving it out; its data dir beside it MUST travel.
+                      "./.harness/zeroclaw/config.toml",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -975,6 +1017,7 @@ GAJAE_DEFAULT_MODEL = os.environ.get("GAJAE_DEFAULT_MODEL", "gpt-5.4")
 JCODE_DEFAULT_MODEL = os.environ.get("JCODE_DEFAULT_MODEL", "gpt-5.4")
 OPENSQUILLA_DEFAULT_MODEL = os.environ.get("OPENSQUILLA_DEFAULT_MODEL", "gpt-5.4")
 NANOBOT_DEFAULT_MODEL = os.environ.get("NANOBOT_DEFAULT_MODEL", "gpt-5.4")
+ZEROCLAW_DEFAULT_MODEL = os.environ.get("ZEROCLAW_DEFAULT_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
@@ -1057,7 +1100,7 @@ _PER_TURN_CONFIG = (".harness/opencode.json", ".harness/kilo.json", ".harness/mc
                     ".harness/mcp-bridge/")
 # A base's own state directory outside the CLI home, which it rewrites on every turn (see
 # _git_ensure). Not in the checkpoint repo; in the tar like .harness/home.
-_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/")
+_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/", ".harness/zeroclaw/")
 
 
 def _git_ensure(ws: str) -> None:
@@ -1090,6 +1133,7 @@ def _git_ensure(ws: str) -> None:
         ".harness/home/.config/jcode/",
         ".harness/opensquilla/.env", ".harness/opensquilla/secrets.toml",
         ".harness/nanobot/config.json",
+        ".harness/zeroclaw/config.toml",
         "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
         ".harness/home/",
         # Agent Zero's whole base, for the #193 reason: its chat.json stores the full rendered
@@ -1635,6 +1679,12 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # task (goose's lesson), and it is read only in a trusted folder anyway.
         rootrels = [".harness/vibe/home/skills"]
         entryroot = ".harness/vibe/home/skills"
+    elif backend == "zeroclaw":
+        # <agent workspace>/skills/<name>/SKILL.md, the per-agent root zeroclaw loads for a session
+        # (docs/book/src/tools/skills.md). The agent workspace is under .harness/ (_ZEROCLAW_AGENT_WS),
+        # so the bundle is never a produced file.
+        rootrels = [str(_ZEROCLAW_AGENT_WS / "skills")]
+        entryroot = str(_ZEROCLAW_AGENT_WS / "skills")
     else:
         # dsh has no skill loader; the AGENTS.md block below is the only door.
         # aider lands here on purpose too, and for a stronger reason: it has no skill loader AND no
@@ -2023,6 +2073,12 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # The one base whose agent workspace is a subdirectory of the session (see _NANOBOT_WS):
         # the file has to be where THAT workspace is, or it is written and never read.
         return pathlib.Path(cwd) / _NANOBOT_WS / "AGENTS.md"
+    if backend == "zeroclaw":
+        # zeroclaw reads AGENTS.md (with SOUL.md, IDENTITY.md and the rest of its persona set) from
+        # the per-agent workspace, not the ACP cwd (system_prompt.rs). Measured on 0.8.5: a sentinel
+        # written here before the first turn was repeated by the agent, and the file was left as
+        # written while zeroclaw seeded the other six beside it.
+        return pathlib.Path(cwd) / _ZEROCLAW_AGENT_WS / "AGENTS.md"
     if backend == "qwen":
         return pathlib.Path(cwd) / "QWEN.md"   # qwen-code's own context file (bundle default)
     if backend == "gemini":
@@ -2862,17 +2918,22 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         marker.write_text(fp)
     except OSError:
         pass
-    # A connection that is not OpenAI's own or Azure's rides the relay, as it does for every other
-    # base. Codex groups a server's MCP tools in a namespace and adds an empty `properties` to each
-    # object node of their schemas; through Vercel the tool then received empty objects with
-    # gpt-6-luna and gpt-6.1-sol (two of two, 2026-10-05; not with gpt-5.4, whose tool definitions
-    # Codex defers behind a tool search), and the repair lives in the relay
-    # (_with_free_form_objects). The CLI is given a loopback URL and a placeholder, so the
-    # connection's key is no longer in its environment either. OpenAI's own endpoint and Azure's
-    # keep the direct route: both were intact as Codex sends it. The account fingerprint above is
-    # taken from the connection itself, never from the route, which is new on every turn.
+    # Every connection rides the relay, as it does for every other base. Codex groups a server's MCP
+    # tools in a namespace and adds an empty `properties` to each object node of their schemas;
+    # through Vercel the tool then received empty objects with gpt-6-luna and gpt-6.1-sol (two of
+    # two, 2026-10-05; not with gpt-5.4, whose tool definitions Codex defers behind a tool search),
+    # and the repair lives in the relay (_with_free_form_objects). OpenAI's own endpoint and Azure's
+    # were intact as Codex sends it and kept a direct route until 2026-10-15, but the relay is also the
+    # one place a turn's served model is read: Codex reports none, so a turn on those two finished
+    # unlabelled and the matrix could not tell which model had answered (gpt-5.5 on Azure). The
+    # CLI is given a loopback URL and a placeholder, so the connection's key is not in its
+    # environment either. One thing Codex decides from the URL: on an Azure host (or a provider
+    # named "azure") it compacts a long thread through the provider's /responses/compact
+    # (codex-rs/model-provider/src/provider.rs, 0.154.0); behind the loopback it compacts locally,
+    # as it does on every other connection. The account fingerprint above is taken from the
+    # connection itself, never from the route, which is new on every turn.
     cli_base, cli_key = base_url, auth.api_key
-    if p == "tokenrouter" and auth.api_key:
+    if auth.api_key:
         cli_base, cli_key = _hermes_relay_route(base_url, auth.api_key, exact_base=True)
     # codex only speaks the OpenAI Responses API now — current releases removed
     # `wire_api = "chat"` entirely, so a custom chat-completions endpoint cannot be driven by
@@ -3159,12 +3220,7 @@ def _dsh_to_claude(obj: dict, state: dict) -> list[dict]:
                      "model": state.get("model")}]
         return []
     if m == "__hr_result":
-        usage_map = state.get("_dsh_usage") or {}
-        usage: dict = {}
-        for u in usage_map.values():
-            for k, v in u.items():
-                usage[k] = usage.get(k, 0) + v
-        usage = {k: v for k, v in usage.items() if v}
+        usage = _running_usage(state)
         reason = p.get("reason")
         final = p.get("final") or state.get("final", "")
         state["final"] = final
@@ -3525,8 +3581,7 @@ def _pi_to_claude(obj: dict, state: dict) -> list[dict]:
             state["_pi_text"] = ""
             return []
         err = state.get("_pi_error")
-        usage = dict(state.get("_pi_usage") or {})
-        usage = {k: v for k, v in usage.items() if v}
+        usage = _running_usage(state)
         served = sorted(set(state.get("_served") or []))
         requested = str(state.get("model") or "")
         other = [m for m in served if requested and not _same_model(requested, m)]
@@ -3985,7 +4040,15 @@ def _hermes_mcp_section(servers: list[dict] | None) -> dict:
 # turn with a fresh env, so each turn registers its upstream and the entry simply outlives the
 # turn (a few dozen bytes per turn, process lifetime — the sandbox recycles long before this
 # matters).
-_HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threading.Lock()}
+_HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threading.Lock(),
+                       # A route's totals (`usage`, `reasoning_tokens`) are folded in by the relay's
+                       # request threads, one per call, and a CLI can have two calls in flight on one
+                       # route (a background call beside the main one, parallel subagents) while the
+                       # turn reads them. Every fold and every read of a total assembled from several
+                       # writes holds this lock, so a reader sees a whole fold or the one before it and
+                       # no increment is lost (#449). A single store of one scalar (last_data,
+                       # served_model, last_finish, a repair flag) needs none.
+                       "totals": threading.Lock()}
 # The thinking of the turn being built, while /turn runs a backend's builder: {"asked": the level
 # the turn asked for ("" for none), "applied": what a backend whose calls never pass the relay set
 # for its CLI (Claude Code, Codex on OpenAI's own endpoint), "routes": the flags of every route the
@@ -5224,7 +5287,8 @@ def _thinking_in_sse_line(line: bytes) -> int | None:
 def _thinking_add(flags: dict, count: int | None) -> None:
     """Fold one call's thinking count into the route's total; the key exists only once a provider gave one."""
     if count is not None:
-        flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + count
+        with _HERMES_RELAY["totals"]:
+            flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + count
 
 
 def _stream_fold(flags: dict, call_usage: dict, call_thinking: int | None, folded: dict) -> None:
@@ -5237,27 +5301,29 @@ def _stream_fold(flags: dict, call_usage: dict, call_thinking: int | None, folde
     was on it. CheetahClaws's in-process driver is such a client, and its turns came back with no
     usage at all (the thinking column on a candidate, 2026-10-05: the relay had read 329 output
     tokens and 312 thinking tokens for a call whose turn recorded none)."""
-    if call_usage:
-        total = flags.setdefault("usage", {})
-        for k, v in call_usage.items():
-            delta = int(v) - int(folded.get(k, 0))
-            if delta or k not in total:          # a zero is still a figure the provider gave
-                total[k] = int(total.get(k, 0)) + delta
-            folded[k] = int(v)
-    if call_thinking is not None:
-        delta = call_thinking - int(folded.get("_thinking", 0))
-        if delta or "_thinking" not in folded:
-            flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + delta
-            folded["_thinking"] = call_thinking
+    with _HERMES_RELAY["totals"]:
+        if call_usage:
+            total = flags.setdefault("usage", {})
+            for k, v in call_usage.items():
+                delta = int(v) - int(folded.get(k, 0))
+                if delta or k not in total:          # a zero is still a figure the provider gave
+                    total[k] = int(total.get(k, 0)) + delta
+                folded[k] = int(v)
+        if call_thinking is not None:
+            delta = call_thinking - int(folded.get("_thinking", 0))
+            if delta or "_thinking" not in folded:
+                flags["reasoning_tokens"] = int(flags.get("reasoning_tokens") or 0) + delta
+                folded["_thinking"] = call_thinking
 
 
 def _usage_add(flags: dict, call_usage: dict) -> None:
     """Fold one call's usage into the route's running total: a turn is many provider calls."""
     if not call_usage:
         return
-    total = flags.setdefault("usage", {})
-    for k, v in call_usage.items():
-        total[k] = int(total.get(k, 0)) + int(v)
+    with _HERMES_RELAY["totals"]:
+        total = flags.setdefault("usage", {})
+        for k, v in call_usage.items():
+            total[k] = int(total.get(k, 0)) + int(v)
 
 
 def _model_metadata_with_context_length(data: bytes) -> bytes:
@@ -5288,39 +5354,37 @@ def _finish_reason_in(data: bytes) -> str:
     return hits[-1].decode().replace("-", "_") if hits else ""
 
 
+def _turn_relay_flags(env: dict) -> dict:
+    """The flags of this turn's chat route, {} when the turn did not ride the relay. The route is
+    found by the placeholder bearer the CLI was handed, whichever variable the backend keeps it in.
+
+    A helper model's route is passed over. hermes registers one for its image questions
+    (HR_VISION_API_KEY, marked `aux`), and registers it BEFORE the chat route, so the first bearer
+    in the environment was the image route's: a hermes turn whose image questions ride the relay
+    read its served model, usage and finish reason off the model it asks about pictures, "" until
+    it asked one and the image model after. Rule 2 of docs/harness-verification.md reads the
+    second as a substitution, a finding invented out of nothing."""
+    for v in env.values():
+        if isinstance(v, str) and v.startswith("hr-relay-"):
+            route = _HERMES_RELAY["routes"].get(v)
+            if route and not (route[2] or {}).get("aux"):
+                return route[2] or {}
+    return {}
+
+
 def _relay_last_finish(env: dict) -> str:
     """The finish_reason of the LAST provider answer on this turn's route, as the relay saw it.
     A "content_filter" here is the provider declining the request; a CLI that reports it as an
     empty answer (goose: "The model returned an empty response") has hidden a failure."""
-    for v in env.values():
-        if isinstance(v, str) and v.startswith("hr-relay-"):
-            route = _HERMES_RELAY["routes"].get(v)
-            if route:
-                # normalised the way _finish_reason_in normalises, so a caller compares one
-                # spelling whoever wrote the flag (Vercel says "content-filter", OpenAI
-                # "content_filter")
-                return str((route[2] or {}).get("last_finish") or "").replace("-", "_")
-    return ""
+    # normalised the way _finish_reason_in normalises, so a caller compares one spelling whoever
+    # wrote the flag (Vercel says "content-filter", OpenAI "content_filter")
+    return str(_turn_relay_flags(env).get("last_finish") or "").replace("-", "_")
 
 
 def _relay_served_model(env: dict) -> str:
     """What the relay saw the provider serve on this turn's route, "" when the turn did not ride
-    the relay or nothing answered yet. The route is found by the placeholder bearer the CLI was
-    handed, whichever variable the backend keeps it in.
-
-    ONE relay token per env is the invariant this rests on — the first one found is taken as the
-    turn's chat route. It holds for every backend that reaches here: only _hermes_prepare_env
-    registers a second route (the auxiliary vision model, HR_VISION_API_KEY), and hermes runs on
-    _run_hermes_bg, which does not call this. A backend that ever hands its CLI two relay bearers
-    must distinguish them here first: reading the vision route would stamp the image model as the
-    turn's served model, which rule 2 of docs/harness-verification.md reads as a substitution —
-    a finding invented out of nothing."""
-    for v in env.values():
-        if isinstance(v, str) and v.startswith("hr-relay-"):
-            route = _HERMES_RELAY["routes"].get(v)
-            if route:
-                return str((route[2] or {}).get("served_model") or "")
-    return ""
+    the relay or nothing answered yet (see _turn_relay_flags for which route that is)."""
+    return str(_turn_relay_flags(env).get("served_model") or "")
 
 
 def _fill_relay_usage(ev: dict, env: dict) -> None:
@@ -5372,20 +5436,17 @@ def _stamp_thinking(ev: dict, rec: dict) -> None:
 
 def _relay_usage(env: dict) -> dict:
     """The tokens the provider reported on this turn's route, summed over its calls; {} when the
-    turn did not ride the relay or nothing carried usage. Found by the placeholder bearer, exactly
-    as _relay_served_model finds the served model, and subject to the same one-route invariant.
+    turn did not ride the relay or nothing carried usage. Read off the same route as the served
+    model (_turn_relay_flags).
 
     This is the usage of every backend whose own stream reports none (kimi, aider): the provider's
     statement of what it counted, read off the bytes as they pass, rather than a number the CLI
     estimated or nothing at all. A backend that reports its own usage keeps it; this only fills a
     result event that arrived empty."""
-    for v in env.values():
-        if isinstance(v, str) and v.startswith("hr-relay-"):
-            route = _HERMES_RELAY["routes"].get(v)
-            if route:
-                u = (route[2] or {}).get("usage")
-                return dict(u) if isinstance(u, dict) and u else {}
-    return {}
+    flags = _turn_relay_flags(env)
+    with _HERMES_RELAY["totals"]:                # a whole fold, never part of one (#449)
+        u = flags.get("usage")
+        return dict(u) if isinstance(u, dict) and u else {}
 
 
 # A local model server's own discovery endpoints (Ollama, llama.cpp, LM Studio, vLLM), as the path
@@ -6178,7 +6239,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         self._forward(None)
 
     def do_DELETE(self):   # noqa: N802 — a remote runtime's objects are deleted through its API
-        self._forward(None)
+        # A DELETE may carry a body (Qoder's SDK sends `{}`); left unread, those bytes stay on the
+        # keep-alive socket and open the NEXT request's line ("{}DELETE", a 501 from the upstream).
+        n = int(self.headers.get("content-length") or 0)
+        self._forward(self.rfile.read(n) if n else None)
 
     def log_message(self, *a):  # diagnostics belong on stderr, never stdout
         pass
@@ -6368,9 +6432,10 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     _build_grok for the one client that needs it). `usage_no_nulls` rewrites a null token count in an
     answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls).
     `exact_base` joins the client's resource onto the connection's base as stored, for a client that
-    was calling that base directly before it had a route (Codex): the same URL, with the relay between.
-    `aux` marks a route for a helper model (hermes's image questions): the turn's thinking level is
-    the main model's and stays off it."""
+    was calling that base directly before it had a route (Codex, and hermes on Azure): the same URL,
+    with the relay between. `aux` marks a route for a helper model (hermes's image questions): the
+    turn's thinking level is the main model's and stays off it, and what it serves is not the turn's
+    (_turn_relay_flags passes it over)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -6387,7 +6452,7 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         flags = {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
-                 **({} if aux else _turn_effort())}
+                 **({"aux": True} if aux else _turn_effort())}
         _HERMES_RELAY["routes"][tok] = (upstream, api_key, flags if aux else _turn_route(flags))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
@@ -6468,9 +6533,20 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
         elif auth.api_key:
             env["ANTHROPIC_API_KEY"] = auth.api_key
     elif p == "azure-foundry":  # Azure OpenAI (gpt family) — OpenAI-style endpoint + key
-        if auth.api_key:
+        if auth.api_key and auth.base_url:
+            # Through the relay, as every other hermes route. This one called Azure directly with the
+            # connection's key in the CLI's environment, and the relay is the one place a turn's
+            # served model is read: hermes reports none, so every hermes turn on Azure finished
+            # unlabelled and the matrix could not tell which model had answered (gpt-5.5, four of
+            # four on 0.33.0-rc.15). hermes's azure-foundry provider is the OpenAI SDK on the base it
+            # is given, a bearer key; its own Azure rules read the URL for two things the runner
+            # already settles by model (api_mode, written for the Responses family, and the
+            # max_completion_tokens spelling, which hermes also infers from a gpt-5 name).
+            env["AZURE_FOUNDRY_BASE_URL"], env["AZURE_FOUNDRY_API_KEY"] = _hermes_relay_route(
+                auth.base_url, auth.api_key, exact_base=True)
+        elif auth.api_key:
             env["AZURE_FOUNDRY_API_KEY"] = auth.api_key
-        if auth.base_url:
+        elif auth.base_url:
             env["AZURE_FOUNDRY_BASE_URL"] = auth.base_url
     elif p == "openrouter":  # OpenRouter aggregator (vendor/model ids)
         if auth.api_key:
@@ -7259,7 +7335,8 @@ def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
                 withheld.append(implied)
     cmd += ["--disallowed-tools", ",".join(list(_GROK_ALWAYS_WITHHELD) + withheld)]
     if max_turns:
-        # Unset is unbounded; reaching it ends the run as `error_max_turns`, which reads as failed.
+        # Unset is unbounded; reaching it ends the run as `error_max_turns` with is_error set, and
+        # the run loop reports it by that subtype: incomplete at the budget, not failed (#471).
         cmd += ["--max-turns", str(int(max_turns))]
     if partial:
         cmd.append("--include-partial-messages")
@@ -7346,6 +7423,9 @@ def _aider_working_notes(cwd: str, servers: dict | None = None) -> str:
               "- Name a file in a SEARCH/REPLACE block by its path relative to this workspace "
               "(`deck.md`, `src/app.py`), never by an absolute path: a leading slash is refused "
               "and the workspace's own path repeated under it makes a nested copy.",
+              "- A new file is created by writing it: a SEARCH/REPLACE block with its path, an "
+              "empty SEARCH section and the contents in REPLACE. It does not need to be added to "
+              "the chat first.",
               "- Binary files (documents, decks, spreadsheets, images, PDFs) cannot be added to "
               "the chat or edited with SEARCH/REPLACE; inspect and change them with commands.",
               "- Report only output you were actually given. Never write the result you expect "
@@ -7546,7 +7626,7 @@ GEMINI_HELPER_ALIASES = {
 # explicitly (a plain default alone left gemini-2.5-flash rewritten, measured 2026-09-06 on 0.58.0).
 # Every listed id is pinned, and the turn's own model with it, so no context can retarget any of
 # them; a served model that still differs fails the turn (see _gemini_to_claude).
-GEMINI_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+GEMINI_MODELS = ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
                  "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
                  "gemini-3-flash-preview")
 
@@ -8902,13 +8982,16 @@ def _build_goose(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     # Otherwise every turn pays an extra background model call to invent a session name we never
     # read — the name is ours, set with -n below.
     env["GOOSE_DISABLE_SESSION_NAMING"] = "true"
-    _goose_config(root, model, mcp_servers, tools_disabled, provider="anthropic" if native else "openai")
+    goose_provider = "anthropic" if native else "openai"
+    _goose_config(root, model, mcp_servers, tools_disabled, provider=goose_provider)
     # -n names the session on a fresh run and selects it on a resume (get_or_create_session_id
     # matches s.name == name || s.id == name), so it is the handle in both directions and nothing
     # has to be read back out of the stream. --session-id is NOT usable here: it sits in the same
     # clap group, which is multiple = false, and it is rejected outright without --resume.
+    # Goose prefers the session's saved provider to config.yaml on resume. Override it on every
+    # turn so a switch of connection uses the provider matching this turn's endpoint and key.
     cmd = ["goose", "run", "--output-format", "stream-json", "--model", model,
-           "-n", _GOOSE_SESSION_NAME, "-t", prompt]
+           "-n", _GOOSE_SESSION_NAME, "-t", prompt, "--provider", goose_provider]
     if max_turns:
         # The harness's step budget, which the gateway sends as max_turns (its max_step, default
         # 40). goose's own default is 1000, so without this the budget an operator set is ignored
@@ -9348,7 +9431,11 @@ OPENHANDS_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ope
 QODER_DEFAULT_MODEL = os.environ.get("QODER_DEFAULT_MODEL", "ultimate")
 QODER_PROVIDERS = {"qoder"}
 QODER_DEFAULT_BASE = "https://api.qoder.com/api/v1/cloud"
-QODER_PYTHON = os.environ.get("HR_QODER_PYTHON", sys.executable)   # stdlib only: the runner's own interpreter
+# The driver speaks Qoder's SDK (qca-sdk), installed by docker/entrypoint.sh into its own venv
+# (pinned and verified there, like every other backend's package); its interpreter is what runs
+# the driver. The runner's own interpreter serves where that venv is not built (tests).
+QODER_PYTHON = os.environ.get("HR_QODER_PYTHON") or (
+    "/data/agent-tools/qoder-venv/bin/python" if os.path.exists("/data/agent-tools/qoder-venv/bin/python") else sys.executable)
 QODER_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qoder_driver.py")
 QODER_STATE_REL = os.path.join(".harness", "qoder", "state.json")   # the driver's record of its remote ids
 # The built-ins of agent_toolset_20260401, the names tools_disabled matches; pinned equal to
@@ -10839,6 +10926,221 @@ def _build_nanobot(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
            "session_key": resume_session_id or ("hr-" + uuid.uuid4().hex[:12]),
            "tools_disabled": list(tools_disabled or [])}
     return [NANOBOT_PYTHON, NANOBOT_DRIVER, json.dumps(job)]
+
+
+# ── zeroclaw (zeroclaw-labs/zeroclaw, Apache-2.0, a Rust binary) ─────────────────────────────────
+# A self-hosted personal-agent runtime, driven through its ACP server (`zeroclaw acp`, JSON-RPC over
+# stdio) by runner/zeroclaw_driver.py, which emits claude's stream-json directly — so this backend's
+# normaliser is the passthrough, as nanobot's is. The driver's docstring holds the measured reasons
+# ACP is the surface and `zeroclaw agent -m` is not (prose only, and no conversation across runs).
+ZEROCLAW_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
+ZEROCLAW_BIN = os.environ.get("HR_ZEROCLAW_BIN", "/data/agent-tools/bin/zeroclaw")
+ZEROCLAW_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zeroclaw_driver.py")
+# Everything zeroclaw keeps lives under one directory in the session's .harness/: config.toml, its
+# data dir (the ACP session store at data/sessions/acp-sessions.db, its cost and trace logs) and the
+# per-agent workspace. That last one is NOT the agent's working directory — the ACP `cwd` is the
+# session directory, and zeroclaw's file and shell tools are rooted there (measured: `pwd` answered
+# the session dir and a relative file_write landed in it). The agent workspace is where zeroclaw
+# READS its instruction files and skills, and where it SEEDS its own: on the first turn it wrote
+# AGENTS.md, SOUL.md, IDENTITY.md, USER.md, TOOLS.md, MEMORY.md and HEARTBEAT.md there. Measured with
+# the agent workspace equal to the session dir, all seven came back as files the task produced;
+# under .harness/ none does, and a runner-written AGENTS.md there is read and left as written.
+_ZEROCLAW_DIR = pathlib.Path(".harness", "zeroclaw")
+_ZEROCLAW_AGENT_WS = _ZEROCLAW_DIR / "agent"
+# The variable zeroclaw's env-override walker maps onto [providers.models.custom.hr].api_key, so the
+# credential is never written to config.toml. It is also what makes rule 2 answerable on this
+# backend: _relay_served_model finds the relay route by the placeholder bearer among the turn's ENV
+# values.
+_ZEROCLAW_KEY_ENV = "ZEROCLAW_providers__models__custom__hr__api_key"
+# Tools that are never offered. The first four call back to the ACP client and wait for a person
+# (ask_user, escalate_to_human, reaction, poll); a runner turn has none, so the call would hang the
+# turn until zeroclaw's own timeout. The last three let the MODEL change what serves the turn —
+# model_switch and model_routing_config pick another model, proxy_config another route — and a turn
+# that ran on a model nobody asked for is a substitution (matrix rule 2). The last three cannot work
+# in the sandbox at all — MEASURED on 0.8.5 in the image: browser_open "Failed to open system browser",
+# browser "agent-browser CLI is unavailable", screenshot "No screenshot tool found" — so offering them
+# is a picker row that fails on use (rule 4). The instance's browser plugin is the browser here.
+# llm_task takes a `model` argument ("Optional model override", crates/zeroclaw-tools/src/llm_task.rs)
+# and sends it through the relay: model_switch's door again. deliver_file hands a file back to an ACP
+# client as an embedded blob, which this driver drops (a turn's files come back from the workspace,
+# where the file already is), and zeroclaw keeps a second copy of it beside the original.
+_ZEROCLAW_NEVER = ("ask_user", "escalate_to_human", "reaction", "poll",
+                   "model_switch", "model_routing_config", "proxy_config", "llm_task",
+                   "browser_open", "browser", "screenshot", "deliver_file")
+# The tools a zeroclaw turn offers, and the only ones: the config's `allowed_tools` (MCP tools,
+# `<server>__<tool>`, are admitted by zeroclaw on top of it). CAPTURED, not asked of the agent: a
+# fake chat/completions server recorded the request zeroclaw 0.8.5 sends under this config (2026-10-14).
+# With only _ZEROCLAW_NEVER excluded it sent 34 tools, among them cron_add/list/remove/run/runs/update
+# and schedule (no scheduler runs in a one-shot turn), channel_room, send_message_to_peer, send_via and
+# sessions_current/history/list/send (no channels; claude-sonnet-5.5 spent a turn reading an empty
+# session store and made no PDF), pushover and git_forge (accounts of their own), backup, canvas and
+# weather; and no memory_store/recall/forget at all, which the first list named. Each tool here was
+# seen to work in the image; delegate was not ("Missing 'agent' parameter": there is no other agent).
+# Pinned equal to the gateway's _BASE_CATALOG["zeroclaw"] tool ids by its tests.
+ALL_ZEROCLAW_TOOLS = (
+    "shell", "file_read", "file_write", "file_edit", "glob_search", "content_search",
+    "git_operations", "web_fetch", "web_search_tool", "http_request",
+    "image_info", "calculator", "TodoWrite", "spawn_subagent",
+)
+# What `allowed_tools` holds when a harness turns every tool off: an empty list is zeroclaw's "no
+# constraint", so a name no tool has keeps the list closed (MCP tools are still admitted).
+_ZEROCLAW_NO_TOOLS = "no_builtin_tools"
+# The variables a turn's shell needs that zeroclaw does not pass on by itself. Its shell tool builds
+# a minimal environment — MEASURED: a variable in the driver's environment came back empty in the
+# shell, PATH was reset to the system default and only names in `shell_env_passthrough` arrived —
+# which is nanobot's `_build_env` shape exactly, so the same list is handed over by name: the
+# environment layer's variables, PATH (the layer's bin dirs and the installed tools), and the
+# harness's own variables. Names only: the values stay in the driver's environment.
+_ZEROCLAW_SHELL_KEYS = ("PATH", "PROJECT_ROOT", "HR_ENVIRONMENT", "PYTHONPATH", "VIRTUAL_ENV",
+                        "NODE_PATH", "LD_LIBRARY_PATH", "TMPDIR")
+
+
+def _toml(v) -> str:
+    """A TOML value. Strings go through _toml_str (grok's encoder: characters as themselves, since
+    json.dumps's default escapes a character outside the BMP as a surrogate pair, which TOML
+    refuses, so one emoji in an MCP argument made the whole file unreadable)."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, dict):
+        return "{ " + ", ".join(f"{_toml_str(k)} = {_toml(x)}" for k, x in v.items()) + " }"
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_toml(x) for x in v) + "]"
+    return _toml_str(v)
+
+
+def _zeroclaw_mcp(servers: list[dict] | None) -> list[dict]:
+    """zeroclaw's `[[mcp.servers]]` entries: stdio (`command`/`args`/`env`) or a remote server over
+    `http` or `sse` (`url`/`headers`). Unlike nanobot it takes the transport by name, so it is sent."""
+    out: list[dict] = []
+    for i, sv in enumerate(servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            entry: dict = {"name": name, "transport": "stdio", "command": str(argv[0]),
+                           "args": [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]}
+            envv = sv.get("env")
+            if isinstance(envv, dict) and envv:
+                entry["env"] = {str(k): str(v) for k, v in envv.items()}
+        elif url:
+            kind = str(sv.get("transport") or sv.get("type") or "").lower()
+            entry = {"name": name, "transport": "sse" if kind == "sse" or url.rstrip("/").endswith("/sse") else "http",
+                     "url": url}
+            if _mcp_headers(sv):
+                entry["headers"] = _mcp_headers(sv)
+        else:
+            continue
+        out.append(entry)
+    return out
+
+
+def _zeroclaw_config(base_url: str, model: str, cwd: str, mcp_servers: list[dict] | None,
+                     tools_disabled: list[str] | None, max_turns: int | None,
+                     shell_keys: list[str] | tuple = ()) -> pathlib.Path:
+    """Write <cwd>/.harness/zeroclaw/config.toml and return its directory (zeroclaw's --config-dir).
+
+    Rewritten on every turn, so a model switch is a new `model` here: `session/resume` rebuilds the
+    agent from the CURRENT config and seeds it with the stored history. The api key is not in the
+    file (_ZEROCLAW_KEY_ENV); MCP headers and env can be, so the file is in CHECKPOINT_EXCLUDE.
+
+    What the risk profile says, and why:
+      * level "full" — a supervised profile asks the ACP client before a tool runs, and there is
+        nobody to answer.
+      * allowed_commands ["*"] with block_high_risk_commands false — zeroclaw's documented trusted
+        mode. Without it its shell refused `touch` and anything chained with `&&` even at level full
+        (measured: "Command not allowed by security policy"). The session already runs as its own
+        OS user in its own directory, which is the boundary every other base relies on.
+      * excluded_tools — the harness's disabled tools plus _ZEROCLAW_NEVER. It is applied to the
+        tool list the model is offered (measured: an excluded tool is not among the tools the agent
+        lists), and it is the one door that covers MCP tools too: the profile's allow-list
+        auto-admits `<server>__<tool>` names, and only excluded_tools subtracts them."""
+    d = pathlib.Path(cwd) / _ZEROCLAW_DIR
+    agent_ws = pathlib.Path(cwd) / _ZEROCLAW_AGENT_WS
+    agent_ws.mkdir(parents=True, exist_ok=True)
+    disabled = sorted({str(x).split(" (")[0].strip() for x in (tools_disabled or []) if x} | set(_ZEROCLAW_NEVER))
+    mcp = _zeroclaw_mcp(mcp_servers)
+    lines = [
+        "# Written by the HarnessRouter runner on every turn; edits here do not survive the next one.",
+        "schema_version = 3", "",
+        "[providers.models.custom.hr]",
+        f"uri = {_toml((base_url or '').rstrip('/'))}",
+        f"model = {_toml(model)}",
+        # A `custom` endpoint defaults to PROMPT-GUIDED tools: the tool list is described in the
+        # system prompt and the model is asked to write <tool_call> blocks as text (zeroclaw's own
+        # factory test: "custom OpenAI-compatible endpoints must default to prompt-guided tools").
+        # MEASURED through the relay on 0.8.5 (claude-haiku-4.5): the model wrote the calls as prose
+        # with invented <tool_result> lines, two of three arrived without their arguments ("Missing
+        # 'path' parameter"), and the turn spent three model calls on one file. Every provider this
+        # backend is wired to takes native tool calls on chat/completions, so they are switched on.
+        "native_tools = true", "",
+        "[agents.zeroclaw]",   # the agent alias names the agent in its persona (zeroclaw_driver._AGENT)
+        "enabled = true",
+        'model_provider = "custom.hr"',
+        'risk_profile = "hr"',
+        'runtime_profile = "hr"',
+    ]
+    if mcp:
+        # MCP is opt-in per agent on ACP (`acp_enable_mcp`, off by default), and a server reaches an
+        # agent only through a bundle the agent names: three switches, and a missing one is silent.
+        lines += ['mcp_bundles = ["hr"]', "acp_enable_mcp = true"]
+    # A skill folder holding a script file is skipped unless scripts are allowed ("install.sh:
+    # script-like files are blocked by skill security policy"): MEASURED on 0.8.5, the built-in
+    # Office skill was dropped from every session for its install.sh. The skills here are the
+    # image's and the harness author's own, and their scripts run in the same shell either way.
+    lines += ["", "[skills]", "allow_scripts = true"]
+    lines += ["", "[agents.zeroclaw.workspace]", f"path = {_toml(str(agent_ws))}", "",
+              "[risk_profiles.hr]", 'level = "full"', 'allowed_commands = ["*"]',
+              "block_high_risk_commands = false",
+              # zeroclaw's defaults are `workspace_only = true` and a path denylist that holds /etc
+              # and /usr (crates/zeroclaw-config/src/schema.rs, RiskProfileConfig::default). MEASURED
+              # on 0.8.5: `head -2 /etc/os-release`, `ls /env` and a python3 under /usr were all
+              # refused as "forbidden absolute paths outside the workspace", and an environment's
+              # script runs by its absolute path under /env. The boundary here is the session's own
+              # OS user and its workspace, as for every other base.
+              "workspace_only = false", "forbidden_paths = []",
+              f"allowed_tools = {_toml(sorted(set(ALL_ZEROCLAW_TOOLS) - set(disabled)) or [_ZEROCLAW_NO_TOOLS])}",
+              f"excluded_tools = {_toml(disabled)}",
+              f"shell_env_passthrough = {_toml(sorted(set(shell_keys)))}", "",
+              "[runtime_profiles.hr]"]
+    if max_turns:
+        lines.append(f"max_tool_iterations = {int(max_turns)}")
+    if mcp:
+        lines += ["", "[mcp_bundles.hr]", f"servers = {_toml([s['name'] for s in mcp])}"]
+        for s in mcp:
+            lines += ["", "[[mcp.servers]]"] + [f"{k} = {_toml(v)}" for k, v in s.items()]
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.toml").write_text("\n".join(lines) + "\n")
+    return d
+
+
+def _build_zeroclaw(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                    resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                    tools_disabled: list[str] | None = None, max_turns: int | None = None,
+                    caller_keys: list[str] | tuple = ()) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in ZEROCLAW_PROVIDERS:
+        raise HTTPException(400, f"unknown zeroclaw provider '{pr}' (one of {sorted(ZEROCLAW_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"zeroclaw provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        # Every keyed turn rides the loopback relay, so the real key never reaches zeroclaw, and the
+        # relay's taps supply what its ACP stream does not: the served model (rule 2) and fresh,
+        # cached and output tokens. zeroclaw's `custom` provider speaks chat/completions.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, stream_usage=True)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    env[_ZEROCLAW_KEY_ENV] = auth.api_key or ""
+    shell_keys = [k for k in _ZEROCLAW_SHELL_KEYS if env.get(k)]
+    shell_keys += [k for k in caller_keys if env.get(k) is not None and k not in shell_keys]
+    shell_keys += [k for k in _TURN_SHELL_KEYS if env.get(k) and k not in shell_keys]
+    cfg_dir = _zeroclaw_config(auth.base_url, model, cwd, mcp_servers, tools_disabled, max_turns, shell_keys)
+    job = {"zeroclaw": ZEROCLAW_BIN, "config_dir": str(cfg_dir), "cwd": cwd, "model": model,
+           "prompt": prompt, "resume_session_id": resume_session_id or ""}
+    return [sys.executable, ZEROCLAW_DRIVER, json.dumps(job)]
 
 
 
@@ -13027,6 +13329,9 @@ BACKENDS = {
     "fast-agent": {"providers": sorted(FAST_AGENT_PROVIDERS),
                    "default_model": FAST_AGENT_DEFAULT_MODEL,
                    "normalize": _fast_agent_to_claude},
+    # The zeroclaw driver emits claude's stream-json itself (see zeroclaw_driver.py).
+    "zeroclaw": {"providers": sorted(ZEROCLAW_PROVIDERS), "default_model": ZEROCLAW_DEFAULT_MODEL,
+                 "normalize": _claude_passthrough},
 }
 
 
@@ -13221,9 +13526,45 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
     _stop_proc(proc, rec)
 
 
+# Bases whose runner builders take NO step-budget flag of their own: the generic counter in
+# _run_turn_bg enforces max_turns for these by counting tool calls in the normalised stream and
+# stopping the process at the budget (#471). Bases that pass a native limit flag (claude --max-turns,
+# goose --max-steps, kimi's loop.max_steps, grok, hermes config, minimax, aider, cheetahclaws,
+# systemone, openhands, agentzero, opensquilla, nanobot, zeroclaw) are absent: their budget is the
+# CLI's own. jcode is absent too — its counter in _jcode_to_claude predates this one and emits
+# jcode's own usage, so it stays.
+_GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "gajae", "qwen", "gemini", "cline",
+                        "opencode", "mimo", "kilo", "qoder"}
+
+
+def _running_usage(state: dict) -> dict:
+    """What a translator has counted of a turn's usage so far: pi's (omp's, gajae's) per message,
+    dsh's per step. It is the turn's usage on their result, and on a budget's stop, which comes
+    before their CLI says anything terminal. {} where nothing is kept as the turn goes."""
+    usage: dict = {}
+    if state.get("_pi_usage"):
+        usage = dict(state["_pi_usage"])
+    for u in (state.get("_dsh_usage") or {}).values():
+        for k, v in u.items():
+            usage[k] = usage.get(k, 0) + v
+    return {k: v for k, v in usage.items() if v}
+
+
+def _count_tool_calls(ev: dict, state: dict) -> int:
+    """The tool calls a turn has made so far, counted by id, so a normaliser that reports one call
+    twice does not spend the budget twice."""
+    seen = state.setdefault("_tool_ids", set())
+    blocks = (ev.get("message") or {}).get("content")
+    for b in blocks if isinstance(blocks, list) else []:
+        if isinstance(b, dict) and b.get("type") == "tool_use":
+            seen.add(str(b.get("id") or f"#{len(seen)}"))
+    return len(seen)
+
+
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
                  timeout_seconds: int | None = None, partial: bool = False,
-                 max_turns: int | None = None, prompt: str = "") -> None:
+                 max_turns: int | None = None, prompt: str = "",
+                 count_steps: bool = False) -> None:
     rec = _turns[turn_id]
     rec["turn_id"] = turn_id
     state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time(),
@@ -13235,7 +13576,31 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
              # (_opensquilla_transcript)
              "prompt": prompt}
     result_ev = None
+    # The generic step budget (#471): for a base with no limit flag of its own, tool calls are
+    # counted in the normalised stream — every normaliser emits the same Claude-shaped tool_use
+    # blocks — and past the budget the loop below stops the process the way a cancel does, and the
+    # turn ends error_max_turns, which the gateway reports as incomplete.
+    step_cap = int(max_turns) if (count_steps and max_turns) else None
     env = {**env, _TURN_MARK: turn_id}
+
+    def _settle(ev: dict) -> None:
+        """An event, before it is visible. A result gets what the relay saw and the budget's word."""
+        ev.setdefault("_ts", time.time())
+        if ev.get("type") != "result":
+            return
+        if state.get("_stop") == "max_turns" and ev.get("subtype") != "error_max_turns":
+            # The turn ended at its budget. What the CLI says while it is stopped (a remote
+            # runtime's cancel, with its charge) is still the turn's account, but not its verdict.
+            ev.update(subtype="error_max_turns", is_error=False)
+        if not ev.get("model"):
+            # The CLI did not say what ran; the relay saw the provider say it. Set before
+            # the event is visible, so the gateway never reads it unlabelled.
+            served = _relay_served_model(env)
+            if served:
+                ev["model"] = served
+        _fill_relay_usage(ev, env)
+        _stamp_thinking(ev, rec)
+
     try:
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
         # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
@@ -13294,16 +13659,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             except Exception:  # noqa: BLE001
                 continue
             for ev in normalize(obj, state):
-                ev.setdefault("_ts", time.time())
-                if ev.get("type") == "result" and not ev.get("model"):
-                    # The CLI did not say what ran; the relay saw the provider say it. Set before
-                    # the event is visible, so the gateway never reads it unlabelled.
-                    served = _relay_served_model(env)
-                    if served:
-                        ev["model"] = served
-                if ev.get("type") == "result":
-                    _fill_relay_usage(ev, env)
-                    _stamp_thinking(ev, rec)
+                _settle(ev)
                 with _turns_lock:
                     rec["events"].append(ev)
                 if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
@@ -13313,12 +13669,16 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     # Claude's stream-json carries the final assistant text on the result event;
                     # the codex normalizer already fills state['final'], so prefer that.
                     state["final"] = state.get("final") or ev.get("result") or ""
+                if (step_cap and not state.get("_stop") and ev.get("type") == "assistant"
+                        and _count_tool_calls(ev, state) > step_cap):
+                    state["_stop"] = "max_turns"
             if state.get("_stop") and not state.get("_stopped") and proc.poll() is None:
-                # A translator ended the turn itself (a CLI with no step limit of its own went past
-                # the turn's budget): the process is stopped here, and the result event it emitted
-                # says why, so the turn is incomplete at its budget rather than running to the cap.
+                # The turn went past its budget (a CLI with no step limit of its own, counted above
+                # or by its translator): the process is stopped here, the way a cancel stops it, so a
+                # remote runtime is cancelled too, and the turn is incomplete at its budget rather
+                # than running to the cap.
                 state["_stopped"] = True
-                _kill_proc_tree(proc, turn_id)
+                _stop_proc(proc, rec)
         rc = proc.wait()
     finally:
         killer.cancel()
@@ -13332,19 +13692,23 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     eof = getattr(normalize, "eof", None)
     if eof is not None and result_ev is None:
         for ev in eof(state, rc):
-            ev.setdefault("_ts", time.time())
-            if ev.get("type") == "result" and not ev.get("model"):
-                served = _relay_served_model(env)
-                if served:
-                    ev["model"] = served
-            if ev.get("type") == "result":
-                _fill_relay_usage(ev, env)
-                _stamp_thinking(ev, rec)
+            _settle(ev)
             with _turns_lock:
                 rec["events"].append(ev)
             if ev.get("type") == "result":
                 result_ev = ev
                 state["final"] = state.get("final") or ev.get("result") or ""
+    if result_ev is None and state.get("_stop") == "max_turns":
+        # Stopped at its budget before the CLI said anything terminal (codex's turn.completed
+        # never comes once it is killed): the turn's result is the budget's, with what its
+        # translator or the relay counted, and no usage at all where nothing counted it.
+        result_ev = {"type": "result", "subtype": "error_max_turns", "is_error": False,
+                     "result": state.get("final", "")}
+        if _running_usage(state):
+            result_ev["usage"] = _running_usage(state)   # the translator's count so far (pi, dsh)
+        _settle(result_ev)
+        with _turns_lock:
+            rec["events"].append(result_ev)
     if (result_ev is not None and not result_ev.get("is_error")
             and _relay_last_finish(env) == "content_filter"):
         # The provider declined the last request (finish_reason content_filter, seen by the relay)
@@ -13477,7 +13841,8 @@ def _codex_thread_request(resume_session_id: str | None, cwd: str, model: str) -
 
 
 def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, prompt: str,
-                            resume_session_id: str | None, timeout_seconds: int | None) -> None:
+                            resume_session_id: str | None, timeout_seconds: int | None,
+                            max_turns: int | None = None) -> None:
     rec = _turns[turn_id]
     state = {"final": ""}
 
@@ -13598,6 +13963,13 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                 it = p.get("item") or {}
                 for ev in _codex_tool_item(it):     # messages and reasoning yield nothing: already streamed as deltas
                     append(ev)
+                    # The step budget, as _run_turn_bg counts it for `codex exec` (#471): codex has no
+                    # limit of its own, and this is the path the image runs codex on by default.
+                    if (max_turns and ev.get("type") == "assistant"
+                            and _count_tool_calls(ev, state) > int(max_turns)):
+                        state["_stop"] = "max_turns"
+                if state.get("_stop"):
+                    break       # past the budget: the process is stopped below, one turn per process
             elif method == "turn/completed":
                 # Final cumulative usage may also ride the completed turn; read it as a fallback.
                 turn_obj = p.get("turn") or {}
@@ -13647,24 +14019,32 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         return (not low) or ("reconnect" in low) or ("stream closed" in low) or low in ("eof", "connection closed")
     answered = bool(state["final"].strip())
     noise_only = all(_is_reconnect_noise(l) for l in errbuf) if errbuf else True
+    stopped = state.get("_stop") == "max_turns" and not rec.get("cancelled") and not rec.get("capped")
     ok = ((turn_status in ("completed", None)) or (answered and noise_only)) \
         and not rec.get("cancelled") and not rec.get("capped")
     err_txt = ("\n".join(errbuf[-30:]).strip() or f"app-server turn status: {turn_status}")[:2000]
     # On a genuine failure, lead with the agent's own last words (often the real reason, e.g.
     # "workspace is read-only") and follow with the technical error, so the Result row is never a
     # blank "Failed" with no explanation.
-    if ok:
+    if ok or stopped:
         res_txt = state["final"]
     else:
         res_txt = "\n\n".join(x for x in (state["final"].strip(), err_txt) if x)[:4000] or err_txt
-    ev = {"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
-          "result": res_txt, "usage": usage}      # surface the error in the trace
+    # stopped at its budget: incomplete, with the usage the app-server had counted so far
+    ev = {"type": "result", "subtype": "error_max_turns" if stopped else "success" if ok else "error",
+          "is_error": not ok and not stopped, "result": res_txt, "usage": usage}   # surface the error in the trace
+    # What the relay saw the provider say, as on the exec path: the app-server reports no served
+    # model either.
+    served = _relay_served_model(env)
+    if served:
+        ev["model"] = served
+    _fill_relay_usage(ev, env)
     _stamp_thinking(ev, rec)
     append(ev)
     rec["result"] = state["final"]
     rec["status"] = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
-                     else "done" if ok else "failed")
-    if not ok:
+                     else "max_turns" if stopped else "done" if ok else "failed")
+    if not ok and not stopped:
         rec["error"] = err_txt
         rec["tried"] = [{"connection": "codex-app-server", "error": err_txt[:400]}]  # -> gateway failure msg
     rec["done"] = True
@@ -14294,13 +14674,21 @@ def _produced_list(ws: str) -> list[dict]:
     seen = {k: v for k, v in seen.items() if k in keep}
     # mtime rides on each item so a reader can put the newest first: a response carries at most
     # HARNESS_RESP_MAX_FILES of them, and git's path order handed a Mario run its first 24 frames
-    # of 1,400 (hosted, 2026-09-25). 0 when the file is gone (a deletion) or cannot be stat'ed.
-    def _mtime(rel: str) -> float:
+    # of 1,400 (hosted, 2026-09-25). size rides beside it so a reader never has to fetch a file to
+    # learn it is over its cap (the gateway's RESP_MAX_FILE_BYTES; a 49 MB image was read whole
+    # into the gateway only to be dropped, hosted 2026-10-19). Both 0 when the file is gone (a
+    # deletion) or cannot be stat'ed.
+    def _stat(rel: str) -> tuple[float, int]:
         try:
-            return float(os.stat(os.path.join(ws, rel)).st_mtime)
+            st = os.stat(os.path.join(ws, rel))
+            return float(st.st_mtime), int(st.st_size)
         except OSError:
-            return 0.0
-    return [{"path": k, "status": v, "mtime": _mtime(k)} for k, v in seen.items()]
+            return 0.0, 0
+    out = []
+    for k, v in seen.items():
+        mtime, size = _stat(k)
+        out.append({"path": k, "status": v, "mtime": mtime, "size": size})
+    return out
 
 
 def _produced_visible(ws: str) -> list[dict]:
@@ -14363,6 +14751,62 @@ def get_file(path: str, identifier: str = "") -> Response:
     return Response(content=dest.read_bytes(), media_type=media)
 
 
+_DIR_NOFOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _open_dir(base: pathlib.Path, parts: tuple[str, ...], uid: int | None = None, make: bool = False,
+              made: list[str] | None = None) -> int:
+    """An fd on the directory `base`/`parts`, reached one name at a time without following a symlink.
+
+    The file routes check a path and then change it, as the runner, which is root under the
+    write-wall. A process the session left running can swap a checked directory for a symlink in
+    between, and a root write, unlink, rename or chown through that link would land outside the
+    session. Opened with O_NOFOLLOW at every step, the swap fails the change instead.
+
+    `make` creates what is missing (mkdir -p), each directory owned by `uid` (a root-owned directory
+    in a workspace is one the session's own process cannot write into), and lists in `made` what it
+    created. A FILE or a symlink where a directory would be raises NotADirectoryError."""
+    fd = os.open(base, _DIR_NOFOLLOW)
+    try:
+        for name in parts:
+            try:
+                nxt = os.open(name, _DIR_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not make:
+                    raise
+                os.mkdir(name, 0o755, dir_fd=fd)
+                if uid is not None:
+                    os.chown(name, uid, uid, dir_fd=fd, follow_symlinks=False)
+                if made is not None:
+                    made.append(name)
+                nxt = os.open(name, _DIR_NOFOLLOW, dir_fd=fd)
+            except OSError as e:
+                if e.errno != errno.ELOOP:
+                    raise
+                # a symlink: Linux answers ELOOP, macOS ENOTDIR; one answer for both
+                raise NotADirectoryError(errno.ENOTDIR, "a symlink is where a directory would be", name) from None
+            os.close(fd)
+            fd = nxt
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _remove_at(base: pathlib.Path, p: pathlib.Path) -> None:
+    """Remove `p` (a path under `base`) as itself: a directory with everything in it, a file or a
+    symlink as the entry it is. Through _open_dir, so nothing swapped in redirects it."""
+    parts = p.relative_to(base).parts
+    fd = _open_dir(base, parts[:-1])
+    try:
+        if stat.S_ISDIR(os.lstat(parts[-1], dir_fd=fd).st_mode):
+            shutil.rmtree(parts[-1], dir_fd=fd)       # fd-based all the way down; links not followed
+        else:
+            os.unlink(parts[-1], dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
 @app.put("/file")
 async def put_file(request: Request, path: str, identifier: str = "") -> dict:
     """Write ONE file into a session's workspace, as that session.
@@ -14376,32 +14820,237 @@ async def put_file(request: Request, path: str, identifier: str = "") -> dict:
     dest = _safe_join(ws, path)
     if dest is None:
         raise HTTPException(400, "path escapes the workspace")
+    # A file that is already there is replaced WHERE it is. On a nesting base a new file lands at the
+    # session root and the next turn adopts it, but one the agent already has is in its directory:
+    # written at the root it sat beside the agent's copy, which every read found first, and which
+    # adoption would not move over.
+    have = _existing(ws, path)
+    if have is not None and have.is_file() and not have.is_symlink():
+        dest = have
+    elif have is None:
+        # A NEW file whose top folder the agent's directory already has goes into that folder:
+        # adoption moves a root entry only when its name is free in the agent's directory, so it
+        # would never reach the agent.
+        vis = _visible_root(ws)
+        top = (path or "").strip().strip("/").split("/", 1)[0]
+        if vis != ws and "/" in (path or "").strip().strip("/") and (pathlib.Path(vis) / top).is_dir():
+            inside = _safe_join(vis, path)
+            if inside is not None:
+                dest = inside
     data = await request.body()
     pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
     _isolate_session(ws)
     uid = _session_uid(ws)
-    missing: list[pathlib.Path] = []
-    probe = dest.parent
-    while not probe.exists():
-        missing.append(probe)
-        probe = probe.parent
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.parent / f".hr-put-{uuid.uuid4().hex[:8]}"
+    base = pathlib.Path(ws).resolve()
+    parts = dest.relative_to(base).parts
+    if not parts:
+        raise HTTPException(400, "the workspace itself is not a file")
+    tmp = f".hr-put-{uuid.uuid4().hex[:8]}"
     try:
-        tmp.write_bytes(data)
-        os.chmod(tmp, 0o644)
-        if uid is not None:
-            for d in missing:
-                os.chown(d, uid, uid)
-            os.chown(tmp, uid, uid)
-        os.replace(tmp, dest)
+        fd = _open_dir(base, parts[:-1], uid, make=True)
+    except OSError as e:
+        raise HTTPException(500, f"write failed: {str(e)[:200]}")
+    try:
+        out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=fd)
+        with os.fdopen(out, "wb") as f:
+            f.write(data)
+            os.fchmod(f.fileno(), 0o644)
+            if uid is not None:
+                os.fchown(f.fileno(), uid, uid)
+        os.replace(tmp, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
     except OSError as e:
         try:
-            tmp.unlink()
+            os.unlink(tmp, dir_fd=fd)
         except OSError:
             pass
         raise HTTPException(500, f"write failed: {str(e)[:200]}")
+    finally:
+        os.close(fd)
     return {"ok": True, "path": str(dest.relative_to(ws)), "bytes": len(data)}
+
+
+def _safe_leaf(root: str, rel: str) -> pathlib.Path | None:
+    """_safe_join for a path that is about to be removed or renamed: the PARENT is resolved and
+    checked, the last component is not. _safe_join resolves symlinks all the way, so a link inside
+    the workspace would name its target, and removing "the link" would remove the file it points
+    to. None for an escape, or for the root itself."""
+    rel = (rel or "").strip().strip("/")
+    name = posixpath.basename(rel)
+    if not rel or name in ("", ".", ".."):
+        return None
+    parent = _safe_join(root, posixpath.dirname(rel))
+    return None if parent is None else parent / name
+
+
+def _ws_excluded(ws: str) -> tuple[str, ...]:
+    """The base's own machinery, as _git_exclude listed it, relative to the session directory."""
+    try:
+        text = pathlib.Path(ws, ".git", "info", "exclude").read_text(errors="replace")
+    except OSError:
+        return ()
+    return tuple(ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#"))
+
+
+def _ws_protected(rel: str, pats: tuple[str, ...]) -> bool:
+    """`rel` is one of those patterns' paths, under one, or a directory holding one. The gateway's
+    backing.ws_protected applies the same rule to the checkpoint; the two processes ship separately
+    (the runner image carries no gateway code), so it is written twice, and
+    runner/tests/test_file_changes.py holds the two equal over the same cases."""
+    for q in pats:
+        d = q.rstrip("/")
+        if rel == d or (q.endswith("/") and rel.startswith(q)) or d.startswith(rel + "/"):
+            return True
+    return False
+
+
+def _search_roots(ws: str, path: str) -> list[str]:
+    """Where a path the caller names may be: the visible root first, the session root second, the
+    order GET /file reads in.
+
+    The session root is searched on a nesting base only for what _adopt_into would adopt — a file an
+    app wrote there between turns. Never the runner's own entries, and never the agent's directory
+    itself: `workspace` at nanobot's root is the agent's whole working directory, its skills, memory
+    and instructions with the user's files, and a delete of it would take all of them."""
+    vis = _visible_root(ws)
+    roots = [vis]
+    if vis != ws:
+        sub = os.path.basename(vis.rstrip("/"))
+        keep = ({".git", ".gitignore", sub} | _PRODUCED_EXCLUDE_NAMES | _NOISE_SEG
+                | {q.rstrip("/") for q in _PRODUCED_EXCLUDE_PREFIX})
+        if (path or "").strip().strip("/").split("/", 1)[0] not in keep:
+            roots.append(ws)
+    return roots
+
+
+def _copies(ws: str, path: str) -> list[pathlib.Path]:
+    """Every place the path is, in that order. On a nesting base it can be in both: a file the app
+    wrote at the root between turns beside the agent's copy, which _adopt_into will not move over it."""
+    out = []
+    for root in _search_roots(ws, path):
+        p = _safe_leaf(root, path)
+        if p is not None and (p.exists() or p.is_symlink()):
+            out.append(p)
+    return out
+
+
+def _existing(ws: str, path: str) -> pathlib.Path | None:
+    """Where a path the caller names already is (the first of _copies)."""
+    found = _copies(ws, path)
+    return found[0] if found else None
+
+
+def _refuse_protected(ws: str, *paths: pathlib.Path) -> None:
+    """400 for a path the base excludes as its own. On a nesting base a path at the session root is
+    adopted into the agent's directory at the next turn, so it is also checked as it will be there."""
+    pats = _ws_excluded(ws)
+    if not pats:
+        return
+    base = pathlib.Path(ws).resolve()
+    vis = pathlib.Path(_visible_root(ws)).resolve()
+    sub = str(vis.relative_to(base)) if vis != base else ""
+    for p in paths:
+        rel = str(p.relative_to(base))
+        if _ws_protected(rel, pats) or (sub and not (rel == sub or rel.startswith(sub + "/"))
+                                        and _ws_protected(f"{sub}/{rel}", pats)):
+            raise HTTPException(400, "that is the agent's own machinery, not a workspace file")
+
+
+@app.delete("/file")
+def delete_file(path: str, identifier: str = "") -> dict:
+    """Remove ONE file or directory from a session's workspace, as that session (see PUT /file).
+    A directory goes with everything in it, as an environment's source delete does."""
+    ws = _ws(identifier)
+    if _safe_leaf(ws, path) is None:
+        raise HTTPException(400, "path escapes the workspace")
+    found = _copies(ws, path)
+    if not found:
+        raise HTTPException(404, "nothing at that path")
+    _refuse_protected(ws, *found)
+    base = pathlib.Path(ws).resolve()
+    try:
+        # every copy: one left at the root of a nesting base would be adopted back next turn
+        for p in found:
+            _remove_at(base, p)
+    except OSError as e:
+        raise HTTPException(500, f"delete failed: {str(e)[:200]}")
+    return {"ok": True, "path": str(found[0].relative_to(base))}
+
+
+@app.post("/file/mkdir")
+def mkdir_file(path: str, identifier: str = "") -> dict:
+    """Create a directory (and any missing parents), owned by the session's uid. One that already
+    exists is success; a FILE in the way is 409. A new one goes in the user's root — the agent's
+    directory on a nesting base, where the checkpoint's copy of the change puts it too."""
+    ws = _ws(identifier)
+    if _safe_leaf(ws, path) is None:
+        raise HTTPException(400, "path escapes the workspace")
+    pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
+    _isolate_session(ws)
+    dest = _existing(ws, path) or _safe_leaf(_visible_root(ws), path)
+    if dest is None:
+        raise HTTPException(400, "path escapes the workspace")
+    _refuse_protected(ws, dest)
+    if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
+        raise HTTPException(409, "a file is at that path")
+    base = pathlib.Path(ws).resolve()
+    made: list[str] = []
+    try:
+        os.close(_open_dir(base, dest.relative_to(base).parts, _session_uid(ws), make=True, made=made))
+    except (FileExistsError, NotADirectoryError) as e:
+        raise HTTPException(409, f"mkdir failed: {str(e)[:200]}")
+    except OSError as e:
+        raise HTTPException(500, f"mkdir failed: {str(e)[:200]}")
+    return {"ok": True, "path": str(dest.relative_to(base)), "created": bool(made)}
+
+
+@app.post("/file/move")
+def move_file(path: str, to: str, identifier: str = "") -> dict:
+    """Rename a file or directory inside a session's workspace. The destination is on the same side
+    as the source (the nesting base's agent directory, or the session root), must not exist, and
+    must not be inside the source. Missing parent directories are made, as PUT /file makes them."""
+    ws = _ws(identifier)
+    if _safe_leaf(ws, path) is None or _safe_leaf(ws, to) is None:
+        raise HTTPException(400, "path escapes the workspace")
+    found = _copies(ws, path)
+    if not found:
+        raise HTTPException(404, "nothing at that path")
+    src, others = found[0], found[1:]
+    vis = pathlib.Path(_visible_root(ws)).resolve()
+    root = vis if vis != pathlib.Path(ws).resolve() and src.is_relative_to(vis) else pathlib.Path(ws).resolve()
+    dest = _safe_leaf(str(root), to)
+    if dest is None:
+        raise HTTPException(400, "path escapes the workspace")
+    if dest == src or dest.is_relative_to(src):
+        raise HTTPException(400, "a path cannot move inside itself")
+    _refuse_protected(ws, src, dest, *others)
+    # _copies(ws, to): on a nesting base the name can be taken on the OTHER side too, by a file an app
+    # put at the session root (it waits there for adoption) or by the agent's own. Moved in beside it,
+    # one of the two shadows the other for good (adoption never moves over a name the agent's
+    # directory has): an overwrite by another name.
+    if dest.exists() or dest.is_symlink() or _copies(ws, to):
+        raise HTTPException(409, "something is already at the destination")
+    base = pathlib.Path(ws).resolve()
+    sparts, dparts = src.relative_to(base).parts, dest.relative_to(base).parts
+    try:
+        sfd = _open_dir(base, sparts[:-1])
+        try:
+            dfd = _open_dir(base, dparts[:-1], _session_uid(ws), make=True)
+            try:
+                os.rename(sparts[-1], dparts[-1], src_dir_fd=sfd, dst_dir_fd=dfd)
+            finally:
+                os.close(dfd)
+        finally:
+            os.close(sfd)
+        # A second copy at the root of a nesting base (an app's PUT from before writes went where the
+        # file is) would be adopted back under the old name next turn: the old name is gone.
+        for p in others:
+            _remove_at(base, p)
+    except (FileExistsError, NotADirectoryError) as e:
+        # a FILE where one of the destination's folders would be
+        raise HTTPException(409, f"move failed: {str(e)[:200]}")
+    except OSError as e:
+        raise HTTPException(500, f"move failed: {str(e)[:200]}")
+    return {"ok": True, "path": str(src.relative_to(base)), "to": str(dest.relative_to(base))}
 
 
 @app.get("/capabilities")
@@ -14810,6 +15459,13 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                              # the harness's own variables and the platform's HR_ ones a turn carries
                              caller_keys=[*_caller_env(req.env),
                                           *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
+    elif backend == "zeroclaw":
+        model = model or ZEROCLAW_DEFAULT_MODEL
+        cmd = _build_zeroclaw(req.provider, auth, model, req.prompt, cwd, env,
+                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                              tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                              caller_keys=[*_caller_env(req.env),
+                                           *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
     else:
         mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
         # Only a package that is ALSO a Claude Code plugin gets --plugin-dir; an Agent Plugins
@@ -14850,7 +15506,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
             _turn_by_key[key] = turn_id
     if use_appserver:
         threading.Thread(target=_run_codex_appserver_bg,
-                         args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds),
+                         args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds,
+                               req.max_turns),
                          daemon=True).start()
     elif backend == "hermes":
         threading.Thread(target=_run_hermes_bg,
@@ -14861,7 +15518,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         threading.Thread(target=_run_turn_bg,
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
-                         kwargs={"max_turns": req.max_turns, "prompt": req.prompt or ""},
+                         kwargs={"max_turns": req.max_turns, "prompt": req.prompt or "",
+                                 "count_steps": backend in _GENERIC_STEP_BUDGET},
                          daemon=True).start()
     cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     return {"turn_id": turn_id, "status": "running", "backend": backend, "model": model,

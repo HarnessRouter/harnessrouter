@@ -31,6 +31,7 @@ const LOGO: Record<string, string> = {
   nanobot: '/logos/nanobot.svg',   // the nanobot mark (images/nanobot_mark.svg in the MIT HKUDS/nanobot repository); an SVG like cursor.svg, which this map already serves
   vtcode: '/logos/vtcode.png',   // VT Code's own profile mark (resources/icons/vtcode-profile-512.png in the Apache-2.0 vinhnx/VTCode repository), already square
   vibe: '/logos/vibe.svg',   // Vibe's own mark (distribution/zed/icons/mistral_vibe.svg in the Apache-2.0 mistralai/mistral-vibe repository), the glyph Mistral ships for editor surfaces. Like jcode's it is a BLACK mark on transparency and upstream ships no light variant, so it carries no contrast on a dark surface
+  zeroclaw: '/logos/zeroclaw.png', // ZeroClaw's own mark, the ice crab: the zeroclaw-labs organization's avatar on GitHub (the same mascot leads its README and zeroclaw.com), cut square above its name band and scaled to 192 px so it reads at 26 px. The armored crab in the v0.8.5 dashboard (web/dist/logo.png) is an older mark (Richard, 2026-10-14)
   mimo: '/logos/mimo.png',   // Xiaomi MiMo's own square mark: the site icon of mimo.xiaomi.com (the "Xiaomi" over "MiMO" wordmark, white on black) is 32 px only, so it is drawn again at 192 px from the full-size wordmark that mimo.xiaomi.com/coder serves (coder/assets/logo.png), in the same layout (Richard, 2026-10-12)
 };
 // No entry for fast-agent either: its repository ships no mark (the two files with "logo" in the

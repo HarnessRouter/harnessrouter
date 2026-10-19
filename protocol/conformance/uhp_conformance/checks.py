@@ -18,7 +18,12 @@ import uuid
 
 from .registry import Skip, check
 
-SPEC = "protocol/versions/2026-10-04"
+SPEC = "protocol/versions/2026-10-19"
+
+# The five statuses the lifecycle table defines, and the four that end a task. Named once so a
+# check states the rule it enforces rather than spelling out a literal set of its own.
+LIFECYCLE_STATUSES = {"in_progress", "completed", "failed", "incomplete", "cancelled"}
+TERMINAL_STATUSES = LIFECYCLE_STATUSES - {"in_progress"}
 
 
 # ── shared fixtures ────────────────────────────────────────────────────────────────────
@@ -349,6 +354,53 @@ def t06(ctx):
 def t07(ctx):
     rid = (_run_blocking(ctx).json or {}).get("id") or ""
     assert rid.startswith("resp_"), f"response id {rid!r} is not `resp_`-prefixed"
+
+
+@check("T-11", "A background task read while it runs reports in_progress", "core",
+       f"{SPEC}/lifecycle.md#3-task-lifecycle")
+def t11(ctx):
+    """The lifecycle table names five statuses, and `in_progress` is the only non-terminal one. A
+    server that answers a poll with its own internal name for the state (`running`) leaves a
+    strict client with nothing to wait for: it waits for `in_progress`, or treats the unknown
+    status as an error. Measured 2026-10-19 on 0.35.0-rc.2, HarnessRouter answered a background
+    POST and every poll until the turn ended with `running`, while its own stream emitted
+    `in_progress` for the same turn."""
+    h = _harness(ctx)
+    body = {"input": "Count slowly from 1 to 100, one number per line.",
+            "metadata": {"harness_id": h["id"]}, "stream": False, "background": True}
+    if ctx.model:
+        body["model"] = ctx.model
+    started = ctx.client.post("/v1/responses", body=body)
+    rid = (started.json or {}).get("id")
+    if started.status != 200 or not rid:
+        raise Skip(f"could not start a background task (HTTP {started.status})")
+
+    try:
+        accepted = str((started.json or {}).get("status") or "")
+        assert accepted == "in_progress", (
+            f"POST /v1/responses with background:true answered {accepted!r}; a background task is "
+            f"accepted and running, which the lifecycle table names `in_progress`")
+
+        # Read it back while the turn is still going. The status set is total, so one poll settles it:
+        # `in_progress` is the observation, and anything else is either a terminal status or a name
+        # the table does not define. A task that finished first has nothing left to observe, and a
+        # skip is never a pass.
+        got = ctx.client.get(f"/v1/responses/{rid}")
+        assert got.status == 200, f"GET /v1/responses/{{id}} returned HTTP {got.status}"
+        status = str((got.json or {}).get("status") or "")
+        assert status in LIFECYCLE_STATUSES, (
+            f"GET /v1/responses/{{id}} answered {status!r}, which is not one of the five statuses the "
+            f"lifecycle table defines ({', '.join(sorted(LIFECYCLE_STATUSES))})")
+        if status in TERMINAL_STATUSES:
+            raise Skip(f"the task reached {status!r} before the check could read it mid-turn")
+        return f"read back as {status}"
+    finally:
+        # The task was started only to be watched: stop it, so the check leaves nothing running
+        # (and spending) after it. A server that cannot cancel changes no verdict here.
+        try:
+            ctx.client.post(f"/v1/responses/{rid}/cancel")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
@@ -1261,6 +1313,50 @@ def f08(ctx):
     return f"deleted {sid}, now 404"
 
 
+@check("F-09", "Deleting a harness keeps its sessions, or states how long they can be restored", "full",
+       f"{SPEC}/harnesses.md#53-delete")
+def f09(ctx):
+    # §5.3 gives a server two rules and makes it say which one it follows: the capability says it
+    # before the delete, the delete response says it again with the window. A server that reports
+    # nothing keeps the sessions, which is what every version before 2026-10-19 required of all.
+    retires = bool(((ctx.state.get("discovery") or {}).get("capabilities") or {}).get("harness_retirement"))
+    h = _managed_harness(ctx)
+    body = {"input": PROMPT, "metadata": {"harness_id": h["id"]}, "stream": False}
+    if ctx.model:
+        body["model"] = ctx.model
+    r = ctx.client.post("/v1/responses", body=body)
+    sid = ((r.json or {}).get("metadata") or {}).get("session_id") if r.status == 200 else None
+    if not sid:
+        ctx.client.delete(f"/v1/harnesses/{h['id']}")
+        raise Skip(f"a task on a new harness returned no session_id (HTTP {r.status}), so there is no "
+                   "session for the delete to keep or retire")
+    gone = ctx.client.delete(f"/v1/harnesses/{h['id']}")
+    assert gone.status in (200, 204), f"delete returned HTTP {gone.status}"
+    out = (gone.json or {}) if gone.status == 200 else {}
+    said = out.get("sessions") or "kept"
+    if retires:
+        assert said == "retired", (
+            f"the server reports harness_retirement true, but its delete response says sessions "
+            f"{said!r}; §5.3 requires sessions: \"retired\" with the window, so a client can tell the "
+            "person what happened to their history")
+        until = out.get("restorableUntil")
+        assert isinstance(until, int) and until > time.time(), (
+            f"restorableUntil must be a Unix time in the future, the end of the restore window the "
+            f"person is told about; got {until!r}")
+        return f"retired with the harness, restorable until {until}"
+    assert said == "kept", (
+        f"the delete response says sessions {said!r} while harness_retirement is false or absent; "
+        "a server that retires sessions must report the capability, so a client can warn first")
+    after = ctx.client.get(f"/v1/sessions/{sid}")
+    try:
+        assert after.status == 200, (
+            f"the session of a deleted harness answered HTTP {after.status}; with harness_retirement "
+            "false §5.3 requires it to stay readable")
+    finally:
+        ctx.client.delete(f"/v1/sessions/{sid}")
+    return f"kept: {sid} still reads after its harness was deleted"
+
+
 @check("F-02", "Creating a harness with an unsupported base is refused", "full",
        f"{SPEC}/harnesses.md#41-create")
 def f02(ctx):
@@ -2029,8 +2125,12 @@ def me01(ctx):
     ctx.validate(root, "Memory")
     ctx.validate(child, "Memory")
     assert str(root.get("id") or "").strip(), "a memory must carry an id"
-    assert child.get("parent_id") == root["id"] and child.get("ancestors") == [root["id"]], (
-        f"the child must name its parent and its ancestors root first; got parent_id={child.get('parent_id')!r} ancestors={child.get('ancestors')!r}")
+    # the suite's own memory need not be a root of the server's tree: a server whose memories are
+    # its own workspaces places a new one inside the caller's, so the child's ancestors are the
+    # memory's own ancestors and then the memory, root first
+    want = [*(root.get("ancestors") or []), root["id"]]
+    assert child.get("parent_id") == root["id"] and child.get("ancestors") == want, (
+        f"the child must name its parent and its ancestors root first ({want}); got parent_id={child.get('parent_id')!r} ancestors={child.get('ancestors')!r}")
     assert child.get("provider") == root.get("provider"), "a child created without a provider must take its parent's"
     assert set(root.get("privileges") or []) == {"read", "write", "create", "delete"}, (
         f"whoever creates a memory holds all four privileges on it; got {root.get('privileges')!r}")
@@ -2305,6 +2405,143 @@ def me10(ctx):
     assert b["id"] not in {(n.get("record") or {}).get("id") for n in one.get("nodes") or []}, (
         "one hop from the subject reached the object: the fact between them is a node, one hop away")
     return f"{len(g.get('nodes') or [])} nodes, {len(g.get('edges') or [])} edges around {a['id']} on entities={prov['graph']['entities']}"
+
+
+def _instant(s):
+    """An ISO time as an instant, so `Z` and `+00:00` spellings of one moment compare equal."""
+    from datetime import datetime
+    return datetime.fromisoformat(str(s).replace("Z", "+00:00")) if s else None
+
+
+@check("ME-11", "A fact that holds one value ends what it replaced, keeps a disagreement, takes its place in the past, and says what it did",
+       "full", f"{SPEC}/memories.md#44-facts-that-change")
+def me11(ctx):
+    prov = _memories_supported(ctx)
+    if not prov.get("holds"):
+        raise Skip("this provider does not declare holds: it keeps the attributes as written")
+    base = f"/v1/memories/{_memory_child(ctx)['id']}/records"
+    who = "Corvel " + uuid.uuid4().hex[:6]
+    e = ctx.client.post(base, body={"type": "entity", "title": who})
+    assert e.status == 200, f"POST an entity returned HTTP {e.status}: {e.text[:200]}"
+    t0, t1, t15, t2 = "2023-01-01T00:00:00Z", "2024-01-01T00:00:00Z", "2024-03-01T00:00:00Z", "2024-06-01T00:00:00Z"
+
+    def fact(city, t):
+        r = ctx.client.post(base, body={
+            "type": "fact", "title": f"{who} lives in {city}", "references": [{"rel": "subject", "record_id": e.json["id"]}],
+            "attributes": {"predicate": "home_city", "value": city, "holds": "one", "stated_at": t}, "time": {"valid_from": t}})
+        assert r.status == 200, f"POST a fact that holds one value returned HTTP {r.status}: {r.text[:200]}"
+        f = r.json or {}
+        assert isinstance(f.get("closed"), list) and isinstance(f.get("conflicts"), list), (
+            f"the answer to remembering a fact that holds one value carries closed and conflicts, as lists; got {str(f)[:200]}")
+        return f
+
+    def read(rid):
+        return ctx.client.get(f"{base}/{rid}").json or {}
+
+    def ends(rid):
+        return _instant((read(rid).get("time") or {}).get("valid_to"))
+
+    a = fact("Lisbon", t1)
+    assert a["closed"] == [] and a["conflicts"] == [], f"the first value ended or met nothing; got {a['closed']} {a['conflicts']}"
+    b = fact("Porto", t2)
+    assert b["closed"] == [a["id"]] and b["conflicts"] == [], (
+        f"Porto from June must end Lisbon and meet nothing; got closed={b['closed']} conflicts={b['conflicts']}")
+    lis = read(a["id"])
+    assert _instant((lis.get("time") or {}).get("valid_to")) == _instant(t2), f"Lisbon must end where Porto began; got {lis.get('time')}"
+    w = lis.get("written_by") or {}
+    assert w.get("kind") == "provider" and w.get("on_behalf_of"), (
+        f"the version that ended Lisbon is the server's own, on behalf of whoever wrote Porto; got written_by={w}")
+    assert "closed" not in lis and "conflicts" not in lis, "closed and conflicts belong to the write's answer and are never stored"
+    if (prov.get("history") or {}).get("content") == "versions":
+        h = (ctx.client.get(f"{base}/{a['id']}/history").json or {}).get("data") or []
+        first = next((v for v in h if v.get("version") == a.get("version")), None)
+        assert first and (first.get("time") or {}).get("valid_to") is None, (
+            "the version before the end keeps the world time it had: as the memory stood then, Lisbon had not ended")
+    c = fact("Braga", t2)
+    assert c["conflicts"] == [b["id"]] and c["closed"] == [], (
+        f"Braga from the same day as Porto must be linked to it and end nothing; got closed={c['closed']} conflicts={c['conflicts']}")
+    refs = lambda rid: {(x.get("rel"), x.get("record_id")) for x in read(rid).get("references") or []}  # noqa: E731
+    assert ("contradicts", b["id"]) in refs(c["id"]) and ("contradicts", c["id"]) in refs(b["id"]), (
+        "contradicts says the same from either end: it must be kept on both records")
+    assert ends(b["id"]) is None and ends(c["id"]) is None, "a disagreement closes neither side"
+    d = fact("Faro", t0)
+    assert d["closed"] == [] and d["conflicts"] == [], f"a fact about the past ends nothing that followed it; got {d['closed']} {d['conflicts']}"
+    assert ends(d["id"]) == _instant(t1), (
+        "Faro must end where Lisbon began, though Lisbon has itself ended: two values of one may not hold at once")
+    co = fact("Coimbra", t15)
+    assert co["closed"] == [a["id"]] and co["conflicts"] == [], (
+        f"Coimbra from March falls inside Lisbon's time and must end it there; got closed={co['closed']} conflicts={co['conflicts']}")
+    assert ends(a["id"]) == _instant(t15) and ends(co["id"]) == _instant(t2), (
+        "Lisbon must now end in March, and Coimbra where Porto began")
+    return f"five facts on {who}: ended, linked, placed in the past, and placed inside an earlier value"
+
+
+@check("ME-12", "A record found on one side of a disagreement brings the other", "full", f"{SPEC}/memories.md#63-the-response")
+def me12(ctx):
+    prov = _memories_supported(ctx)
+    child = _memory_child(ctx)
+    base = f"/v1/memories/{child['id']}/records"
+    who = "Hollin" + uuid.uuid4().hex[:6]
+    x = ctx.client.post(base, body={"type": "fact", "content": f"{who} signed the warehouse lease in May."})
+    assert x.status == 200, f"POST records returned HTTP {x.status}: {x.text[:200]}"
+    y = ctx.client.post(base, body={"type": "fact", "content": f"{who} has never signed a lease.",
+                                    "references": [{"rel": "contradicts", "record_id": x.json["id"]}]})
+    assert y.status == 200, f"POST a fact that contradicts another returned HTTP {y.status}: {y.text[:200]}"
+    ids = {x.json["id"], y.json["id"]}
+    back = {(ref.get("rel"), ref.get("record_id")) for ref in (ctx.client.get(f"{base}/{x.json['id']}").json or {}).get("references") or []}
+    assert ("contradicts", y.json["id"]) in back, "contradicts written on one record must be kept on the other as well"
+    signals = (prov.get("recall") or {}).get("signals") or []
+    body = {"query": f"did {who} sign the lease?", "limit": 1} if "query" in signals else {"text": who, "limit": 1}
+    deadline, res = time.time() + 40, {}
+    while True:
+        r = ctx.client.post(f"/v1/memories/{child['id']}/recall", body=body)
+        assert r.status == 200, f"POST recall returned HTTP {r.status}: {r.text[:200]}"
+        res = r.json or {}
+        got = [x2 for x2 in res.get("results") or [] if (x2.get("record") or {}).get("id") in ids]
+        if got or time.time() > deadline:
+            break
+        time.sleep(2)
+    ctx.validate(res, "MemoryRecall")
+    assert got, f"neither side of the disagreement was recalled with {body}"
+    seen = {(g.get("record") or {}).get("id"): g for g in got}
+    assert set(seen) == ids, (
+        f"with limit 1 the best hit must bring the other side of the disagreement; got {sorted(seen)}")
+    pulled = [g for g in got if g.get("why") == ["contradicts"]]
+    assert len(pulled) == 1 and pulled[0].get("score") is None, (
+        "the side brought along is marked why [\"contradicts\"] with no score, once")
+    return f"limit 1 answered both sides of {who}'s lease"
+
+
+@check("ME-13", "A memory's standing records are read newest first, within a budget, from that memory alone", "full",
+       f"{SPEC}/memories.md#91-what-a-session-does")
+def me13(ctx):
+    prov = _memories_supported(ctx)
+    root, child = ctx.state["memory_root"], _memory_child(ctx)
+    r = ctx.client.get(f"/v1/memories/{child['id']}/prime?budget=4000")
+    assert r.status == 200, f"GET prime returned HTTP {r.status}: {r.text[:200]}"
+    ctx.validate(r.json or {}, "MemoryPrime")
+    if not prov.get("prime"):
+        assert (r.json or {}).get("records") == [], "a provider that does not prime answers the prime read with an empty list"
+        return "this provider does not prime, and answers an empty list"
+    base = f"/v1/memories/{child['id']}/records"
+    rule = ctx.client.post(base, body={"type": "procedure", "title": "Write dates as 1 March 2024", "attributes": {"standing": True}})
+    time.sleep(1.1)
+    pref = ctx.client.post(base, body={"type": "fact", "title": "Prefers answers of three sentences or fewer",
+                                       "attributes": {"standing": True, "predicate": "prefers"}})
+    plain = ctx.client.post(base, body={"type": "fact", "title": "The office closes at six"})
+    assert rule.status == pref.status == plain.status == 200, "writing the standing records was refused"
+    got = (ctx.client.get(f"/v1/memories/{child['id']}/prime?budget=4000").json or {})
+    ids = [x.get("id") for x in got.get("records") or []]
+    assert pref.json["id"] in ids and rule.json["id"] in ids and plain.json["id"] not in ids, (
+        f"the prime read is the standing records and nothing else; got {ids}")
+    assert ids.index(pref.json["id"]) < ids.index(rule.json["id"]), "standing records come newest first"
+    assert got.get("truncated") is False and int(got.get("tokens") or 0) > 0, f"tokens and truncated as the read counted them; got {got}"
+    tight = ctx.client.get(f"/v1/memories/{child['id']}/prime?budget=1").json or {}
+    assert [x.get("id") for x in tight.get("records") or []] == [pref.json["id"]] and tight.get("truncated") is True, (
+        "within a budget too small for any, the newest standing record still fits and the read says it left the rest out")
+    above = [x.get("id") for x in (ctx.client.get(f"/v1/memories/{root['id']}/prime").json or {}).get("records") or []]
+    assert pref.json["id"] not in above, "the prime read is of the memory alone unless depth widens it"
+    return f"{len(ids)} standing records, newest first; a budget of one token kept the newest"
 
 
 @check("ME-08", "A memory moves with its subtree, and deleting it takes the subtree", "full",

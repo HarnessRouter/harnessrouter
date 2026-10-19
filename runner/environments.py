@@ -579,6 +579,7 @@ _apt_lists_at = 0.0
 
 
 _RANGE_OPS = (">=", "<=", "~=", "!=", ">", "<")
+_NPM_RANGE = re.compile(r"[\^~<>*|\s]|(?:^|\.)[xX](?:\.|$)")
 
 
 def spec_parts(spec: str, manager: str) -> tuple[str, str]:
@@ -588,7 +589,12 @@ def spec_parts(spec: str, manager: str) -> tuple[str, str]:
     s = spec.strip()
     if manager == "npm":
         i = s.rfind("@")
-        return (s[:i], s[i + 1:]) if i > 0 else (s, "")
+        if i <= 0:
+            return s, ""
+        # npm's ranges (^4.17.0, ~4.17, >=1, 1.x, *) are not one version either: the registry's
+        # `versions` names exact ones, so a range read as a pin was "not published".
+        v = s[i + 1:]
+        return s[:i], ("" if _NPM_RANGE.search(v) else v)
     # Ranges before the pin operators: `>=`, `<=`, `~=` and `!=` each end in `=`, so looking for a
     # pin first read `jq>=1.6` as the name `jq>` with the pin `1.6` — neither what the owner
     # declared nor something apt-get, pip or a registry will answer for.
@@ -643,6 +649,7 @@ def check_package(manager: str, spec: str) -> dict:
         raise HTTPException(400, "that is not a package spec")
     name, pin = spec_parts(spec, manager)
     out = {"manager": manager, "name": name, "spec": spec, "exists": None, "latest": "", "version": "", "error": ""}
+    dist_tags: dict = {}   # npm only: PyPI and apt have no dist-tag concept
     try:
         if manager == "pip":
             st, j = _http_json(f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json")
@@ -661,7 +668,8 @@ def check_package(manager: str, spec: str) -> dict:
                 return out
             if st != 200:
                 raise RuntimeError(f"the npm registry answered {st}")
-            out.update(exists=True, latest=str((j.get("dist-tags") or {}).get("latest") or ""))
+            dist_tags = j.get("dist-tags") or {}
+            out.update(exists=True, latest=str(dist_tags.get("latest") or ""))
             versions = set((j.get("versions") or {}).keys())
         else:
             _apt_lists()
@@ -675,7 +683,12 @@ def check_package(manager: str, spec: str) -> dict:
             m = subprocess.run(["apt-cache", "madison", name], capture_output=True, text=True, timeout=60, env=env)
             versions = {ln.split("|")[1].strip() for ln in m.stdout.splitlines() if ln.count("|") >= 2}
         if pin:
-            if pin in versions:
+            # A dist-tag is a name for a version, not a version: resolve it before checking
+            # the published versions, so `lodash@latest` stops reading as "not published".
+            # An unknown tag keeps the error below; only an exact version is looked up.
+            if pin in dist_tags:
+                out["version"] = str(dist_tags[pin])
+            elif pin in versions:
                 out["version"] = pin
             else:
                 out["error"] = f"{name} {pin} is not published; the latest is {out['latest']}"
@@ -706,13 +719,35 @@ def build_record(env_id: str, n: int) -> dict | None:
         return None
 
 
+def _build_running(env_id: str, n: int) -> bool:
+    with _builds_lock:
+        t = _builds.get(f"{env_id}:{int(n)}")
+    return bool(t and t.is_alive())
+
+
+def _as_read(env_id: str, n: int, rec: dict) -> dict:
+    """A record that says building with no build thread behind it is a build that stopped. The
+    record is the build's only report, and the thread that writes it is gone: its last write failed
+    (a full disk; _build swallows that one) or the runner restarted under it. Read as it lies, it
+    said building to every read for good, and the gateway, which takes the environment's status
+    from versions(), showed it building for good too. Both reads answer it as failed."""
+    if rec.get("status") != "building" or _build_running(env_id, n):
+        return rec
+    try:
+        stopped = int(os.path.getmtime(version_dir(env_id, n) / ".hr-build.json"))
+    except OSError:
+        stopped = int(time.time())
+    return {**rec, "status": "failed", "stage": "", "finished_at": stopped,
+            "error": "the build stopped before it recorded its end"}
+
+
 def versions(env_id: str) -> list[dict]:
     root = env_dir(env_id) / "versions"
     out = []
     if root.is_dir():
         for e in sorted(root.iterdir(), key=lambda x: int(x.name) if x.name.isdigit() else 0):
             if e.name.isdigit():
-                rec = build_record(env_id, int(e.name)) or {"version": int(e.name), "status": "unknown"}
+                rec = _as_read(env_id, int(e.name), build_record(env_id, int(e.name)) or {"version": int(e.name), "status": "unknown"})
                 out.append({k: rec.get(k) for k in ("version", "status", "started_at", "finished_at", "error", "files", "bytes")
                             } | {"packages": len(rec.get("packages") or [])})
     return out
@@ -1248,7 +1283,7 @@ def r_build_status(env_id: str, version: int) -> dict:
     rec = build_record(env_id, int(version))
     if not rec:
         raise HTTPException(404, "no such build")
-    return rec
+    return _as_read(env_id, int(version), rec)
 
 
 @router.get("/environments/{env_id}/versions")

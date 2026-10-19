@@ -1063,7 +1063,7 @@ def _read_submit(cand: dict, status: int, doc) -> tuple[str, Payload | None]:
     if shape == "video-generation":
         tid = str(doc.get("task_id") or doc.get("id") or "")
         if not tid:
-            raise MediaEmpty(provider_message(doc, status) or
+            raise MediaEmpty(provider_said(doc) or
                              "the provider accepted the request but returned no task id")
         return tid, None
 
@@ -1121,14 +1121,14 @@ def _read_submit(cand: dict, status: int, doc) -> tuple[str, Payload | None]:
         op = doc.get("operation")
         if op is not None:
             return json.dumps(op, separators=(",", ":")), None
-        raise MediaEmpty(provider_message(doc, status) or
+        raise MediaEmpty(provider_said(doc) or
                          "the provider accepted the request but returned no job handle")
 
     if shape == "vercel-speech":
         if doc.get("audio"):
             fmt = str(cand.get("format") or "mp3")
             return "", Payload(data=_b64(str(doc["audio"])), mime=f"audio/{fmt}")
-        raise MediaEmpty(provider_message(doc, status) or
+        raise MediaEmpty(provider_said(doc) or
                          "the provider answered with no audio")
 
     raise MediaError(f"No adapter for endpoint shape {shape!r}.")
@@ -1216,7 +1216,7 @@ def _read_poll(cand: dict, status: int, doc) -> tuple[str, Payload | None, str, 
             # Completed with nothing in it billed and delivered nothing. Same rule as everywhere.
             return "failed", None, "the provider reported completed and returned no video", ""
         if st in ("failed", "cancelled", "canceled"):
-            return "failed", None, scrub(provider_message(doc, status)
+            return "failed", None, scrub(provider_said(doc)
                                          or f"the render ended as {st}"), ""
         if st == "pending" or not st:
             return "running", None, "", ""
@@ -1356,6 +1356,12 @@ def _clean(value):
 def provider_message(doc, status: int) -> str:
     """The provider's own sentence, which is what the agent needs — never our paraphrase of it.
     Scrubbed of credentials, which is not a paraphrase: everything that diagnoses survives."""
+    return provider_said(doc) or f"the provider answered HTTP {status}"
+
+
+def provider_said(doc) -> str:
+    """The provider's own sentence in this body, "" when it carried none. A caller with a better
+    sentence than "the provider answered HTTP 200" for a body that said nothing uses this one."""
     if isinstance(doc, dict):
         for key in ("message", "error", "detail", "msg"):
             v = doc.get(key)
@@ -1384,7 +1390,7 @@ def provider_message(doc, status: int) -> str:
                     return scrub("; ".join(said))
         if isinstance(doc.get("code"), str) and doc["code"] and doc["code"] != "success":
             return scrub(str(doc["code"]))
-    return f"the provider answered HTTP {status}"
+    return ""
 
 
 def usage_usd(doc) -> float | None:

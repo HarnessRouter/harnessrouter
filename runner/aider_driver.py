@@ -32,11 +32,14 @@ normalised by _aider_to_claude in server.py.
 """
 from __future__ import annotations
 
+import codecs
 import contextlib
+import copy
 import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import time
 
@@ -78,7 +81,9 @@ def _strip_shell_blocks(text: str) -> str:
     out, lines, i = [], (text or "").splitlines(), 0
     while i < len(lines):
         line = lines[i]
-        opener = "```" + line.strip().lstrip("`")     # a fence of any length, read as three
+        # a fence of any length, read as three; a line that does not start with one is prose, even
+        # when it starts with a shell's name ("bash build.sh" in an answer is not a block)
+        opener = ("```" + line.strip().lstrip("`")) if line.strip().startswith("```") else ""
         if opener.strip() in _SHELL_FENCES or any(opener.startswith(f + " ") for f in _SHELL_FENCES):
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
@@ -136,13 +141,12 @@ def is_text_file(path: str, sniff: int = 65536) -> bool:
     if b"\x00" in head:
         return False
     try:
-        head.decode("utf-8")
+        # A cut inside a multi-byte sequence at the sniff boundary is not a binary file, so a head
+        # that filled the sniff may end mid-character. A file read whole may not: dropping its last
+        # bytes passed any file of four bytes or fewer, and any whose only bad byte was near its end.
+        codecs.getincrementaldecoder("utf-8")().decode(head, final=len(head) < sniff)
     except UnicodeDecodeError:
-        # a cut inside a multi-byte sequence at the sniff boundary is not a binary file
-        try:
-            head[:-4].decode("utf-8")
-        except UnicodeDecodeError:
-            return False
+        return False
     return True
 
 
@@ -354,12 +358,245 @@ _ANNOUNCES = re.compile(
 # A reply that stops short and says so in a paragraph of its own: "To complete the task, I still
 # need to click the link" after the first browser output (gpt-5.4, hr-test 0.25.13, 2026-09-28).
 _STOPS_SHORT = re.compile(r"(?:^|\n)\s*to (?:complete|finish) (?:the|this) task,?\s*i (?:still |also )?need to\b", re.I)
+# A reply that asks the person something: a "?" ending a phrase, not one inside a URL's query.
+_ASKS_PERSON = re.compile(r"\?(?=[\s)\]*_\"'”]|\Z)")
 NUDGE = ("Nothing was run or edited. If the task needs files or commands, produce them now in "
          "this reply; otherwise give your final answer.")
 
 
 def _announces_without_acting(text: str) -> bool:
     return bool(_ANNOUNCES.match(text or "") or _STOPS_SHORT.search(text or ""))
+
+
+# A request that names a file to create or write: "Create a file named hello-aider.txt containing
+# exactly the word HELLO, then reply DONE." gpt-5.4 answered that with "DONE", 4 output tokens and
+# no file, 4 of 4, and gpt-5.5 the same; without ", then reply DONE" gpt-5.4 wrote it 3 of 3
+# (issue #379, 2026-10-04). aider gives the model one response per turn and the edit block IS that
+# response, so a request ending on a word to send back gets the word. Keyed on the REQUEST, since
+# the reply ("DONE") reads as a finished answer: the verb opens a clause (the start, after a
+# sentence or a comma, "and", "then", "now", "please", "can you") and a file name with a lettered
+# extension follows in the same sentence. So "how do I create config.yaml?" and "what would
+# hello.txt contain?" are questions and never match, and "Reply with exactly: M1-gpt-5.4" names
+# no file (5.4 is a version, not an extension).
+_CREATE_VERB = re.compile(
+    r"(?:^|[.;:!?]\s+|\n\s*|,\s*|\b(?:and|then|please|kindly|now|also|just|first)\s+"
+    r"|\b(?:can|could|would|will) you\s+(?:please\s+)?|\bi (?:want|need) you to\s+)"
+    r"(?:create|write|make|save|generate|produce|build|draft|put|store|export)\b"
+    r"(?!\s+(?:sure|certain)\b)", re.I)                 # "make sure the output goes to x.json"
+# The rest of the verb's clause, bounded so a long unpunctuated paste costs a short scan: a dot
+# followed by a letter or a slash is inside a file name, not the sentence's end. The clause ends
+# where it starts describing what the thing does: "write a script that parses config.yaml", "write
+# a script to parse config.yaml" ask for a script, not for config.yaml.
+_SENTENCE_END = re.compile(
+    r"[.!?](?![\w/])|\n|\b(?:that|which|who|whose|because|while|if)\b"
+    r"|\bto\s+(?!(?:the|a|an|my|your|this|its|their|our)\b)[a-z]+\b(?![\w./`-])", re.I)
+_SCAN = 300
+# A name ending in a text file type, whole: "report.final.md", "notes.v2.txt". The types are
+# listed, so a module or a method ("subprocess.run", "requests.Session") is not a name, and they are
+# text, since the nudge asks for an edit block and a .pptx or .png written that way is a corrupt
+# file. Or a lowercase dotfile (".env", not ".NET"), or a file named without an extension
+# ("Dockerfile"). A leading "./" is the workspace itself.
+_FILE_TYPES = (
+    "txt|md|markdown|rst|adoc|tex|bib|log|py|ipynb|js|mjs|cjs|ts|tsx|jsx|vue|svelte|astro|json|"
+    "jsonl|yaml|yml|toml|ini|cfg|conf|env|csv|tsv|xml|html|htm|css|scss|sass|less|sql|sh|bash|zsh|"
+    "fish|ps1|bat|rb|go|rs|java|kt|kts|swift|c|h|cc|cpp|hpp|cs|php|pl|lua|r|jl|dart|scala|ex|exs|"
+    "erl|hs|ml|proto|graphql|gql|tf|hcl|patch|diff|svg|pem|crt")
+_FILE_NAME = re.compile(
+    r"(?<![\w/.@-])(?:\./)?((?:[\w-]+/)*(?:[\w-]+(?:\.[\w-]+)*\.(?i:" + _FILE_TYPES + r")|\.[a-z][a-z0-9_.-]*"
+    r"|(?:Dockerfile|Makefile|Procfile|Gemfile|Rakefile|Jenkinsfile|Vagrantfile|Containerfile)))"
+    r"(?![\w/@.-]*[\w/@-])")
+# A file the request reads from, or that the thing asked for is for, is not one it asks for:
+# "write a summary of `notes.md`", "write a scraper for wikipedia.org" (a site whose ending is also
+# a file type: .org is left off the list, and .sh, .rs, .go, .pl, .ml and .cs are code). A file
+# that exists is left out below, which covers "export the table in data.csv" without refusing
+# "save it in out.md" or "a project with main.py and utils.py".
+_READS_FROM = re.compile(r"\b(?:of|from|about|than|for)\s*[`'\"]?\Z", re.I)
+# A framework's name is not a file: "a Next.js app". The frameworks are named, so "create App.js"
+# is still a file.
+_NOT_A_FILE = re.compile(
+    r"(?:Node|Next|Nuxt|Vue|React|Angular|Ember|Backbone|Express|Nest|Three|D3|Chart|Moment|Alpine|"
+    r"Solid|Svelte|Deno|Bun)\.js\Z", re.I)
+_WALK_CAP = 200000
+
+
+def _workspace_names(root: str) -> "set | None":
+    """Every file in the workspace, by path and by bare name, read once per turn. "Write tests for
+    utils.py" means src/utils.py when that is where it is, so a bare name anywhere is that file.
+    git's own list is complete in a tree of any size (the workspace is aider's repo); without git,
+    a walk blind to dot-folders and node_modules, which a request does not mean. None when neither
+    can say: then a bare name counts as present, since no nudge is the turn as it was and a wrong
+    one makes a stray file."""
+    paths = _workspace_paths(root)
+    return None if paths is None else paths | {p.rsplit("/", 1)[-1] for p in paths}
+
+
+def _workspace_paths(root: str) -> "set | None":
+    """The workspace's files by path, as _workspace_names reads them; None when neither git nor a
+    bounded walk can say."""
+    try:
+        out = subprocess.run(["git", "-c", "safe.directory=*", "-C", root, "ls-files", "-z",
+                              "--cached", "--others", "--exclude-standard"],
+                             capture_output=True, timeout=10, check=True).stdout
+        paths = [p for p in out.decode("utf-8", "replace").split("\0") if p]
+    except (OSError, subprocess.SubprocessError):
+        paths = []
+        for d, dirs, files in os.walk(root):
+            dirs[:] = [x for x in dirs if not x.startswith(".") and x != "node_modules"]
+            paths += [os.path.relpath(os.path.join(d, f), root) for f in files]
+            if len(paths) > _WALK_CAP:
+                return None
+    return set(paths)
+
+
+def _edits_sentence(edited: list, before: "set | None") -> str:
+    """What a turn changed, said from the edits themselves, for a turn whose model wrote only edit
+    blocks: its answer is empty once they are cards. Measured 2026-10-19 on "Create a file named
+    hello.txt containing hi, then say done.": the reply was the edit block alone in 6 of 24 runs
+    (gpt-5.4 4 of 6), and 11 of 24 on 0.35.2. A file absent from the workspace before the turn was
+    created; one that was there was edited. With no listing to tell them apart, every file is
+    "edited", which a written file also is. Names up to two files, then counts; nothing else."""
+    created = sorted(p for p in edited if before is not None and p not in before)
+    changed = sorted(p for p in edited if p not in created)
+
+    def files(ps: list) -> str:
+        return " and ".join(ps) if len(ps) <= 2 else f"{len(ps)} files"
+    if created and changed:
+        return f"Created {files(created)}{', and' if len(created) == 2 else ' and'} edited {files(changed)}."
+    return f"Created {files(created)}." if created else f"Edited {files(changed)}."
+
+
+def _exists_in(root: str, name: str, names: "set | None") -> bool:
+    """The name is in the workspace already: at its path, or for a bare name anywhere in it."""
+    if os.path.exists(os.path.join(root, name)):
+        return True
+    if "/" in name:
+        return False
+    return names is None or name in names
+
+
+def _files_asked_for(prompt: str, root: str = ".", names: "set | None | bool" = False) -> list:
+    """The files this turn's request asks to have created or written that do not exist yet.
+
+    A file that exists is left out: the nudge's new-file block would append to it, and a file an
+    earlier turn already made is not this turn's to make again. Earlier turns the gateway puts
+    ahead of the request (for a backend that lost its history) are left out the same way."""
+    text = prompt or ""
+    if names is False:
+        names = _workspace_names(root)
+    if text.startswith("<conversation_so_far>\n"):
+        text = text.rpartition("</conversation_so_far>\n\n")[2]
+    found: list = []
+    for verb in _CREATE_VERB.finditer(text):
+        rest = text[verb.end():verb.end() + _SCAN]
+        stop = _SENTENCE_END.search(rest)
+        # a name the window's cut runs through is half a name
+        cut = not stop and verb.end() + _SCAN < len(text)
+        rest = rest[:stop.start()] if stop else rest
+        for m in _FILE_NAME.finditer(rest):
+            name = m.group(1)
+            if ((cut and m.end() == len(rest)) or _NOT_A_FILE.match(name)
+                    or _READS_FROM.search(rest[:m.start()])
+                    or name in found or _exists_in(root, name, names)):
+                continue
+            found.append(name)
+    return found
+
+
+def _file_nudge(names: list) -> str:
+    listed = ", ".join(f"`{n}`" for n in names)
+    one = len(names) == 1
+    return (f"The request asks for {listed}, and {'it is' if one else 'they are'} not written yet. "
+            f"Write {'it' if one else 'them'} now in this reply with a SEARCH/REPLACE block "
+            "each: the path, an empty SEARCH section and the contents in the REPLACE section. A "
+            "new file does not need to be added to the chat first. Then give the reply the request "
+            "asks for.")
+
+
+# A request that asks for words back once the work is done: "Create a file named hello.txt
+# containing hi, then say done." gpt-5.4-mini answered it with the edit block and nothing else (21
+# output tokens, its chat history shows no other words; the runner read-back on 0.35.3's driver,
+# 2026-10-18): the file was written and the person's answer was the driver's "The task ended
+# without a written answer" sentence. aider gives the model one response per turn, and the block
+# was that response, the mirror of #379's "DONE" with no file. Keyed on the request, like the file
+# nudge: the verb opens a clause, so "the answer is in notes.md" asks for nothing. ENGLISH ONLY: the
+# openers are English words, so a request in another language never gets this nudge. Such a turn
+# still ends with words, the sentence _edits_sentence builds from its edits, which is also the answer
+# whenever this nudge is not sent or was already spent on another one this turn.
+_ASKS_REPLY = re.compile(
+    r"(?:^|[.;:!?]\s+|\n\s*|,\s*|\b(?:and|then|please|now|also|just|finally|afterwards)\s+)"
+    r"(?:say|reply|respond|answer|confirm|report|tell me|let me know)\b", re.I)
+REPLY_NUDGE = ("What this turn wrote and ran is done, so do not write or run it again. Now give the "
+               "reply the request asks for, in words, with no SEARCH/REPLACE block and no command.")
+
+
+def _asks_for_reply(prompt: str) -> bool:
+    """Whether this turn's request asks for words back (earlier turns put ahead of it are not it)."""
+    text = prompt or ""
+    if text.startswith("<conversation_so_far>\n"):
+        text = text.rpartition("</conversation_so_far>\n\n")[2]
+    return bool(_ASKS_REPLY.search(text))
+
+
+NEW_FILE_NOTE = ("If the request asks for a new file, it needs no adding to the chat: write it with "
+                 "a SEARCH/REPLACE block that has its path, an empty SEARCH section and the contents "
+                 "in REPLACE, then give the reply the request asks for. A question about a file is "
+                 "answered in words, without creating it.")
+
+
+def _new_files_need_no_add(coder) -> None:
+    """aider's word for a chat with no files in it is "I am not sharing any files that you can
+    edit yet.", sent as the user every turn. gpt-5.4-mini took it at its word (#379): asked to
+    create hello-aider.txt it answered "I can't create or edit files yet because you haven't
+    shared any editable files in the chat", and said it again after the nudge, and after a second
+    nudge tried for measuring. With the workspace notes' line and the nudge it wrote the file 12 of
+    17 times and 6 answered that way; with this message as well, 21 of 24 and none (2026-10-18).
+
+    When the workspace has files aider sends another: "Don't try and edit any existing code without
+    asking me to add the files to the chat! ... then stop so I can add them", answered for the
+    model with "I will suggest which files need to be edited and then stop and wait for your
+    approval". With notes.md and src/app.py in the workspace gpt-5.4-mini wrote the file 1 of 6
+    (0 of 3 on the build before this change). That one keeps its rule for existing files, which
+    the driver's adding of named files answers, and says a new file is written directly: 4 of 6,
+    gpt-5.4 2 of 2, and appending to notes.md still worked (gpt-5.4 2 of 2). The prompts object is
+    the coder class's own, shared, so it is copied first."""
+    prompts = copy.copy(coder.gpt_prompts)
+    prompts.files_no_full_files = "No files are in the chat yet. " + NEW_FILE_NOTE
+    if getattr(prompts, "files_no_full_files_with_repo_map", None):
+        prompts.files_no_full_files_with_repo_map = (
+            "No files are in the chat yet. " + NEW_FILE_NOTE + "\n"
+            "An existing file has to be in the chat before you edit it: to change existing files, "
+            "name the ones that need changes and stop, and they will be added. Name only files "
+            "that need to be edited, not ones that are only context.\n")
+        prompts.files_no_full_files_with_repo_map_reply = (
+            "Ok. If a request asks for a new file I will write it directly; for existing files I "
+            "will name the ones that need changes and stop so they can be added.")
+    coder.gpt_prompts = prompts
+
+
+def _repo_map_after_the_conversation(coder) -> None:
+    """THE CONVERSATION STARTS WITH WHAT THE USER SAID, with files in the workspace as without.
+    aider sends the repo map as a user message, answered for the model with "Ok, I won't try and
+    edit those files without asking first.", AHEAD of the restored conversation (format_chat_chunks
+    puts repo before done), so once the workspace holds a file the first exchange the model sees is
+    aider's. Asked what word the first message of the task asked for, gpt-5.4 answered "Ok" or
+    "exactly" 5 of 6 times after it had written hello-aider.txt, and "M1-gpt-5.4" 6 of 6 with the
+    map moved (0.35.3-rc.4, 2026-10-18). The examples were moved out of the conversation for the
+    same reason. The map now opens the files message that follows
+    the conversation, where the note on what is in the chat already sits: what the model is told
+    about the workspace is the same, only its place moves."""
+    repo_messages = coder.get_repo_messages
+    files_messages = coder.get_chat_files_messages
+
+    def chat_files():
+        files, repo = files_messages(), repo_messages()
+        if not repo:
+            return files
+        if files and files[0]["role"] == "user" and isinstance(files[0]["content"], str):
+            return [dict(files[0], content=repo[0]["content"] + "\n\n" + files[0]["content"])] + files[1:]
+        return repo + files
+
+    coder.get_repo_messages = lambda: []
+    coder.get_chat_files_messages = chat_files
 
 
 def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
@@ -376,13 +613,28 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     the person would type "go ahead" (gpt-5.5 on the hosted service, 2026-09-19: that sentence
     and zero commands; gpt-5.4 twice ended after one message). The nudge is that "go ahead", once
     per turn, only when the reply reads as an announcement, so a plain answer never pays for a
-    second call. Counted against aider's max_reflections like any reflection."""
+    second call. Counted against aider's max_reflections like any reflection.
+
+    The same one nudge when the request names a file to create or write that the turn has not
+    written (#379): the reply ("DONE") reads as an answer, so the request decides. It names the
+    files and asks for the edit blocks, since the general nudge's "otherwise give your final
+    answer" is the way out the model already took. A reply that asks the person
+    something is not nudged. A command counts only by what it left on disk: a turn that read a
+    skill with `cat` and answered "DONE" made no file.
+
+    And the same one nudge the other way round: a request that asks for words back ("then say
+    done") answered by a pass that edited or ran something and said nothing besides. Without it the
+    answer is the driver's "ended without a written answer" sentence over a task that is done. One
+    nudge per turn in every case."""
     coder.io.user_input(prompt)
     coder.init_before_message()
     message = prompt
     reflections = 0
     reported: set = set()
     nudged = False
+    root = getattr(coder, "root", None) or "."
+    wanted = _files_asked_for(prompt, root)
+    wants_reply = _asks_for_reply(prompt)
     while message:
         coder.reflected_message = None
         calls_before = len(gate.calls) if gate is not None else 0
@@ -394,10 +646,23 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
             reported.update(edited)
             _emit("edits", {"files": edited})
         acted = bool(edited) or (gate is not None and len(gate.calls) > calls_before)
-        if (not coder.reflected_message and not nudged and not acted
-                and _announces_without_acting(coder.partial_response_content or "")):
-            nudged = True
-            coder.reflected_message = NUDGE
+        if not coder.reflected_message and not nudged:
+            reply = (coder.partial_response_content or "").rstrip()
+            # Asked for and still not at its path: a turn that wrote a.txt of "a.txt and b.txt" is
+            # nudged for b.txt alone, and a command that wrote the file left it there. A reply that
+            # asks the person something is waiting for them, and an empty one is a failed call
+            # (a provider error, a timeout) that a second call would only repeat.
+            missing = [n for n in wanted if n not in reported
+                       and not os.path.exists(os.path.join(root, n))]
+            if missing and reply and not _ASKS_PERSON.search(strip_edit_blocks(reply)):
+                nudged = True
+                coder.reflected_message = _file_nudge(missing)
+            elif not acted and _announces_without_acting(reply):
+                nudged = True
+                coder.reflected_message = NUDGE
+            elif acted and reply and wants_reply and not strip_edit_blocks(reply):
+                nudged = True
+                coder.reflected_message = REPLY_NUDGE
         if not coder.reflected_message:
             break
         if reflections >= coder.max_reflections:
@@ -405,6 +670,12 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
             break
         reflections += 1
         message = coder.reflected_message
+        # A reflection is a user message the model sees, and aider writes only the turn's first
+        # one to its chat history, which is what a recycled sandbox restores the conversation
+        # from. Logged here, the restored history is the one the model saw: on 0.35.3-rc.1, after
+        # a nudged turn and a recycle, the history held two replies in a row with no message
+        # between, and gpt-5.4-mini answered "what did my first message ask for" with "HELLO".
+        coder.io.user_input(message)
 
 
 def _write_model_metadata(cwd: str, model: str) -> str | None:
@@ -590,6 +861,8 @@ def main() -> int:
     # a per-model settings file would replace every other setting of the model with the class
     # defaults, so the attribute is set on the object, which is what format_chat_chunks reads.
     coder.main_model.examples_as_sys_msg = True
+    _new_files_need_no_add(coder)
+    _repo_map_after_the_conversation(coder)
     # NO TEMPERATURE. aider sends `temperature: 0` for every id its settings do not know, and a
     # provider that has retired the field refuses the whole turn: claude-fable-5-1 on TokenRouter
     # answered "`temperature` is deprecated for this model" and the turn died after 171 s of
@@ -603,6 +876,7 @@ def main() -> int:
     _run_shell_commands_reporting(coder, gate, reflect=bool(job.get("reflect_shell_output", True)))
 
     _emit("init", {"model": coder.main_model.name, "edit_format": coder.edit_format})
+    before = _workspace_paths(cwd)        # what was there, so the turn's edits say created or edited
     try:
         _run_turn(coder, job["prompt"], gate)
     except Exception as exc:  # noqa: BLE001 — the turn's failure is the product here, not a crash
@@ -626,11 +900,14 @@ def main() -> int:
         # further turn when that printed nothing. Measured on the hosted service (an officecli
         # that was not installed ran seven times and the task ended with no text and no file;
         # gpt-5.4 ended after one edit block). Said as what happened, not as an answer the model
-        # gave. The same two sentences on the hosted service.
-        final = ("The task ended without a written answer after running commands. The commands "
-                 "and their output are above." if gate.calls else
-                 "The task ended without a written answer after editing files. What it did is "
-                 "shown above.")
+        # gave: the files it changed, by name, or the commands it ran. The same on the hosted service.
+        edited = sorted(coder.aider_edited_files or [])
+        if edited:
+            final = _edits_sentence(edited, before) + (
+                " The commands and their output are above." if gate.calls else "")
+        else:
+            final = ("The task ended without a written answer after running commands. The commands "
+                     "and their output are above.")
     _emit("result", {
         "final": final,
         "ok": not failed,

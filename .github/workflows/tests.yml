@@ -62,7 +62,9 @@ jobs:
       # the driver's tests import it, and skip without it, so the suite installs the same pin.
       # CheetahClaws the same way: its driver tests run the pinned package against a stub endpoint
       # (they skip without it), and it resolves beside the runner's own pins (pip check is clean).
-      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.4.0" "cheetahclaws==3.5.88"
+      # Qoder's SDK the same way: the qoder driver imports it (the image pins it in its own venv),
+      # and the driver's tests run it as a subprocess against a stub Managed API.
+      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.4.0" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
       - run: python -m pytest runner/tests -q
 
   conformance:

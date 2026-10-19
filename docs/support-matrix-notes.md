@@ -6,6 +6,118 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## `max_output_tokens` is reported, not applied (2026-10-18, #470)
+
+A request's `max_output_tokens` is accepted and named in `metadata.ignored_fields`; no base receives
+it. That is a decision, not a gap (GOVERNANCE, "A declined field is not a pending one"): a UHP turn
+is many model calls, and a cap on each call's output changes what an agent can do, since it can cut
+a tool call off in the middle of its arguments. A turn's budgets here are `max_step` and
+`timeout_seconds`.
+
+## hermes and Codex on Azure name the model that served them (2026-10-15)
+
+The open item from 0.33.0-rc.15: hermes switching into gpt-5.5 on Azure finished with no served
+model, four of four, and Codex the same, so the same-model rule could not judge those turns. Neither
+CLI reports one; the relay reads it, and both bases called Azure directly (Codex also OpenAI's own
+endpoint). Both now ride the relay at the connection's own base. Found on the way: the turn's route
+was the first placeholder in the environment, and hermes registers its image question route first,
+so a hermes turn whose image questions ride the relay read its served model, usage and finish
+reason off the image model.
+
+Measured on 0.34.0 in a side container on the test VM (codex and hermes only, a fresh volume), one
+turn each straight to the runner, gpt-5.5 on the instance's Azure resource, "Reply with exactly the
+word: pong", the hermes turn with its image questions routed through the relay. Then the same image
+with this change's runner, then the stock one again with the provider's cache warm:
+
+| Turn | 0.34.0 | with the change | 0.34.0, cache warm |
+|---|---|---|---|
+| codex (exec) | no model; 11,637 in | gpt-5.5; 1,525 in + 10,112 cached | no model; 11,637 in |
+| codex (app-server) | no model; 12,372 in | gpt-5.5; 1,236 in + 11,136 cached | no model; 1,236 in + 11,136 cached |
+| hermes | no model; 421 in | gpt-5.5; 421 in + 10,240 cached | no model; 421 in |
+
+So the usage changes too. Codex's exec stream counts cached input as input (every cached token at
+the full price) and hermes's counters leave cached input out; the provider's own split, read by the
+relay, replaces both, as it already did on every relayed route. Codex's app-server already split
+its own count and gains only the served model. Codex compacts a long thread locally behind the
+relay; on an Azure URL it had used the provider's /responses/compact (0.154.0). It sends
+`store: false` either way.
+
+## Muse Wonder (2026-10-14 and 15)
+
+Meta announced two models. Muse Wonder Full has no API: Meta serves it only inside its own Muse Code
+subscription, so no connection can reach it and it is not in the catalog. Muse Wonder is, as
+`muse-wonder-1.0` (Meta's own API id), read off each vendor's own list and then called with a tool,
+streamed and not:
+
+| Provider | Id | Result |
+|---|---|---|
+| Vercel AI Gateway | `meta/muse-wonder-1.0` | answers as itself, tool arguments whole |
+| OpenRouter | `meta/muse-wonder` | answers as itself, tool arguments whole ($4 / $20 per million) |
+| TokenRouter | either name | "No available channel" |
+| LLMTR | | not listed |
+
+It cannot be turned off. OpenRouter refuses `none` ("Reasoning is mandatory for this endpoint") and
+Vercel accepts it and thinks anyway. One question that needs work, two samples a level, the
+provider's own reasoning-token count:
+
+| Level | OpenRouter | Vercel |
+|---|---|---|
+| none | refused | 606, 661 |
+| minimal | 474, 313 | 706, 502 |
+| low | 1082, 922 | 531, 457 |
+| medium | 1149, 1782 | 1181, 1360 |
+| high | 1419, 1245 | 1085, 1321 |
+| xhigh | 1517, 1425 | 1563, 826 |
+
+So its levels are minimal to xhigh, and a turn that asks for none gets minimal.
+
+Measured on the review instance (0.34.0-rc.7) on every base that offers the Meta family (21), one
+provider column at a time with the instance's route for the model pointed at that integration:
+
+| | OpenRouter | Vercel AI Gateway |
+|---|---|---|
+| five scenarios (first, follow-up, switch, artifact, recycle) | 21 of 21 | 21 of 21 |
+
+Then the plugin package (skill, stdio MCP, rows, SSE, streamable HTTP), the browser column and a
+one-slide deck carrying a stamp, on the instance's own route (Vercel). Seventeen bases passed all
+three. Four failed, each on every turn that met the failure, and do not offer it:
+
+- **agentzero:** "Agent stopped after 5 consecutive unusable model responses", on the skill turn, both
+  browser tries and the deck.
+- **aider:** the model writes the command it means to run behind its sentence, the code fence opened
+  mid-line ("as directed.```bash"), so aider finds nothing to run: all five plugin turns, both
+  browser tries, and no deck.
+- **openhands:** its next request carries two outputs for one tool call, and the provider refuses it
+  ("Duplicate function_call_output for call_id ..."): the four MCP transports, both browser tries and
+  the deck. Every other model passes on the same base and route.
+- **cheetahclaws:** the five scenarios, the plugin package and the browser passed, but no deck came
+  within the ten-minute limit, twice.
+
+## Gemini 4 Argon (2026-10-14, the day Google announced it)
+
+Read off each vendor's own list that day: Google AI Studio `gemini-4-argon` (generateContent,
+1,048,576 input tokens, thinking), OpenRouter and Vercel `google/gemini-4-argon` ($2 / $10 per
+million; Vercel also lists flex and priority tiers). TokenRouter and LLMTR do not list it. A one-line
+completion through each of the three came back as `gemini-4-argon` itself.
+
+Thinking levels, by `reasoning_effort` on Google's OpenAI-compatible surface: none, low, medium and
+high answered; minimal ("Thinking level MINIMAL is not supported") and xhigh were refused. OpenRouter
+refuses none ("Reasoning is mandatory"), as for every Gemini; Vercel took every level.
+
+Measured on the review instance (0.34.0-rc.5), on every base that offers the Gemini family (22,
+zeroclaw included), one provider column at a time with the instance's route for the model pointed at
+that integration:
+
+| | Google AI Studio | OpenRouter | Vercel AI Gateway |
+|---|---|---|---|
+| five scenarios (first, follow-up, switch, artifact, recycle) | 22 of 22 | 22 of 22 | 22 of 22 |
+
+Every Argon turn was served by `gemini-4-argon` (Google) or `google/gemini-4-argon` (the aggregators).
+Gemini CLI runs on a Google connection only, so its OpenRouter and Vercel rows ran on Google; goose and
+cheetahclaws cannot be driven by a Google connection, so their Google row ran on OpenRouter. On the
+instance's own route (Vercel), every one of the 22 also passed the plugin package (skill, stdio MCP,
+rows, SSE, streamable HTTP), the browser column and a one-slide deck carrying a stamp. Offered on all 22.
+
 ## After 0.33.0: three Qoder ids taken off, two fixes from the hosted service's column (2026-10-14)
 
 The hosted service measured the five bases of 0.33.0 on its own connections: first turn, follow-up
@@ -28,6 +140,43 @@ offered model, the same lists as here.
   normalises them once the channel's validator names the problem, measured 2026-10-07 on the same
   nanobot argument), and the model catalog route (0.6 s here, the same as the bases route; hosted's
   slowness came from its remote secret store).
+
+## zeroclaw reviewed on the review instance (2026-10-14, 0.34.0-rc.1 to rc.5)
+
+Every model zeroclaw offered went through the five console scenarios, the plugin package (skill, stdio
+MCP, rows, SSE, streamable HTTP), the browser column and a one-slide deck carrying a stamp; on top, the
+family tour (13 of 13 families in one conversation), the environments column (3 of 3), the
+custom-harness dimension, and the five-turn PDF conversation (5 of 5). Each fix below was measured
+before and after on the same instance; the section further down (2026-10-13) is the contributor's own.
+
+- **Paths.** zeroclaw's risk profile defaults to `workspace_only = true` and a denylist holding /etc
+  and /usr: `head /etc/os-release`, `ls /env` and a python3 under /usr were refused as "forbidden
+  absolute paths outside the workspace". Both are opened; the session's OS user is the boundary.
+- **Skills with scripts were skipped** ("script-like files are blocked by skill security policy"):
+  the Office skill, for its install.sh. `[skills] allow_scripts = true`.
+- **The shell starts empty** and passes only the names it is given: the image skill's `HR_IMAGE_*`
+  ("image generation is not configured for this Harness") and `OFFICECLI_RESIDENT_FLUSH` (seven
+  decks handed back empty: officecli wrote on idle, after a ten-second turn had ended) are named now.
+- **The step budget read as success.** zeroclaw summarises and stops with `end_turn` at
+  `max_tool_iterations`; its note in the answer now ends the turn as `max_steps`.
+- **34 tools, not 20.** Captured from the request zeroclaw sends (a fake chat/completions server):
+  cron and schedule, channel and session messaging, pushover, git_forge, backup, canvas, weather,
+  and none of the memory tools the first list named. `allowed_tools` is the measured set of 14
+  (MCP tools are admitted on top of it); `delegate` fails ("Missing 'agent' parameter"); `llm_task`
+  takes a model override and `deliver_file` hands back a copy the driver drops, so both are never offered.
+- **"You are hr".** zeroclaw names the agent after its config alias in the persona it seeds; the
+  alias is `zeroclaw` now.
+- **State in the checkpoint repo**, every turn (three SQLite stores, the trace log, persona files,
+  copied skills): `.harness/zeroclaw/` rides the tar (#460 did the same for nanobot, opensquilla, goose).
+- **Not offered:** grok-4.20 (no deck twice: "invalid semantic completion", no text and no tool call);
+  nemotron-3-super (no deck; off every sibling base already); qwen3.8-flash (answered the follow-up
+  with the first turn's codeword, and provider errors on the artifact after an outage had cleared).
+- **Known and left:** zeroclaw keeps a turn's messages only when the turn succeeds, so after a cancel
+  the next turn does not know what the cancelled one did.
+- **The PDF conversation's first turn** ("follow your instruction: say hi" under an instruction to make
+  a PDF): GPT models answer "hi" without a PDF on zeroclaw, pi and opencode alike (32 of 55 zeroclaw
+  models, every family represented). It is a property of the prompt, not of a base, and was not used
+  to take models off; the rest of the conversation passes on every model tried.
 
 ## The four new bases offer only what they run reliably (2026-10-12, 0.33.0-rc.5 to rc.11, the review instance)
 
@@ -124,7 +273,9 @@ connection, Haiku 4.5 as the switch partner:
   recycle it answered a word that was never asked for) in two of three runs, so Haiku 5.5 is left
   out of aider's catalog. Claude Code runs it on the CLI the image pins (2.1.280); no bump.
 - Vercel AI Gateway: 17 of 17 bases pass all five.
-- OpenRouter: 16 of 16 pass all five (Claude Code cannot use an OpenRouter connection).
+- OpenRouter: 16 of 16 pass all five (Claude Code could not use an OpenRouter connection then; it
+  can since 2026-10-13, through OpenRouter's Anthropic-shaped /api/v1/messages, and is not yet
+  measured on it).
 - Findings that are not about Haiku 5.5 and appear for Haiku 4.5 on the same bases: through the
   Anthropic connection agentzero, aider, cline, grok, kimi, minimax and qwen read no prompt cache
   (they do not ask Anthropic to cache, so every call pays the full input price); cline and dsh report
@@ -3360,14 +3511,64 @@ driver's mapping off it.
   region. The catalog carries the sixteen public ids; `ultimate` and `efficient` have completed
   turns.
 
+### The transport: Qoder's Python SDK (2026-10-16)
+
+The driver's wire moved from a hand-written `urllib` client to Qoder's own SDK (`qca-sdk` 0.6.0,
+MIT, PyPI), installed into `$TOOLS/qoder-venv` by `install_qoder` with the wheel's sha256 pinned
+and an import check of every method the driver calls. The per-turn contract, the state file, the
+business rules (cancel, artifacts, names as input, hard across turns, purge) and all 43 tests are
+unchanged; what changed:
+
+- Every `user.message` carries an `Idempotency-Key` (a fresh UUID), which is what the SDK itself
+  requires before it retries a POST — so the "is the message POST idempotent" question below is
+  answered by the vendor's own client: that header is the mechanism.
+- The SDK fetches and follows the artifact's presigned link itself and refuses one that is not an
+  http(s) URL; the driver's own check of the same became the SDK's.
+- The reconnect loop stays in the driver (a stream that ends without a terminal event is decided by
+  the session's status, which the SDK's ResumableStream does not consult); the SDK's SSE decoder,
+  typed calls and error classes replace the hand-rolled ones.
+- A bug the switch found: the relay's `do_DELETE` did not read a DELETE's body. The SDK sends `{}`,
+  the two bytes stayed on the keep-alive socket, and the next request opened with `{}DELETE` — a
+  501 from upstream that made a purge report three failures behind one session delete. Fixed and
+  pinned by a test.
+- Live on the SDK transport (Global, `efficient`): a first turn with Write + DeliverArtifacts in
+  21 s, the artifact landed, charge 0.23 credits; the purge deleted the session, the file and the
+  Agent and archived the Environment.
+- Found in review, each pinned by a test that fails without it: the SDK raises the storage host's
+  answer to the presigned link with the same class as the API's own, so a lapsed link (a 403 at the
+  store) read as the file refused and was not asked for again; a refusal of the request that
+  carries no credential is now the link's, and gets one fresh link as before. A purge on an
+  interpreter without the SDK died in a traceback while the runner removed the folder; it now
+  reports every recorded id as left. An OSError that reaches the top (the SDK wraps the network's)
+  ends the turn as the workspace's, not without a result.
+- Measured on the candidate 0.34.2-rc.1 (main plus this change, 2026-10-16), in a side instance
+  on a copy of the test instance's settings, through api.qoder.com (Global): the image's
+  fresh-volume smoke test installed the SDK on amd64 and arm64 and listed all 26 bases; an upgraded
+  volume built the venv at boot (`qoder-ready` 0.6.0) and the runner ran the driver on it. The
+  console column, `run.mjs` through Playwright, passed 45 of 45 scenarios (first, follow-up,
+  switch, artifact, recycle) on nine of the twelve offered ids: auto, ultimate, qmodel_38max,
+  qmodel, gmodel, gfmodel, dmodel, dfmodel, mmodel. performance, kmodel_latest and smodel were not
+  run (the account's trial credits; smodel costs about 11 a turn). Through the API on qfmodel: an
+  input file mounted and read, a follow-up on the same Qoder session, a skill published and used,
+  Bash disabled and absent from the agent's tools, a cancel 16 s in that Qoder recorded as
+  `session.status_idle` with `stop_reason: cancelled`, and every session delete purged at Qoder
+  (sessions, files and skills 404 afterwards, Agents and Environments archived; nothing left).
+  Claude Code, Codex (with a follow-up) and Hermes completed on the same candidate. The whole run
+  cost 14 credits.
+- `install_qoder` run as written in the image's base (`python:3.12-slim`): the venv built in 17 s,
+  the marker says 0.6.0, the import check passed, a wrong digest was refused with both digests
+  named; the driver run on that venv's interpreter from inside the container completed a live turn
+  (artifact landed, 0.42 credits) and its purge.
+
 ### Not yet confirmed with Qoder (the driver's defaults until then)
 
 The presigned artifact URL's lifetime (a lapsed link is re-requested, never a failure in itself);
 whether a delivered artifact can carry directory structure (flat names are written); the session
 idle TTL and auto-archive (an archived or missing session is `resume_lost`); the billing of failed
-and cancelled runs (no figure is given for them); whether `POST /sessions/{id}/events` is
-idempotent as a contract (the message is never sent twice, the history decides); the files
-reference's text-only rule against the message schema's image `file_id`.
+and cancelled runs (no figure is given for them); the files reference's text-only rule against the
+message schema's image `file_id`. Answered since: `POST /sessions/{id}/events` is idempotent under
+an `Idempotency-Key` header — the vendor's own SDK sends one and retries a POST only under one —
+and every message the driver sends carries it (the history is now the fallback, not the guard).
 
 ### Versions and the column
 
@@ -3907,6 +4108,106 @@ environment names. It could not read them — `control.db` and `graph.db` are `0
 mode either way. The half that stops a session renaming or replacing another session's directory
 (which needs write on the parent, not on the target) is untouched by that change.
 
+## zeroclaw, a new base (2026-10-13, refs #442)
+
+zeroclaw (zeroclaw-labs/zeroclaw, Apache-2.0) is a Rust personal-agent runtime, pinned to 0.8.5
+(released 2026-09-05) and installed from its GitHub release archive, verified against digests
+pinned in `docker/entrypoint.sh` (read off that release's own SHA256SUMS). It is driven through its
+ACP server, `zeroclaw acp`, by `runner/zeroclaw_driver.py`, which re-emits claude's stream-json, so
+the normaliser is the passthrough. It speaks chat/completions through its `custom` provider and rides
+the loopback relay, so it is wired row for row with nanobot and is in `CHAT_ONLY_BACKENDS`.
+
+### Why ACP, and what the probes showed (against OpenRouter, claude-haiku-4.5)
+
+- **`zeroclaw agent -m` cannot hold a conversation.** It prints the final answer as prose, and its
+  `--session-state-file` is read only by the interactive REPL, so every one-shot run starts from the
+  system prompt alone. ACP keeps sessions in `data/sessions/acp-sessions.db`, and `session/resume` in
+  a later process seeds the agent with them: a second process named the file the first had written.
+- **The model is the config's, and the config is rewritten every turn.** `session/resume` rebuilds the
+  agent from the current `config.toml`, so a switch is a new `model` line. The switch rows below were
+  served by the partner model on both pairs.
+- **zeroclaw seeds seven files into its agent workspace** (AGENTS.md, SOUL.md, IDENTITY.md, USER.md,
+  TOOLS.md, MEMORY.md, HEARTBEAT.md). With the agent workspace equal to the session directory all
+  seven came back as produced files. The agent workspace is now `.harness/zeroclaw/agent` and the ACP
+  `cwd` is the session directory: the file and shell tools are rooted at the `cwd` (`pwd` answered the
+  session directory; a relative `file_write` landed there), and the instruction file and skills are
+  read from the agent workspace. A sentinel written into `.harness/zeroclaw/agent/AGENTS.md` before
+  the first turn was repeated by the agent, and the file was left as written.
+- **Its shell refused ordinary commands even at level `full`.** `touch` and anything chained with `&&`
+  answered "Command not allowed by security policy". The risk profile uses zeroclaw's documented
+  trusted mode (`allowed_commands = ["*"]`, `block_high_risk_commands = false`); the session already
+  runs as its own OS user in its own directory.
+- **Its shell passes on only what it is told to.** A variable in the driver's environment came back
+  empty and PATH was reset to the system default; names in `shell_env_passthrough` arrived. The runner
+  names PATH, the environment layer's variables and the harness's own (nanobot's arrangement).
+- **A custom endpoint gets prompt-guided tools by default.** Through the relay the model wrote its
+  calls as `<tool_call>` text with invented `<tool_result>` lines, two of three arrived without their
+  arguments ("Missing 'path' parameter"), and one file took three model calls (read off the session's
+  stored transcript). zeroclaw's provider factory defaults a `custom` endpoint to prompt-guided tools
+  (its own test: "custom OpenAI-compatible endpoints must default to prompt-guided tools"). The runner
+  sets `native_tools = true`; the same turn then made one native call and used half the input tokens.
+- **The context budget was left at zeroclaw's default (32,000 tokens), on a measurement.** A six-turn
+  session on claude-haiku-4.5, four turns of it reading a 6 KB file, reached about 35,000 input tokens
+  per model call; zeroclaw recorded no trim or compaction event, all 17 messages stayed in the store,
+  and the last turn recalled a codeword from the first. A much longer session may still trim: zeroclaw
+  then sends `_zeroclaw/history_trimmed`, which the driver does not yet surface.
+- **The thinking level and attached images need nothing of their own.** The relay applies the turn's
+  level to every request body it carries (`runner/reasoning.py`), and an attached image arrives as a
+  file in the workspace, as on nanobot.
+- **Failure reporting (checklist item 8).** A provider failure is a JSON-RPC error on the prompt
+  (`-32603`, "The model provider custom.hr rejected its credentials", measured with a bad key), and a
+  session the store does not hold is `-32000 Session not found` on `session/resume`. Both are
+  structured, so nothing is parsed out of prose. The driver fails the turn on the first, and starts a
+  new session on the second while `_resume_lost` reports the lost history.
+- **Usage and the served model come from the relay.** The ACP stream carries no usage and names only
+  the configured model. Neither the key nor anything derived from it was found in any file zeroclaw
+  wrote.
+- **Interactive tools are never offered.** `ask_user`, `escalate_to_human`, `reaction` and `poll` call
+  back to the ACP client and wait for a person; `model_switch`, `model_routing_config` and
+  `proxy_config` let the model change what serves the turn. All seven are in `excluded_tools` on every
+  turn, and an excluded tool is absent from the list the agent reports.
+
+### Measured (self-hosted, image built from this branch's final commit, 2026-10-13)
+
+| Dimension | Result |
+|---|---|
+| Five scenarios, OpenRouter, claude-haiku-4.5 and gpt-5.4-mini | 10 of 10, every turn on `integration:openrouter`, none unlabelled |
+| Custom harness (skill + script, disabled tool, MCP over streamable HTTP) | pass: skill reached, script ran through `shell` with the harness's variable, `web_fetch` disabled and unused, `deepwiki__read_wiki_structure` called |
+| Install on a first start | `installing zeroclaw 0.8.5 …`, digest verified, listed among backends available |
+| Five scenarios, 15 more OpenRouter models (the cheap and mid tier of every family) | 14 of 15; llama-3.3-70b is not offered (below) |
+| Plugin matrix (`plugins/run-matrix.py --mode all`, gpt-5.4-mini) | 5 of 5: skills, stdio MCP, rows, remote SSE, remote streamable HTTP |
+| Family tour, one conversation over ten families | 10 of 10, every turn served by its family; two passed on a retest (below) |
+| Cancel mid-turn (a turn inside `sleep 120`) | cancelled at once; the driver, `zeroclaw acp`, its shell and `sleep` were all gone 5 s later; the next turn in the session recalled the first |
+| zeroclaw's own web tools in the image | `web_fetch`, `web_search_tool` (DuckDuckGo) and `http_request` work |
+
+- **Finding, prompt cache on Claude:** claude-haiku-4.5 read 7% of its input from cache against 70% for
+  gpt-5.4-mini. zeroclaw's chat/completions requests carry no `cache_control`, so Anthropic models on
+  an aggregator cache little. The agentzero, aider and cline rows report the same for the same reason.
+
+- **llama-3.3-70b is not offered.** On OpenRouter it declined the first turn, a one-line echo, twice in
+  a row ("The provided functions are insufficient for me to complete this task", then "I cannot perform
+  this task as it requires additional information that is not provided"), with zeroclaw's tool list in
+  the request. It is in `_NOT_OFFERED["zeroclaw"]`, as it is on goose, hermes, jcode, kilo, mimo, nanobot,
+  opensquilla and pi.
+- **The family tour's two retests.** kimi-k2.7-code's first turn failed with zeroclaw's "The model
+  provider returned an invalid semantic completion": the provider returned no text and no tool call on
+  the stream and again on zeroclaw's non-streaming fallback. The turn failed with that reason rather
+  than completing empty. muse-glimmer-30b's first turn completed without rebuilding the deck. Both
+  passed on a retest in the same conversation.
+- **Three tools need a desktop and are not offered.** In the image, `browser_open` failed with "Failed
+  to open system browser", `browser` with "agent-browser CLI is unavailable" and `screenshot` with "No
+  screenshot tool found". They are in `_ZEROCLAW_NEVER` (rule 4).
+- **The instance's own MCP server is reached over loopback.** On nanobot, reaching it needed
+  `_BRIDGE_LOOPBACK_BACKENDS`. zeroclaw connected to `http://127.0.0.1:8080/v1/mcp/plugs` directly and
+  called `plugs__browser_navigate`. The browser column itself could not be judged on this instance: the
+  plug answered "The browser service is not set up on this deployment", and nanobot, run as a control,
+  failed the same way.
+
+### Not yet measured
+
+The expensive models of the catalog (Sonnet, Opus, Fable, the GPT sol and terra lines, Gemini Pro), the
+other providers (the direct Anthropic and OpenAI connections, Vercel, TokenRouter), the browser column
+on an instance with a browser service, the environments column and the benchmark dimension.
 ## vibe: Mistral's own CLI, and a model switch a resumed session would have swallowed (2026-10-14/15) — behaviour measured, NO column yet
 
 `mistral-vibe` 2.26.1, added as the twenty-seventh base. Measured against the pinned wheel through a

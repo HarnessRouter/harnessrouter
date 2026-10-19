@@ -617,8 +617,10 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
               <>
                 {m.status === 'incomplete' && m.incompleteReason && (
                   <div className="wbx-incomplete-why">
-                    {m.incompleteReason === 'max_steps' ? 'It hit its step limit.'
-                      : m.incompleteReason === 'timeout' ? 'It hit its time limit.'
+                    {m.incompleteReason === 'max_steps'
+                      ? 'It reached its step limit. Raise Max steps under Runtime limits in this harness\u2019s settings to let it go further.'
+                      : m.incompleteReason === 'timeout'
+                        ? 'It reached its time limit. Raise Timeout under Runtime limits in this harness\u2019s settings to give it longer.'
                       : m.incompleteReason === 'interrupted'
                         ? 'The turn was interrupted before it finished, for example by a server restart. No limit was hit.'
                         : null}

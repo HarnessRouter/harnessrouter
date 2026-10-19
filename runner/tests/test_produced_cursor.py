@@ -120,3 +120,14 @@ def test_a_libreoffice_profile_in_the_workspace_is_not_a_deliverable():
     # a profile at the workspace root, and a folder named user/ that is not a profile, both read right
     assert _without_lo_profiles(["user/registrymodifications.xcu", "user/pack/a", "out.pdf"]) == ["out.pdf"]
     assert _without_lo_profiles(["user/readme.md", "out.pdf"]) == ["user/readme.md", "out.pdf"]
+
+
+def test_each_produced_item_says_how_big_it_is():
+    """The gateway reads a file over its cap from this field and never fetches it (a 49 MB image was
+    read whole into the gateway only to be dropped, hosted 2026-10-19)."""
+    d = _ws()
+    (pathlib.Path(d) / "hero.png").write_bytes(b"x" * 4096)
+    (pathlib.Path(d) / "out").mkdir()
+    (pathlib.Path(d) / "out" / "a.txt").write_text("abc")
+    by = {f["path"]: f for f in _produced_list(d)}
+    assert by["hero.png"]["size"] == 4096 and by["out/a.txt"]["size"] == 3

@@ -2,6 +2,78 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.10.19.post1 (2026-10-19)
+
+No change to the protocol, the schema or any verdict a conformant server gets.
+
+T-11 reads a background task back while it is still running and requires the lifecycle table's name
+for the state, `in_progress`. No check looked at a task before it reached a terminal status, so a
+server could answer every background POST and every poll with a name of its own and stay green.
+HarnessRouter answered `running`, which the table does not define, while its own stream emitted
+`in_progress` for the same turn: a client written to the specification waited for `in_progress`,
+or treated the unknown status as an error. The check skips rather than fails when the task finishes
+before it can be read mid-turn, since there is then nothing left to observe.
+
+## 2026-10-19, addition: when each turn began and ended
+
+Additive. Each item of a session's `turns` ([Sessions §3](versions/2026-10-19/sessions.md#3-inspecting-a-session))
+SHOULD carry `created_at`, when the turn began, and `completed_at`, when it ended, both in Unix
+seconds as every other time in the protocol. `completed_at` is `null` while the turn is running and
+when the server does not know when it ended. An imported turn carries the time it was imported for
+both. A client no longer reads each turn's response to learn its time. `TurnItem` gains both fields.
+
+## 2026-10-19, addition: earlier turns (capability `input_history`)
+
+Additive. A request without `previous_response_id` may carry the conversation so far as `user` and
+`assistant` messages before the last `user` message ([Tasks §2.1](versions/2026-10-19/tasks.md#21-earlier-turns)).
+A server that reports the new `input_history` capability gives them to the harness as its history,
+treats only the last `user` message as the task's own, keeps them as the session's first turns marked
+`imported: true` in `/turns` (completed, no model ran, no cost). Beyond its bounds it imports none
+of them and reads the request as without the capability, never refusing it. A server without the
+capability, or one that reports it `false`, is unchanged.
+
+## 2026-10-19
+
+Against `2026-10-04`, one rule changes and the rest is additive.
+
+**Retiring a harness may retire its sessions with it, under a stated restore window**
+([Harnesses §5.3](versions/2026-10-19/harnesses.md#53-delete)). Every earlier version said a server
+MUST NOT delete the sessions or responses that used a deleted harness. That stays the rule for a
+server that reports the new `harness_retirement` capability `false`, or says nothing. A server that
+reports it `true` MAY remove them with the harness, under three conditions:
+- it states the window when the harness is retired: the delete response carries
+  `sessions: "retired"` and `restorableUntil` (Unix seconds), and its own interface tells the person
+  the window's length before they confirm;
+- within the window, a restore brings back the harness and its sessions together;
+- only after the window may it remove them for good. The one exception is a person's own request
+  to erase their data, which may remove their retired sessions sooner;
+- it never retires a harness mid-task: it cancels the task first, or refuses the delete with `409`
+  and the new code `harness_busy`, saying why.
+
+A server may withhold them from lists and reads while the window runs. The delete response gains
+`sessions` (`kept` or `retired`; absent means kept) and `restorableUntil`. This is the one change
+that is not additive. [Versioning](VERSIONING.md#the-current-versions-known-compromises) records what
+it means for a server that also serves an earlier version.
+
+**Harness writes refuse what they cannot store**, now stated in
+[Harnesses §5.1](versions/2026-10-19/harnesses.md#51-create): a field the harness does not have and
+a `default_model` its base does not run are `422`, the latter with `model_not_available`, now in
+the error table beside the task-time `model_unavailable`. Both maintained servers have done this
+since 2026-10-10.
+
+**Conformance suite 2026.10.19.** New check F-09 (class Full) creates a harness, runs a task on it
+and deletes the harness. A server whose `harness_retirement` is `false` or absent passes when the
+session still reads afterwards and the response says nothing else. One that reports it `true` passes
+when the delete response says `sessions: "retired"` with a future `restorableUntil`.
+
+## Conformance suite 2026.10.4.post11 (2026-10-15)
+
+No change to the protocol, the schema or any verdict a conformant server gets. ME-01 assumed the
+memory the suite creates is a root of the server's tree and asked its child for exactly one
+ancestor. A server whose memories are its own workspaces places a new memory inside the caller's,
+which the chapter allows, and would have failed for that alone. The child's ancestors are now
+expected to be the memory's own ancestors and then the memory, root first.
+
 ## Conformance suite 2026.10.4.post9 (2026-10-06)
 
 No change to the protocol, the schema or any verdict a conformant server gets.
@@ -135,6 +207,41 @@ cannot see, and every memory below those on which what it may do differs from th
 its privileges on each. It is stated in what the caller may do, not in how access is kept, so a
 server that lets a member in by a role answers it as one that keeps a grant per memory does. §9
 names it as what an agent's tools are built from. Conformance: ME-01 asks it.
+
+**Facts that change (§4.4), standing records and observed conversations, found while preparing
+three public memory benchmarks for the second server.** A memory that keeps facts has to tell an update
+("I moved to Porto") from an addition ("I got a fourth bike") and from a disagreement ("I have
+never written a route", after describing one), keep the time something was said apart from the
+time it became true, and give an agent its standing instructions without being asked. The chapter
+had a word for none of these, so every writer and every server would have invented its own. Now:
+
+- A fact's attributes have defined keys: `predicate`, `value`, `holds` (`one` or `many`),
+  `stated_at`, `as_said`, `precision`, and `standing` (on any record). Without `time.valid_from`, a
+  fact became true when it was said. A server that declares `holds` places a `one` fact among the
+  others on its subject and predicate by their world time: what was true at T ends at T (a version
+  of the server's own, `on_behalf_of` the writer), a different value from the same instant is
+  linked with `contradicts` and both stay, and a fact about the past ends where the next value
+  began. The answer to the write says what it did, in `closed` and `conflicts`, never stored.
+- `contradicts` is a defined `rel`, kept on both records. A recall result on one side brings the
+  other, after the ranked results, with `score` null and `why` `["contradicts"]`, outside `limit`.
+- `GET /v1/memories/{id}/prime` reads a memory's standing records, newest first, within a token
+  budget, from that memory alone unless `depth` widens it; a server priming an agent reads each
+  memory it was granted at depth 0. The capability `prime` says whether a provider answers it.
+- An observed episode carries `time.valid_from`, a content part may carry `name` beside `role`, and
+  a conversation is observed one session to an episode, in order. A job says `queued`, `running`,
+  `completed` or `failed` (`pending` stays for a provider that cannot tell the first two apart),
+  with what it wrote, `closed`, `conflicts` and `usage`.
+- A revision no longer changes the world time of the version it replaces: that version gets only
+  its belief-time stamp, so `as_of` reads what the memory believed then. Stated because the second
+  server's store did otherwise; its existing histories needed no repair.
+
+Additive: every request and object valid before is valid now. Schema: `MemoryContentPart.name`, the
+episode's `time`, `MemoryJob` (`memory_id`, `closed`, `conflicts`, `usage`, times; `queued` and
+`running`), `MemoryRecord.closed` and `.conflicts` on a write's answer, `MemoryProvider.prime` and
+`.holds`, `MemoryPrime` and its path. Suite `2026.10.4.post10`: ME-11 (five facts on one subject:
+ended, linked, placed in the past, placed inside an earlier value), ME-12 (both sides of a
+disagreement from a recall of one), ME-13 (the prime read: only standing records, newest first, a
+budget, the memory alone).
 
 - **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
   optional at every class behind the `memories` capability. A memory is a named node in a tree:

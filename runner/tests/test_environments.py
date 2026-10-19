@@ -332,6 +332,35 @@ def test_a_build_whose_last_write_fails_leaves_the_active_version_as_it_was(stor
     assert _wait("henv_n", 1)["status"] == "failed" and E.active_version("henv_n") is None
 
 
+def test_a_build_that_stopped_without_recording_its_end_reads_as_failed(store, monkeypatch):
+    """The record is the build's only report. When its last write fails (_build swallows that one)
+    or the runner restarts under a build, the record says building with no thread behind it, and
+    every read said building for good. The build's own read and the versions, which the gateway
+    takes the environment's status from, answer it as failed; a build still running is building."""
+    E.write_file("henv_s", "setup.sh", b"#!/bin/sh\necho preparing\nexit 3\n")
+    real = E._write_record
+    monkeypatch.setattr(E, "_write_record", lambda dst, rec: (_ for _ in ()).throw(OSError("no space left on device"))
+                        if rec.get("status") == "failed" else real(dst, rec))
+    E.start_build("henv_s", 1, "stopped")
+    for _ in range(960):
+        with E._builds_lock:
+            if "henv_s:1" not in E._builds:
+                break
+        time.sleep(0.25)
+    assert E.build_record("henv_s", 1)["status"] == "building"        # what the disk still says
+    rec = E.r_build_status("henv_s", 1)
+    assert rec["status"] == "failed" and rec["error"] == "the build stopped before it recorded its end"
+    assert rec["stage"] == "" and rec["finished_at"] >= rec["started_at"]
+    assert [(v["version"], v["status"]) for v in E.versions("henv_s")] == [(1, "failed")]
+
+    class Alive:
+        def is_alive(self):
+            return True
+    monkeypatch.setitem(E._builds, "henv_s:1", Alive())             # the same record while a build runs
+    assert E.r_build_status("henv_s", 1)["status"] == "building"
+    assert E.versions("henv_s")[0]["status"] == "building"
+
+
 def test_the_turn_gets_the_path_the_variables_and_the_instructions(store):
     E.write_file("henv_t", "requirements.txt", b"")
     E.write_file("henv_t", "package.json", json.dumps({"name": "p", "version": "1.0.0", "private": True}).encode())
@@ -706,3 +735,41 @@ def test_a_write_waiting_on_a_snapshot_or_a_slow_import_leaves_the_runner_answer
         g.join(10)
         assert waited is not None and waited < 1.0, f"the runner did not answer while a git import ran ({waited})"
         assert done["g"].status_code == 200
+
+
+def test_an_npm_range_is_a_name_with_no_pin(monkeypatch):
+    """npm's ranges went through as exact pins, so `lodash@^4.17.0` was checked against the
+    registry's exact versions and refused as "not published" though npm installs it."""
+    for spec in ("lodash@^4.17.0", "lodash@~4.17", "lodash@>=4", "lodash@4.x", "lodash@*", "lodash@1 || 2"):
+        assert E.spec_parts(spec, "npm") == ("lodash", ""), spec
+    for spec, want in (("lodash@4.17.21", ("lodash", "4.17.21")), ("@types/node@24.1.0", ("@types/node", "24.1.0")),
+                       ("lodash@1.0.0-rc.1", ("lodash", "1.0.0-rc.1")), ("lodash", ("lodash", ""))):
+        assert E.spec_parts(spec, "npm") == want, spec
+    answers = {"https://registry.npmjs.org/lodash": (200, {"dist-tags": {"latest": "4.17.21"},
+                                                          "versions": {"4.17.21": {}, "4.17.20": {}}})}
+    monkeypatch.setattr(E, "_http_json", lambda url: answers.get(url, (503, {})))
+    ranged = E.check_package("npm", "lodash@^4.17.0")
+    assert ranged["exists"] is True and ranged["error"] == "" and ranged["version"] == ""
+    assert "not published" in E.check_package("npm", "lodash@9.9.9")["error"]
+
+
+def test_an_npm_dist_tag_resolves_to_its_version(monkeypatch):
+    """#494: `lodash@latest` names a dist-tag, not a version — the check resolves the tag
+    instead of reporting it "not published". An unknown tag keeps the error."""
+    answers = {
+        "https://registry.npmjs.org/lodash": (200, {
+            "dist-tags": {"latest": "4.17.21", "next": "4.17.22-beta.0"},
+            "versions": {"4.17.21": {}, "4.17.20": {}},
+        }),
+    }
+    monkeypatch.setattr(E, "_http_json", lambda url: answers.get(url, (503, {})))
+    tagged = E.check_package("npm", "lodash@latest")
+    assert tagged["exists"] is True and tagged["version"] == "4.17.21" and not tagged["error"]
+    other_tag = E.check_package("npm", "lodash@next")
+    assert other_tag["version"] == "4.17.22-beta.0" and not other_tag["error"]
+    unknown = E.check_package("npm", "lodash@no-such-tag")
+    assert unknown["version"] == "" and "no-such-tag is not published" in unknown["error"]
+    exact = E.check_package("npm", "lodash@9.9.9")
+    assert exact["version"] == "" and "9.9.9 is not published" in exact["error"]
+    pinned = E.check_package("npm", "lodash@4.17.20")
+    assert pinned["version"] == "4.17.20" and not pinned["error"]

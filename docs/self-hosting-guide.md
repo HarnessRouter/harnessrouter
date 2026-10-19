@@ -271,11 +271,17 @@ integration there is nothing to set.
 
 Pick the **Custom** provider. It asks for the API format the endpoint speaks (OpenAI Chat
 Completions, OpenAI Responses for Codex, or Anthropic Messages), the endpoint URL, the key, and
-the **models** it serves. Each model row pairs the id a harness picks (the same ids every other
-provider uses, `gpt-5.5`, `claude-opus-4.8`) with the name this endpoint wants on the wire. That
+the **models** it serves. In **Model**, type any id, including one absent from the suggested
+catalog. Each row pairs that id, which a harness picks, with the name this endpoint wants on the wire. That
 name is an arbitrary string per row and is sent verbatim: a bare vendor id, a deployment alias, a
 versioned SKU. Leave it blank to send the model id as it is. No transform is applied, because the
-name a proxy expects is a fact about that proxy and nothing else.
+name a proxy expects is a fact about that proxy and nothing else. If only **Name on the wire**
+is filled in, the console also uses it as the model id when saving; completely empty rows are skipped.
+
+The form lists the compatible harness bases below the model rows for the selected API format.
+Choose one of those bases to use the model. If another connection serves the same id, select
+this connection under **Model routing**. Model ids are entered manually; the form does not fetch
+the endpoint's model list.
 
 The mapping is a property of the connection, not of a harness: a harness picks a model by its id,
 the connection decides how that id is written for its endpoint. Two harnesses that need different
@@ -359,18 +365,18 @@ offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
 |---|---|
-| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
-| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
-| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, System One, CheetahClaws |
-| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
-| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
+| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw |
+| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw |
+| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, System One, CheetahClaws, ZeroClaw |
+| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw |
+| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, ZeroClaw |
 | `typesafe` | System One (Jev on TypeSafe's own API: `jev-latest`, `jev-preview`) |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot |
-| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits) |
-| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot |
-| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot |
-| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, CheetahClaws (OpenAI format) |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw |
+| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits) |
+| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw |
+| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw |
+| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, ZeroClaw, CheetahClaws (OpenAI format) |
 
 </details>
 
@@ -475,7 +481,8 @@ the instance, and are then removed.
 
 | What is deleted | What happens |
 |---|---|
-| A task (a session) | Removed at once, for good: its conversation and trace, its responses, the files it produced and their previews, its list of changed files, its media, the record of every plugin call it made, its checkpoint and its working folder. A marker that holds its id and the time of the delete, and nothing of its content, stays for a day so that a turn still finishing cannot write it back, then goes too. |
+| A task (a session) | Removed at once, for good: its conversation and trace, its responses, the files it produced and their previews, its list of changed files, its media, the record of every plugin call it made, its checkpoint, the record of the files an app removed from its workspace, and its working folder. A marker that holds its id and the time of the delete, and nothing of its content, stays for a day so that a turn still finishing cannot write it back, then goes too. |
+| A file or folder in a task's workspace (`DELETE /v1/sessions/{session_id}/files/{path}`) | Removed at once from the workspace and from its checkpoint, so no later turn sees it, together with the copy an app saved there. A copy that a turn handed back as one of its outputs stays readable from that turn's response until the task is deleted. |
 | An API key | Removed at once. It stops working immediately and leaves the list of keys. |
 | A credential | Removed at once: a plugin's stored secrets when the plugin is removed, a database connection when it is removed from a harness or its harness is deleted, a stored tool token deleted with `DELETE /v1/mcp-secrets/{ref}`. |
 | A harness | Kept 30 days, then removed with its skill bundles and plugin packages. A restored harness comes back without its credentials, since those went at once. The tasks and responses that used it are kept. |
@@ -893,8 +900,9 @@ and credentials.
 starter kits are the same; these are the parts that need a service a single box does not have:
 
 - **Billing.** Credits, grants, usage in dollars per task and the per-task spend counters belong to
-  the hosted ledger. Here you pay your providers directly; `max_cost_usd` on a task or a harness
-  still caps a turn, read from the provider prices.
+  the hosted ledger. Here you pay your providers directly, and nothing caps a turn by its cost: a
+  harness that carries `max_cost_usd` is refused as a field it does not have. A turn is bounded by
+  `max_step` and `timeout_seconds`; set spend limits with your provider.
 - **Plugins as accounts.** On the hosted service a plugin is the organization's own account kept by
   a registry and managed only on the Plugins page; here the registry is local to this box, and the
   browser plugin connects without a credential.
@@ -952,7 +960,7 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot ...  # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw ...  # the default
 docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
@@ -1179,6 +1187,7 @@ All paths below are relative to the API base above and use the same Bearer key.
 | Stream progress | Set `"stream": true` on the response request for server-sent events |
 | Read session history | `GET /v1/sessions/{session_id}/turns` |
 | Upload inputs or retrieve outputs | `POST /v1/files`; `GET /v1/sessions/{session_id}/files` |
+| Read or change one workspace file between turns | `GET`, `PUT` or `DELETE /v1/sessions/{session_id}/files/{path}` (`PUT` takes `{"content": "..."}` or `{"content_b64": "..."}`; `DELETE` removes a folder with everything in it); `POST /v1/sessions/{session_id}/files/{path}:mkdir` makes a folder and its parents (`created: false` when it was already there); `POST /v1/sessions/{session_id}/files/{path}:move` with `{"to": "<path>"}` renames a file or folder and never overwrites (409 `file_exists`). The next turn sees each change. All but `GET` answer 409 `session_busy` while a turn runs, and every one refuses a path that leaves the workspace; `DELETE`, `:mkdir` and `:move` also refuse the agent's own files (`.git`, `.harness`, a base's skills and memory) |
 | Cancel work | `POST /v1/responses/{response_id}/cancel` |
 | Delete | `DELETE /v1/sessions/{session_id}`, `DELETE /v1/responses/{response_id}`, `DELETE /v1/harnesses/{harness_id}`, `DELETE /v1/files/{file_id}`, `DELETE /v1/mcp-secrets/{ref}`; what each removes and when is in [What a delete removes, and when](#what-a-delete-removes-and-when) |
 | Describe the API | `GET /v1/openapi.json`, the surface above as an OpenAPI document, readable without a login |

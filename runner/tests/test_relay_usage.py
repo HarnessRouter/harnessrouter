@@ -144,5 +144,8 @@ def test_a_backend_that_reports_its_own_usage_keeps_it():
     split count (codex, claude) is the record. Pinned on the source of the run loop, which needs
     a live process to exercise: both result sites go through the one helper."""
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("server.py").read_text()
-    assert src.count("_fill_relay_usage(ev, env)") == 3     # the run loop, its eof path, the hermes driver
+    # the run loop's _settle (its stream, its eof path and a budget's stop), the hermes and codex
+    # app-server drivers
+    assert src.count("_fill_relay_usage(ev, env)") == 3
+    assert src.count("_settle(ev)") == 2 and src.count("_settle(result_ev)") == 1
     assert src.count('if ev.get("type") == "result" and not ev.get("usage"):') == 0

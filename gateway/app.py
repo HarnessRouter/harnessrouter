@@ -22,6 +22,7 @@ import urllib.parse
 import collections
 import time
 import uuid
+import weakref
 import zipfile
 
 import base64
@@ -376,10 +377,16 @@ def _reasoning_level(value, where: str = "") -> str:
     return level
 # Output (container) files produced by a turn are capped to keep a single response bounded.
 RESP_MAX_FILES = int(os.environ.get("HARNESS_RESP_MAX_FILES", "25"))
-RESP_MAX_FILE_BYTES = int(os.environ.get("HARNESS_RESP_MAX_FILE_BYTES", str(25 * 1024 * 1024)))
+# A produced file over this is never read into the gateway (_sandbox_file): it gets no card and the
+# answer names it, its size and where it is (_too_large_note). 64 MiB, up from 25: the files seen
+# over the old cap were 25.5 to 49.1 MiB (hosted, 2026-10-19). Its size is learned before any byte
+# is read (the runner's listing, else the stated length), so a collection holds at most one file of
+# this size at a time.
+RESP_MAX_FILE_BYTES = int(os.environ.get("HARNESS_RESP_MAX_FILE_BYTES", str(64 * 1024 * 1024)))
 # /v1/files upload cap (HR-INF-015): the route had NO cap — a huge upload buffered whole in the
 # gateway AND ballooned again as base64 in the runner turn body. 25 MiB matches the engine's
-# attachment cap and RESP_MAX_FILE_BYTES, bounding the inline-b64 turn payload to ~33 MB.
+# attachment cap, bounding the inline-b64 turn payload to ~33 MB. (Produced files are never inlined
+# into a turn, so their cap above is not bound to this one.)
 _UPLOAD_MAX_BYTES = int(os.environ.get("HARNESS_UPLOAD_MAX_BYTES", str(25 * 1024 * 1024)))
 RESP_BLOB_KB = os.environ.get("HARNESS_RESP_BLOB_KB", "harness-responses")  # response records + container files
 # Durable session-workspace store (git checkpoint tarball per session) lives in vg-gateway blob
@@ -1275,6 +1282,10 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("azure-foundry", "codex"): "azure",       ("azure-foundry", "hermes"): "azure-foundry",
     ("bedrock", "claude"): "bedrock",          ("bedrock", "hermes"): "bedrock",
     ("openrouter", "codex"): "tokenrouter",    ("openrouter", "hermes"): "openrouter",
+    # OpenRouter answers Anthropic's Messages shape too, at https://openrouter.ai/api/v1/messages
+    # (2026-10-13: 200 with an Anthropic message envelope for anthropic/claude-sonnet-4.6, and a
+    # Claude Code turn completed through it), so it drives Claude Code the way Vercel does.
+    ("openrouter", "claude"): "tokenrouter",
     ("tokenrouter", "claude"): "tokenrouter",  ("tokenrouter", "codex"): "tokenrouter",
     ("tokenrouter", "hermes"): "openai-api",
     ("openai", "codex"): "openai",             ("openai", "hermes"): "openai-api",
@@ -1555,6 +1566,14 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("tokenrouter", "nanobot"): "tokenrouter", ("vercel", "nanobot"): "tokenrouter",
     ("llmtr", "nanobot"): "tokenrouter",       ("custom", "nanobot"): "openai-api",
     ("google", "nanobot"): "openai-api",       ("harnessrouter", "nanobot"): "tokenrouter",
+    # zeroclaw speaks ONE OpenAI shape too — its `custom` provider posts chat/completions — through
+    # the loopback relay, so it is wired row for row with nanobot.
+    ("anthropic", "zeroclaw"): "anthropic",    ("openai", "zeroclaw"): "openai",
+    ("azure-foundry", "zeroclaw"): "azure",
+    ("openrouter", "zeroclaw"): "openai-api",
+    ("tokenrouter", "zeroclaw"): "tokenrouter", ("vercel", "zeroclaw"): "tokenrouter",
+    ("llmtr", "zeroclaw"): "tokenrouter",      ("custom", "zeroclaw"): "openai-api",
+    ("google", "zeroclaw"): "openai-api",      ("harnessrouter", "zeroclaw"): "tokenrouter",
 }
 
 
@@ -1838,6 +1857,40 @@ async def _sandbox(path: str, sid: str, method: str = "POST", body: dict | None 
     kw: dict = {"content": content} if content is not None else ({"json": body} if body is not None else {})
     return await _client().request(method, f"{POOL_ENDPOINT}{path}", params=q,
                                    headers=_pool_headers(), **kw)
+
+
+async def _sandbox_file(sid: str, path: str, cap: int) -> tuple[int, bytes | None, str, int | None]:
+    """One workspace file from the runner, never holding more than `cap` bytes of it plus one chunk:
+    (status, its bytes or None when it is over the cap, media type, its size when known).
+
+    The length the runner states is read before the body, so a file over the cap is never read at
+    all; a body with no stated length is read in chunks and abandoned once it passes the cap (its
+    size is then unknown, only that it is over). It used to be read whole and measured after: a turn's
+    seven images of 33 to 49 MB passed through the gateway in two seconds to be dropped (hosted,
+    2026-10-19)."""
+    c = _client()
+    req = c.build_request("GET", f"{POOL_ENDPOINT}/file", params={"identifier": sid, "path": path},
+                          headers=_pool_headers())
+    r = await c.send(req, stream=True)
+    try:
+        media = r.headers.get("content-type", "application/octet-stream")
+        if r.status_code >= 400:
+            return r.status_code, None, media, None
+        try:
+            stated = int(r.headers.get("content-length") or -1)
+        except ValueError:
+            stated = -1
+        if stated > cap:
+            return r.status_code, None, media, stated
+        chunks, got = [], 0
+        async for chunk in r.aiter_bytes():
+            got += len(chunk)
+            if got > cap:
+                return r.status_code, None, media, None
+            chunks.append(chunk)
+        return r.status_code, b"".join(chunks), media, got
+    finally:
+        await r.aclose()
 
 
 class _SandboxRefused(RuntimeError):
@@ -2932,6 +2985,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             elif st == "incomplete":
                 translator.incomplete_reason = str(s.get("reason") or "incomplete")
                 translator.handoff = s.get("handoff") if isinstance(s.get("handoff"), dict) else None
+            if terminal != "cancelled" and await _turn_cancelled(sid, org, resp_id):
+                terminal = "cancelled"        # an answered cancel wins over the runner's end (_resp_execute)
             break
     if terminal is None:
         return False                          # still running / adoption interrupted — later sweep retries
@@ -2943,13 +2998,12 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     if translator.charge:
         rec["charge"] = translator.charge
     await _vertex_upsert(sid, {"status": rec["status"], "turn_status": rec["status"]})
+    produced: list[dict] = []
     try:
         # Every terminal outcome collects. A cancelled or failed turn may already have written the
         # deliverable (a Stop that lands after the file is saved, an OOM at finalize) — skipping
         # collection threw those files away from the record while they sat in the workspace.
         produced = await _collect_produced(sid, set())
-        for oev in translator.complete(rec["status"], produced):
-            _emit(oev)
     except Exception:  # noqa: BLE001
         pass
     # The turn's browser closes BEFORE the trace is finalized: its stop row (the vendor's stop
@@ -2958,7 +3012,19 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     # the manifest said terminal, so the row reached the audit and never the trace (hosted, every
     # base of the browser column, 2026-09-27). persist() still closes a turn that never got here.
     await _browser_close(sid, "turn_end")
+    # Saved before the answer completes, as on the primary path: whether a file too large to
+    # attach is in the task's files is known only once the save has landed (_too_large_saved).
     await _checkpoint(sid, rec)
+    try:
+        _too_large_saved(produced, rec)
+        # Translate for the wire, the same way the persist just below does: `rec["status"]` holds
+        # the trace's name for the outcome (`done`, `max_turns`, `timeout`), and `complete()` both
+        # puts it in the response object and looks the event name up by it, so an untranslated
+        # status reached subscribers as `status: "max_turns"` under a `response.completed` (#480).
+        for oev in translator.complete(_RESP_STATUS_MAP.get(rec["status"], "failed"), produced):
+            _emit(oev)
+    except Exception:  # noqa: BLE001
+        pass
     await _trace_finalize(sid, rec)
     # Persist the response record with the FULL turn output — NOT translator.output, which only
     # holds events AFTER our resume cursor (we joined mid-turn). Reconstruct the whole turn from the
@@ -2970,7 +3036,10 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
                   "_member": member}
         if full_output:
-            stored["output"] = full_output
+            # the trace holds the runner's events, not the gateway's own closing paragraph on files
+            # too large to attach (complete), so that paragraph is carried over onto the record
+            note = translator.note_item
+            stored["output"] = full_output + ([note] if note and note not in full_output else [])
         await _resp_put(resp_id, stored, org, sid, None, _status, translator.created_at, True)
     except Exception:  # noqa: BLE001
         pass
@@ -3995,6 +4064,14 @@ def _gemini_schema(node):
         elif members:
             out = {**members[0], **out}
             out.setdefault("type", members[0].get("type") or "string")
+    if isinstance(out.get("enum"), list) and None in out["enum"]:
+        # A nullable enum spelled the JSON-schema way ({"type": ["string", "null"], "enum": [..., null]},
+        # grok's todo_write status) is refused whole: "Enum values must share one supported primitive
+        # type" (gemini-3.5-flash-lite through Vercel, 2026-09-27). The null member is `nullable`.
+        out["enum"] = [x for x in out["enum"] if x is not None]
+        out["nullable"] = True
+        if not out["enum"]:
+            out.pop("enum")
     if "type" not in out and "anyOf" not in out:
         out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
     if out.get("type") == "array" and "items" not in out:
@@ -5011,6 +5088,7 @@ async def _stop_session(org: str, sid: str, v: dict, rid_hint: str = "") -> tupl
             rec = await _resp_get(rid)
             if rec and str(rec.get("status") or "") in ("running", "in_progress", "queued", "starting"):
                 rec["status"] = "cancelled"
+                rec.setdefault("_completed_at", time.time())     # the turns feed's completed_at
                 _resp_cache_forget(rid)
                 await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", rid, {"status": "cancelled"})
@@ -5300,9 +5378,11 @@ async def _session_purge(sid: str, v: dict | None, index: dict | None = None) ->
             await BACKING.graph.delete(rid, "HarnessResponse")
     # 3) everything stored under its id: the checkpoint and the media scene (sessions/<sid>/ in
     # the session store), the change list (sessions/<sid>/ in the response store), the files its
-    # tasks produced (containers/<sid>/) and their rendered previews (previews/<sid>/)
+    # tasks produced (containers/<sid>/), their rendered previews (previews/<sid>/), and the record of
+    # what an app removed from its workspace (ws-removed/<sid>/)
     for kb, prefix in ((BLOB_KB, f"sessions/{sid}/"), (RESP_BLOB_KB, f"sessions/{sid}/"),
-                       (RESP_BLOB_KB, f"containers/{sid}/"), (RESP_BLOB_KB, f"previews/{sid}/")):
+                       (RESP_BLOB_KB, f"containers/{sid}/"), (RESP_BLOB_KB, f"previews/{sid}/"),
+                       (RESP_BLOB_KB, f"ws-removed/{sid}/")):
         with contextlib.suppress(Exception):
             for it in await _blob_list_all(prefix, kb=kb):
                 await _blob_delete(str(it.get("file_id") or ""), kb=kb)
@@ -5599,8 +5679,8 @@ _CUSTOM_FORMAT_BACKENDS = {
     # has no Messages client at all (Backend is MISTRAL | GENERIC), so the openai set alone.
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
                "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
-               "mimo", "jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent",
-               "fast-agent"},
+               "mimo", "jcode", "opensquilla", "nanobot", "zeroclaw",
+               "vibe", "vtcode", "docker-agent", "fast-agent"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
@@ -5685,6 +5765,9 @@ def _provider_catalog_public() -> list[dict]:
                                for c, v in _VENDOR_MODELS.get(pid, {}).items()],
                     # The custom provider's rows name any canonical; the form offers this list.
                     "canonicals": _catalog_canonicals() if pid == "custom" else [],
+                    **({"format_backends": {fmt: sorted(bases)
+                                            for fmt, bases in _CUSTOM_FORMAT_BACKENDS.items()}}
+                       if pid == "custom" else {}),
                     "backends": backends})
     return out
 
@@ -6250,6 +6333,7 @@ class _RespTranslator:
         self.error: dict | None = None
         self.cur: dict | None = None
         self.any_text = False
+        self.note_item: dict | None = None   # the answer's paragraph on files too large to attach (complete)
 
     def _ev(self, type_: str, **f) -> dict:
         e = {"type": type_, "sequence_number": self.seq, **f}
@@ -6425,6 +6509,10 @@ class _RespTranslator:
 
     def complete(self, status: str, files: list[dict] | None = None) -> list[dict]:
         evs: list[dict] = []
+        # A file too large to attach (_collect_produced) has no card: the answer says so in its own
+        # last paragraph, kept as note_item for a record rebuilt from the trace (_adopt_orphan_turn).
+        big = [f for f in (files or []) if f.get("too_large")]
+        files = [f for f in (files or []) if not f.get("too_large")]
         if files:
             if not (self.cur and self.cur["kind"] == "message"):
                 evs += self._close_cur()
@@ -6435,6 +6523,11 @@ class _RespTranslator:
                  "download_url": _file_url(f["container_id"], f["file_id"]),
                  "start_index": 0, "end_index": len(self.cur["text"])} for f in files]
         evs += self._close_cur()
+        if big:
+            evs += self._open_message()
+            evs += self._handle("text", _too_large_note(big))
+            evs += self._close_cur()
+            self.note_item = self.output[-1]
         ev_type = {"completed": "response.completed", "incomplete": "response.incomplete",
                    "failed": "response.failed", "cancelled": "response.failed"}.get(status, "response.completed")
         evs.append(self._ev(ev_type, response=self._response_obj(status)))
@@ -6648,6 +6741,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "gemini-3.5-flash":      "google/gemini-3.5-flash",
         "gemini-3.5-flash-lite": "google/gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite": "google/gemini-3.1-flash-lite",
+        "gemini-4-argon":        "google/gemini-4-argon",
         "gemini-3.1-pro-preview": "google/gemini-3.1-pro-preview",
         "gemini-3-flash-preview": "google/gemini-3-flash-preview",
         "deepseek-v4-pro":    "deepseek/deepseek-v4-pro",
@@ -6687,6 +6781,11 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         # TokenRouter's answers name grok-4.3, Vercel's echo the asked id. A retired id served by
         # another model is a substitution whatever the aggregator reports.
         "grok-build-0.1":     "x-ai/grok-build-0.1",
+        # Muse Wonder (2026-10-14): Meta's own API and Vercel name it muse-wonder-1.0, OpenRouter
+        # meta/muse-wonder (_OPENROUTER_RESLUG); each answers as the id it was asked for, with whole
+        # tool arguments streamed and not. TokenRouter and llmtr do not list it. Muse Wonder Full has
+        # no API at all: Meta serves it only inside its own Muse Code subscription.
+        "muse-wonder-1.0":    "meta/muse-wonder-1.0",
         "muse-spark-1.3":     "meta/muse-spark-1.3",
         "muse-spark-1.2":     "meta/muse-spark-1.2",
         "muse-spark-1.1":     "meta/muse-spark-1.1",
@@ -6822,8 +6921,10 @@ _TOKENROUTER_NO_CHANNEL = {
     # No Meta id is on TokenRouter's list (2026-09-13).
     "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
     "llama-4-maverick", "llama-3.3-70b",
+    "muse-wonder-1.0",   # still none on 2026-10-14: "No available channel" under either name
     # TokenRouter's /v1/models on 2026-09-06 lists eight Gemini text models and not this one.
     "gemini-3.1-flash-lite",
+    "gemini-4-argon",   # not on TokenRouter's /v1/models (2026-10-14): Google, OpenRouter and Vercel serve it
 }
 # Image models, kept OUT of _VENDOR_MODELS on purpose: those tables feed the chat model pickers
 # and the per-backend catalogs, and an image model offered as a chat model is a broken choice a
@@ -6901,6 +7002,7 @@ _VENDOR_MODELS["tokenrouter"] = {c: v for c, v in _SHARED_SLUGS.items() if c not
 _OPENROUTER_RESLUG = {
     "qwen3.8-max": "qwen/qwen3.8-max-0902",
     "grok-4.20":   "x-ai/grok-4.20",
+    "muse-wonder-1.0": "meta/muse-wonder",   # OpenRouter has no versioned name for it (2026-10-14)
 }
 # The same broken promise on OpenRouter's side, for the day an id has no endpoint there. Empty on
 # 2026-09-13: the three Muse Spark ids answered HTTP 403 ("18+ age confirmation", an attestation
@@ -7000,7 +7102,7 @@ _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v) for c, v in _SHARED_SLUG
 # the id it was asked for, so every other base would have run 3.8 under the 3.7 name. TokenRouter,
 # Vercel and OpenRouter still serve it as itself.
 _GOOGLE_ANSWERS_AS_ANOTHER = {"gemini-3.7-flash"}
-_VENDOR_MODELS["google"] = {m: m for m in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview")
+_VENDOR_MODELS["google"] = {m: m for m in ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview")
                             if m not in _GOOGLE_ANSWERS_AS_ANOTHER}
 
 
@@ -7018,14 +7120,14 @@ _MODEL_ORDER: tuple[str, ...] = (
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8",
     "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
     # Google
-    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+    "gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
     "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
     "gemini-3-flash-preview",
     # xAI
     "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
     # Meta
-    "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick",
-    "llama-3.3-70b",
+    "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b",
+    "llama-4-maverick", "llama-3.3-70b",
     # DeepSeek
     "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
     # Moonshot
@@ -7197,12 +7299,12 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # frontier US+China set, served via the TokenRouter/OpenRouter
                           # integrations (2026-07-22: each probe-verified through the hermes
                           # CLI on the TokenRouter connection)
-                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
+                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.3", "glm-5.3-flash",
                           "qwen3.7-max", "qwen3.8-max", "kimi-k2.7-code",
                           "mistral-medium-3.5", "step-3.7-flash", "minimax-m3",
                           "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash",
                           "qwen3.7-flash",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # pi (earendil-works pi coding agent) is multi-family the same way hermes is: the CLI's
     # unified LLM layer runs either family natively and anything OpenAI/Anthropic-compatible
     # through a custom provider. The list grew the same way hermes's did — a model is added when
@@ -7227,10 +7329,10 @@ _MODEL_CATALOG: dict[str, dict] = {
                        "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                        "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                        "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
-                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
+                       "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "kimi-k3", "glm-5.3", "glm-5.3-flash", "kimi-k2.7-code",
                        "qwen3.7-max", "qwen3.8-max",
                        "mistral-medium-3.5", "step-3.7-flash",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # opencode reaches every model the same way pi does: one OpenAI-compatible (or Messages, or
     # Responses) client pointed at our relay, with the package chosen per turn from the model
     # family (see _opencode_config, which mirrors _pi_models_json). The serving paths are
@@ -7247,8 +7349,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                             "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                             "mistral-medium-3.5", "step-3.7-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
-                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
-                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
+                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # qwen-code speaks OPENAI_BASE_URL/OPENAI_API_KEY at the same relays; serving paths are pi's.
     # Measured on the self-hosted instance, 2026-09-06 support matrix (five scenarios per pair):
     # every row below passed on TokenRouter, Vercel and Azure OpenAI. gpt-5.3-codex is NOT here:
@@ -7278,9 +7380,9 @@ _MODEL_CATALOG: dict[str, dict] = {
                   "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                   "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                   "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                  "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                   "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
-                  "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
+                  "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                   "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
                   "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
                   "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus",
@@ -7304,9 +7406,9 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                  "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                  "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
-                 "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
+                 "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
                  "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
@@ -7332,9 +7434,9 @@ _MODEL_CATALOG: dict[str, dict] = {
                     "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                     "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                     "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                     "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
-                    "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
+                    "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                     "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
                     "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
                     "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
@@ -7353,8 +7455,8 @@ _MODEL_CATALOG: dict[str, dict] = {
                  "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                  "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                  "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
-                 "gemini-3.1-flash-lite", "gemini-3-flash-preview", "muse-spark-1.3", "muse-spark-1.2",
+                 "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
+                 "gemini-3.1-flash-lite", "gemini-3-flash-preview", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                  "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
                  "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
                  "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
@@ -7375,9 +7477,9 @@ _MODEL_CATALOG: dict[str, dict] = {
                       "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                       "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
                       "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                      "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                      "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                       "gemini-3.1-flash-lite", "gemini-3-flash-preview", "grok-4.6", "grok-4.5", "grok-4.3",
-                      "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2",
+                      "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2",
                       "muse-spark-1.1", "muse-glimmer-30b", "llama-3.3-70b", "deepseek-v4.1-flash",
                       "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code", "qwen3.8-max",
                       "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-max", "qwen3.7-plus", "glm-5.3",
@@ -7395,13 +7497,15 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "claude-opus-5", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7",
                          "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5", "gemini-3.8-flash", "gemini-3.7-flash",
                          "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
-                         "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+                         "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
                          "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1",
                          # muse-spark 1.1 and 1.3 are excluded: on the family tour (hr-test,
                          # 2026-09-26, three attempts) each ran the same edit into a loop of 90-odd
                          # tool calls after the CLI compacted the conversation, never finished, and
                          # was stopped at the ten-minute cap; 1.2 sits between them and is not offered
-                         # either. muse-glimmer-30b is untested here and stays offered.
+                         # either. muse-glimmer-30b is untested here and stays offered. Muse Wonder
+                         # passed the five scenarios and the plugin package here but made no deck
+                         # within the ten-minute limit, twice (0.34.0-rc.7, 2026-10-15): not offered.
                          "muse-glimmer-30b",
                          "llama-3.3-70b", "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash",
                          "kimi-k3", "kimi-k2.7-code", "qwen3.8-max", "qwen3.8-flash", "qwen3.8-27b",
@@ -7424,9 +7528,9 @@ _MODEL_CATALOG: dict[str, dict] = {
                         "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                         "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                         "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
-                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                        "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                         "kimi-k2.7-code", "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # cline: same relay reach as opencode/qwen (openai-compatible through the loopback relay,
     # shape repair in flight). Every row below completed a real turn through the gateway against
     # the live provider, substitution-checked, in the 2026-08-30 sweep (22/24; the two absentees
@@ -7449,17 +7553,17 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "kimi-k3", "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                          "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
-                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
-                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
+                          "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
+                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     "pi": {"default": "gpt-5.4",
            "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                       "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
-                      "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
+                      "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3",
                       "kimi-k2.7-code", "qwen3.7-max", "qwen3.8-max",
                       "mistral-medium-3.5", "step-3.7-flash", "glm-5.3", "glm-5.3-flash",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
     # gemini backend only speaks the native Google API (Path A: Gemini API Key), so unlike every
     # row above it cannot serve the whole cross-vendor catalogue through a relay — only Google's
     # own models, direct from Google. gemini-3.6-flash is live-turn verified (2026-09-06, a
@@ -7479,7 +7583,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # The default is the newest flash, honest like the rest.
     "gemini": {"default": "gemini-3.8-flash",
                "models": ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                          "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                           "gemini-3-flash-preview"]},
     # omp (Oh My Pi) is pi's lineage and speaks the OpenAI and Anthropic shapes through the same
     # loopback relay, so it reaches what pi reaches; the list is pi's, and the support matrix
@@ -7527,13 +7631,13 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8",
                          "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5",
                          "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash",
-                         "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
+                         "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview",
                          "gemini-3-flash-preview",
                          "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "kimi-k2.7-code",
                          "qwen3.7-max", "qwen3.8-max", "mistral-medium-3.5", "step-3.7-flash",
                          "glm-5.3", "glm-5.3-flash",
                          "hunyuan-3", "ling-3.0-flash", "minimax-m3", "nemotron-3-ultra", "qwen3.7-flash",
-                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
+                         "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
 # kilo (Kilo CLI) is an opencode fork: the same ai-sdk packages chosen per turn by the same function
@@ -7602,7 +7706,8 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # through the runner's own relay): claude-haiku-5.5 and gemini-3-flash, each asked for and each
 # served as itself, including on a mid-session switch its own session store would otherwise have
 # taken back.
-for _b in ("jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent", "fast-agent"):
+for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
+           "vibe", "vtcode", "docker-agent", "fast-agent"):
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
@@ -7693,7 +7798,35 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     "nanobot": frozenset({"grok-build-0.1", "kimi-k3", "llama-3.3-70b", "grok-4.5", "nemotron-3-super",
                           "gpt-5.6-luna"}),
     "qoder": frozenset({"qfmodel", "efficient", "kmodel", "qmodel_latest"}),
+    # zeroclaw (0.8.5, 2026-10-13): llama-3.3-70b on OpenRouter declines the FIRST turn — a one-line
+    # echo — twice in a row ("The provided functions are insufficient for me to complete this task",
+    # then "I cannot perform this task as it requires additional information that is not provided"),
+    # with zeroclaw's tool list in the request. Fourteen other models passed all five scenarios.
+    # Measured on every offered model on the review instance (0.34.0-rc.1 to rc.4, 2026-10-14: five
+    # scenarios, the plugin package, the browser, a one-slide deck, the family tour):
+    #   grok-4.20         made no deck twice: zeroclaw's "The model provider returned an invalid
+    #                     semantic completion" (no text and no tool call, after its own retries).
+    #   nemotron-3-super  made no deck (no .pptx), no browser call on its first browser run, and a
+    #                     provider error on its first artifact; off all four sibling bases already.
+    #   qwen3.8-flash     answered the follow-up with the first turn's codeword ("M1" for "M2"), the
+    #                     mix-up that took it off mimo, and failed its artifact on provider errors after
+    #                     an outage had cleared (rc.2, rc.4, rc.5: no clean run).
+    "zeroclaw": frozenset({"llama-3.3-70b", "grok-4.20", "nemotron-3-super", "qwen3.8-flash"}),
 }
+# Muse Wonder (muse-wonder-1.0), on every base that offers the Meta family, review instance
+# 0.34.0-rc.7 (2026-10-15): the five scenarios passed on all 21 through OpenRouter and through Vercel;
+# the plugin package, the browser and a one-slide deck on the instance's own route (Vercel) took it
+# off three more bases than cheetahclaws, each failure repeated on every turn that met it:
+#   agentzero   "Agent stopped after 5 consecutive unusable model responses": the skill turn, both
+#               browser tries, the deck.
+#   aider       writes the command it means to run behind its sentence, the code fence opened
+#               mid-line ("as directed.```bash"), so aider finds nothing to run: all five plugin
+#               turns, both browser tries, no deck.
+#   openhands   its next request carries two outputs for one tool call and the provider refuses it
+#               ("Duplicate function_call_output for call_id ..."): the four MCP transports, both
+#               browser tries, the deck. Every other model passes on the same base and route.
+for _b in ("agentzero", "aider", "openhands"):
+    _NOT_OFFERED[_b] = _NOT_OFFERED.get(_b, frozenset()) | {"muse-wonder-1.0"}
 for _b, _e in _MODEL_CATALOG.items():
     _gone = _NOT_OFFERED.get(_b, frozenset())
     _e["models"] = _ordered_models(m for m in (_e.get("models") or []) if m not in _gone)   # one order everywhere, see _MODEL_ORDER
@@ -7731,9 +7864,8 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # be a picker row that fails on send here too.
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
                       "cheetahclaws", "grok", "agentzero",
-                      "jcode", "opensquilla", "nanobot", "vibe", "vtcode", "docker-agent",
-                      # fast-agent: its `generic` provider is a chat/completions client
-                      "fast-agent")
+                      "jcode", "opensquilla", "nanobot", "zeroclaw",
+                      "vibe", "vtcode", "docker-agent", "fast-agent")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -7917,7 +8049,9 @@ async def _resolve_model_policy(requested: str, hv: dict | None, backend: str, o
         return default
     if await _model_authorized_async(req, backend, org):
         return req
-    raise uhp_error(400, "model_not_available",
+    # UHP Errors §3.1: a task's model that cannot be served is `model_unavailable` (422), refused when
+    # the task is sent; `model_not_available` is the harness write's refusal of a default_model (#517).
+    raise uhp_error(422, "model_unavailable",
                     f"Model '{req}' is not available on the {backend} base of this instance: no connected "
                     f"provider serves it there. GET /v1/harnesses/{{id}}/models lists the models this "
                     f"harness can run.", "model")
@@ -8008,8 +8142,15 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
 
 
 # ── response record store (blob = source of truth; VG vertex = index/fallback) ──────────
+# a turn record still running: no end time yet
+_TURN_LIVE = frozenset({"running", "in_progress", "queued", "starting"})
+
+
 async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None,
                     status: str, created_at: float, store: bool) -> None:
+    if status not in _TURN_LIVE and "_completed_at" not in stored:
+        # when the turn ended, for the turns feed's completed_at; stripped from the response object
+        stored = {**stored, "_completed_at": time.time()}
     try:
         _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
@@ -8059,6 +8200,32 @@ def _strip_internal(d: dict) -> dict:
     return {k: v for k, v in d.items() if not k.startswith("_")}
 
 
+# The gateway's internal lifecycle names for the one non-terminal state, and UHP's name for it.
+# `lifecycle.md` §3 has five statuses; `running` is not one of them, so a stored record read
+# through any UHP response object used to answer a status the protocol does not define, while
+# streaming already emitted `in_progress` from the same turn. The map is total over every name the
+# gateway uses, not just the ones written today: `_RESP_TERMINAL` and `_RESP_STATUS_MAP`'s keys
+# name `done`, `max_turns`, `timeout` and `error`, and a record written by an older build can
+# still carry one. Those translate here rather than at the write, so no exit needs to remember to.
+_UHP_STATUS = {"running": "in_progress", "starting": "in_progress", "queued": "in_progress",
+               "in_progress": "in_progress", "completed": "completed", "failed": "failed",
+               "incomplete": "incomplete", "cancelled": "cancelled",
+               "done": "completed", "max_turns": "incomplete", "timeout": "incomplete",
+               "error": "failed"}
+
+
+def _public_response(rec: dict) -> dict:
+    """The response object as it leaves the gateway: internal fields dropped, status in UHP's
+    vocabulary. A dedicated formatter rather than a rule inside `_strip_internal`, whose one job
+    is dropping `_`-prefixed keys; the status rule is a protocol rule, so the two stay readable
+    apart. The STORED value is untouched: the console's turn list and the reconcile sweeps read
+    `running` from the record itself and must keep seeing it."""
+    d = _strip_internal(rec)
+    if "status" in d:
+        d["status"] = _UHP_STATUS.get(str(d["status"]), d["status"])
+    return d
+
+
 # Harness-internal seed/config files the runner writes into the workspace to drive the agent
 # (e.g. AGENTS.md surfaces installed skills for codex; CLAUDE.md is the claude equivalent). They are
 # never user-facing artifacts, so they must never appear in a turn's output file list.
@@ -8089,6 +8256,42 @@ def _produced_rel(path: str) -> str:
     return path
 
 
+def _too_large_saved(produced: list[dict], rec: dict) -> None:
+    """Mark each file too large to attach with whether it is in the task's files: the turn's save
+    landed (_checkpoint) and the files listing shows that path (_ws_visible). Only then does the
+    answer say where it is; a file the listing would not show is never said to be there."""
+    saved = rec.get("checkpointed") is True
+    for f in produced:
+        if f.get("too_large"):
+            f["saved"] = saved and _ws_visible(str(f.get("filename") or ""))
+
+
+def _too_large_note(big: list[dict]) -> str:
+    """The answer's last paragraph for the turn's files too large to attach: each by its path and
+    size (MB, the unit RESP_MAX_FILE_BYTES is set in), and where it is when it is saved. A file whose
+    reading was stopped at the cap (no stated length) is "over" the cap, never a guessed size."""
+    def _mb(f: dict) -> str:
+        n = f.get("bytes")
+        return f"{n / (1024 * 1024):.1f} MB" if n else f"over {RESP_MAX_FILE_BYTES / (1024 * 1024):g} MB"
+
+    def _named(fs: list[dict]) -> str:
+        return ", ".join(f"{f['filename']} ({_mb(f)})" for f in fs)
+    saved = [f for f in big if f.get("saved")]
+    unsaved = [f for f in big if not f.get("saved")]
+    lines = []
+    if len(saved) == 1:
+        f = saved[0]
+        lines.append(f"{f['filename']} is too large to attach here ({_mb(f)}); it's saved in the task's files.")
+    elif saved:
+        lines.append(f"These files are too large to attach here; they're saved in the task's files: {_named(saved)}.")
+    if len(unsaved) == 1:
+        f = unsaved[0]
+        lines.append(f"{f['filename']} is too large to attach here ({_mb(f)}).")
+    elif unsaved:
+        lines.append(f"These files are too large to attach here: {_named(unsaved)}.")
+    return "\n\n".join(lines)
+
+
 async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[dict]:
     exclude = exclude or set()
     try:
@@ -8109,25 +8312,43 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
     # The cap counts produced files, so what is never one (an internal name, an input file the
     # caller attached) is set aside before it: an internal file newer than the rest must not
     # take a slot from a real one.
-    wanted: list[tuple[str, str]] = []
+    wanted: list[tuple[dict, str]] = []
     for it in items:
         path = (it or {}).get("path")
         rel = _produced_rel(path) if path else ""
         if rel and rel not in exclude and not _is_internal_output(rel):
-            wanted.append((path, rel))
-    for path, rel in wanted[:RESP_MAX_FILES]:
+            wanted.append((it, rel))
+    for it, rel in wanted[:RESP_MAX_FILES]:
+        path = it["path"]
         try:
-            fr = await _sandbox("/file", sid, "GET", params={"path": path})
-            if fr.status_code >= 400 or not fr.content or len(fr.content) > RESP_MAX_FILE_BYTES:
+            # Its size before any byte of it: the runner's listing says it (a runner from before the
+            # field does not), else the length the runner states, else the read stops at the cap.
+            try:
+                listed = int(it.get("size"))
+            except (TypeError, ValueError):
+                listed = -1
+            if listed > RESP_MAX_FILE_BYTES:
+                status, data, media, size = 200, None, "", listed      # never asked for
+            else:
+                status, data, media, size = await _sandbox_file(sid, path, RESP_MAX_FILE_BYTES)
+            if status >= 400:
                 continue
+            if data is None:
+                # No card, but named: the answer says it is too large to attach and where it is
+                # (_too_large_note). Skipped in silence, a person was left looking for a file the
+                # agent had named (hosted, 2026-10-19, nine images of 25.5 to 49.1 MB).
+                print(f"[produced] sid={sid} file_too_big {size or f'over {RESP_MAX_FILE_BYTES}'}", flush=True)
+                out.append({"filename": rel, "bytes": size, "too_large": True})
+                continue
+            if not data:
+                continue                    # an empty file: nothing to hand over
             cfile = _rid("cfile")
-            media = fr.headers.get("content-type", "application/octet-stream")
             fname = rel
-            if await _blob_put(f"containers/{sid}/{cfile}", fr.content, kb=RESP_BLOB_KB):
+            if await _blob_put(f"containers/{sid}/{cfile}", data, kb=RESP_BLOB_KB):
                 await _blob_put(f"containers/{sid}/{cfile}.meta",
                                 json.dumps({"filename": fname, "media_type": media,
                                             "written_at": time.time()}).encode(), kb=RESP_BLOB_KB)
-                out.append({"container_id": sid, "file_id": cfile, "filename": fname, "bytes": len(fr.content)})
+                out.append({"container_id": sid, "file_id": cfile, "filename": fname, "bytes": len(data)})
         except Exception:  # noqa: BLE001
             continue
     # Advance the runner's collection cursor ONLY now that the files are captured to blobs. This is
@@ -8286,7 +8507,12 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                "heartbeat": str(time.time()), "runner_turn_id": "",
                                **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
-    await _hydrate(sid, rec)
+    # Under the session's change lock: an app's PUT, delete, mkdir or move that passed its busy check
+    # before this turn was stamped running finishes before the restore reads the workspace, and one
+    # that comes after waits, reads the session again under the lock, and is refused (_ws_busy_now).
+    # In this process only, like the lock itself.
+    async with _ws_change_lock(sid):
+        await _hydrate(sid, rec)
     if rec.get("hydrate_failed_with_checkpoint"):
         # The task has a checkpoint and it could not be restored: the turn does not run. Running it
         # on the wiped workspace started the conversation over without a word (2026-09-06); an
@@ -8499,7 +8725,12 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         # manifest reads it) and on the translator (the stored response and the turns feed read it).
         rec["connection"] = name
         translator.connection = name
-        if sid in _cancel_req:
+        # The durable latch too, not only the in-process flag: a cancel that landed between the check
+        # before /turn and the registration above could not prove it owned the live turn, so it only
+        # latched (cancel_response), and the poll loop reads the latch first one interval in. A turn
+        # shorter than that ran to its end and wrote `completed` over the cancel the client was told
+        # had landed (0.35.7-rc.1, a cancel sent as a background task started, 2026-10-19).
+        if await _turn_cancelled(sid, org, translator.resp_id):
             try:
                 await _sandbox_json(f"/turn/{rt}/cancel", sid, "POST", attempts=2)
             except Exception:  # noqa: BLE001
@@ -8624,6 +8855,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                          # 2000, not 200: a CLI panic names its file after the first 200
                                          # characters and 200 cut goose's tmp-dir panic at its path (2026-09-13).
                                          "error": (s.get("error") or s.get("result") or "")[:2000]})
+                if terminal != "cancelled" and await _turn_cancelled(sid, org, translator.resp_id):
+                    # A cancel the client was answered `cancelled` wins over the runner's own end: the
+                    # latch is read every tenth interval, so a turn can finish before it is seen, and
+                    # its end must not overwrite what the cancel already told the client.
+                    terminal = "cancelled"
                 break
         if pending:   # the loop was left between two writes (a cancel, a poll that kept failing)
             await _trace_flush(tr, {"events": pending, "n_total": fed_upto})
@@ -8671,6 +8907,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
     await _checkpoint(sid, rec)
+    _too_large_saved(produced, rec)      # the answer says a file is in the task's files only once it is
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
     # and the only ordering at which a hosted write survives.
@@ -9180,7 +9417,8 @@ async def recycle_session_sandbox(sid: str) -> dict:
     if {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}:
         raise HTTPException(409, "a turn is running; recycle after it settles")
     rec: dict = {}
-    await _hydrate(sid, rec, force=True)
+    async with _ws_change_lock(sid):       # as a turn's restore is (_resp_execute)
+        await _hydrate(sid, rec, force=True)
     if not rec.get("hydrated"):
         raise HTTPException(502, f"workspace restore failed: {_hydrate_reason(rec)}")
     return {"session_id": sid, "checkpoint_sha": str(v.get("ws_sha") or ""),
@@ -9306,7 +9544,39 @@ class CreateResponseBody(BaseModel):
     reasoning: dict | None = None       # {"effort": level}: how much the model thinks this turn (the Responses API's field)
 
 
+# Request fields the gateway accepts and does not act on, so a request that carries one is told so in
+# `metadata.ignored_fields` (tasks.md 1.1: ignoring MUST be observable). `tools` and `include` are
+# reserved (tasks.md 1.4). `max_output_tokens` reaches no base: it is kept for the idempotency hash
+# only, and no runner build passes an output-token bound to a harness (#470). A field leaves this
+# list in the change that makes a base apply it.
+_UNAPPLIED_REQUEST_FIELDS = ("tools", "include", "max_output_tokens")
+
+
+def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
+    """The fields of this request the gateway will not act on, in a stable order; `None` means the
+    client did not send the field, so it is not named."""
+    return [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
+
+
 _IDEM_TERMINAL = {"completed", "failed", "incomplete", "cancelled", "error"}
+
+# The event name a terminal status gets on the wire. streaming.md §2.1 names all three; the
+# replay path used to fold everything that was not `completed` into `response.failed`, so a turn
+# that stopped at a limit was announced as an error rather than as the partial result it was.
+_IDEM_EVENT = {"completed": "response.completed", "incomplete": "response.incomplete",
+               "cancelled": "response.failed", "failed": "response.failed"}
+
+
+def _synth_response(resp_id: str, status: str, error: dict | None = None) -> dict:
+    """A response object for an event with no record behind it. `Event.response` is a `$ref` to
+    `Response`, whose `required` is id, object, created_at, status, output and model, so a literal
+    carrying three of the six fails schema validation even when every field it does carry is right.
+    The id and the status are the two the caller knows; the rest are filled so the frame holds."""
+    body = {"id": resp_id, "object": "response", "created_at": int(time.time()),
+            "status": status, "output": [], "model": ""}
+    if error:
+        body["error"] = error
+    return body
 
 
 async def _idem_replay(resp_id: str, stream: bool):
@@ -9324,17 +9594,30 @@ async def _idem_replay(resp_id: str, stream: bool):
 
     if not stream:
         rec = await _await_terminal()
-        return JSONResponse(rec or {"id": resp_id, "status": "unknown",
-                                    "error": {"message": "idempotent replay: original response not found"}})
+        if not rec:
+            # A missing original is the same answer the GET gives for an unknown id. The old
+            # `{"status": "unknown"}` body named a status UHP does not define (#480).
+            raise uhp_error(404, "response_not_found",
+                            "idempotent replay: original response not found", "response_id")
+        return JSONResponse(_public_response(rec))
 
     async def gen():
         created = {"type": "response.created", "sequence_number": 0,
-                   "response": {"id": resp_id, "object": "response", "status": "in_progress"}}
+                   "response": _synth_response(resp_id, "in_progress")}
         yield f"data: {json.dumps(created)}\n\n"
         rec = await _await_terminal()
-        st = str((rec or {}).get("status") or "failed")
-        ev = "response.completed" if st == "completed" else "response.failed"
-        yield f"data: {json.dumps({'type': ev, 'sequence_number': 1, 'response': rec or {'id': resp_id, 'status': st}})}\n\n"
+        if not rec:
+            # The stream already opened, so this cannot become a 404 the way the non-stream
+            # branch's does. It ends on the one event a client can act on, carrying the same
+            # code the GET would have answered (#480).
+            body = _synth_response(resp_id, "failed",
+                                   {"type": "invalid_request_error", "code": "response_not_found",
+                                    "message": "idempotent replay: original response not found",
+                                    "param": "response_id"})
+            yield f"data: {json.dumps({'type': 'response.failed', 'sequence_number': 1, 'response': body})}\n\n"
+            return
+        st = str(rec.get("status") or "failed")
+        yield f"data: {json.dumps({'type': _IDEM_EVENT.get(st, 'response.failed'), 'sequence_number': 1, 'response': _public_response(rec)})}\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -9595,7 +9878,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         # remember this turn's response id on the trace + session so a loaded session can resume
         _session_trace.setdefault(sid, {}).update(last_response_id=resp_id)
         # Reserved fields, named on the response rather than dropped in silence (tasks.md 1.4).
-        _ignored = [f for f in ("tools", "include") if getattr(body, f, None) is not None]
+        _ignored = _ignored_request_fields(body)
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
         tr.environment = str((environment or {}).get("id") or "")
         if effort:   # what the turn asked of the model's thinking; "applied" arrives with the result
@@ -9676,7 +9959,9 @@ async def create_response(body: CreateResponseBody, request: Request):
         task.add_done_callback(_inflight.discard)
         # Return a SNAPSHOT (copy the output list) so the immediate JSON can't alias the list the
         # detached task appends to. Already persisted 'running'; poll GET /v1/responses/{id}.
-        _snap = tr._response_obj("running")
+        # The answer is built straight, not from the stored record, so it carries UHP's name for
+        # the state (`in_progress`) rather than the gateway's internal one (#480).
+        _snap = tr._response_obj("in_progress")
         _snap["output"] = list(_snap.get("output") or [])
         return _snap
 
@@ -9973,7 +10258,7 @@ async def get_response(response_id: str, request: Request):
     # Durable settler for async/background polling: never leave a poller stuck at 'running' if the
     # owning turn actually finished/died (reconciled from the session vertex + trace).
     rec = await _reconcile_response(response_id, rec)
-    return _strip_internal(rec)
+    return _public_response(rec)
 
 
 @app.get("/v1/sessions/{sid}/turns")
@@ -9986,6 +10271,15 @@ async def session_turns(sid: str, request: Request, limit: int = 0) -> dict:
     return await _session_turns_data(sid, limit=limit)
 
 
+def _unix_s(ts) -> int | None:
+    """A time as whole Unix seconds, the form every UHP time takes; None when there is none."""
+    try:
+        t = float(ts)
+        return int(t) if t > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 async def _session_turns_data(sid: str, limit: int = 0) -> dict:
     # find this session's response ids (HarnessResponse vertices carry session_id)
     ids: list[str] = []
@@ -9993,6 +10287,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
     rows = await BACKING.graph.find("HarnessResponse", {"session_id": safe_sid})
     rows.sort(key=lambda x: str(x.get("created_at") or ""))
     ids = [str(x.get("id")) for x in rows if x.get("id")]
+    # each row's birth as the index holds it: a turn's time when its record carries none
+    born = {str(x.get("id")): x.get("created_at") for x in rows if x.get("id")}
     if limit and limit > 0:
         ids = ids[-limit:]   # last N turns only — bounds blob fetches AND response size
     turns = []
@@ -10046,6 +10342,13 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
                                             or None),
                       "handoff": ((rec.get("incomplete_details") or {}).get("handoff") or None),
+                      # When the turn began and when it ended, Unix seconds like the response
+                      # object's created_at, from the record itself (no read per row). completed_at
+                      # is null while the turn runs and on a record that never said when it ended
+                      # (before 2026-10-19, or settled by a reconcile that cannot know).
+                      "created_at": _unix_s(rec.get("created_at") or born.get(rid)),
+                      "completed_at": (None if str(rec.get("status") or "") in _TURN_LIVE
+                                       else _unix_s(rec.get("_completed_at"))),
                       "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
     # session vertex, so read it ONCE.
@@ -10429,6 +10732,7 @@ async def cancel_response(response_id: str, request: Request):
             # Not confirmed as the live turn: latch this record cancelled in blob + graph (keep
             # them consistent) and let the turn's own resp_is_cancelled check settle it.
             rec["status"] = "cancelled"
+            rec.setdefault("_completed_at", time.time())     # the turns feed's completed_at
             try:
                 _resp_cache_forget(response_id)
                 await _blob_put(f"responses/{response_id}.json",
@@ -10437,7 +10741,7 @@ async def cancel_response(response_id: str, request: Request):
             except Exception:  # noqa: BLE001
                 pass
     rec = await _resp_get(response_id) or rec
-    return _strip_internal(rec)
+    return _public_response(rec)
 
 
 # ── files: upload (in) + container content (out) ────────────────────────────────────────
@@ -10598,7 +10902,7 @@ def _ws_visible(path: str) -> bool:
 # than keeping a second list in the gateway: `.harness/agent-subdir` names the agent's directory
 # and `.git/info/exclude` carries the base's own machinery patterns (git status honours the same
 # file, which is what keeps the produced-files list clean).
-_WS_SUBDIR_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_WS_SUBDIR_RE = backing.WS_SUBDIR_RE      # one rule with the file routes (backing.tar_change)
 
 
 def _ws_rules(tf) -> tuple[str, tuple[str, ...]]:
@@ -10775,13 +11079,40 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
     NEWEST WINS. Two captures can name the same file — the agent's, taken when a turn ended, and
     the app's, taken when somebody saved between turns — and serving the older one hands back work
     the person already replaced. Ties keep the previous last-one-wins order, so a pair of legacy
-    metas with no stamp resolves exactly as it did before."""
+    metas with no stamp resolves exactly as it did before.
+
+    A DELETE (or the source of a move) leaves a tombstone (_put_tombstone). It hides every capture of
+    that path, and of anything under it when it was a directory, that is not newer than it. Without it the by-path read fell back to the agent's old
+    capture of a file the app had just removed, and the next restore put the app's own copy back."""
+    return (await _capture_state(sid))[0]
+
+
+async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[str, float]]:
+    """(_newest_captures, the tombstones: path -> when it was removed).
+
+    The captures are the window they always were (a first page of 200 metas). The tombstones are
+    kept under their own prefix and read IN FULL: inside that window a tombstone could fall out of
+    it at random, and the file it hid would come back. There are few of them (one per removed path,
+    and a removed directory drops those under it), so reading all of them is cheap."""
     out: dict[str, tuple[str, bool]] = {}
     newest: dict[str, float] = {}
+    gate = asyncio.Semaphore(16)
+
+    async def _get(fid: str) -> bytes | None:
+        async with gate:
+            return await _blob_get(fid, kb=RESP_BLOB_KB)
     listing = await _blob_list(f"containers/{sid}/", limit=200, kb=RESP_BLOB_KB)
-    metas = [i for i in (listing.get("items") or []) if str(i.get("file_id", "")).endswith(".meta")]
-    for it in metas[:200]:
-        meta_b = await _blob_get(it["file_id"], kb=RESP_BLOB_KB)
+    metas = [i for i in (listing.get("items") or []) if str(i.get("file_id", "")).endswith(".meta")][:200]
+    tomb_ids = [i["file_id"] for i in await _blob_list_all(_tomb_prefix(sid), kb=RESP_BLOB_KB)]
+    bodies = await asyncio.gather(*(_get(it["file_id"]) for it in metas), *(_get(t) for t in tomb_ids))
+    tombs: dict[str, float] = {}
+    for meta_b in bodies[len(metas):]:
+        try:
+            t = json.loads(meta_b or b"")
+            tombs[str(t["filename"])] = max(float(t["removed_at"]), tombs.get(str(t["filename"]), 0.0))
+        except Exception:  # noqa: BLE001
+            continue
+    for it, meta_b in zip(metas, bodies[: len(metas)]):
         if not meta_b:
             continue
         try:
@@ -10797,7 +11128,54 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
         newest[str(fname)] = ts
         out[str(fname)] = (it["file_id"].rsplit("/", 1)[-1][: -len(".meta")],
                            meta.get("source") == "app")
-    return out
+    if tombs:
+        out = {n: v for n, v in out.items() if not _tombstoned(n, newest[n], tombs)}
+    return out, tombs
+
+
+def _tomb_prefix(sid: str) -> str:
+    return f"ws-removed/{sid}/"
+
+
+def _tomb_key(sid: str, path: str) -> str:
+    return _tomb_prefix(sid) + hashlib.sha256(path.encode()).hexdigest()[:32]
+
+
+def _tombstoned(name: str, ts: float, tombs: dict[str, float]) -> bool:
+    """Was `name` (as of `ts`) removed by one of these tombstones: its own, or a directory's above it?"""
+    return any(ts <= t and (name == p or name.startswith(p + "/")) for p, t in tombs.items())
+
+
+async def _put_tombstone(sid: str, path: str,
+                         state: tuple[dict[str, tuple[str, bool]], dict[str, float]] | None = None) -> bool:
+    """Record that an app removed `path` (see _newest_captures) → whether it was stored.
+
+    The app's own copy of the path is dropped only AFTER the store accepted the record: without the
+    record, the agent's older captures of the path would be unhidden and the by-path read would serve
+    the file the app just removed.
+
+    Then it compacts: the app's copies under a removed directory, and the records of paths under it,
+    are hidden by this one and are dropped. The agent's captures stay (a turn's record names them)."""
+    body = json.dumps({"filename": path, "removed_at": time.time()}).encode()
+    try:
+        if not await _blob_put(_tomb_key(sid, path), body, kb=RESP_BLOB_KB):
+            print(f"[workspace] tombstone rejected sid={sid} path={path}", flush=True)
+            return False
+    except Exception as e:  # noqa: BLE001
+        print(f"[workspace] tombstone failed sid={sid} path={path}: {e}", flush=True)
+        return False
+    caps, tombs = state or ({}, {})
+    keys = [f"containers/{sid}/{backing.app_capture_id(path)}{x}" for x in ("", ".meta")]
+    for name, (_cid, app_) in caps.items():
+        if app_ and name.startswith(path + "/"):
+            keys += [f"containers/{sid}/{backing.app_capture_id(name)}{x}" for x in ("", ".meta")]
+    keys += [_tomb_key(sid, t) for t in tombs if t.startswith(path + "/")]
+    for key in keys:
+        try:
+            await _blob_delete(key, kb=RESP_BLOB_KB)
+        except Exception:  # noqa: BLE001 — housekeeping; the record already hides it
+            pass
+    return True
 
 
 # Backends whose CLI cannot resume a conversation headless. cline 3.0.60: `--json --id` refuses
@@ -11135,12 +11513,24 @@ async def read_session_file(sid: str, path: str, request: Request) -> Response:
             got = await _container_file_bytes(sid, path)
         else:
             try:
-                byname = await _cfile_by_name(sid)
+                caps, tombs = await _capture_state(sid)
             except Exception:  # noqa: BLE001 — blob store unavailable: keep the honest 404
-                byname = {}
-            cid = byname.get(path) or byname.get(path.rsplit("/", 1)[-1])
+                caps, tombs = {}, {}
+            byname = {name: c for name, (c, _app) in caps.items()}
+            cid = byname.get(path)
+            if not cid and "/" in path and not _tombstoned(path, float("-inf"), tombs):
+                # the bare-filename match is for captures named before paths were kept; a path an
+                # app removed must not come back through it as some other file of the same name
+                cid = byname.get(path.rsplit("/", 1)[-1])
             if cid:
                 got = await _container_file_bytes(sid, cid)
+            if got is None:
+                # The checkpoint, last. A file the agent moved has no capture under its new name, and
+                # once the live directory is reaped (self-hosted) the checkpoint holds the only copy
+                # there until the next turn restores it. A path an app removed is out of the
+                # checkpoint as well (the delete changed it), so this brings nothing back.
+                with contextlib.suppress(Exception):    # blob store unavailable: the honest 404
+                    got = await _container_file_bytes(sid, _wf_id(path))
         if got is not None:
             data, media, _fname = got
             return Response(content=data, media_type=media,
@@ -11173,12 +11563,7 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
     # this shipped broken: it compared v["org"], but a session vertex carries the owner in
     # `tenant`, so every write 404'd on a session the caller could plainly read.
     _org, v = await _owned_session(request, sid)
-
-    live = {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}
-    if live:
-        raise uhp_error(409, "session_busy",
-                        "The agent is working on this session. Wait for the turn to finish "
-                        "before writing to its workspace.")
+    _refuse_if_busy(v)
 
     if body.content_b64 is not None:
         try:
@@ -11194,13 +11579,213 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
         raise uhp_error(413, "payload_too_large",
                         f"A workspace file written this way is limited to {_WS_WRITE_MAX} bytes.")
 
-    ok = await BACKING.workspace.write(sid, path, data)
+    async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
+        ok = await BACKING.workspace.write(sid, path, data)
+        if ok:
+            _ws_changed(sid)
     if not ok:
         # The only ways to get here are a path that tried to leave the workspace and a storage
         # failure. Both are the caller's problem to see, not something to swallow.
         raise uhp_error(400, "write_failed",
                         "Could not write that path. It must be inside the session workspace.")
     return {"session_id": sid, "path": path, "bytes": len(data), "written": True}
+
+
+def _refuse_if_busy(v: dict) -> None:
+    """A workspace change while a turn runs is refused, for every route that changes one (the PUT
+    above says why)."""
+    live = {"running", "starting"} & {str(v.get("turn_status") or ""), str(v.get("status") or "")}
+    if live:
+        raise uhp_error(409, "session_busy",
+                        "The agent is working on this session. Wait for the turn to finish "
+                        "before writing to its workspace.")
+
+
+async def _ws_busy_now(sid: str) -> None:
+    """_refuse_if_busy again, on the session as it is now, under the change lock. The route's first
+    check read the session before it took the lock. A turn stamped running since then holds that
+    lock while it restores the workspace (_resp_execute), so a change that waited behind it reads it
+    running here and stops, instead of landing under a running turn."""
+    _refuse_if_busy(await _vertex_get(sid) or {})
+
+
+def _changeable(path: str, param: str = "path") -> str:
+    """The workspace path a delete, mkdir or move may touch → itself, normalised; else 400.
+
+    Two rules on top of PUT's. The path must stay inside the workspace, as for PUT. And it must be
+    a path the session SHOWS (_ws_visible, the listing's rule): removing or renaming `.git` or
+    `.harness` would take the session's checkpoint history and the harness's own state with it,
+    which a write cannot do but a recursive delete can."""
+    member = backing._safe_member(path)
+    if not member or not _ws_visible(member):
+        raise uhp_error(400, "invalid_input",
+                        "That path must be inside the session workspace, and not one of its "
+                        "internal files.", param)
+    return member
+
+
+def _ws_outcome(outcome: str, path: str, to: str = "") -> None:
+    """A backing's WS_* answer → the failure it means, or nothing when it worked. For a move, a clash
+    is at the destination, so `to` names it."""
+    if outcome in (backing.WS_OK, backing.WS_UNCHANGED):
+        return
+    if outcome == backing.WS_NOT_FOUND:
+        raise uhp_error(404, "file_not_found", f"No file or directory '{path}' in this session's workspace.", "path")
+    if outcome == backing.WS_EXISTS:
+        at = to or path
+        raise uhp_error(409, "file_exists", f"Something is already at '{at}', or a file is where one of "
+                        "its folders would go.", "to" if to else "path")
+    if outcome == backing.WS_BAD_PATH:
+        if to:
+            # the backing refused the source or the destination, and does not say which
+            raise uhp_error(400, "invalid_input", "Neither the path nor `to` may be one of the agent's "
+                            "own files, and a path cannot move inside itself.")
+        raise uhp_error(400, "invalid_input", "That path must be inside the session workspace, and not "
+                        "one of the agent's own files.", "path")
+    raise uhp_error(502, "internal_error", "The session workspace could not be changed. Try again.")
+
+
+async def _checkpoint_rewritten(sid: str, sha: str) -> None:
+    """The hosted backing rewrote the session's checkpoint: record its sha as the session's, so a
+    sandbox kept warm with the old workspace is restored rather than trusted (CheckpointWorkspaceFiles
+    ._store says why). It must RAISE when the store refuses: the backing then leaves the archive as it
+    was rather than rewriting it under a sha that still matches the warm sandbox."""
+    await BACKING.graph.upsert("HarnessSession", sid, {"ws_sha": sha}, raise_on_fail=True)
+
+
+if hasattr(BACKING.workspace, "on_rewrite"):
+    BACKING.workspace.on_rewrite = _checkpoint_rewritten
+
+
+def _ws_unrecorded(op: str) -> None:
+    """The tombstone was not stored (_put_tombstone logged why): the change stands, and the caller is
+    told it may not last rather than handed a clean 200. A delete can be repeated (its route records
+    the removal even when the path is already gone); a move's source is gone, so it cannot."""
+    again = " Repeat the delete to record it." if op == "delete" else ""
+    raise uhp_error(502, "internal_error", f"The {op} was made, but could not be recorded, so a later "
+                    f"restore of this session could undo it.{again}")
+
+
+def _ws_changed(sid: str) -> None:
+    """What _checkpoint does after the workspace changes: drop this session's cached tarball and
+    file map here and on every replica, so the listing reads the change."""
+    _ws_tar_evict(sid)
+    _WS_FILES_CACHE.pop(sid, None)
+    _bus_publish("_ctrl", "_ctrl", "", sid, "", {"type": "hr.ctrl.ws_invalidate"})
+
+
+class WorkspaceMove(BaseModel):
+    to: str
+
+
+# The action is a suffix on the path (`…/files/notes/old.md:move`), so a path with slashes is still
+# one path parameter: Starlette's {path:path} is `.*` followed by the literal, and backtracks to it.
+@app.post("/v1/sessions/{sid}/files/{path:path}:mkdir")
+async def mkdir_session_file(sid: str, path: str, request: Request) -> dict:
+    """Create a directory in a session's workspace, with any missing parents. One that already
+    exists is success (`created: false`); a FILE at that path, or where one of its parents would
+    be, is 409 `file_exists`."""
+    _org, v = await _owned_session(request, sid)
+    _refuse_if_busy(v)
+    member = _changeable(path)
+    async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
+        outcome = await BACKING.workspace.mkdir(sid, member)
+        _ws_outcome(outcome, member)
+        _ws_changed(sid)
+    return {"session_id": sid, "path": member, "dir": True, "created": outcome == backing.WS_OK}
+
+
+@app.post("/v1/sessions/{sid}/files/{path:path}:move")
+async def move_session_file(sid: str, path: str, body: WorkspaceMove, request: Request) -> dict:
+    """Rename a file or directory in a session's workspace to `to`. The destination must not exist
+    (409 `file_exists`, never an overwrite) and must not be inside the source."""
+    _org, v = await _owned_session(request, sid)
+    _refuse_if_busy(v)
+    member = _changeable(path)
+    dest = _changeable(body.to, "to")
+    if dest == member or dest.startswith(member + "/"):
+        raise uhp_error(400, "invalid_input", "A path cannot move inside itself.", "to")
+    async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
+        _ws_outcome(await BACKING.workspace.move(sid, member, dest), member, dest)
+        _ws_changed(sid)
+        state = await _capture_state_or_none(sid)
+        await _carry_captures(sid, member, dest, state)
+        if not await _put_tombstone(sid, member, state):
+            _ws_unrecorded("move")
+    return {"session_id": sid, "path": member, "to": dest, "moved": True}
+
+
+@app.delete("/v1/sessions/{sid}/files/{path:path}")
+async def delete_session_file(sid: str, path: str, request: Request) -> dict:
+    """Remove a file, or a directory and everything in it, from a session's workspace."""
+    _org, v = await _owned_session(request, sid)
+    _refuse_if_busy(v)
+    member = _changeable(path)
+    async with _ws_change_lock(sid):
+        await _ws_busy_now(sid)
+        outcome = await BACKING.workspace.delete(sid, member)
+        if outcome == backing.WS_NOT_FOUND:
+            # Nothing to remove, but a durable copy of the path may still answer the by-path read
+            # (a delete whose record the store refused, repeated): record the removal when there is
+            # one to hide, and only then, so a run of deletes of paths that never existed stores
+            # nothing. Recorded, it IS the delete the caller asked to repeat, and it answers so.
+            state = await _capture_state_or_none(sid)
+            if state and any(n == member or n.startswith(member + "/") for n in state[0]):
+                if not await _put_tombstone(sid, member, state):
+                    _ws_unrecorded("delete")
+                _ws_changed(sid)
+                return {"session_id": sid, "path": member, "deleted": True}
+        _ws_outcome(outcome, member)
+        _ws_changed(sid)
+        if not await _put_tombstone(sid, member, await _capture_state_or_none(sid)):
+            _ws_unrecorded("delete")
+    return {"session_id": sid, "path": member, "deleted": True}
+
+
+_WS_CHANGE_LOCKS: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+
+
+def _ws_change_lock(sid: str) -> asyncio.Lock:
+    """One PUT, delete, mkdir or move per session at a time on this replica: the change, the copies
+    it carries and the tombstone it writes are read-then-write, and two interleaved would each start
+    from the same state — a PUT racing a delete of its path would have its fresh copy dropped by the
+    delete's tombstone. (The backing serialises the archive rewrite itself the same way.)"""
+    return backing.keyed_lock(_WS_CHANGE_LOCKS, sid)
+
+
+async def _capture_state_or_none(sid: str):
+    try:
+        return await _capture_state(sid)
+    except Exception:  # noqa: BLE001 — blob store unavailable: nothing to carry or compact
+        return None
+
+
+async def _carry_captures(sid: str, src: str, dst: str, state=None) -> None:
+    """An app's durable copy of a moved file goes to the new name.
+
+    Self-hosted, that copy can be NEWER than the checkpoint (an app saved between turns), and a
+    restore re-applies it from the capture rather than from the archive. Left under the old name it
+    would be hidden by the move's tombstone, and the restore would bring back the checkpoint's older
+    copy at the new name, losing the app's last save. Hosted, app writes go into the archive and
+    leave no capture, so there is nothing to carry.
+
+    Only the APP's: an agent's capture carried as the app's would be re-applied on every restore,
+    over whatever the agent later did with the file. Once the live directory is reaped, the by-path
+    read finds a moved agent file at its new name in the checkpoint (read_session_file's last
+    fallback)."""
+    caps = (state or ({}, {}))[0]
+    for name, (cid, from_app) in caps.items():
+        if not from_app or not (name == src or name.startswith(src + "/")):
+            continue
+        try:
+            got = await _container_file_bytes(sid, cid)
+            if got:
+                await backing.put_app_capture(BACKING.blob, RESP_BLOB_KB, sid, dst + name[len(src):], got[0])
+        except Exception as e:  # noqa: BLE001 — the move is done; the source's tombstone must still land
+            print(f"[workspace] capture not carried sid={sid} {name} -> {dst}: {e}", flush=True)
 
 
 @app.get("/v1/containers/{container_id}/files/{file_id}/content")
@@ -17443,6 +18028,29 @@ _BASE_CATALOG: dict[str, dict] = {
         # capability — a model left with `bash` can still write a file with a shell command.
         "tool_enforcement": "hard",
     },
+    "zeroclaw": {
+        "label": "ZeroClaw", "backend": "zeroclaw", "status": "ready",
+        "system_prompt": ("You are ZeroClaw, an autonomous agent. You work on a real git workspace "
+                          "with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # The tools zeroclaw 0.8.5 offers a session under the runner's config, as the agent listed
+        # them, pinned equal to the runner's ALL_ZEROCLAW_TOOLS, which is also the turn's allow-list:
+        # the twenty tools zeroclaw would offer beyond it (scheduling, channels, outside accounts and
+        # the rest; see the runner) are never offered, so there is nothing here to turn off.
+        "tools": [("shell", "Shell"), ("file_read", "File Read"), ("file_write", "File Write"),
+                  ("file_edit", "Edit"), ("glob_search", "Find"), ("content_search", "Search"),
+                  ("git_operations", "Git"),
+                  ("web_fetch", "Web Fetch"), ("web_search_tool", "Web Search"),
+                  ("http_request", "HTTP Request"), ("image_info", "Image Info"), ("calculator", "Calculator"),
+                  ("TodoWrite", "Todo"),
+                  ("spawn_subagent", "Subagent")],
+        # "hard": the runner writes the disabled tools into the risk profile's `excluded_tools`,
+        # which removes them from the tool list the model is offered (measured: an excluded tool is
+        # absent from the agent's own list) and is the one door that also removes MCP tools. As on
+        # every base, withholding a tool withholds that tool, not the capability: with file_write
+        # off, `shell` can still write a file.
+        "tool_enforcement": "hard",
+    },
 }
 
 # Bases this server can execute. Derived from the catalog above so the two cannot disagree —
@@ -19356,7 +19964,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         if want_base not in _BASE_CATALOG:
             raise uhp_error(400, "invalid_base", f"No base harness '{want_base}'.", "base")
         if not await _base_serves(org, want_base, want_model):
-            raise uhp_error(400, "model_unavailable",
+            raise uhp_error(422, "model_unavailable",
                             f"Nothing you have connected can run {want_model or 'that model'} "
                             f"on {want_base}.", "model")
         base, model = want_base, want_model

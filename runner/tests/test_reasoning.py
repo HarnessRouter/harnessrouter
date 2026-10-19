@@ -138,6 +138,16 @@ def test_levels_are_named_only_for_models_that_were_measured():
         assert levels and all(lv in reasoning.LEVELS for lv in levels), model
 
 
+def test_muse_wonder_has_the_levels_both_routes_answered_under_either_name():
+    # OpenRouter's meta/muse-wonder and Vercel's meta/muse-wonder-1.0 are one model; neither route
+    # turns it off, so a turn that asks for none gets its lowest level.
+    for wire in ("meta/muse-wonder", "meta/muse-wonder-1.0", "muse-wonder-1.0"):
+        assert reasoning.levels_for(wire) == ("minimal", "low", "medium", "high", "xhigh"), wire
+    for route in ("openrouter", "vercel"):
+        assert reasoning.level_on(route, "meta/muse-wonder", "none") == "minimal"
+        assert reasoning.level_on(route, "meta/muse-wonder-1.0", "xhigh") == "xhigh"
+
+
 # ── the relay ────────────────────────────────────────────────────────────────────────────────
 
 class _Upstream:
@@ -410,3 +420,12 @@ def test_a_route_the_gateway_names_wins_over_the_base(monkeypatch):
         assert "effort_route" not in rs._HERMES_RELAY["routes"][tok][2]
     finally:
         rs._TURN_THINKING.reset(token); rs._HERMES_RELAY["routes"].pop(tok, None)
+
+
+def test_gemini_4_argon_takes_the_levels_google_answered():
+    """Measured 2026-10-14 on Google's OpenAI-compatible surface: none, low, medium, high answered;
+    minimal and xhigh refused. OpenRouter refuses `none` for every Gemini ("Reasoning is mandatory")."""
+    assert reasoning.levels_for("gemini-4-argon") == ("none", "low", "medium", "high")
+    assert reasoning.level_on("google", "gemini-4-argon", "minimal") == "low"
+    assert reasoning.level_on("openrouter", "gemini-4-argon", "none") == "low"
+    assert reasoning.level_on("vercel", "gemini-4-argon", "high") == "high"

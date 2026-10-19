@@ -212,7 +212,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 #
 # gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
 # this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder,vibe,vtcode,docker-agent,fast-agent}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,vtcode,docker-agent,fast-agent}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -240,10 +240,10 @@ backend_bin() {
     systemone) echo "$TOOLS/systemone-venv/bin/python" ;;
     cheetahclaws) echo "$TOOLS/cheetahclaws-venv/bin/cheetahclaws-ready" ;;
     agentzero) echo "$TOOLS/agentzero-venv/bin/agentzero-ready" ;;
-    # qoder has NO binary: its runtime is Qoder's cloud, and the turn process is runner/qoder_driver.py
-    # on the runner's own interpreter (stdlib only). Nothing is installed, pinned or verified for it,
-    # and the image's interpreter is what "installed" means here.
-    qoder) echo "$PY" ;;
+    # qoder has no binary of its own: its runtime is Qoder's cloud, and the turn process is
+    # runner/qoder_driver.py on Qoder's SDK, in a venv of its own (install_qoder). The venv's
+    # interpreter is what "installed" means here.
+    qoder) echo "$TOOLS/qoder-venv/bin/python" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
     gajae)  echo "$TOOLS/bin/gjc" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
@@ -253,6 +253,7 @@ backend_bin() {
     docker-agent) echo "$TOOLS/bin/docker-agent" ;;
     fast-agent) echo "$TOOLS/fast-agent-venv/bin/fast-agent" ;;
     nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
+    zeroclaw) echo "$TOOLS/bin/zeroclaw" ;;
   esac
 }
 
@@ -339,6 +340,70 @@ if aider.__version__ != want:
   # what the boot compares against the pin, so a half-built venv is rebuilt rather than trusted.
   printf '#!/bin/sh\necho %s\n' "$AIDER_PIN" > "$TOOLS/aider-venv/bin/aider-ready" \
     && chmod +x "$TOOLS/aider-venv/bin/aider-ready"
+}
+
+# Qoder Cloud Agents' Python SDK, MIT (QoderAI/qoder-cloud-agents-sdk-python, PyPI `qca-sdk`), pinned
+# to 0.6.0. The qoder backend's runtime is Qoder's cloud; what this box needs is the client the
+# driver (runner/qoder_driver.py) speaks it with, in a venv of its own so its httpx/pydantic/anyio
+# stay off the runner's. VERIFIED the way cheetahclaws is: the wheel is downloaded on its own and
+# compared against the digest pinned here (PyPI's sha256 for qca_sdk-0.6.0-py3-none-any.whl,
+# 2026-10-16) before it is installed; an operator who overrides the version supplies HR_QODER_SHA256
+# for it, or is told the wheel is unverified. The import check asserts the client and the methods the
+# driver reaches for, so an SDK refactor fails the install here rather than the first live turn.
+QODER_PIN="${HR_QODER_SDK_VERSION:-0.6.0}"
+if [ "$QODER_PIN" = "0.6.0" ]; then
+  QODER_SHA256="${HR_QODER_SHA256:-97d76fece7a489394e3dc237fece652bb6130f7cf5b1870aa6e9216e4ac8773f}"
+else
+  QODER_SHA256="${HR_QODER_SHA256:-}"
+fi
+install_qoder() {
+  qd_py="${HR_QODER_BASE_PYTHON:-python3}"
+  rm -rf "$TOOLS/qoder-venv"
+  "$qd_py" -m venv "$TOOLS/qoder-venv" || return 1
+  qd_tmp="$(mktemp -d)"
+  "$TOOLS/qoder-venv/bin/pip" download -q --disable-pip-version-check --no-deps \
+    --only-binary=:all: -d "$qd_tmp" "qca-sdk==$QODER_PIN" || { rm -rf "$qd_tmp"; return 1; }
+  qd_whl="$qd_tmp/qca_sdk-$QODER_PIN-py3-none-any.whl"
+  [ -f "$qd_whl" ] || { echo "qca-sdk $QODER_PIN: no wheel was downloaded"; rm -rf "$qd_tmp"; return 1; }
+  if [ -n "$QODER_SHA256" ]; then
+    qd_have="$(sha256sum "$qd_whl" | awk '{print $1}')"
+    if [ "$QODER_SHA256" != "$qd_have" ]; then
+      echo "qca-sdk $QODER_PIN: wheel digest mismatch (want $QODER_SHA256, have $qd_have)"
+      rm -rf "$qd_tmp"; return 1
+    fi
+  fi
+  "$TOOLS/qoder-venv/bin/pip" install -q --disable-pip-version-check "$qd_whl" \
+    || { rm -rf "$qd_tmp"; return 1; }
+  rm -rf "$qd_tmp"
+  "$TOOLS/qoder-venv/bin/python" -c '
+import sys, importlib.metadata as md
+want = sys.argv[1]
+have = md.version("qca-sdk")
+if have != want:
+    sys.exit("qca-sdk %s installed, wanted %s" % (have, want))
+# every call runner/qoder_driver.py makes, on the client it makes them on
+import qca
+from qca.managed import Managed
+for name in ("APIStatusError", "APIConnectionError", "APITimeoutError", "APIResponseValidationError", "APIError"):
+    getattr(qca, name)
+m = Managed(pat="probe", base_url="http://127.0.0.1:9/")
+for path in ("environments.create", "environments.delete", "environments.archive",
+             "vaults.create", "vaults.delete", "vaults.credentials.create", "vaults.credentials.list", "vaults.credentials.archive",
+             "agents.create", "agents.retrieve", "agents.update", "agents.archive",
+             "sessions.create", "sessions.retrieve", "sessions.update", "sessions.cancel", "sessions.delete",
+             "sessions.resources.add", "sessions.events.send", "sessions.events.list", "sessions.events.stream",
+             "files.upload", "files.download", "files.delete",
+             "skills.create", "skills.versions.create", "skills.delete"):
+    obj = m
+    for part in path.split("."):
+        obj = getattr(obj, part)
+    if not callable(obj):
+        sys.exit("qca-sdk %s: %s is not callable" % (have, path))
+' "$QODER_PIN" || return 1
+  # Written LAST, after the install and the checks proved the venv good: the marker is what the
+  # boot compares against the pin, so a half-built venv is rebuilt rather than trusted.
+  printf '#!/bin/sh\necho %s\n' "$QODER_PIN" > "$TOOLS/qoder-venv/bin/qoder-ready" \
+    && chmod +x "$TOOLS/qoder-venv/bin/qoder-ready"
 }
 
 # CheetahClaws, Apache-2.0 (SAIL-Research-Lab/cheetahclaws, PyPI `cheetahclaws`), pinned to 3.5.88.
@@ -875,6 +940,45 @@ install_goose() {
   mkdir -p "$TOOLS/bin" && install -m 755 "$gs_tmp/goose" "$TOOLS/bin/goose" \
     || { rm -rf "$gs_tmp"; return 1; }
   rm -rf "$gs_tmp"
+}
+
+# zeroclaw (Apache-2.0, zeroclaw-labs/zeroclaw) ships prebuilt Rust binaries on GitHub releases, with
+# a SHA256SUMS beside them. Pinned EXACTLY to the release runner/zeroclaw_driver.py was measured
+# against (its ACP methods, the session/update shapes, the session store, the config schema), and
+# verified against digests pinned HERE, read off that release's own SHA256SUMS on 2026-10-13 — the
+# goose pattern, which does not trust a checksum file that can be re-uploaded beside the asset it
+# describes. The archive also carries zerocode, zerorelay and a web bundle; only zeroclaw is kept.
+install_zeroclaw() {
+  case "$(uname -m)" in
+    x86_64)        zc_arch="x86_64";  zc_sha="9dbb53af95132e3a934ab61b229fb7aec3565f1c9bf31851f1698be9160655f9" ;;
+    aarch64|arm64) zc_arch="aarch64"; zc_sha="aaa7e2c656dedf651217a70ea487e1e65f51b4ca771d114e60bf409165700986" ;;
+    *) echo "unsupported architecture $(uname -m) for zeroclaw"; return 1 ;;
+  esac
+  zc_ver="${HR_ZEROCLAW_VERSION:-0.8.5}"; zc_ver="${zc_ver#v}"
+  if [ "$zc_ver" != "0.8.5" ]; then
+    if [ -n "${HR_ZEROCLAW_SHA256:-}" ]; then
+      zc_sha="$HR_ZEROCLAW_SHA256"
+    else
+      echo "[harnessrouter] WARN: HR_ZEROCLAW_VERSION=$zc_ver overrides the pinned 0.8.5, and no"
+      echo "[harnessrouter]       HR_ZEROCLAW_SHA256 was given — this zeroclaw archive is UNVERIFIED."
+      zc_sha=""
+    fi
+  fi
+  zc_url="https://github.com/zeroclaw-labs/zeroclaw/releases/download/v${zc_ver}/zeroclaw-${zc_arch}-unknown-linux-gnu.tar.gz"
+  zc_tmp="$(mktemp -d)"
+  curl -fsSL "$zc_url" -o "$zc_tmp/zeroclaw.tar.gz" || { rm -rf "$zc_tmp"; return 1; }
+  if [ -n "$zc_sha" ]; then
+    zc_have="$(sha256sum "$zc_tmp/zeroclaw.tar.gz" | awk '{print $1}')"
+    if [ "$zc_sha" != "$zc_have" ]; then
+      echo "zeroclaw $zc_ver: archive digest mismatch for $zc_arch (want $zc_sha, have $zc_have)"
+      rm -rf "$zc_tmp"; return 1
+    fi
+  fi
+  tar -xzf "$zc_tmp/zeroclaw.tar.gz" -C "$zc_tmp" zeroclaw || { rm -rf "$zc_tmp"; return 1; }
+  [ -f "$zc_tmp/zeroclaw" ] || { echo "release archive contained no zeroclaw binary"; rm -rf "$zc_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin" && install -m 755 "$zc_tmp/zeroclaw" "$TOOLS/bin/zeroclaw" \
+    || { rm -rf "$zc_tmp"; return 1; }
+  rm -rf "$zc_tmp"
 }
 
 # omp (Oh My Pi, MIT) ships standalone prebuilt binaries on GitHub releases, with a SHA256SUMS.txt
@@ -1436,6 +1540,17 @@ install_backends() {
     try_install "CheetahClaws" install_cheetahclaws || true
   fi
   [ -x "$TOOLS/cheetahclaws-venv/bin/python" ] && export HR_CHEETAHCLAWS_PYTHON="$TOOLS/cheetahclaws-venv/bin/python"
+  # The qoder backend's SDK, ~15 MB with its dependencies. The marker names the version the venv was
+  # built for, so a pin bump rebuilds it; the session lives at Qoder and in the workspace, not here.
+  if wanted qoder && [ "$("$TOOLS/qoder-venv/bin/qoder-ready" 2>/dev/null)" != "$QODER_PIN" ]; then
+    echo "[harnessrouter] installing the Qoder Cloud Agents SDK qca-sdk $QODER_PIN (MIT)…"
+    if [ -z "$QODER_SHA256" ]; then
+      echo "[harnessrouter] WARN: HR_QODER_SDK_VERSION=$QODER_PIN overrides the pinned 0.6.0, and no"
+      echo "[harnessrouter]       HR_QODER_SHA256 was given — this qca-sdk wheel is UNVERIFIED."
+    fi
+    try_install "Qoder SDK" install_qoder || true
+  fi
+  [ -x "$TOOLS/qoder-venv/bin/python" ] && export HR_QODER_PYTHON="$TOOLS/qoder-venv/bin/python"
   if wanted agentzero && [ "$("$TOOLS/agentzero-venv/bin/agentzero-ready" 2>/dev/null)" != "$AGENTZERO_PIN" ]; then
     echo "[harnessrouter] installing Agent Zero $AGENTZERO_PIN (MIT) — ~640 MB, this takes a minute or two…"
     try_install "Agent Zero" install_agentzero || true
@@ -1526,6 +1641,14 @@ install_backends() {
     echo "[harnessrouter] installing VT Code $VTCODE_PIN (Apache-2.0, version-pinned) — ~31 MB…"
     try_install "VT Code" install_vtcode || true
   fi
+  # `zeroclaw --version` prints "zeroclaw 0.8.5", so comparing it to the pin both installs a missing
+  # binary and replaces one left by an older image.
+  ZEROCLAW_PIN="${HR_ZEROCLAW_VERSION:-0.8.5}"; ZEROCLAW_PIN="${ZEROCLAW_PIN#v}"
+  if wanted zeroclaw && [ "$("$(backend_bin zeroclaw)" --version 2>/dev/null | awk '{print $2}')" != "$ZEROCLAW_PIN" ]; then
+    echo "[harnessrouter] installing zeroclaw $ZEROCLAW_PIN (Apache-2.0, version-pinned$([ "$ZEROCLAW_PIN" = 0.8.5 ] || [ -n "${HR_ZEROCLAW_SHA256:-}" ] && echo ", digest-verified"))…"
+    try_install "zeroclaw" install_zeroclaw || true
+  fi
+  [ -x "$(backend_bin zeroclaw)" ] && export HR_ZEROCLAW_BIN="$(backend_bin zeroclaw)"
   # Both venv bases are reached by PATH from the runner, so the interpreter and the console script
   # are named explicitly — $TOOLS/bin is what PATH carries, and neither of these lives there.
   [ -x "$TOOLS/opensquilla-venv/bin/opensquilla" ] && export HR_OPENSQUILLA_BIN="$TOOLS/opensquilla-venv/bin/opensquilla"

@@ -57,10 +57,41 @@ def test_the_response_still_validates_against_the_spec():
 
 
 def test_the_selection_matches_what_the_request_carried():
-    """Mirrors the expression in the /v1/responses path: a field is ignored when it is present,
-    and `None` means the client did not send it."""
+    """The selection the /v1/responses path uses: a field is ignored when it is present, and `None`
+    means the client did not send it."""
+    from app import _ignored_request_fields
+
     class Body:
         tools = [{"type": "function", "name": "x"}]
         include = None
 
-    assert [f for f in ("tools", "include") if getattr(Body, f, None) is not None] == ["tools"]
+    assert _ignored_request_fields(Body) == ["tools"]
+
+
+def test_max_output_tokens_is_named_because_no_base_applies_it():
+    """#470: `max_output_tokens` is accepted and stored, but no runner build passes an output-token
+    bound to a harness, so a request carrying it completed unbounded with nothing said. Until a base
+    applies it, the response names it."""
+    from app import CreateResponseBody, _ignored_request_fields
+    assert _ignored_request_fields(CreateResponseBody(input="hi", max_output_tokens=64)) == ["max_output_tokens"]
+    # a zero is still a value the client sent
+    assert _ignored_request_fields(CreateResponseBody(input="hi", max_output_tokens=0)) == ["max_output_tokens"]
+
+
+def test_the_request_path_names_what_was_sent_and_nothing_else():
+    from app import CreateResponseBody, _ignored_request_fields
+    assert _ignored_request_fields(CreateResponseBody(input="hi")) == []
+    both = CreateResponseBody(input="hi", tools=[{"type": "function", "name": "x"}], include=["a"],
+                              max_output_tokens=16)
+    assert _ignored_request_fields(both) == ["tools", "include", "max_output_tokens"]
+    meta = _translator(ignored=_ignored_request_fields(both))._response_obj("completed")["metadata"]
+    assert meta["ignored_fields"] == ["tools", "include", "max_output_tokens"]
+
+
+def test_the_request_path_reads_the_shared_selection():
+    """The /v1/responses path computes `ignored` through `_ignored_request_fields`, so a field added
+    to or removed from the list is what a response actually reports."""
+    import inspect
+    import app
+    src = inspect.getsource(app.create_response)
+    assert "_ignored = _ignored_request_fields(body)" in src

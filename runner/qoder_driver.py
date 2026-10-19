@@ -1,15 +1,23 @@
-"""One Qoder Cloud Agent turn, as a runner subprocess.
+"""One Qoder Cloud Agents turn, as a runner subprocess.
 
 Spawned per turn by server.py under the same contract as every other backend: `__hr_init` first,
 one `{"m": ..., "p": ...}` JSON line per event on stdout, `__hr_result` last, and server.py's
 normaliser (_qoder_to_claude) unaware of the wire. What differs is that the agent loop runs in
-Qoder's cloud, not in this sandbox: this process is an HTTP client to a REST + SSE API (Managed
-mode, `/api/v1/cloud`), so what a CLI driver spends on a subprocess this one spends on a session.
+Qoder's cloud, not in this sandbox: this process is a client of a REST + SSE API (Managed mode,
+`/api/v1/cloud`), so what a CLI driver spends on a subprocess this one spends on a session.
+
+The wire is Qoder's own Python SDK (`qca-sdk`, pinned in docker/entrypoint.sh into its own venv,
+imported in Client so the module loads without it): typed calls, the SDK's retry classification
+(a POST is retried only under an `Idempotency-Key`, which every user.message here carries), and
+its SSE decoder. The reconnect loop stays here rather than in the SDK's ResumableStream, because
+a stream that ends without a terminal event is decided by the SESSION's status (idle twice with no
+idle event seen = the event was lost; running = reconnect), which the stream alone cannot know.
 
 The credential never enters this process. The job carries the runner's loopback relay as the
 base and a placeholder bearer; the relay holds the PAT and forwards this route verbatim (no body
 rewrites, no served-model or usage taps, see _qoder_relay_route in server.py). The one network
-call that bypasses the relay is the presigned artifact download, which carries no credential.
+call that bypasses the relay is the presigned artifact download, which carries no credential and
+which the SDK follows itself (`files.download`), refusing a link that is not a web address.
 
 Everything the turn creates at Qoder — the Environment, the Agent, the Session, uploaded input
 files, delivered artifact files, a Vault for MCP bearers, Skill resources — is recorded in
@@ -25,7 +33,6 @@ Without that call the remote turn would keep running and billing after the local
 from __future__ import annotations
 
 import hashlib
-import http.client
 import json
 import mimetypes
 import os
@@ -35,9 +42,6 @@ import shutil
 import signal
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 import uuid
 
 STATE_REL = os.path.join(".harness", "qoder", "state.json")
@@ -89,116 +93,196 @@ class Cancelled(BaseException):
 
 
 class ApiError(Exception):
+    """Qoder answered with an error: the status and the envelope's type and message. Status 0 is
+    the driver's own verdict on an answer it could not use (no id where one was due)."""
+
     def __init__(self, status: int, kind: str, message: str, path: str = ""):
         super().__init__(f"{status} {kind}: {message}")
         self.status, self.kind, self.message, self.path = status, kind, message, path
 
 
-# ── HTTP ────────────────────────────────────────────────────────────────────────────────────────
-class Api:
-    """The Managed API through the relay: `base` is the relay's address, `token` a placeholder."""
+class NetError(Exception):
+    """Nothing answered: the connection was refused, dropped, or timed out."""
+
+
+class LinkRefused(Exception):
+    """The storage host refused a presigned download link; a lapsed one is refused there (403 on
+    most stores), and the rule is that a fresh link is asked for, never that the file is gone."""
+
+
+# ── the SDK ─────────────────────────────────────────────────────────────────────────────────────
+def _plain(obj):
+    """A pydantic model (or a list of them) as JSON-compatible dicts, extras included; anything
+    else as it is. The handlers below read dicts, as they did off the wire."""
+    if isinstance(obj, list):
+        return [_plain(x) for x in obj]
+    dump = getattr(obj, "model_dump", None)
+    return dump(mode="json", exclude_none=True) if callable(dump) else obj
+
+
+class Client:
+    """The Managed API through the relay, on Qoder's SDK: `base` is the relay's address, `token`
+    a placeholder. Every method answers plain dicts and raises ApiError / NetError, so the turn's
+    logic reads one shape whatever the SDK's models and exceptions are called."""
 
     def __init__(self, base: str, token: str):
-        self.base = base.rstrip("/")
-        self.token = token
+        import httpx  # noqa: PLC0415 — the SDK's own dependency, present wherever the SDK is
+        from qca.managed import Managed  # noqa: PLC0415 — installed in the backend's venv, not the runner's
+        import qca  # noqa: PLC0415
 
-    def _headers(self, extra: dict | None = None) -> dict:
-        h = {"authorization": f"Bearer {self.token}", "accept": "application/json"}
-        if extra:
-            h.update(extra)
-        return h
+        self._x = qca
+        self._httpx = httpx
+        self.base = base.rstrip("/") + "/"
+        self.m = Managed(pat=token, base_url=self.base, timeout=httpx.Timeout(CALL_TIMEOUT_S), max_retries=2)
 
-    def request(self, method: str, path: str, body: dict | None = None, *, data: bytes | None = None,
-                headers: dict | None = None, timeout: float = CALL_TIMEOUT_S):
-        """One call; the parsed JSON answer (None for an empty body). Raises ApiError on 4xx/5xx
-        with the envelope's type and message, urllib.error.URLError when nothing answered."""
-        hdrs = self._headers(headers)
-        payload = data
-        if body is not None:
-            payload = json.dumps(body).encode()
-            hdrs["content-type"] = "application/json"
-        req = urllib.request.Request(self.base + path, data=payload, method=method, headers=hdrs)
+    # one place turns the SDK's exceptions into the driver's two
+    def _call(self, path: str, fn, *a, **kw):
+        x = self._x
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-        except urllib.error.HTTPError as e:
-            raw = e.read()
-            kind, msg = _error_fields(raw)
-            raise ApiError(e.code, kind, msg or raw[:300].decode("utf-8", "replace"), path) from None
-        if not raw:
-            return None
+            return _plain(fn(*a, **kw))
+        except x.APIStatusError as e:
+            body = e.body if isinstance(e.body, dict) else {}
+            err = body.get("error") if isinstance(body.get("error"), dict) else {}
+            kind = str(err.get("type") or body.get("code") or "")
+            msg = str(err.get("message") or body.get("message") or str(e))[:300]
+            raise ApiError(int(e.status_code), kind, msg, path) from None
+        except x.APIConnectionError as e:          # APITimeoutError is one of these
+            raise NetError(f"{type(e).__name__}: {e}"[:300]) from None
+        except x.APIResponseValidationError as e:
+            raise ApiError(0, "api_error", f"an answer the SDK could not read: {e}"[:300], path) from None
+
+    # environments
+    def environment_create(self, body: dict) -> dict:
+        return self._call("/environments", self.m.environments.create, **body)
+
+    def environment_delete(self, eid: str) -> dict:
+        return self._call(f"/environments/{eid}", self.m.environments.delete, eid)
+
+    def environment_archive(self, eid: str) -> dict:
+        return self._call(f"/environments/{eid}/archive", self.m.environments.archive, eid)
+
+    # vaults
+    def vault_create(self, display_name: str, metadata: dict) -> dict:
+        return self._call("/vaults", self.m.vaults.create, display_name=display_name, metadata=metadata)
+
+    def vault_delete(self, vid: str) -> dict:
+        return self._call(f"/vaults/{vid}", self.m.vaults.delete, vid)
+
+    def credential_create(self, vid: str, auth: dict) -> dict:
+        return self._call(f"/vaults/{vid}/credentials", self.m.vaults.credentials.create, vid, auth=auth)
+
+    def credentials_list(self, vid: str) -> list[dict]:
+        page = self._call(f"/vaults/{vid}/credentials", self.m.vaults.credentials.list, vid)
+        return list((page or {}).get("data") or [])
+
+    def credential_archive(self, vid: str, cid: str) -> dict:
+        return self._call(f"/vaults/{vid}/credentials/{cid}/archive", self.m.vaults.credentials.archive, cid, vault_id=vid)
+
+    # agents
+    def agent_create(self, body: dict) -> dict:
+        return self._call("/agents", self.m.agents.create, **body)
+
+    def agent_retrieve(self, aid: str) -> dict:
+        return self._call(f"/agents/{aid}", self.m.agents.retrieve, aid)
+
+    def agent_update(self, aid: str, body: dict, version: int) -> dict:
+        return self._call(f"/agents/{aid}", self.m.agents.update, aid, version=version, **body)
+
+    def agent_archive(self, aid: str) -> dict:
+        return self._call(f"/agents/{aid}/archive", self.m.agents.archive, aid)
+
+    # sessions
+    def session_create(self, body: dict) -> dict:
+        return self._call("/sessions", self.m.sessions.create, **body)
+
+    def session_retrieve(self, sid: str) -> dict:
+        return self._call(f"/sessions/{sid}", self.m.sessions.retrieve, sid)
+
+    def session_update(self, sid: str, body: dict) -> dict:
+        return self._call(f"/sessions/{sid}", self.m.sessions.update, sid, **body)
+
+    def session_cancel(self, sid: str) -> dict:
+        return self._call(f"/sessions/{sid}/cancel", self.m.sessions.cancel, sid,
+                          timeout=self._httpx.Timeout(20.0))
+
+    def session_delete(self, sid: str) -> dict:
+        return self._call(f"/sessions/{sid}", self.m.sessions.delete, sid)
+
+    def resource_add(self, sid: str, file_id: str, mount_path: str) -> dict:
+        return self._call(f"/sessions/{sid}/resources", self.m.sessions.resources.add, sid,
+                          type="file", file_id=file_id, mount_path=mount_path)
+
+    def events_send(self, sid: str, events: list[dict], idempotency_key: str = "") -> list[dict]:
+        hdrs = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        doc = self._call(f"/sessions/{sid}/events", self.m.sessions.events.send, sid, events=events,
+                         extra_headers=hdrs)
+        return list((doc or {}).get("data") or [])
+
+    def events_list(self, sid: str, **query) -> dict:
+        return self._call(f"/sessions/{sid}/events", self.m.sessions.events.list, sid, **query) or {}
+
+    def events_stream(self, sid: str, last_event_id: str = ""):
+        """An open SDK Stream of SessionStreamEvent, deltas of agent.message requested; the caller
+        iterates it and reads `.last_event_id` after each event for the cursor."""
+        x = self._x
         try:
-            return json.loads(raw)
-        except ValueError:
-            return {"_raw": raw[:300].decode("utf-8", "replace")}
+            return self.m.sessions.events.stream(
+                sid, event_deltas=["agent.message"], last_event_id=last_event_id or None,
+                timeout=self._httpx.Timeout(CALL_TIMEOUT_S, read=STREAM_READ_TIMEOUT_S))
+        except x.APIStatusError as e:
+            body = e.body if isinstance(e.body, dict) else {}
+            err = body.get("error") if isinstance(body.get("error"), dict) else {}
+            raise ApiError(int(e.status_code), str(err.get("type") or ""), str(err.get("message") or e)[:300],
+                           f"/sessions/{sid}/events/stream") from None
+        except x.APIConnectionError as e:
+            raise NetError(f"{type(e).__name__}: {e}"[:300]) from None
 
-    def stream(self, path: str, last_event_id: str = ""):
-        """An open SSE response for `path` (a GET); the caller reads it with iter_sse."""
-        hdrs = self._headers({"accept": "text/event-stream"})
-        if last_event_id:
-            hdrs["last-event-id"] = last_event_id
-        req = urllib.request.Request(self.base + path, method="GET", headers=hdrs)
+    def stream_errors(self) -> tuple:
+        """What a read off an open stream raises when the connection goes (the caller reconnects)."""
+        x = self._x
+        return (x.APIConnectionError, x.APITimeoutError)
+
+    def stream_error_frame(self) -> type:
+        """What a read raises when the stream carries an `error` frame of its own."""
+        return self._x.APIError
+
+    # files
+    def file_upload(self, name: str, data: bytes, ctype: str) -> dict:
+        return self._call("/files", self.m.files.upload, file=(name, data, ctype), name=name)
+
+    def file_download(self, fid: str):
+        """An open binary download of the file's bytes (the SDK fetched the presigned link and
+        refused one that is not http(s)); iterate `.iter_bytes()`, then `.close()`."""
+        x = self._x
         try:
-            return urllib.request.urlopen(req, timeout=STREAM_READ_TIMEOUT_S)
-        except urllib.error.HTTPError as e:
-            raw = e.read()
-            kind, msg = _error_fields(raw)
-            raise ApiError(e.code, kind, msg or raw[:300].decode("utf-8", "replace"), path) from None
+            return self.m.files.download(fid)
+        except x.APIStatusError as e:
+            if "authorization" not in e.request.headers:
+                # The SDK makes two requests here and raises the same class for both. The storage
+                # request is the one that carries no credential (the presigned link is the
+                # authority), so a refusal there is the link's, not the file's.
+                raise LinkRefused(f"the storage host refused the download link ({e.status_code})") from None
+            body = e.body if isinstance(e.body, dict) else {}
+            err = body.get("error") if isinstance(body.get("error"), dict) else {}
+            raise ApiError(int(e.status_code), str(err.get("type") or ""), str(err.get("message") or e)[:300],
+                           f"/files/{fid}/content") from None
+        except x.APIConnectionError as e:
+            raise NetError(f"{type(e).__name__}: {e}"[:300]) from None
+        except x.APIResponseValidationError as e:
+            raise ApiError(0, "api_error", "the download link is not a web address", f"/files/{fid}/content") from e
 
+    def file_delete(self, fid: str) -> dict:
+        return self._call(f"/files/{fid}", self.m.files.delete, fid)
 
-def _error_fields(raw: bytes) -> tuple[str, str]:
-    try:
-        doc = json.loads(raw)
-        err = doc.get("error") if isinstance(doc, dict) else None
-        if isinstance(err, dict):
-            return str(err.get("type") or ""), str(err.get("message") or "")
-    except ValueError:
-        pass
-    return "", ""
+    # skills
+    def skill_create(self, files: list[tuple[str, bytes, str]]) -> dict:
+        return self._call("/skills", self.m.skills.create, files=files)
 
+    def skill_version_create(self, skill_id: str, files: list[tuple[str, bytes, str]]) -> dict:
+        return self._call(f"/skills/{skill_id}/versions", self.m.skills.versions.create, skill_id, files=files)
 
-def multipart(parts: list[tuple[str, str | None, str, bytes]]) -> tuple[bytes, str]:
-    """A multipart/form-data body from (field, filename or None, content type, bytes) parts;
-    returns (body, content-type header)."""
-    boundary = "----hr" + uuid.uuid4().hex
-    out = bytearray()
-    for field, filename, ctype, data in parts:
-        out += f"--{boundary}\r\n".encode()
-        disp = f'form-data; name="{field}"'
-        if filename is not None:
-            disp += f'; filename="{filename.replace(chr(34), "_")}"'
-        out += f"Content-Disposition: {disp}\r\n".encode()
-        if filename is not None:
-            out += f"Content-Type: {ctype}\r\n".encode()
-        out += b"\r\n" + data + b"\r\n"
-    out += f"--{boundary}--\r\n".encode()
-    return bytes(out), f"multipart/form-data; boundary={boundary}"
-
-
-def iter_sse(resp):
-    """(id, event, data) per SSE message off an open response; a comment line is skipped. Ends
-    at EOF; a socket timeout or a dropped connection raises out (the caller reconnects)."""
-    sid, ev, data = "", "", []
-    while True:
-        line = resp.readline()
-        if not line:
-            return
-        line = line.rstrip(b"\r\n").decode("utf-8", "replace")
-        if line == "":
-            if ev or data:
-                yield sid, ev, "\n".join(data)
-            sid, ev, data = "", "", []
-            continue
-        if line.startswith(":"):
-            continue
-        field, _, value = line.partition(":")
-        value = value[1:] if value.startswith(" ") else value
-        if field == "id":
-            sid = value
-        elif field == "event":
-            ev = value
-        elif field == "data":
-            data.append(value)
+    def skill_delete(self, skill_id: str) -> dict:
+        return self._call(f"/skills/{skill_id}", self.m.skills.delete, skill_id)
 
 
 # ── state ────────────────────────────────────────────────────────────────────────────────────────
@@ -428,9 +512,10 @@ def skill_tree(folder: str) -> tuple[str, list[tuple[str, bytes]], str]:
     return name, files, ""
 
 
-def publish_skills(api: Api, st: dict, skills: list[dict], notes: list[str]) -> list[dict]:
+def publish_skills(api: Client, st: dict, skills: list[dict], notes: list[str]) -> list[dict]:
     """Each harness skill bundle as a Qoder custom Skill (a new version when its bytes changed),
-    reused across the session's turns by content hash; → the bindings for the Agent."""
+    reused across the session's turns by content hash; → the bindings for the Agent. The package
+    goes as a bare file tree, each part's filename its path under the skill's directory."""
     known: dict = st.setdefault("skills", {})
     out: list[dict] = []
     for s in skills or []:
@@ -444,15 +529,12 @@ def publish_skills(api: Api, st: dict, skills: list[dict], notes: list[str]) -> 
         if rec.get("id") and rec.get("sha") == digest and rec.get("version"):
             out.append({"id": rec["id"], "version": rec["version"]})
             continue
-        parts = [("files", path, mimetypes.guess_type(path)[0] or "application/octet-stream", data)
-                 for path, data in files]
-        body, ctype = multipart(parts)
+        parts = [(path, data, mimetypes.guess_type(path)[0] or "application/octet-stream") for path, data in files]
         if rec.get("id"):
-            ver = api.request("POST", f"/skills/{rec['id']}/versions", data=body,
-                              headers={"content-type": ctype})
+            ver = api.skill_version_create(rec["id"], parts)
             version = str((ver or {}).get("version") or "")
         else:
-            created = api.request("POST", "/skills", data=body, headers={"content-type": ctype})
+            created = api.skill_create(parts)
             rec = {"id": str((created or {}).get("id") or "")}
             version = str((created or {}).get("latest_version") or "")
         if not rec.get("id") or not version:
@@ -477,7 +559,7 @@ def upload_ok(rel: str, size: int) -> str:
     return f"{rel}: Qoder accepts text-type input files only (binary, image and archive files are refused)"
 
 
-def upload_inputs(api: Api, st: dict, cwd: str, rels: list[str]) -> list[dict]:
+def upload_inputs(api: Client, st: dict, cwd: str, rels: list[str]) -> list[dict]:
     """Upload the runner's staged input files once each (by content hash); → the file resources
     to mount, with the mount path the model is told."""
     known: dict = st.setdefault("files", {})
@@ -491,10 +573,7 @@ def upload_inputs(api: Api, st: dict, cwd: str, rels: list[str]) -> list[dict]:
         digest = _sha(data)
         rec = known.get(rel) or {}
         if not (rec.get("id") and rec.get("sha") == digest):
-            body, ctype = multipart([("file", os.path.basename(rel),
-                                      mimetypes.guess_type(rel)[0] or "text/plain", data),
-                                     ("name", None, "", os.path.basename(rel).encode())])
-            created = api.request("POST", "/files", data=body, headers={"content-type": ctype})
+            created = api.file_upload(os.path.basename(rel), data, mimetypes.guess_type(rel)[0] or "text/plain")
             rec = {"id": str((created or {}).get("id") or ""), "sha": digest, "mounted": []}
             known[rel] = rec
         mount = f"{MOUNT_ROOT}/{rel.lstrip('/')}"
@@ -507,7 +586,7 @@ class Turn:
     def __init__(self, job: dict):
         self.job = job
         self.cwd = str(job.get("cwd") or os.getcwd())
-        self.api = Api(str(job.get("base_url") or ""), str(job.get("api_key") or ""))
+        self.api = Client(str(job.get("base_url") or ""), str(job.get("api_key") or ""))
         self.st = load_state(self.cwd)
         self.notes: list[str] = []
         self.session_id = ""
@@ -535,7 +614,7 @@ class Turn:
         env_id = str(self.st.get("environment_id") or "")
         if env_id:
             return env_id
-        created = self.api.request("POST", "/environments", {
+        created = self.api.environment_create({
             "name": f"harnessrouter {pathlib.Path(self.cwd).name}"[:256],
             "description": "Created by HarnessRouter for one session; deleted with it.",
             "config": {"type": "cloud"}, "metadata": {"harnessrouter": "1"}})
@@ -557,9 +636,7 @@ class Turn:
             return [self.st["vault_id"]] if self.st.get("vault_id") else []
         vid = str(self.st.get("vault_id") or "")
         if not vid:
-            created = self.api.request("POST", "/vaults", {
-                "display_name": f"harnessrouter {pathlib.Path(self.cwd).name}"[:255],
-                "metadata": {"harnessrouter": "1"}})
+            created = self.api.vault_create(f"harnessrouter {pathlib.Path(self.cwd).name}"[:255], {"harnessrouter": "1"})
             vid = str((created or {}).get("id") or "")
             if not vid:
                 raise ApiError(0, "api_error", "vault create returned no id", "/vaults")
@@ -578,25 +655,24 @@ class Turn:
         return [vid]
 
     def _create_credential(self, vid: str, c: dict) -> str:
-        body = {"auth": {"type": "static_bearer", "mcp_server_url": c["url"], "token": c["token"]}}
+        auth = {"type": "static_bearer", "mcp_server_url": c["url"], "token": c["token"]}
         try:
-            doc = self.api.request("POST", f"/vaults/{vid}/credentials", body)
+            doc = self.api.credential_create(vid, auth)
         except ApiError as e:
             if e.status != 409:
                 raise
             # an active credential for this URL that the state does not know: archived, then made anew
             for old in self._active_credentials(vid, c["url"]):
                 self._archive_credential(vid, old)
-            doc = self.api.request("POST", f"/vaults/{vid}/credentials", body)
+            doc = self.api.credential_create(vid, auth)
         cid = str((doc or {}).get("id") or "")
         if not cid:
             raise ApiError(0, "api_error", "credential create returned no id", f"/vaults/{vid}/credentials")
         return cid
 
     def _active_credentials(self, vid: str, url: str) -> list[str]:
-        doc = self.api.request("GET", f"/vaults/{vid}/credentials")
         out = []
-        for x in (doc or {}).get("data") or []:
+        for x in self.api.credentials_list(vid):
             if not isinstance(x, dict) or not x.get("id") or x.get("archived_at"):
                 continue
             if url in (x.get("mcp_server_url"), (x.get("auth") or {}).get("mcp_server_url")):
@@ -605,7 +681,7 @@ class Turn:
 
     def _archive_credential(self, vid: str, cid: str) -> None:
         try:
-            self.api.request("POST", f"/vaults/{vid}/credentials/{cid}/archive")
+            self.api.credential_archive(vid, cid)
         except ApiError as e:
             if e.status not in (404, 409):       # gone, or archived already
                 raise
@@ -617,11 +693,11 @@ class Turn:
         if aid and self.st.get("agent_hash") == digest and self.st.get("agent_version"):
             return aid, int(self.st["agent_version"]), False
         if aid:
-            current = self.api.request("GET", f"/agents/{aid}")
+            current = self.api.agent_retrieve(aid)
             version = int((current or {}).get("version") or 1)
-            updated = self.api.request("POST", f"/agents/{aid}", {**body, "version": version})
+            updated = self.api.agent_update(aid, body, version)
         else:
-            updated = self.api.request("POST", "/agents", body)
+            updated = self.api.agent_create(body)
             aid = str((updated or {}).get("id") or "")
         version = int((updated or {}).get("version") or 1)
         if not aid:
@@ -638,7 +714,7 @@ class Turn:
         if resume != str(self.st.get("session_id") or ""):
             return "", True
         try:
-            doc = self.api.request("GET", f"/sessions/{resume}")
+            doc = self.api.session_retrieve(resume)
         except ApiError as e:
             if e.status == 404:
                 return "", True
@@ -661,7 +737,7 @@ class Turn:
             body["vault_ids"] = vault_ids
         if resources:
             body["resources"] = [{k: v for k, v in r.items() if not k.startswith("_")} for r in resources]
-        doc = self.api.request("POST", "/sessions", body)
+        doc = self.api.session_create(body)
         sid = str((doc or {}).get("id") or "")
         if not sid:
             raise ApiError(0, "api_error", "session create returned no id", "/sessions")
@@ -680,8 +756,7 @@ class Turn:
             if sid in (rec.get("mounted") or []):
                 continue
             try:
-                self.api.request("POST", f"/sessions/{sid}/resources",
-                                 {"type": "file", "file_id": r["file_id"], "mount_path": r["mount_path"]})
+                self.api.resource_add(sid, r["file_id"], r["mount_path"])
             except ApiError as e:
                 if e.status != 409:
                     raise
@@ -689,15 +764,11 @@ class Turn:
         save_state(self.cwd, self.st)
 
     # ── the stream ──
-    def handle(self, eid: str, ev: str, data: str, posted_id: str, started: list[bool]) -> bool:
-        """One SSE message; True when the turn is over."""
-        try:
-            doc = json.loads(data) if data else {}
-        except ValueError:
-            return False
+    def handle(self, eid: str, doc: dict, posted_id: str, started: list[bool]) -> bool:
+        """One stream event, as the SDK decoded it; True when the turn is over."""
         if not isinstance(doc, dict):
             return False
-        t = str(doc.get("type") or ev or "")
+        t = str(doc.get("type") or "")
         if t == "heartbeat":
             return False
         if eid and t not in ("event_start", "event_delta"):
@@ -821,7 +892,7 @@ class Turn:
                 ev["deny_message"] = "This tool is disabled for this harness."
             events.append(ev)
         if events:
-            self.api.request("POST", f"/sessions/{self.session_id}/events", {"events": events})
+            self.api.events_send(self.session_id, events, idempotency_key=uuid.uuid4().hex)
 
     def artifact(self, doc: dict) -> None:
         fid = str(doc.get("file_id") or "")
@@ -873,37 +944,32 @@ class Turn:
         _emit("artifact", {**rec, "status": "landed", "path": written})
 
     def _download(self, fid: str, original: str, part: pathlib.Path) -> tuple[int | None, str]:
-        """(bytes written to `part`, "") or (None, why). The presigned link is asked for again once
-        if the first one fails (its lifetime is not documented); a refused file is not retried."""
+        """(bytes written to `part`, "") or (None, why). The SDK asks for the presigned link and
+        follows it (refusing one that is not http(s)); the link is asked for again once if the
+        first fails (its lifetime is not documented); a refused file is not retried."""
         why = ""
         for _attempt in (0, 1):
             try:
-                link = self.api.request("GET", f"/files/{fid}/content")
-                url = str((link or {}).get("url") or "")
-                if not url:
-                    return None, f"{original}: no download url"
-                if urllib.parse.urlsplit(url).scheme.lower() not in ("https", "http"):
-                    # urllib also opens file:, ftp: and data: URLs; a link that is not a web address
-                    # would land a file of this box (or anything else) as the artifact
-                    return None, f"{original}: the download link is not a web address"
-                req = urllib.request.Request(url, method="GET")       # presigned: no credential travels
                 part.parent.mkdir(parents=True, exist_ok=True)
                 n = 0
-                with urllib.request.urlopen(req, timeout=CALL_TIMEOUT_S) as resp, open(part, "wb") as out:
-                    while True:
-                        chunk = resp.read(1 << 20)
-                        if not chunk:
-                            break
-                        n += len(chunk)
-                        if n > ARTIFACT_MAX_BYTES:
-                            return None, f"{original}: over the {ARTIFACT_MAX_BYTES}-byte artifact limit"
-                        out.write(chunk)
+                resp = self.api.file_download(fid)
+                try:
+                    with open(part, "wb") as out:
+                        for chunk in resp.iter_bytes(1 << 20):
+                            n += len(chunk)
+                            if n > ARTIFACT_MAX_BYTES:
+                                return None, f"{original}: over the {ARTIFACT_MAX_BYTES}-byte artifact limit"
+                            out.write(chunk)
+                finally:
+                    resp.close()
                 return n, ""
             except ApiError as e:
                 why = f"{original}: {e}"
-                if e.status in (404, 410, 403):
+                if e.status in (0, 404, 410, 403):
                     break
-            except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
+            except (NetError, LinkRefused, OSError) as e:
+                why = f"{original}: download failed: {type(e).__name__}: {e}"[:300]
+            except Exception as e:  # noqa: BLE001 — the storage host dropped mid-body (httpx's own errors)
                 why = f"{original}: download failed: {type(e).__name__}: {e}"[:300]
         return None, why
 
@@ -916,12 +982,13 @@ class Turn:
         open took, and nothing of an earlier turn is read as this one's."""
         started = [bool(posted_id)]
         self.last_event_id = posted_id
-        path = f"/sessions/{self.session_id}/events/stream?event_deltas%5B%5D=agent.message"
         attempts = 0
         idle_eofs = 0
+        dropped = self.api.stream_errors()
+        error_frame = self.api.stream_error_frame()
         while True:
             try:
-                resp = self.api.stream(path, self.last_event_id)
+                stream = self.api.events_stream(self.session_id, self.last_event_id)
             except ApiError as e:
                 if e.status in (400, 404) and self.last_event_id:
                     self.last_event_id = ""          # the cursor is gone; start from now
@@ -929,33 +996,37 @@ class Turn:
                     if attempts <= STREAM_RECONNECTS:
                         continue
                 raise
-            except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
+            except NetError as e:
                 attempts += 1
                 if attempts > STREAM_RECONNECTS:
                     raise ApiError(0, "stream", f"the event stream could not be opened: {e}"[:300])
                 time.sleep(min(2.0 * attempts, 15.0))
                 continue
             try:
-                for eid, ev, data in iter_sse(resp):
-                    if self.handle(eid, ev, data, posted_id, started):
+                for ev in stream:
+                    eid = str(stream.last_event_id or "")
+                    if self.handle(eid, _plain(ev), posted_id, started):
                         return
-            except (http.client.HTTPException, TimeoutError, OSError) as e:
+            except dropped as e:
                 attempts += 1
                 _emit("notice", {"text": f"event stream dropped ({type(e).__name__}); resuming from {self.last_event_id or 'now'}"})
                 if attempts > STREAM_RECONNECTS:
                     raise ApiError(0, "stream", f"the event stream kept dropping: {e}"[:300])
                 time.sleep(min(2.0 * attempts, 15.0))
                 continue
+            except error_frame as e:
+                # the stream itself said `error`: Qoder's own word, and the turn's reason
+                raise ApiError(0, "stream", str(e)[:300], f"/sessions/{self.session_id}/events/stream") from None
             finally:
                 try:
-                    resp.close()
+                    stream.close()
                 except Exception:  # noqa: BLE001
                     pass
             # EOF without a terminal event: the server closed the stream. Where the session stands
             # decides: terminated ends the turn; running (or a turn resumed after a confirmation)
             # means reconnect from the cursor; idle twice in a row with no idle event seen means
             # the event was lost on the wire and the turn is over.
-            doc = self.api.request("GET", f"/sessions/{self.session_id}")
+            doc = self.api.session_retrieve(self.session_id)
             status = str((doc or {}).get("status") or "")
             if status == "terminated":
                 self.terminated = True
@@ -973,26 +1044,29 @@ class Turn:
 
     def post_message(self, text: str | None = None) -> str:
         """Send the turn's message once (or `text`, the delivery round's); → the user.message event
-        id. If the call itself fails after it may have been delivered, the session's history says
-        whether it was, and the message is never sent a second time."""
+        id. The message carries an Idempotency-Key, the API's own guard against a retried POST
+        running twice (the SDK retries a POST only under one). If the call still fails after it may
+        have been delivered, the session's history says whether it was, and the message is never
+        sent a second time."""
         before = self.last_history_id()
         if text is None:
             text = str(self.job.get("prompt") or "")
             if self.mounts:
                 text = ("[Attached files, mounted read-only: " + ", ".join(f"`{m}`" for m in self.mounts) + "]\n\n" + text)
-        body = {"events": [{"type": "user.message", "content": [{"type": "text", "text": text}]}]}
+        events = [{"type": "user.message", "content": [{"type": "text", "text": text}]}]
         try:
-            doc = self.api.request("POST", f"/sessions/{self.session_id}/events", body)
-            for e in (doc or {}).get("data") or []:
+            for e in self.api.events_send(self.session_id, events, idempotency_key=uuid.uuid4().hex):
                 if isinstance(e, dict) and e.get("type") == "user.message":
                     return str(e.get("id") or "")
             return ""
-        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
-            q = "/events?limit=20&order=asc&types=user.message" + (f"&after_id={before}" if before else "")
+        except NetError:
+            query: dict = {"limit": 20, "order": "asc", "types": ["user.message"]}
+            if before:
+                query["after_id"] = before
             try:
-                doc = self.api.request("GET", f"/sessions/{self.session_id}{q}")
+                doc = self.api.events_list(self.session_id, **query)
             except ApiError:
-                doc = None
+                doc = {}
             for e in (doc or {}).get("data") or []:
                 if isinstance(e, dict) and e.get("type") == "user.message":
                     _emit("notice", {"text": "the message's acknowledgement was lost; the session history shows it arrived"})
@@ -1040,18 +1114,18 @@ class Turn:
 
     def last_history_id(self) -> str:
         try:
-            doc = self.api.request("GET", f"/sessions/{self.session_id}/events?limit=1&order=desc")
+            doc = self.api.events_list(self.session_id, limit=1, order="desc")
             return str((doc or {}).get("first_id") or "")
-        except (ApiError, urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
+        except (ApiError, NetError):
             return ""
 
     def snapshot_usage(self) -> None:
         try:
-            doc = self.api.request("GET", f"/sessions/{self.session_id}")
+            doc = self.api.session_retrieve(self.session_id)
             u = (doc or {}).get("usage")
             if isinstance(u, dict) and u:
                 self.usage = {k: u.get(k) for k in ("model_credits", "sandbox_runtime_credits", "total_credits")}
-        except (ApiError, urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
+        except (ApiError, NetError):
             pass
 
     def charge(self) -> dict | None:
@@ -1081,7 +1155,7 @@ class Turn:
         if not self.session_id:
             return "cancelled before a Qoder session existed"
         try:
-            self.api.request("POST", f"/sessions/{self.session_id}/cancel", timeout=20.0)
+            self.api.session_cancel(self.session_id)
             return f"cancel accepted by Qoder for session {self.session_id}"
         except Exception as e:  # noqa: BLE001
             return f"cancel failed ({str(e)[:200]}); Qoder session {self.session_id} may still be running"
@@ -1125,8 +1199,7 @@ class Turn:
             if changed:
                 # a session pins its Agent version; its tools and servers are what it lets a
                 # later turn replace, so a tool disabled between turns is withheld on this one
-                self.api.request("POST", f"/sessions/{sid}", {"agent": {"tools": body["tools"],
-                                                                        "mcp_servers": body["mcp_servers"]}})
+                self.api.session_update(sid, {"agent": {"tools": body["tools"], "mcp_servers": body["mcp_servers"]}})
             self.mount_resources(sid, resources)
         else:
             sid = self.create_session(aid, version, env_id, vault_ids, resources)
@@ -1174,14 +1247,24 @@ def purge(job: dict) -> int:
     """Delete at Qoder everything the session's turns created there, in dependency order; every
     failure is reported with its id, never swallowed. Exit 0 when nothing failed."""
     cwd = str(job.get("cwd") or os.getcwd())
-    api = Api(str(job.get("base_url") or ""), str(job.get("api_key") or ""))
     st = load_state(cwd)
+    try:
+        api = Client(str(job.get("base_url") or ""), str(job.get("api_key") or ""))
+    except ImportError as e:
+        # Without the SDK nothing can be deleted, and the runner removes the folder (and this
+        # state with it) whatever the answer is: the report names every recorded id, so what is
+        # left at Qoder is in the runner's log rather than in a traceback.
+        _emit("purge", {"done": [], "failed": [{
+            "what": "everything recorded: " + json.dumps(st)[:1200],
+            "error": f"the Qoder SDK (qca-sdk) is not installed in this interpreter: {e}"[:300]}],
+            "state": STATE_REL})
+        return 1
     done: list[str] = []
     failed: list[dict] = []
 
-    def attempt(label: str, method: str, path: str, body: dict | None = None, ok_status=(404,)) -> bool:
+    def attempt(label: str, fn, *a, ok_status=(404,)) -> bool:
         try:
-            api.request(method, path, body)
+            fn(*a)
             done.append(label)
             return True
         except ApiError as e:
@@ -1195,30 +1278,30 @@ def purge(job: dict) -> int:
 
     sessions = list(st.get("sessions") or ([st["session_id"]] if st.get("session_id") else []))
     for sid in sessions:
-        attempt(f"cancel session {sid}", "POST", f"/sessions/{sid}/cancel", ok_status=(404, 409))
-        attempt(f"delete session {sid}", "DELETE", f"/sessions/{sid}")
+        attempt(f"cancel session {sid}", api.session_cancel, sid, ok_status=(404, 409))
+        attempt(f"delete session {sid}", api.session_delete, sid)
     for fid in list(st.get("artifacts") or []):
-        attempt(f"delete artifact file {fid}", "DELETE", f"/files/{fid}")
+        attempt(f"delete artifact file {fid}", api.file_delete, fid)
     for rel, rec in (st.get("files") or {}).items():
         if isinstance(rec, dict) and rec.get("id"):
-            attempt(f"delete input file {rec['id']} ({rel})", "DELETE", f"/files/{rec['id']}")
+            attempt(f"delete input file {rec['id']} ({rel})", api.file_delete, rec["id"])
     if st.get("agent_id"):
-        attempt(f"archive agent {st['agent_id']}", "POST", f"/agents/{st['agent_id']}/archive")
+        attempt(f"archive agent {st['agent_id']}", api.agent_archive, st["agent_id"])
     if st.get("vault_id"):
-        attempt(f"delete vault {st['vault_id']}", "DELETE", f"/vaults/{st['vault_id']}")
+        attempt(f"delete vault {st['vault_id']}", api.vault_delete, st["vault_id"])
     for name, rec in (st.get("skills") or {}).items():
         if isinstance(rec, dict) and rec.get("id"):
-            attempt(f"delete skill {rec['id']} ({name})", "DELETE", f"/skills/{rec['id']}")
+            attempt(f"delete skill {rec['id']} ({name})", api.skill_delete, rec["id"])
     if st.get("environment_id"):
         eid = st["environment_id"]
         try:
-            api.request("DELETE", f"/environments/{eid}")
+            api.environment_delete(eid)
             done.append(f"delete environment {eid}")
         except ApiError as e:
             if e.status == 404:
                 done.append(f"delete environment {eid} (already gone)")
             elif e.status == 409:       # still referenced: the API says to archive it instead
-                attempt(f"archive environment {eid}", "POST", f"/environments/{eid}/archive")
+                attempt(f"archive environment {eid}", api.environment_archive, eid)
             else:
                 failed.append({"what": f"delete environment {eid}", "error": str(e)})
         except Exception as e:  # noqa: BLE001
@@ -1232,7 +1315,12 @@ def main() -> int:
     job = json.loads(sys.argv[1])
     if job.get("purge"):
         return purge(job)
-    turn = Turn(job)
+    try:
+        turn = Turn(job)
+    except ImportError as e:
+        _emit("__hr_result", {"status": "failed", "final": "", "charge": None,
+                              "reason": f"the Qoder SDK (qca-sdk) is not installed in this interpreter: {e}"[:500]})
+        return 0
 
     def on_term(signum, frame):  # noqa: ARG001
         raise Cancelled()
@@ -1249,8 +1337,13 @@ def main() -> int:
     except ApiError as e:
         turn.result("failed", f"Qoder API {e.path}: {e}"[:1000])
         return 0
-    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
-        turn.result("failed", f"Qoder did not answer: {type(e).__name__}: {e}"[:1000])
+    except NetError as e:
+        turn.result("failed", f"Qoder did not answer: {e}"[:1000])
+        return 0
+    except OSError as e:
+        # this box, not Qoder: a workspace file that could not be read or written. The SDK raises
+        # its own classes for the network, so what is left here is local, and said so.
+        turn.result("failed", f"the workspace: {type(e).__name__}: {e}"[:1000])
         return 0
 
 
