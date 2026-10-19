@@ -5749,10 +5749,30 @@ def _chain_refusal(conn: dict, backend: str) -> str:
 
 def _chain_wired(conn: dict, backend: str) -> dict:
     """The chain connection under the runner's own name for its provider, as an integration is
-    sent (see _integration_conn); api_format rides along for the backends that read it."""
+    sent (see _mapped_integration_conn); api_format rides along for the backends that read it.
+
+    A provider whose endpoint this product knows also gets that endpoint here, exactly as the
+    integrations form supplies it on save ("A provider whose endpoint we know supplies its own
+    base_url"). Without it, a connection set from the environment — the scripted-deploy path in
+    the self-hosting guide — reached the runner with no base, and every backend that needs one
+    failed the turn in the runner's vocabulary: `vibe provider 'tokenrouter' needs a base_url
+    (none configured)`, measured on a Vercel connection written as
+    HR_SECRET_GLOBAL_HARNESS_CONN_VERCEL while bringing up the support matrix (2026-10-19). The
+    catalog is read under the connection's OWN provider name, before the rename: the runner's
+    name for a Vercel or HarnessRouter connection is `tokenrouter`, whose endpoint is something
+    else entirely. A provider the catalog does not know, or one whose base is genuinely
+    per-deployment (Azure, Bedrock), is left as the operator wrote it."""
     provider = str(conn.get("provider") or "").lower()
+    patch: dict = {}
+    known = (_PROVIDER_CATALOG.get(provider) or {}).get("base_url")
+    if known and not str(conn.get("base_url") or "").strip():
+        patch["base_url"] = known
     mapped = _INTEGRATION_WIRING.get((provider, backend)) if provider in _PROVIDER_CATALOG else None
-    return {**conn, "provider": mapped} if mapped and mapped != provider else conn
+    if mapped and mapped != provider:
+        patch["provider"] = mapped
+    # The connection itself when there is nothing to change, as before: the caller's own test
+    # asks for the same object (test_chain_pairing), and a copy is made only where it is needed.
+    return {**conn, **patch} if patch else conn
 
 
 # Built-in agent tools an endpoint may refuse (a proxy that gates codex's web_search per model,
