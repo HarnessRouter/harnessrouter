@@ -2903,6 +2903,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             elif st == "incomplete":
                 translator.incomplete_reason = str(s.get("reason") or "incomplete")
                 translator.handoff = s.get("handoff") if isinstance(s.get("handoff"), dict) else None
+            if terminal != "cancelled" and await _turn_cancelled(sid, org, resp_id):
+                terminal = "cancelled"        # an answered cancel wins over the runner's end (_resp_execute)
             break
     if terminal is None:
         return False                          # still running / adoption interrupted — later sweep retries
@@ -8500,7 +8502,12 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         # manifest reads it) and on the translator (the stored response and the turns feed read it).
         rec["connection"] = name
         translator.connection = name
-        if sid in _cancel_req:
+        # The durable latch too, not only the in-process flag: a cancel that landed between the check
+        # before /turn and the registration above could not prove it owned the live turn, so it only
+        # latched (cancel_response), and the poll loop reads the latch first one interval in. A turn
+        # shorter than that ran to its end and wrote `completed` over the cancel the client was told
+        # had landed (0.35.7-rc.1, a cancel sent as a background task started, 2026-10-19).
+        if await _turn_cancelled(sid, org, translator.resp_id):
             try:
                 await _sandbox_json(f"/turn/{rt}/cancel", sid, "POST", attempts=2)
             except Exception:  # noqa: BLE001
@@ -8625,6 +8632,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                          # 2000, not 200: a CLI panic names its file after the first 200
                                          # characters and 200 cut goose's tmp-dir panic at its path (2026-09-13).
                                          "error": (s.get("error") or s.get("result") or "")[:2000]})
+                if terminal != "cancelled" and await _turn_cancelled(sid, org, translator.resp_id):
+                    # A cancel the client was answered `cancelled` wins over the runner's own end: the
+                    # latch is read every tenth interval, so a turn can finish before it is seen, and
+                    # its end must not overwrite what the cancel already told the client.
+                    terminal = "cancelled"
                 break
         if pending:   # the loop was left between two writes (a cancel, a poll that kept failing)
             await _trace_flush(tr, {"events": pending, "n_total": fed_upto})
