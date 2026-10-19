@@ -128,6 +128,53 @@ writes one record per family: model, served model, status, seconds, the files th
 and the failure text when there is one. The notes name the instance, the connections and the
 result per family.
 
+## The order a harness is tested in
+
+A new harness is measured in THIS ORDER, one harness at a time, and each step runs only after the
+one before it is green. The order is not taste: each step costs more than the last and each one
+depends on what the last proved, so a failure found early is a failure not paid for five times.
+
+1. **The support matrix on the first provider** (`run.mjs`): five scenarios per model. This is the
+   step that proves the base can be driven at all — the connection, the model, the session, the
+   files, the checkpoint. Nothing else is worth running until it passes.
+2. **The custom-harness dimension** (`custom-harness.mjs`): the harness a PERSON configures — their
+   own skill carrying their own script, their own MCP server, and a tool switched off. One turn per
+   base. A base that routes perfectly and ignores the skill someone wrote is not working.
+3. **The plugin matrix** (`plugins/run-matrix.py`): the same promise through an Agent Plugins
+   package — a skill, a stdio MCP server, a stdio tool taking free-form rows, and the SSE and
+   streamable-HTTP transports.
+4. **The family tour** (`family-tour.mjs`): one conversation carried across every model family in
+   turn, on one deliverable. This is where a session that cannot survive a family change shows up.
+5. **The support matrix again on a SECOND provider**, from a fresh connection of that provider and
+   nothing else (see "One provider at a time" below). A column is one connection's measurement; a
+   second provider is what separates "this base works" from "this base works on that key".
+
+The other columns — browser, thinking, environments — are run when a base claims those surfaces.
+Every step's findings go to `docs/support-matrix-notes.md` under that base, including the steps that
+were NOT run, by name. A harness with step 1 green and nothing else is reported as exactly that.
+
+**Stop on the first failure, and on anything that hangs past five minutes.** A step is not left
+running past a failed row to "see how many pass": the run is paused there, the failure is debugged
+to its cause, the cause is FIXED, and the step is then continued or re-run on the fixed build. The
+same applies to silence — a scenario still running after five minutes is treated as a failure and
+opened up rather than waited out, because a hang is a finding too (a turn that never answers, a
+route that never returns, a session the pool has lost).
+
+Two things that discipline is for. A column run to the end past a failure spends real money proving
+the same break fifty times, and its rows cannot be read afterwards: the first failure often changes
+what the later rows mean. And a fix applied without re-running the rows that preceded it leaves a
+column assembled from two different builds — which is how a table ends up describing software
+nobody shipped. When a fix lands mid-column, the pairs already recorded are re-run on the fixed
+build unless the fix provably cannot touch them, and the write-up says which rows were measured on
+which build.
+
+Measured, this batch: vibe's first column failed on its first turn (a connection from the
+environment had no endpoint), and that one row was worth more than the other fifty-five would have
+been — the cause was in the gateway, on the documented scripted-deploy path, and it would have
+failed every base. The second finding came the same way: two pairs PASSED all five scenarios while
+running a model nobody asked for, and the four pairs touched by the fix were re-run on the fixed
+build rather than kept.
+
 ## Rules for the run itself
 
 - **One provider at a time, and isolation means deletion.** A column measures what a provider can
