@@ -12603,7 +12603,14 @@ def backends() -> dict:
 # sha256 of the checkpoint each session's workspace currently holds. PER SESSION, and outside
 # the workspace so it survives the wipe: one shared marker meant a second session's hydrate
 # answered the first session's "do you already have this checkpoint?" probe.
-_WS_MARKER_DIR = "/tmp/hr-ws"
+#
+# It has to live as long as the workspace does. Self-hosted keeps workspaces on the /data volume
+# so a restart doesn't discard work in flight, but the markers sat in /tmp, which a restart empties:
+# the next probe missed, the gateway restored the last end-of-turn checkpoint over the surviving
+# folder, and everything the interrupted turn had written was deleted, files and conversation
+# (#505). The entrypoint puts them on the volume beside the workspaces (HR_WS_MARKER_DIR); a
+# sandbox whose workspace is not on a volume keeps /tmp, where both go together.
+_WS_MARKER_DIR = os.environ.get("HR_WS_MARKER_DIR") or "/tmp/hr-ws"
 
 
 def _ws_marker_path(identifier: str) -> pathlib.Path:
@@ -12703,6 +12710,9 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         # Warm-pool sandboxes are REUSED across sessions, so /workspace may hold a PRIOR session's
         # files (incl. another tenant's). Wipe it before restoring so this session starts from
         # exactly its own checkpoint (or empty) — multi-tenant isolation, not best-effort.
+        # The marker goes first: a restart in the middle of the wipe or the untar must not leave it
+        # vouching for a half-restored folder, now that it outlives a restart.
+        _ws_marker_clear(identifier)
         for child in ws_path.iterdir():
             try:
                 if child.is_dir() and not child.is_symlink():

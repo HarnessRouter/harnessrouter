@@ -84,3 +84,41 @@ def test_delete_workspace_clears_the_marker_even_when_the_folder_is_already_gone
     assert r["removed"] is False and r["reason"] == "no folder"
     assert not server._ws_marker_path("s1").exists()
     assert runner.post(f"/hydrate?identifier=s1&probe={sha}", content=b"").json()["skipped"] is False
+
+
+def test_the_marker_dir_is_the_deployments_to_choose():
+    """Self-hosted keeps workspaces on the /data volume, and the entrypoint puts the markers there
+    too (HR_WS_MARKER_DIR): in /tmp a restart forgot them, the probe missed, and the last
+    checkpoint was restored over a workspace that had survived the restart (#505)."""
+    src = pathlib.Path(server.__file__).read_text()
+    assert '_WS_MARKER_DIR = os.environ.get("HR_WS_MARKER_DIR") or "/tmp/hr-ws"' in src
+    entry = (pathlib.Path(server.__file__).resolve().parents[1] / "docker" / "entrypoint.sh").read_text()
+    assert 'HR_WS_MARKER_DIR="${HR_WS_MARKER_DIR:-$DATA_DIR/ws-markers}"' in entry
+
+
+def test_a_workspace_that_outlived_a_restart_is_kept_as_the_interrupted_turn_left_it(runner, tmp_path):
+    """The restart case (#505): the turn after the checkpoint wrote files, then the process died.
+    The workspace and its marker are both on the volume, so the next turn's probe is answered
+    'held' and the work the interrupted turn did is still there for the follow-up to continue."""
+    body, sha = _checkpoint()
+    runner.post("/hydrate?identifier=s1", content=body)
+    (tmp_path / "ws" / "s1" / "step2.txt").write_text("written before the restart")
+    fresh = TestClient(server.app)                          # a new process, same volume
+    assert fresh.post(f"/hydrate?identifier=s1&probe={sha}", content=b"").json()["skipped"] is True
+    assert (tmp_path / "ws" / "s1" / "step2.txt").read_text() == "written before the restart"
+
+
+def test_a_restore_cut_short_leaves_no_marker_vouching_for_it(runner, tmp_path, monkeypatch):
+    """The marker now outlives a restart, so a hydrate that dies between the wipe and the untar
+    must not leave the previous marker saying the half-restored folder holds the checkpoint."""
+    body, sha = _checkpoint()
+    runner.post("/hydrate?identifier=s1", content=body)
+    real_run = server.subprocess.run
+    def _dies(cmd, *a, **k):
+        if cmd[:2] == ["tar", "xzf"]:
+            raise RuntimeError("killed mid-untar")
+        return real_run(cmd, *a, **k)
+    monkeypatch.setattr(server.subprocess, "run", _dies)
+    with pytest.raises(RuntimeError):
+        runner.post("/hydrate?identifier=s1", content=body)
+    assert not server._ws_marker_path("s1").exists()
