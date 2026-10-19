@@ -4283,6 +4283,31 @@ installed into the container before the tour. A deck task on a stock image needs
 the product's own image bakes those libraries in — and a tour run without it would have measured
 the rig.
 
+### The SECOND column (google, 2026-10-19): 8 of 8, and the relay repair it forced
+A fresh instance holding ONE connection — Google AI Studio and nothing else — which is what "one
+provider at a time" means here. Its menu offered **8 of the catalog's 58 ids**, the whole gemini
+family, and the other 50 were correctly not offered: that is the honest-catalog rule working per
+connection rather than per base. All 8 pairs passed all five scenarios, nothing substituted (and on
+this endpoint the served ids come back BARE — `gemini-3.8-flash`, not `google/gemini-3.8-flash`),
+every pair's `served` carrying two ids, cards agreeing, every session deleted.
+
+It did not start that way. **The artifact scenario failed twice** — 211 s, then 162 s on the
+re-run — with `The turn failed: Tool call chunk missing index`, after the model had answered and
+with the file never written. That sentence is the CLIENT's (vibe 2.26.1 raises it in its own
+`core/types.py` while merging a streamed tool call's chunks) and the cause is the PROVIDER's shape:
+measured straight at `generativelanguage.googleapis.com/v1beta/openai`, a streamed `tool_calls`
+delta carries `id`, `type`, `function` and Google's own `extra_content.google.thought_signature`
+and NO `index`, where OpenAI's streaming shape has one on every delta because that is how a client
+merges chunks. The relay now supplies it (`_tool_call_index_line`, route flag `tool_index_fill`),
+and the scenario that failed twice passes in 19.76 s.
+
+Worth keeping about that fix: **the first version of it did nothing.** The rewriter was extended
+and ten unit tests passed, but the streaming loop's gate — the expression that decides whether the
+client is given the rewritten lines or the raw read — still named only the two older flags, so the
+bytes went through untouched and the column failed again with the identical error. The whole
+8-pair column was then re-run on the fixed build rather than kept, per "a column is never assembled
+from two builds".
+
 ### What it is
 Not a fork of anything this runner already drives. Its programmatic mode is a written contract:
 `vibe -p` with `--output streaming` puts one JSON session-journal entry per line on stdout
@@ -4367,10 +4392,10 @@ against the real assets, and `install_vibe` itself was run on a `python:3.12-sli
 the installed binary reported `vibe 2.26.1`.
 
 ### What is NOT measured
-No custom-harness run, no plugin, browser, environments or family-tour dimension, and no column on
-any provider but Vercel. The `("google", "vibe")` wiring row is the one probed directly
-(gemini-3.8-flash, 2026-10-15) rather than through an aggregator; the Vercel column above is a
-column of one connection, so every other row of this base's wiring is still unmeasured. A turn's input is large — 11.5k tokens on a three-word prompt, 20k characters of system
+Two columns (vercel, google), the custom-harness dimension, the plugin matrix and the family tour
+have run. What has NOT: the browser, thinking and environments columns, and every other row of this
+base's wiring — anthropic, openai, azure-foundry, openrouter, tokenrouter, llmtr, custom and
+harnessrouter are all unmeasured on it, and a column is one connection's measurement. A turn's input is large — 11.5k tokens on a three-word prompt, 20k characters of system
 prompt — which is worth knowing before reading its usage numbers against another base's.
 
 ## vtcode: a codex frame over its own items, and two refusals that were the CLIENT's request shape (2026-10-16) — behaviour measured, NO column yet
