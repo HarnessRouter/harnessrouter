@@ -209,6 +209,30 @@ curl --fail-with-body -sS "$HARNESSROUTER_BASE_URL/v1/responses" \
 
 The task and its transcript appear in the same workspace in the Console. Set `"stream": true` to receive server-sent events.
 
+**Retry a task without running it twice.**
+
+Send the same request with the same `Idempotency-Key` when retrying a task. For example, send this request twice using the URL and API key above (key generation needs Python 3):
+
+```bash
+IDEMPOTENCY_KEY=$(python3 -c 'import uuid; print(uuid.uuid4())')
+
+for attempt in 1 2; do
+  curl --fail-with-body -sS "$HARNESSROUTER_BASE_URL/v1/responses" \
+    -H "Authorization: Bearer ${HARNESSROUTER_API_KEY:?}" \
+    -H 'content-type: application/json' \
+    -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+    -d '{
+      "input":"Reply with exactly: it works.",
+      "metadata":{"harness_id":"codex"},
+      "model":"gpt-5.4-mini",
+      "stream":false
+    }'
+  printf '\n'
+done
+```
+
+Both responses have the same `id`, and the session contains one turn: the retry returns the first request's result without starting another execution. If the first request is still running, the retry waits for it. Use a new key for each new logical request. Reusing a key with a different request body returns `409`; changing only `stream` still counts as the same request. See [Tasks §6: Idempotency](protocol/versions/2026-10-19/tasks.md#6-idempotency).
+
 Never put a long exact value such as a token, an id or a hash in the prompt: the agent retypes what it reads, and a model drops and swaps characters in strings like that. Attach it as a file (`POST /v1/files`, then an `input_file` block; the file lands in the agent's working directory under its filename before every turn that carries it) or hand it to the agent through the harness's environment. A harness takes an `env` map whose values resolve on every turn: `$headers.X-Name` takes that header from the request (declare it in `additional_headers`), `vault:name` takes a stored secret, anything else is used as written. The agent's shell and tools start with those variables set, so a task can say "the token is in $DEPLOY_TOKEN", and a value that came through a reference is redacted from everything that leaves the sandbox, the response, the stream, the trace and the stored record, even when the agent prints it. A `vault:` reference reads only a secret your own workspace stored through `PUT /v1/mcp-secrets/{ref}`. The redaction protects the record, not the agent: a value the agent can read it can also send elsewhere if a prompt or a page tells it to, so hand it a token scoped to the user and the task, short-lived and least privilege.
 
 The whole API is described at `$HARNESSROUTER_BASE_URL/v1/openapi.json`, generated from the routes, with a browsable copy at `/v1/docs`.

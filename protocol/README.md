@@ -102,6 +102,8 @@ The stream is Server-Sent Events. The last event carries the finished `response`
 any files the agent produced. To continue the same conversation, send the next request with
 `previous_response_id` set to the id you just received.
 
+For retries, send an `Idempotency-Key`. A server that advertises `idempotency` returns the first request's result for a repeated key without starting a second execution. See [Tasks §6: Idempotency](versions/2026-10-19/tasks.md#6-idempotency).
+
 Full walk-through: [Tasks](versions/2026-10-19/tasks.md).
 
 ## Relationship to the OpenAI Responses API
