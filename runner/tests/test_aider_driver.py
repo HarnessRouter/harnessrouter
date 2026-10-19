@@ -676,7 +676,9 @@ def _run_installed(coder, prompt):
     return gate, emitted
 
 
-_ADDED = "I added these files to the chat: hello.txt\nLet me know if there are others we should add."
+# what check_for_file_mentions returns once the driver has set prompts.added_files: the reflected
+# message the driver feeds back IS this string (the shape tests below assert it in c.sent)
+_ADDED = aider_driver.ADDED_FILES.format(fnames="hello.txt")
 _BLOCK = "hello.txt\n```text\n<<<<<<< SEARCH\nhello\n=======\nhello\nworld\n>>>>>>> REPLACE\n```\n"
 
 
@@ -769,6 +771,40 @@ def test_mid_turn_words_that_no_file_add_answered_keep_their_message_and_their_p
                      ("shell_decision", "cat hello.txt"),
                      ("text", "hello.txt has two lines.")]
     assert aider_driver._turn_answer(c, gate, set(), failed=False) == "hello.txt has two lines."
+
+
+def test_the_added_files_message_states_the_add_and_invites_no_answer():
+    """aider's own added_files prompt ends "Let me know if there are others we should add." — an
+    invitation written for a person at the prompt. Reflected into the driver's loop it was
+    ANSWERED: gpt-6-sol opened the pass after the add with "No other files are needed." and that
+    narration became the turn's answer, in the future tense ("I'll add `there` after `hi`.",
+    rc.1 probe, 2026-10-19). The driver's message states the add and points back at the request —
+    no question, no invitation — and it lives on the aider.prompts MODULE, because that is where
+    check_for_file_mentions reads it (base_coder.py:31, 1781); the coder's gpt_prompts does not
+    carry it."""
+    assert aider_driver.ADDED_FILES.format(fnames="hello.txt") == \
+        "I added these files to the chat: hello.txt. Continue with the request."
+    msg = aider_driver.ADDED_FILES.format(fnames="a.txt, b.txt")
+    assert "a.txt, b.txt" in msg and "?" not in msg and "Let me know" not in msg
+    # the override lands where aider reads it, replacing aider's own wording
+    pkg = types.ModuleType("aider")
+    mod = types.ModuleType("aider.prompts")
+    mod.added_files = ("I added these files to the chat: {fnames}\nLet me know if there are others"
+                       " we should add.")
+    pkg.prompts = mod
+    saved = {k: sys.modules.get(k) for k in ("aider", "aider.prompts")}
+    sys.modules.update({"aider": pkg, "aider.prompts": mod})
+    try:
+        aider_driver._added_files_without_invitation()
+    finally:
+        for k, v in saved.items():
+            sys.modules.pop(k, None) if v is None else sys.modules.__setitem__(k, v)
+    assert mod.added_files == aider_driver.ADDED_FILES
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "    _added_files_without_invitation()\n" in src    # main sets it before the turn runs
+    # _ADDED above is this message, so the shape tests also pin that the reflected message the
+    # driver feeds back is the uninviting one
+    assert _ADDED == aider_driver.ADDED_FILES.format(fnames="hello.txt")
 
 
 def test_a_chat_with_no_files_says_a_new_file_needs_no_adding():

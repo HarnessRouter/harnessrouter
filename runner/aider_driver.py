@@ -621,6 +621,23 @@ def _new_files_need_no_add(coder) -> None:
     coder.gpt_prompts = prompts
 
 
+ADDED_FILES = "I added these files to the chat: {fnames}. Continue with the request."
+
+
+def _added_files_without_invitation() -> None:
+    """aider's reflected message after an automatic add ends "Let me know if there are others we
+    should add." — an invitation written for a person at the prompt. Fed back as the next pass's
+    input in the driver's loop, the model ANSWERS it: gpt-6-sol opened the pass after the add with
+    "No other files are needed." and that narration became the turn's answer, in the future tense
+    ("I'll add `there` after `hi`.", rc.1 probe, 2026-10-19). Nobody is at that prompt here, so the
+    message states the add and points back at the request, and invites nothing. It is set on the
+    aider.prompts MODULE, because that is where check_for_file_mentions reads it
+    (base_coder.py:31, 1781) — the coder's gpt_prompts does not carry it — and the turn is its own
+    process, so the patch outlives nothing."""
+    from aider import prompts
+    prompts.added_files = ADDED_FILES
+
+
 def _repo_map_after_the_conversation(coder) -> None:
     """THE CONVERSATION STARTS WITH WHAT THE USER SAID, with files in the workspace as without.
     aider sends the repo map as a user message, answered for the model with "Ok, I won't try and
@@ -957,6 +974,7 @@ def main() -> int:
     # defaults, so the attribute is set on the object, which is what format_chat_chunks reads.
     coder.main_model.examples_as_sys_msg = True
     _new_files_need_no_add(coder)
+    _added_files_without_invitation()
     _repo_map_after_the_conversation(coder)
     # NO TEMPERATURE. aider sends `temperature: 0` for every id its settings do not know, and a
     # provider that has retired the field refuses the whole turn: claude-fable-5-1 on TokenRouter
