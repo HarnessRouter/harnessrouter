@@ -20,6 +20,11 @@ from .registry import Skip, check
 
 SPEC = "protocol/versions/2026-10-19"
 
+# The five statuses the lifecycle table defines, and the four that end a task. Named once so a
+# check states the rule it enforces rather than spelling out a literal set of its own.
+LIFECYCLE_STATUSES = {"in_progress", "completed", "failed", "incomplete", "cancelled"}
+TERMINAL_STATUSES = LIFECYCLE_STATUSES - {"in_progress"}
+
 
 # ── shared fixtures ────────────────────────────────────────────────────────────────────
 # Small, deterministic work: the point is to exercise the protocol, not the model.
@@ -349,6 +354,53 @@ def t06(ctx):
 def t07(ctx):
     rid = (_run_blocking(ctx).json or {}).get("id") or ""
     assert rid.startswith("resp_"), f"response id {rid!r} is not `resp_`-prefixed"
+
+
+@check("T-11", "A background task read while it runs reports in_progress", "core",
+       f"{SPEC}/lifecycle.md#3-task-lifecycle")
+def t11(ctx):
+    """The lifecycle table names five statuses, and `in_progress` is the only non-terminal one. A
+    server that answers a poll with its own internal name for the state (`running`) leaves a
+    strict client with nothing to wait for: it waits for `in_progress`, or treats the unknown
+    status as an error. Measured 2026-10-19 on 0.35.0-rc.2, HarnessRouter answered a background
+    POST and every poll until the turn ended with `running`, while its own stream emitted
+    `in_progress` for the same turn."""
+    h = _harness(ctx)
+    body = {"input": "Count slowly from 1 to 100, one number per line.",
+            "metadata": {"harness_id": h["id"]}, "stream": False, "background": True}
+    if ctx.model:
+        body["model"] = ctx.model
+    started = ctx.client.post("/v1/responses", body=body)
+    rid = (started.json or {}).get("id")
+    if started.status != 200 or not rid:
+        raise Skip(f"could not start a background task (HTTP {started.status})")
+
+    try:
+        accepted = str((started.json or {}).get("status") or "")
+        assert accepted == "in_progress", (
+            f"POST /v1/responses with background:true answered {accepted!r}; a background task is "
+            f"accepted and running, which the lifecycle table names `in_progress`")
+
+        # Read it back while the turn is still going. The status set is total, so one poll settles it:
+        # `in_progress` is the observation, and anything else is either a terminal status or a name
+        # the table does not define. A task that finished first has nothing left to observe, and a
+        # skip is never a pass.
+        got = ctx.client.get(f"/v1/responses/{rid}")
+        assert got.status == 200, f"GET /v1/responses/{{id}} returned HTTP {got.status}"
+        status = str((got.json or {}).get("status") or "")
+        assert status in LIFECYCLE_STATUSES, (
+            f"GET /v1/responses/{{id}} answered {status!r}, which is not one of the five statuses the "
+            f"lifecycle table defines ({', '.join(sorted(LIFECYCLE_STATUSES))})")
+        if status in TERMINAL_STATUSES:
+            raise Skip(f"the task reached {status!r} before the check could read it mid-turn")
+        return f"read back as {status}"
+    finally:
+        # The task was started only to be watched: stop it, so the check leaves nothing running
+        # (and spending) after it. A server that cannot cancel changes no verdict here.
+        try:
+            ctx.client.post(f"/v1/responses/{rid}/cancel")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
