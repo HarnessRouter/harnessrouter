@@ -108,6 +108,12 @@ GET /v1/harnesses/{harness_id}/models
 }
 ```
 
+`fallback` is deprecated, and is removed no earlier than the second version after this one. It names
+the model a server would run in place of one it cannot serve, which
+[Tasks §1.3](tasks.md#13-model-selection-and-substitution) makes the harness's `default`, so it only
+ever repeats `default`; a server that refuses an unavailable model (`model_unavailable`) runs none in
+its place. Servers keep sending it as before. Read `default` and each model's `available` instead.
+
 ### 3.1 `available` is a promise
 
 `available: true` means the server can serve that model for that harness **right now** — a

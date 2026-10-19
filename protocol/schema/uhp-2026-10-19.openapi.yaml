@@ -1279,7 +1279,7 @@ paths:
       summary: Models this harness can run
       responses:
         '200':
-          description: The harness's allowed models, default and authorized fallback
+          description: The harness's allowed models and its default
           content:
             application/json:
               schema: { $ref: '#/components/schemas/HarnessModels' }
@@ -2113,7 +2113,15 @@ components:
         harness_id: { type: string }
         backend: { type: string }
         default: { type: string }
-        fallback: { type: string }
+        fallback:
+          type: string
+          deprecated: true
+          description: |
+            Deprecated, and removed no earlier than the second version after 2026-10-19. The model a
+            server would run in place of one it cannot serve, which Tasks §1.3 makes the harness's
+            `default`, so it only ever repeats `default`; a server that refuses an unavailable model
+            (`model_unavailable`) runs none in its place. Read `default` and each model's
+            `available` instead.
         models: { type: array, items: { $ref: '#/components/schemas/Model' } }
 
     Model:
