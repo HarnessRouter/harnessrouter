@@ -426,6 +426,13 @@ def _workspace_names(root: str) -> "set | None":
     a walk blind to dot-folders and node_modules, which a request does not mean. None when neither
     can say: then a bare name counts as present, since no nudge is the turn as it was and a wrong
     one makes a stray file."""
+    paths = _workspace_paths(root)
+    return None if paths is None else paths | {p.rsplit("/", 1)[-1] for p in paths}
+
+
+def _workspace_paths(root: str) -> "set | None":
+    """The workspace's files by path, as _workspace_names reads them; None when neither git nor a
+    bounded walk can say."""
     try:
         out = subprocess.run(["git", "-c", "safe.directory=*", "-C", root, "ls-files", "-z",
                               "--cached", "--others", "--exclude-standard"],
@@ -438,7 +445,24 @@ def _workspace_names(root: str) -> "set | None":
             paths += [os.path.relpath(os.path.join(d, f), root) for f in files]
             if len(paths) > _WALK_CAP:
                 return None
-    return set(paths) | {p.rsplit("/", 1)[-1] for p in paths}
+    return set(paths)
+
+
+def _edits_sentence(edited: list, before: "set | None") -> str:
+    """What a turn changed, said from the edits themselves, for a turn whose model wrote only edit
+    blocks: its answer is empty once they are cards. Measured 2026-10-19 on "Create a file named
+    hello.txt containing hi, then say done.": the reply was the edit block alone in 6 of 24 runs
+    (gpt-5.4 4 of 6), and 11 of 24 on 0.35.2. A file absent from the workspace before the turn was
+    created; one that was there was edited. With no listing to tell them apart, every file is
+    "edited", which a written file also is. Names up to two files, then counts; nothing else."""
+    created = sorted(p for p in edited if before is not None and p not in before)
+    changed = sorted(p for p in edited if p not in created)
+
+    def files(ps: list) -> str:
+        return " and ".join(ps) if len(ps) <= 2 else f"{len(ps)} files"
+    if created and changed:
+        return f"Created {files(created)}{', and' if len(created) == 2 else ' and'} edited {files(changed)}."
+    return f"Created {files(created)}." if created else f"Edited {files(changed)}."
 
 
 def _exists_in(root: str, name: str, names: "set | None") -> bool:
@@ -486,6 +510,31 @@ def _file_nudge(names: list) -> str:
             "each: the path, an empty SEARCH section and the contents in the REPLACE section. A "
             "new file does not need to be added to the chat first. Then give the reply the request "
             "asks for.")
+
+
+# A request that asks for words back once the work is done: "Create a file named hello.txt
+# containing hi, then say done." gpt-5.4-mini answered it with the edit block and nothing else (21
+# output tokens, its chat history shows no other words; the runner read-back on 0.35.3's driver,
+# 2026-10-18): the file was written and the person's answer was the driver's "The task ended
+# without a written answer" sentence. aider gives the model one response per turn, and the block
+# was that response, the mirror of #379's "DONE" with no file. Keyed on the request, like the file
+# nudge: the verb opens a clause, so "the answer is in notes.md" asks for nothing. ENGLISH ONLY: the
+# openers are English words, so a request in another language never gets this nudge. Such a turn
+# still ends with words, the sentence _edits_sentence builds from its edits, which is also the answer
+# whenever this nudge is not sent or was already spent on another one this turn.
+_ASKS_REPLY = re.compile(
+    r"(?:^|[.;:!?]\s+|\n\s*|,\s*|\b(?:and|then|please|now|also|just|finally|afterwards)\s+)"
+    r"(?:say|reply|respond|answer|confirm|report|tell me|let me know)\b", re.I)
+REPLY_NUDGE = ("What this turn wrote and ran is done, so do not write or run it again. Now give the "
+               "reply the request asks for, in words, with no SEARCH/REPLACE block and no command.")
+
+
+def _asks_for_reply(prompt: str) -> bool:
+    """Whether this turn's request asks for words back (earlier turns put ahead of it are not it)."""
+    text = prompt or ""
+    if text.startswith("<conversation_so_far>\n"):
+        text = text.rpartition("</conversation_so_far>\n\n")[2]
+    return bool(_ASKS_REPLY.search(text))
 
 
 NEW_FILE_NOTE = ("If the request asks for a new file, it needs no adding to the chat: write it with "
@@ -571,7 +620,12 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     files and asks for the edit blocks, since the general nudge's "otherwise give your final
     answer" is the way out the model already took. A reply that asks the person
     something is not nudged. A command counts only by what it left on disk: a turn that read a
-    skill with `cat` and answered "DONE" made no file. One nudge per turn either way."""
+    skill with `cat` and answered "DONE" made no file.
+
+    And the same one nudge the other way round: a request that asks for words back ("then say
+    done") answered by a pass that edited or ran something and said nothing besides. Without it the
+    answer is the driver's "ended without a written answer" sentence over a task that is done. One
+    nudge per turn in every case."""
     coder.io.user_input(prompt)
     coder.init_before_message()
     message = prompt
@@ -580,6 +634,7 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     nudged = False
     root = getattr(coder, "root", None) or "."
     wanted = _files_asked_for(prompt, root)
+    wants_reply = _asks_for_reply(prompt)
     while message:
         coder.reflected_message = None
         calls_before = len(gate.calls) if gate is not None else 0
@@ -605,6 +660,9 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
             elif not acted and _announces_without_acting(reply):
                 nudged = True
                 coder.reflected_message = NUDGE
+            elif acted and reply and wants_reply and not strip_edit_blocks(reply):
+                nudged = True
+                coder.reflected_message = REPLY_NUDGE
         if not coder.reflected_message:
             break
         if reflections >= coder.max_reflections:
@@ -818,6 +876,7 @@ def main() -> int:
     _run_shell_commands_reporting(coder, gate, reflect=bool(job.get("reflect_shell_output", True)))
 
     _emit("init", {"model": coder.main_model.name, "edit_format": coder.edit_format})
+    before = _workspace_paths(cwd)        # what was there, so the turn's edits say created or edited
     try:
         _run_turn(coder, job["prompt"], gate)
     except Exception as exc:  # noqa: BLE001 — the turn's failure is the product here, not a crash
@@ -841,11 +900,14 @@ def main() -> int:
         # further turn when that printed nothing. Measured on the hosted service (an officecli
         # that was not installed ran seven times and the task ended with no text and no file;
         # gpt-5.4 ended after one edit block). Said as what happened, not as an answer the model
-        # gave. The same two sentences on the hosted service.
-        final = ("The task ended without a written answer after running commands. The commands "
-                 "and their output are above." if gate.calls else
-                 "The task ended without a written answer after editing files. What it did is "
-                 "shown above.")
+        # gave: the files it changed, by name, or the commands it ran. The same on the hosted service.
+        edited = sorted(coder.aider_edited_files or [])
+        if edited:
+            final = _edits_sentence(edited, before) + (
+                " The commands and their output are above." if gate.calls else "")
+        else:
+            final = ("The task ended without a written answer after running commands. The commands "
+                     "and their output are above.")
     _emit("result", {
         "final": final,
         "ok": not failed,

@@ -330,7 +330,33 @@ def test_a_turn_that_ended_on_a_command_says_so_rather_than_saying_nothing():
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
     assert "if not final.strip() and not failed and (gate.calls or coder.aider_edited_files):" in src
     assert "The task ended without a written answer after running commands." in src
-    assert "The task ended without a written answer after editing files." in src
+    # an edit-only turn says which files it changed (below), not that it wrote no answer
+    assert "The task ended without a written answer after editing files." not in src
+    assert "final = _edits_sentence(edited, before)" in src
+
+
+def test_a_turn_that_only_wrote_edit_blocks_says_which_files_it_changed(tmp_path):
+    """The model's whole reply was the edit block, without the "done" it was asked for (6 of 24 on
+    "Create a file named hello.txt containing hi, then say done.", 2026-10-19), and the answer read
+    "The task ended without a written answer". It now names what the turn changed, from the edits
+    themselves: created when the file was not in the workspace before the turn, edited when it
+    was. Nothing is said that the edits do not show."""
+    S = aider_driver._edits_sentence
+    assert S(["hello.txt"], set()) == "Created hello.txt."
+    assert S(["hello.txt"], {"hello.txt"}) == "Edited hello.txt."
+    assert S(["a.txt", "b.txt"], set()) == "Created a.txt and b.txt."
+    assert S(["hello.txt", "src/x.py", "y.md"], {"src/x.py", "y.md"}) == "Created hello.txt and edited src/x.py and y.md."
+    assert S(["a", "b", "c", "d"], {"c", "d"}) == "Created a and b, and edited c and d."
+    assert S(["a", "b", "c"], {"a", "b", "c"}) == "Edited 3 files."
+    assert S(["n1", "n2", "n3", "old"], {"old"}) == "Created 3 files and edited old."
+    assert S(["hello.txt"], None) == "Edited hello.txt."       # no listing: every written file is edited
+    # created means absent before the turn, by path: a hello.txt elsewhere does not make it edited
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "hello.txt").write_text("x")
+    before = aider_driver._workspace_paths(str(tmp_path))
+    assert before == {"src/hello.txt"}
+    assert S(["hello.txt"], before) == "Created hello.txt."
+    assert "hello.txt" in aider_driver._workspace_names(str(tmp_path))   # the nudge's bare names stay
 
 
 def test_a_reply_that_announces_work_and_does_none_is_nudged_once():
@@ -548,6 +574,57 @@ def test_a_file_request_answered_with_a_word_and_no_edit_is_nudged_once():
     c.send_message = pending
     aider_driver._run_turn(c, ask, gate)
     assert c.sent == [ask, "lint: fix this", nudge]
+
+
+def test_a_request_for_words_back_answered_by_an_edit_alone_is_nudged_once():
+    """The runner read-back on 0.35.3's driver (2026-10-18): "Create a file named hello.txt
+    containing hi, then say done." gpt-5.4-mini answered with the edit block and no other word (its
+    chat history), so hello.txt was written and the answer was "The task ended without a written
+    answer after editing files." A request that asks for words back gets one nudge for them, and
+    the nudged reply is the answer; a reply with words, a request that asks for none, a failed call
+    and a second wordless reply get none."""
+    root = tempfile.mkdtemp()
+
+    class Coder:
+        def __init__(self, replies, edits=None, gate=None):
+            self.replies = list(replies); self.edits = list(edits or []); self.gate = gate
+            self.reflected_message = None; self.partial_response_content = ""; self.root = root
+            self.aider_edited_files = set(); self.max_reflections = 5
+            self.io = types.SimpleNamespace(user_input=lambda p: None); self.sent = []
+        def init_before_message(self): self.aider_edited_files = set()
+        def send_message(self, m):
+            self.sent.append(m); self.partial_response_content = self.replies.pop(0)
+            step = self.edits.pop(0) if self.edits else None
+            if step == "edit":
+                self.aider_edited_files.add("hello.txt"); pathlib.Path(root, "hello.txt").write_text("hi\n")
+            elif step == "run":                  # a command that printed nothing: no reflection
+                self.gate.calls.append({"command": "touch hello.txt", "approved": True})
+            return iter(())
+    ask = "Create a file named hello.txt containing hi, then say done."
+    block = "hello.txt\n```text\n<<<<<<< SEARCH\n=======\nhi\n>>>>>>> REPLACE\n```\n"   # the reply, verbatim
+    gate = aider_driver._Gate([])
+    c = Coder([block, "done"], edits=["edit"]); logged = []; c.io = types.SimpleNamespace(user_input=logged.append)
+    aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask, aider_driver.REPLY_NUDGE] and logged == [ask, aider_driver.REPLY_NUDGE]
+    assert aider_driver.strip_edit_blocks(c.partial_response_content) == "done"     # what the result says
+    assert "do not write or run it again" in aider_driver.REPLY_NUDGE
+    c = Coder([block, block], edits=["edit"]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask, aider_driver.REPLY_NUDGE]                 # once, not twice
+    c = Coder([block + "\ndone"], edits=["edit"]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask]                                           # it said the word
+    c = Coder([block], edits=["edit"]); aider_driver._run_turn(c, "Create a file named hello.txt containing hi.", gate)
+    assert len(c.sent) == 1                                          # no word asked for: the edit is the turn
+    c = Coder([""]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask]                                           # a failed call is not repeated
+    g = aider_driver._Gate([])
+    c = Coder(["```bash\ntouch hello.txt\n```", "done"], edits=["run"], gate=g); aider_driver._run_turn(c, ask, g)
+    assert c.sent == [ask, aider_driver.REPLY_NUDGE]                 # a command and no word, the same
+    a = aider_driver._asks_for_reply
+    assert a("Create a.txt and b.txt, then reply DONE.") and a("Reply with exactly: M1-gpt-5.4")
+    assert a("Fix the bug in app.py and tell me what it was") and a("Update notes.md. Confirm when done.")
+    assert not a("Create hello.txt containing hi") and not a("the answer is in notes.md")
+    assert not a("write an essay to essay.md") and not a("Make the report in report.md")
+    assert not a("<conversation_so_far>\nuser: say hi\n</conversation_so_far>\n\nCreate hello.txt")
 
 
 def test_a_chat_with_no_files_says_a_new_file_needs_no_adding():
