@@ -680,7 +680,9 @@
           "type": "string"
         },
         "fallback": {
-          "type": "string"
+          "type": "string",
+          "deprecated": true,
+          "description": "Deprecated, and removed no earlier than the second version after 2026-10-19. The model a\nserver would run in place of one it cannot serve, which Tasks §1.3 makes the harness's\n`default`, so it only ever repeats `default`; a server that refuses an unavailable model\n(`model_unavailable`) runs none in its place. Read `default` and each model's\n`available` instead.\n"
         },
         "models": {
           "type": "array",
