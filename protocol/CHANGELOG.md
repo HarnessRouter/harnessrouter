@@ -2,6 +2,36 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## 2026-10-19
+
+Against `2026-10-04`, one rule changes and the rest is additive.
+
+**Retiring a harness may retire its sessions with it, under a stated restore window**
+([Harnesses §5.3](versions/2026-10-19/harnesses.md#53-delete)). Every earlier version said a server
+MUST NOT delete the sessions or responses that used a deleted harness. That stays the rule for a
+server that reports the new `harness_retirement` capability `false`, or says nothing. A server that
+reports it `true` MAY remove them with the harness, under three conditions:
+- it states the window when the harness is retired: the delete response carries
+  `sessions: "retired"` and `restorableUntil` (Unix seconds), and its own interface tells the person
+  the window's length before they confirm;
+- within the window, a restore brings back the harness and its sessions together;
+- only after the window may it remove them for good.
+
+A server may withhold them from lists and reads while the window runs. The delete response gains
+`sessions` (`kept` or `retired`; absent means kept) and `restorableUntil`. This is the one change
+that is not additive. [Versioning](VERSIONING.md#the-current-versions-known-compromises) records what
+it means for a server that also serves an earlier version.
+
+**Harness writes refuse what they cannot store**, now stated in
+[Harnesses §5.1](versions/2026-10-19/harnesses.md#51-create): a field the harness does not have and
+a `default_model` its base does not run are `422`. Both maintained servers have done this since
+2026-10-10.
+
+**Conformance suite 2026.10.19.** New check F-09 (class Full) creates a harness, runs a task on it
+and deletes the harness. A server whose `harness_retirement` is `false` or absent passes when the
+session still reads afterwards and the response says nothing else. One that reports it `true` passes
+when the delete response says `sessions: "retired"` with a future `restorableUntil`.
+
 ## Conformance suite 2026.10.4.post11 (2026-10-15)
 
 No change to the protocol, the schema or any verdict a conformant server gets. ME-01 assumed the

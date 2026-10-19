@@ -18,7 +18,7 @@ import uuid
 
 from .registry import Skip, check
 
-SPEC = "protocol/versions/2026-10-04"
+SPEC = "protocol/versions/2026-10-19"
 
 
 # ── shared fixtures ────────────────────────────────────────────────────────────────────
@@ -1259,6 +1259,50 @@ def f08(ctx):
         f"a deleted session still resolves (GET returned HTTP {after.status}); §6 requires 404 "
         "afterwards, otherwise the client cannot tell 'deleted' from 'failed to delete'.")
     return f"deleted {sid}, now 404"
+
+
+@check("F-09", "Deleting a harness keeps its sessions, or states how long they can be restored", "full",
+       f"{SPEC}/harnesses.md#53-delete")
+def f09(ctx):
+    # §5.3 gives a server two rules and makes it say which one it follows: the capability says it
+    # before the delete, the delete response says it again with the window. A server that reports
+    # nothing keeps the sessions, which is what every version before 2026-10-19 required of all.
+    retires = bool(((ctx.state.get("discovery") or {}).get("capabilities") or {}).get("harness_retirement"))
+    h = _managed_harness(ctx)
+    body = {"input": PROMPT, "metadata": {"harness_id": h["id"]}, "stream": False}
+    if ctx.model:
+        body["model"] = ctx.model
+    r = ctx.client.post("/v1/responses", body=body)
+    sid = ((r.json or {}).get("metadata") or {}).get("session_id") if r.status == 200 else None
+    if not sid:
+        ctx.client.delete(f"/v1/harnesses/{h['id']}")
+        raise Skip(f"a task on a new harness returned no session_id (HTTP {r.status}), so there is no "
+                   "session for the delete to keep or retire")
+    gone = ctx.client.delete(f"/v1/harnesses/{h['id']}")
+    assert gone.status in (200, 204), f"delete returned HTTP {gone.status}"
+    out = (gone.json or {}) if gone.status == 200 else {}
+    said = out.get("sessions") or "kept"
+    if retires:
+        assert said == "retired", (
+            f"the server reports harness_retirement true, but its delete response says sessions "
+            f"{said!r}; §5.3 requires sessions: \"retired\" with the window, so a client can tell the "
+            "person what happened to their history")
+        until = out.get("restorableUntil")
+        assert isinstance(until, int) and until > time.time(), (
+            f"restorableUntil must be a Unix time in the future, the end of the restore window the "
+            f"person is told about; got {until!r}")
+        return f"retired with the harness, restorable until {until}"
+    assert said == "kept", (
+        f"the delete response says sessions {said!r} while harness_retirement is false or absent; "
+        "a server that retires sessions must report the capability, so a client can warn first")
+    after = ctx.client.get(f"/v1/sessions/{sid}")
+    try:
+        assert after.status == 200, (
+            f"the session of a deleted harness answered HTTP {after.status}; with harness_retirement "
+            "false §5.3 requires it to stay readable")
+    finally:
+        ctx.client.delete(f"/v1/sessions/{sid}")
+    return f"kept: {sid} still reads after its harness was deleted"
 
 
 @check("F-02", "Creating a harness with an unsupported base is refused", "full",
