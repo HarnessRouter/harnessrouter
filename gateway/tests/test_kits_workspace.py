@@ -134,3 +134,16 @@ def test_a_relaunch_carries_the_kits_current_prompt(world, monkeypatch):
     assert not third["created"] and third["harnessId"] == hid
     assert store[hid]["system_prompt"] == "Build decks. The person sees only ./deck.json."
     assert third["harness"]["systemPrompt"] == "Build decks. The person sees only ./deck.json."
+
+
+def test_a_launch_on_a_base_and_model_nothing_serves_is_422_model_unavailable(world, monkeypatch):
+    """UHP Errors §3.1: a model that cannot be served when the work is sent is `model_unavailable`,
+    422, the same answer a task gets (#517). It was 400 here."""
+    async def serves_nothing(org, base, model):
+        return False
+    monkeypatch.setattr(gw, "_base_serves", serves_nothing)
+    with pytest.raises(gw.HTTPException) as e:
+        asyncio.run(gw.launch_kit("slides", _Req(), gw.KitLaunchBody(base="hermes", model="deepseek-v4-pro")))
+    assert e.value.status_code == 422
+    assert e.value.detail["code"] == "model_unavailable" and e.value.detail["param"] == "model"
+    assert "deepseek-v4-pro" in e.value.detail["message"]           # the words are unchanged

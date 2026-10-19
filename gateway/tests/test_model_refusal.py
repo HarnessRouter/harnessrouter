@@ -20,8 +20,10 @@ def test_a_model_the_base_cannot_serve_is_refused_not_replaced(monkeypatch):
     monkeypatch.setattr(gw, "_model_authorized_async", no)
     with pytest.raises(HTTPException) as e:
         asyncio.run(gw._resolve_model_policy("claude-sonnet-9", {"default_model": "claude-sonnet-5"}, "claude", "org"))
-    assert e.value.status_code == 400
-    assert e.value.detail["code"] == "model_not_available" and e.value.detail["param"] == "model"
+    # UHP Errors §3.1: a task's model is model_unavailable, 422; model_not_available is the harness
+    # write's code for a default_model (#517)
+    assert e.value.status_code == 422
+    assert e.value.detail["code"] == "model_unavailable" and e.value.detail["param"] == "model"
     assert "claude-sonnet-9" in e.value.detail["message"] and "claude" in e.value.detail["message"]
     # no request, or a bare family name, is the harness default and not a refusal
     assert asyncio.run(gw._resolve_model_policy("", {"default_model": "claude-sonnet-5"}, "claude", "org")) == "claude-sonnet-5"

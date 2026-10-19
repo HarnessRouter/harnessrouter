@@ -7903,7 +7903,9 @@ async def _resolve_model_policy(requested: str, hv: dict | None, backend: str, o
         return default
     if await _model_authorized_async(req, backend, org):
         return req
-    raise uhp_error(400, "model_not_available",
+    # UHP Errors §3.1: a task's model that cannot be served is `model_unavailable` (422), refused when
+    # the task is sent; `model_not_available` is the harness write's refusal of a default_model (#517).
+    raise uhp_error(422, "model_unavailable",
                     f"Model '{req}' is not available on the {backend} base of this instance: no connected "
                     f"provider serves it there. GET /v1/harnesses/{{id}}/models lists the models this "
                     f"harness can run.", "model")
@@ -19578,7 +19580,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         if want_base not in _BASE_CATALOG:
             raise uhp_error(400, "invalid_base", f"No base harness '{want_base}'.", "base")
         if not await _base_serves(org, want_base, want_model):
-            raise uhp_error(400, "model_unavailable",
+            raise uhp_error(422, "model_unavailable",
                             f"Nothing you have connected can run {want_model or 'that model'} "
                             f"on {want_base}.", "model")
         base, model = want_base, want_model
