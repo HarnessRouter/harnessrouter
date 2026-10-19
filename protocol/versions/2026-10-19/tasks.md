@@ -210,9 +210,10 @@ An assistant message's `content` is a string or an array of `output_text` parts;
 - MUST keep the earlier messages in the session as its first turns, before the task's own, each
   marked `imported: true` in [`/turns`](sessions.md#3-inspecting-a-session). An imported turn is
   `completed`, ran no model and costs nothing.
-- MAY bound how many earlier messages and how much text it takes, and MUST refuse a request beyond a
-  bound with `400` and `code: "invalid_input"`, saying which bound, rather than shorten the
-  conversation in silence.
+- MAY bound how many earlier messages and how much text it imports. Beyond a bound it MUST NOT
+  import any of them and MUST NOT refuse the request for it: the request is read as it would be
+  without the capability, so a client that sent such arrays before keeps working. A client that
+  needs the turns kept checks that the first turn reads back `imported: true`.
 
 With `previous_response_id`, the session already holds the conversation and this section does not
 apply. A client that needs the earlier turns kept MUST check `capabilities.input_history` first: a

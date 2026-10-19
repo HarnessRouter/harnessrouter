@@ -8,9 +8,9 @@ Additive. A request without `previous_response_id` may carry the conversation so
 `assistant` messages before the last `user` message ([Tasks §2.1](versions/2026-10-19/tasks.md#21-earlier-turns)).
 A server that reports the new `input_history` capability gives them to the harness as its history,
 treats only the last `user` message as the task's own, keeps them as the session's first turns marked
-`imported: true` in `/turns` (completed, no model ran, no cost), and refuses input beyond its bounds
-with `400 invalid_input` rather than shortening it. A server without the capability, or one that
-reports it `false`, is unchanged.
+`imported: true` in `/turns` (completed, no model ran, no cost). Beyond its bounds it imports none
+of them and reads the request as without the capability, never refusing it. A server without the
+capability, or one that reports it `false`, is unchanged.
 
 ## 2026-10-19
 
