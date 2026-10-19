@@ -55,8 +55,17 @@ _T0 = time.time()
 # Fences are three OR MORE backticks: aider's own parser takes any length (a block whose content
 # holds ``` is fenced with ````), and gpt-5.4 closes with four. A stripper that took exactly three
 # left the fourth behind as the whole answer (an answer card reading "`", hosted 2026-09-19).
-_EDIT_BLOCK = re.compile(r"(?:^\S+\n)?`{3,}[^\n]*\n(?:\S+\n)?<{5,9} SEARCH\n.*?^>{5,9} REPLACE\n`{3,}[ \t]*\n?",
-                         re.S | re.M)
+# The file name tolerates what aider's parser tolerates: find_filename reads the 3 lines before
+# `<<<<<<< SEARCH` and strips each one (editblock_coder.py:492, 538-569; strip_filename:408), so a
+# name with whitespace around it, or one blank line between it and the fence, still names the
+# block's file — gpt-5.4 wrote both shapes and the leftover "hello.txt" beat the edits sentence as
+# the whole answer (hosted, 2026-10-19). One token only (\S+): a line with internal spaces is
+# prose and is never swallowed, and a second blank line puts the name outside the parser's 3-line
+# window, so it stays.
+_EDIT_BLOCK = re.compile(
+    r"(?:^[ \t]*\S+[ \t]*\n(?:[ \t]*\n)?)?`{3,}[^\n]*\n(?:[ \t]*\S+[ \t]*\n)?<{5,9} SEARCH\n"
+    r".*?^>{5,9} REPLACE\n`{3,}[ \t]*\n?",
+    re.S | re.M)
 
 
 # `hr-mcp call <server> <tool>` wherever it stands in COMMAND position: at the start of the line

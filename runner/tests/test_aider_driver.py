@@ -322,6 +322,33 @@ def test_edit_blocks_are_stripped_from_the_answer_and_the_edits_render_as_cards(
     assert 'final = strip_edit_blocks(coder.partial_response_content or "")' in src
 
 
+def test_a_path_line_aiders_lookback_takes_is_stripped_with_its_block():
+    """gpt-5.4 answered just "hello.txt" (1 of 3 follow-up probes, hosted, 2026-10-19): it set the
+    path line off from the fence — a blank line between them, or a trailing space on the name —
+    and aider still applied the edit, because find_filename reads the 3 lines before
+    `<<<<<<< SEARCH` and strips each one (editblock_coder.py:492, 538-569; strip_filename:408),
+    while the strip's path group took only a bare \\S+ line DIRECTLY above the fence. The leftover
+    path then beat the edits sentence as the answer. The group now takes what the parser takes:
+    whitespace around the name, one blank line at most (the parser's 3-line window holds no more),
+    and still one token only, so a prose line is never swallowed."""
+    S = aider_driver.strip_edit_blocks
+    block = "```text\n<<<<<<< SEARCH\nhello\n=======\nhello\nworld\n>>>>>>> REPLACE\n```\n"
+    assert S("hello.txt\n\n" + block) == ""                  # path + blank line + fence (measured)
+    assert S("hello.txt \n" + block) == ""                   # trailing space on the path (measured)
+    assert S("hello.txt\t\n" + block) == ""
+    assert S("  hello.txt\n" + block) == ""                  # leading spaces: strip_filename strips
+    assert S("hello.txt \n \n" + block) == ""                # a whitespace-only line is a blank one
+    assert S("Done.\n\nhello.txt\n\n" + block) == "Done."    # prose above the path is kept
+    # a second blank line puts the path outside find_filename's window: it is not the block's
+    assert S("hello.txt\n\n\n" + block) == "hello.txt"
+    # a line with internal spaces is prose, never a path, whatever sits under it
+    assert S("I will edit hello.txt now.\n" + block) == "I will edit hello.txt now."
+    assert S("I will edit hello.txt now.\n\n" + block) == "I will edit hello.txt now."
+    # the name inside the fence tolerates the same whitespace, and the whole block still matches
+    inside = "```python\nbuild.py \n<<<<<<< SEARCH\n=======\nx = 1\n>>>>>>> REPLACE\n```\n"
+    assert S("Deck builder:\n" + inside) == "Deck builder:"
+
+
 def test_a_turn_that_ended_on_a_command_says_so_rather_than_saying_nothing():
     """A response that was commands and nothing else leaves no answer once the blocks are cards;
     the record then read as an empty reply (hosted, 2026-09-19: seven officecli attempts, no text,
