@@ -377,10 +377,16 @@ def _reasoning_level(value, where: str = "") -> str:
     return level
 # Output (container) files produced by a turn are capped to keep a single response bounded.
 RESP_MAX_FILES = int(os.environ.get("HARNESS_RESP_MAX_FILES", "25"))
-RESP_MAX_FILE_BYTES = int(os.environ.get("HARNESS_RESP_MAX_FILE_BYTES", str(25 * 1024 * 1024)))
+# A produced file over this is never read into the gateway (_sandbox_file): it gets no card and the
+# answer names it, its size and where it is (_too_large_note). 64 MiB, up from 25: the files seen
+# over the old cap were 25.5 to 49.1 MiB (hosted, 2026-10-19). Its size is learned before any byte
+# is read (the runner's listing, else the stated length), so a collection holds at most one file of
+# this size at a time.
+RESP_MAX_FILE_BYTES = int(os.environ.get("HARNESS_RESP_MAX_FILE_BYTES", str(64 * 1024 * 1024)))
 # /v1/files upload cap (HR-INF-015): the route had NO cap — a huge upload buffered whole in the
 # gateway AND ballooned again as base64 in the runner turn body. 25 MiB matches the engine's
-# attachment cap and RESP_MAX_FILE_BYTES, bounding the inline-b64 turn payload to ~33 MB.
+# attachment cap, bounding the inline-b64 turn payload to ~33 MB. (Produced files are never inlined
+# into a turn, so their cap above is not bound to this one.)
 _UPLOAD_MAX_BYTES = int(os.environ.get("HARNESS_UPLOAD_MAX_BYTES", str(25 * 1024 * 1024)))
 RESP_BLOB_KB = os.environ.get("HARNESS_RESP_BLOB_KB", "harness-responses")  # response records + container files
 # Durable session-workspace store (git checkpoint tarball per session) lives in vg-gateway blob
@@ -1811,6 +1817,40 @@ async def _sandbox(path: str, sid: str, method: str = "POST", body: dict | None 
                                    headers=_pool_headers(), **kw)
 
 
+async def _sandbox_file(sid: str, path: str, cap: int) -> tuple[int, bytes | None, str, int | None]:
+    """One workspace file from the runner, never holding more than `cap` bytes of it plus one chunk:
+    (status, its bytes or None when it is over the cap, media type, its size when known).
+
+    The length the runner states is read before the body, so a file over the cap is never read at
+    all; a body with no stated length is read in chunks and abandoned once it passes the cap (its
+    size is then unknown, only that it is over). It used to be read whole and measured after: a turn's
+    seven images of 33 to 49 MB passed through the gateway in two seconds to be dropped (hosted,
+    2026-10-19)."""
+    c = _client()
+    req = c.build_request("GET", f"{POOL_ENDPOINT}/file", params={"identifier": sid, "path": path},
+                          headers=_pool_headers())
+    r = await c.send(req, stream=True)
+    try:
+        media = r.headers.get("content-type", "application/octet-stream")
+        if r.status_code >= 400:
+            return r.status_code, None, media, None
+        try:
+            stated = int(r.headers.get("content-length") or -1)
+        except ValueError:
+            stated = -1
+        if stated > cap:
+            return r.status_code, None, media, stated
+        chunks, got = [], 0
+        async for chunk in r.aiter_bytes():
+            got += len(chunk)
+            if got > cap:
+                return r.status_code, None, media, None
+            chunks.append(chunk)
+        return r.status_code, b"".join(chunks), media, got
+    finally:
+        await r.aclose()
+
+
 class _SandboxRefused(RuntimeError):
     """The runner answered with its own verdict (a 4xx other than 429): `status` and the reason it
     gave (`detail`), so a turn it refused to start says why rather than reading as a connection
@@ -2914,17 +2954,12 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     if translator.charge:
         rec["charge"] = translator.charge
     await _vertex_upsert(sid, {"status": rec["status"], "turn_status": rec["status"]})
+    produced: list[dict] = []
     try:
         # Every terminal outcome collects. A cancelled or failed turn may already have written the
         # deliverable (a Stop that lands after the file is saved, an OOM at finalize) — skipping
         # collection threw those files away from the record while they sat in the workspace.
         produced = await _collect_produced(sid, set())
-        # Translate for the wire, the same way the persist just below does: `rec["status"]` holds
-        # the trace's name for the outcome (`done`, `max_turns`, `timeout`), and `complete()` both
-        # puts it in the response object and looks the event name up by it, so an untranslated
-        # status reached subscribers as `status: "max_turns"` under a `response.completed` (#480).
-        for oev in translator.complete(_RESP_STATUS_MAP.get(rec["status"], "failed"), produced):
-            _emit(oev)
     except Exception:  # noqa: BLE001
         pass
     # The turn's browser closes BEFORE the trace is finalized: its stop row (the vendor's stop
@@ -2933,7 +2968,19 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     # the manifest said terminal, so the row reached the audit and never the trace (hosted, every
     # base of the browser column, 2026-09-27). persist() still closes a turn that never got here.
     await _browser_close(sid, "turn_end")
+    # Saved before the answer completes, as on the primary path: whether a file too large to
+    # attach is in the task's files is known only once the save has landed (_too_large_saved).
     await _checkpoint(sid, rec)
+    try:
+        _too_large_saved(produced, rec)
+        # Translate for the wire, the same way the persist just below does: `rec["status"]` holds
+        # the trace's name for the outcome (`done`, `max_turns`, `timeout`), and `complete()` both
+        # puts it in the response object and looks the event name up by it, so an untranslated
+        # status reached subscribers as `status: "max_turns"` under a `response.completed` (#480).
+        for oev in translator.complete(_RESP_STATUS_MAP.get(rec["status"], "failed"), produced):
+            _emit(oev)
+    except Exception:  # noqa: BLE001
+        pass
     await _trace_finalize(sid, rec)
     # Persist the response record with the FULL turn output — NOT translator.output, which only
     # holds events AFTER our resume cursor (we joined mid-turn). Reconstruct the whole turn from the
@@ -2945,7 +2992,10 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
                   "_member": member}
         if full_output:
-            stored["output"] = full_output
+            # the trace holds the runner's events, not the gateway's own closing paragraph on files
+            # too large to attach (complete), so that paragraph is carried over onto the record
+            note = translator.note_item
+            stored["output"] = full_output + ([note] if note and note not in full_output else [])
         await _resp_put(resp_id, stored, org, sid, None, _status, translator.created_at, True)
     except Exception:  # noqa: BLE001
         pass
@@ -6236,6 +6286,7 @@ class _RespTranslator:
         self.error: dict | None = None
         self.cur: dict | None = None
         self.any_text = False
+        self.note_item: dict | None = None   # the answer's paragraph on files too large to attach (complete)
 
     def _ev(self, type_: str, **f) -> dict:
         e = {"type": type_, "sequence_number": self.seq, **f}
@@ -6411,6 +6462,10 @@ class _RespTranslator:
 
     def complete(self, status: str, files: list[dict] | None = None) -> list[dict]:
         evs: list[dict] = []
+        # A file too large to attach (_collect_produced) has no card: the answer says so in its own
+        # last paragraph, kept as note_item for a record rebuilt from the trace (_adopt_orphan_turn).
+        big = [f for f in (files or []) if f.get("too_large")]
+        files = [f for f in (files or []) if not f.get("too_large")]
         if files:
             if not (self.cur and self.cur["kind"] == "message"):
                 evs += self._close_cur()
@@ -6421,6 +6476,11 @@ class _RespTranslator:
                  "download_url": _file_url(f["container_id"], f["file_id"]),
                  "start_index": 0, "end_index": len(self.cur["text"])} for f in files]
         evs += self._close_cur()
+        if big:
+            evs += self._open_message()
+            evs += self._handle("text", _too_large_note(big))
+            evs += self._close_cur()
+            self.note_item = self.output[-1]
         ev_type = {"completed": "response.completed", "incomplete": "response.incomplete",
                    "failed": "response.failed", "cancelled": "response.failed"}.get(status, "response.completed")
         evs.append(self._ev(ev_type, response=self._response_obj(status)))
@@ -8115,6 +8175,42 @@ def _produced_rel(path: str) -> str:
     return path
 
 
+def _too_large_saved(produced: list[dict], rec: dict) -> None:
+    """Mark each file too large to attach with whether it is in the task's files: the turn's save
+    landed (_checkpoint) and the files listing shows that path (_ws_visible). Only then does the
+    answer say where it is; a file the listing would not show is never said to be there."""
+    saved = rec.get("checkpointed") is True
+    for f in produced:
+        if f.get("too_large"):
+            f["saved"] = saved and _ws_visible(str(f.get("filename") or ""))
+
+
+def _too_large_note(big: list[dict]) -> str:
+    """The answer's last paragraph for the turn's files too large to attach: each by its path and
+    size (MB, the unit RESP_MAX_FILE_BYTES is set in), and where it is when it is saved. A file whose
+    reading was stopped at the cap (no stated length) is "over" the cap, never a guessed size."""
+    def _mb(f: dict) -> str:
+        n = f.get("bytes")
+        return f"{n / (1024 * 1024):.1f} MB" if n else f"over {RESP_MAX_FILE_BYTES / (1024 * 1024):g} MB"
+
+    def _named(fs: list[dict]) -> str:
+        return ", ".join(f"{f['filename']} ({_mb(f)})" for f in fs)
+    saved = [f for f in big if f.get("saved")]
+    unsaved = [f for f in big if not f.get("saved")]
+    lines = []
+    if len(saved) == 1:
+        f = saved[0]
+        lines.append(f"{f['filename']} is too large to attach here ({_mb(f)}); it's saved in the task's files.")
+    elif saved:
+        lines.append(f"These files are too large to attach here; they're saved in the task's files: {_named(saved)}.")
+    if len(unsaved) == 1:
+        f = unsaved[0]
+        lines.append(f"{f['filename']} is too large to attach here ({_mb(f)}).")
+    elif unsaved:
+        lines.append(f"These files are too large to attach here: {_named(unsaved)}.")
+    return "\n\n".join(lines)
+
+
 async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[dict]:
     exclude = exclude or set()
     try:
@@ -8135,25 +8231,43 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
     # The cap counts produced files, so what is never one (an internal name, an input file the
     # caller attached) is set aside before it: an internal file newer than the rest must not
     # take a slot from a real one.
-    wanted: list[tuple[str, str]] = []
+    wanted: list[tuple[dict, str]] = []
     for it in items:
         path = (it or {}).get("path")
         rel = _produced_rel(path) if path else ""
         if rel and rel not in exclude and not _is_internal_output(rel):
-            wanted.append((path, rel))
-    for path, rel in wanted[:RESP_MAX_FILES]:
+            wanted.append((it, rel))
+    for it, rel in wanted[:RESP_MAX_FILES]:
+        path = it["path"]
         try:
-            fr = await _sandbox("/file", sid, "GET", params={"path": path})
-            if fr.status_code >= 400 or not fr.content or len(fr.content) > RESP_MAX_FILE_BYTES:
+            # Its size before any byte of it: the runner's listing says it (a runner from before the
+            # field does not), else the length the runner states, else the read stops at the cap.
+            try:
+                listed = int(it.get("size"))
+            except (TypeError, ValueError):
+                listed = -1
+            if listed > RESP_MAX_FILE_BYTES:
+                status, data, media, size = 200, None, "", listed      # never asked for
+            else:
+                status, data, media, size = await _sandbox_file(sid, path, RESP_MAX_FILE_BYTES)
+            if status >= 400:
                 continue
+            if data is None:
+                # No card, but named: the answer says it is too large to attach and where it is
+                # (_too_large_note). Skipped in silence, a person was left looking for a file the
+                # agent had named (hosted, 2026-10-19, nine images of 25.5 to 49.1 MB).
+                print(f"[produced] sid={sid} file_too_big {size or f'over {RESP_MAX_FILE_BYTES}'}", flush=True)
+                out.append({"filename": rel, "bytes": size, "too_large": True})
+                continue
+            if not data:
+                continue                    # an empty file: nothing to hand over
             cfile = _rid("cfile")
-            media = fr.headers.get("content-type", "application/octet-stream")
             fname = rel
-            if await _blob_put(f"containers/{sid}/{cfile}", fr.content, kb=RESP_BLOB_KB):
+            if await _blob_put(f"containers/{sid}/{cfile}", data, kb=RESP_BLOB_KB):
                 await _blob_put(f"containers/{sid}/{cfile}.meta",
                                 json.dumps({"filename": fname, "media_type": media,
                                             "written_at": time.time()}).encode(), kb=RESP_BLOB_KB)
-                out.append({"container_id": sid, "file_id": cfile, "filename": fname, "bytes": len(fr.content)})
+                out.append({"container_id": sid, "file_id": cfile, "filename": fname, "bytes": len(data)})
         except Exception:  # noqa: BLE001
             continue
     # Advance the runner's collection cursor ONLY now that the files are captured to blobs. This is
@@ -8702,6 +8816,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
     await _checkpoint(sid, rec)
+    _too_large_saved(produced, rec)      # the answer says a file is in the task's files only once it is
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
     # and the only ordering at which a hosted write survives.

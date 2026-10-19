@@ -12812,13 +12812,21 @@ def _produced_list(ws: str) -> list[dict]:
     seen = {k: v for k, v in seen.items() if k in keep}
     # mtime rides on each item so a reader can put the newest first: a response carries at most
     # HARNESS_RESP_MAX_FILES of them, and git's path order handed a Mario run its first 24 frames
-    # of 1,400 (hosted, 2026-09-25). 0 when the file is gone (a deletion) or cannot be stat'ed.
-    def _mtime(rel: str) -> float:
+    # of 1,400 (hosted, 2026-09-25). size rides beside it so a reader never has to fetch a file to
+    # learn it is over its cap (the gateway's RESP_MAX_FILE_BYTES; a 49 MB image was read whole
+    # into the gateway only to be dropped, hosted 2026-10-19). Both 0 when the file is gone (a
+    # deletion) or cannot be stat'ed.
+    def _stat(rel: str) -> tuple[float, int]:
         try:
-            return float(os.stat(os.path.join(ws, rel)).st_mtime)
+            st = os.stat(os.path.join(ws, rel))
+            return float(st.st_mtime), int(st.st_size)
         except OSError:
-            return 0.0
-    return [{"path": k, "status": v, "mtime": _mtime(k)} for k, v in seen.items()]
+            return 0.0, 0
+    out = []
+    for k, v in seen.items():
+        mtime, size = _stat(k)
+        out.append({"path": k, "status": v, "mtime": mtime, "size": size})
+    return out
 
 
 def _produced_visible(ws: str) -> list[dict]:
