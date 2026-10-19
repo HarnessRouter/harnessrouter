@@ -330,7 +330,33 @@ def test_a_turn_that_ended_on_a_command_says_so_rather_than_saying_nothing():
     src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
     assert "if not final.strip() and not failed and (gate.calls or coder.aider_edited_files):" in src
     assert "The task ended without a written answer after running commands." in src
-    assert "The task ended without a written answer after editing files." in src
+    # an edit-only turn says which files it changed (below), not that it wrote no answer
+    assert "The task ended without a written answer after editing files." not in src
+    assert "final = _edits_sentence(edited, before)" in src
+
+
+def test_a_turn_that_only_wrote_edit_blocks_says_which_files_it_changed(tmp_path):
+    """The model's whole reply was the edit block, without the "done" it was asked for (6 of 24 on
+    "Create a file named hello.txt containing hi, then say done.", 2026-10-19), and the answer read
+    "The task ended without a written answer". It now names what the turn changed, from the edits
+    themselves: created when the file was not in the workspace before the turn, edited when it
+    was. Nothing is said that the edits do not show."""
+    S = aider_driver._edits_sentence
+    assert S(["hello.txt"], set()) == "Created hello.txt."
+    assert S(["hello.txt"], {"hello.txt"}) == "Edited hello.txt."
+    assert S(["a.txt", "b.txt"], set()) == "Created a.txt and b.txt."
+    assert S(["hello.txt", "src/x.py", "y.md"], {"src/x.py", "y.md"}) == "Created hello.txt and edited src/x.py and y.md."
+    assert S(["a", "b", "c", "d"], {"c", "d"}) == "Created a and b, and edited c and d."
+    assert S(["a", "b", "c"], {"a", "b", "c"}) == "Edited 3 files."
+    assert S(["n1", "n2", "n3", "old"], {"old"}) == "Created 3 files and edited old."
+    assert S(["hello.txt"], None) == "Edited hello.txt."       # no listing: every written file is edited
+    # created means absent before the turn, by path: a hello.txt elsewhere does not make it edited
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "hello.txt").write_text("x")
+    before = aider_driver._workspace_paths(str(tmp_path))
+    assert before == {"src/hello.txt"}
+    assert S(["hello.txt"], before) == "Created hello.txt."
+    assert "hello.txt" in aider_driver._workspace_names(str(tmp_path))   # the nudge's bare names stay
 
 
 def test_a_reply_that_announces_work_and_does_none_is_nudged_once():

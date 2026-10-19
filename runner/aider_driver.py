@@ -426,6 +426,13 @@ def _workspace_names(root: str) -> "set | None":
     a walk blind to dot-folders and node_modules, which a request does not mean. None when neither
     can say: then a bare name counts as present, since no nudge is the turn as it was and a wrong
     one makes a stray file."""
+    paths = _workspace_paths(root)
+    return None if paths is None else paths | {p.rsplit("/", 1)[-1] for p in paths}
+
+
+def _workspace_paths(root: str) -> "set | None":
+    """The workspace's files by path, as _workspace_names reads them; None when neither git nor a
+    bounded walk can say."""
     try:
         out = subprocess.run(["git", "-c", "safe.directory=*", "-C", root, "ls-files", "-z",
                               "--cached", "--others", "--exclude-standard"],
@@ -438,7 +445,24 @@ def _workspace_names(root: str) -> "set | None":
             paths += [os.path.relpath(os.path.join(d, f), root) for f in files]
             if len(paths) > _WALK_CAP:
                 return None
-    return set(paths) | {p.rsplit("/", 1)[-1] for p in paths}
+    return set(paths)
+
+
+def _edits_sentence(edited: list, before: "set | None") -> str:
+    """What a turn changed, said from the edits themselves, for a turn whose model wrote only edit
+    blocks: its answer is empty once they are cards. Measured 2026-10-19 on "Create a file named
+    hello.txt containing hi, then say done.": the reply was the edit block alone in 6 of 24 runs
+    (gpt-5.4 4 of 6), and 11 of 24 on 0.35.2. A file absent from the workspace before the turn was
+    created; one that was there was edited. With no listing to tell them apart, every file is
+    "edited", which a written file also is. Names up to two files, then counts; nothing else."""
+    created = sorted(p for p in edited if before is not None and p not in before)
+    changed = sorted(p for p in edited if p not in created)
+
+    def files(ps: list) -> str:
+        return " and ".join(ps) if len(ps) <= 2 else f"{len(ps)} files"
+    if created and changed:
+        return f"Created {files(created)}{', and' if len(created) == 2 else ' and'} edited {files(changed)}."
+    return f"Created {files(created)}." if created else f"Edited {files(changed)}."
 
 
 def _exists_in(root: str, name: str, names: "set | None") -> bool:
@@ -818,6 +842,7 @@ def main() -> int:
     _run_shell_commands_reporting(coder, gate, reflect=bool(job.get("reflect_shell_output", True)))
 
     _emit("init", {"model": coder.main_model.name, "edit_format": coder.edit_format})
+    before = _workspace_paths(cwd)        # what was there, so the turn's edits say created or edited
     try:
         _run_turn(coder, job["prompt"], gate)
     except Exception as exc:  # noqa: BLE001 — the turn's failure is the product here, not a crash
@@ -841,11 +866,14 @@ def main() -> int:
         # further turn when that printed nothing. Measured on the hosted service (an officecli
         # that was not installed ran seven times and the task ended with no text and no file;
         # gpt-5.4 ended after one edit block). Said as what happened, not as an answer the model
-        # gave. The same two sentences on the hosted service.
-        final = ("The task ended without a written answer after running commands. The commands "
-                 "and their output are above." if gate.calls else
-                 "The task ended without a written answer after editing files. What it did is "
-                 "shown above.")
+        # gave: the files it changed, by name, or the commands it ran. The same on the hosted service.
+        edited = sorted(coder.aider_edited_files or [])
+        if edited:
+            final = _edits_sentence(edited, before) + (
+                " The commands and their output are above." if gate.calls else "")
+        else:
+            final = ("The task ended without a written answer after running commands. The commands "
+                     "and their output are above.")
     _emit("result", {
         "final": final,
         "ok": not failed,
