@@ -864,3 +864,77 @@ def test_a_turn_that_wrote_no_trajectory_fails_and_leaves_the_reason_to_stderr()
 def test_the_tools_offered_are_the_three_with_a_switch():
     assert set(ALL_FAST_AGENT_TOOLS) == {"bash", "read_text_file", "edit_file"}
     assert "process" not in ALL_FAST_AGENT_TOOLS
+
+
+# ── vtcode: a text-only answer has to be allowed to END the turn ──────────────────────────────
+def test_vtcode_lets_one_idle_turn_finish_the_run():
+    """THE BUG, found by vtcode's first matrix column (2026-10-19): the first scenario, "Reply with
+    exactly: M1-<model>", failed on gpt-6.1-sol and gpt-6-sol with
+    `The turn failed: Stopped due to infinite loop detection` — 153 s each, with the correct answer
+    already sent twice.
+
+    Why, from this CLI's own source: an answer that is TEXT with no tool call does not end a run.
+    It asks whether the text looks like a completion (`check_completion_candidate`, a phrase list:
+    "the task is complete", "all done"), and when it does not, it calls the model again. The second
+    identical answer trips `check_for_response_loop`, whose outcome `LoopDetected` is a hard block.
+    The default `idle_turn_limit` of 3 cannot help, because the loop detector fires on the second
+    answer, before any limit above 1 is reached.
+
+    At 1, the first text-only answer ends the run as `StoppedNoAction` — a SUCCESS in this CLI's
+    own words (`TaskOutcome::is_success` matches `Success | StoppedNoAction`). Measured after the
+    change, same model, same relay: `turn.completed`, the answer, 5 s.
+    """
+    ws = _ws()
+    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    cfg = _vtcode_config_path(ws).read_text()
+    assert "idle_turn_limit = 1" in cfg
+    # and the reason stays beside it, since 3 is the CLI's default and 2 would not help either
+    assert "StoppedNoAction" in cfg and "loop detector" in cfg
+
+
+def test_vtcode_still_runs_one_turn_one_answer():
+    # the two settings the idle limit works with, unchanged
+    ws = _ws()
+    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    cfg = _vtcode_config_path(ws).read_text()
+    assert 'continuation_policy = "off"' in cfg
+    assert 'orchestration_mode = "single"' in cfg
+    assert "auto_continue_tracker = false" in cfg
+
+
+def test_vtcode_lets_the_tools_it_offers_actually_run():
+    """THE BUG, found by vtcode's first matrix column (2026-10-19): the artifact scenario asked for
+    one file, `apply_patch` came back `[Blocked by policy] tool denied by policy`, and the turn
+    answered "the execution policy denied apply_patch, so I could not create hello-vtcode.txt"
+    with nothing written.
+
+    A `prompt` policy is a DENY in a headless run — there is nobody to confirm — and `prompt` is
+    this CLI's default for EVERY tool (`ToolPolicy::Prompt` is the serde default), apply_patch
+    included in its own shipped example config. Being in
+    `[automation.full_auto].allowed_tools` is a different question: that list is the hard boundary
+    for what the model may reach, not whether a reached tool runs without a human.
+
+    Measured after the change, same model and relay: apply_patch completes, the file holds HELLO,
+    the turn answers DONE.
+    """
+    ws = _ws()
+    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    cfg = _vtcode_config_path(ws).read_text()
+    assert 'default_policy = "allow"' in cfg
+    assert "[tools.policies]" in cfg
+    for tool in ALL_VTCODE_TOOLS:
+        assert f'{tool} = "allow"' in cfg, tool
+
+
+def test_vtcode_denies_a_withheld_tool_at_both_doors():
+    ws = _ws()
+    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                  tools_disabled=["apply_patch"])
+    cfg = _vtcode_config_path(ws).read_text()
+    # the policy layer says deny...
+    assert 'apply_patch = "deny"' in cfg
+    assert 'apply_patch = "allow"' not in cfg
+    # ...and the hard boundary still leaves it out of the allow-list it enforces
+    allowed = cfg.split("allowed_tools = [", 1)[1].split("]", 1)[0]
+    assert "apply_patch" not in allowed
+    assert "exec_command" in allowed
