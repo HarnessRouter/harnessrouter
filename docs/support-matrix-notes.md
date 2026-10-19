@@ -4210,12 +4210,47 @@ the loopback relay, so it is wired row for row with nanobot and is in `CHAT_ONLY
 The expensive models of the catalog (Sonnet, Opus, Fable, the GPT sol and terra lines, Gemini Pro), the
 other providers (the direct Anthropic and OpenAI connections, Vercel, TokenRouter), the browser column
 on an instance with a browser service, the environments column and the benchmark dimension.
-## vibe: Mistral's own CLI, and a model switch a resumed session would have swallowed (2026-10-14/15) — behaviour measured, NO column yet
+## vibe: Mistral's own CLI, a model switch a resumed session would have swallowed, and the FIRST COLUMN of this batch (2026-10-14/19)
 
 `mistral-vibe` 2.26.1, added as the twenty-seventh base. Measured against the pinned wheel through a
 proxy that recorded every request the CLI made, on the Vercel AI Gateway and on Google's
-OpenAI-compatible endpoint. **No support-matrix column has run**: every number below is from those
-probes and from the runner's own argv end to end, not from a console sweep.
+OpenAI-compatible endpoint — and then, on 2026-10-19, through a real support-matrix column.
+
+### The column (vercel, 2026-10-19): 56 pairs, 56 passes, and two gateway bugs it found
+Run against a locally built image of this branch (`HR_BACKENDS=vibe`, one Vercel connection set
+from the environment), `scripts/support-matrix/run.mjs` driving the console as a person:
+**56 of the 58 ids in its catalog ran, every one of them passing all five scenarios** — first turn,
+follow-up, switch, artifact, recycle. The other two are `llama-3.3-70b` and
+`nemotron-3.5-lightning`, both already in `_VERCEL_NO_CHANNEL` for measured reasons of their own
+(that gateway's Llama route refuses tools in streaming mode; its nemotron-3.5-lightning garbles
+tool-call arguments), so the picker correctly did not offer them. The audit beyond the pass flags
+is clean too: every pair's `served` carries two ids (its own and the switch partner's, which is
+what proves the chip's move reached the provider), no pair's file cards disagree with its record,
+and every session deleted. 2.3M input tokens for the whole column.
+
+**The column's real yield was two bugs in the gateway, neither in any harness**, both on the
+connection path and both now fixed with tests:
+1. A connection set from the environment — the scripted-deploy shape the self-hosting guide
+   documents — reached the runner with **no base_url**, because the integrations form fills a known
+   provider's endpoint on save and the chain path never did. The first turn of the first pair failed
+   with the runner's own sentence, `vibe provider 'tokenrouter' needs a base_url (none configured)`.
+2. The rename to the runner's provider name is **lossy about which vendor the connection is**:
+   `tokenrouter` is the runner's name for TokenRouter, Vercel, llmtr AND the HarnessRouter API, and
+   `_map_model` read that renamed name to pick a model-id table. So a Vercel connection was sent
+   TokenRouter's slugs. Measured through a recording proxy in front of the gateway: `grok-4.20` went
+   out as `x-ai/grok-4.20-beta` and came back `spacexai/grok-4.20-non-reasoning-beta` — the
+   NON-reasoning model, where this product's own table names `spacexai/grok-4.20-reasoning` — and
+   `qwen3.8-max` went out as `qwen/qwen3.8-max` and came back `alibaba/qwen3.8-2.4t-a95b`. **Both
+   pairs passed all five scenarios**: that aggregator resolves a slug it does not publish to
+   something near it, so nothing but the served-model check could see it. Of the fourteen ids whose
+   Vercel slug differs from TokenRouter's, twelve were saved by that leniency and two ran a model
+   other than the one picked. This is what matrix rule 2 is for, and the first time it has caught a
+   routing fault rather than a harness fault. After the fix, the same four pairs send and are served
+   `spacexai/grok-4.20-reasoning`, `alibaba/qwen3.8-max`, `zai/glm-5.3` and `google/gemini-3-flash`.
+
+Neither bug is this base's, and both would have hit every backend on an environment-set connection,
+which is why they are written up here rather than in a harness's section: the column is what found
+them.
 
 ### What it is
 Not a fork of anything this runner already drives. Its programmatic mode is a written contract:
@@ -4301,11 +4336,10 @@ against the real assets, and `install_vibe` itself was run on a `python:3.12-sli
 the installed binary reported `vibe 2.26.1`.
 
 ### What is NOT measured
-No support-matrix column, no custom-harness run, no plugin, browser, environments or family-tour
-dimension. Two model ids have been served as themselves (claude-haiku-5.5, gemini-3-flash); the
-other 54 in its catalog are offered so a column can measure them here, and the `("google", "vibe")`
-wiring row is the one probed directly (gemini-3.8-flash, 2026-10-15) rather than through an
-aggregator. A turn's input is large — 11.5k tokens on a three-word prompt, 20k characters of system
+No custom-harness run, no plugin, browser, environments or family-tour dimension, and no column on
+any provider but Vercel. The `("google", "vibe")` wiring row is the one probed directly
+(gemini-3.8-flash, 2026-10-15) rather than through an aggregator; the Vercel column above is a
+column of one connection, so every other row of this base's wiring is still unmeasured. A turn's input is large — 11.5k tokens on a three-word prompt, 20k characters of system
 prompt — which is worth knowing before reading its usage numbers against another base's.
 
 ## vtcode: a codex frame over its own items, and two refusals that were the CLIENT's request shape (2026-10-16) — behaviour measured, NO column yet
