@@ -627,6 +627,186 @@ def test_a_request_for_words_back_answered_by_an_edit_alone_is_nudged_once():
     assert not a("<conversation_so_far>\nuser: say hi\n</conversation_so_far>\n\nCreate hello.txt")
 
 
+def _answered_mention_coder(root):
+    """A Coder whose send_message is ordered as 0.86.2 orders it: the display reaches
+    io.assistant_output during the send, then check_for_file_mentions runs, and an ANSWERED
+    mention sets the reflected message and ends the pass before any edit or command
+    (base_coder.py:1561-1567). `mentions` holds what the check returns, one entry per pass."""
+    class Coder:
+        def __init__(self, replies, mentions):
+            self.replies = list(replies); self.mentions = list(mentions)
+            self.reflected_message = None; self.partial_response_content = ""
+            self.aider_edited_files = set(); self.max_reflections = 5; self.root = root
+            self.io = types.SimpleNamespace(user_input=lambda p: None,
+                                            assistant_output=lambda m, pretty=None: None,
+                                            confirm_ask=lambda *a, **k: True,
+                                            tool_error=lambda m="", strip=True: None,
+                                            tool_warning=lambda m="", strip=True: None)
+            self.sent = []
+        def check_for_file_mentions(self, content):
+            # aider's own: an answered mention returns prompts.added_files, else None
+            return self.mentions.pop(0) if self.mentions else None
+        def init_before_message(self): pass
+        def send_message(self, m):
+            self.sent.append(m)
+            self.partial_response_content = self.replies.pop(0)
+            self.io.assistant_output(self.partial_response_content)
+            added = self.check_for_file_mentions(self.partial_response_content)
+            if added:
+                self.reflected_message = added
+                return iter(())
+            if "<<<<<<< SEARCH" in self.partial_response_content:
+                self.aider_edited_files.add("hello.txt")
+                pathlib.Path(self.root, "hello.txt").write_text("hello\nworld\n")
+            return iter(())
+    return Coder
+
+
+def _run_installed(coder, prompt):
+    """_install + _run_turn on one gate, with every event the turn emits captured."""
+    gate = aider_driver._Gate([])
+    emitted: list = []
+    real_emit = aider_driver._emit
+    aider_driver._emit = lambda m, p: emitted.append((m, p))
+    try:
+        aider_driver._install(coder, gate)
+        aider_driver._run_turn(coder, prompt, gate)
+    finally:
+        aider_driver._emit = real_emit
+    return gate, emitted
+
+
+# what check_for_file_mentions returns once the driver has set prompts.added_files: the reflected
+# message the driver feeds back IS this string (the shape tests below assert it in c.sent)
+_ADDED = aider_driver.ADDED_FILES.format(fnames="hello.txt")
+_BLOCK = "hello.txt\n```text\n<<<<<<< SEARCH\nhello\n=======\nhello\nworld\n>>>>>>> REPLACE\n```\n"
+
+
+def test_a_pass_answered_by_the_automatic_file_add_is_not_part_of_the_reply(tmp_path):
+    """MEASURED twice on the hosted service (gpt-5.4, QA org, 2026-10-19), then 9 of 12 across
+    gpt-5.4, gpt-5.5 and gpt-6-sol on 0.35.8: turn 2 of hello.txt ("add a second line, world, to
+    hello.txt") rendered (1) "Please add this file to the chat first so I can provide an exact
+    edit: - `hello.txt`" (2) the edit (3) an empty message. The first pass's words were answered
+    by the driver itself — check_for_file_mentions added the file and set the reflected message —
+    so the person read a request nobody needs to act on; the second pass was the edit block alone,
+    an empty message once the block is a card. The pass that spoke to the driver is not part of
+    the reply, an empty text is never emitted, and the answer is the sentence from the edits. The
+    add request's WORDING varies by model, so the detection is the mechanism (the check returned
+    its added-files message), never the words: a second wording must behave the same."""
+    Coder = _answered_mention_coder(str(tmp_path))
+    ask = "add a second line, world, to hello.txt"
+    c = Coder(["Please add this file to the chat first so I can provide an exact edit:\n- `hello.txt`",
+               _BLOCK], [_ADDED, None])
+    gate, emitted = _run_installed(c, ask)
+    assert c.sent == [ask, _ADDED]                       # the add was answered, aider's own loop ran
+    texts = [p["text"] for m, p in emitted if m == "text"]
+    assert texts == []                                   # no add-file text, and never an empty message
+    assert ("edits", {"files": ["hello.txt"]}) in emitted
+    assert aider_driver._turn_answer(c, gate, {"hello.txt"}, failed=False) == "Edited hello.txt."
+    # another wording of the same request (gpt-5.5 and gpt-6-sol write their own): the mechanism
+    # decides, so the words never matter
+    c = Coder(["I need to edit this existing file, which has not been added to the chat yet: hello.txt",
+               _BLOCK], [_ADDED, None])
+    gate, emitted = _run_installed(c, ask)
+    assert [p["text"] for m, p in emitted if m == "text"] == []
+    assert aider_driver._turn_answer(c, gate, {"hello.txt"}, failed=False) == "Edited hello.txt."
+    # off the send path too, an empty text is never emitted: a display of edit blocks alone is
+    # no message at all, not ""
+    assert _turn_texts(_BLOCK, "") == []
+
+
+def test_the_last_pass_words_are_the_answer_and_win_over_the_edits_sentence(tmp_path):
+    """The sentence is the fallback, not the answer: a last pass that wrote the edit AND words
+    answers with its words, and a request that asks for words back still gets its one REPLY_NUDGE
+    first — the nudged words are the answer, the sentence stays behind them."""
+    Coder = _answered_mention_coder(str(tmp_path))
+    ask = "add a second line, world, to hello.txt"
+    c = Coder(["Please add `hello.txt` to the chat so I can edit it.",
+               _BLOCK + "\nAdded the second line."], [_ADDED, None])
+    gate, emitted = _run_installed(c, ask)
+    assert [p["text"] for m, p in emitted if m == "text"] == ["Added the second line."]
+    assert aider_driver._turn_answer(c, gate, {"hello.txt"}, failed=False) == "Added the second line."
+    # asked for words back and the edit pass wrote none: one nudge, and the nudged word answers
+    asked = ask + ", then say done."
+    c = Coder(["Please add `hello.txt` to the chat so I can edit it.", _BLOCK, "done"],
+              [_ADDED, None, None])
+    gate, emitted = _run_installed(c, asked)
+    assert c.sent == [asked, _ADDED, aider_driver.REPLY_NUDGE]
+    assert [p["text"] for m, p in emitted if m == "text"] == ["done"]
+    assert aider_driver._turn_answer(c, gate, {"hello.txt"}, failed=False) == "done"
+    # a turn whose TAIL asked the driver for files (reflections spent) answers with what it did,
+    # never with that request; a failed turn keeps its empty answer for the error to speak
+    ns = types.SimpleNamespace(partial_response_content="Please add `notes.md` to the chat.",
+                               aider_edited_files={"hello.txt"})
+    g = aider_driver._Gate([]); g.answered_by_file_add = True
+    assert aider_driver._turn_answer(ns, g, {"hello.txt"}, failed=False) == "Edited hello.txt."
+    assert aider_driver._turn_answer(ns, g, {"hello.txt"}, failed=True) == ""
+    g.calls.append({"command": "cat hello.txt", "tool": "Shell", "approved": True, "reason": ""})
+    assert aider_driver._turn_answer(ns, g, {"hello.txt"}, failed=False) == \
+        "Edited hello.txt. The commands and their output are above."
+    g.answered_by_file_add = False
+    assert aider_driver._turn_answer(ns, g, {"hello.txt"}, failed=False) == "Please add `notes.md` to the chat."
+
+
+def test_mid_turn_words_that_no_file_add_answered_keep_their_message_and_their_place(tmp_path):
+    """The words of every pass the file add did not answer stay what they are today: each pass its
+    own message, ahead of the cards it narrates (the gate flushes the parked words when a card
+    goes out). They remain narration — the turn's answer is still the LAST pass's words alone,
+    never a join of the passes."""
+    Coder = _answered_mention_coder(str(tmp_path))
+
+    class Narrating(Coder):
+        def send_message(self, m):
+            out = super().send_message(m)
+            if len(self.sent) == 1:          # the first pass proposes a command, aider confirms it
+                self.io.confirm_ask("Run shell command?", subject="cat hello.txt",
+                                    explicit_yes_required=True)
+                self.reflected_message = "Output:\n\ntwo lines\n\n" + aider_driver.REFLECT_ASK
+            return out
+    c = Narrating(["Reading the file now.", "hello.txt has two lines."], [None, None])
+    gate, emitted = _run_installed(c, "how many lines does hello.txt have?")
+    order = [(m, p.get("text") or p.get("command")) for m, p in emitted
+             if m in ("text", "shell_decision")]
+    assert order == [("text", "Reading the file now."),
+                     ("shell_decision", "cat hello.txt"),
+                     ("text", "hello.txt has two lines.")]
+    assert aider_driver._turn_answer(c, gate, set(), failed=False) == "hello.txt has two lines."
+
+
+def test_the_added_files_message_states_the_add_and_invites_no_answer():
+    """aider's own added_files prompt ends "Let me know if there are others we should add." — an
+    invitation written for a person at the prompt. Reflected into the driver's loop it was
+    ANSWERED: gpt-6-sol opened the pass after the add with "No other files are needed." and that
+    narration became the turn's answer, in the future tense ("I'll add `there` after `hi`.",
+    rc.1 probe, 2026-10-19). The driver's message states the add and points back at the request —
+    no question, no invitation — and it lives on the aider.prompts MODULE, because that is where
+    check_for_file_mentions reads it (base_coder.py:31, 1781); the coder's gpt_prompts does not
+    carry it."""
+    assert aider_driver.ADDED_FILES.format(fnames="hello.txt") == \
+        "I added these files to the chat: hello.txt. Continue with the request."
+    msg = aider_driver.ADDED_FILES.format(fnames="a.txt, b.txt")
+    assert "a.txt, b.txt" in msg and "?" not in msg and "Let me know" not in msg
+    # the override lands where aider reads it, replacing aider's own wording
+    pkg = types.ModuleType("aider")
+    mod = types.ModuleType("aider.prompts")
+    mod.added_files = ("I added these files to the chat: {fnames}\nLet me know if there are others"
+                       " we should add.")
+    pkg.prompts = mod
+    saved = {k: sys.modules.get(k) for k in ("aider", "aider.prompts")}
+    sys.modules.update({"aider": pkg, "aider.prompts": mod})
+    try:
+        aider_driver._added_files_without_invitation()
+    finally:
+        for k, v in saved.items():
+            sys.modules.pop(k, None) if v is None else sys.modules.__setitem__(k, v)
+    assert mod.added_files == aider_driver.ADDED_FILES
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("aider_driver.py").read_text()
+    assert "    _added_files_without_invitation()\n" in src    # main sets it before the turn runs
+    # _ADDED above is this message, so the shape tests also pin that the reflected message the
+    # driver feeds back is the uninviting one
+    assert _ADDED == aider_driver.ADDED_FILES.format(fnames="hello.txt")
+
+
 def test_a_chat_with_no_files_says_a_new_file_needs_no_adding():
     """aider's "I am not sharing any files that you can edit yet." made gpt-5.4-mini refuse to
     create a file, even after a nudge (#379). The no-files message says a new file is written with
