@@ -417,7 +417,7 @@ curl $BASE/v1/environments/$ENV/builds/1 -H "Authorization: Bearer $KEY"`} />
 
       <Endpoint method="GET" path="/v1/harnesses/{id}/models">
         <p className="hr-meta">The models this agent may run and its default. A run requesting a model
-          outside this set is refused before it starts (<code>400 model_not_available</code>); nothing
+          outside this set is refused before it starts (<code>422 model_unavailable</code>); nothing
           runs on a model the caller did not ask for.</p>
       </Endpoint>
 
