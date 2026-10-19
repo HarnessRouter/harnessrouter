@@ -377,10 +377,16 @@ def _reasoning_level(value, where: str = "") -> str:
     return level
 # Output (container) files produced by a turn are capped to keep a single response bounded.
 RESP_MAX_FILES = int(os.environ.get("HARNESS_RESP_MAX_FILES", "25"))
-RESP_MAX_FILE_BYTES = int(os.environ.get("HARNESS_RESP_MAX_FILE_BYTES", str(25 * 1024 * 1024)))
+# A produced file over this is never read into the gateway (_sandbox_file): it gets no card and the
+# answer names it, its size and where it is (_too_large_note). 64 MiB, up from 25: the files seen
+# over the old cap were 25.5 to 49.1 MiB (hosted, 2026-10-19). Its size is learned before any byte
+# is read (the runner's listing, else the stated length), so a collection holds at most one file of
+# this size at a time.
+RESP_MAX_FILE_BYTES = int(os.environ.get("HARNESS_RESP_MAX_FILE_BYTES", str(64 * 1024 * 1024)))
 # /v1/files upload cap (HR-INF-015): the route had NO cap — a huge upload buffered whole in the
 # gateway AND ballooned again as base64 in the runner turn body. 25 MiB matches the engine's
-# attachment cap and RESP_MAX_FILE_BYTES, bounding the inline-b64 turn payload to ~33 MB.
+# attachment cap, bounding the inline-b64 turn payload to ~33 MB. (Produced files are never inlined
+# into a turn, so their cap above is not bound to this one.)
 _UPLOAD_MAX_BYTES = int(os.environ.get("HARNESS_UPLOAD_MAX_BYTES", str(25 * 1024 * 1024)))
 RESP_BLOB_KB = os.environ.get("HARNESS_RESP_BLOB_KB", "harness-responses")  # response records + container files
 # Durable session-workspace store (git checkpoint tarball per session) lives in vg-gateway blob
@@ -1811,6 +1817,40 @@ async def _sandbox(path: str, sid: str, method: str = "POST", body: dict | None 
                                    headers=_pool_headers(), **kw)
 
 
+async def _sandbox_file(sid: str, path: str, cap: int) -> tuple[int, bytes | None, str, int | None]:
+    """One workspace file from the runner, never holding more than `cap` bytes of it plus one chunk:
+    (status, its bytes or None when it is over the cap, media type, its size when known).
+
+    The length the runner states is read before the body, so a file over the cap is never read at
+    all; a body with no stated length is read in chunks and abandoned once it passes the cap (its
+    size is then unknown, only that it is over). It used to be read whole and measured after: a turn's
+    seven images of 33 to 49 MB passed through the gateway in two seconds to be dropped (hosted,
+    2026-10-19)."""
+    c = _client()
+    req = c.build_request("GET", f"{POOL_ENDPOINT}/file", params={"identifier": sid, "path": path},
+                          headers=_pool_headers())
+    r = await c.send(req, stream=True)
+    try:
+        media = r.headers.get("content-type", "application/octet-stream")
+        if r.status_code >= 400:
+            return r.status_code, None, media, None
+        try:
+            stated = int(r.headers.get("content-length") or -1)
+        except ValueError:
+            stated = -1
+        if stated > cap:
+            return r.status_code, None, media, stated
+        chunks, got = [], 0
+        async for chunk in r.aiter_bytes():
+            got += len(chunk)
+            if got > cap:
+                return r.status_code, None, media, None
+            chunks.append(chunk)
+        return r.status_code, b"".join(chunks), media, got
+    finally:
+        await r.aclose()
+
+
 class _SandboxRefused(RuntimeError):
     """The runner answered with its own verdict (a 4xx other than 429): `status` and the reason it
     gave (`detail`), so a turn it refused to start says why rather than reading as a connection
@@ -2903,6 +2943,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             elif st == "incomplete":
                 translator.incomplete_reason = str(s.get("reason") or "incomplete")
                 translator.handoff = s.get("handoff") if isinstance(s.get("handoff"), dict) else None
+            if terminal != "cancelled" and await _turn_cancelled(sid, org, resp_id):
+                terminal = "cancelled"        # an answered cancel wins over the runner's end (_resp_execute)
             break
     if terminal is None:
         return False                          # still running / adoption interrupted — later sweep retries
@@ -2914,13 +2956,12 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     if translator.charge:
         rec["charge"] = translator.charge
     await _vertex_upsert(sid, {"status": rec["status"], "turn_status": rec["status"]})
+    produced: list[dict] = []
     try:
         # Every terminal outcome collects. A cancelled or failed turn may already have written the
         # deliverable (a Stop that lands after the file is saved, an OOM at finalize) — skipping
         # collection threw those files away from the record while they sat in the workspace.
         produced = await _collect_produced(sid, set())
-        for oev in translator.complete(rec["status"], produced):
-            _emit(oev)
     except Exception:  # noqa: BLE001
         pass
     # The turn's browser closes BEFORE the trace is finalized: its stop row (the vendor's stop
@@ -2929,7 +2970,19 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     # the manifest said terminal, so the row reached the audit and never the trace (hosted, every
     # base of the browser column, 2026-09-27). persist() still closes a turn that never got here.
     await _browser_close(sid, "turn_end")
+    # Saved before the answer completes, as on the primary path: whether a file too large to
+    # attach is in the task's files is known only once the save has landed (_too_large_saved).
     await _checkpoint(sid, rec)
+    try:
+        _too_large_saved(produced, rec)
+        # Translate for the wire, the same way the persist just below does: `rec["status"]` holds
+        # the trace's name for the outcome (`done`, `max_turns`, `timeout`), and `complete()` both
+        # puts it in the response object and looks the event name up by it, so an untranslated
+        # status reached subscribers as `status: "max_turns"` under a `response.completed` (#480).
+        for oev in translator.complete(_RESP_STATUS_MAP.get(rec["status"], "failed"), produced):
+            _emit(oev)
+    except Exception:  # noqa: BLE001
+        pass
     await _trace_finalize(sid, rec)
     # Persist the response record with the FULL turn output — NOT translator.output, which only
     # holds events AFTER our resume cursor (we joined mid-turn). Reconstruct the whole turn from the
@@ -2941,7 +2994,10 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
                   "_member": member}
         if full_output:
-            stored["output"] = full_output
+            # the trace holds the runner's events, not the gateway's own closing paragraph on files
+            # too large to attach (complete), so that paragraph is carried over onto the record
+            note = translator.note_item
+            stored["output"] = full_output + ([note] if note and note not in full_output else [])
         await _resp_put(resp_id, stored, org, sid, None, _status, translator.created_at, True)
     except Exception:  # noqa: BLE001
         pass
@@ -4990,6 +5046,7 @@ async def _stop_session(org: str, sid: str, v: dict, rid_hint: str = "") -> tupl
             rec = await _resp_get(rid)
             if rec and str(rec.get("status") or "") in ("running", "in_progress", "queued", "starting"):
                 rec["status"] = "cancelled"
+                rec.setdefault("_completed_at", time.time())     # the turns feed's completed_at
                 _resp_cache_forget(rid)
                 await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", rid, {"status": "cancelled"})
@@ -6231,6 +6288,7 @@ class _RespTranslator:
         self.error: dict | None = None
         self.cur: dict | None = None
         self.any_text = False
+        self.note_item: dict | None = None   # the answer's paragraph on files too large to attach (complete)
 
     def _ev(self, type_: str, **f) -> dict:
         e = {"type": type_, "sequence_number": self.seq, **f}
@@ -6406,6 +6464,10 @@ class _RespTranslator:
 
     def complete(self, status: str, files: list[dict] | None = None) -> list[dict]:
         evs: list[dict] = []
+        # A file too large to attach (_collect_produced) has no card: the answer says so in its own
+        # last paragraph, kept as note_item for a record rebuilt from the trace (_adopt_orphan_turn).
+        big = [f for f in (files or []) if f.get("too_large")]
+        files = [f for f in (files or []) if not f.get("too_large")]
         if files:
             if not (self.cur and self.cur["kind"] == "message"):
                 evs += self._close_cur()
@@ -6416,6 +6478,11 @@ class _RespTranslator:
                  "download_url": _file_url(f["container_id"], f["file_id"]),
                  "start_index": 0, "end_index": len(self.cur["text"])} for f in files]
         evs += self._close_cur()
+        if big:
+            evs += self._open_message()
+            evs += self._handle("text", _too_large_note(big))
+            evs += self._close_cur()
+            self.note_item = self.output[-1]
         ev_type = {"completed": "response.completed", "incomplete": "response.incomplete",
                    "failed": "response.failed", "cancelled": "response.failed"}.get(status, "response.completed")
         evs.append(self._ev(ev_type, response=self._response_obj(status)))
@@ -7903,7 +7970,9 @@ async def _resolve_model_policy(requested: str, hv: dict | None, backend: str, o
         return default
     if await _model_authorized_async(req, backend, org):
         return req
-    raise uhp_error(400, "model_not_available",
+    # UHP Errors §3.1: a task's model that cannot be served is `model_unavailable` (422), refused when
+    # the task is sent; `model_not_available` is the harness write's refusal of a default_model (#517).
+    raise uhp_error(422, "model_unavailable",
                     f"Model '{req}' is not available on the {backend} base of this instance: no connected "
                     f"provider serves it there. GET /v1/harnesses/{{id}}/models lists the models this "
                     f"harness can run.", "model")
@@ -7994,8 +8063,15 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
 
 
 # ── response record store (blob = source of truth; VG vertex = index/fallback) ──────────
+# a turn record still running: no end time yet
+_TURN_LIVE = frozenset({"running", "in_progress", "queued", "starting"})
+
+
 async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None,
                     status: str, created_at: float, store: bool) -> None:
+    if status not in _TURN_LIVE and "_completed_at" not in stored:
+        # when the turn ended, for the turns feed's completed_at; stripped from the response object
+        stored = {**stored, "_completed_at": time.time()}
     try:
         _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
@@ -8045,6 +8121,32 @@ def _strip_internal(d: dict) -> dict:
     return {k: v for k, v in d.items() if not k.startswith("_")}
 
 
+# The gateway's internal lifecycle names for the one non-terminal state, and UHP's name for it.
+# `lifecycle.md` §3 has five statuses; `running` is not one of them, so a stored record read
+# through any UHP response object used to answer a status the protocol does not define, while
+# streaming already emitted `in_progress` from the same turn. The map is total over every name the
+# gateway uses, not just the ones written today: `_RESP_TERMINAL` and `_RESP_STATUS_MAP`'s keys
+# name `done`, `max_turns`, `timeout` and `error`, and a record written by an older build can
+# still carry one. Those translate here rather than at the write, so no exit needs to remember to.
+_UHP_STATUS = {"running": "in_progress", "starting": "in_progress", "queued": "in_progress",
+               "in_progress": "in_progress", "completed": "completed", "failed": "failed",
+               "incomplete": "incomplete", "cancelled": "cancelled",
+               "done": "completed", "max_turns": "incomplete", "timeout": "incomplete",
+               "error": "failed"}
+
+
+def _public_response(rec: dict) -> dict:
+    """The response object as it leaves the gateway: internal fields dropped, status in UHP's
+    vocabulary. A dedicated formatter rather than a rule inside `_strip_internal`, whose one job
+    is dropping `_`-prefixed keys; the status rule is a protocol rule, so the two stay readable
+    apart. The STORED value is untouched: the console's turn list and the reconcile sweeps read
+    `running` from the record itself and must keep seeing it."""
+    d = _strip_internal(rec)
+    if "status" in d:
+        d["status"] = _UHP_STATUS.get(str(d["status"]), d["status"])
+    return d
+
+
 # Harness-internal seed/config files the runner writes into the workspace to drive the agent
 # (e.g. AGENTS.md surfaces installed skills for codex; CLAUDE.md is the claude equivalent). They are
 # never user-facing artifacts, so they must never appear in a turn's output file list.
@@ -8075,6 +8177,42 @@ def _produced_rel(path: str) -> str:
     return path
 
 
+def _too_large_saved(produced: list[dict], rec: dict) -> None:
+    """Mark each file too large to attach with whether it is in the task's files: the turn's save
+    landed (_checkpoint) and the files listing shows that path (_ws_visible). Only then does the
+    answer say where it is; a file the listing would not show is never said to be there."""
+    saved = rec.get("checkpointed") is True
+    for f in produced:
+        if f.get("too_large"):
+            f["saved"] = saved and _ws_visible(str(f.get("filename") or ""))
+
+
+def _too_large_note(big: list[dict]) -> str:
+    """The answer's last paragraph for the turn's files too large to attach: each by its path and
+    size (MB, the unit RESP_MAX_FILE_BYTES is set in), and where it is when it is saved. A file whose
+    reading was stopped at the cap (no stated length) is "over" the cap, never a guessed size."""
+    def _mb(f: dict) -> str:
+        n = f.get("bytes")
+        return f"{n / (1024 * 1024):.1f} MB" if n else f"over {RESP_MAX_FILE_BYTES / (1024 * 1024):g} MB"
+
+    def _named(fs: list[dict]) -> str:
+        return ", ".join(f"{f['filename']} ({_mb(f)})" for f in fs)
+    saved = [f for f in big if f.get("saved")]
+    unsaved = [f for f in big if not f.get("saved")]
+    lines = []
+    if len(saved) == 1:
+        f = saved[0]
+        lines.append(f"{f['filename']} is too large to attach here ({_mb(f)}); it's saved in the task's files.")
+    elif saved:
+        lines.append(f"These files are too large to attach here; they're saved in the task's files: {_named(saved)}.")
+    if len(unsaved) == 1:
+        f = unsaved[0]
+        lines.append(f"{f['filename']} is too large to attach here ({_mb(f)}).")
+    elif unsaved:
+        lines.append(f"These files are too large to attach here: {_named(unsaved)}.")
+    return "\n\n".join(lines)
+
+
 async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[dict]:
     exclude = exclude or set()
     try:
@@ -8095,25 +8233,43 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
     # The cap counts produced files, so what is never one (an internal name, an input file the
     # caller attached) is set aside before it: an internal file newer than the rest must not
     # take a slot from a real one.
-    wanted: list[tuple[str, str]] = []
+    wanted: list[tuple[dict, str]] = []
     for it in items:
         path = (it or {}).get("path")
         rel = _produced_rel(path) if path else ""
         if rel and rel not in exclude and not _is_internal_output(rel):
-            wanted.append((path, rel))
-    for path, rel in wanted[:RESP_MAX_FILES]:
+            wanted.append((it, rel))
+    for it, rel in wanted[:RESP_MAX_FILES]:
+        path = it["path"]
         try:
-            fr = await _sandbox("/file", sid, "GET", params={"path": path})
-            if fr.status_code >= 400 or not fr.content or len(fr.content) > RESP_MAX_FILE_BYTES:
+            # Its size before any byte of it: the runner's listing says it (a runner from before the
+            # field does not), else the length the runner states, else the read stops at the cap.
+            try:
+                listed = int(it.get("size"))
+            except (TypeError, ValueError):
+                listed = -1
+            if listed > RESP_MAX_FILE_BYTES:
+                status, data, media, size = 200, None, "", listed      # never asked for
+            else:
+                status, data, media, size = await _sandbox_file(sid, path, RESP_MAX_FILE_BYTES)
+            if status >= 400:
                 continue
+            if data is None:
+                # No card, but named: the answer says it is too large to attach and where it is
+                # (_too_large_note). Skipped in silence, a person was left looking for a file the
+                # agent had named (hosted, 2026-10-19, nine images of 25.5 to 49.1 MB).
+                print(f"[produced] sid={sid} file_too_big {size or f'over {RESP_MAX_FILE_BYTES}'}", flush=True)
+                out.append({"filename": rel, "bytes": size, "too_large": True})
+                continue
+            if not data:
+                continue                    # an empty file: nothing to hand over
             cfile = _rid("cfile")
-            media = fr.headers.get("content-type", "application/octet-stream")
             fname = rel
-            if await _blob_put(f"containers/{sid}/{cfile}", fr.content, kb=RESP_BLOB_KB):
+            if await _blob_put(f"containers/{sid}/{cfile}", data, kb=RESP_BLOB_KB):
                 await _blob_put(f"containers/{sid}/{cfile}.meta",
                                 json.dumps({"filename": fname, "media_type": media,
                                             "written_at": time.time()}).encode(), kb=RESP_BLOB_KB)
-                out.append({"container_id": sid, "file_id": cfile, "filename": fname, "bytes": len(fr.content)})
+                out.append({"container_id": sid, "file_id": cfile, "filename": fname, "bytes": len(data)})
         except Exception:  # noqa: BLE001
             continue
     # Advance the runner's collection cursor ONLY now that the files are captured to blobs. This is
@@ -8490,7 +8646,12 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         # manifest reads it) and on the translator (the stored response and the turns feed read it).
         rec["connection"] = name
         translator.connection = name
-        if sid in _cancel_req:
+        # The durable latch too, not only the in-process flag: a cancel that landed between the check
+        # before /turn and the registration above could not prove it owned the live turn, so it only
+        # latched (cancel_response), and the poll loop reads the latch first one interval in. A turn
+        # shorter than that ran to its end and wrote `completed` over the cancel the client was told
+        # had landed (0.35.7-rc.1, a cancel sent as a background task started, 2026-10-19).
+        if await _turn_cancelled(sid, org, translator.resp_id):
             try:
                 await _sandbox_json(f"/turn/{rt}/cancel", sid, "POST", attempts=2)
             except Exception:  # noqa: BLE001
@@ -8615,6 +8776,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                                          # 2000, not 200: a CLI panic names its file after the first 200
                                          # characters and 200 cut goose's tmp-dir panic at its path (2026-09-13).
                                          "error": (s.get("error") or s.get("result") or "")[:2000]})
+                if terminal != "cancelled" and await _turn_cancelled(sid, org, translator.resp_id):
+                    # A cancel the client was answered `cancelled` wins over the runner's own end: the
+                    # latch is read every tenth interval, so a turn can finish before it is seen, and
+                    # its end must not overwrite what the cancel already told the client.
+                    terminal = "cancelled"
                 break
         if pending:   # the loop was left between two writes (a cancel, a poll that kept failing)
             await _trace_flush(tr, {"events": pending, "n_total": fed_upto})
@@ -8662,6 +8828,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
     await _checkpoint(sid, rec)
+    _too_large_saved(produced, rec)      # the answer says a file is in the task's files only once it is
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
     # and the only ordering at which a hosted write survives.
@@ -9314,6 +9481,24 @@ def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
 
 _IDEM_TERMINAL = {"completed", "failed", "incomplete", "cancelled", "error"}
 
+# The event name a terminal status gets on the wire. streaming.md §2.1 names all three; the
+# replay path used to fold everything that was not `completed` into `response.failed`, so a turn
+# that stopped at a limit was announced as an error rather than as the partial result it was.
+_IDEM_EVENT = {"completed": "response.completed", "incomplete": "response.incomplete",
+               "cancelled": "response.failed", "failed": "response.failed"}
+
+
+def _synth_response(resp_id: str, status: str, error: dict | None = None) -> dict:
+    """A response object for an event with no record behind it. `Event.response` is a `$ref` to
+    `Response`, whose `required` is id, object, created_at, status, output and model, so a literal
+    carrying three of the six fails schema validation even when every field it does carry is right.
+    The id and the status are the two the caller knows; the rest are filled so the frame holds."""
+    body = {"id": resp_id, "object": "response", "created_at": int(time.time()),
+            "status": status, "output": [], "model": ""}
+    if error:
+        body["error"] = error
+    return body
+
 
 async def _idem_replay(resp_id: str, stream: bool):
     """A duplicate request (same Idempotency-Key) returns the FIRST request's result instead of
@@ -9330,17 +9515,30 @@ async def _idem_replay(resp_id: str, stream: bool):
 
     if not stream:
         rec = await _await_terminal()
-        return JSONResponse(rec or {"id": resp_id, "status": "unknown",
-                                    "error": {"message": "idempotent replay: original response not found"}})
+        if not rec:
+            # A missing original is the same answer the GET gives for an unknown id. The old
+            # `{"status": "unknown"}` body named a status UHP does not define (#480).
+            raise uhp_error(404, "response_not_found",
+                            "idempotent replay: original response not found", "response_id")
+        return JSONResponse(_public_response(rec))
 
     async def gen():
         created = {"type": "response.created", "sequence_number": 0,
-                   "response": {"id": resp_id, "object": "response", "status": "in_progress"}}
+                   "response": _synth_response(resp_id, "in_progress")}
         yield f"data: {json.dumps(created)}\n\n"
         rec = await _await_terminal()
-        st = str((rec or {}).get("status") or "failed")
-        ev = "response.completed" if st == "completed" else "response.failed"
-        yield f"data: {json.dumps({'type': ev, 'sequence_number': 1, 'response': rec or {'id': resp_id, 'status': st}})}\n\n"
+        if not rec:
+            # The stream already opened, so this cannot become a 404 the way the non-stream
+            # branch's does. It ends on the one event a client can act on, carrying the same
+            # code the GET would have answered (#480).
+            body = _synth_response(resp_id, "failed",
+                                   {"type": "invalid_request_error", "code": "response_not_found",
+                                    "message": "idempotent replay: original response not found",
+                                    "param": "response_id"})
+            yield f"data: {json.dumps({'type': 'response.failed', 'sequence_number': 1, 'response': body})}\n\n"
+            return
+        st = str(rec.get("status") or "failed")
+        yield f"data: {json.dumps({'type': _IDEM_EVENT.get(st, 'response.failed'), 'sequence_number': 1, 'response': _public_response(rec)})}\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -9682,7 +9880,9 @@ async def create_response(body: CreateResponseBody, request: Request):
         task.add_done_callback(_inflight.discard)
         # Return a SNAPSHOT (copy the output list) so the immediate JSON can't alias the list the
         # detached task appends to. Already persisted 'running'; poll GET /v1/responses/{id}.
-        _snap = tr._response_obj("running")
+        # The answer is built straight, not from the stored record, so it carries UHP's name for
+        # the state (`in_progress`) rather than the gateway's internal one (#480).
+        _snap = tr._response_obj("in_progress")
         _snap["output"] = list(_snap.get("output") or [])
         return _snap
 
@@ -9979,7 +10179,7 @@ async def get_response(response_id: str, request: Request):
     # Durable settler for async/background polling: never leave a poller stuck at 'running' if the
     # owning turn actually finished/died (reconciled from the session vertex + trace).
     rec = await _reconcile_response(response_id, rec)
-    return _strip_internal(rec)
+    return _public_response(rec)
 
 
 @app.get("/v1/sessions/{sid}/turns")
@@ -9992,6 +10192,15 @@ async def session_turns(sid: str, request: Request, limit: int = 0) -> dict:
     return await _session_turns_data(sid, limit=limit)
 
 
+def _unix_s(ts) -> int | None:
+    """A time as whole Unix seconds, the form every UHP time takes; None when there is none."""
+    try:
+        t = float(ts)
+        return int(t) if t > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 async def _session_turns_data(sid: str, limit: int = 0) -> dict:
     # find this session's response ids (HarnessResponse vertices carry session_id)
     ids: list[str] = []
@@ -9999,6 +10208,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
     rows = await BACKING.graph.find("HarnessResponse", {"session_id": safe_sid})
     rows.sort(key=lambda x: str(x.get("created_at") or ""))
     ids = [str(x.get("id")) for x in rows if x.get("id")]
+    # each row's birth as the index holds it: a turn's time when its record carries none
+    born = {str(x.get("id")): x.get("created_at") for x in rows if x.get("id")}
     if limit and limit > 0:
         ids = ids[-limit:]   # last N turns only — bounds blob fetches AND response size
     turns = []
@@ -10052,6 +10263,13 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
                                             or None),
                       "handoff": ((rec.get("incomplete_details") or {}).get("handoff") or None),
+                      # When the turn began and when it ended, Unix seconds like the response
+                      # object's created_at, from the record itself (no read per row). completed_at
+                      # is null while the turn runs and on a record that never said when it ended
+                      # (before 2026-10-19, or settled by a reconcile that cannot know).
+                      "created_at": _unix_s(rec.get("created_at") or born.get(rid)),
+                      "completed_at": (None if str(rec.get("status") or "") in _TURN_LIVE
+                                       else _unix_s(rec.get("_completed_at"))),
                       "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
     # session vertex, so read it ONCE.
@@ -10435,6 +10653,7 @@ async def cancel_response(response_id: str, request: Request):
             # Not confirmed as the live turn: latch this record cancelled in blob + graph (keep
             # them consistent) and let the turn's own resp_is_cancelled check settle it.
             rec["status"] = "cancelled"
+            rec.setdefault("_completed_at", time.time())     # the turns feed's completed_at
             try:
                 _resp_cache_forget(response_id)
                 await _blob_put(f"responses/{response_id}.json",
@@ -10443,7 +10662,7 @@ async def cancel_response(response_id: str, request: Request):
             except Exception:  # noqa: BLE001
                 pass
     rec = await _resp_get(response_id) or rec
-    return _strip_internal(rec)
+    return _public_response(rec)
 
 
 # ── files: upload (in) + container content (out) ────────────────────────────────────────
@@ -19578,7 +19797,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         if want_base not in _BASE_CATALOG:
             raise uhp_error(400, "invalid_base", f"No base harness '{want_base}'.", "base")
         if not await _base_serves(org, want_base, want_model):
-            raise uhp_error(400, "model_unavailable",
+            raise uhp_error(422, "model_unavailable",
                             f"Nothing you have connected can run {want_model or 'that model'} "
                             f"on {want_base}.", "model")
         base, model = want_base, want_model

@@ -2,6 +2,70 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.10.19.post1 (2026-10-19)
+
+No change to the protocol, the schema or any verdict a conformant server gets.
+
+T-11 reads a background task back while it is still running and requires the lifecycle table's name
+for the state, `in_progress`. No check looked at a task before it reached a terminal status, so a
+server could answer every background POST and every poll with a name of its own and stay green.
+HarnessRouter answered `running`, which the table does not define, while its own stream emitted
+`in_progress` for the same turn: a client written to the specification waited for `in_progress`,
+or treated the unknown status as an error. The check skips rather than fails when the task finishes
+before it can be read mid-turn, since there is then nothing left to observe.
+
+## 2026-10-19, addition: when each turn began and ended
+
+Additive. Each item of a session's `turns` ([Sessions §3](versions/2026-10-19/sessions.md#3-inspecting-a-session))
+SHOULD carry `created_at`, when the turn began, and `completed_at`, when it ended, both in Unix
+seconds as every other time in the protocol. `completed_at` is `null` while the turn is running and
+when the server does not know when it ended. An imported turn carries the time it was imported for
+both. A client no longer reads each turn's response to learn its time. `TurnItem` gains both fields.
+
+## 2026-10-19, addition: earlier turns (capability `input_history`)
+
+Additive. A request without `previous_response_id` may carry the conversation so far as `user` and
+`assistant` messages before the last `user` message ([Tasks §2.1](versions/2026-10-19/tasks.md#21-earlier-turns)).
+A server that reports the new `input_history` capability gives them to the harness as its history,
+treats only the last `user` message as the task's own, keeps them as the session's first turns marked
+`imported: true` in `/turns` (completed, no model ran, no cost). Beyond its bounds it imports none
+of them and reads the request as without the capability, never refusing it. A server without the
+capability, or one that reports it `false`, is unchanged.
+
+## 2026-10-19
+
+Against `2026-10-04`, one rule changes and the rest is additive.
+
+**Retiring a harness may retire its sessions with it, under a stated restore window**
+([Harnesses §5.3](versions/2026-10-19/harnesses.md#53-delete)). Every earlier version said a server
+MUST NOT delete the sessions or responses that used a deleted harness. That stays the rule for a
+server that reports the new `harness_retirement` capability `false`, or says nothing. A server that
+reports it `true` MAY remove them with the harness, under three conditions:
+- it states the window when the harness is retired: the delete response carries
+  `sessions: "retired"` and `restorableUntil` (Unix seconds), and its own interface tells the person
+  the window's length before they confirm;
+- within the window, a restore brings back the harness and its sessions together;
+- only after the window may it remove them for good. The one exception is a person's own request
+  to erase their data, which may remove their retired sessions sooner;
+- it never retires a harness mid-task: it cancels the task first, or refuses the delete with `409`
+  and the new code `harness_busy`, saying why.
+
+A server may withhold them from lists and reads while the window runs. The delete response gains
+`sessions` (`kept` or `retired`; absent means kept) and `restorableUntil`. This is the one change
+that is not additive. [Versioning](VERSIONING.md#the-current-versions-known-compromises) records what
+it means for a server that also serves an earlier version.
+
+**Harness writes refuse what they cannot store**, now stated in
+[Harnesses §5.1](versions/2026-10-19/harnesses.md#51-create): a field the harness does not have and
+a `default_model` its base does not run are `422`, the latter with `model_not_available`, now in
+the error table beside the task-time `model_unavailable`. Both maintained servers have done this
+since 2026-10-10.
+
+**Conformance suite 2026.10.19.** New check F-09 (class Full) creates a harness, runs a task on it
+and deletes the harness. A server whose `harness_retirement` is `false` or absent passes when the
+session still reads afterwards and the response says nothing else. One that reports it `true` passes
+when the delete response says `sessions: "retired"` with a future `restorableUntil`.
+
 ## Conformance suite 2026.10.4.post11 (2026-10-15)
 
 No change to the protocol, the schema or any verdict a conformant server gets. ME-01 assumed the

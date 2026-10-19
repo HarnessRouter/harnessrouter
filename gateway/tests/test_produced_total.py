@@ -41,7 +41,10 @@ def test_collection_keeps_the_newest_and_counts_them_all(monkeypatch):
             return _Resp(200, json.dumps({"files": listed}).encode())
         if path == "/produced/ack":
             return _Resp(200, b"{}")
-        return _Resp(200, b"bytes", "image/jpeg")           # GET /files/<path>
+        return _Resp(200, b"{}")
+
+    async def _file(s, path, cap):                          # GET /file, read no further than the cap
+        return 200, b"bytes", "image/jpeg", 5
 
     async def _blob_put(key, data, kb=0):
         stored[key] = data
@@ -49,6 +52,7 @@ def test_collection_keeps_the_newest_and_counts_them_all(monkeypatch):
     monkeypatch.setattr(gw, "_sandbox", _sandbox)
     monkeypatch.setattr(gw, "_blob_put", _blob_put)
     monkeypatch.setattr(gw, "RESP_MAX_FILES", 25)
+    monkeypatch.setattr(gw, "_sandbox_file", _file)
     out = asyncio.run(gw._collect_produced(sid))
     names = [o["filename"] for o in out]
     assert len(out) == 25 and names[0] == "observations/000029.jpg" and names[-1] == "observations/000005.jpg"
