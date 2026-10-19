@@ -4990,6 +4990,7 @@ async def _stop_session(org: str, sid: str, v: dict, rid_hint: str = "") -> tupl
             rec = await _resp_get(rid)
             if rec and str(rec.get("status") or "") in ("running", "in_progress", "queued", "starting"):
                 rec["status"] = "cancelled"
+                rec.setdefault("_completed_at", time.time())     # the turns feed's completed_at
                 _resp_cache_forget(rid)
                 await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
                 await _vg_upsert("HarnessResponse", rid, {"status": "cancelled"})
@@ -7996,8 +7997,15 @@ async def _harness_models_view(hv: dict | None, backend: str, servable: set[str]
 
 
 # ── response record store (blob = source of truth; VG vertex = index/fallback) ──────────
+# a turn record still running: no end time yet
+_TURN_LIVE = frozenset({"running", "in_progress", "queued", "starting"})
+
+
 async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None,
                     status: str, created_at: float, store: bool) -> None:
+    if status not in _TURN_LIVE and "_completed_at" not in stored:
+        # when the turn ended, for the turns feed's completed_at; stripped from the response object
+        stored = {**stored, "_completed_at": time.time()}
     try:
         _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
@@ -9994,6 +10002,15 @@ async def session_turns(sid: str, request: Request, limit: int = 0) -> dict:
     return await _session_turns_data(sid, limit=limit)
 
 
+def _unix_s(ts) -> int | None:
+    """A time as whole Unix seconds, the form every UHP time takes; None when there is none."""
+    try:
+        t = float(ts)
+        return int(t) if t > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 async def _session_turns_data(sid: str, limit: int = 0) -> dict:
     # find this session's response ids (HarnessResponse vertices carry session_id)
     ids: list[str] = []
@@ -10001,6 +10018,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
     rows = await BACKING.graph.find("HarnessResponse", {"session_id": safe_sid})
     rows.sort(key=lambda x: str(x.get("created_at") or ""))
     ids = [str(x.get("id")) for x in rows if x.get("id")]
+    # each row's birth as the index holds it: a turn's time when its record carries none
+    born = {str(x.get("id")): x.get("created_at") for x in rows if x.get("id")}
     if limit and limit > 0:
         ids = ids[-limit:]   # last N turns only — bounds blob fetches AND response size
     turns = []
@@ -10054,6 +10073,13 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
                                             or None),
                       "handoff": ((rec.get("incomplete_details") or {}).get("handoff") or None),
+                      # When the turn began and when it ended, Unix seconds like the response
+                      # object's created_at, from the record itself (no read per row). completed_at
+                      # is null while the turn runs and on a record that never said when it ended
+                      # (before 2026-10-19, or settled by a reconcile that cannot know).
+                      "created_at": _unix_s(rec.get("created_at") or born.get(rid)),
+                      "completed_at": (None if str(rec.get("status") or "") in _TURN_LIVE
+                                       else _unix_s(rec.get("_completed_at"))),
                       "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
     # session vertex, so read it ONCE.
@@ -10437,6 +10463,7 @@ async def cancel_response(response_id: str, request: Request):
             # Not confirmed as the live turn: latch this record cancelled in blob + graph (keep
             # them consistent) and let the turn's own resp_is_cancelled check settle it.
             rec["status"] = "cancelled"
+            rec.setdefault("_completed_at", time.time())     # the turns feed's completed_at
             try:
                 _resp_cache_forget(response_id)
                 await _blob_put(f"responses/{response_id}.json",

@@ -1130,6 +1130,17 @@
         "imported": {
           "type": "boolean",
           "description": "A turn the session was started with (Tasks §2.1, capability `input_history`): completed,\nno model ran and nothing was spent. `false`, or absent, for a turn that ran.\n"
+        },
+        "created_at": {
+          "type": "integer",
+          "description": "When the turn began, in Unix seconds, as the Response's `created_at`. An imported turn\ncarries the time it was imported.\n"
+        },
+        "completed_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "When the turn ended, in Unix seconds. `null` while the turn is running, and when the\nserver does not know when it ended. An imported turn carries the time it was imported.\n"
         }
       },
       "additionalProperties": true

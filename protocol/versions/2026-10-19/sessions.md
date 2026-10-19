@@ -94,6 +94,12 @@ against one implementation's habits.
 A server with the `input_history` capability marks each turn a session was started with
 ([Tasks §2.1](tasks.md#21-earlier-turns)) `imported: true`, and every turn that ran `imported: false`.
 
+Each turn SHOULD also carry `created_at`, when it began, and `completed_at`, when it ended, both
+integers in Unix seconds like the Response's `created_at` ([Tasks §3](tasks.md#3-the-response-object)).
+`completed_at` is `null` while the turn is running and when the server does not know when it ended.
+An imported turn carries the time it was imported for both, so a client reading a session's history
+never has to fetch each turn's response to learn when it happened.
+
 A session whose turns read an environment carries `environment`, the environment's id, so a client
 can tell which project a conversation worked in ([Environments §6](environments.md#6-what-a-session-sees)).
 

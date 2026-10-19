@@ -2,6 +2,14 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## 2026-10-19, addition: when each turn began and ended
+
+Additive. Each item of a session's `turns` ([Sessions §3](versions/2026-10-19/sessions.md#3-inspecting-a-session))
+SHOULD carry `created_at`, when the turn began, and `completed_at`, when it ended, both in Unix
+seconds as every other time in the protocol. `completed_at` is `null` while the turn is running and
+when the server does not know when it ended. An imported turn carries the time it was imported for
+both. A client no longer reads each turn's response to learn its time. `TurnItem` gains both fields.
+
 ## 2026-10-19, addition: earlier turns (capability `input_history`)
 
 Additive. A request without `previous_response_id` may carry the conversation so far as `user` and

@@ -120,6 +120,9 @@ Against `2026-10-04`, one rule changes and the rest is additive.
   publication and additive: with the `input_history` capability, the messages before the last `user`
   message are the conversation so far, kept as the session's first turns marked `imported`. Beyond
   a server's bounds the request is read as without the capability, never refused.
+- **Each turn says when it began and ended** ([Sessions §3](sessions.md#3-inspecting-a-session)),
+  added after publication and additive: a session's turns carry `created_at` and `completed_at` in
+  Unix seconds, `completed_at` `null` while the turn runs or when its end is not known.
 - **Harness writes refuse what they cannot store** ([Harnesses §5.1](harnesses.md#51-create)): a field
   the harness does not have, and a `default_model` its base does not run, are `422`. Both maintained
   servers have done this since 2026-10-10, inside `2026-10-04`; this version states it.
