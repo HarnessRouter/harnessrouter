@@ -1375,6 +1375,22 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "docker-agent"): "tokenrouter",
     ("custom", "docker-agent"): "openai-api",
     ("harnessrouter", "docker-agent"): "tokenrouter",
+    # dcode (deepagents-code) is the ONLY base here besides codex that speaks the Responses API,
+    # so its reach is codex's rather than the other four's: langchain-openai posts to
+    # /v1/responses, and the providers listed are the ones that serve it. An Anthropic or Google
+    # native endpoint is absent for that reason — a Messages or generativelanguage base URL has no
+    # /v1/responses to post to, and this builder only ever sets OPENAI_BASE_URL. MEASURED on the
+    # Vercel connection through the runner's own relay (2026-10-19, five scenarios): every request
+    # went to /v1/responses, and claude-haiku-5.5 and gemini-3-flash were each asked for and each
+    # served as itself, including on the mid-session switch its session would otherwise have taken
+    # back. The other rows are the same endpoints codex is already wired to.
+    ("openai", "dcode"): "openai",
+    ("azure-foundry", "dcode"): "azure",
+    ("openrouter", "dcode"): "openai-api",
+    ("tokenrouter", "dcode"): "tokenrouter",   ("vercel", "dcode"): "tokenrouter",
+    ("llmtr", "dcode"): "tokenrouter",
+    ("custom", "dcode"): "openai-api",
+    ("harnessrouter", "dcode"): "tokenrouter",
     # vtcode, the same reach as vibe's and for the same reason: one OpenAI shape, through the
     # relay, with the provider named in its config rather than inferred from the model id.
     ("anthropic", "vtcode"): "anthropic",      ("openai", "vtcode"): "openai",
@@ -5683,8 +5699,11 @@ _CUSTOM_FORMAT_BACKENDS = {
                "vibe", "vtcode", "docker-agent", "fast-agent"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
-    # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
-    "responses": {"codex"},
+    # The OpenAI Responses API: what codex speaks, and — since this batch — dcode, whose
+    # langchain-openai model posts to /v1/responses on every turn (measured through a recording
+    # proxy and again through the runner's own relay). A custom integration declaring
+    # chat/completions cannot serve it, which is why dcode is in this set and in neither other one.
+    "responses": {"codex", "dcode"},
 }
 
 
@@ -7706,8 +7725,15 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # through the runner's own relay): claude-haiku-5.5 and gemini-3-flash, each asked for and each
 # served as itself, including on a mid-session switch its own session store would otherwise have
 # taken back.
+# dcode takes the same multi-family list, with one difference that is about the WIRE rather than
+# the ids: it drives the Responses API, so the chat-only reasoning below is reversed for it — a
+# chat-completions-only channel is what would fail here. MEASURED (2026-10-19, the Vercel
+# connection through the runner's own relay, five scenarios): claude-haiku-5.5 and gemini-3-flash,
+# each asked for and each served as itself over /v1/responses, across a mid-session switch its
+# session had pinned. The two Responses-API-only ids codex lists (gpt-5.3-codex, gpt-6-astra) are
+# NOT added here: this base could serve them and no turn has, and a list is not a place to guess.
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
-           "vibe", "vtcode", "docker-agent", "fast-agent"):
+           "vibe", "vtcode", "docker-agent", "fast-agent", "dcode"):
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
@@ -17938,6 +17964,29 @@ _BASE_CATALOG: dict[str, dict] = {
         # construction would have withheld the built-ins and let every MCP tool through. Measured:
         # with write_file withheld the model wrote the file with `exec` instead, which is the honest
         # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
+    "dcode": {
+        "label": "Deep Agents Code", "backend": "dcode", "status": "ready",
+        "system_prompt": ("You are Deep Agents Code, an autonomous coding agent. You work on a "
+                          "real git workspace with shell and file access, reading and editing "
+                          "files and running commands to complete the task end to end."),
+        # SEVEN of the fourteen tools a turn declares, and the seven are the ones that can really
+        # be switched off: `--allow-fs-tools` is the single door, and on this surface it governs
+        # the shell as well (FS_TOOL_NAMES includes `execute`), so the filesystem set minus
+        # read_file is the whole offer. read_file is excluded because the flag's own parser
+        # rejects a list without it; task, compact_conversation, update_goal, ask_user, fetch_url
+        # and get_current_thread_id are excluded because nothing withholds them, and a toggle that
+        # disables nothing is what UHP §4.3 forbids. Held equal to the runner's ALL_DCODE_TOOLS by
+        # gateway/tests/test_dcode_tools.py, and read off a turn's own request body rather than
+        # from the docs — which is how the two differences from its headless mode were found
+        # (`js_eval` is not declared over ACP, `ask_user` is).
+        "tools": [("ls", "List"), ("write_file", "File Write"), ("edit_file", "Edit"),
+                  ("delete", "Delete"), ("glob", "Glob"), ("grep", "Grep"),
+                  ("execute", "Shell")],
+        # "hard", measured twice over: a turn launched with the shell outside the allow-list did
+        # not DECLARE it (read off the request), and asked to run `echo NOPE` on a resumed session
+        # the model answered that it had no shell tool and ran nothing.
         "tool_enforcement": "hard",
     },
     "fast-agent": {

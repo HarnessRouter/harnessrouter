@@ -70,7 +70,7 @@ def test_this_batchs_four_bases_are_there():
 
 def test_this_batchs_bases_are_there():
     # batch 4, the same check as above for the bases added with it
-    for b in ("vibe", "vtcode", "docker-agent", "fast-agent"):
+    for b in ("vibe", "vtcode", "docker-agent", "fast-agent", "dcode"):
         assert b in _bases_in_dimension(), b
 
 
@@ -110,6 +110,10 @@ def test_the_tools_this_batchs_bases_run_the_fixture_WITH_are_never_withheld():
         # unmeasurable rather than withholding one of them — which is what pickDisabled returning
         # null means, and what the dimension already does for aider.
         "fast-agent": ("bash", "read_text_file", "edit_file"),
+        # dcode: `execute` runs the skill's script and `write_file` is how it writes. Of its seven
+        # the only one the fixture never needs is `delete`, which is why NEEDED_ID deliberately
+        # does not match it — it is this base's one spare for pickDisabled.
+        "dcode": ("execute", "write_file", "ls", "edit_file", "glob", "grep"),
     }
     for base, ids in needs.items():
         published = _tool_ids(A._BASE_CATALOG[base])

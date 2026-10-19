@@ -3759,8 +3759,10 @@ turn at a time. It says each base works; the column above is what says each MODE
   families, before any model switch had real effect, finished in 27-33 s. jcode has no step or
   iteration flag of any kind, so nothing bounds this but the turn's wall clock
   (`MAX_TURN_SECONDS`, six hours by default); the operator's step budget — the gateway's `max_step`,
-  which reaches the runner as `max_turns` — is forwarded by nine of twenty builders and is a no-op
-  on the other eleven, this one included.
+  which reaches the runner as `max_turns` — is forwarded by seventeen of the thirty-one builders
+  (hermes through its config file rather than a flag) and is a no-op on the other fourteen, this one
+  included. Counted off the builders themselves, 2026-10-19; the number moved when dcode joined
+  them, which is the sort of count that goes stale silently.
 
 - **nanobot's CLI seeds the workspace and makes a second git repository in it.** `nanobot agent -m`
   calls `sync_workspace_templates()`, which creates AGENTS.md, SOUL.md, USER.md, HEARTBEAT.md,
@@ -4502,14 +4504,17 @@ modes, its sub-agents, its RAG and its MCP catalog are all untouched here: a tur
 toolsets above and nothing else. Its remote MCP transport ("streamable" or "sse") has not been
 exercised against a live server, so SSE is bridged like the other bases' until it is.
 
-## dcode (deepagents-code): implemented, NOT offered — its headless mode cannot continue a conversation (2026-10-16)
+## dcode (deepagents-code): the first base driven over ACP, because its headless mode cannot continue a conversation (2026-10-19) — behaviour measured, NO column yet
 
-LangChain's `deepagents-code` 0.1.84 (`dcode`) was built as far as the runner — the builder, the
-store reader, `runner/dcode_driver.py` — and is deliberately **not** registered in the gateway, the
-console, the installer or either measurement dimension. `runner/tests/test_dcode_not_offered.py`
-pins that state so a half-registration cannot pass unnoticed, the way gajae's does.
+LangChain's `deepagents-code` 0.1.84 (`dcode`) is the thirty-first base, and the only one here
+driven over the **Agent Client Protocol** instead of a CLI flag. Measured through a recording proxy
+and then end to end through the runner's own argv and relay, five scenarios in one workspace. **No
+support-matrix column has run.** One recorded turn's whole `session/update` stream is committed as
+`runner/tests/fixtures/batch4/dcode-six-tools.ndjson` and replayed by
+`runner/tests/test_dcode_acp.py`, which also drives the shipped driver against a fake ACP agent
+(`runner/tests/fixtures/batch4/fake_acp_agent.py`) for the parts only a live conversation has.
 
-### Why
+### Why not its headless flag
 `dcode -n "<task>"` always starts a fresh thread. Its own source says so, about `--rubric`:
 
 > `--rubric` cannot reach that state: it requires `-n`, and `run_non_interactive` takes no resume or
@@ -4519,11 +4524,9 @@ pins that state so a half-registration cannot pass unnoticed, the way gajae's do
 MEASURED against that, because a comment is a claim too: five turns in one workspace, each passing
 `-r <thread_id>` for a thread whose row and 22 checkpoints were in the store. Five NEW rows in
 `dcode_thread_workspaces`, and every recall answered "this thread has no earlier message". Moving
-`-r` before `-n` instead of after it changed nothing.
-
-So a base on this path passes `first turn` and fails `follow-up`, `switch` and `recycle` — three of
-the matrix's five scenarios — and offering it would be a base that cannot do what the product
-promises.
+`-r` before `-n` instead of after it changed nothing. A base on that path passes `first turn` and
+fails `follow-up`, `switch` and `recycle` — three of the matrix's five scenarios — so the headless
+groundwork was built, left unregistered, and is now replaced rather than offered.
 
 ### The first reading of this was wrong, which is the part worth keeping
 An earlier probe "resumed" and recalled the right word. It looked like continuity and was not: the
@@ -4532,28 +4535,115 @@ for the agent to read. The control that settled it asks for something only the c
 carry (*what word did I ask you to reply with*), and the memory file that could otherwise have
 carried it — `$HOME/.deepagents/agent/AGENTS.md`, which this CLI's memory prompt writes "learnings"
 into by default — was empty on both sides. A recall question answerable from the workspace measures
-the workspace.
+the workspace. The ACP measurement below uses that control: the first turn was told to answer one
+word and write nothing (its updates carry no tool call at all), and the second process, a different
+process with a different pipe, answered what the word was.
 
-### What it would take to offer it
-`dcode --acp` runs an ACP server over stdio whose sessions ARE LangGraph threads, and that server is
-constructed with `load_sessions=True` (main.py:3703) — so `session/load` can continue a thread
-across processes, which is exactly what one-process-per-turn needs. ACP also carries tool calls, so
-the trace would be better than the `-q` text this groundwork reads. The work is an ACP client in the
-runner (initialize → session/new or session/load → session/prompt → the session/update stream), and
-it would be reusable: mistral-vibe ships `vibe-acp`, docker-agent has `acp`, VT Code has `acp`.
+### What ACP gives this base that no flag did
+- `initialize` answers `agentCapabilities.loadSession: true`, and the server is constructed with
+  `load_sessions=True` (main.py:3703), so **`session/load` continues a thread across processes** —
+  which is what one-process-per-turn needs. The client advertises no filesystem capability, so the
+  agent uses its own tools instead of asking the runner to read and write files.
+- `session/new` makes the id; it is not ours to choose. `session/load` requires the same `cwd` the
+  session was created with (invalid_params otherwise), and that is the session directory here, so a
+  resume holds across a sandbox recycle.
+- The session id IS the LangGraph thread id, and the thread's **checkpoints** are where it lives.
+  The ACP path never writes `dcode_thread_workspaces` — that table is the TUI's, and in a workspace
+  that has only run ACP turns it does not exist at all (measured: after two turns the store held
+  `checkpoints` and `writes` and no third table). `_dcode_threads` reads `checkpoints`, and the db
+  is per session directory under the redirected HOME, so a thread_id in it is this workspace's.
+- Tool calls arrive as `tool_call` / `tool_call_update`, so the record carries the turn's tools —
+  which the `-q` text path could never have done.
 
-### What was measured and is worth keeping either way
+### Five things that each had to be measured
+- **A loaded session REPLAYS its whole conversation as updates** before the prompt is sent. The
+  driver starts recording only after `session/load` returns; a turn that recorded from the start
+  would open with every earlier turn's reply — the same shape fast-agent's trajectory had in
+  another protocol, found there by a test and here before one was needed.
+- **The model belongs to the session, not to the flag.** `_restore_persisted_selections` puts the
+  model a loaded session was created with back onto it, so the driver sends
+  `session/set_config_option {configId: "model"}` on every turn. The value is validated against a
+  list whose FIRST entry is the launch `-M` resolved spec — which is why `-M` is still passed: it
+  is what puts this turn's model in the list at all. Measured on the switch scenario: the resumed
+  thread's turn asked for `google/gemini-3-flash` and the relay read that model off the answer.
+- **ACP's `tool_call` has no field for the tool's name** — a `title` for a human and a `kind` from
+  a fixed vocabulary. deepagents' server renames exactly four tools (read_file, write_file,
+  edit_file, execute) and passes `title = tool_name` for every other one, so the driver puts the id
+  back from the pair. Without that, a record would say ``Write `/ws/e2e.txt` `` where every other
+  base says `write_file`, and the custom-harness dimension — which reads these names — would count
+  a write as a CUSTOM tool.
+- **One call never gets a completion.** An `edit_file` with a full diff goes out through the
+  server's `start_edit_tool_call` branch and nothing follows it: measured on a six-tool turn, the
+  edit landed and the status stayed `pending` forever. A `tool_use` with no `tool_result` is a hole
+  in the record, so the driver closes it by saying exactly that rather than claiming an outcome
+  nobody reported.
+- **`ask_user` is declared, cannot be withheld, and cannot work here.** ACP mode leaves
+  `enable_ask_user` at its True default, and the tool raises a free-form LangGraph `interrupt()`,
+  which this protocol has no shape for — the server answers the prompt with error -32600 ("ACP
+  limitation … ACP only supports human-in-the-loop permission prompts with a fixed set of
+  decisions"). The driver reports that as *the agent tried to ask the user a question mid-turn,
+  which this connection cannot carry*, instead of handing back a protocol complaint. This is the
+  one tool on this base that can end a turn by being used.
+
+### Tools, and the one door that governs them
+Fourteen reach the model over ACP, read off a turn's own request body: ls, read_file, write_file,
+edit_file, delete, glob, grep, execute, task, compact_conversation, update_goal, ask_user,
+fetch_url, get_current_thread_id. **Two differ from its headless mode**, which is why the docs (or
+the other mode) would have produced the wrong list: `js_eval` is absent (ACP leaves
+`enable_interpreter` at its False default and `--no-interpreter` is not plumbed into it) and
+`ask_user` is present.
+
+`--allow-fs-tools` is the single door, and on this surface it governs the shell as well:
+`FS_TOOL_NAMES` includes `execute`, and a turn launched with `--allow-fs-tools read_file,ls`
+declared neither the shell nor the five write tools. No `-S` is needed for the shell to be there
+(measured: a turn with no `-S` ran `echo SHELLOK`). So the catalog offers **seven** — the filesystem
+set minus read_file, which the flag's own parser refuses to drop — and the other six are not
+offered because nothing withholds them. Enforcement is **hard**: a withheld tool is not declared,
+and asked to run `echo NOPE` on a resumed session with `execute` withheld the model answered that it
+had no shell tool and ran nothing.
+
+### Everything else that was measured
 - `-M openai:<id>` with OPENAI_BASE_URL and OPENAI_API_KEY is langchain-openai pointed at the relay,
-  and it posts to **/v1/responses**, not chat/completions.
+  and it posts to **/v1/responses**, not chat/completions. So this is the second Responses client
+  here after codex: it is NOT in `CHAT_ONLY_BACKENDS`, it IS in the `responses` custom-format set,
+  and its provider wiring is codex's — no Anthropic or Google native endpoint, which have no
+  /v1/responses to post to.
 - It reads the project's `AGENTS.md` only when the workspace is a git PROJECT (its lookup is
   `find_project_agent_md(project_root)`); in a plain directory the same file reached nobody.
-  Measured both ways.
+  Measured both ways, and again end to end: an instruction in it was obeyed on all five turns.
+- Skills land in `$HOME/.deepagents/agent/skills/<name>/SKILL.md` and are visible: asked which
+  skills it had, a turn named the harness's `stamp` beside its own four.
+- The operator's step budget is a **no-op** on this base, as it is on the other builders with no
+  knob for it (jcode's note above counts them): `--max-turns` "requires -n or piped stdin" and is
+  rejected in ACP mode, and the only neighbouring
+  flag, `--recursion-limit`, counts LangGraph graph steps rather than turns. The turn's wall clock
+  (`MAX_TURN_SECONDS`) is what bounds it.
 - `dcode threads list --json` with an inherited stdin hung for eight minutes and returned at once
-  with it closed — the second base this batch where stdin was the whole problem.
-- Fourteen tools reach the model (ls, read_file, write_file, edit_file, delete, glob, grep, execute,
-  task, compact_conversation, update_goal, js_eval, fetch_url, get_current_thread_id) and only eight
-  can be withheld, each on a different switch: the filesystem set through `--allow-fs-tools` (which
-  must keep read_file), `execute` by withholding `-S`, `js_eval` through `--no-interpreter`.
+  with it closed — the second base this batch where stdin was the whole problem, and the reason
+  `_run_turn_bg` closes stdin for every turn now.
+- **A provider failure fails the turn** rather than being narrated as its answer — checked, not
+  assumed, because several CLIs here do narrate it. Measured with a bad key through the relay: the
+  prompt is answered with JSON-RPC -32603 "Internal error" and the real sentence in `data.details`
+  ("Error code: 401 - … 'Authentication failed' …"), and the driver reports that sentence. Its
+  first version reported the envelope plus the agent's stderr tail — this CLI writes a full Python
+  traceback there at the same moment — which made a 711-character result out of a 274-character
+  reason, so the stderr tail is now kept only for the failures that have no reason of their own (a
+  refused initialize, no session id, a turn that never answers).
+- Permission: the agent calls `session/request_permission` on the client and the driver allows,
+  which is the grant claude gets with `--dangerously-skip-permissions`; the sandbox is the trust
+  boundary and nobody is attached to answer. `--yolo` is not the route — ACP mode exits 2 unless the
+  YOLO acknowledgement was given in the interactive TUI — and `--auto-approve` would install a
+  classifier that spends a second model on every decision.
+- ripgrep: this CLI downloads a pinned, SHA-256-verified `rg` of its own the first time `grep` is
+  called. `install_dcode` does that at install time instead, into the venv
+  (`share/deepagents-code/bin/rg`, verified on `python:3.12-slim`), which is where it is found
+  whatever HOME a turn runs with; `DEEPAGENTS_CODE_OFFLINE=1` then keeps a turn from fetching
+  anything, and if that copy is missing the search falls back to the slower Python path its own
+  documentation names rather than failing.
+- The ACP server lives in a SEPARATE distribution: `dcode --acp` exits 1 with "ACP dependencies not
+  available" unless `deepagents-acp` is installed beside the CLI. The installer pins both wheels by
+  the sha256 PyPI publishes, and then imports `deepagents_acp.server` and checks `load_sessions` is
+  still a parameter of it — the one thing this base cannot do without.
 - Defaults that would have cost something: LangSmith tracing (on), the update check, the plugin and
   price auto-updates, the project `.env` applied to the process environment, and
   `MEMORY_AUTO_SAVE` — the agent is otherwise told to persist learnings into the AGENTS.md the

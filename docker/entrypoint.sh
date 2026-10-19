@@ -212,7 +212,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 #
 # gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
 # this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,vtcode,docker-agent,fast-agent}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,vtcode,docker-agent,fast-agent,dcode}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -252,6 +252,7 @@ backend_bin() {
     vtcode) echo "$TOOLS/bin/vtcode" ;;
     docker-agent) echo "$TOOLS/bin/docker-agent" ;;
     fast-agent) echo "$TOOLS/fast-agent-venv/bin/fast-agent" ;;
+    dcode) echo "$TOOLS/dcode-venv/bin/dcode" ;;
     nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
     zeroclaw) echo "$TOOLS/bin/zeroclaw" ;;
   esac
@@ -1367,6 +1368,81 @@ install_docker_agent() {
   fi
 }
 
+# Deep Agents Code (MIT, langchain-ai/deepagents) from PyPI: the CLI wheel plus the ACP server
+# wheel, which is a SEPARATE distribution and the one this backend is driven through — `dcode --acp`
+# exits 1 with "ACP dependencies not available" without it. Both are pinned by version and by the
+# sha256 PyPI publishes for the file; their dependency trees (the deepagents SDK, langchain,
+# agent-client-protocol) are resolved by pip as vibe's and fast-agent's are.
+install_dcode() {
+  dc_ver="${HR_DCODE_VERSION:-0.1.84}"; dc_ver="${dc_ver#v}"
+  dc_acp_ver="${HR_DCODE_ACP_VERSION:-0.0.13}"; dc_acp_ver="${dc_acp_ver#v}"
+  dc_whl="deepagents_code-${dc_ver}-py3-none-any.whl"
+  dc_want="321437c72cdc109db70e9e9c06b2b4f9b1bfc2aac362b6678b18e01882a3b183"
+  dc_acp_whl="deepagents_acp-${dc_acp_ver}-py3-none-any.whl"
+  dc_acp_want="90c58385e44fe32b70e88980f83c930a25532c3d5c4de10dbc9dca09941313c2"
+  # A version override has no digest here, so it SAYS the bytes are unverified rather than
+  # pretending the check ran (goose's installer sets the precedent).
+  if [ -n "${HR_DCODE_VERSION:-}" ] && [ "$dc_ver" != "0.1.84" ]; then
+    if [ -n "${HR_DCODE_SHA256:-}" ]; then dc_want="$HR_DCODE_SHA256"; else
+      echo "[harnessrouter] WARN: HR_DCODE_VERSION=$dc_ver without HR_DCODE_SHA256 — the wheel is NOT verified"
+      dc_want=""
+    fi
+  fi
+  if [ -n "${HR_DCODE_ACP_VERSION:-}" ] && [ "$dc_acp_ver" != "0.0.13" ]; then
+    if [ -n "${HR_DCODE_ACP_SHA256:-}" ]; then dc_acp_want="$HR_DCODE_ACP_SHA256"; else
+      echo "[harnessrouter] WARN: HR_DCODE_ACP_VERSION=$dc_acp_ver without HR_DCODE_ACP_SHA256 — the wheel is NOT verified"
+      dc_acp_want=""
+    fi
+  fi
+  dc_tmp="$(mktemp -d)"
+  # The file URL is read out of PyPI's simple index rather than hard-coded: the hash is what pins
+  # the artifact, and the CDN path for a file is not part of the release's identity.
+  for dc_pair in "deepagents-code|$dc_whl|$dc_want" "deepagents-acp|$dc_acp_whl|$dc_acp_want"; do
+    dc_pkg="${dc_pair%%|*}"; dc_rest="${dc_pair#*|}"
+    dc_file="${dc_rest%%|*}"; dc_sum="${dc_rest#*|}"
+    dc_href="$(curl -fsSL -H 'Accept: text/html' "https://pypi.org/simple/$dc_pkg/" \
+               | grep -o "https://files.pythonhosted.org/[^\"#]*${dc_file}" | head -1)"
+    [ -n "$dc_href" ] || { echo "dcode: $dc_file is not in the $dc_pkg index"; rm -rf "$dc_tmp"; return 1; }
+    curl -fsSL "$dc_href" -o "$dc_tmp/$dc_file" || { rm -rf "$dc_tmp"; return 1; }
+    if [ -n "$dc_sum" ]; then
+      dc_have="$(sha256sum "$dc_tmp/$dc_file" | awk '{print $1}')"
+      if [ "$dc_sum" != "$dc_have" ]; then
+        echo "dcode: checksum mismatch for $dc_file (want $dc_sum, have $dc_have)"
+        rm -rf "$dc_tmp"; return 1
+      fi
+    fi
+  done
+  "${HR_DCODE_BASE_PYTHON:-python3}" -m venv "$TOOLS/dcode-venv" \
+    || { rm -rf "$dc_tmp" "$TOOLS/dcode-venv"; return 1; }
+  "$TOOLS/dcode-venv/bin/pip" install -q --disable-pip-version-check \
+      "$dc_tmp/$dc_whl" "$dc_tmp/$dc_acp_whl" \
+    || { rm -rf "$dc_tmp" "$TOOLS/dcode-venv"; return 1; }
+  rm -rf "$dc_tmp"
+  # The managed ripgrep, fetched HERE and not inside a turn: this CLI downloads a pinned,
+  # SHA-256-verified `rg` of its own the first time `grep` is called, and a turn is not the place
+  # for a download. With DEEPAGENTS_CODE_OFFLINE=1 (which the runner sets on every turn) it would
+  # instead fall back to "the slow Python regex path" its own documentation names. Not fatal: that
+  # fallback is a working search, so a failure here costs speed and nothing else.
+  HOME="$TOOLS/dcode-venv" "$TOOLS/dcode-venv/bin/dcode" tools install --json >/dev/null 2>&1 \
+    || echo "[harnessrouter] note: dcode's managed ripgrep was not installed; its grep uses the slower Python path"
+  # RUN what was installed and compare the version it REPORTS, and prove the surface this backend
+  # is driven through: the ACP server mode, which lives in a different distribution and whose
+  # absence `dcode --acp` reports as an exit rather than as a missing feature.
+  "$TOOLS/dcode-venv/bin/python" -c '
+import sys, importlib.metadata as md
+have = md.version("deepagents-code")
+if have != sys.argv[1]:
+    sys.exit("deepagents-code %s installed, wanted %s" % (have, sys.argv[1]))
+from deepagents_acp.server import AgentServerACP           # what `dcode --acp` imports
+from acp import run_agent                                  # and the protocol package under it
+import inspect
+src = inspect.getsource(AgentServerACP.__init__)
+if "load_sessions" not in src:
+    sys.exit("deepagents-acp %s no longer takes load_sessions, which is how a turn resumes"
+             % md.version("deepagents-acp"))
+' "$dc_ver" || { rm -rf "$TOOLS/dcode-venv"; return 1; }
+}
+
 # Run an install and, if it fails, SAY WHY.
 #
 # This was `>/dev/null 2>&1 || true`, and the silence cost a day of someone's life: a root-owned
@@ -1629,6 +1705,19 @@ install_backends() {
     try_install "fast-agent" install_fast_agent || true
   fi
   [ -x "$TOOLS/fast-agent-venv/bin/fast-agent" ] && export HR_FAST_AGENT_BIN="$TOOLS/fast-agent-venv/bin/fast-agent"
+
+  DCODE_PIN="${HR_DCODE_VERSION:-0.1.84}"
+  if wanted dcode && [ "$("$TOOLS/dcode-venv/bin/python" -c 'import importlib.metadata as m;print(m.version("deepagents-code"))' 2>/dev/null)" != "$DCODE_PIN" ]; then
+    rm -rf "$TOOLS/dcode-venv"
+    echo "[harnessrouter] installing Deep Agents Code $DCODE_PIN (MIT, version-pinned)…"
+    try_install "Deep Agents Code" install_dcode || true
+  fi
+  if [ -x "$TOOLS/dcode-venv/bin/dcode" ]; then
+    export HR_DCODE_BIN="$TOOLS/dcode-venv/bin/dcode"
+    # The driver is stdlib-only, so the CLI's own interpreter runs it and no second venv exists
+    # for a backend to drift out of (nanobot's arrangement).
+    export HR_DCODE_PYTHON="$TOOLS/dcode-venv/bin/python"
+  fi
 
   DOCKER_AGENT_PIN="${HR_DOCKER_AGENT_VERSION:-1.150.0}"
   if wanted docker-agent && [ "$("$(backend_bin docker-agent)" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$DOCKER_AGENT_PIN" ]; then

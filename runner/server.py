@@ -450,23 +450,22 @@ def _dcode_state_db(cwd: str) -> pathlib.Path:
 
 
 def _dcode_threads(cwd: str) -> list[str]:
-    """Thread ids this workspace has, newest first, read from the CLI's own table.
+    """Thread ids this workspace's store has, read from the checkpointer's own table.
 
-    `dcode_thread_workspaces` holds one row per thread with the cwd it ran in. Asking it is how the
-    runner learns the id of the conversation it just started (there is nothing in the output that
-    carries it) and whether an id it was asked to continue is still there."""
+    An ACP session IS a LangGraph thread, and the thread's checkpoints are the only record of it:
+    `dcode --acp` builds the agent on `get_checkpointer()` and writes nothing to
+    `dcode_thread_workspaces` — that table is the TUI's, and in a workspace that has only ever run
+    ACP turns it does not exist at all (measured: after two turns the store held `checkpoints` and
+    `writes` and no third table). The db itself is per session directory, under the redirected
+    HOME, so a thread_id in THIS db is a conversation of THIS workspace and no cwd column is
+    needed. Asking it is how _resume_lost learns that a thread the caller named is really there."""
     db = _dcode_state_db(cwd)
     if not db.is_file():
         return []
     try:
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
         try:
-            rows = con.execute(
-                "SELECT thread_id FROM dcode_thread_workspaces WHERE cwd = ? "
-                "ORDER BY created_at DESC", (str(pathlib.Path(cwd).resolve()),)).fetchall()
-            if not rows:
-                rows = con.execute("SELECT thread_id FROM dcode_thread_workspaces "
-                                   "ORDER BY created_at DESC").fetchall()
+            rows = con.execute("SELECT DISTINCT thread_id FROM checkpoints").fetchall()
             return [str(r[0]) for r in rows if r and r[0]]
         finally:
             con.close()
@@ -553,8 +552,9 @@ _SESSION_PRESENT = {
     # docker-agent passes --session on EVERY turn (an id its store does not have is created with
     # that id, as a new conversation), so the argv says nothing: its store is asked instead.
     "docker-agent": _docker_agent_session_present,
-    # dcode's thread id is not in its output at all: the store is the only place it exists, and
-    # _build_dcode passes -r only when the thread is in it.
+    # dcode's ACP session id is a LangGraph thread id, and the checkpointer's table is the only
+    # place it exists: the driver asks the agent to load it and the store is what knows it is
+    # there.
     "dcode": _dcode_session_present,
     # fast-agent: _build_fast_agent passes --resume only when the session's own file is in the
     # store, so the argv is that lookup's conclusion.
@@ -932,6 +932,13 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       # as written, and those commonly hold a bearer token. Rewritten every turn, so
                       # nothing is lost by leaving it out; its data dir beside it MUST travel.
                       "./.harness/zeroclaw/config.toml",
+                      # dcode stores API keys added with its own `/auth` in
+                      # $HOME/.deepagents/.state/auth.json (its auth_store writes it 0600). The
+                      # runner never writes it — the relay's placeholder rides the environment —
+                      # but a task that ran the command would, and the CONVERSATION lives in
+                      # sessions.db in the same directory and MUST travel, so the exclusion is the
+                      # file and not the directory (nanobot's shape).
+                      "./.harness/home/.deepagents/.state/auth.json",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -1134,6 +1141,7 @@ def _git_ensure(ws: str) -> None:
         ".harness/opensquilla/.env", ".harness/opensquilla/secrets.toml",
         ".harness/nanobot/config.json",
         ".harness/zeroclaw/config.toml",
+        ".harness/home/.deepagents/.state/auth.json",
         "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
         ".harness/home/",
         # Agent Zero's whole base, for the #193 reason: its chat.json stores the full rendered
@@ -12755,58 +12763,91 @@ def _build_docker_agent(provider: str, auth: Auth, model: str, prompt: str, cwd:
 
 
 # ── deepagents-code (langchain-ai/deepagents, PyPI deepagents-code, `dcode`) ──────────────────
-# LangChain's terminal coding agent on their Deep Agents SDK. Its headless mode is `dcode -n
-# "<task>" -q`, which prints the ANSWER and nothing else — there is no event stream, so this is the
-# second base here with a deliberately reduced trace (aider is the first): the turn's tool calls do
-# not appear in the record, and what does appear is the answer, the produced files, and the usage
-# and served model the relay stamps.
+# LangChain's terminal coding agent on their Deep Agents SDK, driven over the **Agent Client
+# Protocol** rather than its headless flag — the first base here on ACP, and the reason is that the
+# headless flag cannot carry a conversation.
 #
-# MEASURED on 0.1.84 (2026-10-16) against the Vercel AI Gateway through a recording proxy:
-#   * The model is `-M openai:<id>`, and with OPENAI_BASE_URL and OPENAI_API_KEY in the environment
-#     that is langchain-openai pointed at the relay. It posts to **/v1/responses**, not
-#     chat/completions, which is why this base is NOT in CHAT_ONLY_BACKENDS: a Responses-only id is
-#     reachable here, as it is on codex.
-#   * `-r <thread_id>` continues a conversation and a DIFFERENT `-M` on that resume is honoured —
-#     measured both ways (the first turn's word recalled while the request asked for the second
-#     model). Unlike vibe, vtcode and jcode, nothing pins the model to the session.
-#   * The thread id is NOT in the output. It is in the CLI's own store, `dcode_thread_workspaces`
-#     in $HOME/.deepagents/.state/sessions.db, one row per thread with the cwd it ran in — which is
-#     where _dcode_thread_id reads it and where _dcode_session_present asks whether a conversation
-#     is really there.
-#   * It reads the project's AGENTS.md — but only when the workspace is a PROJECT: its lookup is
-#     `find_project_agent_md(project_root)` and the root is the git repository, so the same file in
-#     a plain directory reached nobody. Measured both ways (no token in the answer before
-#     `git init`, the token in it after), and every session here is a git repository.
+#   `dcode -n "<task>"` always starts a fresh thread. Its own source says so, about `--rubric`:
+#   "`run_non_interactive` takes no resume or thread-id argument, so it always starts a fresh
+#   thread". MEASURED against that (2026-10-16): five turns in one workspace, each passing
+#   `-r <thread_id>` for a thread with 22 checkpoints in the store, produced five NEW threads and
+#   five "this thread has no earlier message" answers. A base on that path passes `first turn` and
+#   fails `follow-up`, `switch` and `recycle`.
+#
+# `dcode --acp` is the same agent behind ACP over stdio, and its server is built with
+# `load_sessions=True`, so `session/load` restores a conversation IN A DIFFERENT PROCESS — which is
+# what one-process-per-turn needs. MEASURED on 0.1.84 (2026-10-19), two processes, live provider:
+#   * Process one created a session and was told to answer one word and WRITE NOTHING (updates:
+#     one message chunk, no tool call). Process two loaded that session id and answered what the
+#     word was — a question nothing in the workspace could answer, which is the control the first,
+#     WRONG reading of this base lacked (see docs/support-matrix-notes.md).
+#   * `session/load` REPLAYS the whole conversation as `session/update` notifications before the
+#     prompt goes out, so dcode_driver.py starts recording only after the load returns; otherwise
+#     every turn's record would open with every earlier turn's reply.
+#   * It requires the same `cwd` the session was created with, which is the session directory here,
+#     so a resume holds across a sandbox recycle.
+#   * The session id is the LangGraph thread id, and the thread's CHECKPOINTS are where it lives:
+#     the ACP path never writes `dcode_thread_workspaces` (the TUI's table, absent altogether in a
+#     workspace that has only run ACP turns), so _dcode_threads reads `checkpoints`.
+#   * The model is the SESSION's, not the flag's: `_restore_persisted_selections` puts the model a
+#     loaded session was created with back on it, so a switch turn must say so — the driver sends
+#     `session/set_config_option {configId: "model"}` on every turn. The value is validated against
+#     a list whose FIRST entry is THIS process's `-M` resolved spec, which is why the flag is still
+#     passed: it is what puts this turn's model in the list at all.
+#   * Permission: the agent calls `session/request_permission` on the client, and the driver allows
+#     — the sandbox is the trust boundary, the same grant claude gets with
+#     --dangerously-skip-permissions. `--yolo` is not the way to it here: ACP mode exits 2 unless
+#     the YOLO acknowledgement was given in the interactive TUI, and `--auto-approve` would install
+#     a classifier that spends a second model on every decision.
+#   * Tools reaching the model, read off a turn's own request body: ls, read_file, write_file,
+#     edit_file, delete, glob, grep, execute, task, compact_conversation, update_goal, ask_user,
+#     fetch_url, get_current_thread_id. Two differences from the headless path, both measured on
+#     the same build: `js_eval` is NOT declared (ACP mode leaves `enable_interpreter` at its False
+#     default and `--no-interpreter` is not plumbed into it), and `ask_user` IS (its
+#     `enable_ask_user` default is True there). `--allow-fs-tools` works, and in ACP mode it
+#     governs `execute` too — FS_TOOL_NAMES includes it, and a turn launched with
+#     `--allow-fs-tools read_file,ls` declared neither the shell nor the five write tools. So the
+#     eight withholdable tools are the whole filesystem set, `-S` is not needed for the shell to
+#     be there, and read_file is never withheld because the flag's own parser rejects a list
+#     without it.
+#   * ask_user is the one tool that cannot be withheld AND cannot work here: it raises a free-form
+#     LangGraph interrupt, which this protocol has no shape for, and the ACP server answers the
+#     prompt with error -32600 "ACP limitation". The driver names that outcome in the result rather
+#     than reporting an unexplained failure.
+#   * The operator's step budget is a no-op on this base (it is on eleven of twenty): `--max-turns`
+#     "requires -n or piped stdin" and is rejected in ACP mode, and the only neighbouring flag,
+#     `--recursion-limit`, counts LangGraph graph steps rather than turns. The turn's wall clock
+#     (MAX_TURN_SECONDS) is what bounds it.
+#   * It reads the project's AGENTS.md through find_project_agent_md — but only when the workspace
+#     is a git PROJECT, which every session here is (measured both ways: no token in the answer in
+#     a plain directory, the token in it after `git init`).
 #   * stdin: `dcode threads list --json` with an inherited stdin hung for eight minutes and
 #     returned at once with it closed — the same shape vtcode showed, and the reason _run_turn_bg
-#     closes stdin for every turn now.
-#   * Its answer is prose, so the turn runs through runner/dcode_driver.py — which keeps the CLI's
-#     two streams apart (the runner merges them, and here stdout IS the answer) and reads the thread
-#     id out of the store. The driver emits claude's stream-json, so this backend's normaliser is
-#     the passthrough, as systemone's and nanobot's are.
-#   * Fourteen tools reach the model, measured off a turn's own request: ls, read_file, write_file,
-#     edit_file, delete, glob, grep, execute, task, compact_conversation, update_goal, js_eval,
-#     fetch_url, get_current_thread_id. Only EIGHT of them can be withheld (see
-#     ALL_DCODE_TOOLS below), and the catalog offers exactly those eight.
-DCODE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+#     closes stdin for every turn now. ACP owns the child's stdin here, and the driver's own stdin
+#     is the runner's to close.
+# The driver speaks JSON-RPC to the CLI and claude's stream-json to the runner, so this backend's
+# normaliser is the passthrough, as systemone's and nanobot's are.
+# No `anthropic` here, unlike the other four: this builder sets OPENAI_BASE_URL and the CLI's
+# langchain-openai model posts to /v1/responses, which an Anthropic Messages endpoint does not
+# have. That is codex's provider set rather than vibe's, and the gateway's wiring agrees.
+DCODE_PROVIDERS = {"openai", "azure", "openai-api", "tokenrouter"}
 DCODE_BIN = os.environ.get("HR_DCODE_BIN", "/data/agent-tools/dcode-venv/bin/dcode")
 DCODE_PYTHON = os.environ.get("HR_DCODE_PYTHON", "/data/agent-tools/dcode-venv/bin/python")
 DCODE_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dcode_driver.py")
 DCODE_DEFAULT_MODEL = os.environ.get("DCODE_DEFAULT_MODEL", "gpt-5.4")
-# The tools a person can really switch off here, and the switch each one travels on:
-#   --allow-fs-tools  the filesystem set, which must always include read_file (the CLI requires it)
-#   -S / its absence  `execute`, the shell: it is OFF unless a shell allow-list is passed
-#   --no-interpreter  `js_eval`
-# The other six a turn declares — read_file, task, compact_conversation, update_goal, fetch_url and
-# get_current_thread_id — have no switch, so they are NOT offered: a tool id the runtime cannot
-# withhold would be reported as off by the console and disable nothing (UHP §4.3).
-_DCODE_FS_TOOLS = ("ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep")
-ALL_DCODE_TOOLS = ("ls", "write_file", "edit_file", "delete", "glob", "grep", "execute", "js_eval")
+# The filesystem set `--allow-fs-tools` governs, which on this surface includes the shell. The
+# other six a turn declares — read_file (the flag's parser requires it), task,
+# compact_conversation, update_goal, ask_user and fetch_url with get_current_thread_id — have no
+# switch, so they are NOT offered: a tool id the runtime cannot withhold would be reported as off
+# by the console and disable nothing (UHP §4.3).
+_DCODE_FS_TOOLS = ("ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute")
+ALL_DCODE_TOOLS = ("ls", "write_file", "edit_file", "delete", "glob", "grep", "execute")
 
 
 def _dcode_config(cwd: str) -> None:
-    """Write $HOME/.deepagents/config.toml: the warnings off, so a successful turn's stream is the
-    answer and nothing else (the CLI prints its Tavily notice and the suppression recipe itself)."""
+    """Write $HOME/.deepagents/config.toml: the warnings off, so nothing of the CLI's own writing
+    lands on the stream the driver reads (it prints its Tavily notice and the suppression recipe
+    itself)."""
     home = pathlib.Path(cwd) / ".harness" / "home" / ".deepagents"
     home.mkdir(parents=True, exist_ok=True)
     (home / "config.toml").write_text(
@@ -12833,7 +12874,9 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     _dcode_config(cwd)
-    # langchain-openai's own variables, which is what `-M openai:<id>` resolves through.
+    # langchain-openai's own variables, which is what `-M openai:<id>` resolves through. It posts
+    # to **/v1/responses**, not chat/completions, which is why this base is NOT in
+    # CHAT_ONLY_BACKENDS: a Responses-only id is reachable here, as it is on codex.
     env["OPENAI_BASE_URL"] = (auth.base_url or "").rstrip("/")
     env["OPENAI_API_KEY"] = auth.api_key or ""
     # Every default that would phone home, change the binary, or write into the user's own files:
@@ -12846,31 +12889,28 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     # editing it would be editing something the next turn overwrites.
     env["DEEPAGENTS_CODE_MEMORY_AUTO_SAVE"] = "0"
     env["DEEPAGENTS_CODE_READ_PROJECT_DOTENV"] = "0"
-    # ripgrep is installed with the CLI (see install_dcode); this stops a download inside a turn if
-    # a volume ever comes up without it, at the cost of the slower search path.
+    # No download inside a turn. This CLI fetches a pinned, SHA-256-verified ripgrep of its own
+    # the first time `grep` is called, and install_dcode does that at install time instead — into
+    # the venv (share/deepagents-code/bin/rg, verified on python:3.12-slim), which is where it is
+    # found whatever HOME a turn runs with. If that copy is missing, this flag's own
+    # documentation says what happens: the search falls back to "the slow Python regex path",
+    # which is a working grep and not a failed turn.
     env["DEEPAGENTS_CODE_OFFLINE"] = "1"
     # LangSmith tracing is on by default in its own right; --no-tracing covers the session and this
     # covers the SDK underneath it.
     env["LANGSMITH_TRACING"] = "false"
     env["LANGCHAIN_TRACING_V2"] = "false"
     disabled = {str(t) for t in (tools_disabled or ())}
+    model_spec = f"openai:{model}"
     cmd = [DCODE_BIN,
-           "-n", prompt,
-           # the answer and nothing else; the record's text is this stream
-           "-q",
+           "--acp",
            "--no-tracing",
-           "-M", f"openai:{model}",
+           # not this turn's model so much as this turn's PERMISSION to ask for it: the server's
+           # valid-model list is built from the spec this process resolves (see the driver).
+           "-M", model_spec,
            "--max-retries", "2"]
-    if "execute" not in disabled:
-        # The shell is OFF in headless mode unless an allow-list is given, and the sandbox is the
-        # boundary here, so the list is "all" — this is the switch a disabled `execute` travels on.
-        cmd += ["-S", "all"]
-    if "js_eval" in disabled:
-        cmd.append("--no-interpreter")
     fs_kept = [t for t in _DCODE_FS_TOOLS if t not in disabled]
     if len(fs_kept) != len(_DCODE_FS_TOOLS):
-        # read_file is required to be in the list by the CLI itself, so it is never withheld — and
-        # it is not offered as a toggle either (see ALL_DCODE_TOOLS).
         if "read_file" not in fs_kept:
             fs_kept = ["read_file", *fs_kept]
         cmd += ["--allow-fs-tools", ",".join(fs_kept)]
@@ -12882,15 +12922,16 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
         # Nothing declared: its auto-discovery would otherwise pick up a config in the workspace,
         # which is the task's own file rather than the harness's declaration.
         cmd.append("--no-mcp")
-    if max_turns:
-        cmd += ["--max-turns", str(int(max_turns))]
-    if resume_session_id and _dcode_session_present(cwd, cmd, resume_session_id):
-        cmd += ["-r", resume_session_id]
-    # The driver runs that argv and turns its two streams into events (see dcode_driver.py).
+    # The driver speaks ACP to that process and claude's stream-json to the runner.
     job = {"argv": cmd, "cwd": str(pathlib.Path(cwd).resolve()),
-           "db": str(_dcode_state_db(cwd)), "model": model,
-           # A cap of its own, under the runner's: the CLI's --timeout exits 124, which the driver
-           # reports as the limit rather than as an unexplained failure.
+           # The task rides the protocol, not the command line: ACP takes it in session/prompt.
+           "prompt": prompt,
+           "model": model, "model_spec": model_spec,
+           # Asked for, not assumed: the driver loads it and falls back to a new session, and
+           # _resume_lost (which asked the store before this ran) is what tells the user.
+           "resume": resume_session_id or "",
+           # A cap of its own, under the runner's, so a turn that never answers is reported as the
+           # limit rather than as an unexplained failure.
            "timeout": MAX_TURN_SECONDS}
     return [DCODE_PYTHON, DCODE_DRIVER, json.dumps(job, separators=(",", ":"))]
 
@@ -13320,8 +13361,8 @@ BACKENDS = {
     "docker-agent": {"providers": sorted(DOCKER_AGENT_PROVIDERS),
                      "default_model": DOCKER_AGENT_DEFAULT_MODEL,
                      "normalize": _docker_agent_to_claude},
-    # deepagents-code prints prose, so runner/dcode_driver.py runs it and emits claude's
-    # stream-json itself — the passthrough, as systemone's and nanobot's are.
+    # deepagents-code is driven over ACP, so runner/dcode_driver.py speaks JSON-RPC to the CLI
+    # and emits claude's stream-json itself — the passthrough, as systemone's and nanobot's are.
     "dcode": {"providers": sorted(DCODE_PROVIDERS), "default_model": DCODE_DEFAULT_MODEL,
               "normalize": _claude_passthrough},
     # fast-agent's stream is prose and its RECORD is the ATIF trajectory it writes, so the
