@@ -58,6 +58,7 @@ credentials. The document MUST NOT contain anything principal-specific.
     "session_listing": true,
     "harness_management": true,
     "harness_retirement": false,
+    "input_history": false,
     "session_sharing": true,
     "idempotency": true,
     "plugins": true,

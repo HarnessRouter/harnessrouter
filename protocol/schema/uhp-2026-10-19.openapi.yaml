@@ -1808,6 +1808,12 @@ components:
           description: |
             The server holds memories: a tree of memories with access granted per node, records kept
             by a connected provider, and tools a harness's agent reaches them with. Optional at every class.
+        input_history:
+          type: boolean
+          description: |
+            A request that starts a session may carry earlier turns: `user` and `assistant` messages
+            before the last `user` message, given to the harness as the conversation so far and kept as
+            the session's first turns, marked `imported` in its turns. See Tasks §2.1. Optional at every class.
       additionalProperties: { type: boolean }
 
     Harness:
@@ -2135,7 +2141,10 @@ components:
             - type: string
             - type: array
               items: { type: object, additionalProperties: true }
-          description: A bare string is shorthand for one user message.
+          description: |
+            A bare string is shorthand for one user message. Without `previous_response_id`, on a
+            server with `input_history`, `user` and `assistant` messages before the last `user` message
+            are the conversation so far, kept as the session's first turns, marked imported (Tasks §2.1).
         model: { type: string, description: Canonical model id. Omitted means the harness default. }
         metadata:
           type: object
@@ -2319,6 +2328,11 @@ components:
         assistant: { type: string }
         tools: { type: array, items: { type: object, additionalProperties: true } }
         files: { type: array, items: { type: object, additionalProperties: true } }
+        imported:
+          type: boolean
+          description: |
+            A turn the session was started with (Tasks §2.1, capability `input_history`): completed,
+            no model ran and nothing was spent. `false`, or absent, for a turn that ran.
       additionalProperties: true
 
     Environment:

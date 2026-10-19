@@ -118,6 +118,10 @@
         "memories": {
           "type": "boolean",
           "description": "The server holds memories: a tree of memories with access granted per node, records kept\nby a connected provider, and tools a harness's agent reaches them with. Optional at every class.\n"
+        },
+        "input_history": {
+          "type": "boolean",
+          "description": "A request that starts a session may carry earlier turns: `user` and `assistant` messages\nbefore the last `user` message, given to the harness as the conversation so far and kept as\nthe session's first turns, marked `imported` in its turns. See Tasks §2.1. Optional at every class.\n"
         }
       },
       "additionalProperties": {
@@ -731,7 +735,7 @@
               }
             }
           ],
-          "description": "A bare string is shorthand for one user message."
+          "description": "A bare string is shorthand for one user message. Without `previous_response_id`, on a\nserver with `input_history`, `user` and `assistant` messages before the last `user` message\nare the conversation so far, kept as the session's first turns, marked imported (Tasks §2.1).\n"
         },
         "model": {
           "type": "string",
@@ -1122,6 +1126,10 @@
             "type": "object",
             "additionalProperties": true
           }
+        },
+        "imported": {
+          "type": "boolean",
+          "description": "A turn the session was started with (Tasks §2.1, capability `input_history`): completed,\nno model ran and nothing was spent. `false`, or absent, for a turn that ran.\n"
         }
       },
       "additionalProperties": true

@@ -180,6 +180,44 @@ the honest form here is to say plainly that these two do nothing.
 A server at conformance class **Core** MUST accept `input_text`. A server at **Extended** MUST also
 accept `input_file` and `input_image`. See [Files](files.md).
 
+### 2.1 Earlier turns
+
+A task can start from a conversation held somewhere else: a transcript the client kept, or a recorded
+run it continues as a task of its own. On a request **without** `previous_response_id`, an `input`
+array carries it the way the Responses API reads one: the `user` and `assistant` messages before the
+last `user` message, in order, are the conversation so far, and the last `user` message is the work.
+
+```json
+{
+  "input": [
+    { "role": "user", "content": [{ "type": "input_text", "text": "Make a product image of a mug." }] },
+    { "role": "assistant", "content": "Here is the mug on a light oak table." },
+    { "role": "user", "content": [
+        { "type": "input_text", "text": "Make the background white." },
+        { "type": "input_file", "filename": "mug.png", "file_data": "data:image/png;base64,…" }
+    ]}
+  ]
+}
+```
+
+An assistant message's `content` is a string or an array of `output_text` parts; files travel as
+`input_file` in a `user` message, under the limits of [Files](files.md). A server that reports the
+`input_history` capability:
+
+- MUST give the harness the earlier messages as the conversation so far, and MUST treat only the last
+  `user` message as the task's own message: it is what the task's turn records as the user's.
+  `system` and `developer` messages stay instructions for the task, wherever they appear.
+- MUST keep the earlier messages in the session as its first turns, before the task's own, each
+  marked `imported: true` in [`/turns`](sessions.md#3-inspecting-a-session). An imported turn is
+  `completed`, ran no model and costs nothing.
+- MAY bound how many earlier messages and how much text it takes, and MUST refuse a request beyond a
+  bound with `400` and `code: "invalid_input"`, saying which bound, rather than shorten the
+  conversation in silence.
+
+With `previous_response_id`, the session already holds the conversation and this section does not
+apply. A client that needs the earlier turns kept MUST check `capabilities.input_history` first: a
+server without it may give the harness the last messages alone.
+
 ## 3. The response object
 
 ```json

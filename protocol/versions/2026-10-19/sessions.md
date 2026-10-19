@@ -91,6 +91,9 @@ understand. This was previously an object with no stated shape, which meant no c
 could assert anything past the status code, and every client that rebuilt a transcript did so
 against one implementation's habits.
 
+A server with the `input_history` capability marks each turn a session was started with
+([Tasks §2.1](tasks.md#21-earlier-turns)) `imported: true`, and every turn that ran `imported: false`.
+
 A session whose turns read an environment carries `environment`, the environment's id, so a client
 can tell which project a conversation worked in ([Environments §6](environments.md#6-what-a-session-sees)).
 
