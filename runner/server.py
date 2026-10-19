@@ -1883,6 +1883,21 @@ def _plugin_launchers(cwd: str, servers: list[dict] | None) -> list[dict]:
 _AGENTS_BEGIN = "<!-- harness-skills:begin -->"
 _AGENTS_END = "<!-- harness-skills:end -->"
 
+# What replaces hermes' own stop-time check, which _hermes_prepare_env switches off. The check
+# stays (hermes' coding prompt asks for it too); what changes is when it runs and who hears about
+# it. Before the final reply, once, so no second answer follows the first; and out of the reply,
+# which is about the person's work: the person never asked how the agent checked itself, and a
+# reply about test commands, validators and a script under some path is runtime noise to them.
+_HERMES_CHECK_SECTION = [
+    "## Checking your work", "",
+    "If you changed code or data files, check them before your final reply: run the project's "
+    "own test or build command when it has one, otherwise a short script you keep in `tmp/`. "
+    "Fix what the check finds. Check before you answer, never after: your reply ends the turn.", "",
+    "The check is for you, not the user. Your reply is about their work: what you made or "
+    "changed, and anything they need to do next. Leave out tests, linters, validators, check "
+    "scripts and their paths, and whether the workspace has a test command, unless the user "
+    "asked about them. If something still does not work, say what, in terms of their work.", ""]
+
 
 def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
     """The agent's instruction file: AGENTS.md for Codex, Hermes, Pi, dsh and opencode (all read
@@ -1966,7 +1981,14 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     relative paths by habit, and the first dsh deck task (deepseek-v4-pro, 2026-08-21) saved to the
     workspace PARENT, the user saw an empty turn, and three turns went to copying files into view.
     An instruction is the right mechanism here: writes cannot be walled in a sandbox whose point is
-    real bash, and widening collection would ship every scratch file as a deliverable."""
+    real bash, and widening collection would ship every scratch file as a deliverable.
+
+    Scratch files have a place INSIDE the workspace, `tmp/`, which is already what the platform
+    treats as scratch: git-ignored (_git_ensure), so never a produced file; left out of the
+    checkpoint (CHECKPOINT_EXCLUDE); hidden from the gateway's file listing. Without it the rule
+    read as "writes are restricted to the workspace" while nothing enforces that, and hermes, told
+    by its own stop-time check to write under /tmp, spent tool calls and its reply on the conflict
+    (2026-10-19, see _hermes_prepare_env). One rule, and the reality agrees with it."""
     if backend in ("systemone", "qoder"):
         return                  # reads no workspace; its instructions travel in the job (_build_systemone, _build_qoder)
     p = _agent_doc_path(cwd, backend)
@@ -1974,9 +1996,13 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     lines = [_AGENTS_BEGIN, "## Workspace", "",
              "Your working directory is this task's workspace and the ONLY place the user can see "
              "files. Save every deliverable (documents, decks, code, exports) to a relative path "
-             "under it. Never write output to an absolute path outside it (/tmp, /app, the "
-             "workspace parent directory, or your home directory): those files are not collected, "
-             "and the user will never see them.", ""]
+             "under it. Files you need only while working (a quick check script, intermediate "
+             "data) go in its `tmp/` folder, which is never shown to the user or saved with the "
+             "work. Keep every file you write inside the workspace: nothing written outside it "
+             "(/tmp, /app, the workspace parent directory, or your home directory) is collected, "
+             "and the user will never see it.", ""]
+    if backend == "hermes":
+        lines += _HERMES_CHECK_SECTION
     lines += environments.doc_section(environment)
     if skills_meta:
         lines += ["## Available skills", "",
@@ -6172,9 +6198,23 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
         cfg["model"]["api_mode"] = api_mode
     if p == "bedrock":
         cfg["bedrock"] = {"region": auth.aws_region or "us-east-1"}
+    # hermes' verify-on-stop, OFF. It is a second turn after the final answer: when the turn edited
+    # code and hermes saw no check it recognises, it keeps the answer, appends a nudge and runs the
+    # model again, up to twice a turn (agent/verification_stop.py, max_attempts=2). The nudge tells
+    # the model to write a `hermes-verify-` script under the OS temp dir and to "summarize it
+    # explicitly as ad-hoc verification rather than suite green", and its ledger counts that script
+    # only OUTSIDE the project, so one the model moved into the workspace (as the agent doc's
+    # Workspace rule asks) left the turn unverified and drew the second nudge. Every nudged answer
+    # is already in state.db, which this runner reads as the reply: two answers, an extra model
+    # call, and the check narrated to the person (staging kits, and a QA company's design reviews
+    # posted as card comments, 2026-10-19). Upstream turned it off by default in its config v31,
+    # but only by migrating an installed config; this file is written fresh every turn, so the
+    # schema default "auto" (on for the CLI) applied. The check itself moves into the agent doc,
+    # before the answer and out of it (_HERMES_CHECK_SECTION).
+    cfg["agent"] = {"verify_on_stop": False}
     if max_turns:
         # hermes 0.19.0 has no --max-turns CLI flag; agent.max_turns in config.yaml is the knob.
-        cfg["agent"] = {"max_turns": int(max_turns)}
+        cfg["agent"]["max_turns"] = int(max_turns)
     if vision_auth and vision_auth.get("model"):
         # hermes asks its image questions separately from the conversation (vision_analyze, the
         # browser tools) and, left alone, asks the model the harness writes with. That made a
