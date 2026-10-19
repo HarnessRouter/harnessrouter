@@ -18080,9 +18080,16 @@ _BASE_CATALOG: dict[str, dict] = {
         # All five tools its own `vtcode schema tools` reports on 0.177.0, held equal to the
         # runner's ALL_VTCODE_TOOLS by gateway/tests/test_vtcode_tools.py. Everything else this
         # runtime can do — code_search, web_search, web_fetch, cron, an MCP server's tools — is
-        # DEFERRED behind `search_tools`, which the model calls to have them defined; that is why
-        # this list is short and why a judge reading tool names sees `search_tools` where another
-        # base would show the tool itself.
+        # behind `search_tools`, which the model calls to have them defined.
+        #
+        # AND IN HEADLESS MODE THAT DOOR DOES NOT OPEN, measured 2026-10-19: every `search_tools`
+        # call comes back `[Execution failed] session tool catalog is not available`. Its own
+        # source says why — `attach_session_model_tools` is called by the INTERACTIVE runloop only
+        # ("Headless paths may never call this"), and `execute_search_tools` errors rather than
+        # degrading. So on this base, in `vtcode exec`, these five ARE the tools: the five the
+        # model is shown, the five it can use, and no MCP server's tool among them whatever the
+        # harness declares (see docs/support-matrix-notes.md for the whole measurement, including
+        # the two settings that do not change it).
         "tools": [("exec_command", "Shell"), ("write_stdin", "Shell Input"),
                   ("apply_patch", "Apply Patch"), ("search_tools", "Tool Lookup"),
                   ("record_decision", "Record Decision")],

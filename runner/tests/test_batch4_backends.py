@@ -337,7 +337,7 @@ def test_vtcode_reads_agents_md_and_keeps_its_own_state_out_of_the_deliverables(
     assert _agent_doc_path(ws, "vtcode") == pathlib.Path(ws) / "AGENTS.md"
     # its session store, snapshots and tracker files live in <workspace>/.vtcode
     assert ".vtcode/" in _PRODUCED_EXCLUDE_PREFIX
-    assert _BRIDGED_TRANSPORTS["vtcode"] == ("sse",)
+    assert set(_BRIDGED_TRANSPORTS["vtcode"]) == {"sse", "http"}   # see the bridge test below
     meta = _write_skills(ws, [{"name": "stamp", "content": "---\nname: stamp\n---\nrun it\n"}],
                          backend="vtcode")
     assert meta
@@ -938,3 +938,40 @@ def test_vtcode_denies_a_withheld_tool_at_both_doors():
     allowed = cfg.split("allowed_tools = [", 1)[1].split("]", 1)[0]
     assert "apply_patch" not in allowed
     assert "exec_command" in allowed
+
+
+def test_vtcode_bridges_both_remote_mcp_transports():
+    """THE BUG, found by vtcode's custom-harness run (2026-10-19): the harness declared the
+    fixture's streamable-HTTP MCP server, the store held it (`mcp_stored`), and the turn never
+    called it — `search_tools` (this runtime's own door to a deferred tool) was called three times,
+    found nothing of the server's, and the model fell back to `exec_command` five times.
+
+    Its own source says why, in the doc comment on `McpHttpServerConfig`: "HTTP transport is
+    partially implemented. Basic connectivity testing is supported, but full streamable HTTP MCP
+    server support requires additional implementation using Server-Sent Events (SSE) or WebSocket
+    connections." SSE it has no client for at all (McpTransportConfig is Stdio | Http). So both
+    remote transports are bridged, which is jcode's arrangement: the bridge launches a stdio server
+    this client does speak.
+    """
+    from server import _BRIDGED_TRANSPORTS
+    assert set(_BRIDGED_TRANSPORTS["vtcode"]) == {"sse", "http"}
+
+
+def test_a_remote_server_reaches_vtcode_as_a_stdio_launcher():
+    """The bridge runs in the turn's own preparation (_sse_bridges), before the builder sees the
+    list, so this is measured there and then through the config the builder writes from it."""
+    from server import _sse_bridges
+    ws = _ws()
+    out = _sse_bridges(ws, [{"name": "probe", "url": "https://mcp.example/mcp",
+                             "transport": "http"}], "vtcode")
+    assert out and out[0].get("command"), out
+    launcher = pathlib.Path(str(out[0]["command"]))
+    assert launcher.is_file()
+    body = launcher.read_text()
+    assert "HR_MCP_TRANSPORT=http" in body and "mcp.example" in body
+    # ...and the config the builder then writes names that launcher, not an endpoint
+    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                  mcp_servers=out)
+    block = _vtcode_config_path(ws).read_text().split("[[mcp.providers]]", 1)[1]
+    assert "command =" in block
+    assert "endpoint =" not in block.split("[[", 1)[0]

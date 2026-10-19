@@ -4461,6 +4461,40 @@ both the page and the record were right. The check now asks what the rule is act
 file this turn stored has a card, no card is rendered twice (the 2026-09-07 defect), and no card
 names a file no turn of the session produced.
 
+### An MCP server cannot reach the model on this base in headless mode (2026-10-19)
+The custom-harness dimension is where this came out, and the cause is not the transport. What
+happens, measured through the product and then by hand with the API:
+
+- The harness stored the server (`mcp_stored`), the runner wrote it into `[[mcp.providers]]`, and
+  the turn never called it. The model called `search_tools` — this runtime's own door to anything
+  beyond its five built-ins — and got back `[Execution failed] session tool catalog is not
+  available`, three times, then went looking through the workspace instead
+  (`find … -iname '*mcp*'`, `cat AGENTS.md`, `cat .harness/mcp-bridge/deepwiki.sh`) and tried to
+  run the bridge launcher by hand, which the execution policy refused.
+- Its own source says why: `attach_session_model_tools` is called by the INTERACTIVE runloop only
+  — its doc comment reads "Headless paths may never call this; every consumer of
+  `session_model_tools()` must treat `None` as 'no session tool list available' and degrade
+  gracefully rather than error" — and `execute_search_tools` does the opposite of that last
+  clause: it errors.
+- Two settings were tried and neither helps. `[tools] profile = "advanced_vtcode"` (the profile
+  that admits everything except the legacy file tools) adds `task_tracker` and friends to the
+  model's list but no MCP tool, and the model again ended up driving the bridge script with
+  `python3` by hand. Bridging the server as stdio (`_BRIDGED_TRANSPORTS`, which this batch
+  extended to `("sse", "http")` because its HTTP client carries no tools either — its own doc
+  comment: "HTTP transport is partially implemented") changes what is in the config, not what the
+  model is shown.
+
+So for this base the five tools in its catalog are the whole story in exec mode, and a harness's
+MCP servers are configured but unreachable. The gateway's catalog comment now says so.
+
+**A dimension caveat worth keeping:** the first custom-harness run of this base reported `mcp=true`,
+and that was a FALSE PASS. The judge's MCP rule counts a tool name found inside a call's arguments
+(the rule exists because mimo and grok dispatch MCP tools through other tools), and this model had
+typed `read_wiki_structure` into a shell command while hunting. The second run, with the bridge in
+place, reported the same thing for the same reason. What settled it was reading the turn's tool
+RESULTS rather than its tool names — `session tool catalog is not available` — which is the
+evidence this section rests on.
+
 ### Two facts about this base's own safety layer, measured on the way
 - Its execution policy permits a FIXED LIST of programs and refuses everything else by name:
   echo, ls, cat, cp, head, tail, printenv, pwd, rg, grep, sed, which, date, whoami, hostname,

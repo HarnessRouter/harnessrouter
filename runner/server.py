@@ -1897,8 +1897,19 @@ _BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "g
                        # server a harness declares has no client there at all.
                        "vibe": ("sse",),
                        # vtcode's McpTransportConfig has exactly two variants, Stdio and Http, so
-                       # an SSE server has no client there either.
-                       "vtcode": ("sse",),
+                       # an SSE server has no client there — and the Http one does not carry tools
+                       # either. Its own doc comment on McpHttpServerConfig says so: "HTTP
+                       # transport is partially implemented. Basic connectivity testing is
+                       # supported, but full streamable HTTP MCP server support requires additional
+                       # implementation using Server-Sent Events (SSE) or WebSocket connections."
+                       # MEASURED by the custom-harness dimension (2026-10-19): with the fixture's
+                       # streamable-HTTP server declared and stored on the harness, the turn called
+                       # `search_tools` three times — this runtime's own door to a deferred tool —
+                       # found nothing of the server's, and fell back to `exec_command` five times
+                       # ("the declared MCP server was never called"). So BOTH remote transports are
+                       # bridged here, which is jcode's arrangement for the same reason: the bridge
+                       # launches a stdio server the client does speak.
+                       "vtcode": ("sse", "http"),
                        # docker-agent's remote toolset takes transport_type "streamable" or "sse",
                        # and the product's own servers are streamable; an SSE one is bridged for
                        # the same reason as the others until that path is measured.
