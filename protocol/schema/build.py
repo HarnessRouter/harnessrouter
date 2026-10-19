@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - environment guidance, not logic
     sys.exit("PyYAML is required: pip install pyyaml")
 
 HERE = pathlib.Path(__file__).parent
-VERSION = "2026-10-04"
+VERSION = "2026-10-19"
 SRC = HERE / f"uhp-{VERSION}.openapi.yaml"
 OUT = HERE / f"uhp-{VERSION}.schema.json"
 

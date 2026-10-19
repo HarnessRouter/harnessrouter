@@ -2,8 +2,8 @@
 
 ## The scheme
 
-UHP versions are dates — `YYYY-MM-DD`, the day the version was published. `2026-10-04` is the
-current version; `2026-09-28`, `2026-09-12` and `2026-08-11` remain published and served.
+UHP versions are dates — `YYYY-MM-DD`, the day the version was published. `2026-10-19` is the
+current version; `2026-10-04`, `2026-09-28`, `2026-09-12` and `2026-08-11` remain published and served.
 
 Dates were chosen over semantic versioning deliberately. SemVer's promise is that a major bump means
 "expect breakage" and a minor bump means "safe" — a promise that is only as good as the discipline
@@ -54,7 +54,8 @@ A server MUST:
 3. Support at least one full version at a time, and SHOULD support the previous version for at least
    six months after a new one is published. When the newer version is additive, as `2026-10-04` is
    to `2026-09-28`, that one to `2026-09-12` and that one to `2026-08-11`, all are served from one code path: the same objects answer either request,
-   and the only difference a client sees is the version echoed in the header.
+   and the only difference a client sees is the version echoed in the header. `2026-10-19` is
+   additive to `2026-10-04` except in one rule, which the known compromises below describe.
 
 ## Deprecation
 
@@ -86,5 +87,12 @@ smooth ones.
   and a harness on a model no base runs refused every task given to it; a client, and above all an
   agent driving the API, had no way to learn why. What the harness object comes back with and cannot be written (`id`,
   `object`, `createdAt` and the server's own read-only fields) is still accepted and ignored, so a
-  harness read and sent back saves. The next version states both rules in
-  [Harnesses §5](versions/2026-10-04/harnesses.md#5-managing-harnesses).
+  harness read and sent back saves. `2026-10-19` states both rules in
+  [Harnesses §5.1](versions/2026-10-19/harnesses.md#51-create).
+- **Retiring a harness under an earlier version.** `2026-10-19` lets a server that reports
+  `harness_retirement` retire a harness's sessions with it, restorable for a window it states and
+  removed after it ([Harnesses §5.3](versions/2026-10-19/harnesses.md#53-delete)). Every earlier
+  version says a server MUST NOT delete them. A server that retires sessions this way and also serves
+  an earlier version from one code path departs from that version's §5.3 for those requests; a
+  client that depends on a retired harness's history reads `harness_retirement` from discovery,
+  which a server reports whatever version the request names.

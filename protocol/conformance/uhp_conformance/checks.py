@@ -18,7 +18,7 @@ import uuid
 
 from .registry import Skip, check
 
-SPEC = "protocol/versions/2026-10-04"
+SPEC = "protocol/versions/2026-10-19"
 
 # The five statuses the lifecycle table defines, and the four that end a task. Named once so a
 # check states the rule it enforces rather than spelling out a literal set of its own.
@@ -375,24 +375,32 @@ def t11(ctx):
     if started.status != 200 or not rid:
         raise Skip(f"could not start a background task (HTTP {started.status})")
 
-    accepted = str((started.json or {}).get("status") or "")
-    assert accepted == "in_progress", (
-        f"POST /v1/responses with background:true answered {accepted!r}; a background task is "
-        f"accepted and running, which the lifecycle table names `in_progress`")
+    try:
+        accepted = str((started.json or {}).get("status") or "")
+        assert accepted == "in_progress", (
+            f"POST /v1/responses with background:true answered {accepted!r}; a background task is "
+            f"accepted and running, which the lifecycle table names `in_progress`")
 
-    # Read it back while the turn is still going. The status set is total, so one poll settles it:
-    # `in_progress` is the observation, and anything else is either a terminal status or a name
-    # the table does not define. A task that finished first has nothing left to observe, and a
-    # skip is never a pass.
-    got = ctx.client.get(f"/v1/responses/{rid}")
-    assert got.status == 200, f"GET /v1/responses/{{id}} returned HTTP {got.status}"
-    status = str((got.json or {}).get("status") or "")
-    assert status in LIFECYCLE_STATUSES, (
-        f"GET /v1/responses/{{id}} answered {status!r}, which is not one of the five statuses the "
-        f"lifecycle table defines ({', '.join(sorted(LIFECYCLE_STATUSES))})")
-    if status in TERMINAL_STATUSES:
-        raise Skip(f"the task reached {status!r} before the check could read it mid-turn")
-    return f"read back as {status}"
+        # Read it back while the turn is still going. The status set is total, so one poll settles it:
+        # `in_progress` is the observation, and anything else is either a terminal status or a name
+        # the table does not define. A task that finished first has nothing left to observe, and a
+        # skip is never a pass.
+        got = ctx.client.get(f"/v1/responses/{rid}")
+        assert got.status == 200, f"GET /v1/responses/{{id}} returned HTTP {got.status}"
+        status = str((got.json or {}).get("status") or "")
+        assert status in LIFECYCLE_STATUSES, (
+            f"GET /v1/responses/{{id}} answered {status!r}, which is not one of the five statuses the "
+            f"lifecycle table defines ({', '.join(sorted(LIFECYCLE_STATUSES))})")
+        if status in TERMINAL_STATUSES:
+            raise Skip(f"the task reached {status!r} before the check could read it mid-turn")
+        return f"read back as {status}"
+    finally:
+        # The task was started only to be watched: stop it, so the check leaves nothing running
+        # (and spending) after it. A server that cannot cancel changes no verdict here.
+        try:
+            ctx.client.post(f"/v1/responses/{rid}/cancel")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
@@ -1303,6 +1311,50 @@ def f08(ctx):
         f"a deleted session still resolves (GET returned HTTP {after.status}); §6 requires 404 "
         "afterwards, otherwise the client cannot tell 'deleted' from 'failed to delete'.")
     return f"deleted {sid}, now 404"
+
+
+@check("F-09", "Deleting a harness keeps its sessions, or states how long they can be restored", "full",
+       f"{SPEC}/harnesses.md#53-delete")
+def f09(ctx):
+    # §5.3 gives a server two rules and makes it say which one it follows: the capability says it
+    # before the delete, the delete response says it again with the window. A server that reports
+    # nothing keeps the sessions, which is what every version before 2026-10-19 required of all.
+    retires = bool(((ctx.state.get("discovery") or {}).get("capabilities") or {}).get("harness_retirement"))
+    h = _managed_harness(ctx)
+    body = {"input": PROMPT, "metadata": {"harness_id": h["id"]}, "stream": False}
+    if ctx.model:
+        body["model"] = ctx.model
+    r = ctx.client.post("/v1/responses", body=body)
+    sid = ((r.json or {}).get("metadata") or {}).get("session_id") if r.status == 200 else None
+    if not sid:
+        ctx.client.delete(f"/v1/harnesses/{h['id']}")
+        raise Skip(f"a task on a new harness returned no session_id (HTTP {r.status}), so there is no "
+                   "session for the delete to keep or retire")
+    gone = ctx.client.delete(f"/v1/harnesses/{h['id']}")
+    assert gone.status in (200, 204), f"delete returned HTTP {gone.status}"
+    out = (gone.json or {}) if gone.status == 200 else {}
+    said = out.get("sessions") or "kept"
+    if retires:
+        assert said == "retired", (
+            f"the server reports harness_retirement true, but its delete response says sessions "
+            f"{said!r}; §5.3 requires sessions: \"retired\" with the window, so a client can tell the "
+            "person what happened to their history")
+        until = out.get("restorableUntil")
+        assert isinstance(until, int) and until > time.time(), (
+            f"restorableUntil must be a Unix time in the future, the end of the restore window the "
+            f"person is told about; got {until!r}")
+        return f"retired with the harness, restorable until {until}"
+    assert said == "kept", (
+        f"the delete response says sessions {said!r} while harness_retirement is false or absent; "
+        "a server that retires sessions must report the capability, so a client can warn first")
+    after = ctx.client.get(f"/v1/sessions/{sid}")
+    try:
+        assert after.status == 200, (
+            f"the session of a deleted harness answered HTTP {after.status}; with harness_retirement "
+            "false §5.3 requires it to stay readable")
+    finally:
+        ctx.client.delete(f"/v1/sessions/{sid}")
+    return f"kept: {sid} still reads after its harness was deleted"
 
 
 @check("F-02", "Creating a harness with an unsupported base is refused", "full",

@@ -52,13 +52,13 @@ anything that only inspects a schema.
 
 ## What it checks
 
-99 checks across three classes.
+100 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
 | **Core** | 41 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation, reserved request fields |
 | **Extended** | +9 | Session listing and inspection, file input, artifacts, download headers, path-traversal probes |
-| **Full** | +49 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing, plugins (package round trip, derivation, refusals, export, and a tool call through a plugin's server) |
+| **Full** | +50 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing, plugins (package round trip, derivation, refusals, export, and a tool call through a plugin's server) |
 
 Every check names the section of the specification it enforces, so a failure points at the sentence
 it violates rather than at a test name.

@@ -7103,6 +7103,9 @@ def _aider_working_notes(cwd: str, servers: dict | None = None) -> str:
               "- Name a file in a SEARCH/REPLACE block by its path relative to this workspace "
               "(`deck.md`, `src/app.py`), never by an absolute path: a leading slash is refused "
               "and the workspace's own path repeated under it makes a nested copy.",
+              "- A new file is created by writing it: a SEARCH/REPLACE block with its path, an "
+              "empty SEARCH section and the contents in REPLACE. It does not need to be added to "
+              "the chat first.",
               "- Binary files (documents, decks, spreadsheets, images, PDFs) cannot be added to "
               "the chat or edited with SEARCH/REPLACE; inspect and change them with commands.",
               "- Report only output you were actually given. Never write the result you expect "
