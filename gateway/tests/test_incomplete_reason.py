@@ -274,12 +274,34 @@ def test_the_reason_is_written_only_onto_the_turn_it_was_proved_for(monkeypatch)
 
 
 def test_a_drain_after_the_turn_ended_keeps_its_own_end():
-    """A drain that cuts in after _resp_execute returned (while the final persist is in flight)
-    must not overwrite a finished turn as interrupted: both turn paths write the turn's own end."""
-    import inspect
+    """A drain that cuts in after _resp_execute returned must not overwrite a finished turn as
+    interrupted. If it cut the closing events short, the terminal event is still sent, so an open
+    Workbench does not stay on 'running'; if they were all sent, nothing is sent twice."""
+    import asyncio, inspect
+    for told, sent in ((False, ["response.completed"]), (True, [])):
+        tr = _tr()
+        emitted, persisted = [], []
+        async def _emit(ev):
+            emitted.append(ev["type"])
+        async def _persist(status):
+            persisted.append(status)
+        asyncio.run(A._settle_drained(_persist, tr, _emit, {"status": "completed", "told": told}))
+        assert emitted == sent and persisted == ["completed"] and tr.incomplete_reason == ""
     src = inspect.getsource(A.create_response)
-    assert src.count("ended = status") == 2
-    sites = [k for k in range(len(src)) if src.startswith("await _settle_drained(", k)]
-    assert len(sites) == 2
-    for i in sites:
-        assert "if ended" in src[i - 900:i], "the drain settle is reached only for a turn still running"
+    assert src.count("await _settle_drained(persist, tr, ") == 2
+    assert src.count(", end)") == 2, "both turn paths hand the drain the turn's own end"
+
+
+def test_a_running_turn_with_no_readable_record_is_scoped_by_its_turn_at(monkeypatch):
+    """No record to read the start from: the session's turn_at (stamped at accept) scopes the
+    walk, which unscoped would find the previous turn's result."""
+    import time
+    seen = []
+    async def _tts(blob, since_ms=0):
+        seen.append(since_ms)
+        return None
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
+         "running_response_id": "", "trace_blob": "org/inv_hsess1", "turn_at": "4.25",
+         "heartbeat": str(time.time() - 600)}
+    settled, writes, _ = _sweep(monkeypatch, v, 404, None, tts=_tts)
+    assert seen[0] == 4250 and writes[0]["incomplete_reason"] == "interrupted"

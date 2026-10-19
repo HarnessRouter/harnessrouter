@@ -179,6 +179,15 @@ def _reap_workspaces(keep: str = "") -> int:
             removed += 1
         except OSError:
             continue
+    # A marker whose folder went some other way (by hand, while the runner was down): markers live
+    # on the volume now, so nothing else would ever remove it.
+    try:
+        for m in os.scandir(_WS_MARKER_DIR):
+            name = m.name.removesuffix(".sha")
+            if m.name.endswith(".sha") and name != keep and not os.path.isdir(os.path.join(WORKSPACE_ROOT, name)):
+                _ws_marker_clear(name)
+    except OSError:
+        pass
     if removed:
         print(f"[reap] removed {removed} workspace(s) idle > {WS_TTL_HOURS}h", flush=True)
     return removed
@@ -12608,9 +12617,25 @@ def backends() -> dict:
 # so a restart doesn't discard work in flight, but the markers sat in /tmp, which a restart empties:
 # the next probe missed, the gateway restored the last end-of-turn checkpoint over the surviving
 # folder, and everything the interrupted turn had written was deleted, files and conversation
-# (#505). The entrypoint puts them on the volume beside the workspaces (HR_WS_MARKER_DIR); a
-# sandbox whose workspace is not on a volume keeps /tmp, where both go together.
-_WS_MARKER_DIR = os.environ.get("HR_WS_MARKER_DIR") or "/tmp/hr-ws"
+# (#505). The entrypoint names the place on the volume (HR_WS_MARKER_DIR). Without it, a runner
+# that holds several sessions puts them beside its workspace root, as environments.py does with its
+# own root, so a runner started some other way keeps them as long as its workspaces too; a
+# per-session sandbox, or a runner that cannot write there, keeps /tmp.
+def _ws_marker_dir() -> str:
+    named = os.environ.get("HR_WS_MARKER_DIR")
+    if named:
+        return named
+    if _SANDBOX_PER_SESSION:
+        return "/tmp/hr-ws"
+    beside = os.path.join(os.path.dirname(WORKSPACE_ROOT.rstrip("/")) or "/", "ws-markers")
+    try:
+        os.makedirs(beside, mode=0o700, exist_ok=True)
+    except OSError:
+        return "/tmp/hr-ws"
+    return beside if os.access(beside, os.W_OK) else "/tmp/hr-ws"
+
+
+_WS_MARKER_DIR = _ws_marker_dir()
 
 
 def _ws_marker_path(identifier: str) -> pathlib.Path:

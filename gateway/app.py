@@ -215,13 +215,35 @@ def _run_credits(model: str, usage: dict, elapsed_s: float) -> float:
 _DRAIN_S = int(os.environ.get("HR_DRAIN_S", "570"))
 
 
-async def _settle_drained(persist, tr, emit) -> None:
+_TERMINAL_EVENT = {"completed": "response.completed", "incomplete": "response.incomplete",
+                   "failed": "response.failed", "cancelled": "response.failed"}
+
+
+async def _settle_drained(persist, tr, emit, end: dict | None = None) -> None:
     """Settle a turn cancelled by shutdown drain: emit a terminal event to the bus (so an open
     Workbench stops showing 'running') and persist it. Best-effort; never raises.
 
     'incomplete' with reason 'interrupted', not 'failed' (#505): nothing went wrong with the task,
     the gateway stopped under it. That is the status worth continuing, and the console says a
-    restart cut the turn instead of showing an error the task never had."""
+    restart cut the turn instead of showing an error the task never had.
+
+    `end` is the turn's own end once _resp_execute returned it ({"status", "told"}): a drain that
+    cuts in after that, while its closing events or its record are being written, did not interrupt
+    anything. The turn's own end is written instead, and its terminal event is sent if the drain
+    cut the sending short, so a subscriber never stays on 'running'."""
+    if end and end.get("status"):
+        st = end["status"]
+        if not end.get("told"):
+            try:
+                await emit(tr._ev(_TERMINAL_EVENT.get(st, "response.completed"),
+                                  response=tr._response_obj(st)))
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            await persist(st)
+        except Exception:  # noqa: BLE001
+            pass
+        return
     tr.incomplete_reason = "interrupted"
     try:
         for ev in tr.complete("incomplete"):
@@ -3040,8 +3062,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         full_output = await _replay_output_from_trace(base, resp_id, model, since_ms=turn_since_ms)
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
                   "_member": member}
-        if (_orig_rec or {}).get("_created_ms"):
-            stored["_created_ms"] = _orig_rec["_created_ms"]   # the turn's start, not this adoption's
+        # the turn's start, not this adoption's (the translator's created_at is the adoption time)
+        stored["_created_ms"] = (_orig_rec or {}).get("_created_ms") or turn_since_ms or None
         if full_output:
             # the trace holds the runner's events, not the gateway's own closing paragraph on files
             # too large to attach (complete), so that paragraph is carried over onto the record
@@ -3092,7 +3114,15 @@ async def _reconcile_session(v: dict) -> bool:
             rec_run = await _resp_get(rid_run)
         except Exception:  # noqa: BLE001 — unscoped walk below, as before
             rec_run = None
-    status = await _trace_terminal_status(base, _turn_since_ms(rec_run))
+    since = _turn_since_ms(rec_run)
+    if not since:
+        # no readable record for the running turn: its start stamped at accept (turn_at) still
+        # scopes the walk, which unscoped would settle it with the previous turn's result
+        try:
+            since = int(float(v.get("turn_at") or 0) * 1000)
+        except (TypeError, ValueError):
+            since = 0
+    status = await _trace_terminal_status(base, since)
     interrupted = False
     if status is None:
         if age > _GW_MAX_TURN_S:
@@ -9927,7 +9957,7 @@ async def create_response(body: CreateResponseBody, request: Request):
             _bus_publish(org, harness_id, member, sid, resp_id, ev)
 
         async def run_bg():
-            ended = ""                          # the turn's own end, once _resp_execute has returned it
+            end = {"status": "", "told": False}   # the turn's own end, once _resp_execute returns it
             try:
                 async with _turn_slot(org, sid):
                     for ev in tr.start():
@@ -9938,26 +9968,19 @@ async def create_response(body: CreateResponseBody, request: Request):
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
-                    ended = status
+                    end["status"] = status
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
                     for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                         await bus_emit_bg(ev)
+                    end["told"] = True
                     await persist(status)
             except asyncio.CancelledError:
-                if ended:
-                    # the turn had already ended when the drain cut in, mid-persist: it was not
-                    # interrupted, so its own end is written again rather than overwritten
-                    try:
-                        await persist(ended)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    raise
                 # HR-INF-019: the replica is draining (SIGTERM) and this detached turn didn't finish
                 # inside the drain window. Settle it HONESTLY (incomplete, interrupted) instead of
                 # leaving a 6h phantom 'running', then re-raise so the loop can shut down. Best-effort I/O — the
                 # shutdown hook awaits us while the loop is still alive so these writes can land.
-                await _settle_drained(persist, tr, bus_emit_bg)
+                await _settle_drained(persist, tr, bus_emit_bg, end)
                 raise
             except Exception as e:  # noqa: BLE001
                 # Emit the terminal failure to the bus too (parity with streaming) so an open
@@ -9989,7 +10012,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 _bus_publish(org, harness_id, member, sid, resp_id, ev)  # broadcast to all subscribers
 
             async def run():
-                ended = ""                      # as in run_bg
+                end = {"status": "", "told": False}   # as in run_bg
                 try:
                     async with _turn_slot(org, sid):
                         for ev in tr.start():
@@ -9999,20 +10022,15 @@ async def create_response(body: CreateResponseBody, request: Request):
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
-                        ended = status
+                        end["status"] = status
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
                         for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                             await emit(ev)
+                        end["told"] = True
                         await persist(status)
                 except asyncio.CancelledError:
-                    if ended:                   # ended before the drain cut in (see run_bg)
-                        try:
-                            await persist(ended)
-                        except Exception:  # noqa: BLE001
-                            pass
-                        raise
-                    await _settle_drained(persist, tr, emit)   # HR-INF-019 drain (see run_bg)
+                    await _settle_drained(persist, tr, emit, end)   # HR-INF-019 drain (see run_bg)
                     raise
                 except Exception as e:  # noqa: BLE001
                     for ev in tr.fail(str(e)[:300]):
@@ -10372,7 +10390,7 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "created_at": _unix_s(rec.get("created_at") or born.get(rid)),
                       "completed_at": (None if str(rec.get("status") or "") in _TURN_LIVE
                                        else _unix_s(rec.get("_completed_at"))),
-                      "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0,
+                      "_model": rec.get("model") or "",
                       "_since_ms": _turn_since_ms(rec, for_result=False)})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
     # session vertex, so read it ONCE.
@@ -10386,7 +10404,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
         vst = str(v.get("turn_status") or v.get("status") or "")
         if vst in ("cancelled", "failed", "error", "done", "completed", "incomplete", "max_turns", "timeout"):
             turns[-1]["status"] = vst
-            if vst == "incomplete" and not turns[-1].get("incomplete_reason"):
+            if (vst == "incomplete" and not turns[-1].get("incomplete_reason")
+                    and turns[-1]["id"] == str(v.get("running_response_id") or "")):
                 turns[-1]["incomplete_reason"] = v.get("incomplete_reason") or None   # the sweep's proof
         # (2) Trace catch-up whenever the stored record has NO content yet — output[] is only
         # written by persist() at finalize, so this covers BOTH cases with one mechanism:
@@ -10409,7 +10428,6 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                 turns[-1].update(assistant=asst, tools=tools, files=files)
     for _t in turns:
         _t.pop("_model", None)
-        _t.pop("_created_at", None)
         _t.pop("_since_ms", None)
     return {"session_id": sid, "turns": turns, "last_response_id": ids[-1] if ids else None}
 
