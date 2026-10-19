@@ -15,7 +15,10 @@ reports it `true` MAY remove them with the harness, under three conditions:
   `sessions: "retired"` and `restorableUntil` (Unix seconds), and its own interface tells the person
   the window's length before they confirm;
 - within the window, a restore brings back the harness and its sessions together;
-- only after the window may it remove them for good.
+- only after the window may it remove them for good. The one exception is a person's own request
+  to erase their data, which may remove their retired sessions sooner;
+- it never retires a harness mid-task: it cancels the task first, or refuses the delete with `409`
+  and the new code `harness_busy`, saying why.
 
 A server may withhold them from lists and reads while the window runs. The delete response gains
 `sessions` (`kept` or `retired`; absent means kept) and `restorableUntil`. This is the one change
@@ -24,8 +27,9 @@ it means for a server that also serves an earlier version.
 
 **Harness writes refuse what they cannot store**, now stated in
 [Harnesses §5.1](versions/2026-10-19/harnesses.md#51-create): a field the harness does not have and
-a `default_model` its base does not run are `422`. Both maintained servers have done this since
-2026-10-10.
+a `default_model` its base does not run are `422`, the latter with `model_not_available`, now in
+the error table beside the task-time `model_unavailable`. Both maintained servers have done this
+since 2026-10-10.
 
 **Conformance suite 2026.10.19.** New check F-09 (class Full) creates a harness, runs a task on it
 and deletes the harness. A server whose `harness_retirement` is `false` or absent passes when the

@@ -288,7 +288,12 @@ these rules:
   offers it) MUST bring back its sessions and responses with it, as they were. A server MAY
   withhold them from lists and reads until then; a read of one MAY answer `404`.
 - **After the window, removal is permanent.** The server MAY then remove the harness, its sessions
-  and its responses for good. It MUST NOT remove them earlier.
+  and its responses for good. It MUST NOT remove them earlier, with one exception: a person's own
+  request to erase their data MAY remove the retired sessions that are theirs before the window
+  ends.
+- **Never mid-turn.** A harness with a task in progress is not retired while it runs. The server
+  either cancels the task first, as `POST /v1/sessions/{session_id}/cancel` would, and then retires
+  the harness, or refuses the delete with `409` and `code: "harness_busy"`, saying why.
 
 A server MUST NOT remove a harness's sessions or responses when the harness is retired without a
 window it stated. A server that keeps them MAY say so with `sessions: "kept"` in the delete

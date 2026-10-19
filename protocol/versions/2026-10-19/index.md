@@ -109,7 +109,9 @@ Against `2026-10-04`, one rule changes and the rest is additive.
 - **Retiring a harness may retire its sessions with it, under a stated restore window**
   ([Harnesses §5.3](harnesses.md#53-delete)). A server that reports the new `harness_retirement`
   capability may remove a harness's sessions and responses with it once a restore window it stated
-  when the harness was retired has passed; within the window a restore brings them back. A server
+  when the harness was retired has passed; within the window a restore brings them back. It never
+  retires a harness mid-task (`harness_busy`), and only a person's own erasure request removes
+  their sessions sooner. A server
   that reports it `false`, or says nothing, keeps them, as every earlier version required. The
   delete response gains `sessions` and `restorableUntil`. This is the one change that is not
   additive: a client that relies on a retired harness's sessions staying readable checks the

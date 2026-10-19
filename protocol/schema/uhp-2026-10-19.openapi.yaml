@@ -175,6 +175,13 @@ paths:
                       responses back; after it they may be removed for good. Present when
                       `sessions` is `retired`.
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            `harness_busy`: the harness retires its sessions with it and has a task in progress. A
+            server either cancels the task first or refuses with this; it never retires mid-task.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
 
   /v1/harnesses/{harness_id}/skills/{skill_name}/files:
     parameters:
@@ -2607,9 +2614,11 @@ components:
             - session_expired
             - harness_mismatch
             - session_busy
+            - harness_busy
             - plugin_conflict
             - file_too_large
             - model_unavailable
+            - model_not_available
             - unsupported_base
             - plugin_invalid
             - unsupported_plugin_schema

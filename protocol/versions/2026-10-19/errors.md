@@ -71,9 +71,11 @@ Rules:
 | `session_expired` | 404 | The session existed but is past its retention. |
 | `harness_mismatch` | 409 | The task named a different harness than the session it continues. |
 | `session_busy` | 409 | A task is already running in this session. |
+| `harness_busy` | 409 | A harness that retires its sessions with it has a task in progress; it is not retired mid-task ([Harnesses §5.3](harnesses.md#53-delete)). |
 | `plugin_conflict` | 409 | Two plugins share a name, or a component name collides across the harness and its plugins. `detail.component`, `detail.name` and `detail.between` say which. |
 | `file_too_large` | 413 | The upload exceeds the server's limit. `detail.max_bytes` states it. |
 | `model_unavailable` | 422 | The requested model cannot be served for this harness. |
+| `model_not_available` | 422 | A harness create or update named a `default_model` its base does not run ([Harnesses §5.1](harnesses.md#51-create)). |
 | `unsupported_base` | 422 | The requested harness base is not supported by this server. |
 | `environment_not_found` | 404 | No such environment in the caller's scope, on a read, a harness write or a task ([Environments §8](environments.md#8-errors)). |
 | `environment_not_ready` | 409 | A task on an environment with no active version, or activating an unfinished build. |
