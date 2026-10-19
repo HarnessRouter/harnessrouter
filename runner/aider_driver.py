@@ -512,6 +512,31 @@ def _file_nudge(names: list) -> str:
             "asks for.")
 
 
+# A request that asks for words back once the work is done: "Create a file named hello.txt
+# containing hi, then say done." gpt-5.4-mini answered it with the edit block and nothing else (21
+# output tokens, its chat history shows no other words; the runner read-back on 0.35.3's driver,
+# 2026-10-18): the file was written and the person's answer was the driver's "The task ended
+# without a written answer" sentence. aider gives the model one response per turn, and the block
+# was that response, the mirror of #379's "DONE" with no file. Keyed on the request, like the file
+# nudge: the verb opens a clause, so "the answer is in notes.md" asks for nothing. ENGLISH ONLY: the
+# openers are English words, so a request in another language never gets this nudge. Such a turn
+# still ends with words, the sentence _edits_sentence builds from its edits, which is also the answer
+# whenever this nudge is not sent or was already spent on another one this turn.
+_ASKS_REPLY = re.compile(
+    r"(?:^|[.;:!?]\s+|\n\s*|,\s*|\b(?:and|then|please|now|also|just|finally|afterwards)\s+)"
+    r"(?:say|reply|respond|answer|confirm|report|tell me|let me know)\b", re.I)
+REPLY_NUDGE = ("What this turn wrote and ran is done, so do not write or run it again. Now give the "
+               "reply the request asks for, in words, with no SEARCH/REPLACE block and no command.")
+
+
+def _asks_for_reply(prompt: str) -> bool:
+    """Whether this turn's request asks for words back (earlier turns put ahead of it are not it)."""
+    text = prompt or ""
+    if text.startswith("<conversation_so_far>\n"):
+        text = text.rpartition("</conversation_so_far>\n\n")[2]
+    return bool(_ASKS_REPLY.search(text))
+
+
 NEW_FILE_NOTE = ("If the request asks for a new file, it needs no adding to the chat: write it with "
                  "a SEARCH/REPLACE block that has its path, an empty SEARCH section and the contents "
                  "in REPLACE, then give the reply the request asks for. A question about a file is "
@@ -595,7 +620,12 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     files and asks for the edit blocks, since the general nudge's "otherwise give your final
     answer" is the way out the model already took. A reply that asks the person
     something is not nudged. A command counts only by what it left on disk: a turn that read a
-    skill with `cat` and answered "DONE" made no file. One nudge per turn either way."""
+    skill with `cat` and answered "DONE" made no file.
+
+    And the same one nudge the other way round: a request that asks for words back ("then say
+    done") answered by a pass that edited or ran something and said nothing besides. Without it the
+    answer is the driver's "ended without a written answer" sentence over a task that is done. One
+    nudge per turn in every case."""
     coder.io.user_input(prompt)
     coder.init_before_message()
     message = prompt
@@ -604,6 +634,7 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     nudged = False
     root = getattr(coder, "root", None) or "."
     wanted = _files_asked_for(prompt, root)
+    wants_reply = _asks_for_reply(prompt)
     while message:
         coder.reflected_message = None
         calls_before = len(gate.calls) if gate is not None else 0
@@ -629,6 +660,9 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
             elif not acted and _announces_without_acting(reply):
                 nudged = True
                 coder.reflected_message = NUDGE
+            elif acted and reply and wants_reply and not strip_edit_blocks(reply):
+                nudged = True
+                coder.reflected_message = REPLY_NUDGE
         if not coder.reflected_message:
             break
         if reflections >= coder.max_reflections:

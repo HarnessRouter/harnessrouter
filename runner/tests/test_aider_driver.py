@@ -576,6 +576,57 @@ def test_a_file_request_answered_with_a_word_and_no_edit_is_nudged_once():
     assert c.sent == [ask, "lint: fix this", nudge]
 
 
+def test_a_request_for_words_back_answered_by_an_edit_alone_is_nudged_once():
+    """The runner read-back on 0.35.3's driver (2026-10-18): "Create a file named hello.txt
+    containing hi, then say done." gpt-5.4-mini answered with the edit block and no other word (its
+    chat history), so hello.txt was written and the answer was "The task ended without a written
+    answer after editing files." A request that asks for words back gets one nudge for them, and
+    the nudged reply is the answer; a reply with words, a request that asks for none, a failed call
+    and a second wordless reply get none."""
+    root = tempfile.mkdtemp()
+
+    class Coder:
+        def __init__(self, replies, edits=None, gate=None):
+            self.replies = list(replies); self.edits = list(edits or []); self.gate = gate
+            self.reflected_message = None; self.partial_response_content = ""; self.root = root
+            self.aider_edited_files = set(); self.max_reflections = 5
+            self.io = types.SimpleNamespace(user_input=lambda p: None); self.sent = []
+        def init_before_message(self): self.aider_edited_files = set()
+        def send_message(self, m):
+            self.sent.append(m); self.partial_response_content = self.replies.pop(0)
+            step = self.edits.pop(0) if self.edits else None
+            if step == "edit":
+                self.aider_edited_files.add("hello.txt"); pathlib.Path(root, "hello.txt").write_text("hi\n")
+            elif step == "run":                  # a command that printed nothing: no reflection
+                self.gate.calls.append({"command": "touch hello.txt", "approved": True})
+            return iter(())
+    ask = "Create a file named hello.txt containing hi, then say done."
+    block = "hello.txt\n```text\n<<<<<<< SEARCH\n=======\nhi\n>>>>>>> REPLACE\n```\n"   # the reply, verbatim
+    gate = aider_driver._Gate([])
+    c = Coder([block, "done"], edits=["edit"]); logged = []; c.io = types.SimpleNamespace(user_input=logged.append)
+    aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask, aider_driver.REPLY_NUDGE] and logged == [ask, aider_driver.REPLY_NUDGE]
+    assert aider_driver.strip_edit_blocks(c.partial_response_content) == "done"     # what the result says
+    assert "do not write or run it again" in aider_driver.REPLY_NUDGE
+    c = Coder([block, block], edits=["edit"]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask, aider_driver.REPLY_NUDGE]                 # once, not twice
+    c = Coder([block + "\ndone"], edits=["edit"]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask]                                           # it said the word
+    c = Coder([block], edits=["edit"]); aider_driver._run_turn(c, "Create a file named hello.txt containing hi.", gate)
+    assert len(c.sent) == 1                                          # no word asked for: the edit is the turn
+    c = Coder([""]); aider_driver._run_turn(c, ask, gate)
+    assert c.sent == [ask]                                           # a failed call is not repeated
+    g = aider_driver._Gate([])
+    c = Coder(["```bash\ntouch hello.txt\n```", "done"], edits=["run"], gate=g); aider_driver._run_turn(c, ask, g)
+    assert c.sent == [ask, aider_driver.REPLY_NUDGE]                 # a command and no word, the same
+    a = aider_driver._asks_for_reply
+    assert a("Create a.txt and b.txt, then reply DONE.") and a("Reply with exactly: M1-gpt-5.4")
+    assert a("Fix the bug in app.py and tell me what it was") and a("Update notes.md. Confirm when done.")
+    assert not a("Create hello.txt containing hi") and not a("the answer is in notes.md")
+    assert not a("write an essay to essay.md") and not a("Make the report in report.md")
+    assert not a("<conversation_so_far>\nuser: say hi\n</conversation_so_far>\n\nCreate hello.txt")
+
+
 def test_a_chat_with_no_files_says_a_new_file_needs_no_adding():
     """aider's "I am not sharing any files that you can edit yet." made gpt-5.4-mini refuse to
     create a file, even after a nudge (#379). The no-files message says a new file is written with
