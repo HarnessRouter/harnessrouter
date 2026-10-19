@@ -208,18 +208,36 @@ try {
           const a = await turn(`Create a file named hello-${h}.txt containing exactly the word HELLO, then reply DONE.`, { expectFiles: true });
           // the file cards render from the settled read, a moment after the answer
           let fl = await files(); for (let i = 0; i < 10 && fl.length < (a.turn_files || []).length; i++) { await sleep(1500); fl = await files(); }
-          // The cards the page renders must BE what the turn stored: the same names, the same count.
+          // The cards the page renders must BE what the SESSION stored: every file this turn stored
+          // has a card, no card is rendered twice, and no card names a file no turn produced.
           // Asking only whether SOME card carried the name let a file rendered twice pass as a produced
           // artifact for months; the console showed two cards for one file until a reload (2026-09-07).
           // A harness that produces files is measured on both halves, the record and what the reader sees.
+          //
+          // The comparison is against the session, not against this turn alone: an EARLIER turn may
+          // have produced a file of its own, and then the page rightly shows it beside this turn's.
+          // Measured on 2026-10-19 — vtcode on gemini-3.1-pro-preview wrote `output.txt` carrying its
+          // answer on the FOLLOW-UP turn, so the artifact row read "the cards do not match the record:
+          // cards [output.txt,hello-vtcode.txt] vs record [hello-vtcode.txt]". Both the page and the
+          // record were right; this check was the thing that assumed only one turn ever writes.
           const named = fl.some((f) => f.includes(`hello-${h}.txt`));
+          const sessionTurns = (await turnsOf(rec.sid)) || [];
+          const sessionFiles = [...new Set(sessionTurns.flatMap((t) => (t && t.files) || [])
+            .map((f) => String((f && (f.filename || f.name)) || f)).filter(Boolean))];
           const want = (a.turn_files || []).slice().sort(), got = fl.slice().sort();
-          const agrees = want.length === got.length && want.every((w, i) => got[i].includes(w) || w.includes(got[i]));
+          const matches = (x, y) => String(x).includes(String(y)) || String(y).includes(String(x));
+          const everyWantHasACard = want.every((w) => got.some((g) => matches(g, w)));
+          const noDuplicateCards = new Set(got).size === got.length;
+          const everyCardWasProduced = got.every((g) => sessionFiles.some((f) => matches(f, g))
+            || want.some((w) => matches(w, g)));
+          const agrees = everyWantHasACard && noDuplicateCards && everyCardWasProduced;
           rec.artifact = { ...a, files: fl, record_files: a.turn_files, cards_agree: agrees,
             ok: a.ok && named && agrees,
             why: !a.ok ? a.why
                : !named ? `no file card (files: ${fl.join(',') || 'none'}); ${a.tail.slice(-160)}`
                : !agrees ? `the cards do not match the record: cards [${fl.join(',') || 'none'}] vs record [${want.join(',') || 'none'}]`
+                   + (noDuplicateCards ? '' : ' (a card is rendered twice)')
+                   + (everyCardWasProduced ? '' : ` (a card names a file no turn produced; the session produced [${sessionFiles.join(',') || 'none'}])`)
                : a.why };
           log(`ARTIFACT ${k} ${rec.artifact.ok ? 'ok' : 'FAIL'} ${rec.artifact.s}s ${rec.artifact.why}`);
           // the sandbox is let go on purpose (what the pool does between visits) and the next turn must

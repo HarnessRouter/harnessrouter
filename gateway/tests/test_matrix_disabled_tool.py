@@ -156,3 +156,22 @@ def test_a_base_with_nothing_to_spare_records_it_as_unmeasurable():
     assert "pickDisabled" in SRC
     assert "rec.disabled_tool_unused === null" in SRC, "a null must not be read as a pass"
     assert "disabled_tool_unused: null" in SRC or "? !toolNames.some" in SRC
+
+
+def test_the_artifact_card_check_reads_the_session_not_only_the_turn():
+    """The cards rule compares what the page renders against what the SESSION produced.
+
+    It used to compare against the artifact TURN alone, which assumed no earlier turn ever writes
+    a file. Measured on 2026-10-19: vtcode on gemini-3.1-pro-preview wrote `output.txt` carrying
+    its answer on the FOLLOW-UP turn, and the artifact row then failed with "the cards do not
+    match the record: cards [output.txt,hello-vtcode.txt] vs record [hello-vtcode.txt]" — both the
+    page and the record were right. What the rule is FOR is still enforced: every file the turn
+    stored has a card, no card is rendered twice (the 2026-09-07 defect), and no card names a file
+    no turn produced.
+    """
+    src = (pathlib.Path(__file__).resolve().parents[2] / "scripts" / "support-matrix"
+           / "run.mjs").read_text()
+    assert "noDuplicateCards" in src and "everyCardWasProduced" in src
+    assert "everyWantHasACard" in src
+    # the session's own turns are what it reads for that third condition
+    assert "sessionFiles" in src and "turnsOf(rec.sid)" in src

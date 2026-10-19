@@ -4398,11 +4398,99 @@ base's wiring — anthropic, openai, azure-foundry, openrouter, tokenrouter, llm
 harnessrouter are all unmeasured on it, and a column is one connection's measurement. A turn's input is large — 11.5k tokens on a three-word prompt, 20k characters of system
 prompt — which is worth knowing before reading its usage numbers against another base's.
 
-## vtcode: a codex frame over its own items, and two refusals that were the CLIENT's request shape (2026-10-16) — behaviour measured, NO column yet
+## vtcode: a codex frame over its own items, two refusals that were the CLIENT's request shape, and a column that cost two config fixes (2026-10-16/19)
 
 VT Code 0.177.0, added as the twenty-eighth base. Measured against the pinned release tarball on
-the Vercel AI Gateway, first through a recording proxy and then end to end through the runner's own
-argv and relay. **No support-matrix column has run.**
+the Vercel AI Gateway, first through a recording proxy, then end to end through the runner's own
+argv and relay — and on 2026-10-19 through a real support-matrix column.
+
+### The column (vercel, 2026-10-19): 55 of 56, one row reproduced as a finding
+Run against a locally built image of this branch (`HR_BACKENDS=vtcode`, one Vercel connection from
+the environment). **56 of the catalog's 58 ids ran and 55 of them passed all five scenarios**; the
+two that did not run are `llama-3.3-70b` and `nemotron-3.5-lightning`, already excluded on that
+gateway for measured reasons of their own. The audit beyond the pass flags: no substitution on any
+row, two `served` ids per row (so every switch reached the provider), no file card disagreeing with
+its record, every session of a passing row deleted. 1.6M input tokens for the column.
+
+**The one row that failed, twice:** `grok-build-0.1` passes `first` (7.6 s) and passes `switch` —
+the turn gpt-6.1-sol answers — and fails `followup`, `artifact` and `recycle` with
+`The turn failed: Stopped due to infinite loop detection`, 207 to 310 s each, on both the column
+run and a clean retest. Every failing turn is one this model answers itself, so what the row
+records is that THIS MODEL cannot hold a turn on this base: its own answers trip the CLI's loop
+detector. That is the same shape the batch notes already have for gpt-5.4-mini on this base, now
+with a model that reproduces it every time rather than once.
+
+Three rows failed on the first pass and passed a clean retest, which is why the matrix's own rule
+says to retest before excluding: `claude-sonnet-5` and `claude-opus-4.8` answered the recall after
+the recycle with the PREVIOUS turn's word (`HELLO`), and `gemini-3.1-pro-preview` failed the file-
+card check for a reason that was the dimension's own (below).
+
+### What the column cost before it could run at all
+Two bugs in the config this runner writes, neither in the CLI, both fixed with tests and then
+re-verified through the product — and the whole column re-run from zero on the fixed build, because
+a column assembled from two builds describes software nobody shipped.
+
+1. **A text-only answer could not end a turn.** An answer that is text with no tool call is not the
+   end of a run for this CLI: it asks whether the text looks like a completion
+   (`check_completion_candidate`, a phrase list — "the task is complete", "all done"), and when it
+   does not, it calls the model again. The second identical answer trips `check_for_response_loop`,
+   whose outcome `LoopDetected` is a hard block. So the matrix's FIRST scenario, "Reply with
+   exactly: M1-<model>", failed on gpt-6.1-sol and gpt-6-sol with
+   `Stopped due to infinite loop detection` — 153 s each, with the right answer already sent twice.
+   `[agent] idle_turn_limit = 1` is the fix and 1 is the only value that works: the default is 3 and
+   the detector fires on the second answer, before any limit above 1 is reached. At 1 the first
+   text-only answer ends the run as `StoppedNoAction`, a SUCCESS in this CLI's own words
+   (`TaskOutcome::is_success` matches `Success | StoppedNoAction`); a turn that calls a tool resets
+   the counter, so the turns that do work are unchanged. Measured after: the same turn answers in
+   5 s with `turn.completed`.
+2. **The tools this base offers could not run.** A `prompt` policy is a DENY in a headless run —
+   nobody is there to confirm — and `prompt` is this CLI's default for every tool, `apply_patch`
+   included in its own shipped example config. apply_patch is how this base WRITES FILES, so the
+   artifact scenario came back `[Blocked by policy] tool denied by policy` and the turn answered
+   "the execution policy denied apply_patch, so I could not create hello-vtcode.txt" with nothing
+   written. Being in `[automation.full_auto].allowed_tools` is a different question: that list is
+   the hard boundary for what the model may REACH, not whether a reached tool runs without a human.
+   `[tools] default_policy = "allow"` with `[tools.policies]` naming every offered tool is the fix,
+   and a withheld tool is now denied at both doors.
+
+A third fix was in the DIMENSION, not the product: the artifact row compared the page's file cards
+against the files of that turn alone, which assumes no earlier turn ever writes. `gemini-3.1-pro-
+preview` wrote `output.txt` carrying its answer on the FOLLOW-UP turn, so the row read "the cards
+do not match the record: cards [output.txt,hello-vtcode.txt] vs record [hello-vtcode.txt]" while
+both the page and the record were right. The check now asks what the rule is actually for: every
+file this turn stored has a card, no card is rendered twice (the 2026-09-07 defect), and no card
+names a file no turn of the session produced.
+
+### Two facts about this base's own safety layer, measured on the way
+- Its execution policy permits a FIXED LIST of programs and refuses everything else by name:
+  echo, ls, cat, cp, head, tail, printenv, pwd, rg, grep, sed, which, date, whoami, hostname,
+  uname, wc, git, cargo, python/python3, npm, node. A turn that reached for `truncate` or `od` was
+  told `command '<name>' is not permitted by the execution policy`, and recovered by using one of
+  the permitted programs instead.
+- A command containing `&&` is refused by its own preflight as a `Command injection pattern
+  detected`, before the execution policy is consulted at all.
+Neither is configurable from the harness, and neither stopped a turn that had another way to do
+the work — both are worth knowing before reading a trace from this base.
+
+### The resumed conversation is wrapped in the CLI's own prose, which is what the recall rows read
+What the model receives on a resumed turn, read off the request itself (2026-10-19, a recording
+proxy in front of the relay):
+
+```
+system     # VT Code (Build mode) …
+user       Task: Exec Task | Description: Reply with exactly: M1-haiku
+user       You are running vtcode in non-interactive exec mode. …
+assistant  M1-haiku
+user       No tool calls or completion for 1 consecutive turns. The agent appears to be idle …
+user       Task: Exec Task | Description: Create a file named hello-vtcode.txt … then reply DONE.
+```
+
+Every prompt is wrapped in a `Task: … / Description: …` envelope with a boilerplate user message
+after it, and since `idle_turn_limit = 1` each text-only turn also leaves the CLI's own idle notice
+in the history. The conversation is complete — the session store holds all five turns with the
+right goals, and the checkpoint restores it (`hydrated: true`) — but "my very first message" is not
+a user message in it, which is what two models got wrong on the recall and what 54 others got
+right.
 
 ### What it is, and what its own docs get wrong about it
 `vtcode exec --json` streams NDJSON that its documentation calls "the non-interactive Codex schema".
@@ -4497,10 +4585,11 @@ reported 0.177.0; it finds the executable in the archive rather than assuming it
 jcode's lesson (a 505-byte launcher on PATH with no binary beside it).
 
 ### What is NOT measured
-No column and no other dimension. Two model ids served as themselves; `gpt-5.4-mini` ran but hit
-its loop detector, which is recorded above as the base's own behaviour rather than a routing
-finding. Its MCP transports are Stdio and Http only (read off `McpTransportConfig`), so SSE is
-bridged — that path has not been exercised against a live server here.
+One column, on one connection (vercel). No second provider yet, and none of the other dimensions:
+the custom-harness run, the plugin matrix, the family tour, the browser, thinking and environments
+columns have not run on this base. Its MCP transports are Stdio and Http only (read off
+`McpTransportConfig`), so SSE is bridged — and that path has still not been exercised against a
+live server here, which is what the plugin matrix is for.
 
 ## docker-agent: Docker's own runtime, where the config IS the harness (2026-10-16) — behaviour measured, NO column yet
 
