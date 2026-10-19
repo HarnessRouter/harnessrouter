@@ -225,3 +225,61 @@ def test_the_sweep_reads_the_trace_from_the_running_turns_start(monkeypatch):
         return None
     settled, writes, _ = _sweep(monkeypatch, v, 404, rec, tts=_tts)
     assert seen[0] == 5000 and writes[0]["incomplete_reason"] == "interrupted"
+
+
+def test_the_record_carries_its_start_to_the_millisecond(monkeypatch):
+    """created_at is whole seconds; _created_ms is the exact start, and the cutoff when present.
+    Both the result walk and the output replay then read exactly this turn's chunks."""
+    import asyncio, json
+    put = {}
+    async def _blob_put(key, data, **k):
+        put.update(json.loads(data)); return True
+    async def _vg_upsert(*a, **k):
+        return None
+    monkeypatch.setattr(A, "_blob_put", _blob_put)
+    monkeypatch.setattr(A, "_vg_upsert", _vg_upsert)
+    asyncio.run(A._resp_put("resp_1", {"id": "resp_1", "created_at": 1792417802}, "o", "s", None,
+                            "running", 1792417802.5, True))
+    assert put["_created_ms"] == 1792417802500
+    rec = {"created_at": 1792417802, "_created_ms": 1792417802500}
+    assert A._turn_since_ms(rec) == A._turn_since_ms(rec, for_result=False) == 1792417802500
+    old = {"created_at": 1792417802}                      # a record from before the field
+    assert A._turn_since_ms(old) == 1792417803000          # the result walk skips the shared second
+    assert A._turn_since_ms(old, for_result=False) == 1792417802000   # the replay keeps it, as before
+
+
+def test_the_reason_is_written_only_onto_the_turn_it_was_proved_for(monkeypatch):
+    """The session's incomplete_reason belongs to its running response. An older orphan of the
+    same session settled later must not be told it was interrupted."""
+    import asyncio, time
+    v = {"id": "hsess1", "status": "incomplete", "incomplete_reason": "interrupted",
+         "running_response_id": "resp_2", "heartbeat": str(time.time() - 600)}
+    async def _vget(sid):
+        return dict(v)
+    async def _blob_get(*a, **k):
+        return None
+    async def _blob_put(*a, **k):
+        return True
+    async def _vg_upsert(*a, **k):
+        return None
+    for name, fn in (("_vertex_get", _vget), ("_blob_get", _blob_get), ("_blob_put", _blob_put),
+                     ("_vg_upsert", _vg_upsert)):
+        monkeypatch.setattr(A, name, fn)
+    old = asyncio.run(A._reconcile_response("resp_1", {"id": "resp_1", "status": "running",
+                                                       "_session_id": "hsess1", "output": []}))
+    assert old["status"] == "incomplete" and not old.get("incomplete_details")
+    cur = asyncio.run(A._reconcile_response("resp_2", {"id": "resp_2", "status": "running",
+                                                       "_session_id": "hsess1", "output": []}))
+    assert cur["incomplete_details"] == {"reason": "interrupted", "handoff": None}
+
+
+def test_a_drain_after_the_turn_ended_keeps_its_own_end():
+    """A drain that cuts in after _resp_execute returned (while the final persist is in flight)
+    must not overwrite a finished turn as interrupted: both turn paths write the turn's own end."""
+    import inspect
+    src = inspect.getsource(A.create_response)
+    assert src.count("ended = status") == 2
+    sites = [k for k in range(len(src)) if src.startswith("await _settle_drained(", k)]
+    assert len(sites) == 2
+    for i in sites:
+        assert "if ended" in src[i - 900:i], "the drain settle is reached only for a turn still running"

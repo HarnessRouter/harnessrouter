@@ -2707,22 +2707,29 @@ _RECONCILE_EVERY_S = int(os.environ.get("HARNESS_RECONCILE_EVERY_S", "60"))
 _GW_MAX_TURN_S = int(os.environ.get("HARNESS_MAX_TURN_S", "21600"))
 
 
-def _turn_since_ms(rec: dict | None) -> int:
-    """The cutoff for reading only a turn's own trace chunks when looking for its RESULT, as epoch
-    millis; 0 when the record is missing or never said.
+def _turn_since_ms(rec: dict | None, for_result: bool = True) -> int:
+    """The cutoff for reading only a turn's own trace chunks, as epoch millis; 0 when the record
+    is missing or never said.
 
-    The record's created_at is whole seconds, and the previous turn's last chunk (its result) can
+    The record carries its exact start (_created_ms, _resp_put) and that is the cutoff. Records
+    from before it have only created_at, in whole seconds, and the previous turn's last chunk can
     land in the very second this turn starts: measured, turn 1's result at .072 and turn 2 created
-    later in that second, so a cutoff at the second's start read turn 1's result as turn 2's. The
-    cutoff is the NEXT whole second. The previous turn ended before this one began, so nothing of
-    it is later; what this skips of this turn is its first second, the prompt, never a result."""
+    later in that second, so a cutoff at the second's start read turn 1's result as turn 2's. For
+    those, a caller looking for the turn's RESULT (for_result) cuts at the next whole second; a
+    replay of the turn's output keeps the second's start, as it always has."""
+    r = rec or {}
     try:
-        c = float((rec or {}).get("created_at") or 0)
+        exact = int(r.get("_created_ms") or 0)
+        c = float(r.get("created_at") or 0)
     except Exception:  # noqa: BLE001
         return 0
+    if exact > 0:
+        return exact
     if c <= 0:
         return 0
-    return int(c * 1000) if c != int(c) else (int(c) + 1) * 1000
+    if c != int(c):
+        return int(c * 1000)
+    return (int(c) + 1) * 1000 if for_result else int(c) * 1000
 
 
 async def _trace_terminal_status(base: str, since_ms: int = 0) -> str | None:
@@ -2881,7 +2888,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     # which is only when THIS replica adopted it. Needed at settle to scope the full-trace replay to
     # this turn's own chunks (pre- AND post-adoption), not prior turns sharing the same session trace.
     _orig_rec = await _resp_get(resp_id)
-    turn_since_ms = int(float((_orig_rec or {}).get("created_at") or 0) * 1000)
+    turn_since_ms = _turn_since_ms(_orig_rec, for_result=False)
     # Build trace state for _trace_flush (globally-unique time-ordered chunk keys → appending from a
     # new replica can't collide). Cursor starts at what's already durable, so we re-flush nothing.
     tr = {"prefix": base, "org": org, "billing_org": str(v.get("billing_org") or org),
@@ -3023,6 +3030,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         full_output = await _replay_output_from_trace(base, resp_id, model, since_ms=turn_since_ms)
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
                   "_member": member}
+        if (_orig_rec or {}).get("_created_ms"):
+            stored["_created_ms"] = _orig_rec["_created_ms"]   # the turn's start, not this adoption's
         if full_output:
             # the trace holds the runner's events, not the gateway's own closing paragraph on files
             # too large to attach (complete), so that paragraph is carried over onto the record
@@ -3085,13 +3094,14 @@ async def _reconcile_session(v: dict) -> bool:
                     probe_gone = False
             if probe_gone:
                 status = "incomplete" if rt_probe else "failed"
+            gone = status in ("failed", "incomplete")
             # Stale heartbeat but no terminal result yet: the owning replica likely died mid-turn
             # (deploy / scale-in / crash) while the turn keeps executing in its sandbox. ADOPT it —
             # resume harvesting its events to the trace + bus so viewers don't freeze. Run it
             # DETACHED (it polls for the rest of the turn); blocking here would stall the sweep for
             # every other session. The lease makes adoption single-flight, so a duplicate spawn on
             # the next sweep simply refuses at lease_admit. Tracked in _inflight so drain settles it.
-            if status in ("failed", "incomplete"):
+            if gone:
                 pass                        # provably gone — fall through and settle below
             elif sid not in _adopting:
                 _adopting.add(sid)
@@ -3105,21 +3115,18 @@ async def _reconcile_session(v: dict) -> bool:
                 _t = asyncio.create_task(_adopt_bg())
                 _inflight.add(_t)
                 _t.add_done_callback(_inflight.discard)
-            if status not in ("failed", "incomplete"):
+            if not gone:
                 return False               # not settled yet; the detached adopter (or a later sweep) will
-            if status == "incomplete":
-                interrupted = True
+            interrupted = status == "incomplete"
     await _vertex_upsert(sid, {"status": status, "turn_status": status,
                                **({"incomplete_reason": "interrupted"} if interrupted else {})})
     # Settle the RESPONSE record in the same pass. The session vertex and the response blob are two
     # records of one fact; settling only the vertex left the turn list showing a live "Working…"
     # spinner on a turn whose process died — the exact confusion this sweep exists to remove — and
     # a background poller on GET /v1/responses/{id} was only healed if something happened to GET it.
-    if rid_run:
+    if rec_run:                            # read above; _reconcile_response re-reads before it writes
         try:
-            rec_run = await _resp_get(rid_run)
-            if rec_run:
-                await _reconcile_response(rid_run, rec_run)
+            await _reconcile_response(rid_run, rec_run)
         except Exception:  # noqa: BLE001 — the vertex settle above already landed; a later GET heals
             pass
     if base:                               # reflect in the manifest so the Recents/Traces card updates
@@ -3240,7 +3247,8 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     except Exception:  # noqa: BLE001
         pass
     rec["status"] = settled
-    if settled == "incomplete" and vs == "incomplete" and v.get("incomplete_reason"):
+    if (settled == "incomplete" and vs == "incomplete" and v.get("incomplete_reason")
+            and rid == str(v.get("running_response_id") or "")):
         # the sweep proved why (the runner lost the turn: interrupted) and wrote it on the session
         rec["incomplete_details"] = {"reason": str(v["incomplete_reason"]), "handoff": None}
     try:
@@ -8117,6 +8125,10 @@ async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None
     if status not in _TURN_LIVE and "_completed_at" not in stored:
         # when the turn ended, for the turns feed's completed_at; stripped from the response object
         stored = {**stored, "_completed_at": time.time()}
+    if created_at and "_created_ms" not in stored:
+        # when the turn began, to the millisecond: created_at is whole seconds, too coarse to tell
+        # this turn's trace chunks from the previous turn's (_turn_since_ms)
+        stored = {**stored, "_created_ms": int(float(created_at) * 1000)}
     try:
         _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
@@ -9889,6 +9901,7 @@ async def create_response(body: CreateResponseBody, request: Request):
             _bus_publish(org, harness_id, member, sid, resp_id, ev)
 
         async def run_bg():
+            ended = ""                          # the turn's own end, once _resp_execute has returned it
             try:
                 async with _turn_slot(org, sid):
                     for ev in tr.start():
@@ -9899,12 +9912,21 @@ async def create_response(body: CreateResponseBody, request: Request):
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                    ended = status
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
                     for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                         await bus_emit_bg(ev)
                     await persist(status)
             except asyncio.CancelledError:
+                if ended:
+                    # the turn had already ended when the drain cut in, mid-persist: it was not
+                    # interrupted, so its own end is written again rather than overwritten
+                    try:
+                        await persist(ended)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    raise
                 # HR-INF-019: the replica is draining (SIGTERM) and this detached turn didn't finish
                 # inside the drain window. Settle it HONESTLY (incomplete, interrupted) instead of
                 # leaving a 6h phantom 'running', then re-raise so the loop can shut down. Best-effort I/O — the
@@ -9941,6 +9963,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 _bus_publish(org, harness_id, member, sid, resp_id, ev)  # broadcast to all subscribers
 
             async def run():
+                ended = ""                      # as in run_bg
                 try:
                     async with _turn_slot(org, sid):
                         for ev in tr.start():
@@ -9950,12 +9973,19 @@ async def create_response(body: CreateResponseBody, request: Request):
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                        ended = status
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
                         for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
                             await emit(ev)
                         await persist(status)
                 except asyncio.CancelledError:
+                    if ended:                   # ended before the drain cut in (see run_bg)
+                        try:
+                            await persist(ended)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        raise
                     await _settle_drained(persist, tr, emit)   # HR-INF-019 drain (see run_bg)
                     raise
                 except Exception as e:  # noqa: BLE001
@@ -10316,7 +10346,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "created_at": _unix_s(rec.get("created_at") or born.get(rid)),
                       "completed_at": (None if str(rec.get("status") or "") in _TURN_LIVE
                                        else _unix_s(rec.get("_completed_at"))),
-                      "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
+                      "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0,
+                      "_since_ms": _turn_since_ms(rec, for_result=False)})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
     # session vertex, so read it ONCE.
     last_running = bool(turns) and str(turns[-1].get("status") or "") in (
@@ -10345,7 +10376,7 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                 # Scope replay to chunks THIS turn could have written — the events/ directory is one
                 # flat cross-turn stream, so without this cutoff a fresh open silently fuses the
                 # PRIOR turn's reply onto this one (see _replay_output_from_trace's since_ms doc).
-                since_ms = int(float(turns[-1].get("_created_at") or 0) * 1000)
+                since_ms = int(turns[-1].get("_since_ms") or 0)
                 out = await _replay_output_from_trace(
                     base, str(turns[-1]["id"]), str(turns[-1].get("_model") or ""), since_ms=since_ms)
                 asst, tools, files = _output_to_turn_fields(out)
@@ -10353,6 +10384,7 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
     for _t in turns:
         _t.pop("_model", None)
         _t.pop("_created_at", None)
+        _t.pop("_since_ms", None)
     return {"session_id": sid, "turns": turns, "last_response_id": ids[-1] if ids else None}
 
 
