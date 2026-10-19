@@ -95,6 +95,12 @@ Rules:
 | `unsupported_plugin_schema` | 422 | The manifest's `$schema` names an Agent Plugins version this server does not install. `detail.supported` lists what it does. |
 | `unsupported_transport` | 422 | A plugin declares an MCP server whose transport cannot be run for this harness base. `detail.transport` and `detail.base` say which. |
 
+`model_not_available` and `model_unavailable` are refused at different moments and are not
+interchangeable. `model_not_available` refuses a request that writes a harness (a create or update
+whose `default_model` its base does not run), before any task exists; `model_unavailable` refuses a
+task whose model cannot be served for its harness, when the task is sent. The first tells the client
+to fix the harness, the second to send the task with another model.
+
 ### 3.2 Authentication and limits
 
 | Code | HTTP | Meaning |
