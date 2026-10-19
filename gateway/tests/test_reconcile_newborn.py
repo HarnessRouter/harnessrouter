@@ -31,7 +31,7 @@ def _run(rec, vertex, monkeypatch, trace_status=None):
     async def _vgup(label, vid, props, **kw):
         return None
 
-    async def _tts(blob):
+    async def _tts(blob, since_ms=0):
         return trace_status
 
     monkeypatch.setattr(gw, "_vertex_get", _vget)

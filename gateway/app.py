@@ -210,21 +210,26 @@ def _run_credits(model: str, usage: dict, elapsed_s: float) -> float:
 
 
 # HR-INF-019: how long a draining replica waits for detached turns to finish before it settles the
-# stragglers 'failed' and lets the process exit. Must stay under ACA's terminationGracePeriodSeconds
-# (600s) so the settle writes land before SIGKILL.
+# stragglers 'incomplete' (interrupted) and lets the process exit. Must stay under ACA's
+# terminationGracePeriodSeconds (600s) so the settle writes land before SIGKILL.
 _DRAIN_S = int(os.environ.get("HR_DRAIN_S", "570"))
 
 
 async def _settle_drained(persist, tr, emit) -> None:
-    """Settle a turn cancelled by shutdown drain: emit a terminal failure to the bus (so an open
-    Workbench stops showing 'running') and persist 'failed'. Best-effort; never raises."""
+    """Settle a turn cancelled by shutdown drain: emit a terminal event to the bus (so an open
+    Workbench stops showing 'running') and persist it. Best-effort; never raises.
+
+    'incomplete' with reason 'interrupted', not 'failed' (#505): nothing went wrong with the task,
+    the gateway stopped under it. That is the status worth continuing, and the console says a
+    restart cut the turn instead of showing an error the task never had."""
+    tr.incomplete_reason = "interrupted"
     try:
-        for ev in tr.fail("gateway draining for redeploy"):
+        for ev in tr.complete("incomplete"):
             await emit(ev)
     except Exception:  # noqa: BLE001
         pass
     try:
-        await persist("failed")
+        await persist("incomplete")
     except Exception:  # noqa: BLE001
         pass
 
@@ -2702,18 +2707,43 @@ _RECONCILE_EVERY_S = int(os.environ.get("HARNESS_RECONCILE_EVERY_S", "60"))
 _GW_MAX_TURN_S = int(os.environ.get("HARNESS_MAX_TURN_S", "21600"))
 
 
-async def _trace_terminal_status(base: str) -> str | None:
+def _turn_since_ms(rec: dict | None) -> int:
+    """The cutoff for reading only a turn's own trace chunks when looking for its RESULT, as epoch
+    millis; 0 when the record is missing or never said.
+
+    The record's created_at is whole seconds, and the previous turn's last chunk (its result) can
+    land in the very second this turn starts: measured, turn 1's result at .072 and turn 2 created
+    later in that second, so a cutoff at the second's start read turn 1's result as turn 2's. The
+    cutoff is the NEXT whole second. The previous turn ended before this one began, so nothing of
+    it is later; what this skips of this turn is its first second, the prompt, never a result."""
+    try:
+        c = float((rec or {}).get("created_at") or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+    if c <= 0:
+        return 0
+    return int(c * 1000) if c != int(c) else (int(c) + 1) * 1000
+
+
+async def _trace_terminal_status(base: str, since_ms: int = 0) -> str | None:
     """'done'/'failed' if the trace has a terminal result event, else None (not finished yet).
 
     Walks chunks NEWEST-to-OLDEST until a result event is found (HR-INF-015): the old code
-    downloaded the whole transcript to find the last result; the semantics — the last result
-    event ANYWHERE settles a multi-turn orphan even when the final turn died result-less — are
-    preserved by walking back, almost always stopping at the first (newest) chunk. Bounded at 50
-    chunks so a pathological session can't regress to a full download."""
+    downloaded the whole transcript to find the last result; walking back almost always stops at
+    the first (newest) chunk. Bounded at 50 chunks so a pathological session can't regress to a
+    full download.
+
+    since_ms scopes it to THIS turn, as in _replay_output_from_trace: the events/ directory is one
+    stream shared by every turn of the session, so without it a follow-up that died result-less
+    was settled by the PREVIOUS turn's result. A runner restart under turn 2 settled turn 2
+    'completed' with no output (#505, measured: start.txt from turn 1, two of turn 2's four steps
+    on disk, and the API said completed). 0 keeps the whole-directory walk for a caller that
+    cannot name the turn's start."""
     if not base:
         return None
     listed = await _blob_list_all(f"{base}/events/", kb=TRACE_KB)
-    chunk_ids = sorted(it["file_id"] for it in listed if it.get("file_id"))
+    chunk_ids = sorted(it["file_id"] for it in listed
+                       if it.get("file_id") and (since_ms <= 0 or (_chunk_ms(it["file_id"]) or 0) >= since_ms))
     for cid in reversed(chunk_ids[-50:]):
         part = await _blob_get(cid, kb=TRACE_KB)
         if not part:
@@ -3022,15 +3052,25 @@ async def _reconcile_session(v: dict) -> bool:
     if age < _RECONCILE_STALE_S:
         return False                       # fresh heartbeat -> a live turn is still being polled
     base = v.get("trace_blob")
-    status = await _trace_terminal_status(base)
+    rid_run = str(v.get("running_response_id") or "")
+    rec_run = None
+    if rid_run:
+        try:
+            rec_run = await _resp_get(rid_run)
+        except Exception:  # noqa: BLE001 — unscoped walk below, as before
+            rec_run = None
+    status = await _trace_terminal_status(base, _turn_since_ms(rec_run))
+    interrupted = False
     if status is None:
         if age > _GW_MAX_TURN_S:
-            status = "failed"              # past the hard cap with no result -> interrupted
+            status = "failed"              # past the hard cap with no result, and nothing proves why
         else:
             # First ask the RUNNER whether the recorded turn still exists. Turn records are
             # in-memory there, so a restart answers 404 — and a 404 means the process that owned
-            # this turn is gone and it can never finish. Settle it NOW as failed. Without this the
-            # single-container deployment showed "Working" for the full six-hour cap after any
+            # this turn is gone and it can never finish. Settle it NOW: incomplete, interrupted
+            # (#505), because the task did not fail, a restart cut it, and a follow-up continues
+            # it. Only the 404 proves that; no runner turn recorded at all is still 'failed'.
+            # Without this the single-container deployment showed "Working" for the full six-hour cap after any
             # restart: adoption below is gated on the control store, which self-hosted does not
             # have, so nothing else could ever settle the record. Seen live: a SIGKILLed container
             # left a finished-looking transcript pinned at "Working" for half an hour.
@@ -3044,14 +3084,14 @@ async def _reconcile_session(v: dict) -> bool:
                 except Exception:  # noqa: BLE001
                     probe_gone = False
             if probe_gone:
-                status = "failed"
+                status = "incomplete" if rt_probe else "failed"
             # Stale heartbeat but no terminal result yet: the owning replica likely died mid-turn
             # (deploy / scale-in / crash) while the turn keeps executing in its sandbox. ADOPT it —
             # resume harvesting its events to the trace + bus so viewers don't freeze. Run it
             # DETACHED (it polls for the rest of the turn); blocking here would stall the sweep for
             # every other session. The lease makes adoption single-flight, so a duplicate spawn on
             # the next sweep simply refuses at lease_admit. Tracked in _inflight so drain settles it.
-            if status == "failed":
+            if status in ("failed", "incomplete"):
                 pass                        # provably gone — fall through and settle below
             elif sid not in _adopting:
                 _adopting.add(sid)
@@ -3065,14 +3105,16 @@ async def _reconcile_session(v: dict) -> bool:
                 _t = asyncio.create_task(_adopt_bg())
                 _inflight.add(_t)
                 _t.add_done_callback(_inflight.discard)
-            if status != "failed":
+            if status not in ("failed", "incomplete"):
                 return False               # not settled yet; the detached adopter (or a later sweep) will
-    await _vertex_upsert(sid, {"status": status, "turn_status": status})
+            if status == "incomplete":
+                interrupted = True
+    await _vertex_upsert(sid, {"status": status, "turn_status": status,
+                               **({"incomplete_reason": "interrupted"} if interrupted else {})})
     # Settle the RESPONSE record in the same pass. The session vertex and the response blob are two
     # records of one fact; settling only the vertex left the turn list showing a live "Working…"
     # spinner on a turn whose process died — the exact confusion this sweep exists to remove — and
     # a background poller on GET /v1/responses/{id} was only healed if something happened to GET it.
-    rid_run = str(v.get("running_response_id") or "")
     if rid_run:
         try:
             rec_run = await _resp_get(rid_run)
@@ -3139,12 +3181,12 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         return rec
     vs = str(v.get("status") or "")
     settled = None
-    if vs in ("done", "failed", "cancelled") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
+    if vs in ("done", "failed", "cancelled", "incomplete") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
         # The session is terminal but its owner heartbeated moments ago: the owner is finalizing
         # (collecting files, writing the checkpoint) and will write the full record itself,
         # output, usage and served model included. Only an orphan is settled from the session.
         return rec
-    if vs in ("done", "failed", "cancelled"):
+    if vs in ("done", "failed", "cancelled", "incomplete"):
         settled = _RESP_STATUS_MAP.get(vs)
         # "completed" is a claim about THIS response, not about the session. A record with no
         # output of its own (the finalize died before any content landed) settling as "completed"
@@ -3176,7 +3218,7 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         # "never" calls every newborn a corpse. Staleness is measured from the last sign of life.
         hb = max(_hb_seconds(v), _born_seconds(rec), _born_seconds(v))
         if time.time() - hb >= _RECONCILE_STALE_S:      # owner stopped heartbeating → orphaned
-            ts = await _trace_terminal_status(v.get("trace_blob"))
+            ts = await _trace_terminal_status(v.get("trace_blob"), _turn_since_ms(rec))
             if ts:
                 settled = _RESP_STATUS_MAP.get(ts, "failed")
             elif time.time() - hb > _GW_MAX_TURN_S:
@@ -3198,6 +3240,9 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     except Exception:  # noqa: BLE001
         pass
     rec["status"] = settled
+    if settled == "incomplete" and vs == "incomplete" and v.get("incomplete_reason"):
+        # the sweep proved why (the runner lost the turn: interrupted) and wrote it on the session
+        rec["incomplete_details"] = {"reason": str(v["incomplete_reason"]), "handoff": None}
     try:
         _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
@@ -3271,7 +3316,7 @@ async def _drain_inflight() -> None:
     cover them and the old `except Exception` never caught the cancellation. Wait up to _DRAIN_S for
     in-flight turns to finish NATURALLY (checkpoint + metering happen on completion); then cancel any
     stragglers and await them HERE — while the loop is still alive — so each turn's CancelledError
-    handler settles it 'failed' (honest) instead of leaving a 6h phantom 'running'."""
+    handler settles it 'incomplete', interrupted (honest), instead of leaving a 6h phantom 'running'."""
     if not _inflight:
         return
     pending = list(_inflight)
@@ -3282,7 +3327,7 @@ async def _drain_inflight() -> None:
         pass
     still = [t for t in pending if not t.done()]
     if still:
-        print(f"[drain] {len(still)} turn(s) still running at deadline — settling failed", flush=True)
+        print(f"[drain] {len(still)} turn(s) still running at deadline — settling interrupted", flush=True)
         for t in still:
             t.cancel()
         # Await the cancellations so the CancelledError handlers' settle-writes complete before exit.
@@ -8426,7 +8471,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         except Exception:  # noqa: BLE001 — lease is best-effort; never block a turn on it
             pass
     await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
-                               "heartbeat": str(time.time()), "runner_turn_id": "",
+                               "heartbeat": str(time.time()), "runner_turn_id": "", "incomplete_reason": "",
                                **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
     # Under the session's change lock: an app's PUT, delete, mkdir or move that passed its busy check
     # before this turn was stamped running finishes before the restore reads the workspace, and one
@@ -9785,7 +9830,8 @@ async def create_response(body: CreateResponseBody, request: Request):
         # `starting` session with no runner turn and no recent heartbeat as dead (_turn_slot).
         await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                    "running_response_id": resp_id, "runner_turn_id": "",
-                                   "billing_org": billing_org, "heartbeat": str(time.time())})
+                                   "billing_org": billing_org, "heartbeat": str(time.time()),
+                                   "incomplete_reason": ""})
     except Exception as e:  # noqa: BLE001 — this write is load-bearing for cross-replica cancel: log it
         print(f"[cancel] accept-time running_response_id write failed sid={sid} resp={resp_id}: {str(e)[:120]}",
               flush=True)
@@ -9860,8 +9906,8 @@ async def create_response(body: CreateResponseBody, request: Request):
                     await persist(status)
             except asyncio.CancelledError:
                 # HR-INF-019: the replica is draining (SIGTERM) and this detached turn didn't finish
-                # inside the drain window. Settle it HONESTLY ('failed') instead of leaving a 6h
-                # phantom 'running', then re-raise so the loop can shut down. Best-effort I/O — the
+                # inside the drain window. Settle it HONESTLY (incomplete, interrupted) instead of
+                # leaving a 6h phantom 'running', then re-raise so the loop can shut down. Best-effort I/O — the
                 # shutdown hook awaits us while the loop is still alive so these writes can land.
                 await _settle_drained(persist, tr, bus_emit_bg)
                 raise
@@ -10283,6 +10329,8 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
         vst = str(v.get("turn_status") or v.get("status") or "")
         if vst in ("cancelled", "failed", "error", "done", "completed", "incomplete", "max_turns", "timeout"):
             turns[-1]["status"] = vst
+            if vst == "incomplete" and not turns[-1].get("incomplete_reason"):
+                turns[-1]["incomplete_reason"] = v.get("incomplete_reason") or None   # the sweep's proof
         # (2) Trace catch-up whenever the stored record has NO content yet — output[] is only
         # written by persist() at finalize, so this covers BOTH cases with one mechanism:
         #   • turn still running → show progress-so-far, the bus streams new events on top;
