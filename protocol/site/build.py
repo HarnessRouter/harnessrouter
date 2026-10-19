@@ -185,6 +185,7 @@ def inject_levels(examples_html: str) -> str:
 NAV = [
     ("Introduction", [
         ("index.html", "What is UHP?", ROOT / "README.md"),
+        ("ecosystem.html", "Protocol ecosystem", ROOT / "ECOSYSTEM.md"),
     ]),
     ("Specification", [
         (f"spec/{VERSION}/{name}.html", title, ROOT / f"versions/{VERSION}/{name}.md")
@@ -218,6 +219,9 @@ EXTRA = [
 # metadata manifest: build() asserts every page has one, they are unique, and lengths sit in the
 # 100–170 band that renders whole in Google, Bing, and the AI-engine retrieval snippets.
 DESCRIPTIONS = {
+    "ecosystem.html":
+        "How UHP fits alongside MCP, A2A, Agent Client Protocol and AG-UI: the boundaries "
+        "each connects and examples of combining them in an agent system.",
     "index.html":
         "The Unified Harness Protocol (UHP) is an open standard for running complete agent "
         "harnesses — tasks, sessions, streaming, files — through one shared contract.",
@@ -752,6 +756,8 @@ def rewrite_links(html_text: str, depth: int, version: str = VERSION) -> str:
         (r'href="(?:\.\./)*SERVING\.md"', f'href="{up}serving"'),
         (r'href="(?:\.\./)*CONNECTING\.md"', f'href="{up}connecting"'),
         (r'href="(?:\.\./)*IMPLEMENTATIONS\.md"', f'href="{up}examples"'),
+        (r'href="(?:\.\./)*ECOSYSTEM\.md#([^"]+)"', rf'href="{up}ecosystem#\1"'),
+        (r'href="(?:\.\./)*ECOSYSTEM\.md"', f'href="{up}ecosystem"'),
         (r'href="(?:\.\./)*conformance/README\.md#([^"]+)"', rf'href="{up}conformance#\1"'),
         (r'href="(?:\.\./)*conformance/README\.md"', f'href="{up}conformance"'),
         (r'href="reports/([^"]+\.json)"', rf'href="{up}reports/\1"'),      # measured evidence files
