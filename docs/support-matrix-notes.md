@@ -4261,9 +4261,10 @@ it would be reusable: mistral-vibe ships `vibe-acp`, docker-agent has `acp`, VT 
 ## fast-agent: a framework with no tools of its own, and a store that pins the model (2026-10-16) — behaviour measured, NO column yet
 
 `fast-agent-mcp` 0.10.45, added as the thirtieth base. Measured through a recording proxy and then
-end to end through the runner's own argv and relay. **No support-matrix column has run**, and the
-runner-side unit tests for this base are still to write (the e2e and the captured ATIF fixture are
-in place: `runner/tests/fixtures/batch4/fast-agent-three-turns.atif.json`).
+end to end through the runner's own argv and relay. **No support-matrix column has run.** Its
+captured three-turn trajectory is committed as
+`runner/tests/fixtures/batch4/fast-agent-three-turns.atif.json` and the shipped eof is replayed
+against it by 16 tests in `runner/tests/test_batch4_backends.py`.
 
 ### What it is
 `fast-agent go -m "<task>" --quiet` prints the answer; `--trajectory-output … --trajectory-format
@@ -4292,9 +4293,12 @@ everything: `_fast_agent_eof` reads that file, which is opensquilla's arrangemen
   declared no bash at all and the model said it could not. Measured both ways, which is why this
   base's `tool_enforcement` is "hard".
 
-Its trajectory on a resumed session holds EVERY turn of the conversation (nine steps across three),
-so the eof cuts at the last `user` step carrying this turn's own prompt — without that, each reply
-arrived with every earlier reply glued in front of it.
+Its trajectory on a resumed session holds EVERY turn of the conversation (eight steps across three
+in the captured one), so the eof cuts to this turn: from after the last `user` step carrying this
+turn's prompt, up to the next `user` step. Without the front cut each reply arrived with every
+earlier reply glued in front of it; the back cut was added when a test over the captured fixture
+asked what the MIDDLE turn produced and got that turn plus the one after it. Two independent guards
+for one invariant — a turn's record is one turn — the other being the builder clearing the file.
 
 ### End to end (2026-10-16)
 Three turns in one session: the first answered with the instruction-file token; the second, on a
@@ -4306,8 +4310,8 @@ Served models read off the relay on each (claude-haiku-5.5, gemini-3-flash, clau
 PyPI, pinned to 0.10.45, the wheel fetched by URL and compared to PyPI's own recorded digest
 (`b88aac3f…`, verified against the real asset); pure-python, so one digest covers every
 architecture. Its own venv. The install check also asserts that its generic client still reads
-`GENERIC_BASE_URL`, which is the relay door. **The installer has not yet been run on a linux
-container**, unlike the other three bases in this batch.
+`GENERIC_BASE_URL`, which is the relay door. `install_fast_agent` was run on a `python:3.12-slim`
+container, where what it installed reported `fast-agent-mcp v0.10.45`.
 
 ### What is NOT measured
 No column, no other dimension, no MCP server exercised (its client takes stdio, sse and streamable

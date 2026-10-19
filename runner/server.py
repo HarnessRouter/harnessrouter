@@ -12779,6 +12779,14 @@ def _fast_agent_eof(state: dict, rc: int) -> list[dict]:
                    if x.get("source") == "user" and str(x.get("message") or "") == prompt),
                   default=-1)
         steps = steps[cut + 1:]
+        # ...and STOP at the next user message. Trimming only the front is right for the file this
+        # turn just wrote (its own prompt is the last one in it) and wrong for any trajectory that
+        # also holds what came after — which is how its own captured fixture reads, and what a
+        # stale file would look like if the clear in _build_fast_agent ever failed. Two independent
+        # guards for one invariant: a turn's record is one turn.
+        nxt = next((i for i, x in enumerate(steps) if x.get("source") == "user"), None)
+        if nxt is not None:
+            steps = steps[:nxt]
     seen_text = ""
     for step in steps:
         if step.get("source") != "agent":

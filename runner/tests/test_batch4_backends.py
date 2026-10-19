@@ -1,4 +1,5 @@
-"""The bases added in batch 4: vibe (mistral-vibe), vtcode (VT Code) and docker-agent.
+"""The bases added in batch 4: vibe (mistral-vibe), vtcode (VT Code), docker-agent and
+fast-agent.
 
 Everything asserted here was MEASURED against the pinned build named beside it, on 2026-10-14/15,
 through a proxy that recorded what the CLI actually sent — not read off documentation. The fixtures
@@ -14,7 +15,7 @@ Each test pins one thing that would otherwise fail SILENTLY:
   * the export this turn wrote, never the one the last turn left behind
   * the credential in the ENVIRONMENT, which is what makes served-model and usage readable
 
-Pinned builds: mistral-vibe 2.26.1 · vtcode 0.177.0 · docker-agent v1.150.0
+Pinned builds: mistral-vibe 2.26.1 · vtcode 0.177.0 · docker-agent v1.150.0 · fast-agent-mcp 0.10.45
 """
 import json
 import pathlib
@@ -31,7 +32,11 @@ from server import (ALL_VIBE_TOOLS, ALL_VTCODE_TOOLS, Auth, BACKENDS,  # noqa: E
                     _vtcode_session_present, _vtcode_to_claude, _vtcode_usage,
                     ALL_DOCKER_AGENT_TOOLS, _build_docker_agent, _docker_agent_eof,
                     _docker_agent_home, _docker_agent_session_db,
-                    _docker_agent_session_present, _docker_agent_to_claude)
+                    _docker_agent_session_present, _docker_agent_to_claude,
+                    ALL_FAST_AGENT_TOOLS, _build_fast_agent, _fast_agent_eof,
+                    _fast_agent_home, _fast_agent_session_file,
+                    _fast_agent_session_present, _fast_agent_set_model,
+                    _fast_agent_to_claude, _fast_agent_traj)
 
 UP = "https://up.example/v1"
 FIX = pathlib.Path(__file__).resolve().parent / "fixtures" / "batch4"
@@ -621,3 +626,241 @@ def test_the_tools_are_the_ones_its_toolsets_declare():
     assert "write_file" in ALL_DOCKER_AGENT_TOOLS and "shell" in ALL_DOCKER_AGENT_TOOLS
     assert "think" in ALL_DOCKER_AGENT_TOOLS and "list_todos" in ALL_DOCKER_AGENT_TOOLS
     assert len(ALL_DOCKER_AGENT_TOOLS) == 15
+
+
+# ══ fast-agent (fast-agent-mcp 0.10.45) ═══════════════════════════════════════════════════════
+
+FA_FIXTURE = "fast-agent-three-turns.atif.json"
+# The three prompts of the captured conversation, in order. A turn's record must hold its own
+# steps, and this turn's prompt is the boundary (see _fast_agent_eof).
+FA_PROMPTS = (
+    "Reply with exactly: FA-E2E-FIRST",
+    "Create a file called e2e.txt containing the word MADE, then say in one sentence what word I "
+    "asked you to reply with in my first message.",
+    "Run the shell command `echo NOPE` and tell me what it printed.",
+)
+
+
+def _fa_ws() -> str:
+    """A workspace whose trajectory file IS the captured three-turn conversation."""
+    ws = _ws()
+    traj = _fast_agent_traj(ws)
+    traj.parent.mkdir(parents=True, exist_ok=True)
+    traj.write_text((FIX / FA_FIXTURE).read_text())
+    return ws
+
+
+def _fa_eof(ws: str, prompt: str, rc: int = 0):
+    state = {"model": "gpt-5.4", "final": "", "cwd": ws, "prompt": prompt}
+    # the stream carries nothing on this base; everything comes out of the eof
+    assert _fast_agent_to_claude({"anything": True}, state) == []
+    return _fast_agent_eof(state, rc), state
+
+
+def test_fast_agent_is_registered_with_an_eof_that_carries_the_turn():
+    assert "fast-agent" in BACKENDS
+    assert BACKENDS["fast-agent"]["normalize"] is _fast_agent_to_claude
+    assert getattr(BACKENDS["fast-agent"]["normalize"], "eof", None) is _fast_agent_eof
+
+
+def test_the_instruction_file_is_the_one_the_runner_writes_and_names():
+    ws = _ws()
+    # it has no instruction-file convention of its own: the file is passed with -i (aider's shape)
+    assert _agent_doc_path(ws, "fast-agent") == pathlib.Path(ws) / "AGENTS.md"
+    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    assert cmd[cmd.index("-i") + 1] == str(pathlib.Path(ws) / "AGENTS.md")
+
+
+def test_the_agent_works_in_the_session_and_keeps_its_store_out_of_it():
+    """Both measured, and each was a defect first: the agent's working directory was its HOME, so a
+    turn's deliverable landed in .harness/ where the produced-files list drops it; and once
+    --workspace was given, the home resolved UNDER it and FAST_AGENT_HOME was ignored, so the
+    session store moved into the directory the user collects."""
+    ws, env = _ws(), {}
+    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, env)
+    assert cmd[cmd.index("--workspace") + 1] == str(pathlib.Path(ws).resolve())
+    assert cmd[cmd.index("--home") + 1] == str(_fast_agent_home(ws))
+    assert str(_fast_agent_home(ws)).endswith("/.harness/fast-agent")
+    assert env["FAST_AGENT_HOME"] == str(_fast_agent_home(ws))
+
+
+def test_the_credential_is_in_the_two_variables_its_generic_client_reads():
+    ws, env = _ws(), {}
+    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="real-key"), "gpt-5.4", "hi", ws, env)
+    assert env["GENERIC_BASE_URL"].startswith("http://127.0.0.1:")   # the relay, not the upstream
+    assert env["GENERIC_API_KEY"].startswith("hr-relay-")
+    assert "real-key" not in json.dumps(env)
+
+
+def test_the_model_rides_the_generic_prefix_and_the_trajectory_is_cleared_per_turn():
+    ws = _fa_ws()
+    assert _fast_agent_traj(ws).is_file()
+    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "claude-haiku-5.5",
+                            "hi", ws, {})
+    assert cmd[cmd.index("--model") + 1] == "generic.claude-haiku-5.5"
+    assert not _fast_agent_traj(ws).exists(), (
+        "last turn's trajectory would otherwise answer for this one")
+    assert cmd[cmd.index("--trajectory-format") + 1] == "atif"
+
+
+def test_the_shell_runtime_is_asked_for_and_withheld_by_NAME():
+    """Measured on a resumed session: omitting -x left bash in place and the model ran the command;
+    --no-shell made the request declare no bash at all."""
+    ws = _ws()
+    on = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    assert "-x" in on and "--no-shell" not in on
+    off = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                            tools_disabled=["bash"])
+    assert "--no-shell" in off and "-x" not in off
+
+
+def test_the_two_file_tools_are_withheld_in_the_config_and_only_when_asked():
+    ws = _ws()
+    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    cfg = (_fast_agent_home(ws) / "fastagent.config.yaml").read_text()
+    assert "enable_read_text_file: true" in cfg
+    assert 'write_text_file_mode: "auto"' in cfg
+    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                      tools_disabled=["read_text_file", "edit_file"])
+    cfg = (_fast_agent_home(ws) / "fastagent.config.yaml").read_text()
+    assert "enable_read_text_file: false" in cfg
+    assert 'write_text_file_mode: "off"' in cfg
+    # with the shell runtime withheld there is no shell section to write at all
+    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                      tools_disabled=["bash"])
+    assert "shell:" not in (_fast_agent_home(ws) / "fastagent.config.yaml").read_text()
+
+
+def test_resume_is_passed_only_when_the_session_file_is_there():
+    ws = _ws()
+    sid = "2610160220-7kil4q"
+    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                            resume_session_id=sid)
+    assert "--resume" not in cmd
+    assert _resume_lost("fast-agent", cmd, sid, ws) == sid
+    f = _fast_agent_session_file(ws, sid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"session_id": sid, "continuation": {"agents": {"harness": {
+        "shell_enabled": True, "model": "gpt-5.4", "model_spec": "generic.gpt-5.4",
+        "history_file": "history_harness.json"}}}}))
+    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                            resume_session_id=sid)
+    assert cmd[cmd.index("--resume") + 1] == sid
+    assert _fast_agent_session_present(ws, cmd, sid) is True
+    assert _resume_lost("fast-agent", cmd, sid, ws) is None
+
+
+def test_a_switch_rewrites_the_sessions_stored_model_and_nothing_else():
+    """A resumed session restores its own model, so the store is pointed at this turn's first
+    (measured). `shell_enabled` is deliberately NOT written: --no-shell does that job, and writing
+    into another program's state without a measurement behind it is how a commit message came to
+    claim a fix that changed nothing (opensquilla's `[memory] source`)."""
+    ws = _ws()
+    sid = "2610160220-7kil4q"
+    f = _fast_agent_session_file(ws, sid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    before = {"session_id": sid, "metadata": {"title": "keep me"},
+              "continuation": {"agents": {"harness": {
+                  "shell_enabled": True, "model": "claude-haiku-5.5",
+                  "model_spec": "generic.claude-haiku-5.5",
+                  "history_file": "history_harness.json",
+                  "resolved_prompt": "do not touch"}}}}
+    f.write_text(json.dumps(before))
+    assert _fast_agent_set_model(ws, sid, "gemini-3-flash") is True
+    after = json.loads(f.read_text())
+    agent = after["continuation"]["agents"]["harness"]
+    assert agent["model"] == "gemini-3-flash"
+    assert agent["model_spec"] == "generic.gemini-3-flash"
+    assert agent["shell_enabled"] is True, "not ours to write"
+    assert agent["resolved_prompt"] == "do not touch"
+    assert agent["history_file"] == "history_harness.json"
+    assert after["metadata"]["title"] == "keep me"
+    # the same model again changes nothing, so a no-op turn does not rewrite the store
+    assert _fast_agent_set_model(ws, sid, "gemini-3-flash") is False
+    # and a session that is not there is not an error
+    assert _fast_agent_set_model(ws, "nope", "gemini-3-flash") is False
+
+
+def test_an_mcp_server_carries_its_bearer_and_its_transport():
+    ws = _ws()
+    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                      mcp_servers=[{"name": "plugs", "url": "https://p.example/mcp",
+                                    "transport": "http", "auth": "tok-7"},
+                                   {"name": "legacy", "url": "https://l.example/sse",
+                                    "transport": "sse"}])
+    cfg = (_fast_agent_home(ws) / "fastagent.config.yaml").read_text()
+    assert 'transport: "http"' in cfg and 'url: "https://p.example/mcp"' in cfg
+    assert '"Authorization": "Bearer tok-7"' in cfg
+    assert 'transport: "sse"' in cfg, "its client takes sse natively, so nothing is bridged"
+    assert "fast-agent" not in _BRIDGED_TRANSPORTS
+
+
+def test_a_turns_record_is_its_own_steps_and_not_the_whole_conversation():
+    """Its trajectory holds every turn of a resumed session — eight steps across three here — and
+    a turn that reported all of them arrived with every earlier reply glued in front of its own."""
+    ws = _fa_ws()
+    evs, state = _fa_eof(ws, FA_PROMPTS[2])
+    texts = [b["text"] for e in evs for b in (e.get("message", {}).get("content") or [])
+             if b.get("type") == "text"]
+    assert len(texts) == 1
+    assert texts[0].startswith("E2EFA I can't run that command")
+    assert "FA-E2E-FIRST" not in texts[0], "the first turn's answer is not this turn's"
+    assert state["final"] == texts[0]
+
+
+def test_the_middle_turns_tool_call_and_its_result_come_off_the_real_trajectory():
+    ws = _fa_ws()
+    evs, state = _fa_eof(ws, FA_PROMPTS[1])
+    calls = [b for e in evs for b in (e.get("message", {}).get("content") or [])
+             if b.get("type") == "tool_use"]
+    results = [b for e in evs for b in (e.get("message", {}).get("content") or [])
+               if b.get("type") == "tool_result"]
+    assert [c["name"] for c in calls] == ["bash"]
+    assert calls[0]["id"] == "call_3379114"
+    assert results[0]["tool_use_id"] == calls[0]["id"] and results[0]["is_error"] is False
+    assert "process exit code was 0" in results[0]["content"]
+    assert "FA-E2E-FIRST" in state["final"], "this turn's own answer, which recalls the first"
+    assert "I can't run that command" not in state["final"], "the turn after it is not this one"
+
+
+def test_the_session_id_and_the_usage_come_off_the_trajectory_too():
+    ws = _fa_ws()
+    evs, _state = _fa_eof(ws, FA_PROMPTS[0])
+    init = evs[0]
+    assert init["subtype"] == "init" and init["session_id"] == "2610160220-7kil4q"
+    res = evs[-1]
+    assert res["subtype"] == "success" and res["is_error"] is False
+    # final_metrics, not a sum of our own: 4524 prompt / 715 completion / 0 cached
+    assert res["usage"]["input_tokens"] == 4524
+    assert res["usage"]["output_tokens"] == 715
+    assert "cache_read_tokens" not in res["usage"]
+
+
+def test_a_cumulative_message_contributes_only_its_new_text():
+    # measured on this CLI: a two-step turn reported "FAOK" and then "FAOK\n\nDONE"
+    ws = _ws()
+    traj = _fast_agent_traj(ws)
+    traj.parent.mkdir(parents=True, exist_ok=True)
+    traj.write_text(json.dumps({"session_id": "s1", "steps": [
+        {"step_id": 1, "source": "user", "message": "go"},
+        {"step_id": 2, "source": "agent", "message": "FAOK"},
+        {"step_id": 3, "source": "agent", "message": "FAOK\n\nDONE"}],
+        "final_metrics": {"total_prompt_tokens": 10, "total_completion_tokens": 2}}))
+    evs, state = _fa_eof(ws, "go")
+    texts = [b["text"] for e in evs for b in (e.get("message", {}).get("content") or [])
+             if b.get("type") == "text"]
+    assert texts == ["FAOK", "DONE"], texts
+    assert state["final"] == "FAOK\nDONE"
+
+
+def test_a_turn_that_wrote_no_trajectory_fails_and_leaves_the_reason_to_stderr():
+    ws = _ws()   # no trajectory file at all: the CLI died before writing one
+    evs, _state = _fa_eof(ws, "go", rc=1)
+    res = evs[-1]
+    assert res["subtype"] == "error" and res["is_error"] is True
+    assert res["result"] == "", "the run loop's stderr tail is the reason, not a placeholder"
+
+
+def test_the_tools_offered_are_the_three_with_a_switch():
+    assert set(ALL_FAST_AGENT_TOOLS) == {"bash", "read_text_file", "edit_file"}
+    assert "process" not in ALL_FAST_AGENT_TOOLS
