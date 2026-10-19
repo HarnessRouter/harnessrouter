@@ -55,8 +55,17 @@ _T0 = time.time()
 # Fences are three OR MORE backticks: aider's own parser takes any length (a block whose content
 # holds ``` is fenced with ````), and gpt-5.4 closes with four. A stripper that took exactly three
 # left the fourth behind as the whole answer (an answer card reading "`", hosted 2026-09-19).
-_EDIT_BLOCK = re.compile(r"(?:^\S+\n)?`{3,}[^\n]*\n(?:\S+\n)?<{5,9} SEARCH\n.*?^>{5,9} REPLACE\n`{3,}[ \t]*\n?",
-                         re.S | re.M)
+# The file name tolerates what aider's parser tolerates: find_filename reads the 3 lines before
+# `<<<<<<< SEARCH` and strips each one (editblock_coder.py:492, 538-569; strip_filename:408), so a
+# name with whitespace around it, or one blank line between it and the fence, still names the
+# block's file — gpt-5.4 wrote both shapes and the leftover "hello.txt" beat the edits sentence as
+# the whole answer (hosted, 2026-10-19). One token only (\S+): a line with internal spaces is
+# prose and is never swallowed, and a second blank line puts the name outside the parser's 3-line
+# window, so it stays.
+_EDIT_BLOCK = re.compile(
+    r"(?:^[ \t]*\S+[ \t]*\n(?:[ \t]*\n)?)?`{3,}[^\n]*\n(?:[ \t]*\S+[ \t]*\n)?<{5,9} SEARCH\n"
+    r".*?^>{5,9} REPLACE\n`{3,}[ \t]*\n?",
+    re.S | re.M)
 
 
 # `hr-mcp call <server> <tool>` wherever it stands in COMMAND position: at the start of the line
@@ -182,6 +191,24 @@ class _Gate:
         # True while the last thing that happened was an error: set by tool_error, cleared by the
         # next assistant output. What decides whether the turn failed (see main).
         self.error_after_output = False
+        # While _run_turn runs a pass its words are parked here instead of leaving at once: who
+        # they were for is known only after aider's file-mention check has run (see _install).
+        # None outside a pass — then words leave at once, as at any call site off the send path.
+        self.pass_words: "list | None" = None
+        # Set when aider answered the pass itself: check_for_file_mentions added the files the
+        # words asked for and set the reflected message. Reset by _run_turn at each pass.
+        self.answered_by_file_add = False
+
+    def flush_words(self) -> None:
+        """The running pass's parked words, emitted now: a card is about to go out, and the words
+        that narrate it come first, as they always have. A pass that reached a card is already
+        past aider's file-mention check (send_message returns at an answered mention before any
+        edit or command), so these words were for the person."""
+        for w in self.pass_words or []:
+            if w.strip():
+                _emit("text", {"text": w})
+        if self.pass_words:
+            self.pass_words = []
 
     def mcp_calls_in(self, command: str) -> list[tuple[str, str]]:
         """Every ('server', 'tool') an hr-mcp call in this command names, in order.
@@ -242,7 +269,15 @@ def _install(coder, gate: _Gate) -> None:
         # An empty content field is the only case aider's decorated display string may be shown for;
         # it goes through the banner's own marker rather than being handed over whole (#395).
         gate.error_after_output = False
-        _emit("text", {"text": strip_edit_blocks(body or _after_answer_banner(str(message)))})
+        text = strip_edit_blocks(body or _after_answer_banner(str(message)))
+        # Parked while a pass runs: whether these words were for the person or for the driver is
+        # known only once aider's file-mention check has answered (or not) at the pass's end. And
+        # an empty text — a response that was edit blocks alone — is no message at all: emitted,
+        # it rendered as an empty reply after the cards (hosted, gpt-5.4, 2026-10-19).
+        if gate.pass_words is not None:
+            gate.pass_words.append(text)
+        elif text:
+            _emit("text", {"text": text})
         return orig_assistant(message, pretty)
 
     def tool_error(message="", strip=True):
@@ -253,6 +288,7 @@ def _install(coder, gate: _Gate) -> None:
         return orig_error(message, strip)
 
     def tool_warning(message="", strip=True):
+        gate.flush_words()
         _emit("warning", {"text": str(message)})
         return orig_warning(message, strip)
 
@@ -267,6 +303,7 @@ def _install(coder, gate: _Gate) -> None:
             approved, name, reason = gate.decide(command)
             gate.calls.append({"command": command, "tool": name, "approved": approved,
                                "reason": reason})
+            gate.flush_words()
             _emit("shell_decision", {"command": command, "tool": name,
                                      "approved": approved, "reason": reason})
             return approved
@@ -281,6 +318,7 @@ def _install(coder, gate: _Gate) -> None:
         if question in _FILE_PROMPTS and subject:
             path = str(subject) if os.path.isabs(str(subject)) else os.path.join(coder.root, str(subject))
             if not is_text_file(path):
+                gate.flush_words()
                 _emit("warning", {"text": f"{subject} is not a text file and stays out of the chat"})
                 # aider's prompt tells the model to ask the user for the file and stop; when the
                 # user says no, a person types what to do instead. Nobody is at that prompt here,
@@ -300,6 +338,25 @@ def _install(coder, gate: _Gate) -> None:
     io.tool_error = tool_error
     io.tool_warning = tool_warning
     io.confirm_ask = confirm_ask
+
+    # aider answers a file mention ITSELF in driver mode: check_for_file_mentions asks "Add file
+    # to the chat?", --yes-always says yes, and the reflected message it sets ("I added these
+    # files to the chat: …") is the next pass's input. A pass whose words that add answered was
+    # talking to the driver, not the person — measured twice on the hosted twin (gpt-5.4,
+    # 2026-10-19): turn 2 on hello.txt opened the reply with "Please add this file to the chat
+    # first so I can provide an exact edit: - `hello.txt`", a request nobody needed to act on,
+    # then the edit, then an empty message. The WORDING of such a request varies by model
+    # ("Please add this file…", "I need to edit this existing file, which has not been added…"),
+    # so the signal is the mechanism itself — the check returned its added-files message — never
+    # the words.
+    mentions = getattr(coder, "check_for_file_mentions", None)
+    if mentions is not None:
+        def check_for_file_mentions(content):
+            added = mentions(content)
+            if added:
+                gate.answered_by_file_add = True
+            return added
+        coder.check_for_file_mentions = check_for_file_mentions
 
 
 REFLECT_ASK = ("Continue the task with this output. If more commands or edits are needed, propose "
@@ -573,6 +630,23 @@ def _new_files_need_no_add(coder) -> None:
     coder.gpt_prompts = prompts
 
 
+ADDED_FILES = "I added these files to the chat: {fnames}. Continue with the request."
+
+
+def _added_files_without_invitation() -> None:
+    """aider's reflected message after an automatic add ends "Let me know if there are others we
+    should add." — an invitation written for a person at the prompt. Fed back as the next pass's
+    input in the driver's loop, the model ANSWERS it: gpt-6-sol opened the pass after the add with
+    "No other files are needed." and that narration became the turn's answer, in the future tense
+    ("I'll add `there` after `hi`.", rc.1 probe, 2026-10-19). Nobody is at that prompt here, so the
+    message states the add and points back at the request, and invites nothing. It is set on the
+    aider.prompts MODULE, because that is where check_for_file_mentions reads it
+    (base_coder.py:31, 1781) — the coder's gpt_prompts does not carry it — and the turn is its own
+    process, so the patch outlives nothing."""
+    from aider import prompts
+    prompts.added_files = ADDED_FILES
+
+
 def _repo_map_after_the_conversation(coder) -> None:
     """THE CONVERSATION STARTS WITH WHAT THE USER SAID, with files in the workspace as without.
     aider sends the repo map as a user message, answered for the model with "Ok, I won't try and
@@ -625,7 +699,15 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     And the same one nudge the other way round: a request that asks for words back ("then say
     done") answered by a pass that edited or ran something and said nothing besides. Without it the
     answer is the driver's "ended without a written answer" sentence over a task that is done. One
-    nudge per turn in every case."""
+    nudge per turn in every case.
+
+    EACH PASS'S WORDS leave when the pass ends, not as they arrive, because who they were for is
+    known only then: a pass whose words were answered by the automatic file add (see _install) was
+    talking to the driver and its words are not part of the reply; every other pass's words are
+    shown as they always were, each its own message, ahead of any cards they narrate (the gate
+    flushes them when a card goes out). The turn's answer is the LAST pass's words (_turn_answer);
+    a mid-turn pass's words stay what they are today, narration beside that pass's cards, and are
+    not joined into the answer. An empty text is never emitted."""
     coder.io.user_input(prompt)
     coder.init_before_message()
     message = prompt
@@ -638,7 +720,18 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     while message:
         coder.reflected_message = None
         calls_before = len(gate.calls) if gate is not None else 0
-        list(coder.send_message(message))
+        if gate is not None:
+            gate.pass_words = []
+            gate.answered_by_file_add = False
+        try:
+            list(coder.send_message(message))
+        finally:
+            if gate is not None:
+                words, gate.pass_words = gate.pass_words or [], None
+                if not gate.answered_by_file_add:
+                    for w in words:
+                        if w.strip():
+                            _emit("text", {"text": w})
         # aider_edited_files accumulates over the turn; what this pass added is reported now, so
         # the cards sit beside the prose that produced them.
         edited = sorted(set(coder.aider_edited_files or []) - reported)
@@ -676,6 +769,34 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
         # a nudged turn and a recycle, the history held two replies in a row with no message
         # between, and gpt-5.4-mini answered "what did my first message ask for" with "HELLO".
         coder.io.user_input(message)
+
+
+def _turn_answer(coder, gate: _Gate, before: "set | None", failed: bool) -> str:
+    """The turn's answer: the LAST pass's words, and never words addressed to the driver.
+
+    The result's text is what the gateway stores as the answer, so it is stripped of the
+    edit markup exactly as the text events were; the edits were reported as cards. A last pass
+    whose words the automatic file add answered asked the driver for files it already has, so it
+    answered the person nothing — as _run_turn already kept those words out of the reply. A
+    response that was commands or edit blocks and nothing else leaves no answer once the blocks
+    are cards: the model's last word was a command or an edit, and aider gives it no further turn
+    when that printed nothing. Measured on the hosted service (an officecli that was not installed
+    ran seven times and the task ended with no text and no file; gpt-5.4 ended after one edit
+    block, and turn 2 on hello.txt, 2026-10-19, asked for the file and then wrote only the edit).
+    Said as what happened, not as an answer the model gave: the files it changed, by name, or the
+    commands it ran."""
+    final = strip_edit_blocks(coder.partial_response_content or "")
+    if gate.answered_by_file_add:
+        final = ""
+    if not final.strip() and not failed and (gate.calls or coder.aider_edited_files):
+        edited = sorted(coder.aider_edited_files or [])
+        if edited:
+            final = _edits_sentence(edited, before) + (
+                " The commands and their output are above." if gate.calls else "")
+        else:
+            final = ("The task ended without a written answer after running commands. The commands "
+                     "and their output are above.")
+    return final
 
 
 def _write_model_metadata(cwd: str, model: str) -> str | None:
@@ -862,6 +983,7 @@ def main() -> int:
     # defaults, so the attribute is set on the object, which is what format_chat_chunks reads.
     coder.main_model.examples_as_sys_msg = True
     _new_files_need_no_add(coder)
+    _added_files_without_invitation()
     _repo_map_after_the_conversation(coder)
     # NO TEMPERATURE. aider sends `temperature: 0` for every id its settings do not know, and a
     # provider that has retired the field refuses the whole turn: claude-fable-5-1 on TokenRouter
@@ -891,23 +1013,7 @@ def main() -> int:
     # more of the model's work is not a failed turn: measured 2026-09-19, a restyled .pptx and an
     # edited hello.md were reported FAILED for a decode error twelve commands earlier.
     failed = coder.usage_report is None or gate.error_after_output
-    # The result's text is what the gateway stores as the answer, so it is stripped of the
-    # edit markup exactly as the text events were; the edits were reported as cards.
-    final = strip_edit_blocks(coder.partial_response_content or "")
-    if not final.strip() and not failed and (gate.calls or coder.aider_edited_files):
-        # A response that was commands or edit blocks and nothing else leaves no answer once the
-        # blocks are cards: the model's last word was a command or an edit, and aider gives it no
-        # further turn when that printed nothing. Measured on the hosted service (an officecli
-        # that was not installed ran seven times and the task ended with no text and no file;
-        # gpt-5.4 ended after one edit block). Said as what happened, not as an answer the model
-        # gave: the files it changed, by name, or the commands it ran. The same on the hosted service.
-        edited = sorted(coder.aider_edited_files or [])
-        if edited:
-            final = _edits_sentence(edited, before) + (
-                " The commands and their output are above." if gate.calls else "")
-        else:
-            final = ("The task ended without a written answer after running commands. The commands "
-                     "and their output are above.")
+    final = _turn_answer(coder, gate, before, failed)
     _emit("result", {
         "final": final,
         "ok": not failed,

@@ -2040,6 +2040,16 @@ def _inv_ts(created: float) -> str:
     return str(TRACE_TS_MAX - int(created * 1000)).zfill(14)
 
 
+def _created_from_prefix(prefix: str) -> float | None:
+    """'{org}/{inv}_{sid}' (or the manifest key '{org}/idx/{inv}_{sid}.json') -> epoch seconds.
+    The inverse of _inv_ts: the creation time is durable in every prefix."""
+    try:
+        inv = prefix.rsplit("/", 1)[-1].split("_", 1)[0]
+        return (TRACE_TS_MAX - int(inv)) / 1000.0
+    except (ValueError, AttributeError):
+        return None
+
+
 def _manifest_key(base: str) -> str:
     """Trace base '{org}/{inv}_{sid}' -> the FLAT manifest key '{org}/idx/{inv}_{sid}.json'. The
     `idx/` namespace holds exactly one object per session, so a prefix-LIST of '{org}/idx/' paginates
@@ -3049,17 +3059,31 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     return True
 
 
+def _sweep_seen(v: dict) -> float:
+    """The session's last sign of life, for the sweep: its heartbeat, floored by its birth (the
+    record's created_at, else the time its trace prefix carries) and by its current turn's start
+    (turn_at, stamped at accept). A heartbeat of 0 read as "never" aged a session from 1970, past the
+    hard cap, and the sweep settled it failed at once (hosted, 2026-10-19: a newborn settled while its
+    sandbox was being placed, then completed 34 s later; the newborn trap _reconcile_response already
+    guards against). 0 when the record holds none of them."""
+    try:
+        turn_at = float(v.get("turn_at") or 0)
+    except (TypeError, ValueError):
+        turn_at = 0.0
+    born = _born_seconds(v) or (_created_from_prefix(str(v.get("trace_blob") or "")) or 0.0)
+    return max(_hb_seconds(v), born, turn_at)
+
+
 async def _reconcile_session(v: dict) -> bool:
     sid = v.get("id") or v.get("session_id")
     if not sid:
         return False
-    try:
-        hb = float(v.get("heartbeat") or 0)
-    except Exception:  # noqa: BLE001
-        hb = 0
-    age = time.time() - hb
+    seen = _sweep_seen(v)
+    if not seen:
+        return False                       # no time on record at all: an unknown age is past no cap
+    age = time.time() - seen
     if age < _RECONCILE_STALE_S:
-        return False                       # fresh heartbeat -> a live turn is still being polled
+        return False                       # fresh heartbeat (or a newborn turn) -> still being polled
     base = v.get("trace_blob")
     rid_run = str(v.get("running_response_id") or "")
     rec_run = None
@@ -9840,10 +9864,12 @@ async def create_response(body: CreateResponseBody, request: Request):
         # this warmup window burn seconds on a dead-handle sandbox kill before settling.
         # The heartbeat too: a turn that is accepted is alive, and the orphan sweep reads a
         # `starting` session with no runner turn and no recent heartbeat as dead (_turn_slot).
+        # turn_at: the turn's start, beside the heartbeat; the sweep ages a session from it as well
+        # (_sweep_seen), so a later heartbeat-less write never ages this turn from an older one.
         await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                    "running_response_id": resp_id, "runner_turn_id": "",
                                    "billing_org": billing_org, "heartbeat": str(time.time()),
-                                   "incomplete_reason": ""})
+                                   "turn_at": str(time.time()), "incomplete_reason": ""})
     except Exception as e:  # noqa: BLE001 — this write is load-bearing for cross-replica cancel: log it
         print(f"[cancel] accept-time running_response_id write failed sid={sid} resp={resp_id}: {str(e)[:120]}",
               flush=True)
