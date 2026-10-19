@@ -2919,7 +2919,11 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         # deliverable (a Stop that lands after the file is saved, an OOM at finalize) — skipping
         # collection threw those files away from the record while they sat in the workspace.
         produced = await _collect_produced(sid, set())
-        for oev in translator.complete(rec["status"], produced):
+        # Translate for the wire, the same way the persist just below does: `rec["status"]` holds
+        # the trace's name for the outcome (`done`, `max_turns`, `timeout`), and `complete()` both
+        # puts it in the response object and looks the event name up by it, so an untranslated
+        # status reached subscribers as `status: "max_turns"` under a `response.completed` (#480).
+        for oev in translator.complete(_RESP_STATUS_MAP.get(rec["status"], "failed"), produced):
             _emit(oev)
     except Exception:  # noqa: BLE001
         pass
@@ -8055,6 +8059,32 @@ def _strip_internal(d: dict) -> dict:
     return {k: v for k, v in d.items() if not k.startswith("_")}
 
 
+# The gateway's internal lifecycle names for the one non-terminal state, and UHP's name for it.
+# `lifecycle.md` §3 has five statuses; `running` is not one of them, so a stored record read
+# through any UHP response object used to answer a status the protocol does not define, while
+# streaming already emitted `in_progress` from the same turn. The map is total over every name the
+# gateway uses, not just the ones written today: `_RESP_TERMINAL` and `_RESP_STATUS_MAP`'s keys
+# name `done`, `max_turns`, `timeout` and `error`, and a record written by an older build can
+# still carry one. Those translate here rather than at the write, so no exit needs to remember to.
+_UHP_STATUS = {"running": "in_progress", "starting": "in_progress", "queued": "in_progress",
+               "in_progress": "in_progress", "completed": "completed", "failed": "failed",
+               "incomplete": "incomplete", "cancelled": "cancelled",
+               "done": "completed", "max_turns": "incomplete", "timeout": "incomplete",
+               "error": "failed"}
+
+
+def _public_response(rec: dict) -> dict:
+    """The response object as it leaves the gateway: internal fields dropped, status in UHP's
+    vocabulary. A dedicated formatter rather than a rule inside `_strip_internal`, whose one job
+    is dropping `_`-prefixed keys; the status rule is a protocol rule, so the two stay readable
+    apart. The STORED value is untouched: the console's turn list and the reconcile sweeps read
+    `running` from the record itself and must keep seeing it."""
+    d = _strip_internal(rec)
+    if "status" in d:
+        d["status"] = _UHP_STATUS.get(str(d["status"]), d["status"])
+    return d
+
+
 # Harness-internal seed/config files the runner writes into the workspace to drive the agent
 # (e.g. AGENTS.md surfaces installed skills for codex; CLAUDE.md is the claude equivalent). They are
 # never user-facing artifacts, so they must never appear in a turn's output file list.
@@ -9324,6 +9354,24 @@ def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
 
 _IDEM_TERMINAL = {"completed", "failed", "incomplete", "cancelled", "error"}
 
+# The event name a terminal status gets on the wire. streaming.md §2.1 names all three; the
+# replay path used to fold everything that was not `completed` into `response.failed`, so a turn
+# that stopped at a limit was announced as an error rather than as the partial result it was.
+_IDEM_EVENT = {"completed": "response.completed", "incomplete": "response.incomplete",
+               "cancelled": "response.failed", "failed": "response.failed"}
+
+
+def _synth_response(resp_id: str, status: str, error: dict | None = None) -> dict:
+    """A response object for an event with no record behind it. `Event.response` is a `$ref` to
+    `Response`, whose `required` is id, object, created_at, status, output and model, so a literal
+    carrying three of the six fails schema validation even when every field it does carry is right.
+    The id and the status are the two the caller knows; the rest are filled so the frame holds."""
+    body = {"id": resp_id, "object": "response", "created_at": int(time.time()),
+            "status": status, "output": [], "model": ""}
+    if error:
+        body["error"] = error
+    return body
+
 
 async def _idem_replay(resp_id: str, stream: bool):
     """A duplicate request (same Idempotency-Key) returns the FIRST request's result instead of
@@ -9340,17 +9388,30 @@ async def _idem_replay(resp_id: str, stream: bool):
 
     if not stream:
         rec = await _await_terminal()
-        return JSONResponse(rec or {"id": resp_id, "status": "unknown",
-                                    "error": {"message": "idempotent replay: original response not found"}})
+        if not rec:
+            # A missing original is the same answer the GET gives for an unknown id. The old
+            # `{"status": "unknown"}` body named a status UHP does not define (#480).
+            raise uhp_error(404, "response_not_found",
+                            "idempotent replay: original response not found", "response_id")
+        return JSONResponse(_public_response(rec))
 
     async def gen():
         created = {"type": "response.created", "sequence_number": 0,
-                   "response": {"id": resp_id, "object": "response", "status": "in_progress"}}
+                   "response": _synth_response(resp_id, "in_progress")}
         yield f"data: {json.dumps(created)}\n\n"
         rec = await _await_terminal()
-        st = str((rec or {}).get("status") or "failed")
-        ev = "response.completed" if st == "completed" else "response.failed"
-        yield f"data: {json.dumps({'type': ev, 'sequence_number': 1, 'response': rec or {'id': resp_id, 'status': st}})}\n\n"
+        if not rec:
+            # The stream already opened, so this cannot become a 404 the way the non-stream
+            # branch's does. It ends on the one event a client can act on, carrying the same
+            # code the GET would have answered (#480).
+            body = _synth_response(resp_id, "failed",
+                                   {"type": "invalid_request_error", "code": "response_not_found",
+                                    "message": "idempotent replay: original response not found",
+                                    "param": "response_id"})
+            yield f"data: {json.dumps({'type': 'response.failed', 'sequence_number': 1, 'response': body})}\n\n"
+            return
+        st = str(rec.get("status") or "failed")
+        yield f"data: {json.dumps({'type': _IDEM_EVENT.get(st, 'response.failed'), 'sequence_number': 1, 'response': _public_response(rec)})}\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -9692,7 +9753,9 @@ async def create_response(body: CreateResponseBody, request: Request):
         task.add_done_callback(_inflight.discard)
         # Return a SNAPSHOT (copy the output list) so the immediate JSON can't alias the list the
         # detached task appends to. Already persisted 'running'; poll GET /v1/responses/{id}.
-        _snap = tr._response_obj("running")
+        # The answer is built straight, not from the stored record, so it carries UHP's name for
+        # the state (`in_progress`) rather than the gateway's internal one (#480).
+        _snap = tr._response_obj("in_progress")
         _snap["output"] = list(_snap.get("output") or [])
         return _snap
 
@@ -9989,7 +10052,7 @@ async def get_response(response_id: str, request: Request):
     # Durable settler for async/background polling: never leave a poller stuck at 'running' if the
     # owning turn actually finished/died (reconciled from the session vertex + trace).
     rec = await _reconcile_response(response_id, rec)
-    return _strip_internal(rec)
+    return _public_response(rec)
 
 
 @app.get("/v1/sessions/{sid}/turns")
@@ -10472,7 +10535,7 @@ async def cancel_response(response_id: str, request: Request):
             except Exception:  # noqa: BLE001
                 pass
     rec = await _resp_get(response_id) or rec
-    return _strip_internal(rec)
+    return _public_response(rec)
 
 
 # ── files: upload (in) + container content (out) ────────────────────────────────────────

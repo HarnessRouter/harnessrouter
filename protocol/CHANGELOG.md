@@ -2,6 +2,18 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.10.19.post1 (2026-10-19)
+
+No change to the protocol, the schema or any verdict a conformant server gets.
+
+T-11 reads a background task back while it is still running and requires the lifecycle table's name
+for the state, `in_progress`. No check looked at a task before it reached a terminal status, so a
+server could answer every background POST and every poll with a name of its own and stay green.
+HarnessRouter answered `running`, which the table does not define, while its own stream emitted
+`in_progress` for the same turn: a client written to the specification waited for `in_progress`,
+or treated the unknown status as an error. The check skips rather than fails when the task finishes
+before it can be read mid-turn, since there is then nothing left to observe.
+
 ## 2026-10-19, addition: when each turn began and ended
 
 Additive. Each item of a session's `turns` ([Sessions §3](versions/2026-10-19/sessions.md#3-inspecting-a-session))
