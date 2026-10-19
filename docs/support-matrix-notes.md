@@ -4252,6 +4252,37 @@ Neither bug is this base's, and both would have hit every backend on an environm
 which is why they are written up here rather than in a harness's section: the column is what found
 them.
 
+### The custom-harness dimension, the plugin matrix and the family tour (2026-10-19)
+Run in that order after the column, each only once the one before it was green (see "The order a
+harness is tested in" in docs/harness-verification.md).
+
+- **Custom harness: pass, 11 s.** The configuration a person builds, not a built-in: its own skill
+  carrying its own script RAN (`skill_reached`, `script_ran`, `stamp.txt` produced), the tool
+  switched off (`todo`) was not used, and the person's own MCP server was called —
+  `mcp_deepwiki.read_wiki_structure`, reached through two `search_tool_functions` calls, which is
+  this runtime's own deferred-tool dispatcher doing exactly what its catalog entry says it does.
+- **Plugin matrix: five of five columns pass.** One Agent Plugins package and nothing on the
+  harness's direct lists: `skills` 4.5 s, stdio `mcp` 8.0 s, `rows` 8.7 s (the free-form rows
+  arrived carrying their fields — `first=1 second=2`, the tool's own token, not the agent's
+  account of its call), `sse` 9.9 s and `http` 9.2 s, both answering the public probe's fixed
+  token. **This is the first time this base's remote MCP paths have been measured against a live
+  server** rather than read off its transport enum: the SSE column proves the runner's bridge for
+  it (its own `mcp_servers` has no SSE client) and the HTTP column proves its native
+  streamable-HTTP client.
+- **Family tour: 12 of 12 families in one conversation.** One `tour.pptx` carried from a first turn
+  through twelve model families, each making its own edit and each keeping the file: gpt-5.4-mini,
+  claude-sonnet-5, gemini-3.5-flash, grok-4.5, muse-spark-1.1, deepseek-v4-flash, kimi-k3,
+  qwen3.8-flash, glm-5.3-flash, mistral-medium-3.5, step-3.7-flash, hunyuan-4-preview. Every turn's
+  served model was the family asked for, 12 to 58 s each, 3 to 6 tool calls. `llama-3.3-70b` and
+  `nemotron-3.5-lightning` were skipped as not offered on this connection, which is
+  `_VERCEL_NO_CHANNEL` working.
+
+One RIG difference, recorded because it is not a finding about the base: the image these ran on was
+built lean (`WITH_DOC_PREVIEW=0`, no built-in skills) to keep the build short, so `python-pptx` was
+installed into the container before the tour. A deck task on a stock image needs no such thing —
+the product's own image bakes those libraries in — and a tour run without it would have measured
+the rig.
+
 ### What it is
 Not a fork of anything this runner already drives. Its programmatic mode is a written contract:
 `vibe -p` with `--output streaming` puts one JSON session-journal entry per line on stdout

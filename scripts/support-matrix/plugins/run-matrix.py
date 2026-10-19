@@ -49,7 +49,15 @@ BASES = ["claude-code", "codex", "hermes", "goose", "gemini", "qwen", "opencode"
          # _BRIDGED_TRANSPORTS and a remote column measures the bridge on them.
          "mimo", "jcode", "opensquilla", "nanobot",
          # zeroclaw takes stdio, http and sse servers natively ([[mcp.servers]] `transport`)
-         "zeroclaw"]
+         "zeroclaw",
+         # 2026-10-19, this batch. Every one takes a stdio server, and their remote clients were
+         # read off each CLI's own transport enum, which is what _BRIDGED_TRANSPORTS in the runner
+         # records: vibe (transport http | streamable-http | stdio), vtcode (Stdio | Http) and
+         # docker-agent (streamable | sse, product servers streamable) have their SSE column
+         # bridged; fast-agent takes SSE natively; dcode reads the claude-shaped config, which
+         # carries all three. No remote column has been measured on any of them against a live
+         # server yet — that is what this dimension is for.
+         "vibe", "vtcode", "docker-agent", "fast-agent", "dcode"]
 NO_STDIO: set[str] = set()
 # The public probe the remote columns call: its SSE end answers PROBE-SSE-<id>, its streamable-HTTP
 # end PROBE-HTTP-<id>. Both are the same fixed server, so a wrong answer is the base, not the probe.

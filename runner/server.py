@@ -5976,8 +5976,15 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # stream is line-buffered as it passes; the bytes still go through untouched
                 pending += chunk
                 # a route that rewrites usage forwards whole lines (as rewritten) instead of the
-                # raw read, so a rewrite never straddles two reads
-                out_lines = [] if (flags.get("usage_no_nulls") or flags.get("plain_stream")) else None
+                # raw read, so a rewrite never straddles two reads.
+                # EVERY rewrite flag has to be named here, not only in _rewrite_stream_line: this
+                # is the gate that decides whether the rewritten lines are what the client gets,
+                # and a flag added to the rewriter alone changes nothing at all. Measured the hard
+                # way — `tool_index_fill` was added to the rewriter, the suite passed on it, and
+                # the Google column failed again with the identical error because the bytes still
+                # went through untouched.
+                out_lines = [] if (flags.get("usage_no_nulls") or flags.get("plain_stream")
+                                   or flags.get("tool_index_fill")) else None
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
                     if out_lines is not None:
@@ -6377,9 +6384,71 @@ def _plain_trailer_line(line: bytes, state: dict) -> bytes:
     return line
 
 
+def _tool_call_index_line(line: bytes, state: dict) -> bytes:
+    """One SSE line with the `index` a streamed tool call arrived without.
+
+    Google's OpenAI-compatible surface omits it. MEASURED 2026-10-19 straight at
+    generativelanguage.googleapis.com/v1beta/openai, gemini-3.8-flash with one function tool: the
+    streamed delta carries `id`, `type`, `function` and Google's own
+    `extra_content.google.thought_signature`, and NO `index` —
+
+        "tool_calls":[{"extra_content":{...},"function":{"arguments":"{…}","name":"write_file"},
+                       "id":"call_4217092","type":"function"}]
+
+    OpenAI's streaming shape puts an `index` on every tool-call delta, because that is how a client
+    merges the chunks of one call. A client that follows it refuses the answer: vibe 2.26.1 raises
+    `ValueError("Tool call chunk missing index")` in its own `core/types.py` while merging, so the
+    turn FAILS after the model has answered and the work is lost (the artifact scenario of its
+    Google column, 211 s, found by the support matrix). The index is positional information only
+    the stream has, so the relay is the one place that can supply it.
+
+    Each distinct tool-call id takes the next index for its choice — two calls in one answer stay
+    two — and a continuation chunk, which carries no id, keeps the index of the call it continues.
+    """
+    raw = line.strip()
+    if not raw.startswith(b"data:") or b'"tool_calls"' not in raw:
+        return line
+    payload = raw[5:].strip()
+    if not payload.startswith(b"{"):
+        return line
+    try:
+        obj = json.loads(payload)
+    except ValueError:
+        return line
+    choices = obj.get("choices") if isinstance(obj, dict) else None
+    if not isinstance(choices, list):
+        return line
+    per = state.setdefault("tool_index", {})
+    changed = False
+    for ch in choices:
+        if not isinstance(ch, dict):
+            continue
+        delta = ch.get("delta") if isinstance(ch.get("delta"), dict) else ch.get("message")
+        calls = (delta or {}).get("tool_calls") if isinstance(delta, dict) else None
+        if not isinstance(calls, list):
+            continue
+        slot = per.setdefault(str(ch.get("index", 0)), {"ids": {}, "next": 0, "last": 0})
+        for tc in calls:
+            if not isinstance(tc, dict) or tc.get("index") is not None:
+                continue
+            cid = str(tc.get("id") or "")
+            if cid:
+                if cid not in slot["ids"]:
+                    slot["ids"][cid] = slot["next"]
+                    slot["next"] += 1
+                slot["last"] = slot["ids"][cid]
+            tc["index"] = slot["last"]
+            changed = True
+    if not changed:
+        return line
+    return b"data: " + json.dumps(obj, separators=(",", ":")).encode()
+
+
 def _rewrite_stream_line(line: bytes, flags: dict, state: dict) -> bytes:
     if flags.get("usage_no_nulls"):
         line = _usage_without_nulls(line)
+    if flags.get("tool_index_fill"):
+        line = _tool_call_index_line(line, state)
     if flags.get("plain_stream"):
         line = _plain_trailer_line(line, state)
     return line
@@ -6429,7 +6498,8 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
 def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = (),
                         stream_usage: bool = False, gemini_schemas: bool = False,
                         usage_no_nulls: bool = False, exact_base: bool = False,
-                        aux: bool = False, plain_stream: bool = False) -> tuple[str, str]:
+                        aux: bool = False, plain_stream: bool = False,
+                        tool_index_fill: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -6439,6 +6509,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     normalises a gemini model's tool declarations on this route whatever the channel (see
     _build_grok for the one client that needs it). `usage_no_nulls` rewrites a null token count in an
     answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls).
+    `tool_index_fill` supplies the `index` a streamed tool call arrives without on Google's
+    OpenAI-compatible surface, for a client that merges chunks by it (_tool_call_index_line).
     `exact_base` joins the client's resource onto the connection's base as stored, for a client that
     was calling that base directly before it had a route (Codex, and hermes on Azure): the same URL,
     with the relay between. `aux` marks a route for a helper model (hermes's image questions): the
@@ -6460,6 +6532,7 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         flags = {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
+                 "tool_index_fill": bool(tool_index_fill),
                  **({"aux": True} if aux else _turn_effort())}
         _HERMES_RELAY["routes"][tok] = (upstream, api_key, flags if aux else _turn_route(flags))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
@@ -12054,7 +12127,17 @@ def _build_vibe(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # Every keyed turn rides the relay: the connection's real key never reaches the CLI's
         # environment, where the agent's own shell could read it, and the relay is the only tap
         # that can say which model actually answered.
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        #
+        # tool_index_fill: this client merges a streamed tool call's chunks by their `index` and
+        # raises ValueError("Tool call chunk missing index") when one has none — its own
+        # core/types.py, raised AFTER the model has answered, so the turn's work is lost. Google's
+        # OpenAI-compatible surface sends no index (measured; see _tool_call_index_line), which
+        # failed the artifact scenario of this base's Google column and nothing else in it. The
+        # flag is on for every route because the repair only ever ADDS the field the OpenAI
+        # streaming shape already defines, and the provider that needs it is decided by the
+        # connection rather than by this builder.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key,
+                                                    tool_index_fill=True)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home, out = _vibe_home(cwd), _vibe_out(cwd)
     _vibe_config(auth, model, home, mcp_servers)

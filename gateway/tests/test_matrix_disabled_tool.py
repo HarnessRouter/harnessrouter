@@ -74,6 +74,26 @@ def test_this_batchs_bases_are_there():
         assert b in _bases_in_dimension(), b
 
 
+def test_the_plugin_matrix_knows_this_batchs_bases_too():
+    """The plugin dimension has its own base list, and a base missing from it is never measured
+    there — the same silent gap the custom-harness list has. Found while running this batch's
+    steps in order: the five bases were in the custom-harness dimension and not in this one."""
+    src = (pathlib.Path(__file__).resolve().parents[2] / "scripts" / "support-matrix"
+           / "plugins" / "run-matrix.py").read_text()
+    # the literal's own brackets, matched: a comment inside it mentions `[[mcp.servers]]`, so
+    # cutting at the first "]" reads part of a comment as the whole list (it did, once)
+    start = src.index("BASES = [") + len("BASES = ")
+    depth, end = 0, start
+    for i, ch in enumerate(src[start:], start):
+        depth += (ch == "[") - (ch == "]")
+        if depth == 0:
+            end = i + 1
+            break
+    bases = src[start:end]
+    for b in ("vibe", "vtcode", "docker-agent", "fast-agent", "dcode"):
+        assert f'"{b}"' in bases, (b, bases[-200:])
+
+
 def test_gajae_is_not(the_dimension=None):
     # it is implemented and not offered; a base the server cannot serve produces a column of
     # failures that say nothing about it (see test_gajae_not_offered.py)
