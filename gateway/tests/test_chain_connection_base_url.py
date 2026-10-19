@@ -82,3 +82,49 @@ def test_a_connection_with_nothing_to_change_is_the_same_object():
     # test_chain_pairing asks for identity here, and the fill must not quietly start copying
     conn = {"provider": "openai-api", "base_url": "http://h/v1"}
     assert A._chain_wired(conn, "codex") is conn
+
+
+# ── the same loss, one field further on: WHICH VENDOR this connection is ──────────────────────
+# `tokenrouter` is the runner's name for TokenRouter, Vercel, llmtr and the HarnessRouter API, and
+# `openai-api` is its name for Google AI Studio too. _map_model used that renamed name to pick a
+# model-id table, so a Vercel connection was given TokenRouter's slugs. MEASURED on the first
+# matrix column of this batch, through a recording proxy in front of the gateway (2026-10-19):
+# `grok-4.20` went out as `x-ai/grok-4.20-beta` and Vercel answered
+# `spacexai/grok-4.20-non-reasoning-beta` — the NON-reasoning model, where the Vercel table names
+# `spacexai/grok-4.20-reasoning` — and `qwen3.8-max` went out as `qwen/qwen3.8-max` and came back
+# as `alibaba/qwen3.8-2.4t-a95b`. Both turns passed; only the served-model check saw it.
+def test_a_renamed_connection_keeps_which_vendor_it_is():
+    out = A._chain_wired({"name": "v", "provider": "vercel", "api_key": "k"}, "vibe")
+    assert out["provider"] == "tokenrouter" and out["_vendor"] == "vercel"
+
+
+def test_the_model_id_sent_is_the_vendors_own_and_not_the_runner_names():
+    vercel = A._chain_wired({"name": "v", "provider": "vercel", "api_key": "k"}, "vibe")
+    assert A._map_model(vercel, "grok-4.20") == "spacexai/grok-4.20-reasoning"
+    assert A._map_model(vercel, "qwen3.8-max") == "alibaba/qwen3.8-max"
+    assert A._map_model(vercel, "glm-5.3") == "zai/glm-5.3"
+    # and TokenRouter still gets TokenRouter's
+    tr = A._chain_wired({"name": "t", "provider": "tokenrouter", "api_key": "k"}, "vibe")
+    assert A._map_model(tr, "grok-4.20") == "x-ai/grok-4.20-beta"
+
+
+def test_every_vendor_that_shares_a_runner_name_keeps_its_own_table():
+    # the four that become `tokenrouter`, and the two that become `openai-api`
+    for vendor in ("vercel", "llmtr", "harnessrouter", "tokenrouter", "google", "openrouter"):
+        conn = A._chain_wired({"name": vendor, "provider": vendor, "api_key": "k"}, "vibe")
+        for canonical in ("grok-4.20", "qwen3.8-max", "glm-5.3"):
+            want = A._vendor_models(vendor).get(canonical) or canonical
+            assert A._map_model(conn, canonical) == want, (vendor, canonical)
+
+
+def test_an_integration_carries_its_vendor_too():
+    # an integration whose model list has no entry for the canonical falls through to _map_model,
+    # which must not then read the runner's name either
+    import inspect
+    conn = {"name": "integration:mine", "backend": "vibe", "provider": "tokenrouter",
+            "_vendor": "vercel"}
+    assert A._map_model(conn, "grok-4.20") == "spacexai/grok-4.20-reasoning"
+    # and the builder is what puts it there, pinned at the source: the shape above is only right
+    # if _mapped_integration_conn really carries the integration's own provider across the rename
+    src = inspect.getsource(A._mapped_integration_conn)
+    assert '"_vendor": (integ.get("provider") or "").lower()' in src, src[-400:]

@@ -1848,6 +1848,10 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     models = _integration_models(integ)
     pid = models.get(canon) or models.get(canon.lower()) or ""
     conn = {"name": f"integration:{iname}", "backend": backend, "provider": provider,
+            # the vendor beside the runner's name for it, for the same reason as in _chain_wired:
+            # this connection's model id table is the VENDOR's, and an integration whose model
+            # list has no entry for the canonical falls through to _map_model
+            "_vendor": (integ.get("provider") or "").lower(),
             **{k: v for k, v in (integ.get("config") or {}).items() if v not in (None, "")}}
     if pid:
         conn["model"] = pid
@@ -5770,6 +5774,12 @@ def _chain_wired(conn: dict, backend: str) -> dict:
     mapped = _INTEGRATION_WIRING.get((provider, backend)) if provider in _PROVIDER_CATALOG else None
     if mapped and mapped != provider:
         patch["provider"] = mapped
+        # WHICH VENDOR this is, kept beside the runner's name for it, because the rename is
+        # lossy: `tokenrouter` is the runner's name for TokenRouter, Vercel, llmtr AND the
+        # HarnessRouter API, and `openai-api` is its name for Google AI Studio as well as an
+        # OpenAI-compatible endpoint. _map_model needs the vendor to pick the right id table —
+        # see the comment there for what sending the wrong vendor's slug actually did.
+        patch["_vendor"] = provider
     # The connection itself when there is nothing to change, as before: the caller's own test
     # asks for the same object (test_chain_pairing), and a copy is made only where it is needed.
     return {**conn, **patch} if patch else conn
@@ -7214,7 +7224,18 @@ def _map_model(conn: dict, friendly: str) -> str | None:
     400 with 'invalid model identifier', failing the whole turn. So an unmappable/empty name falls
     back to the connection's configured default, then the provider's sonnet id — always something valid."""
     backend = (conn.get("backend") or "").lower()
-    provider = (conn.get("provider") or "").lower()
+    # THE VENDOR, not the runner's name for it. A connection renamed for the runner (`vercel`,
+    # `llmtr` and `harnessrouter` all become `tokenrouter`; `google` becomes `openai-api`) would
+    # otherwise be given another vendor's id table, and the id would be sent to an endpoint that
+    # never published it. MEASURED on a Vercel connection while running this batch's first matrix
+    # column (2026-10-19, the recording proxy in front of the gateway): `grok-4.20` went out as
+    # TokenRouter's `x-ai/grok-4.20-beta` and Vercel answered as
+    # `spacexai/grok-4.20-non-reasoning-beta` — the NON-reasoning model, where _VERCEL_RESLUG
+    # names `spacexai/grok-4.20-reasoning`; `qwen3.8-max` went out as `qwen/qwen3.8-max` and came
+    # back as `alibaba/qwen3.8-2.4t-a95b`. Both turns PASSED, because that gateway resolves a slug
+    # it does not publish to something near it, so the only trace was the served-model check: the
+    # substitution rule of docs/harness-verification.md, which is why that rule exists.
+    provider = (conn.get("_vendor") or conn.get("provider") or "").lower()
     default = conn.get("model") or ""
 
     def _valid_default() -> str | None:
