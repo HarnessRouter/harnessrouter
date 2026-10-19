@@ -2,6 +2,16 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## 2026-10-19, addition: earlier turns (capability `input_history`)
+
+Additive. A request without `previous_response_id` may carry the conversation so far as `user` and
+`assistant` messages before the last `user` message ([Tasks §2.1](versions/2026-10-19/tasks.md#21-earlier-turns)).
+A server that reports the new `input_history` capability gives them to the harness as its history,
+treats only the last `user` message as the task's own, keeps them as the session's first turns marked
+`imported: true` in `/turns` (completed, no model ran, no cost). Beyond its bounds it imports none
+of them and reads the request as without the capability, never refusing it. A server without the
+capability, or one that reports it `false`, is unchanged.
+
 ## 2026-10-19
 
 Against `2026-10-04`, one rule changes and the rest is additive.

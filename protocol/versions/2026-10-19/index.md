@@ -116,6 +116,10 @@ Against `2026-10-04`, one rule changes and the rest is additive.
   delete response gains `sessions` and `restorableUntil`. This is the one change that is not
   additive: a client that relies on a retired harness's sessions staying readable checks the
   capability.
+- **A new task may bring its earlier turns** ([Tasks §2.1](tasks.md#21-earlier-turns)), added after
+  publication and additive: with the `input_history` capability, the messages before the last `user`
+  message are the conversation so far, kept as the session's first turns marked `imported`. Beyond
+  a server's bounds the request is read as without the capability, never refused.
 - **Harness writes refuse what they cannot store** ([Harnesses §5.1](harnesses.md#51-create)): a field
   the harness does not have, and a `default_model` its base does not run, are `422`. Both maintained
   servers have done this since 2026-10-10, inside `2026-10-04`; this version states it.
