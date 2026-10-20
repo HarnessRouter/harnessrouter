@@ -366,6 +366,23 @@ def _load_reasoning():
 reasoning = _load_reasoning()
 
 
+def _load_tracecontext():
+    """runner/tracecontext.py, by path, as _load_reasoning: the gateway checks the caller's trace
+    context with the same rules the runner applies."""
+    import importlib.util
+    path = pathlib.Path(__file__).resolve().parents[1] / "runner" / "tracecontext.py"
+    spec = importlib.util.spec_from_file_location("hr_tracecontext", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# The caller's W3C trace context on POST /v1/responses: `traceparent` and `tracestate` only, never
+# `baggage` (it can carry the caller's data to a model provider). A value that is not W3C syntax is
+# dropped, never refused.
+tracecontext = _load_tracecontext()
+
+
 def _reasoning_level(value, where: str = "") -> str:
     """A level as the API takes it, "" for none given. A value that is not a level is refused when
     it came with the request (`where` names the field) and read as none when it was stored."""
@@ -6298,6 +6315,9 @@ class _RespTranslator:
         # {"effort": asked, "applied": level | "default" | None}: None for a turn that asked for no
         # level; "applied" is None until the runner's result says what the model was actually given.
         self.reasoning: dict | None = None
+        # The caller's W3C trace context ({"traceparent", "tracestate"}, {} for none): passed to the
+        # runner's /turn and kept on the stored record, never on the public response.
+        self.trace: dict = {}
         self.seq = 0
         self.out_index = -1
         self.output: list[dict] = []
@@ -8632,7 +8652,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 # does not depend on the model chosen to write with. See _vision_auth.
                 "vision_auth": vision_auth,
                 # codex streaming: run via the app-server protocol (item/agentMessage/delta)
-                "codex_appserver": bool(codex_appserver)}
+                "codex_appserver": bool(codex_appserver),
+                # The caller's W3C trace context: the runner hands it to the CLI and sends a child of
+                # it on the model calls its relay forwards. Absent, nothing is sent.
+                "traceparent": translator.trace.get("traceparent"),
+                "tracestate": translator.trace.get("tracestate")}
         # Stop requested while we were resolving the connection / provisioning the previous
         # attempt? Honor it BEFORE launching a CLI process (from any replica, via the one signal).
         if await _turn_cancelled(sid, org, translator.resp_id):
@@ -9831,6 +9855,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         tr.environment = str((environment or {}).get("id") or "")
         if effort:   # what the turn asked of the model's thinking; "applied" arrives with the result
             tr.reasoning = {"effort": effort, "applied": None}
+        tr.trace = tracecontext.parse(request.headers.get("traceparent"), request.headers.get("tracestate"))
 
         # Broadcast a synthetic turn-start so the bus alone can render a conversation turn from
         # scratch (the native Responses events don't echo the user's prompt).
@@ -9841,7 +9866,8 @@ async def create_response(body: CreateResponseBody, request: Request):
             if status != "running":
                 await _browser_close(sid, "turn_end")     # the turn's browser, if it opened one
             stored = {**tr._response_obj(status), "_session_id": sid, "_org": org,
-                      "_member": member, "_input": input_items, "_backend": backend}
+                      "_member": member, "_input": input_items, "_backend": backend,
+                      **({"_trace": tr.trace} if tr.trace else {})}
             await _resp_put(resp_id, stored, org, sid, body.previous_response_id, status, created_at, body.store)
 
         # Persist the turn as 'running' NOW so GET /v1/sessions/{sid}/turns surfaces the in-flight

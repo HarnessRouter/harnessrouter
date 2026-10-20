@@ -84,6 +84,7 @@ from pydantic import BaseModel
 
 import environments   # the read-only project layer a turn may name (runner/environments.py)
 import reasoning      # how much a model thinks on a turn: levels and what sets them (runner/reasoning.py)
+import tracecontext   # the caller's W3C trace context, and the child the relay sends (runner/tracecontext.py)
 
 app = FastAPI(title="harness-runner")
 
@@ -3882,6 +3883,10 @@ _HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threadin
 # backend keeps its placeholder in. A context variable, so two turns being built at once never read
 # each other's.
 _TURN_THINKING: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_thinking", default=None)
+# The caller's W3C trace context for the turn being built ({"traceparent", "tracestate"}, {} for
+# none). A route registered meanwhile keeps it, and the relay sends a child of it on every model call
+# that route forwards (tracecontext.child). A context variable for the reason _TURN_THINKING is one.
+_TURN_TRACE: contextvars.ContextVar[dict] = contextvars.ContextVar("hr_turn_trace", default={})
 
 
 def _turn_route(flags: dict) -> dict:
@@ -5215,6 +5220,25 @@ def _upstream_is_local_server(base: str) -> bool:
             or (addr.version == 4 and addr in ipaddress.ip_network("100.64.0.0/10")))
 
 
+def _with_trace(headers: dict, trace: dict | None) -> None:
+    """The turn's trace context on a call the relay forwards: a child `traceparent` (same trace id,
+    new span id, sampled flag kept) and the caller's `tracestate`. A call the CLI already traced
+    under the same trace keeps its own headers, whose parent is the CLI's span and so more exact;
+    any other trace header from the CLI is replaced. A route with no trace context is untouched: no
+    header in, nothing out."""
+    tp = (trace or {}).get("traceparent") or ""
+    if not tp:
+        return
+    own = next((v for k, v in headers.items() if k.lower() == "traceparent"), "")
+    if tracecontext.trace_id(own) == tracecontext.trace_id(tp):
+        return
+    for k in [k for k in headers if k.lower() in ("traceparent", "tracestate")]:
+        del headers[k]
+    headers["traceparent"] = tracecontext.child(tp)
+    if trace.get("tracestate"):
+        headers["tracestate"] = trace["tracestate"]
+
+
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -5255,6 +5279,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
+        _with_trace(headers, flags.get("trace"))
         if flags.get("passthrough"):
             self._passthrough(base, key, tail, headers, body)
             return
@@ -6159,6 +6184,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
                  **({"aux": True} if aux else _turn_effort())}
+        if _TURN_TRACE.get():
+            flags["trace"] = dict(_TURN_TRACE.get())
         _HERMES_RELAY["routes"][tok] = (upstream, api_key, flags if aux else _turn_route(flags))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
@@ -13279,6 +13306,8 @@ class TurnReq(BaseModel):
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
     environment: dict | None = None        # {id, slug, entry}: the project layer at /env/<slug>, read-only (environments.py)
     reasoning_effort: str | None = None    # how much the model thinks this turn: one of reasoning.LEVELS; unset = the model's default
+    traceparent: str | None = None         # the caller's W3C trace context (runner/tracecontext.py): TRACEPARENT and
+    tracestate: str | None = None          # TRACESTATE for the CLI, and a child traceparent on relayed model calls
     reasoning_route: str | None = None     # which measured provider the connection is (reasoning.ROUTES), from the gateway,
                                            # which knows it when the base here is a broker's; unset = read it off the base
 
@@ -13380,6 +13409,11 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     turn_thinking = {"asked": effort if effort in reasoning.LEVELS else "", "applied": "", "routes": [],
                      "route": named if named in reasoning.ROUTES else ""}
     _TURN_THINKING.set(turn_thinking)
+    # The caller's trace context, for the CLI (OpenTelemetry-aware tools read TRACEPARENT and
+    # TRACESTATE) and for every route the builder below registers. Set for every turn, so a turn
+    # that brought none also clears what an earlier one left in this context.
+    turn_trace = tracecontext.parse(req.traceparent, req.tracestate)
+    _TURN_TRACE.set(turn_trace)
     # Image generation. Deliberately NOT the OPENAI_* names: on a codex harness those already
     # point at the CHAT connection, which is often a different provider, and one env pair can
     # only carry one credential. The imagegen skill's wrapper reads these and passes them to the
@@ -13397,6 +13431,9 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     for k, val in (req.env or {}).items():
         if isinstance(k, str) and k.startswith("HR_") and val not in (None, ""):
             env[k] = str(val)
+    for k, val in (("TRACEPARENT", turn_trace.get("traceparent")), ("TRACESTATE", turn_trace.get("tracestate"))):
+        if val:
+            env[k] = val
     # CRITICAL for resume: both CLIs write their conversation transcripts under $HOME
     # (~/.claude/projects/*.jsonl, ~/.codex/sessions/*) — NOT under CLAUDE_CONFIG_DIR. The default
     # $HOME is outside /workspace, so transcripts were never checkpointed and `--resume` found nothing
