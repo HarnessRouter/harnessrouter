@@ -8150,6 +8150,19 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
     # so the restriction silently restricts nothing.
     for name in await _resolve_chain(org, backend, None):
         conn, _tenant = await _get_connection(org, name)
+        # A connection the ROUTER would refuse for this base serves none of its models, so it
+        # contributes nothing here — the picker asks the same question the turn will ask, in the
+        # same words (_chain_refusal), and the two cannot drift apart.
+        #
+        # MEASURED on the support matrix (2026-10-20): an instance holding one google connection
+        # offered docker-agent the whole gemini family as AVAILABLE — eight ids — because this
+        # loop read google's per-model table and never asked whether google can drive that base.
+        # It cannot: there is no ("google", "docker-agent") wiring row, so every one of those
+        # turns came back "No connection on this account serves gemini-4-argon" after the point
+        # of no return, which is the promise this function's own docstring exists to stop breaking.
+        # vibe was unaffected only because it happens to have a google row.
+        if conn and _chain_refusal(conn, backend):
+            continue
         table = _vendor_models(str((conn or {}).get("provider") or "").lower())
         if not table:
             return None
