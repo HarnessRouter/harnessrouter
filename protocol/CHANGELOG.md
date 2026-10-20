@@ -2,6 +2,22 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## 2026-10-19, deprecation: the harness models view's `fallback`
+
+`fallback` in `GET /v1/harnesses/{harness_id}/models` ([Harnesses §3](versions/2026-10-19/harnesses.md#3-models))
+is deprecated. It names the model a server would run in place of one it cannot serve, which
+[Tasks §1.3](versions/2026-10-19/tasks.md#13-model-selection-and-substitution) makes the harness's
+`default`, so it only ever repeats `default`; a server that refuses an unavailable model (`422
+model_unavailable`), as both maintained servers do, runs none in its place. Nothing changes on the
+wire: the field keeps its type, and servers keep sending it. Under the
+[deprecation rules](VERSIONING.md#deprecation) it is removed no earlier than the second version
+after this one. A client reads `default` and each model's `available`.
+
+## Conformance suite 2026.10.19.post2 (2026-10-19)
+
+The packaged copy of the 2026-10-19 schema marks `HarnessModels.fallback` deprecated. No check or
+verdict changes.
+
 ## Conformance suite 2026.10.19.post1 (2026-10-19)
 
 No change to the protocol, the schema or any verdict a conformant server gets.

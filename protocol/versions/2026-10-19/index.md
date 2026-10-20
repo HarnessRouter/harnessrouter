@@ -123,6 +123,9 @@ Against `2026-10-04`, one rule changes and the rest is additive.
 - **Each turn says when it began and ended** ([Sessions §3](sessions.md#3-inspecting-a-session)),
   added after publication and additive: a session's turns carry `created_at` and `completed_at` in
   Unix seconds, `completed_at` `null` while the turn runs or when its end is not known.
+- **The harness models view's `fallback` is deprecated** ([Harnesses §3](harnesses.md#3-models)),
+  after publication: it only ever repeats `default`. Nothing changes on the wire, and it is removed
+  no earlier than the second version after this one.
 - **Harness writes refuse what they cannot store** ([Harnesses §5.1](harnesses.md#51-create)): a field
   the harness does not have, and a `default_model` its base does not run, are `422`. Both maintained
   servers have done this since 2026-10-10, inside `2026-10-04`; this version states it.
