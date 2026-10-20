@@ -7715,27 +7715,17 @@ _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models
 # mimo is an opencode FORK that kept opencode's provider model — the config names an ai-sdk package
 # and a baseURL, so it reaches what opencode reaches, Responses ids included.
 _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
-# ── gajae (Gajae-Code) is implemented and NOT offered ─────────────────────────────────────────
-# It has no entry here, none in _BASE_CATALOG, and no wiring row, so this server neither lists it,
-# routes it (_SUPPORTED_BASES and _HID_PREFIX_RE are derived from _BASE_CATALOG) nor runs it. The
-# runner's implementation stays in place — _build_gajae, _gajae_to_claude, their tests and their
-# captured fixtures — because the base WORKS; what stops it is this product's own write-wall, and
-# that is a decision to revisit rather than a defect to fix.
-#
-# MEASURED (2026-10-03, on a real instance, both directions of the switch):
-#   gjc's native lock helper walks from / down to the path it is locking and opens EVERY ancestor
-#   with O_RDONLY|O_DIRECTORY|O_NOFOLLOW (pi-natives, open_parent_no_follow), which needs READ on
-#   each ancestor rather than traverse. docker/entrypoint.sh sets /data and /data/workspaces to
-#   751 — "traversable by sessions, neither listable nor writable" — so a session uid gets EACCES,
-#   the addon reports io_error, and the turn dies before its first model call.
-#   With those two directories at 755 a real turn completed in 4.6 s; put back to 751 it failed
-#   again with the same error. Both sides are defending the same thing from opposite ends: gjc
-#   refuses to trust path resolution for a lock, and this product makes the ancestors unreadable.
-#
-# To offer it: relax those two modes (which gives up "neither listable", not "nor writable"), then
-# restore this entry, the _BASE_CATALOG entry, the _INTEGRATION_WIRING rows and the
-# _CUSTOM_FORMAT_BACKENDS membership. gateway/tests/test_gajae_not_offered.py pins the current
-# state so a half-restore cannot pass unnoticed. docs/support-matrix-notes.md has the full record.
+# No gajae entry: Gajae-Code is not in this tree either. It was built and measured, and what
+# stops it is this product's own write-wall rather than a defect: gjc's native lock helper walks
+# from / down to the path it is locking and opens EVERY ancestor with
+# O_RDONLY|O_DIRECTORY|O_NOFOLLOW (pi-natives, open_parent_no_follow), which needs READ on each
+# ancestor rather than traverse, and docker/entrypoint.sh sets /data and /data/workspaces to 751
+# — "traversable by sessions, neither listable nor writable" — so a session uid gets EACCES and
+# the turn dies before its first model call. MEASURED both ways on a real instance (2026-10-03):
+# at 755 a turn completed in 4.6 s, back at 751 it failed again with the same error. The
+# implementation is parked on the branch `parked/vtcode-and-gajae` and the measurement is in
+# docs/support-matrix-notes.md; offering it means relaxing those two modes first, and restoring
+# that branch rather than writing it again.
 # jcode, opensquilla and nanobot each speak ONE OpenAI shape — chat/completions — through the
 # loopback relay, which is kimi's reach exactly, so they take kimi's list and are in
 # CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used

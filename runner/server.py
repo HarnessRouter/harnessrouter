@@ -534,12 +534,11 @@ _SESSION_PRESENT = {
     "openhands": _openhands_session_present,
     "cheetahclaws": _cheetahclaws_session_present,
     "agentzero": _agentzero_session_present,
-    # This batch: three builders perform the lookup themselves and carry the id in argv only when
-    # they found it (mimo's -s, gajae's -r, jcode's --resume all exit without running the model on
-    # an id their store does not hold), so argv IS the builder's conclusion. The two driver-backed
+    # This batch: two builders perform the lookup themselves and carry the id in argv only when
+    # they found it (mimo's -s and jcode's --resume both exit without running the model on an id
+    # their store does not hold), so argv IS the builder's conclusion. The two driver-backed
     # bases pass the key on every turn and must ask their store.
     "mimo": _argv_session_present,
-    "gajae": _argv_session_present,
     "jcode": _argv_session_present,
     "opensquilla": _opensquilla_session_present,
     "nanobot": _nanobot_session_present,
@@ -887,12 +886,6 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       # workspace hydrated from before that from dragging one through every
                       # later checkpoint.
                       "./.harness/home/.local/share/mimocode/snapshot",
-                      # gajae reads models.yml's apiKey as an env var NAME, so the file holds no
-                      # credential today — but pi's models.json did until it didn't, and auth.json
-                      # is written by `gjc /login`, which a task could run.
-                      "./.harness/home/.gjc/agent/auth.json",
-                      "./.harness/home/.gjc/agent/models.yml",
-                      "./.harness/home/.gjc/agent/.env",
                       # jcode keeps provider credentials under its own home and in the per-provider
                       # env files its `provider add --api-key-stdin` writes. The runner puts the
                       # relay's per-turn placeholder in the ENVIRONMENT and writes neither, but
@@ -1016,8 +1009,6 @@ AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-5.4")
 # MiMo Code is an opencode fork (its repo root package.json is still literally "opencode"), so it
 # shares opencode's default for the same reason: multi-family through one connection.
 MIMO_DEFAULT_MODEL = os.environ.get("MIMO_DEFAULT_MODEL", "gpt-5.4")
-# Gajae-Code is pi's lineage (docs/porting-from-pi-mono.md), so it shares pi's default too.
-GAJAE_DEFAULT_MODEL = os.environ.get("GAJAE_DEFAULT_MODEL", "gpt-5.4")
 JCODE_DEFAULT_MODEL = os.environ.get("JCODE_DEFAULT_MODEL", "gpt-5.4")
 OPENSQUILLA_DEFAULT_MODEL = os.environ.get("OPENSQUILLA_DEFAULT_MODEL", "gpt-5.4")
 NANOBOT_DEFAULT_MODEL = os.environ.get("NANOBOT_DEFAULT_MODEL", "gpt-5.4")
@@ -1131,8 +1122,6 @@ def _git_ensure(ws: str) -> None:
         ".harness/agentzero/base/usr/.env", ".harness/agentzero/base/usr/secrets.env",
         *_PER_TURN_CONFIG,
         # this batch — the same files CHECKPOINT_EXCLUDE drops from the tarball
-        ".harness/home/.gjc/agent/auth.json", ".harness/home/.gjc/agent/models.yml",
-        ".harness/home/.gjc/agent/.env",
         ".harness/home/.jcode/auth.json", ".harness/home/.jcode/credentials.json",
         ".harness/home/.config/jcode/",
         ".harness/opensquilla/.env", ".harness/opensquilla/secrets.toml",
@@ -1610,13 +1599,6 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # us here too — one directory, named in mimo.json.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
-    elif backend == "gajae":
-        # ~/.gjc/agent/skills/<name>/SKILL.md, the CANONICAL user location in gjc's own discovery
-        # table (docs/skills.md), with the agent dir redirected by GJC_CODING_AGENT_DIR into
-        # .harness/home/.gjc/agent (see _build_gajae). User-global for pi's reason: gjc gates
-        # project-local files behind a trust decision, and the user root loads unconditionally.
-        rootrels = [".harness/home/.gjc/agent/skills"]
-        entryroot = ".harness/home/.gjc/agent/skills"
     elif backend == "jcode":
         # ~/.jcode/skills/<name>/SKILL.md — jcode's GLOBAL skills root (tool/skill.rs names it
         # first), and $HOME is already <cwd>/.harness/home, so this is both inside a loader path
@@ -2098,11 +2080,9 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # grok loads AGENTS.md (and CLAUDE.md, AGENT.md …) at every level from the repo root down to
         # the cwd, once the folder is trusted; _build_grok sets GROK_FOLDER_TRUST=0. Verified on
         # 1.0.41: a token written in AGENTS.md was in the model request.
-        # The five added in this batch all read AGENTS.md from the project root, each verified
+        # The four added in this batch all read AGENTS.md from the project root, each verified
         # against the pinned build rather than the docs:
         #   mimo        — opencode's instruction-context loader, unchanged in the fork
-        #   gajae       — discovery/agents-md.ts, "Discovers standalone AGENTS.md files by walking
-        #                 up from cwd", plus ~/.gjc/agent/AGENTS.md (system-prompt.ts)
         #   jcode       — jcode-base/src/prompt.rs load_agents_md_files_from_dirs, which labels it
         #                 "Project Instructions (AGENTS.md)"; no CLAUDE.md branch, despite the
         #                 repo shipping one of its own
@@ -2118,7 +2098,7 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
                                    "goose", "kimi", "aider", "openhands", "kilo", "grok",
                                    "agentzero",
-                                   "mimo", "gajae", "jcode", "opensquilla", "nanobot", "vibe",
+                                   "mimo", "jcode", "opensquilla", "nanobot", "vibe",
                                    # docker-agent reads it through its own prompt-files lookup,
                                    # which walks up from the working directory for AGENTS.md and
                                    # CLAUDE.md; the config this runner writes names AGENTS.md in
@@ -3720,218 +3700,6 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
         else:
             cmd += [f"--tools={','.join(enabled)}"]
     _omp_write_mcp(omp_agent_dir, mcp_servers)
-    cmd.append(prompt)
-    return cmd
-
-
-# ── gajae-code (Yeachan-Heo/gajae-code, binary `gjc`) ─────────────────────────────────────────
-# Pi's lineage, ported to its own tree (docs/porting-from-pi-mono.md; its npm dependency set still
-# carries `pi-ai`, and `$pickenv("GJC_TIMING", "PI_TIMING")` reads pi's env names as fallbacks).
-# Measured on the pinned 0.18.5 binary (2026-10-02), `gjc -p --mode json` emits pi's event stream
-# with pi's field names — session{id} / message_update{assistantMessageEvent} / message_end{message}
-# / tool_execution_start{toolCallId,toolName,args} / tool_execution_end{toolCallId,result,isError} /
-# agent_end — and every assistant message_end carries `model` and
-# `usage:{input,output,cacheRead,cacheWrite}`. So it reads through _pi_to_claude, as omp does,
-# rather than carrying a copy of it; _gajae_to_claude adds only the one event pi has no branch for.
-#
-# WHAT IS NOT PI:
-#   * no --approve / --auto-approve flag exists, and none is needed: print mode runs tools
-#     unattended (measured — it wrote a file with nothing attached to approve).
-#   * the tool switch is an ALLOWLIST (--tools a,b,c) like omp's, not pi's --exclude-tools.
-#   * resume is `-r <id>` against a session DIRECTORY (--session-dir), and a missing id exits
-#     without running the model, printing plain text `Session "<id>" not found.` — so the lookup
-#     happens here and -r is added only when the file is present.
-#   * the agent dir is GJC_CODING_AGENT_DIR and the custom-provider file is models.yml.
-GAJAE_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
-
-# gjc reads `providers.<n>.apiKey` as the NAME of an environment variable, so the credential is
-# named in models.yml and never written into it (the same discipline as opencode's `{env:VAR}`).
-_GAJAE_KEY_ENV = "HR_GAJAE_KEY"
-
-# Every tool id gjc 0.18.5 registers, read off tools/descriptors.ts's `names` table plus the three
-# hidden ones, and not off `--help`, whose list is stale (it advertises a `notebook` tool this build
-# does not have). An unknown name on --tools is a WARNING and is dropped (cli/args.ts filters
-# against BUILTIN_TOOLS before the agent sees it), so unlike omp a drifted list cannot kill a turn —
-# it can only make the allowlist narrower than intended, which is why the list is pinned by a test.
-# `computer` is macOS-arm64 only and is therefore never present in the image.
-ALL_GAJAE_TOOLS = {
-    "read", "bash", "edit", "ast_grep", "ast_edit", "render_mermaid", "ask", "debug", "bisect",
-    "eval", "python", "calc", "ssh", "github", "find", "search", "lsp", "browser", "checkpoint",
-    "rewind", "task", "subagent", "job", "monitor", "cron", "recipe", "irc", "todo_write",
-    "web_search", "search_tool_bm25", "skill_discovery", "telegram_send", "write", "skill", "goal",
-    "move_session",
-}
-
-
-def _gajae_has_session(session_dir: pathlib.Path, session_id: str) -> bool:
-    """Is this session in this workspace's session directory?
-
-    gjc names its files `<ISO timestamp>_<id>.jsonl` (measured), so the id is matched inside the
-    name rather than as the whole of it. Without this check `-r` on an id the directory does not
-    hold exits before the first event and prints only prose, which would read to the runner as a
-    turn that produced nothing."""
-    if not session_id or not session_dir.is_dir():
-        return False
-    try:
-        return any(p.is_file() for p in session_dir.rglob(f"*{session_id}*.jsonl"))
-    except OSError:
-        return False
-
-
-def _gajae_write_mcp(hdir: pathlib.Path, servers: list[dict] | None) -> str:
-    """Write the file `gjc --mcp-config` takes ("Tools-only MCP config file (absolute path)") and
-    return its path, or "" when there is nothing to write.
-
-    Standard mcpServers schema. The file goes under .harness/ rather than into the agent dir
-    because --mcp-config names it explicitly, and --no-mcp is passed beside it so the CONVENTIONAL
-    locations (the agent dir's mcp.json and the project's .gjc/mcp.json) are not also loaded: the
-    project one is a file in the workspace, which a task could write and the next turn would
-    execute — the hole pi closes with --no-extensions and opencode with --pure."""
-    entries: dict = {}
-    for i, sv in enumerate(servers or []):
-        if not isinstance(sv, dict):
-            continue
-        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
-        url = (sv.get("url") or "").strip()
-        if url:
-            entry: dict = {"type": "sse" if str(sv.get("transport") or "").lower() == "sse" else "http",
-                           "url": url}
-            if _mcp_headers(sv):
-                entry["headers"] = _mcp_headers(sv)
-        elif sv.get("command"):
-            entry = {"type": "stdio", "command": str(sv["command"]),
-                     "args": [str(a) for a in (sv.get("args") or [])]}
-        else:
-            continue
-        entries[name] = entry
-    if not entries:
-        return ""
-    hdir.mkdir(parents=True, exist_ok=True)
-    path = hdir / "gajae-mcp.json"
-    path.write_text(json.dumps({"mcpServers": entries}, indent=2))
-    return str(path)
-
-
-def _gajae_to_claude(obj: dict, state: dict) -> list[dict]:
-    """gjc's `--mode json` stream is pi's, so this delegates to _pi_to_claude for every event pi
-    knows and handles only the one it does not.
-
-    `agent_failed` is gjc's own: print-mode.ts writes `{"type":"agent_failed","error":<diagnostic>}`
-    when the run's terminal disposition is a failure that no assistant message_end already reported
-    (an empty turn among them). Without a branch for it that turn reads as a completed turn whose
-    answer is whatever text came before — the failure-reported-as-prose shape _CLAUDE_ERR_RE and
-    _GOOSE_ERR_RE exist for. The error becomes the turn's reason and is NOT rendered as the answer.
-    pi and omp may emit the same event (it is in their shared AgentEvent union); this is NOT added
-    to _pi_to_claude because it has not been measured on either of those builds, and a normaliser
-    changed on an unmeasured assumption is how the last three of these went wrong."""
-    if obj.get("type") == "agent_failed":
-        err = obj.get("error")
-        if isinstance(err, dict):
-            text = str(err.get("message") or err.get("code") or "gajae agent failed")
-        else:
-            text = str(err or "gajae agent failed")
-        state["_pi_error"] = text[:500]
-        return []
-    return _pi_to_claude(obj, state)
-
-
-def _build_gajae(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
-                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-                 tools_disabled: list[str] | None = None, vision: bool = True) -> list[str]:
-    pr = provider or "anthropic"
-    if pr not in GAJAE_PROVIDERS:
-        raise HTTPException(400, f"unknown gajae provider '{pr}' (one of {sorted(GAJAE_PROVIDERS)})")
-    home = pathlib.Path(env.get("HOME") or cwd)
-    agent_dir = home / ".gjc" / "agent"
-    agent_dir.mkdir(parents=True, exist_ok=True)
-    env["GJC_CODING_AGENT_DIR"] = str(agent_dir)
-    # The signed model-preset registry is an HTTPS fetch at start-up that can rewrite which model a
-    # preset names. The harness names one model explicitly and must get that model, so the registry
-    # is off: a catalog fetched at run time is exactly the substitution surface matrix rule 2 is
-    # about, and the sandbox should not reach out for it either.
-    env["GJC_MODEL_PRESET_REGISTRY_DISABLED"] = "1"
-
-    use_custom = bool(auth.base_url) or pr in ("azure", "openai-api", "tokenrouter")
-    if use_custom:
-        if not auth.base_url:
-            raise HTTPException(400, f"gajae provider '{pr}' needs a base_url (none configured)")
-        if auth.api_format == "anthropic":
-            api = "anthropic-messages"
-        elif auth.api_format == "openai":
-            api = "openai-completions"
-        elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
-            api = "anthropic-messages"
-        elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
-            api = "openai-responses"
-        else:
-            api = "openai-completions"
-        if api in ("openai-completions", "openai-responses") and auth.api_key and not auth.api_format:
-            # The relay, for pi's reasons, plus one of its own: the key would otherwise be written
-            # literally into models.yml, which lives under the checkpointed workspace.
-            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
-            auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
-        # gjc resolves `apiKey` as the NAME of an environment variable (resolveApiKeyConfig), so the
-        # credential is named here and read from the environment — hermes's `key_env` discipline,
-        # and the reason models.yml can be in the workspace at all. It is still excluded from the
-        # checkpoint beside pi's and omp's, because a future build reading it as a literal must not
-        # turn this file into a leak.
-        env[_GAJAE_KEY_ENV] = auth.api_key or ""
-        base = (auth.base_url or "").rstrip("/")
-        if api == "anthropic-messages":
-            base = base.removesuffix("/v1")
-        elif not auth.api_format and not base.endswith("/v1"):
-            base += "/v1"
-        (agent_dir / "models.yml").write_text(json.dumps({"providers": {"hr": {
-            "baseUrl": base, "api": api, "apiKey": _GAJAE_KEY_ENV,
-            "models": [{"id": model, "name": model, "reasoning": False,
-                        "input": ["text", "image"] if vision else ["text"],
-                        "contextWindow": 200000, "maxTokens": 32000}],
-        }}}, indent=2))
-        pname = "hr"
-    else:
-        pname = pr
-        if pr == "anthropic" and auth.api_key:
-            env["ANTHROPIC_API_KEY"] = auth.api_key
-        elif pr == "openai" and auth.api_key:
-            env["OPENAI_API_KEY"] = auth.api_key
-
-    session_dir = pathlib.Path(cwd, ".harness", "gajae-sessions")
-    session_dir.mkdir(parents=True, exist_ok=True)
-    cmd = ["gjc", "-p", "--mode", "json",
-           # --model takes a FUZZY pattern. The id is given fully qualified so the exact entry
-           # wins: a custom provider also gets auto-enabled /v1/models discovery (model-registry.ts
-           # ~2976 adds `discovery:{type:"openai-models-list"}` to any custom OpenAI-family
-           # provider, optional so a relay that answers 404 degrades to the static model), and a
-           # bare family name among 300 discovered ids is a substitution waiting to happen.
-           "--model", f"{pname}/{model}" if pname == "hr" else model,
-           # Session storage AND lookup, inside .harness/ so the transcript is checkpointed and
-           # never handed back as a produced file.
-           "--session-dir", str(session_dir),
-           # Rules discovery stays ON: AGENTS.md is how the workspace contract reaches the model.
-           # What is off is everything that executes or fetches something the workspace could have
-           # planted — see --no-mcp below and the preset registry above.
-           "--no-mcp",
-           # Title generation is a second model call per turn for a string nothing here reads.
-           "--no-title",
-           # No LSP server to talk to in the sandbox, and it is a per-turn start-up cost.
-           "--no-lsp"]
-    mcp_path = _gajae_write_mcp(pathlib.Path(cwd, ".harness"), mcp_servers)
-    if mcp_path:
-        cmd += ["--mcp-config", mcp_path]
-    if resume_session_id and _gajae_has_session(session_dir, resume_session_id):
-        cmd += ["-r", resume_session_id]
-    elif resume_session_id:
-        print(f"[resume] gajae: session {resume_session_id} not in this workspace — starting fresh",
-              flush=True)
-    if tools_disabled:
-        disabled = {x.split(" (")[0].strip().lower() for x in tools_disabled if x and x.strip()}
-        enabled = [t for t in sorted(ALL_GAJAE_TOOLS) if t not in disabled]
-        if len(enabled) == len(ALL_GAJAE_TOOLS):
-            pass          # named nothing this runtime has: an allowlist that removes nothing is not sent
-        elif not enabled:
-            cmd += ["--no-tools"]
-        else:
-            cmd += [f"--tools={','.join(enabled)}"]
     cmd.append(prompt)
     return cmd
 
@@ -10865,7 +10633,7 @@ def _nanobot_config(auth: Auth, model: str, cfg_dir: pathlib.Path, workspace: st
     The api key is NAMED, not written: nanobot resolves `${VAR}` references anywhere in the config
     before use (config/loader.py resolve_config_env_vars, which raises if the variable is unset
     rather than silently sending an empty key), so the credential stays in the environment — the
-    same discipline opencode's `{env:VAR}` and gjc's apiKey-as-env-name give. The file is in
+    same discipline opencode's `{env:VAR}` reference gives. The file is in
     CHECKPOINT_EXCLUDE and .gitignore anyway, because a future build that stopped resolving
     references must not turn this file into a leak."""
     base = (auth.base_url or "").rstrip("/")
@@ -13030,10 +12798,6 @@ BACKENDS = {
     # same relationship omp has to pi.
     "mimo": {"providers": sorted(MIMO_PROVIDERS), "default_model": MIMO_DEFAULT_MODEL,
              "normalize": _opencode_to_claude},
-    # Gajae-Code speaks pi's `--mode json` events with pi's field names, so _gajae_to_claude
-    # delegates to pi's and adds only the one event pi has no branch for (agent_failed).
-    "gajae": {"providers": sorted(GAJAE_PROVIDERS), "default_model": GAJAE_DEFAULT_MODEL,
-              "normalize": _gajae_to_claude},
     # jcode's NDJSON is its OWN schema (src/cli/commands.rs emit_ndjson_event), including a `tokens`
     # event the turn has to ACCUMULATE because its own `done.usage` holds only the last request's.
     "jcode": {"providers": sorted(JCODE_PROVIDERS), "default_model": JCODE_DEFAULT_MODEL,
@@ -13272,12 +13036,12 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 # systemone, openhands, agentzero, opensquilla, nanobot, zeroclaw) are absent: their budget is the
 # CLI's own. jcode is absent too — its counter in _jcode_to_claude predates this one and emits
 # jcode's own usage, so it stays.
-_GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "gajae", "qwen", "gemini", "cline",
+_GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "qwen", "gemini", "cline",
                         "opencode", "mimo", "kilo", "qoder"}
 
 
 def _running_usage(state: dict) -> dict:
-    """What a translator has counted of a turn's usage so far: pi's (omp's, gajae's) per message,
+    """What a translator has counted of a turn's usage so far: pi's (omp's) per message,
     dsh's per step. It is the turn's usage on their result, and on a budget's stop, which comes
     before their CLI says anything terminal. {} where nothing is kept as the turn goes."""
     usage: dict = {}
@@ -14916,7 +14680,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # opensquilla is in this set for the same reason gemini is: `--permissions` picks a posture
     # (restricted / bypass / full) and there is no per-tool deny list anywhere on its agent CLI, so
     # UHP §4.3 requires the disabled set be conveyed as a standing instruction rather than silently
-    # dropped. nanobot, mimo, gajae and jcode are NOT here — each has a real switch.
+    # dropped. nanobot, mimo and jcode are NOT here — each has a real switch.
     if backend in ("codex", "hermes", "dsh", "gemini", "opensquilla") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
         if _off:
@@ -15143,13 +14907,6 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_mimo(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=skills_dir, tools_disabled=req.tools_disabled)
-    elif backend == "gajae":
-        model = model or GAJAE_DEFAULT_MODEL
-        # Skills are already under .harness/home/.gjc/agent/skills, gjc's own user-global root, so
-        # there is nothing to name on the command line (pi's and omp's arrangement).
-        cmd = _build_gajae(req.provider, auth, model, req.prompt, cwd, env,
-                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                           tools_disabled=req.tools_disabled, vision=bool(req.vision))
     elif backend == "jcode":
         model = model or JCODE_DEFAULT_MODEL
         cmd = _build_jcode(req.provider, auth, model, req.prompt, cwd, env,
@@ -15181,7 +14938,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     elif backend == "vibe":
         model = model or VIBE_DEFAULT_MODEL
         # Skills are already under $VIBE_HOME/skills, one of its own global roots, so there is
-        # nothing to name on the command line (pi's and gajae's arrangement).
+        # nothing to name on the command line (pi's and omp's arrangement).
         cmd = _build_vibe(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           tools_disabled=req.tools_disabled, max_turns=req.max_turns)

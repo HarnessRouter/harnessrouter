@@ -1,18 +1,17 @@
-"""The five bases added together: mimo, gajae, jcode, opensquilla, nanobot.
+"""The bases added together in batch 3: mimo, jcode, opensquilla, nanobot.
 
 Everything asserted here was MEASURED against the pinned build named beside it, on 2026-10-02, not
 read off documentation. Each test pins one thing that would otherwise fail SILENTLY — the class of
 defect the last three harness PRs were taken over for:
 
   * a shared helper reused for a fork whose spelling differs by one flag (mimo)
-  * a normaliser that treats a provider failure as an answer (gajae's agent_failed)
   * usage read from the field the CLI offers rather than the one that is true (jcode's done.usage,
     which holds only the LAST request's numbers)
   * a default that substitutes the model (opensquilla's router) or that cannot fit the prompt
     (its 8k assumption for a generic endpoint)
   * a tool policy applied at one tool source and not the other (nanobot's session policy)
 
-Pinned builds: @mimo-ai/cli 0.1.15 · gjc 0.18.5 · jcode v0.90.0 · opensquilla 0.5.6 · nanobot-ai 0.3.5
+Pinned builds: @mimo-ai/cli 0.1.15 · jcode v0.90.0 · opensquilla 0.5.6 · nanobot-ai 0.3.5
 """
 import json
 import pathlib
@@ -22,10 +21,9 @@ import tempfile
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
-                    Auth, BACKENDS, CHECKPOINT_EXCLUDE, _agent_doc_path, _build_gajae,
-                    _build_jcode, _build_mimo, _build_nanobot, _build_opensquilla,
-                    _BRIDGED_TRANSPORTS, _JCODE_SANDBOX_OFF, _gajae_to_claude, _jcode_eof, _jcode_to_claude,
+from server import (ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
+                    Auth, BACKENDS, CHECKPOINT_EXCLUDE, _agent_doc_path,                     _build_jcode, _build_mimo, _build_nanobot, _build_opensquilla,
+                    _BRIDGED_TRANSPORTS, _JCODE_SANDBOX_OFF, _jcode_eof, _jcode_to_claude,
                     _opencode_to_claude, _opensquilla_eof, _opensquilla_to_claude,
                     _opensquilla_transcript,
                     _jcode_session_model, _mcp_url_is_loopback, _opensquilla_usage,
@@ -53,26 +51,23 @@ def _norm(fn, lines, model="gpt-5.4", cwd=""):
 # ── registration: the five places a missing row fails silently ────────────────────────────────
 
 def test_every_base_is_registered():
-    # gajae is in BACKENDS (the runner can execute it) but NOT in the gateway's catalogs, so the
-    # product never asks it to — gateway/tests/test_gajae_not_offered.py pins that and says why.
-    for b in ("mimo", "gajae", "jcode", "opensquilla", "nanobot"):
+    for b in ("mimo", "jcode", "opensquilla", "nanobot"):
         assert b in BACKENDS, b
         assert BACKENDS[b]["providers"], b
         assert BACKENDS[b]["default_model"], b
         assert BACKENDS[b]["normalize"] is not None, b
 
 
-def test_all_five_read_agents_md():
+def test_all_four_read_agents_md():
     # Measured per CLI (see _agent_doc_path's comment). Getting this wrong writes the file and the
     # agent never sees it, so the workspace contract never arrives and nothing says so.
-    for b in ("mimo", "gajae", "jcode", "opensquilla", "nanobot"):
+    for b in ("mimo", "jcode", "opensquilla", "nanobot"):
         assert _agent_doc_path("/w", b).name == "AGENTS.md", b
 
 
 def test_skills_land_where_each_loader_looks():
     want = {
         "mimo": ".harness/skills",                        # named in mimo.json's skills.paths
-        "gajae": ".harness/home/.gjc/agent/skills",        # gjc's canonical user root
         "jcode": ".harness/home/.jcode/skills",            # jcode's global root
         "opensquilla": ".harness/opensquilla/skills",      # its managed root = $OPENSQUILLA_STATE_DIR/skills
         "nanobot": "workspace/skills",                     # the ONE path its loader reads, inside
@@ -168,127 +163,6 @@ def test_mimo_resume_is_not_claimed_for_a_session_this_workspace_does_not_hold()
                       resume_session_id="ses_here")
     assert cmd[cmd.index("-s") + 1] == "ses_here"
     assert _resume_lost("mimo", cmd, "ses_here", d) is None
-
-
-# ── gajae: pi's stream, pi's normaliser, and the one event pi has no branch for ────────────────
-
-def test_gajae_argv():
-    d, env = _ws(), {"HOME": str(pathlib.Path(_ws()) / "h")}
-    cmd = _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "do it", d, env)
-    assert cmd[0] == "gjc" and "-p" in cmd
-    assert cmd[cmd.index("--mode") + 1] == "json"
-    # Fully qualified, because --model is a FUZZY pattern and a custom provider also gets
-    # auto-enabled /v1/models discovery: a bare family name among hundreds of discovered ids is a
-    # substitution waiting to happen.
-    assert cmd[cmd.index("--model") + 1] == "hr/gpt-5.4"
-    # Session storage AND lookup inside .harness/, so the transcript is checkpointed and is never
-    # handed back as a produced file.
-    assert cmd[cmd.index("--session-dir") + 1].endswith("/.harness/gajae-sessions")
-    # The conventional MCP autoload includes a file IN the workspace (.gjc/mcp.json) that a task
-    # could write and the next turn would execute — pi's --no-extensions hole, closed the same way.
-    assert "--no-mcp" in cmd
-    assert cmd[-1] == "do it"
-    # A signed model-preset registry fetched at start-up can rewrite which model a preset names.
-    assert env["GJC_MODEL_PRESET_REGISTRY_DISABLED"] == "1"
-
-
-def test_gajae_models_yml_names_the_key_rather_than_holding_it():
-    d = _ws()
-    env = {"HOME": str(pathlib.Path(d) / ".harness" / "home")}
-    # deepseek-v4-pro, not a gpt-5.x id: pi's own api split sends the gpt-5 line to
-    # openai-responses, which is correct and is asserted separately below.
-    _build_gajae("openai-api", Auth(api_key="sk-secret", base_url=UP), "deepseek-v4-pro", "hi", d, env)
-    mv = pathlib.Path(env["HOME"], ".gjc", "agent", "models.yml").read_text()
-    assert "sk-secret" not in mv
-    assert json.loads(mv)["providers"]["hr"]["apiKey"] == "HR_GAJAE_KEY"
-    assert json.loads(mv)["providers"]["hr"]["api"] == "openai-completions"
-    # What the variable holds is the relay's per-turn placeholder, never the provider key: the
-    # file is in the checkpointed workspace, and the real key stays in the runner process.
-    assert env["HR_GAJAE_KEY"].startswith("hr-relay-") and env["HR_GAJAE_KEY"] != "sk-secret"
-    # The gpt-5 line goes to the Responses api instead — pi's split, inherited.
-    d2 = _ws(); env2 = {"HOME": str(pathlib.Path(d2) / ".harness" / "home")}
-    _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d2, env2)
-    mv2 = json.loads(pathlib.Path(env2["HOME"], ".gjc", "agent", "models.yml").read_text())
-    assert mv2["providers"]["hr"]["api"] == "openai-responses"
-    # Excluded from the checkpoint anyway: a future build reading apiKey as a literal must not turn
-    # this file into a leak.
-    assert "./.harness/home/.gjc/agent/models.yml" in CHECKPOINT_EXCLUDE
-
-
-def test_gajae_tool_allowlist_is_the_full_set_minus_the_disabled_one():
-    d = _ws()
-    env = {"HOME": str(pathlib.Path(d) / ".harness" / "home")}
-    cmd = _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
-                       tools_disabled=["write (File Write)"])
-    allow = next(a for a in cmd if a.startswith("--tools="))[len("--tools="):].split(",")
-    assert "write" not in allow
-    assert set(allow) == ALL_GAJAE_TOOLS - {"write"}
-    # A disable list naming nothing this runtime has is not a constraint, so nothing is sent — an
-    # allowlist that removes nothing would only risk narrowing the set by accident.
-    cmd = _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
-                       tools_disabled=["WebSearch"])
-    assert not any(a.startswith("--tools") for a in cmd)
-
-
-def test_gajae_provider_failure_is_a_failed_turn_not_an_answer():
-    # MEASURED against the pinned binary with a bad key: the turn ends on an assistant message_end
-    # with stopReason "error" and the provider's sentence in errorMessage, and the CLI exits 1.
-    evs, state = _norm(_gajae_to_claude, [
-        {"type": "session", "id": "01a0", "version": 5},
-        {"type": "message_end", "message": {
-            "role": "assistant", "content": [], "model": "gpt-5.4", "stopReason": "error",
-            "errorStatus": 401, "errorMessage": "401 Authentication failed.",
-            "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}},
-        {"type": "agent_end", "messages": []},
-    ])
-    res = evs[-1]
-    assert res["type"] == "result" and res["is_error"] is True
-    assert "401 Authentication failed." in res["result"]
-
-
-def test_gajae_agent_failed_is_the_reason_and_never_the_answer():
-    # print-mode.ts writes this when the terminal disposition is a failure no message_end reported.
-    # pi's normaliser has no branch for it, so without this one the turn would complete with
-    # whatever text came before as its answer.
-    evs, state = _norm(_gajae_to_claude, [
-        {"type": "session", "id": "01a0"},
-        {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "let me look"}},
-        {"type": "agent_failed", "error": {"code": "empty_turn", "message": "the model returned nothing"}},
-        {"type": "agent_end", "messages": []},
-    ])
-    res = evs[-1]
-    assert res["is_error"] is True
-    assert res["result"] == "the model returned nothing"
-
-
-def test_gajae_answer_that_merely_mentions_an_error_still_passes():
-    # The anchored-match rule: a coding agent writes about errors constantly, and an unanchored
-    # match turns real answers into failures (the goose lesson). Nothing here sets the error state.
-    evs, _ = _norm(_gajae_to_claude, [
-        {"type": "session", "id": "01a0"},
-        {"type": "message_end", "message": {
-            "role": "assistant", "model": "gpt-5.4", "stopReason": "stop",
-            "content": [{"type": "text", "text": "I fixed the error in parse(): it threw on empty input."}],
-            "usage": {"input": 10, "output": 5}}},
-        {"type": "agent_end", "messages": []},
-    ])
-    assert evs[-1]["is_error"] is False
-    assert "I fixed the error" in evs[-1]["result"]
-
-
-def test_gajae_resume_only_when_the_session_file_is_here():
-    d = _ws()
-    env = {"HOME": str(pathlib.Path(d) / ".harness" / "home")}
-    cmd = _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
-                       resume_session_id="01a0-gone")
-    assert "-r" not in cmd and _resume_lost("gajae", cmd, "01a0-gone", d) == "01a0-gone"
-    sd = pathlib.Path(d, ".harness", "gajae-sessions")
-    sd.mkdir(parents=True, exist_ok=True)
-    (sd / "2026-10-02T22-43-45-033Z_01a0-here.jsonl").write_text("{}")
-    cmd = _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
-                       resume_session_id="01a0-here")
-    assert cmd[cmd.index("-r") + 1] == "01a0-here"
-    assert _resume_lost("gajae", cmd, "01a0-here", d) is None
 
 
 # ── jcode: its own schema, and two measured facts a naive reading gets wrong ───────────────────
@@ -679,28 +553,6 @@ def _replay(fn, name, model, eof=None, rc=0):
         evs += tail
         res = next((e for e in tail if e.get("type") == "result"), None)
     return evs, res
-
-
-def test_real_gajae_turn_that_wrote_a_file():
-    evs, res = _replay(_gajae_to_claude, "gajae-write-file.ndjson", "openai/gpt-6-luna")
-    assert evs[0]["type"] == "system" and evs[0]["subtype"] == "init"
-    assert any(e.get("type") == "assistant" and "tool_use" in json.dumps(e) for e in evs)
-    assert any(e.get("type") == "user" and "Successfully wrote" in json.dumps(e) for e in evs)
-    assert res["is_error"] is False and res["result"] == "DONE"
-    # The served model comes off the CLI's own assistant messages, so rule 2 is answerable here
-    # without the relay as well as with it.
-    assert res["model"] == "openai/gpt-6-luna"
-    assert res["usage"]["input_tokens"] > 0 and res["usage"]["output_tokens"] > 0
-
-
-def test_real_gajae_turn_that_the_provider_refused():
-    evs, res = _replay(_gajae_to_claude, "gajae-provider-401.ndjson", "openai/gpt-6-luna")
-    assert res["is_error"] is True
-    assert res["result"].startswith("401 Authentication failed")
-    # and the failure is NOT rendered as the assistant's answer. Pinned by the event TYPES rather
-    # than by "no assistant event": the second form also passes on an empty list, and a normaliser
-    # that emitted nothing at all would then look correct here.
-    assert [e.get("type") for e in evs] == ["system", "result"]
 
 
 def test_real_jcode_turn_sums_the_usage_its_own_done_event_under_reports():

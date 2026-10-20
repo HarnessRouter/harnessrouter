@@ -3608,15 +3608,18 @@ Owner trust, the Qoder connection added to the instance, driven through the cons
   2.36, qmodel_38max 2.44, qmodel_latest 2.47, performance 4.27, smodel 11.2. Qoder also lists
   `cmodel` (Cantus, price factor 4); it is not in the catalog, not having been measured.
 
-## Five bases added together, four of them offered (2026-10-02/06)
+## Five bases added together, four of them kept (2026-10-02/06; gajae taken out 2026-10-20)
 
 MiMo Code (XiaomiMiMo/MiMo-Code, MIT), Gajae-Code (Yeachan-Heo/gajae-code, MIT), jcode
 (1jehuang/jcode, MIT), OpenSquilla (TokenRhythm/opensquilla, Apache-2.0) and nanobot
 (HKUDS/nanobot, MIT), as the seventeenth to twenty-first bases.
 
-**gajae is implemented and NOT OFFERED**: its CLI cannot run under this product's session
-write-wall, measured both ways on a live instance — see "gajae: the write-wall and a lock that
-walks its ancestors" below. The other four are offered.
+**gajae is NOT IN THIS TREE.** It was built and measured in full, and then taken out whole —
+runner, gateway, console, installer, tests and fixtures — because its CLI cannot run under this
+product's session write-wall, measured both ways on a live instance. The work is parked on the
+branch `parked/vtcode-and-gajae`; what was measured about it, and what offering it would cost, is
+under "gajae: the write-wall and a lock that walks its ancestors" below. The other four are
+offered, and everything else in this section describes those four.
 
 **The FULL Vercel column, 2026-10-11**: every catalog id this connection was probed to serve — 50
 of the 54 common to all four catalogs, muse's four excluded and not probed — on all four bases, the
@@ -3685,7 +3688,6 @@ turn at a time. It says each base works; the column above is what says each MODE
 | base | pinned | lineage | normaliser | turn process |
 |---|---|---|---|---|
 | mimo | @mimo-ai/cli 0.1.15 | an **opencode fork** (its repo root package.json is still `"name": "opencode"`) | `_opencode_to_claude`, unchanged | `mimo run --format json` |
-| gajae | gjc 0.18.5 | **pi's lineage** (docs/porting-from-pi-mono.md; its deps still carry `pi-ai`) | `_gajae_to_claude`, which delegates to `_pi_to_claude` | `gjc -p --mode json` |
 | jcode | v0.90.0 | its own (Rust) | `_jcode_to_claude`, its own | `jcode … run --ndjson` |
 | opensquilla | 0.5.6 | openclaw/hermes lineage (it migrates `~/.openclaw` and `~/.hermes`; its transcript is the pi message shape) | `_opensquilla_to_claude`, its own | `opensquilla agent --json --event-stream-stderr` |
 | nanobot | nanobot-ai 0.3.5 | its own (a personal-agent runtime, not a coding CLI) | the claude passthrough | `runner/nanobot_driver.py`, in process through its SDK |
@@ -3804,11 +3806,6 @@ turn at a time. It says each base works; the column above is what says each MODE
 - **nanobot's usage is gross too.** A measured two-request turn: `input_tokens` 11,107 with
   `cache_read_tokens` 5,503, while the requests reported 5,506 and 5,601 — the cached read is a
   SUBSET. The driver nets it.
-- **gajae auto-enables `/v1/models` discovery on a custom provider.** Against Vercel it listed 376
-  upstream models under our provider name. It is marked optional, so an endpoint without a models
-  list degrades to the static entry, and the builder names the model fully qualified so a fuzzy
-  `--model` cannot land on a discovered id. Its signed model-preset registry — an HTTPS fetch that
-  can rewrite which model a preset names — is turned off.
 - **jcode's Linux release is a PAIR, and its macOS release is not.** `jcode-linux-<arch>.tar.gz`
   holds a 505-byte `sh` launcher plus `jcode-linux-<arch>.bin`; the launcher puts its own directory
   on `LD_LIBRARY_PATH` and execs the `.bin` beside it. The macOS archive holds a single binary and
@@ -3816,8 +3813,8 @@ turn at a time. It says each base works; the column above is what says each MODE
   Installing "the file called jcode*" took the launcher, left its `.bin` behind, and produced an
   executable that is on PATH, satisfies `backend_bin`, and dies on its first turn. Found by running
   the installer function against the real Linux asset, which is now part of what is done before a
-  base is called installed: `install_mimo`, `install_gajae` and `install_jcode` each run the binary
-  and compare the version it REPORTS, and remove what they put down when it does not match.
+  base is called installed: `install_mimo` and `install_jcode` each run the binary and compare the
+  version it REPORTS, and remove what they put down when it does not match.
 - **mimo's first run on a fresh volume is a one-time SQLite migration.** Measured: over nine
   minutes with no output before it was killed, about twenty seconds warm. The installer warms a
   throwaway home so a turn never pays it.
@@ -3827,15 +3824,14 @@ turn at a time. It says each base works; the column above is what says each MODE
 | base | how a provider failure arrives | exit |
 |---|---|---|
 | mimo | opencode's `error` event | 1 |
-| gajae | assistant `message_end` with `stopReason:"error"`, `errorStatus`, `errorMessage` — pi's contract exactly; ONE attempt on a 401, no retry storm. Also an `agent_failed` event pi has no branch for, which is why gajae carries its own wrapper | 1 |
 | jcode | a real `error` event naming the endpoint, the model, the auth variable's NAME (never its value), the status and the provider's body | 1 |
 | opensquilla | an `_event` of kind `error`, and `errors[]` on the final object | 1 |
 | nanobot | `run.failed`, or a `run.completed` whose RunResult carries an `error` or a non-completed `stop_reason` | driver's |
 
 ### Tool enforcement, measured
 
-`hard` on four, and each was proven by asking the model for its own tool list with one tool
-withheld: gajae's `--tools` allowlist (write absent), jcode's `--disabled-tools` (write absent),
+`hard` on three, and each was proven by asking the model for its own tool list with one tool
+withheld: jcode's `--disabled-tools` (write absent),
 mimo's `permission.<key>: "deny"` (opencode's, inherited), nanobot's session policy (write_file
 absent — and the model then wrote the file with `exec`, which is the honest limit every
 shell-bearing base has). `instruction` on opensquilla, because `--permissions` picks a posture and
@@ -3857,7 +3853,6 @@ each: write a file and reply with exactly DONE.
 
 | base | file written | result | usage read off the record |
 |---|---|---|---|
-| gajae | `e2e.txt` = kiwi | success, `DONE`, served model `openai/gpt-6-luna` | 6 fresh in / 37 out, 11,105 cache read, 11,157 cache write |
 | jcode | `e2e.txt` = kiwi | success, `DONE` | 6 fresh in / 66 out, 10,592 cache read, 10,741 cache write |
 | opensquilla | `e2e.txt` = kiwi | success, `DONE` (from the transcript, not the concatenated `text`) | 6 fresh in / 189 out, 8,281 cache read, 8,408 cache write |
 | nanobot | `workspace/e2e.txt` = kiwi | success, `DONE` | 5,596 fresh in / 31 out, 5,505 cache read |
@@ -3869,7 +3864,9 @@ data volume, not of a turn, and it is exactly why `install_mimo` warms a throwaw
 
 The relay is the one that matters for rule 2: all five reached the provider through it with the
 placeholder bearer in the environment, so `_relay_served_model` has its input on every one of them.
-gajae also names the served model itself, on every assistant message.
+(The fifth was gajae, since removed — it answered `DONE` with `openai/gpt-6-luna` as its served
+model, which it names itself on every assistant message; 6 fresh in / 37 out, 11,105 cache read,
+11,157 cache write.)
 
 ### The Google column, and what a DIRECT provider showed that the aggregator hid (2026-10-11)
 
@@ -3956,8 +3953,8 @@ records before it is given a thousand turns to score.
 
 ### What every dimension measured, and what is still not measured
 
-All four offered bases have now been through all four dimensions on the Vercel connection. gajae is
-not offered and is in none of them (see the write-wall section below).
+All four offered bases have now been through all four dimensions on the Vercel connection. gajae
+is not in the tree and is in none of them (see the write-wall section below).
 
 | dimension | mimo | jcode | opensquilla | nanobot |
 |---|---|---|---|---|
@@ -4031,12 +4028,12 @@ write — that would fail the task rather than test the policy):
 | codex | `git` | cheetahclaws | `WebSearch` |
 | hermes | `web_search` | openhands | `Todo` |
 | pi | `edit` | mimo | `websearch` |
-| dsh | `web_search` | gajae | `web_search` |
-| opencode | `websearch` | jcode | `websearch` |
-| qwen | `web_fetch` | opensquilla | `web_search` |
-| gemini | `google_web_search` | nanobot | `web_search` |
-| cline | `fetch_web_content` | goose | `read_image` |
-| omp | `web_search` | **aider** | **null — not testable** |
+| dsh | `web_search` | jcode | `websearch` |
+| opencode | `websearch` | opensquilla | `web_search` |
+| qwen | `web_fetch` | nanobot | `web_search` |
+| gemini | `google_web_search` | goose | `read_image` |
+| cline | `fetch_web_content` | **aider** | **null — not testable** |
+| omp | `web_search` | | |
 
 aider's catalog is one tool, Shell, and the task needs it, so its row reports that the policy is
 not testable on that base rather than passing. A vacuous pass is worse than an honest gap.
@@ -4094,16 +4091,29 @@ Neither side is wrong. gjc assumes it may be running where an attacker can write
 ancestor itself; this product makes those ancestors unwritable so nobody can, and in doing so makes
 them unreadable, which is what gjc's verification needs.
 
-**Decision (the user's, 2026-10-06): do not weaken the wall.** gajae is removed from everything
-that offers, routes or installs it — `_MODEL_CATALOG`, `_BASE_CATALOG`, `_INTEGRATION_WIRING`,
-`_CUSTOM_FORMAT_BACKENDS`, the console's `OOB` and logo map, the default `HR_BACKENDS`, and both
-measurement dimensions' base lists. The runner's implementation stays (`_build_gajae`,
-`_gajae_to_claude`, 13 tests and two captured fixtures) because the base works and the blocker is a
-product decision; `gateway/tests/test_gajae_not_offered.py` pins every one of those surfaces so a
-half-restore — listed but not routable, or routable but not installed — cannot pass unnoticed.
+**Decision (the user's, 2026-10-06): do not weaken the wall.** gajae was first left implemented
+but not offered. **Superseded (the user's, 2026-10-20): take the whole thing out.** A base this
+product cannot run is not carried in the tree — the runner builder and normaliser, the installer,
+the catalog, wiring and console rows, the tests and the two captured fixtures are all gone, and the
+pre-removal state is the branch `parked/vtcode-and-gajae`. Restoring it is that branch plus the
+mode change below, not a rewrite; the record here is what the measurement bought.
+
+**What the measurement bought, kept because it cost a live instance to learn.**
+
+- **gajae auto-enables `/v1/models` discovery on a custom provider.** Against Vercel it listed 376
+  upstream models under our provider name. It is marked optional, so an endpoint without a models
+  list degrades to the static entry; the builder named the model fully qualified so a fuzzy
+  `--model` could not land on a discovered id, and turned off the signed model-preset registry —
+  an HTTPS fetch that can rewrite which model a preset names.
+- **Its failure reporting is pi's contract exactly**: an assistant `message_end` carrying
+  `stopReason:"error"`, `errorStatus` and `errorMessage`, one attempt on a 401 with no retry storm,
+  plus an `agent_failed` event pi has no branch for — which is why its normaliser wrapped pi's
+  rather than reusing it.
+- **Its tool switch is hard**: a `--tools` allowlist, proven by asking the model for its own tool
+  list with `write` absent from the allowlist.
 
 **What it would take to offer it.** Relax `/data` and `/data/workspaces` to `755`, then restore the
-catalog entries, the wiring rows and the `_CUSTOM_FORMAT_BACKENDS` membership. What that gives up is
+parked branch. What that gives up is
 "neither listable", not "nor writable": a session uid could then enumerate other session ids and
 environment names. It could not read them — `control.db` and `graph.db` are `0600` and `blobs/` is
 `0700`, and a session uid already has traverse, so file contents are governed by each file's own

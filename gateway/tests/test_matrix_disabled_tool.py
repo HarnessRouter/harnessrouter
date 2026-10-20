@@ -97,12 +97,6 @@ def test_the_plugin_matrix_knows_this_batchs_bases_too():
         assert f'"{b}"' in bases, (b, bases[-200:])
 
 
-def test_gajae_is_not(the_dimension=None):
-    # it is implemented and not offered; a base the server cannot serve produces a column of
-    # failures that say nothing about it (see test_gajae_not_offered.py)
-    assert "gajae" not in _bases_in_dimension()
-
-
 def test_the_tools_this_batchs_bases_run_the_fixture_WITH_are_never_withheld():
     """Named, not inferred. The first version of this test tried to re-derive "what the fixture
     needs" with a regex over every base's tools and flagged `web_search`, `todowrite` and

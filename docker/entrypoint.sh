@@ -204,14 +204,11 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-# Four of the five added in this batch are in the DEFAULT set rather than opt-in, for the reason
+# The four added in this batch are in the DEFAULT set rather than opt-in, for the reason
 # agentzero's PR settled: the console lists every base in the catalog, so a base the operator
 # did not opt into is a row that fails on its first turn with no explanation. Disk is the
 # trade — jcode is a ~127 MB static Rust binary and the two Python bases bring their own venvs —
 # and an operator who wants them out sets HR_BACKENDS.
-#
-# gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
-# this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
 export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
@@ -245,7 +242,6 @@ backend_bin() {
     # interpreter is what "installed" means here.
     qoder) echo "$TOOLS/qoder-venv/bin/python" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
-    gajae)  echo "$TOOLS/bin/gjc" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
@@ -1031,38 +1027,6 @@ install_mimo() {
   fi
 }
 
-# Gajae-Code (MIT, Yeachan-Heo/gajae-code) publishes standalone prebuilt binaries per target on
-# GitHub releases WITH a checksum file beside them (gajae-release-binaries.sha256), so the bytes are
-# compared against upstream's own list rather than against a digest we computed. NOT the npm
-# package `gajae-code`: its bin shim is `#!/usr/bin/env bun`, and bun is not in this image.
-# NOT INSTALLED TODAY: `wanted gajae` is false unless an operator names it, and the gateway offers
-# no gajae base, so this runs for nobody. Kept against the day the write-wall decision is revisited
-# — the integration itself works; see the note in gateway/app.py above _MODEL_CATALOG["mimo"].
-install_gajae() {
-  case "$(uname -m)" in
-    x86_64)        gj_arch="x64" ;;
-    aarch64|arm64) gj_arch="arm64" ;;
-    *) echo "unsupported architecture $(uname -m) for gajae"; return 1 ;;
-  esac
-  gj_ver="${HR_GAJAE_VERSION:-0.18.5}"; gj_ver="${gj_ver#v}"
-  gj_base="https://github.com/Yeachan-Heo/gajae-code/releases/download/v${gj_ver}"
-  gj_tmp="$(mktemp -d)"
-  curl -fsSL "$gj_base/gjc-linux-$gj_arch" -o "$gj_tmp/gjc" || { rm -rf "$gj_tmp"; return 1; }
-  curl -fsSL "$gj_base/gajae-release-binaries.sha256" -o "$gj_tmp/SHA256SUMS" || { rm -rf "$gj_tmp"; return 1; }
-  gj_want="$(grep "  gjc-linux-$gj_arch\$" "$gj_tmp/SHA256SUMS" | awk '{print $1}')"
-  gj_have="$(sha256sum "$gj_tmp/gjc" | awk '{print $1}')"
-  if [ -z "$gj_want" ] || [ "$gj_want" != "$gj_have" ]; then
-    echo "gajae $gj_ver: checksum mismatch for gjc-linux-$gj_arch (want ${gj_want:-none}, have $gj_have)"
-    rm -rf "$gj_tmp"; return 1
-  fi
-  mkdir -p "$TOOLS/bin" && install -m 755 "$gj_tmp/gjc" "$TOOLS/bin/gjc"; rm -rf "$gj_tmp"
-  # The same proof jcode's install owes, for the same reason.
-  gj_got="$("$TOOLS/bin/gjc" --version 2>/dev/null | head -n 1)"
-  if [ "$gj_got" != "gjc/$gj_ver" ]; then
-    echo "gajae installed but reports '${gj_got:-nothing}', wanted gjc/$gj_ver"; rm -f "$TOOLS/bin/gjc"; return 1
-  fi
-}
-
 # jcode (MIT, 1jehuang/jcode) publishes one prebuilt archive per target with a SHA256SUMS file, so
 # it is fetched and compared the same way. v0.90.0 is the release _build_jcode and _jcode_to_claude
 # were measured against — the NDJSON event names, the per-request `tokens` accounting, the resume
@@ -1617,13 +1581,6 @@ install_backends() {
   if wanted mimo && [ "$("$(backend_bin mimo)" --version 2>/dev/null | head -n 1)" != "$MIMO_PIN" ]; then
     echo "[harnessrouter] installing MiMo Code $MIMO_PIN (MIT, version-pinned)…"
     try_install "MiMo Code" install_mimo || true
-  fi
-
-  GAJAE_PIN="${HR_GAJAE_VERSION:-0.18.5}"
-  # `gjc --version` prints `gjc/<version>`, so the pin is compared against that spelling.
-  if wanted gajae && [ "$("$(backend_bin gajae)" --version 2>/dev/null | head -n 1)" != "gjc/$GAJAE_PIN" ]; then
-    echo "[harnessrouter] installing Gajae-Code $GAJAE_PIN (MIT, version-pinned)…"
-    try_install "Gajae-Code" install_gajae || true
   fi
 
   JCODE_PIN="${HR_JCODE_VERSION:-0.90.0}"
