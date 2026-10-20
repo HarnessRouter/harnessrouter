@@ -1375,6 +1375,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "docker-agent"): "tokenrouter",
     ("custom", "docker-agent"): "openai-api",
     ("harnessrouter", "docker-agent"): "tokenrouter",
+    # PROBED rather than assumed, which is this table's own rule (see the same row on vibe): a
+    # pair on v1.150.0 against generativelanguage.googleapis.com/v1beta/openai passed all five
+    # matrix scenarios on gemini-3.5-flash, with the mid-session switch served as gemini-4-argon
+    # — two served ids on one session, read off the relay (2026-10-20). Before this row the base
+    # had no google row at all, and the picker offered google's whole gemini family anyway; that
+    # half is fixed in _servable_models, which is where the measurement landed first.
+    ("google", "docker-agent"): "openai-api",
     # dcode (deepagents-code) is the ONLY base here besides codex that speaks the Responses API,
     # so its reach is codex's rather than the other four's: langchain-openai posts to
     # /v1/responses, and the providers listed are the ones that serve it. An Anthropic or Google

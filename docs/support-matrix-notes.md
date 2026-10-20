@@ -4447,7 +4447,7 @@ and all three serve every base.
 session tool catalog while its consumer is documented to "degrade gracefully rather than error", and
 an MCP child process spawned without a handshake.
 
-## docker-agent: Docker's own runtime, where the config IS the harness (2026-10-16) — behaviour measured, NO column yet
+## docker-agent: Docker's own runtime, where the config IS the harness (2026-10-16; measured through all five steps 2026-10-20)
 
 Docker Agent v1.150.0, added as the twenty-ninth base and the first one whose whole turn — provider,
 model, instructions, toolsets, skills, MCP servers — comes from a YAML file this runner writes per
@@ -4533,11 +4533,73 @@ arrangement, not install_omp's), compared against the real assets first. `instal
 run on a linux container, where what it installed reported `docker-agent version v1.150.0`. There is
 no `--version` flag: the subcommand is `version`.
 
-### What is NOT measured
-No column, no other dimension. Two model ids served as themselves. Its `--sandbox` / `--cloud`
-modes, its sub-agents, its RAG and its MCP catalog are all untouched here: a turn gets the four
-toolsets above and nothing else. Its remote MCP transport ("streamable" or "sse") has not been
-exercised against a live server, so SSE is bridged like the other bases' until it is.
+### All five steps, in the order docs/harness-verification.md sets (2026-10-20)
+
+A locally built image of this branch, `scripts/support-matrix/run.mjs` driving the console, one
+base installed and one connection configured per step.
+
+| step | result |
+|---|---|
+| matrix, vercel | **56 of 58 ids, all five scenarios each — 280 of 280.** The two left out are `llama-3.3-70b` and `nemotron-3.5-lightning`, already excluded on that gateway for measured reasons |
+| custom harness | **pass**, 16 s: a person's own skill was read (`read_skill matrix-stamp`), its own script ran and produced `stamp.txt`, the withheld `create_todo` went unused, and their own MCP server answered (`deepwiki_read_wiki_structure`, 14 s) |
+| plugin matrix | **5 of 5 columns**: skill 9.4 s, stdio MCP 5.5 s, free-form rows 5.5 s (`first=1 second=2`), **SSE 9.9 s** and **streamable-HTTP 5.4 s** — the first live measurement of this base's remote MCP paths, which until now were bridged on the strength of reading its transport enum |
+| family tour | **12 of 12 families in one conversation**, one `tour.pptx` carried through all of them, every turn served by the family asked for. Slowest: `qwen3.8-flash` 112.8 s over 12 tool calls and `hunyuan-4-preview` 106.8 s over 15, both inside the 600 s cap |
+| matrix, google | **8 of 8 — 40 of 40.** The whole gemini family, which is all this connection serves of the 58; the other 50 correctly not offered |
+
+The audit beyond the pass flags, on both columns: **two `served` ids on every pair** (which is what
+proves the model switch reached the provider), every session deleted (200), every turn on the
+connection the column names, and nothing substituted. Three ids are served under another spelling
+on Vercel — `claude-fable-5-1` → `anthropic/claude-fable-5.1`, `gemini-3-flash-preview` →
+`google/gemini-3-flash`, `hunyuan-4-preview` → `tencent/hy4-preview` — each a `_VERCEL_RESLUG` row
+with its own measured reason, and `gemini-3-flash-preview` comes back under its full name on
+Google's own surface.
+
+**How the vercel column was assembled, said plainly:** 26 pairs ran before the no-answer repair
+below and 30 after it, including the one pair that provoked it, re-run from zero. The repair
+touches only the path a turn takes when it produced no text at all, which no passing row reaches.
+
+### The two things those steps found, neither of them in a harness
+
+**1. A turn that said nothing was reported as success with an empty answer.** `_docker_agent_eof`
+asked only `rc == 0 and not why`, so a run that exited 0 without a single `agent_choice` fragment
+put `result: ""` in the record, which the console renders as a done pill over a blank reply — the
+shape opencode's own eof already refuses to leave blank. MEASURED on `gemini-3.5-flash-lite`'s
+recycle scenario: 46 s, one provider request whose `output` was `[function_call,
+function_call_output]` and nothing else, exit 0, no answer. It did NOT reproduce (the same pair
+re-ran 5 of 5, that scenario in 7.6 s), so **why** the run stopped is not established and nothing
+here claims it. What is established is that the record said success and carried neither an answer
+nor a reason. It now fails with "the agent ended the turn without answering", naming the
+`finish_reason` the CLI's own `token_usage` event carried — `state["_da_finish"]` was already
+being collected and was read by nobody, which is the difference between one look and five.
+
+**2. The model picker offered models the router then refused.** An instance holding one google
+connection reported **eight gemini ids as `available: true`** for docker-agent through the
+product's own `/v1/models`, and every one of those turns came back "No connection on this account
+serves gemini-4-argon" — after the point of no return. `_servable_models` unions the per-model
+table of each chain connection's provider and never asked whether that provider can drive the
+base; the router asks exactly that (`_chain_refusal`: a known provider with no
+`_INTEGRATION_WIRING` row is refused). The picker now asks the router's own question, so the two
+cannot drift, and a connection the router would refuse contributes no models rather than its whole
+table. The second half of the fix is the failure mode to avoid while making it: a skipped
+connection must not fall through to "no restriction", which is this product's original
+offer-everything bug. Both halves are pinned in `gateway/tests/test_servable_models.py`.
+
+This was reachable only because docker-agent had no google row. `goose` has none deliberately
+("unprobed is unlisted", in the table itself) and carries nine gemini ids, so the picker had nine
+promises to break there too; `fast-agent` and `dcode` are in the same position. They are now
+correctly greyed instead of offered-then-failed.
+
+### Google's own surface, probed rather than assumed
+`("google", "docker-agent"): "openai-api"` was added on a measurement, which is that table's own
+rule: a pair on v1.150.0 against `generativelanguage.googleapis.com/v1beta/openai` passed all five
+scenarios on `gemini-3.5-flash` with the mid-session switch served as `gemini-4-argon`, and the
+full eight-id column followed. Before the row, this base reached the gemini family only through an
+aggregator.
+
+### What is still NOT measured
+The browser, thinking and environments columns. Its `--sandbox` / `--cloud` modes, its sub-agents,
+its RAG and its MCP catalog: a turn gets the four toolsets above and nothing else. Why the one
+no-answer turn stopped — it did not reproduce, and the raw CLI stream of it was not captured.
 
 ## dcode (deepagents-code): the first base driven over ACP, because its headless mode cannot continue a conversation (2026-10-19) — behaviour measured, NO column yet
 
