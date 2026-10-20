@@ -13,6 +13,29 @@ wire: the field keeps its type, and servers keep sending it. Under the
 [deprecation rules](VERSIONING.md#deprecation) it is removed no earlier than the second version
 after this one. A client reads `default` and each model's `available`.
 
+## Conformance suite 2026.10.19.post3 (2026-10-19)
+
+No change to the protocol or the schema. One verdict changes: a server that stops a task at a
+budget and reports `incomplete` WITHOUT naming the budget in `incomplete_details.reason` now
+fails T-12. §1.1 requires the `incomplete` status and says nothing about the reason, and the
+2026-10-19 schema types `incomplete_details` as `["object","null"]`, so such a server was
+conformant until this check arrived. #501 asks the check to require the reason, and that is
+where the requirement comes from; making it a protocol rule would be a UEP.
+
+T-12 measures the step budget. A task sent with `max_step: 1` whose work needs three tool calls
+must end `incomplete`, with `incomplete_details.reason` naming the budget, and never `completed`.
+Nothing in the suite sent `max_step` before this, so a server that ignored the budget scored as
+well as one that honoured it. The fixture gains a tool (`uhp_steps`) whose answer asks for the
+next step, and the check counts the rounds from the response's own items — the tool call and the
+answer to it — so a model that claims a call cannot make the count rise. A server that let the
+chain run past the budget and reported `completed` fails; a chain that stayed inside the budget
+says nothing about the rule and is skipped. A task whose chain never began is skipped, not
+passed. A server that cannot bound a base may name `max_step` in `metadata.ignored_fields`, and
+the check accepts that answer.
+
+T-12 needs the fixture's `uhp_steps`, so the public copy of the fixture has to be rebuilt from
+this commit before the check can run against the default `--plugin-mcp-url`.
+
 ## Conformance suite 2026.10.19.post2 (2026-10-19)
 
 The packaged copy of the 2026-10-19 schema marks `HarnessModels.fallback` deprecated. No check or
