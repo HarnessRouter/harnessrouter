@@ -13,6 +13,18 @@ wire: the field keeps its type, and servers keep sending it. Under the
 [deprecation rules](VERSIONING.md#deprecation) it is removed no earlier than the second version
 after this one. A client reads `default` and each model's `available`.
 
+## Conformance suite 2026.10.19.post3 (2026-10-19)
+
+No change to the protocol or the schema.
+
+T-12 runs a task against its step budget. [Tasks §1.1](versions/2026-10-19/tasks.md#11-request-fields)
+says a server MUST stop a task at or after `max_step`, MUST report `incomplete`, and MUST NOT report
+`completed` for work it truncated, and the suite checked only the field's schema: a server that
+dropped the budget in silence and ran the task to the end stayed green. The check sends `max_step: 1`
+with work that needs three tool calls in sequence and requires `incomplete`, with
+`incomplete_details.reason` naming the step budget. A server that names `max_step` in
+`metadata.ignored_fields` passes, as §1.1 allows; a silent `completed` fails.
+
 ## Conformance suite 2026.10.19.post2 (2026-10-19)
 
 The packaged copy of the 2026-10-19 schema marks `HarnessModels.fallback` deprecated. No check or

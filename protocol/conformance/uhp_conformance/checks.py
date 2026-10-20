@@ -403,6 +403,57 @@ def t11(ctx):
             pass
 
 
+# Three tool calls that cannot be merged: each one needs what the one before it returned.
+STEP_BUDGET_PROMPT = (
+    "Use your tools for this, one tool call per step, and wait for each result before the next "
+    "step. Step 1: write a file named uhp_step_budget.txt containing the word alpha. Step 2: read "
+    "uhp_step_budget.txt back. Step 3: append the word you read, reversed, to the same file. Then "
+    "reply with the file's final contents.")
+
+
+@check("T-12", "A task that outruns max_step ends incomplete, never completed", "core",
+       f"{SPEC}/tasks.md#11-request-fields")
+def t12(ctx):
+    """§1.1 makes `max_step` a budget: a server MUST stop the task at or after it, MUST report
+    `incomplete`, and MUST NOT report `completed` for work it truncated. The field's schema was
+    checked and its effect was not, so a server that dropped it in silence and ran the task to the
+    end looked the same as one that held to it. A server that cannot bound a base says so in
+    `metadata.ignored_fields`, which §1.1 accepts; a silent `completed` is the one wrong answer."""
+    h = _harness(ctx)
+    body = {"input": STEP_BUDGET_PROMPT, "metadata": {"harness_id": h["id"]}, "stream": False,
+            "max_step": 1}
+    if ctx.model:
+        body["model"] = ctx.model
+    r = ctx.client.post("/v1/responses", body=body)
+    assert r.status == 200, (
+        f"a task sending `max_step: 1` returned HTTP {r.status}: {r.text[:200]!r}. `max_step` is a "
+        "request field §1.1 defines; a server that cannot honour it names it in ignored_fields "
+        "rather than refusing the request.")
+    d = r.json or {}
+    ignored = (d.get("metadata") or {}).get("ignored_fields") or []
+    if isinstance(ignored, list) and "max_step" in ignored:
+        return f"max_step reported ignored (status={d.get('status')!r})"
+    status = d.get("status")
+    calls = sum(1 for it in d.get("output") or []
+                if isinstance(it, dict) and it.get("type") == "function_call")
+    assert status != "completed", (
+        f"a task given `max_step: 1` and work that needs three tool calls in sequence ended "
+        f"`completed` ({calls} function_call item(s) in its output), and `max_step` is not in "
+        "metadata.ignored_fields. §1.1: a server MUST stop the task at the budget, MUST report "
+        "`incomplete`, and MUST NOT report `completed` for work it truncated — and if it did not "
+        "act on the field, it MUST say so.")
+    assert status == "incomplete", (
+        f"a task given `max_step: 1` ended {status!r}; §1.1 requires a task stopped at its budget "
+        "to report `incomplete`")
+    details = d.get("incomplete_details")
+    reason = str((details or {}).get("reason") or "") if isinstance(details, dict) else ""
+    assert "step" in reason.lower() or "turn" in reason.lower(), (
+        f"the task ended `incomplete` with incomplete_details {details!r}, which does not name the "
+        "step budget. A client has to tell a task stopped at `max_step` from one stopped at "
+        "`timeout_seconds` or by its token limit to know which budget to raise.")
+    return f"incomplete, reason={reason!r}"
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════
 # Core — streaming
 # ══════════════════════════════════════════════════════════════════════════════════════

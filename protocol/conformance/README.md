@@ -45,18 +45,18 @@ fields, or the terminal summary, when deciding whether to publish a class claim.
 
 Exit code is `0` when nothing failed and `1` otherwise, so it drops into CI unchanged.
 
-**The suite runs real agent tasks.** It sends about seven of them, which costs real model tokens and a
+**The suite runs real agent tasks.** It sends about eight of them, which costs real model tokens and a
 few minutes. That is deliberate: the defects worth catching — a stream that never flushes, a
 cancellation that never terminates, an artifact that cannot be downloaded — are invisible to
 anything that only inspects a schema.
 
 ## What it checks
 
-100 checks across three classes.
+101 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
-| **Core** | 41 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation, reserved request fields |
+| **Core** | 42 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation, reserved request fields |
 | **Extended** | +9 | Session listing and inspection, file input, artifacts, download headers, path-traversal probes |
 | **Full** | +50 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing, plugins (package round trip, derivation, refusals, export, and a tool call through a plugin's server) |
 
@@ -79,6 +79,11 @@ A few of them are worth calling out, because they catch things a schema check ne
   leaves a strict client with nothing to wait for: it waits for `in_progress`, or treats the
   unknown status as an error. HarnessRouter answered a background POST and every poll until the
   turn ended with `running` while its own stream emitted `in_progress` for the same turn.
+- **T-12** — a task that outruns `max_step` ends `incomplete`. It sends `max_step: 1` with work
+  that needs three tool calls in sequence, and fails a `completed` unless `max_step` is named in
+  `metadata.ignored_fields`, the answer §1.1 gives a server that cannot bound a base. An
+  `incomplete` must say in `incomplete_details.reason` that the step budget stopped it. The field's
+  schema was checked before this; its effect was not.
 - **X-07** — artifacts download with `X-Content-Type-Options: nosniff`. Artifacts are
   attacker-influenceable content; served without it, an artifact is stored XSS against the client's
   own origin.
