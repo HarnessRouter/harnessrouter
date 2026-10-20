@@ -1,7 +1,8 @@
 """A fake ACP agent, so the driver's own conversation can be tested without a provider.
 
 It answers the five methods dcode's server answers and records what it was asked in
-$FAKE_ACP_LOG. FAKE_ACP_MODE picks the behaviour: `ok`, `ask_user` (the free-form interrupt ACP
+$FAKE_ACP_LOG. FAKE_ACP_MODE picks the behaviour: `ok`, `silent_end_turn` (end_turn with no
+message chunk at all, which a provider really did), `ask_user` (the free-form interrupt ACP
 cannot carry, answered as deepagents' server answers it), `no_load` (an agent that does not
 advertise loadSession at all), `load_fails` (it does, and the session is gone), `bad_model` (the
 model this turn asks for is not in the session's list), `provider_401` (a refusal in `data.details`
@@ -98,8 +99,9 @@ for line in sys.stdin:
                          "status": "completed",
                          "content": [{"type": "content",
                                       "content": {"type": "text", "text": "hi"}}]})
-        update(sid, {"sessionUpdate": "agent_message_chunk",
-                     "content": {"type": "text", "text": "THE NEW ANSWER"}})
+        if MODE != "silent_end_turn":
+            update(sid, {"sessionUpdate": "agent_message_chunk",
+                         "content": {"type": "text", "text": "THE NEW ANSWER"}})
         stop = "refusal" if MODE == "refusal" else "end_turn"
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": stop}})
     elif mid is not None:

@@ -334,14 +334,37 @@ def main() -> int:
             return fail("the agent tried to ask the user a question mid-turn, which this "
                         "connection cannot carry; re-send the task with the answer in it")
         reason = error_text(err)
-        return fail(f"the turn failed: {reason}",
-                    with_tail=reason == "the agent reported an error")
+        # The reason is the provider's sentence and nothing else: the GATEWAY frames a failed turn
+        # ("The turn failed: <reason>", _turn_failure_message), so a driver that frames it too puts
+        # the words in front of the person twice. MEASURED on the family tour (2026-10-20): the
+        # muse family's refusal reached the console as "The turn failed: the turn failed: Error
+        # code: 400 - …". Every other base here hands up the reason alone.
+        return fail(reason, with_tail=reason == "the agent reported an error")
     stop = str((out.get("result") or {}).get("stopReason") or "")
     ok = stop == "end_turn"
     why = {"cancelled": "the turn was cancelled",
            "refusal": "the model refused the request",
            "max_tokens": "the model hit its token limit",
            "max_turn_requests": "the turn hit its request limit"}.get(stop, stop or "no stop reason")
+    if ok and not answer.strip():
+        # `end_turn` with NOTHING said. The protocol's normal end and an empty answer together are
+        # not a completed turn: an empty string in the result slot reaches the person as a done
+        # pill over a blank reply (docker-agent's eof refuses the same thing, for the same reason).
+        # MEASURED in this base's first column (2026-10-20), on grok-4.5 through Vercel, TWICE in
+        # three runs of that pair and on a different scenario each time: the turn's own record
+        # held `output: []` — no content, no tool call — with 18 output tokens billed, all
+        # reasoning, while the ACP server reported stopReason end_turn. Before this branch the
+        # first one was recorded as a COMPLETED turn whose answer was "", which the console shows
+        # as a done pill over a blank reply; with it, the second was recorded as failed and the
+        # console showed the reason. The same shape was measured once on docker-agent
+        # (gemini-3.5-flash-lite), which is why its eof refuses it too.
+        #
+        # This says nothing about WHY a provider answers with reasoning and no content — that is
+        # the model's behaviour on this route, recorded as a row-level finding in
+        # docs/support-matrix-notes.md. ACP carries no usage, so the reason here cannot name the
+        # finish reason the way docker-agent's can; the relay's stamp is where that lives.
+        ok = False
+        why = "the agent ended the turn without answering"
     emit({"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
           # usage is the relay's to stamp (_fill_relay_usage): ACP carries none.
           "result": answer if ok else (why + (f" after {int(time.time() - started)}s" if not ok else "")),

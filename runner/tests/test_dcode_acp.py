@@ -387,6 +387,30 @@ def test_a_stop_reason_that_is_not_an_answer_is_an_error_with_a_reason(tmp_path)
     assert "refused" in res["result"]
 
 
+def test_end_turn_with_nothing_said_is_not_an_answer(tmp_path):
+    """MEASURED in this base's first column (2026-10-20): grok-4.5 through Vercel ended a turn
+    with `output: []` — no content and no tool call — 18 output tokens billed and all of them
+    reasoning, while the ACP server reported stopReason `end_turn`. Twice in three runs of that
+    pair, a different scenario each time. The first was recorded as a completed turn whose answer
+    was "", which the console shows as a done pill over a blank reply; with this branch the second
+    was recorded as failed and the console showed the reason. What the provider did is the model's
+    behaviour on this route and is a row-level finding in the notes; this test is about what the
+    record says when it happens."""
+    evs, _, proc = _drive(tmp_path, "silent_end_turn")
+    assert proc.returncode == 0, proc.stderr
+    res = evs[-1]
+    assert res["subtype"] == "error" and res["is_error"] is True
+    assert "without answering" in res["result"]
+    assert res["result"] != ""
+
+
+def test_end_turn_with_an_answer_is_still_a_success(tmp_path):
+    evs, _, proc = _drive(tmp_path, "ok")
+    res = evs[-1]
+    assert res["subtype"] == "success" and res["is_error"] is False
+    assert res["result"].strip()
+
+
 def test_an_agent_that_does_not_start_is_reported_rather_than_crashing(tmp_path):
     import subprocess
     job = {"argv": [str(tmp_path / "there-is-no-such-binary")], "cwd": str(tmp_path),
@@ -440,3 +464,6 @@ def test_a_provider_refusal_fails_the_turn_without_the_agents_traceback(tmp_path
     assert "401" in res["result"] and "Authentication failed" in res["result"]
     assert "Traceback" not in res["result"]
     assert "langchain_openai" not in res["result"]
+    # and the gateway's own framing is not repeated here: it says "The turn failed: <reason>"
+    # around whatever this hands up, and the family tour showed that twice over (2026-10-20).
+    assert "turn failed" not in res["result"].lower(), res["result"]
