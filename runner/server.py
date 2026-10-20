@@ -3884,6 +3884,97 @@ _HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threadin
 _TURN_THINKING: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_thinking", default=None)
 
 
+# The caller's W3C trace context (#473), for the turn being built: {"traceparent": ..., "tracestate":
+# ...}. The relay's routes are registered on the thread that runs /turn, so a context variable is
+# what carries the context from the request to the routes — the relay serves each call on a thread
+# of its own, where a context variable would not be visible.
+_TURN_TRACE: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_trace", default=None)
+
+# The same W3C syntax the gateway checks, kept here because the runner is the last place before a
+# provider sees the value. The gateway and the runner are separate packages with no shared module.
+# A traceparent may carry trailing data only when its version is not `00`: the spec parses the
+# first 55 characters of a newer version and ignores the rest, so a forward-compatible header
+# keeps its trace.
+_TRACEPARENT_RE = re.compile(
+    r"^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})(-.*)?$")
+# A tracestate member: `key=value`. The value may hold a space anywhere but its last character and
+# must not be empty (W3C Trace Context, `value = 0*255(chr) nblk-chr`).
+_TRACESTATE_RE = re.compile(
+    r"^(?:[a-z][a-z0-9_\-*/]{0,255}|[a-z0-9][a-z0-9_\-*/]{0,240}@[a-z][a-z0-9_\-*/]{0,13})"
+    r"=[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]$")
+
+
+def _valid_traceparent(value: str | None) -> str:
+    """The traceparent of `value` if it is valid W3C syntax, else "".
+
+    Valid means: the shape the spec gives, a version that is not `ff`, and neither an all-zero
+    trace id nor an all-zero parent id — the spec calls those invalid, and a provider that reads
+    one cannot join the trace anyway.
+    """
+    tp = str(value or "").strip().lower()
+    m = _TRACEPARENT_RE.match(tp)
+    if not m:
+        return ""
+    version, trace_id, parent_id, _flags, extra = m.groups()
+    if version == "ff" or trace_id == "0" * 32 or parent_id == "0" * 16:
+        return ""
+    # Version `00` has no trailing data; a newer version may carry fields this code does not know
+    # yet, and the spec says to ignore them rather than drop the trace.
+    if extra and version == "00":
+        return ""
+    return f"{version}-{trace_id}-{parent_id}-{_flags}"
+
+
+def _valid_tracestate(value: str | None) -> str:
+    """The tracestate of `value` if it is valid W3C syntax, else "".
+
+    A tracestate is a list of at most 32 `key=value` members, at most 512 characters overall, and
+    no key twice: "Only one entry per key may exist". A member that does not parse, or a key that
+    repeats, drops the whole tracestate — never the traceparent beside it.
+    """
+    ts = str(value or "").strip()
+    if not ts or len(ts) > 512:
+        return ""
+    members = [m.strip() for m in ts.split(",")]
+    if len(members) > 32 or not all(_TRACESTATE_RE.match(m) for m in members):
+        return ""
+    keys = [m.split("=", 1)[0] for m in members]
+    if len(keys) != len(set(keys)):
+        return ""
+    return ts
+
+
+def _trace_context(traceparent: str | None, tracestate: str | None) -> dict:
+    """The trace context of the turn, as the relay wants it: the traceparent and, only with one,
+    the tracestate. A malformed value is dropped, never refused — a broken tracing header must not
+    fail a turn. `baggage` is not read: it carries the caller's own data and never leaves the box."""
+    tp = _valid_traceparent(traceparent)
+    if not tp:
+        return {}
+    ts = _valid_tracestate(tracestate)
+    return {"traceparent": tp, **({"tracestate": ts} if ts else {})}
+
+
+def _child_traceparent(traceparent: str) -> str:
+    """A child of the caller's traceparent: the same trace id, a NEW span id (this relay hop is a
+    span of its own), the sampled flag kept. Empty when there is no valid traceparent to child."""
+    tp = _valid_traceparent(traceparent)
+    if not tp:
+        return ""
+    version, trace_id, _span, flags = tp.split("-")
+    return f"{version}-{trace_id}-{uuid.uuid4().hex[:16]}-{flags}"
+
+
+def _route_trace_flag() -> dict:
+    """The turn's trace context, as a route flag. Every route of the turn carries it, so the relay
+    gives the provider request a child of the caller's span whichever way the route was made."""
+    trace = _TURN_TRACE.get() or {}
+    if not trace.get("traceparent"):
+        return {}
+    return {"traceparent": trace["traceparent"],
+            **({"tracestate": trace["tracestate"]} if trace.get("tracestate") else {})}
+
+
 def _turn_route(flags: dict) -> dict:
     """A route's flags, remembered as one of the routes of the turn being built."""
     t = _TURN_THINKING.get()
@@ -5251,10 +5342,36 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             return
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
         drop = {"host", "content-length", "authorization", "x-goog-api-key", "x-api-key", "connection",
-                "accept-encoding", "transfer-encoding"}
+                "accept-encoding", "transfer-encoding", "baggage"}
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
+        # The turn's trace context, as a child of it: the same trace id, a new span id (this hop is
+        # a span of its own), the sampled flag kept. The client's own header is replaced, not left
+        # beside it — two traceparents would leave the provider unable to say which span is which.
+        # A turn with no trace context sends none of its own, and the client's headers go upstream
+        # exactly as they did before: the relay changes nothing it was not asked to change.
+        #
+        # The turn's context is the trace's root here: the caller's trace id is never taken from
+        # the client. A CLI that read TRACEPARENT from its environment has already made a child of
+        # the caller's span, and the provider's request belongs under THAT span — so the CLI's own
+        # header is the parent when it carries the caller's trace id, and is ignored otherwise.
+        parent = str(flags.get("traceparent") or "")
+        inbound = next((v for k, v in headers.items() if k.lower() == "traceparent"), "")
+        if parent:
+            valid = _valid_traceparent(inbound)
+            if valid and valid.split("-")[1] == parent.split("-")[1]:
+                parent = valid
+            child = _child_traceparent(parent)
+            if child:
+                for _k in [k for k in headers if k.lower() == "traceparent"]:
+                    del headers[_k]
+                headers["traceparent"] = child
+                state = str(flags.get("tracestate") or "")
+                for _k in [k for k in headers if k.lower() == "tracestate"]:
+                    del headers[_k]
+                if state:
+                    headers["tracestate"] = state
         if flags.get("passthrough"):
             self._passthrough(base, key, tail, headers, body)
             return
@@ -5967,7 +6084,8 @@ def _qoder_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key, _turn_route({"passthrough": True}))
+        _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key,
+                                        _turn_route({"passthrough": True, **_route_trace_flag()}))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -5979,7 +6097,8 @@ def _bedrock_anthropic_route(origin: str, api_key: str) -> tuple[str, str]:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = (origin, api_key, {"bedrock_anthropic": True})
+        _HERMES_RELAY["routes"][tok] = (origin, api_key,
+                                        {"bedrock_anthropic": True, **_route_trace_flag()})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -6120,7 +6239,8 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
         tok = "hr-relay-" + uuid.uuid4().hex
         _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key,
                                         _turn_route({"google_native": True, "model": model,
-                                                     "native_model": native_model, **_turn_effort()}))
+                                                     "native_model": native_model, **_turn_effort(),
+                                                     **_route_trace_flag()}))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -6159,6 +6279,9 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
                  **({"aux": True} if aux else _turn_effort())}
+        # The turn's trace context (#473), on every route of this turn: the relay reads it when it
+        # forwards, and the relay's own threads never see the turn's context variables.
+        flags.update(_route_trace_flag())
         _HERMES_RELAY["routes"][tok] = (upstream, api_key, flags if aux else _turn_route(flags))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
@@ -9327,7 +9450,7 @@ def _systemone_relay_route(provider: str, base_url: str, api_key: str) -> tuple[
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = (base, api_key, {})
+        _HERMES_RELAY["routes"][tok] = (base, api_key, dict(_route_trace_flag()))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -13281,6 +13404,8 @@ class TurnReq(BaseModel):
     reasoning_effort: str | None = None    # how much the model thinks this turn: one of reasoning.LEVELS; unset = the model's default
     reasoning_route: str | None = None     # which measured provider the connection is (reasoning.ROUTES), from the gateway,
                                            # which knows it when the base here is a broker's; unset = read it off the base
+    traceparent: str | None = None          # the caller's W3C trace context (#473); unset = the turn has none
+    tracestate: str | None = None           # its vendor state for that trace; never `baggage`
 
 
 @app.post("/turn")
@@ -13380,6 +13505,15 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     turn_thinking = {"asked": effort if effort in reasoning.LEVELS else "", "applied": "", "routes": [],
                      "route": named if named in reasoning.ROUTES else ""}
     _TURN_THINKING.set(turn_thinking)
+    # The caller's W3C trace context (#473). The CLI's environment carries it, so a tool in the turn
+    # that speaks OpenTelemetry joins the caller's trace; the relay gives the model calls a child of
+    # it. Nothing is set when the turn carried no context.
+    turn_trace = _trace_context(req.traceparent, req.tracestate)
+    _TURN_TRACE.set(turn_trace)
+    if turn_trace.get("traceparent"):
+        env["TRACEPARENT"] = turn_trace["traceparent"]
+    if turn_trace.get("tracestate"):
+        env["TRACESTATE"] = turn_trace["tracestate"]
     # Image generation. Deliberately NOT the OPENAI_* names: on a codex harness those already
     # point at the CHAT connection, which is often a different provider, and one env pair can
     # only carry one credential. The imagegen skill's wrapper reads these and passes them to the

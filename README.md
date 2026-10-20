@@ -209,6 +209,10 @@ curl --fail-with-body -sS "$HARNESSROUTER_BASE_URL/v1/responses" \
 
 The task and its transcript appear in the same workspace in the Console. Set `"stream": true` to receive server-sent events.
 
+**Join a caller's trace to the task.**
+
+Send the W3C Trace Context headers `traceparent` and `tracestate` on the request, and the task's model calls carry a child of that trace — the same trace id, a new span id, the sampled flag kept — so the provider's log and yours are one trace. A value that is not valid W3C syntax is dropped, never refused: a broken tracing header does not fail a task. `baggage` is never read and never leaves the instance.
+
 **Retry a task without running it twice.**
 
 Send the same request with the same `Idempotency-Key` when retrying a task. For example, send this request twice using the URL and API key above (key generation needs Python 3):
