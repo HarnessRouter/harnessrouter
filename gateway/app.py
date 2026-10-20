@@ -7936,6 +7936,23 @@ def _backend_of_harness(hv: dict | None) -> str:
     return str((_BASE_CATALOG.get(base) or {}).get("backend") or "")
 
 
+def _want_partial(backend: str, meta: dict) -> bool:
+    """Token-level streaming (CT-127): opt in globally via env HARNESS_STREAM_PARTIAL=1, or per-request
+    via metadata.stream_partial (for testing). Claude uses --include-partial-messages; codex diffs
+    item.updated (self-healing → batch if it doesn't emit updates). Default off = current batch
+    behavior, so a rollback is just flipping the env with no redeploy.
+
+    grok takes the same flag as claude: grok-build's published headless doc (1.0.41, read
+    2026-10-21) says of `--include-partial-messages` "Emit raw `stream_event` deltas. Only affects
+    `--output-format streaming-messages-json`" — the framing the claude passthrough already reads
+    — so a grok turn streams on the path claude streams on, and grok's runner code
+    (--include-partial-messages) was already there, unreachable until this gate admitted the
+    backend. A grok older than the flag rejects the turn outright, which is why the gate stays
+    opt-in."""
+    return backend in ("claude", "codex", "grok") and (
+        os.environ.get("HARNESS_STREAM_PARTIAL", "0") == "1" or bool(meta.get("stream_partial")))
+
+
 def _model_authorized(requested: str, backend: str) -> bool:
     r = (requested or "").strip().lower()
     if not r:
@@ -8623,7 +8640,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 # idempotency: all _sandbox_json retries of THIS turn share the response id, so a
                 # lost/slow first reply that gets retried dedups to the same runner turn (no re-exec).
                 "idempotency_key": f"{translator.resp_id}:{name}",
-                # token-level streaming (claude): runner adds --include-partial-messages + emits deltas
+                # token-level streaming (claude/grok): runner adds --include-partial-messages + emits deltas
                 "partial_messages": bool(partial_messages),
                 # pi: whether this model's channel takes image input (see _TEXT_ONLY_INPUT)
                 "vision": model_req.strip().lower() not in _TEXT_ONLY_INPUT,
@@ -9692,12 +9709,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                or _route_backend(model_req or body.model, body.backend))
     # Server-side model permission (CT-124): a model this backend cannot serve is refused here.
     model_req = await _resolve_model_policy(model_req, hv, backend, org)
-    # Token-level streaming (CT-127): opt in globally via env HARNESS_STREAM_PARTIAL=1, or per-request
-    # via metadata.stream_partial (for testing). Claude uses --include-partial-messages; codex diffs
-    # item.updated (self-healing → batch if it doesn't emit updates). Default off = current batch
-    # behavior, so a rollback is just flipping the env with no redeploy.
-    want_partial = (backend in ("claude", "codex") and (
-        os.environ.get("HARNESS_STREAM_PARTIAL", "0") == "1" or bool(meta.get("stream_partial"))))
+    want_partial = _want_partial(backend, meta)
     # Codex streaming path: run the codex turn via the app-server protocol (the only codex mode that
     # streams assistant text). Flag-gated (env HARNESS_CODEX_APPSERVER or metadata.codex_appserver);
     # default off keeps codex on the stable `codex exec` path. Rollback = flip env, no redeploy.

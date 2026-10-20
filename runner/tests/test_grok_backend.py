@@ -1,7 +1,9 @@
 """The grok backend: Grok Build (xai-org/grok-build, Apache-2.0), the `grok` binary pinned to 1.0.41.
 
 Every fixture line below was captured from the 1.0.41 binary at a local logging stub (no xAI
-account, no login, no key) — see the PR body for the probe set. Each test pins one thing that would
+account, no login, no key) — see the PR body for the probe set — except the two DELTA lines, which
+were written by hand from grok-build's published headless doc and its source (the 1.0.41 binary was
+never run with `--include-partial-messages` on this machine). Each test pins one thing that would
 otherwise fail SILENTLY in production: a provider failure read as an answer, an answer that talks
 about an error read as a failure, the xAI login that `-r <unknown id>` starts, the shell tool whose
 wire name disables nothing, the side calls that go to a hard-coded xAI model, the key at rest.
@@ -67,6 +69,13 @@ FAIL_401 = {"type": "result", "subtype": "error_during_execution", "is_error": T
             "errors": ["Internal error: \"Unauthorized (401) from http://127.0.0.1:18777/v1/chat/completions: "
                        "invalid_request_error: Incorrect API key provided: sk-bad\\n\\n  Model:     stub-model\""],
             "session_id": SID, "uuid": "u6"}
+# The `--include-partial-messages` lines: the provider's deltas wrapped in the same `stream_event`
+# line claude code emits, and the complete assistant frame that follows them. Hand-written from
+# grok-build's published headless doc and its source, NOT captured from the binary.
+DELTA_1 = {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "First."}}, "session_id": SID, "uuid": "p1"}
+DELTA_2 = {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": " Second."}}, "session_id": SID, "uuid": "p2"}
 
 
 def _argv(d=None, **kw):
@@ -111,6 +120,24 @@ def test_a_provider_failure_is_a_failed_turn_with_the_providers_sentence():
     res = out[-1]
     assert res["is_error"] is True
     assert "Unauthorized (401)" in res["result"] and "Incorrect API key" in res["result"]
+
+
+def test_a_partial_turn_streams_its_text_as_deltas_and_does_not_repeat_the_whole_answer():
+    """CHARACTERIZATION TEST for the runner's pre-existing grok path, which this change does not
+    touch: grok's --include-partial-messages wraps the provider's deltas in the same `stream_event`
+    line claude emits, so the claude passthrough's partial branch reads them: one canonical
+    assistant event per delta, the complete frame's text dropped (it would arrive twice), and the
+    result carrying the whole answer the deltas spelled out.
+
+    It passes before the change too, and that is the point: it pins the behaviour the gateway's
+    gate now makes reachable, so a future edit to the runner's grok path cannot break the half of
+    the feature the gate does not own."""
+    whole = {**TEXT, "message": {**TEXT["message"], "content": [{"type": "text", "text": "First. Second."}]}}
+    out, _ = _norm([INIT, DELTA_1, DELTA_2, whole, {**OK, "result": "First. Second."}], partial=True)
+    texts = [e["message"]["content"][0]["text"] for e in out
+             if e.get("type") == "assistant" and e["message"]["content"][0].get("type") == "text"]
+    assert texts == ["First.", " Second."], texts
+    assert out[-1]["type"] == "result" and out[-1]["result"] == "First. Second."
 
 
 def test_an_answer_that_merely_talks_about_an_error_is_an_answer():

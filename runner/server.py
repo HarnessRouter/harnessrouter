@@ -7001,6 +7001,11 @@ def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     No xAI login, ever: a key-only run needs none, and the two paths that would start one are shut
     (see _grok_has_session). stdin is not read in headless mode, so nothing can wait on it.
 
+    Token-level streaming: --include-partial-messages is the flag claude takes, and grok-build's
+    published headless doc (1.0.41, read 2026-10-21) says of it "Emit raw `stream_event` deltas.
+    Only affects `--output-format streaming-messages-json`" — the framing the claude passthrough
+    already reads, so the partial branch of that passthrough serves a grok turn unchanged.
+
     Retries: the defaults stack a sampler retry loop under a turn-level transient retry (3 more
     attempts, backoff up to 35 s); a provider answering 500 every time took 29 requests and more
     than nine minutes to fail. max_retries = 2 plus GROK_TURN_TRANSIENT_RETRY=0: 3 requests, 3 s,
@@ -13273,7 +13278,7 @@ class TurnReq(BaseModel):
                                            # in anything the gateway reads back (see _turn_secrets)
     metadata: dict | None = None           # systemone: {"systemone": {"script": [...]}} selects a scripted provider (a probe)
     idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
-    partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
+    partial_messages: bool = False         # claude/grok: stream token-level deltas (--include-partial-messages)
     vision: bool = True                    # pi: whether the model's channel accepts image input
     vision_auth: dict | None = None        # hermes: {provider, model, base_url, api_key} for its image questions
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
@@ -13666,7 +13671,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     else:
         threading.Thread(target=_run_turn_bg,
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
-                               bool(req.partial_messages)),   # claude: CLI flag added above
+                               bool(req.partial_messages)),   # claude/grok: CLI flag added above
                          kwargs={"max_turns": req.max_turns, "prompt": req.prompt or "",
                                  "count_steps": backend in _GENERIC_STEP_BUDGET},
                          daemon=True).start()
