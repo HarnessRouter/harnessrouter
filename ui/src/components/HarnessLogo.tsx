@@ -38,8 +38,8 @@ const LOGO: Record<string, string> = {
 // No entry for docker-agent: its repository ships no mark of its own, and the Docker whale is
 // Docker's trademark rather than the project's icon — so it falls back to the generic glyph, as
 // mimo does, instead of this map pointing at a file that is not ours to redistribute.
-// No entry for vtcode: it is implemented and not offered (see
-// gateway/tests/test_vtcode_not_offered.py), so its mark is not carried here — nor in the tree.
+// No entry for vtcode: that base is not in this tree at all (its headless mode drops a harness's
+// MCP servers — docs/support-matrix-notes.md), so neither its mark nor its row is carried here.
 // No entry for dcode either: langchain-ai/deepagents ships no mark for the CLI (its README leads
 // with LangChain's own wordmark, which is LangChain's trademark and not this project's icon), so
 // the generic glyph is the honest fallback here too.

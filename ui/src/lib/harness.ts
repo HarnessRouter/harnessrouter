@@ -297,8 +297,7 @@ const AGENTS_MD_BASES = [
   'mimo', 'jcode', 'opensquilla', 'nanobot', 'zeroclaw',
   // this batch: vibe reads AGENTS.md only in a trusted folder (--trust), docker-agent through
   // its own prompt-files lookup, and fast-agent has no convention at all — the file is passed as
-  // its instruction with -i. (vtcode reads it too, and is not offered; see
-  // gateway/tests/test_vtcode_not_offered.py.)
+  // its instruction with -i.
   'vibe', 'docker-agent', 'fast-agent',
   // dcode reads the project's AGENTS.md through find_project_agent_md — but only when the
   // workspace is a git PROJECT, which every session here is.

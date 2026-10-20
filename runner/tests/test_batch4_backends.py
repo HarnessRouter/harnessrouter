@@ -1,4 +1,4 @@
-"""The bases added in batch 4: vibe (mistral-vibe), vtcode (VT Code), docker-agent and
+"""The bases added in batch 4: vibe (mistral-vibe), docker-agent and
 fast-agent.
 
 Everything asserted here was MEASURED against the pinned build named beside it, on 2026-10-14/15,
@@ -15,7 +15,7 @@ Each test pins one thing that would otherwise fail SILENTLY:
   * the export this turn wrote, never the one the last turn left behind
   * the credential in the ENVIRONMENT, which is what makes served-model and usage readable
 
-Pinned builds: mistral-vibe 2.26.1 · vtcode 0.177.0 · docker-agent v1.150.0 · fast-agent-mcp 0.10.45
+Pinned builds: mistral-vibe 2.26.1 · docker-agent v1.150.0 · fast-agent-mcp 0.10.45
 """
 import json
 import pathlib
@@ -23,13 +23,11 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from server import (ALL_VIBE_TOOLS, ALL_VTCODE_TOOLS, Auth, BACKENDS,  # noqa: E402
+from server import (ALL_VIBE_TOOLS, Auth, BACKENDS,  # noqa: E402
                     CHECKPOINT_EXCLUDE, _PRODUCED_EXCLUDE_PREFIX,
-                    _agent_doc_path, _build_vibe, _build_vtcode,
+                    _agent_doc_path, _build_vibe,
                     _BRIDGED_TRANSPORTS, _vibe_eof, _vibe_home, _vibe_out,
                     _vibe_session_present, _vibe_to_claude, _resume_lost, _write_skills,
-                    _vtcode_config_path, _vtcode_eof, _vtcode_home, _vtcode_is_summary,
-                    _vtcode_session_present, _vtcode_to_claude, _vtcode_usage,
                     ALL_DOCKER_AGENT_TOOLS, _build_docker_agent, _docker_agent_eof,
                     _docker_agent_home, _docker_agent_session_db,
                     _docker_agent_session_present, _docker_agent_to_claude,
@@ -311,176 +309,6 @@ def test_the_tool_list_is_the_one_the_catalog_publishes():
     # the measured set rather than a guess
     assert "bash" in ALL_VIBE_TOOLS and "run_typescript" in ALL_VIBE_TOOLS
     assert "search_tool_functions" in ALL_VIBE_TOOLS
-
-
-# ══ vtcode (VT Code 0.177.0) ══════════════════════════════════════════════════════════════════
-
-def _vt_norm(lines, model="gpt-5.4", cwd=""):
-    state: dict = {"model": model, "final": "", "cwd": cwd}
-    out = []
-    for ln in lines:
-        out += _vtcode_to_claude(ln, state)
-    return out, state
-
-
-def test_vtcode_is_registered_with_its_own_normaliser():
-    assert "vtcode" in BACKENDS
-    assert BACKENDS["vtcode"]["normalize"] is _vtcode_to_claude
-    assert getattr(BACKENDS["vtcode"]["normalize"], "eof", None) is _vtcode_eof
-    # its frame is codex's and its items are not, so it must NOT share codex's normaliser
-    from server import _codex_to_claude
-    assert BACKENDS["vtcode"]["normalize"] is not _codex_to_claude
-
-
-def test_vtcode_reads_agents_md_and_keeps_its_own_state_out_of_the_deliverables():
-    ws = _ws()
-    assert _agent_doc_path(ws, "vtcode") == pathlib.Path(ws) / "AGENTS.md"
-    # its session store, snapshots and tracker files live in <workspace>/.vtcode
-    assert ".vtcode/" in _PRODUCED_EXCLUDE_PREFIX
-    assert set(_BRIDGED_TRANSPORTS["vtcode"]) == {"sse", "http"}   # see the bridge test below
-    meta = _write_skills(ws, [{"name": "stamp", "content": "---\nname: stamp\n---\nrun it\n"}],
-                         backend="vtcode")
-    assert meta
-    assert (pathlib.Path(ws) / ".harness" / "home" / ".agents" / "skills" / "stamp" / "SKILL.md").is_file()
-    assert not (pathlib.Path(ws) / ".agents").exists(), "a skill in the workspace is a deliverable"
-
-
-def test_vtcode_names_the_provider_as_well_as_the_model_everywhere():
-    """Its model→provider inference reads a vendor prefix, so `--model google/...` alone picked its
-    BUILT-IN gemini provider and asked for a key nobody set (measured)."""
-    ws, env = _ws(), {}
-    cmd = _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "google/gemini-3-flash",
-                        "hi", ws, env)
-    cfg = _vtcode_config_path(ws).read_text()
-    assert 'provider = "harness"' in cfg
-    assert 'name = "harness"' in cfg and 'base_url = "' in cfg
-    assert 'default_model = "google/gemini-3-flash"' in cfg
-    # the id must also be in the provider's own list, or a resumed turn naming it is refused
-    assert 'models = ["google/gemini-3-flash"]' in cfg
-    assert cmd[cmd.index("-c") + 1] == str(_vtcode_config_path(ws))
-    assert "--skip-confirmations" in cmd
-    # ten tool calls per session is its default; a real task passes that before it is done
-    assert cmd[cmd.index("--max-tool-calls") + 1] == "120"
-    assert env["VTCODE_TRUST_WORKSPACE"] == "full-auto", "exec refuses an untrusted workspace"
-    assert env["VTCODE_DISABLE_KEYRING"] == "1"
-    assert env["HR_VTCODE_RELAY_KEY"].startswith("hr-relay-")
-    assert "k" != env["HR_VTCODE_RELAY_KEY"]
-    assert env["VTCODE_DATA"].endswith("/.harness/vtcode/data")
-
-
-def test_vtcode_turns_off_every_default_that_would_keep_a_turn_going_or_cost_a_model_call():
-    ws = _ws()
-    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
-    cfg = _vtcode_config_path(ws).read_text()
-    for line in ("memories = false", 'continuation_policy = "off"',
-                 'orchestration_mode = "single"', "auto_continue_tracker = false",
-                 "cross_turn_turns = 0", "atif_enabled = false", "enabled = false"):
-        assert line in cfg, line
-
-
-def test_vtcode_resume_names_the_session_the_provider_and_the_model():
-    ws = _ws()
-    sid = "session-ws-20261016T045735Z_182826-20828"
-    cmd = _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
-                        resume_session_id=sid)
-    assert "resume" not in cmd, "the conversation is not in the store yet"
-    assert _resume_lost("vtcode", cmd, sid, ws) == sid
-    reg = _vtcode_home(ws) / "data" / "state" / "sessions"
-    reg.mkdir(parents=True)
-    (reg / f"{sid}.json").write_text("{}")
-    cmd = _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "claude-haiku-5.5", "hi",
-                        ws, {}, resume_session_id=sid)
-    assert cmd[-2:] == [sid, "hi"]
-    assert cmd[cmd.index("--provider") + 1] == "harness"
-    # the model on the RESUME, or the session's own model wins and the switch is dropped
-    assert cmd[cmd.index("--model") + 1] == "claude-haiku-5.5"
-    assert _vtcode_session_present(ws, cmd, sid) is True
-    assert _resume_lost("vtcode", cmd, sid, ws) is None
-
-
-def test_vtcode_withholds_a_disabled_tool_through_its_hard_allow_list():
-    ws = _ws()
-    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
-                  tools_disabled=["exec_command"])
-    cfg = _vtcode_config_path(ws).read_text()
-    allowed = [ln for ln in cfg.splitlines() if ln.startswith("allowed_tools = ")][0]
-    assert "exec_command" not in allowed
-    for keep in ("apply_patch", "search_tools", "write_stdin", "record_decision"):
-        assert keep in allowed
-
-
-def test_vtcode_mcp_server_carries_its_bearer_on_the_http_transport():
-    ws = _ws()
-    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
-                  mcp_servers=[{"name": "plugs", "url": "https://p.example/mcp",
-                                "transport": "http", "auth": "tok-9"}])
-    cfg = _vtcode_config_path(ws).read_text()
-    assert "[[mcp.providers]]" in cfg and 'endpoint = "https://p.example/mcp"' in cfg
-    assert '"Authorization" = "Bearer tok-9"' in cfg
-
-
-def test_vtcodes_real_first_turn_replays_into_an_answer_and_usage():
-    ws = _ws()
-    evs, state = _vt_norm(_fixture("vtcode-first-turn.ndjson"), cwd=ws)
-    init = evs[0]
-    assert init["subtype"] == "init" and init["session_id"].startswith("session-ws-")
-    res = _vtcode_eof(state, 0)[-1]
-    assert res["subtype"] == "success"
-    assert res["usage"]["input_tokens"] > 0 and res["usage"]["output_tokens"] > 0
-    assert "VT-E2E-FIRST" in state["final"]
-    # the harness's closing summary is not the answer
-    assert not state["final"].startswith("Task:")
-    assert state.get("_vt_summary", "").startswith("Task:")
-
-
-def test_vtcode_tool_calls_and_their_results_come_off_the_real_stream():
-    ws = _ws()
-    evs, state = _vt_norm(_fixture("vtcode-resume-write.ndjson"), cwd=ws)
-    calls = [b for e in evs for b in (e.get("message", {}).get("content") or [])
-             if b.get("type") == "tool_use"]
-    results = [b for e in evs for b in (e.get("message", {}).get("content") or [])
-               if b.get("type") == "tool_result"]
-    assert [c["name"] for c in calls] == ["exec_command"]
-    assert calls[0]["input"].get("cmd")
-    assert results and results[0]["tool_use_id"] == calls[0]["id"], "the result follows its call"
-    assert results[0]["is_error"] is False
-    # only item.completed is read: a partial agent_message must not become a second answer
-    assert sum(1 for e in evs if e.get("type") == "assistant"
-               and (e["message"]["content"] or [{}])[0].get("type") == "text") == 1
-
-
-def test_a_withheld_vtcode_tool_is_a_note_and_not_a_tool_row():
-    ws = _ws()
-    evs, state = _vt_norm(_fixture("vtcode-tool-denied.ndjson"), cwd=ws)
-    names = [b["name"] for e in evs for b in (e.get("message", {}).get("content") or [])
-             if b.get("type") == "tool_use"]
-    assert "exec_command" not in names, "a call the policy refused is not a call that ran"
-    notes = [e["text"] for e in evs if e.get("subtype") == "notice"]
-    assert any("exec_command was refused" in n for n in notes)
-    # and its result row is gone with it
-    assert not [b for e in evs for b in (e.get("message", {}).get("content") or [])
-                if b.get("type") == "tool_result" and "denied" in str(b.get("content"))]
-
-
-def test_the_summary_block_is_told_from_a_model_writing_about_a_task():
-    assert _vtcode_is_summary("Task: Exec Task\nDescription: x\nAgent Type: Single\n")
-    assert not _vtcode_is_summary("Task: write the file. I did that and verified it.")
-    assert not _vtcode_is_summary("The task is complete.")
-
-
-def test_the_usage_field_its_picker_does_not_know_is_mapped_by_hand():
-    # cache_creation_tokens is vtcode's name and is NOT in _norm_token_usage's picker; a field name
-    # nobody reads is a category billed at zero (the gemini-cli lesson)
-    out = _vtcode_usage({"input_tokens": 100, "output_tokens": 10,
-                         "cached_input_tokens": 30, "cache_creation_tokens": 7})
-    assert out["cache_read_tokens"] == 30
-    assert out["cache_write_tokens"] == 7
-    assert out["input_tokens"] == 70, "input is read as gross, netting the cached read"
-
-
-def test_vtcode_tools_are_the_five_its_own_schema_command_reports():
-    assert set(ALL_VTCODE_TOOLS) == {"exec_command", "write_stdin", "apply_patch", "search_tools",
-                                     "record_decision"}
 
 
 # ══ docker-agent (Docker Agent v1.150.0) ══════════════════════════════════════════════════════
@@ -864,114 +692,3 @@ def test_a_turn_that_wrote_no_trajectory_fails_and_leaves_the_reason_to_stderr()
 def test_the_tools_offered_are_the_three_with_a_switch():
     assert set(ALL_FAST_AGENT_TOOLS) == {"bash", "read_text_file", "edit_file"}
     assert "process" not in ALL_FAST_AGENT_TOOLS
-
-
-# ── vtcode: a text-only answer has to be allowed to END the turn ──────────────────────────────
-def test_vtcode_lets_one_idle_turn_finish_the_run():
-    """THE BUG, found by vtcode's first matrix column (2026-10-19): the first scenario, "Reply with
-    exactly: M1-<model>", failed on gpt-6.1-sol and gpt-6-sol with
-    `The turn failed: Stopped due to infinite loop detection` — 153 s each, with the correct answer
-    already sent twice.
-
-    Why, from this CLI's own source: an answer that is TEXT with no tool call does not end a run.
-    It asks whether the text looks like a completion (`check_completion_candidate`, a phrase list:
-    "the task is complete", "all done"), and when it does not, it calls the model again. The second
-    identical answer trips `check_for_response_loop`, whose outcome `LoopDetected` is a hard block.
-    The default `idle_turn_limit` of 3 cannot help, because the loop detector fires on the second
-    answer, before any limit above 1 is reached.
-
-    At 1, the first text-only answer ends the run as `StoppedNoAction` — a SUCCESS in this CLI's
-    own words (`TaskOutcome::is_success` matches `Success | StoppedNoAction`). Measured after the
-    change, same model, same relay: `turn.completed`, the answer, 5 s.
-    """
-    ws = _ws()
-    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
-    cfg = _vtcode_config_path(ws).read_text()
-    assert "idle_turn_limit = 1" in cfg
-    # and the reason stays beside it, since 3 is the CLI's default and 2 would not help either
-    assert "StoppedNoAction" in cfg and "loop detector" in cfg
-
-
-def test_vtcode_still_runs_one_turn_one_answer():
-    # the two settings the idle limit works with, unchanged
-    ws = _ws()
-    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
-    cfg = _vtcode_config_path(ws).read_text()
-    assert 'continuation_policy = "off"' in cfg
-    assert 'orchestration_mode = "single"' in cfg
-    assert "auto_continue_tracker = false" in cfg
-
-
-def test_vtcode_lets_the_tools_it_offers_actually_run():
-    """THE BUG, found by vtcode's first matrix column (2026-10-19): the artifact scenario asked for
-    one file, `apply_patch` came back `[Blocked by policy] tool denied by policy`, and the turn
-    answered "the execution policy denied apply_patch, so I could not create hello-vtcode.txt"
-    with nothing written.
-
-    A `prompt` policy is a DENY in a headless run — there is nobody to confirm — and `prompt` is
-    this CLI's default for EVERY tool (`ToolPolicy::Prompt` is the serde default), apply_patch
-    included in its own shipped example config. Being in
-    `[automation.full_auto].allowed_tools` is a different question: that list is the hard boundary
-    for what the model may reach, not whether a reached tool runs without a human.
-
-    Measured after the change, same model and relay: apply_patch completes, the file holds HELLO,
-    the turn answers DONE.
-    """
-    ws = _ws()
-    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
-    cfg = _vtcode_config_path(ws).read_text()
-    assert 'default_policy = "allow"' in cfg
-    assert "[tools.policies]" in cfg
-    for tool in ALL_VTCODE_TOOLS:
-        assert f'{tool} = "allow"' in cfg, tool
-
-
-def test_vtcode_denies_a_withheld_tool_at_both_doors():
-    ws = _ws()
-    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
-                  tools_disabled=["apply_patch"])
-    cfg = _vtcode_config_path(ws).read_text()
-    # the policy layer says deny...
-    assert 'apply_patch = "deny"' in cfg
-    assert 'apply_patch = "allow"' not in cfg
-    # ...and the hard boundary still leaves it out of the allow-list it enforces
-    allowed = cfg.split("allowed_tools = [", 1)[1].split("]", 1)[0]
-    assert "apply_patch" not in allowed
-    assert "exec_command" in allowed
-
-
-def test_vtcode_bridges_both_remote_mcp_transports():
-    """THE BUG, found by vtcode's custom-harness run (2026-10-19): the harness declared the
-    fixture's streamable-HTTP MCP server, the store held it (`mcp_stored`), and the turn never
-    called it — `search_tools` (this runtime's own door to a deferred tool) was called three times,
-    found nothing of the server's, and the model fell back to `exec_command` five times.
-
-    Its own source says why, in the doc comment on `McpHttpServerConfig`: "HTTP transport is
-    partially implemented. Basic connectivity testing is supported, but full streamable HTTP MCP
-    server support requires additional implementation using Server-Sent Events (SSE) or WebSocket
-    connections." SSE it has no client for at all (McpTransportConfig is Stdio | Http). So both
-    remote transports are bridged, which is jcode's arrangement: the bridge launches a stdio server
-    this client does speak.
-    """
-    from server import _BRIDGED_TRANSPORTS
-    assert set(_BRIDGED_TRANSPORTS["vtcode"]) == {"sse", "http"}
-
-
-def test_a_remote_server_reaches_vtcode_as_a_stdio_launcher():
-    """The bridge runs in the turn's own preparation (_sse_bridges), before the builder sees the
-    list, so this is measured there and then through the config the builder writes from it."""
-    from server import _sse_bridges
-    ws = _ws()
-    out = _sse_bridges(ws, [{"name": "probe", "url": "https://mcp.example/mcp",
-                             "transport": "http"}], "vtcode")
-    assert out and out[0].get("command"), out
-    launcher = pathlib.Path(str(out[0]["command"]))
-    assert launcher.is_file()
-    body = launcher.read_text()
-    assert "HR_MCP_TRANSPORT=http" in body and "mcp.example" in body
-    # ...and the config the builder then writes names that launcher, not an endpoint
-    _build_vtcode("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
-                  mcp_servers=out)
-    block = _vtcode_config_path(ws).read_text().split("[[mcp.providers]]", 1)[1]
-    assert "command =" in block
-    assert "endpoint =" not in block.split("[[", 1)[0]

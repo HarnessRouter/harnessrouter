@@ -249,7 +249,6 @@ backend_bin() {
     jcode)  echo "$TOOLS/bin/jcode" ;;
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
-    vtcode) echo "$TOOLS/bin/vtcode" ;;
     docker-agent) echo "$TOOLS/bin/docker-agent" ;;
     fast-agent) echo "$TOOLS/fast-agent-venv/bin/fast-agent" ;;
     dcode) echo "$TOOLS/dcode-venv/bin/dcode" ;;
@@ -1236,54 +1235,6 @@ install_vibe() {
   fi
 }
 
-# VT Code (Apache-2.0, vinhnx/VTCode) from its GitHub release: one tarball per target, with a
-# `.sha256` beside each asset — so the bytes are compared against what UPSTREAM publishes rather
-# than against a digest of our own (the install_omp precedent; install_goose computes its own only
-# because that project publishes none).
-# NOT INSTALLED TODAY: `wanted vtcode` is false unless an operator names it, and the gateway offers
-# no vtcode base — in `vtcode exec` a harness's MCP servers cannot reach the model (the CLI spawns
-# the server its config names and never sends `initialize`, and `search_tools`, the only other door,
-# answers "session tool catalog is not available" because that catalog is attached by the
-# interactive runloop alone). Measured on 0.177.0 and 0.180.0; see
-# gateway/tests/test_vtcode_not_offered.py and docs/support-matrix-notes.md. The installer stays so
-# the day upstream closes that gap is a one-line change.
-install_vtcode() {
-  vt_ver="${HR_VTCODE_VERSION:-0.177.0}"; vt_ver="${vt_ver#v}"
-  case "$(uname -m)" in
-    x86_64|amd64) vt_target="x86_64-unknown-linux-gnu" ;;
-    aarch64|arm64) vt_target="aarch64-unknown-linux-gnu" ;;
-    *) echo "vtcode: no release tarball for $(uname -m)"; return 1 ;;
-  esac
-  vt_base="https://github.com/vinhnx/VTCode/releases/download/${vt_ver}"
-  vt_tar="vtcode-${vt_ver}-${vt_target}.tar.gz"
-  vt_tmp="$(mktemp -d)"
-  curl -fsSL "$vt_base/$vt_tar" -o "$vt_tmp/$vt_tar" || { rm -rf "$vt_tmp"; return 1; }
-  curl -fsSL "$vt_base/vtcode-${vt_ver}-${vt_target}.sha256" -o "$vt_tmp/want" \
-    || { rm -rf "$vt_tmp"; return 1; }
-  vt_want="$(tr -d '\r' < "$vt_tmp/want" | awk '{print $1}' | head -1)"
-  vt_have="$(sha256sum "$vt_tmp/$vt_tar" | awk '{print $1}')"
-  if [ -z "$vt_want" ] || [ "$vt_want" != "$vt_have" ]; then
-    echo "vtcode $vt_ver: checksum mismatch for $vt_tar (want ${vt_want:-none}, have $vt_have)"
-    rm -rf "$vt_tmp"; return 1
-  fi
-  tar xzf "$vt_tmp/$vt_tar" -C "$vt_tmp" || { rm -rf "$vt_tmp"; return 1; }
-  # The archive holds the binary plus a man/ tree; find the executable rather than assuming its
-  # depth — jcode's Linux tarball was a launcher plus a sibling .bin where its macOS one was a
-  # single binary, and "install the file called <name>*" put a 505-byte shim on PATH.
-  vt_bin="$(find "$vt_tmp" -type f -name vtcode -perm -u+x | head -1)"
-  [ -n "$vt_bin" ] || { echo "vtcode $vt_ver: no vtcode executable in $vt_tar"; rm -rf "$vt_tmp"; return 1; }
-  mkdir -p "$TOOLS/bin"
-  install -m 0755 "$vt_bin" "$TOOLS/bin/vtcode" || { rm -rf "$vt_tmp"; return 1; }
-  rm -rf "$vt_tmp"
-  # RUN what was installed and compare the version it REPORTS: `vtcode --version` prints
-  # "vtcode-core <version>".
-  vt_got="$("$TOOLS/bin/vtcode" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-  if [ "$vt_got" != "$vt_ver" ]; then
-    echo "vtcode installed but reports '${vt_got:-nothing}', wanted $vt_ver"
-    rm -f "$TOOLS/bin/vtcode"; return 1
-  fi
-}
-
 # fast-agent (Apache-2.0, evalstate/fast-agent) from PyPI as fast-agent-mcp, pinned to the release
 # the runner's code was measured against. Its own venv, for opensquilla's reason: it pins a large
 # dependency set (mcp, anthropic, openai, google-genai, a2a-sdk) and must not share the runner's
@@ -1732,11 +1683,6 @@ install_backends() {
     try_install "Docker Agent" install_docker_agent || true
   fi
 
-  VTCODE_PIN="${HR_VTCODE_VERSION:-0.177.0}"
-  if wanted vtcode && [ "$("$(backend_bin vtcode)" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$VTCODE_PIN" ]; then
-    echo "[harnessrouter] installing VT Code $VTCODE_PIN (Apache-2.0, version-pinned) — ~31 MB…"
-    try_install "VT Code" install_vtcode || true
-  fi
   # `zeroclaw --version` prints "zeroclaw 0.8.5", so comparing it to the pin both installs a missing
   # binary and replaces one left by an older image.
   ZEROCLAW_PIN="${HR_ZEROCLAW_VERSION:-0.8.5}"; ZEROCLAW_PIN="${ZEROCLAW_PIN#v}"

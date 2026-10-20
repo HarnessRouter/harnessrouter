@@ -52,9 +52,9 @@ BASES = ["claude-code", "codex", "hermes", "goose", "gemini", "qwen", "opencode"
          "zeroclaw",
          # 2026-10-19, this batch. Every one takes a stdio server, and their remote clients were
          # read off each CLI's own transport enum, which is what _BRIDGED_TRANSPORTS in the runner
-         # records: vibe (transport http | streamable-http | stdio), vtcode (Stdio | Http) and
-         # docker-agent (streamable | sse, product servers streamable) have their SSE column
-         # bridged; fast-agent takes SSE natively; dcode reads the claude-shaped config, which
+         # records: vibe (transport http | streamable-http | stdio) and docker-agent (streamable |
+         # sse, product servers streamable) have their SSE column bridged; fast-agent takes SSE
+         # natively; dcode reads the claude-shaped config, which
          # carries all three. No remote column has been measured on any of them against a live
          # server yet — that is what this dimension is for.
          "vibe", "docker-agent", "fast-agent", "dcode"]

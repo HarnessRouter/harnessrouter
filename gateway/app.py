@@ -1391,18 +1391,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "dcode"): "tokenrouter",
     ("custom", "dcode"): "openai-api",
     ("harnessrouter", "dcode"): "tokenrouter",
-    # vtcode (VT Code) is implemented and NOT OFFERED, so it has no wiring at all. Its runner
-    # path works — it has a measured column (55 of 56 ids, five scenarios each) — but in `vtcode
-    # exec` a harness's MCP SERVERS CANNOT REACH THE MODEL, which is half of what a harness is for
-    # here. Measured on 0.177.0 and again on 0.180.0 (2026-10-19/20) with a stdio server written
-    # for the probe: the CLI spawns the process its config names and never sends `initialize`, so
-    # no tool is registered; `search_tools`, the only door to anything beyond its five built-ins,
-    # answers `[Execution failed] session tool catalog is not available` because
-    # `attach_session_model_tools` is called by the INTERACTIVE runloop alone ("Headless paths may
-    # never call this", its own comment) and `execute_search_tools` errors instead of degrading.
-    # The profile, the surface gate, the allow-list and `vtcode mcp list` were each ruled out; see
-    # docs/support-matrix-notes.md. Offering a base whose declared MCP servers are silently
-    # unreachable would be the overstatement this product refuses, so it waits for upstream.
+    # No vtcode rows: VT Code is not in this tree. It was built, measured (a column of 55 green
+    # rows out of 56) and then taken out whole, because in `vtcode exec` a harness's MCP servers
+    # cannot reach the model — the CLI spawns the server its config names and never sends
+    # `initialize`, and `search_tools`, the only other door, answers "session tool catalog is not
+    # available" (that catalog is attached by the interactive runloop alone). Measured on 0.177.0
+    # and 0.180.0. The implementation is parked on the branch `parked/vtcode-and-gajae` and the
+    # measurement is in docs/support-matrix-notes.md; restoring it is that branch, not a rewrite.
     ("anthropic", "vibe"): "anthropic",        ("openai", "vibe"): "openai",
     ("azure-foundry", "vibe"): "azure",
     ("openrouter", "vibe"): "openai-api",

@@ -546,9 +546,6 @@ _SESSION_PRESENT = {
     # vibe: _build_vibe asks its own session store (_vibe_session_present) and passes --resume only
     # when the conversation is there, so the id in argv IS that lookup's conclusion.
     "vibe": _argv_session_present,
-    # vtcode: the same arrangement — _build_vtcode only emits the `resume` subcommand when
-    # _vtcode_session_present found the id in .vtcode/sessions.
-    "vtcode": _argv_session_present,
     # docker-agent passes --session on EVERY turn (an id its store does not have is created with
     # that id, as a new conversation), so the argv says nothing: its store is asked instead.
     "docker-agent": _docker_agent_session_present,
@@ -1233,12 +1230,6 @@ def _git_shed_cli_home_history(ws: str) -> None:
 # ── input/output file plumbing (OpenAI Responses input_file blocks + container files) ──
 # Paths never reported as agent-produced output (internal state / scratch / secrets / vcs).
 _PRODUCED_EXCLUDE_PREFIX = (".harness/", "tmp/", ".codex/", ".git/", ".claude/", ".pi/",
-                            # vtcode keeps its session store, its snapshots and its task-tracker
-                            # files in <workspace>/.vtcode — CLI state, like the four above, and
-                            # the one place its conversation can live (it has no home-directory
-                            # store), so it is excluded from the deliverables and still travels
-                            # in the checkpoint.
-                            ".vtcode/",
                             # cheetahclaws: its project-level skills folder (written by
                             # _write_skills) and its task tracker, both CLI state
                             ".cheetahclaws/",
@@ -1670,14 +1661,6 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # workspace, where a harness skill would be handed back as a deliverable.
         rootrels = [".harness/home/.agents/skills"]
         entryroot = ".harness/home/.agents/skills"
-    elif backend == "vtcode":
-        # ~/.agents/skills/<name>/SKILL.md — the USER root in its own discovery order (repository
-        # `.agents/skills` first, then this one), with $HOME redirected to .harness/home. Not the
-        # repository root's: that sits in the workspace, where every harness skill would be handed
-        # back to the user as a deliverable of their own task (goose's lesson), and the user root
-        # loads unconditionally rather than per git repository.
-        rootrels = [".harness/home/.agents/skills"]
-        entryroot = ".harness/home/.agents/skills"
     elif backend == "vibe":
         # $VIBE_HOME/skills/<name>/SKILL.md — one of the two GLOBAL skill directories in its own
         # discovery list (the other is ~/.agents/skills), and VIBE_HOME is already this session's
@@ -1896,20 +1879,6 @@ _BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "g
                        # the product's own servers are streamable HTTP, which it speaks, and an SSE
                        # server a harness declares has no client there at all.
                        "vibe": ("sse",),
-                       # vtcode's McpTransportConfig has exactly two variants, Stdio and Http, so
-                       # an SSE server has no client there — and the Http one does not carry tools
-                       # either. Its own doc comment on McpHttpServerConfig says so: "HTTP
-                       # transport is partially implemented. Basic connectivity testing is
-                       # supported, but full streamable HTTP MCP server support requires additional
-                       # implementation using Server-Sent Events (SSE) or WebSocket connections."
-                       # MEASURED by the custom-harness dimension (2026-10-19): with the fixture's
-                       # streamable-HTTP server declared and stored on the harness, the turn called
-                       # `search_tools` three times — this runtime's own door to a deferred tool —
-                       # found nothing of the server's, and fell back to `exec_command` five times
-                       # ("the declared MCP server was never called"). So BOTH remote transports are
-                       # bridged here, which is jcode's arrangement for the same reason: the bridge
-                       # launches a stdio server the client does speak.
-                       "vtcode": ("sse", "http"),
                        # docker-agent's remote toolset takes transport_type "streamable" or "sse",
                        # and the product's own servers are streamable; an SSE one is bridged for
                        # the same reason as the others until that path is measured.
@@ -2150,10 +2119,6 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
                                    "goose", "kimi", "aider", "openhands", "kilo", "grok",
                                    "agentzero",
                                    "mimo", "gajae", "jcode", "opensquilla", "nanobot", "vibe",
-                                   # vtcode reads AGENTS.md from the workspace with no flag once
-                                   # the folder is trusted (`vtcode init` writes one itself);
-                                   # measured, an instruction in it was obeyed in the answer
-                                   "vtcode",
                                    # docker-agent reads it through its own prompt-files lookup,
                                    # which walks up from the working directory for AGENTS.md and
                                    # CLAUDE.md; the config this runner writes names AGENTS.md in
@@ -12187,400 +12152,6 @@ def _build_vibe(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
 
 
 
-# ── VT Code (vinhnx/VTCode, Rust) ──────────────────────────────────────────────────────────────
-# A terminal coding agent whose headless mode its own docs describe as matching "the
-# non-interactive Codex schema". It does not: the FRAME is codex's (thread.started,
-# turn.started/completed/failed, item.started/updated/completed) and the ITEMS are its own
-# (tool_invocation / tool_output / harness / error where codex has command_execution and
-# mcp_tool_call), so it carries its own normaliser rather than reusing _codex_to_claude — the same
-# relationship gemini-cli has to claude's stream-json, and the reason that one has its own too.
-#
-# MEASURED on 0.177.0 (2026-10-16), against the Vercel AI Gateway through a recording proxy:
-#   * `[[custom_providers]]` with base_url + api_key_env + api_format = "openai-chat" is the relay
-#     door, and `[agent] provider` must NAME it: this CLI infers a provider from a model id's
-#     vendor prefix, so `--model google/gemini-3-flash` alone sent it to its BUILT-IN gemini
-#     provider and it asked for a GEMINI_API_KEY nobody set. Every invocation here names the
-#     provider as well as the model.
-#   * `exec resume <id>` restores the model the session STARTED on unless `--model` is passed —
-#     measured: a resumed turn whose config named another model was refused with "Invalid model
-#     identifier: 'anthropic/claude-haiku-5.5'" because that id was no longer in the provider's
-#     list. With `--provider`, `--api-key-env` and `--model` on the resume, the switch works and
-#     the conversation is kept (checklist item 42, a third base with this shape).
-#   * A turn's LAST agent_message is not its answer: the harness appends a summary block ("Task:
-#     … / Agent Type: … / Session: … / Final Status: …"), and `--last-message-file` writes THAT.
-#     The answer is the last agent_message that is not the summary, which is what this normaliser
-#     keeps — otherwise every turn's reply would be machine prose and the real answer would be
-#     pushed out of the transcript a judge reads (batch 3's lesson, in a new costume).
-#   * It reads AGENTS.md from the workspace with no flag, once the workspace is trusted, and exec
-#     mode refuses to run an untrusted one: VTCODE_TRUST_WORKSPACE=full-auto is what grants it
-#     (the alternative is a TTY prompt, which a turn does not have).
-#   * **stdin**: `vtcode exec --json "<prompt>"` with an inherited stdin made no model call at all
-#     for as long as it was left running, and the identical argv with stdin closed answered in
-#     seconds. That is why _run_turn_bg closes stdin for every turn now (see its comment); the two
-#     other suspects, its ripgrep and ast-grep installers, were ruled out by isolating them.
-#   * Its continuation loop ("Completion is accepted only when all tracker steps are completed")
-#     is off here and `orchestration_mode` is `single`: with them on, a small model spent 7 turns
-#     re-verifying a finished task until its own loop detector stopped the run (`loop_detected`).
-#     A capable model then answered in 3 requests with the loop off, which is this product's
-#     contract — one turn, one answer.
-#   * Its own request shape is what two providers refused, not ours: it sends an EMPTY user message
-#     after a tool result and appends its "## Environment" block as a trailing SYSTEM message. All
-#     three families tried (anthropic, google, openai, each through the gateway) refused one or the
-#     other, 400, after the turn had already done its work. The relay repairs both now, keyed on
-#     what the provider says rather than on who said it (_drop_empty_messages,
-#     _trailing_system_as_user); with the repairs, eight consecutive requests were answered 200.
-VTCODE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
-VTCODE_BIN = os.environ.get("HR_VTCODE_BIN", "/data/agent-tools/bin/vtcode")
-VTCODE_DEFAULT_MODEL = os.environ.get("VTCODE_DEFAULT_MODEL", "gpt-5.4")
-# The provider name inside the config this builder writes, named on every invocation (see above).
-_VTCODE_PROVIDER = "harness"
-_VTCODE_KEY_ENV = "HR_VTCODE_RELAY_KEY"
-# Its built-in tools, from `vtcode schema tools` on the pinned build — all five of them. Everything
-# else this runtime can do (code_search, web_search, web_fetch, cron, and an MCP server's tools)
-# is DEFERRED: the model finds it through `search_tools`, which is also why a judge that reads tool
-# names alone sees `exec_command` and `search_tools` where another base would show the tool itself.
-ALL_VTCODE_TOOLS = ("exec_command", "write_stdin", "apply_patch", "search_tools",
-                    "record_decision")
-# The summary block the harness appends after the answer (see the note above). Anchored at the
-# start and requiring two more of its own lines: a model writing "Task: …" about its own work must
-# not be mistaken for it.
-_VTCODE_SUMMARY_RE = re.compile(r"\ATask:.*\n(?:.*\n)*?(?:Agent Type|Session|Final Status):", re.M)
-
-
-def _vtcode_is_summary(text: str) -> bool:
-    return bool(_VTCODE_SUMMARY_RE.match(text or ""))
-
-
-def _vtcode_home(cwd: str) -> pathlib.Path:
-    """Where this base's own files live: the config this builder writes per turn."""
-    return pathlib.Path(cwd) / ".harness" / "vtcode"
-
-
-def _vtcode_config_path(cwd: str) -> pathlib.Path:
-    return _vtcode_home(cwd) / "vtcode.toml"
-
-
-def _vtcode_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
-    """Whether the workspace's session store holds the conversation to continue.
-
-    Its exec sessions live under `<workspace>/.vtcode/sessions/<id>/` (the CLI's own canonical
-    store, documented as where every exec run persists its ThreadEvent stream), so a directory of
-    that name is the predicate — asked of the store rather than by searching bytes."""
-    if not session_id:
-        return False
-    # The registry the `resume` subcommand reads, under the state dir this builder pins with
-    # VTCODE_DATA (one file per session), and the per-workspace event store beside it.
-    reg = _vtcode_home(cwd) / "data" / "state" / "sessions"
-    if (reg / f"{session_id}.json").is_file():
-        return True
-    return (pathlib.Path(cwd) / ".vtcode" / "sessions" / session_id).is_dir()
-
-
-def _vtcode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
-                   tools_disabled: list[str] | None) -> pathlib.Path:
-    """Write .harness/vtcode/vtcode.toml for this turn and return its path.
-
-    Everything in here is either the connection, the model, or a default that would otherwise cost
-    the turn money, change its model or keep it running after it had answered."""
-    q = _vibe_toml   # one TOML scalar, the same hand-rolled quoting vibe's config uses
-    allowed = [t for t in ALL_VTCODE_TOOLS if t not in set(tools_disabled or ())]
-    lines = [
-        "# written per turn by the harness runner — do not edit, it is overwritten",
-        "[features]",
-        "# OFF: the memories subsystem extracts context from finished threads with its own model",
-        "# calls and injects it into later ones — a second bill and a second conversation.",
-        "memories = false",
-        "",
-        "[agent]",
-        f"provider = {q(_VTCODE_PROVIDER)}",
-        f"api_key_env = {q(_VTCODE_KEY_ENV)}",
-        f"default_model = {q(model)}",
-        "",
-        '# ONE idle turn ends the turn, and 1 is the only value that works here. A turn whose answer',
-        '# is TEXT with no tool call is not the end of a run for this CLI: it asks whether the text',
-        '# looks like a completion (check_completion_candidate, a list of phrases such as -the task',
-        '# is complete- or -all done-), and when it does not, it calls the model again. The second,',
-        '# identical answer trips its own loop detector, and that outcome (LoopDetected) is a HARD',
-        '# BLOCK: the turn fails with -Stopped due to infinite loop detection- after the answer is',
-        "# already on the stream. MEASURED on 0.177.0 (2026-10-19): the matrix's first scenario,",
-        '# -Reply with exactly: M1-<model>-, failed that way on gpt-6.1-sol and gpt-6-sol, 153 s',
-        '# each, with the right answer sent twice.',
-        '#',
-        '# The default is 3, which cannot help: the loop detector fires on the SECOND identical',
-        '# answer, before any limit above 1 is reached. At 1, the first text-only answer ends the run',
-        '# as StoppedNoAction, which this CLI counts as a SUCCESS in its own words (-Stopped after',
-        '# agent signaled no further actions-, TaskOutcome::is_success). A turn that calls a tool',
-        '# resets the counter, so nothing changes for the turns that do work; what is given up is the',
-        "# CLI's second chance for a model that answers without doing the work, and one turn, one",
-        "# answer is this product's contract anyway (see continuation_policy below).",
-        'idle_turn_limit = 1',
-        "",
-        "[agent.persistent_memory]",
-        "enabled = false",
-        "",
-        "[agent.harness]",
-        "# OFF, and measured: with the continuation loop on, a task tracker decides when a turn is",
-        "# finished and a weaker model re-verified a completed task until the CLI's own loop",
-        "# detector stopped the run. One turn, one answer, is this product's contract.",
-        'continuation_policy = "off"',
-        '# the single-agent path rather than plan/build/evaluate, for the same reason',
-        'orchestration_mode = "single"',
-        "",
-        "[agent.harness.continuation]",
-        "auto_continue_tracker = false",
-        "cross_turn_turns = 0",
-        "",
-        '[tools]',
-        '# A `prompt` policy is a DENY in a headless run: there is nobody to confirm, and the call',
-        '# comes back "[Blocked by policy] tool denied by policy". Every tool defaults to `prompt`',
-        '# here (ToolPolicy::Prompt is the serde default) and the shipped example config sets',
-        '# apply_patch to `prompt` as well — and apply_patch is the tool this base WRITES FILES with.',
-        "# MEASURED on 0.177.0 (2026-10-19): the matrix's artifact scenario asked for one file,",
-        '# apply_patch came back blocked by policy, and the turn answered -the execution policy denied',
-        '# apply_patch, so I could not create hello-vtcode.txt- with nothing written. Being in',
-        '# [automation.full_auto].allowed_tools is not enough: that list is the hard boundary for what',
-        '# the model may reach, and this is the separate question of whether a reached tool runs',
-        '# without a human. The sandbox is the boundary here, so the answer is yes.',
-        'default_policy = "allow"',
-        '',
-        '[tools.policies]',
-        *(f"{t} = \"allow\"" for t in allowed),
-        # ...and the harness's own disabled tools are denied here too, beside the hard
-        # boundary above: two doors saying the same thing, which is what a reader expects.
-        *(f"{t} = \"deny\"" for t in ALL_VTCODE_TOOLS if t not in allowed),
-        "",
-        "[telemetry]",
-        "atif_enabled = false",
-        "bottleneck_tracing = false",
-        "",
-        "[automation.full_auto]",
-        "# exec mode treats this as a HARD execution boundary: a tool outside the list is denied",
-        "# before it runs, which is where a harness's disabled tool is withheld.",
-        "enabled = true",
-        "# the acknowledgement profile is a file a person signs; without this the CLI aborts",
-        "require_profile_ack = false",
-        "auto_grant_tool_limits = true",
-        "allowed_tools = [" + ", ".join(q(t) for t in allowed) + "]",
-        "",
-        "[[custom_providers]]",
-        f"name = {q(_VTCODE_PROVIDER)}",
-        'display_name = "HarnessRouter"',
-        f"base_url = {q((auth.base_url or '').rstrip('/'))}",
-        f"api_key_env = {q(_VTCODE_KEY_ENV)}",
-        f"model = {q(model)}",
-        # The id has to be in `models` or a resumed turn that names it is refused outright
-        # ("Invalid model identifier"), which is how the model switch presented before this.
-        f"models = [{q(model)}]",
-        "context_window = 200000",
-        '# explicit, not autodetected: this endpoint is chat/completions and nothing else',
-        'api_format = "openai-chat"',
-        "supports_tools = true",
-        "",
-    ]
-    entries = []
-    for i, sv in enumerate(mcp_servers or []):
-        if not isinstance(sv, dict):
-            continue
-        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
-        url = (sv.get("url") or "").strip()
-        if sv.get("command"):
-            cmdv = sv["command"]
-            argv = cmdv if isinstance(cmdv, list) else [str(cmdv)]
-            args = [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]
-            entries.append(("[[mcp.providers]]", [f"name = {q(name)}", "enabled = true",
-                                                  f"command = {q(str(argv[0]))}",
-                                                  "args = [" + ", ".join(q(a) for a in args) + "]"]))
-            continue
-        if not url:
-            continue
-        body = [f"name = {q(name)}", "enabled = true", f"endpoint = {q(url)}"]
-        hdrs = _mcp_headers(sv)
-        if hdrs:
-            # Through the shared helper, which is the one place a server's headers come from: the
-            # bearer the gateway minted for this turn is in there, and eight writers that kept
-            # their own copy dropped it.
-            body.append("headers = { " + ", ".join(f"{q(k)} = {q(v)}" for k, v in hdrs.items()) + " }")
-        entries.append(("[[mcp.providers]]", body))
-    if entries:
-        lines += ["[mcp]", "enabled = true",
-                  # Its transport config has exactly two variants, Stdio and Http (read off
-                  # McpTransportConfig), so an SSE server a harness declares has no client here and
-                  # _BRIDGED_TRANSPORTS turns it into a stdio launcher before this runs.
-                  "request_timeout_seconds = 60", ""]
-        for header, body in entries:
-            lines += [header, *body, ""]
-    path = _vtcode_config_path(cwd)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines))
-    return path
-
-
-def _vtcode_usage(u: dict | None) -> dict:
-    """Its usage object → the canonical shape.
-
-    `input_tokens` / `output_tokens` / `cached_input_tokens` are already names
-    _norm_token_usage knows; `cache_creation_tokens` is NOT in its picker, and a field name it does
-    not know is a category billed at zero, so it is mapped here by hand (the gemini-cli lesson).
-    Every probe reported 0 cached tokens, so whether its input is gross or net of the cache is not
-    something this has measured — it is read as gross, the convention of the chat/completions
-    stream it is reporting."""
-    if not isinstance(u, dict):
-        return {}
-    out = dict(u)
-    if u.get("cache_creation_tokens") and not u.get("cache_creation_input_tokens"):
-        out["cache_creation_input_tokens"] = u["cache_creation_tokens"]
-    return _norm_token_usage(out)
-
-
-def _vtcode_to_claude(obj: dict, state: dict) -> list[dict]:
-    """Map ONE line of `vtcode exec --json` to zero+ canonical claude events.
-
-    Only `item.completed` is read: `item.started` and `item.updated` are the same item with less of
-    it (a growing agent_message, a tool_invocation before its arguments), and rendering those as
-    well would double every row."""
-    t = obj.get("type")
-    if t == "thread.started":
-        sid = str(obj.get("thread_id") or "")
-        state["_vt_sid"] = sid
-        return [{"type": "system", "subtype": "init", "session_id": sid,
-                 "model": state.get("model")}]
-    if t == "turn.completed":
-        state["_vt_usage"] = obj.get("usage")
-        return []
-    if t == "turn.failed":
-        state["_vt_usage"] = obj.get("usage") or state.get("_vt_usage")
-        state["_vt_error"] = str(obj.get("message") or "")[:1000]
-        return []
-    if t == "thread.completed":
-        state["_vt_usage"] = obj.get("usage") or state.get("_vt_usage")
-        code = str(obj.get("outcome_code") or "")
-        if str(obj.get("subtype") or "") != "success" and not state.get("_vt_error"):
-            state["_vt_error"] = code or "the turn did not finish"
-        state["_vt_done"] = True
-        return []
-    if t != "item.completed":
-        return []
-    it = obj.get("item") if isinstance(obj.get("item"), dict) else {}
-    kind = str(it.get("type") or "")
-    if kind == "agent_message":
-        text = str(it.get("text") or "").strip()
-        if not text:
-            return []
-        if _vtcode_is_summary(text):
-            # the harness's own closing block, not the model's answer (see the note above)
-            state["_vt_summary"] = text
-            return []
-        if text == state.get("final"):
-            return []     # the same answer twice: its loop can repeat one verbatim
-        state["final"] = text
-        return [{"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}]
-    if kind == "tool_invocation":
-        cid = str(it.get("tool_call_id") or it.get("id") or "tool")
-        args = it.get("arguments")
-        name = str(it.get("tool_name") or "tool")
-        if str(it.get("outcome") or "") == "hook_denied":
-            # The tool policy refused this call before it ran (`allowed_tools`), and the stream
-            # says so in one word: outcome "hook_denied", with "Tool execution denied: <tool>" as
-            # its output. MEASURED with exec_command withheld.
-            #
-            # Not recorded as a tool call, for the reason written at _vibe_to_claude: on most bases
-            # a disabled tool is withheld from the model, so a turn's tool list means "what ran",
-            # and the custom-harness dimension reads that list to decide whether a withheld tool
-            # stayed unused. The attempt becomes the notice the gateway renders on the reply, so
-            # the person whose switch stopped the agent is told.
-            state.setdefault("_vt_denied", set()).add(cid)
-            text = f"{name} was refused: this harness has it switched off"
-            seen = state.setdefault("_vt_notices", [])
-            if text in seen:
-                return []
-            seen.append(text)
-            return [{"type": "system", "subtype": "notice", "text": text}]
-        return [{"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "id": cid, "name": name,
-             "input": args if isinstance(args, dict) else {"input": args}}]}}]
-    if kind == "tool_output":
-        cid = str(it.get("tool_call_id") or it.get("call_id") or "tool")
-        if cid in state.get("_vt_denied", ()):
-            return []   # the refused call's own result; its notice said what happened
-        rc = it.get("exit_code")
-        bad = (str(it.get("status") or "") not in ("completed", "")
-               or (isinstance(rc, int) and rc != 0))
-        return [{"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": cid, "is_error": bool(bad),
-             "content": str(it.get("output") or "")[:8000]}]}}]
-    if kind == "error":
-        # One tool call's failure, which the agent sees and usually works around (a command its own
-        # policy blocked, a path outside the workspace). Kept as the reason a turn that then fails
-        # can report, and not rendered: the tool_result above already carries what happened.
-        state["_vt_item_error"] = str(it.get("message") or "")[:500]
-        return []
-    return []
-
-
-def _vtcode_eof(state: dict, rc: int) -> list[dict]:
-    """The verdict: its own terminal event when there was one, the exit code otherwise."""
-    usage = _vtcode_usage(state.get("_vt_usage"))
-    why = state.get("_vt_error") or ""
-    if not state.get("_vt_done") and rc != 0 and not why:
-        # died before `thread.completed` — the run loop's stderr tail is the reason
-        why = ""
-    ok = rc == 0 and not why
-    return [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
-             "result": state.get("final", "") if ok else (why or state.get("final", "")),
-             "usage": usage}]
-
-
-_vtcode_to_claude.eof = _vtcode_eof   # type: ignore[attr-defined]
-
-
-def _build_vtcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
-                  resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-                  tools_disabled: list[str] | None = None,
-                  max_turns: int | None = None) -> list[str]:
-    pr = provider or "openai-api"
-    if pr not in VTCODE_PROVIDERS:
-        raise HTTPException(400, f"unknown vtcode provider '{pr}' "
-                                 f"(one of {sorted(VTCODE_PROVIDERS)})")
-    if not auth.base_url:
-        raise HTTPException(400, f"vtcode provider '{pr}' needs a base_url (none configured)")
-    if auth.api_key:
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
-        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
-    cfg = _vtcode_config(auth, model, cwd, mcp_servers, tools_disabled)
-    env[_VTCODE_KEY_ENV] = auth.api_key or ""
-    # exec mode refuses an untrusted workspace, and the alternative is a TTY prompt the turn has
-    # no way to answer; the sandbox is the trust boundary here.
-    env["VTCODE_TRUST_WORKSPACE"] = "full-auto"
-    env["VTCODE_TRUST_WORKSPACE_QUIET"] = "1"
-    # No OS keyring exists in the sandbox, and the credential is in the environment anyway.
-    env["VTCODE_DISABLE_KEYRING"] = "1"
-    # Its state dir is where the RESUMABLE session registry lives, and by default that is the
-    # platform's own application-support path (measured: a session landed under
-    # "$HOME/Library/Application Support/com.vinhnx.vtcode/state/sessions/<id>.json" on a Mac, and
-    # an XDG path on Linux). Both are inside the redirected HOME, but neither is a path this
-    # runner can check for a session without guessing the platform, so both roots are pinned here:
-    # the conversation then travels in the checkpoint under .harness/ and _vtcode_session_present
-    # can ask one directory whether the session is there.
-    env["VTCODE_DATA"] = str(_vtcode_home(cwd) / "data")
-    env["VTCODE_CONFIG"] = str(_vtcode_home(cwd) / "config")
-    # Its session store, its snapshots and its task-tracker files live in `<workspace>/.vtcode`,
-    # which _PRODUCED_EXCLUDE_PREFIX drops, so the conversation travels in the checkpoint without
-    # being handed back as the task's output.
-    base = [VTCODE_BIN, "exec", "--json", "-c", str(cfg), "--skip-confirmations",
-            # Its default is TEN tool calls per session, which a real task reaches long before it
-            # is finished; the turn's own step budget is the harness's.
-            "--max-tool-calls", str(int(max_turns) if max_turns else 120)]
-    if resume_session_id and _vtcode_session_present(cwd, base, resume_session_id):
-        # The model and the provider BOTH have to be named again: a resumed session restores the
-        # model it started on, and a model id's vendor prefix would otherwise pick a built-in
-        # provider nobody configured (both measured).
-        return base + ["resume", "--provider", _VTCODE_PROVIDER,
-                       "--api-key-env", _VTCODE_KEY_ENV, "--model", model,
-                       resume_session_id, prompt]
-    return base + [prompt]
-
-
-
 # ── Docker Agent (docker/docker-agent, Go) ────────────────────────────────────────────────────
 # Docker's own agent builder and runtime, the successor to cagent. A turn is
 # `docker-agent run --exec --json`, which streams NDJSON of its own shape, and everything about the
@@ -13481,11 +13052,6 @@ BACKENDS = {
     # rather than in the stream — so it carries its own normaliser and its own eof.
     "vibe": {"providers": sorted(VIBE_PROVIDERS), "default_model": VIBE_DEFAULT_MODEL,
              "normalize": _vibe_to_claude},
-    # VT Code's `exec --json` wears codex's FRAME over its own items (tool_invocation /
-    # tool_output / harness), so it carries its own normaliser — see the note on the backend for
-    # why _codex_to_claude cannot be reused for it.
-    "vtcode": {"providers": sorted(VTCODE_PROVIDERS), "default_model": VTCODE_DEFAULT_MODEL,
-               "normalize": _vtcode_to_claude},
     # Docker Agent's `run --exec --json` is its own NDJSON (tool_call / tool_call_response /
     # agent_choice / token_usage / stream_stopped), with its usage reported per REQUEST — see
     # _docker_agent_usage for why the turn's numbers are accumulated rather than read off the last
@@ -15612,11 +15178,6 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                   resume_session_id=req.resume_session_id,
                                   mcp_servers=req.mcp_servers,
                                   tools_disabled=req.tools_disabled, max_turns=req.max_turns)
-    elif backend == "vtcode":
-        model = model or VTCODE_DEFAULT_MODEL
-        cmd = _build_vtcode(req.provider, auth, model, req.prompt, cwd, env,
-                            resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                            tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "vibe":
         model = model or VIBE_DEFAULT_MODEL
         # Skills are already under $VIBE_HOME/skills, one of its own global roots, so there is

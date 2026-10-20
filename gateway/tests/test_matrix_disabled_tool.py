@@ -72,7 +72,8 @@ def test_this_batchs_bases_are_there():
     # batch 4, the same check as above for the bases added with it
     for b in ("vibe", "docker-agent", "fast-agent", "dcode"):
         assert b in _bases_in_dimension(), b
-    # vtcode is NOT here: implemented and not offered (test_vtcode_not_offered.py)
+    # vtcode is NOT here, and is not in the tree either: its headless mode drops a harness's MCP
+    # servers, so it was taken out whole (docs/support-matrix-notes.md)
     assert "vtcode" not in _bases_in_dimension()
 
 

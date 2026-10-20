@@ -4398,284 +4398,44 @@ base's wiring — anthropic, openai, azure-foundry, openrouter, tokenrouter, llm
 harnessrouter are all unmeasured on it, and a column is one connection's measurement. A turn's input is large — 11.5k tokens on a three-word prompt, 20k characters of system
 prompt — which is worth knowing before reading its usage numbers against another base's.
 
-## vtcode: implemented, NOT offered — a harness's MCP servers cannot reach the model in its headless mode (2026-10-16/20)
+## vtcode (VT Code 0.177.0): measured, then taken out of the tree — its headless mode drops a harness's MCP servers (2026-10-16/20)
 
-VT Code 0.177.0 was built as far as the runner — `_build_vtcode`, `_vtcode_to_claude`,
-`_vtcode_eof`, their tests, their captured fixtures — and **is deliberately not registered in the
-gateway, the console, the default install set or either measurement dimension**.
-`gateway/tests/test_vtcode_not_offered.py` pins that state at every surface, the way gajae's does.
+Not in this repository any more: the runner implementation, its tests, its fixtures and its
+installer were removed whole, and the console, the gateway and both measurement dimensions never
+got it. **The work is parked on the branch `parked/vtcode-and-gajae`**, which is where a restore
+starts; this section is the record of why it is not here.
 
-**Why, in one sentence:** a turn runs well (its column below is 55 of 56 rows green) but the MCP
-servers a person declares on the harness are silently dropped, and half of what a harness is in
-this product is the tools its owner brings to it.
+**It ran.** A full support-matrix column on the Vercel connection (2026-10-19): 56 of the catalog's
+58 ids ran and **55 passed all five scenarios**, no substitution on any row, file cards agreeing
+with their records, sessions deleted. The one failing row, `grok-build-0.1`, failed the same way
+twice — `first` and `switch` pass, and the three turns the model answers itself end in
+`Stopped due to infinite loop detection` at 207 to 310 s.
 
-**The measurement** (0.177.0, and again on 0.180.0 — three releases newer, picked because 0.179.5's
-notes mention "Keep MCP stdio children on the resolved environment"): a stdio MCP server written
-for the probe appends one line the moment it starts and then answers the protocol by hand. Its log
-holds exactly `spawned <ts>` and **not one `initialize`** — the CLI launches the server its own
-config names and never speaks to it, so no tool is ever registered. `search_tools`, the only other
-door and the one this runtime defers everything behind, answers `[Execution failed] session tool
-catalog is not available`: `attach_session_model_tools` is called by the INTERACTIVE runloop alone
-("Headless paths may never call this", its own doc comment) and `execute_search_tools` errors
-instead of degrading as that comment requires. The model's own account matches — "`marker_ping` is
-not in the tools available in this session. The current tool list is `exec_command`, `apply_patch`,
-`write_stdin`…".
+**What stopped it.** A harness's MCP servers cannot reach the model in `vtcode exec`. Measured on
+0.177.0 and again on 0.180.0 with a stdio MCP server written for the probe, which appends a line
+the moment it starts and then answers the protocol by hand: its log holds exactly `spawned <ts>`
+and **not one `initialize`**. The CLI launches the server its own config names and never speaks to
+it, so no tool is registered. `search_tools` — the only other door, and the one this runtime defers
+everything else behind — answers `[Execution failed] session tool catalog is not available`,
+because `attach_session_model_tools` is called by the INTERACTIVE runloop alone ("Headless paths
+may never call this", its own doc comment) while `execute_search_tools` errors instead of degrading
+as that comment requires. Ruled out by measurement, not by reading: the tool profile
+(`advanced_vtcode` adds its own tools and no MCP tool), the surface gate (`AgentRunner => true`),
+the MCP allow-list (not enforced by default), the config shape (`[[mcp.providers]]` is what the
+struct declares, and exec reads it — that is how the server gets spawned), bridging the server as
+stdio (the bridge's output IS a stdio server, the thing being ignored), and `vtcode mcp list` (its
+own registry, not the workspace config).
 
-**Ruled out, each by measurement rather than by reading:** the tool profile (`advanced_vtcode` adds
-its own tools and no MCP tool; reverted), the surface gate (`SessionSurface::AgentRunner => true`
-allows every tool), the MCP allow-list (`default_allowlist_enforced() == false`), the config shape
-(`[[mcp.providers]]` is what `McpClientConfig.providers` declares, and exec does read it — that is
-how the server gets spawned at all), bridging the server as stdio (the bridge's output IS a stdio
-server, which is the thing being ignored), and `vtcode mcp list` (it reads its own registry rather
-than the workspace config, so no warm-up can populate a cache before a turn).
+**What the column taught the product before it was removed**, all of it still in the tree: a
+streamed tool call with no `index` gets one from the relay (Google's OpenAI-compatible surface sends
+none, and this client merged by it); the matrix's artifact row compares the page's file cards
+against the SESSION's files rather than one turn's; and the relay repairs a client's request shape
+(an empty user message after a tool result, a trailing system message) — all three were found here
+and all three serve every base.
 
-**What this is worth to upstream:** two citable defects, both in their own words — a headless path
-that never attaches the session tool catalog while its consumer is documented to "degrade
-gracefully rather than error", and an MCP child process spawned without a handshake.
-
-Everything below was measured while the base was still being prepared, and is kept because it is
-what a restore would start from: the column, the two config fixes it forced, and the facts about
-this CLI's own safety layer. Measured against the pinned release tarball on the Vercel AI Gateway,
-first through a recording proxy, then end to end through the runner's own argv and relay — and on
-2026-10-19 through a real support-matrix column.
-
-### The column (vercel, 2026-10-19): 55 of 56, one row reproduced as a finding
-Run against a locally built image of this branch (`HR_BACKENDS=vtcode`, one Vercel connection from
-the environment). **56 of the catalog's 58 ids ran and 55 of them passed all five scenarios**; the
-two that did not run are `llama-3.3-70b` and `nemotron-3.5-lightning`, already excluded on that
-gateway for measured reasons of their own. The audit beyond the pass flags: no substitution on any
-row, two `served` ids per row (so every switch reached the provider), no file card disagreeing with
-its record, every session of a passing row deleted. 1.6M input tokens for the column.
-
-**The one row that failed, twice:** `grok-build-0.1` passes `first` (7.6 s) and passes `switch` —
-the turn gpt-6.1-sol answers — and fails `followup`, `artifact` and `recycle` with
-`The turn failed: Stopped due to infinite loop detection`, 207 to 310 s each, on both the column
-run and a clean retest. Every failing turn is one this model answers itself, so what the row
-records is that THIS MODEL cannot hold a turn on this base: its own answers trip the CLI's loop
-detector. That is the same shape the batch notes already have for gpt-5.4-mini on this base, now
-with a model that reproduces it every time rather than once.
-
-Three rows failed on the first pass and passed a clean retest, which is why the matrix's own rule
-says to retest before excluding: `claude-sonnet-5` and `claude-opus-4.8` answered the recall after
-the recycle with the PREVIOUS turn's word (`HELLO`), and `gemini-3.1-pro-preview` failed the file-
-card check for a reason that was the dimension's own (below).
-
-### What the column cost before it could run at all
-Two bugs in the config this runner writes, neither in the CLI, both fixed with tests and then
-re-verified through the product — and the whole column re-run from zero on the fixed build, because
-a column assembled from two builds describes software nobody shipped.
-
-1. **A text-only answer could not end a turn.** An answer that is text with no tool call is not the
-   end of a run for this CLI: it asks whether the text looks like a completion
-   (`check_completion_candidate`, a phrase list — "the task is complete", "all done"), and when it
-   does not, it calls the model again. The second identical answer trips `check_for_response_loop`,
-   whose outcome `LoopDetected` is a hard block. So the matrix's FIRST scenario, "Reply with
-   exactly: M1-<model>", failed on gpt-6.1-sol and gpt-6-sol with
-   `Stopped due to infinite loop detection` — 153 s each, with the right answer already sent twice.
-   `[agent] idle_turn_limit = 1` is the fix and 1 is the only value that works: the default is 3 and
-   the detector fires on the second answer, before any limit above 1 is reached. At 1 the first
-   text-only answer ends the run as `StoppedNoAction`, a SUCCESS in this CLI's own words
-   (`TaskOutcome::is_success` matches `Success | StoppedNoAction`); a turn that calls a tool resets
-   the counter, so the turns that do work are unchanged. Measured after: the same turn answers in
-   5 s with `turn.completed`.
-2. **The tools this base offers could not run.** A `prompt` policy is a DENY in a headless run —
-   nobody is there to confirm — and `prompt` is this CLI's default for every tool, `apply_patch`
-   included in its own shipped example config. apply_patch is how this base WRITES FILES, so the
-   artifact scenario came back `[Blocked by policy] tool denied by policy` and the turn answered
-   "the execution policy denied apply_patch, so I could not create hello-vtcode.txt" with nothing
-   written. Being in `[automation.full_auto].allowed_tools` is a different question: that list is
-   the hard boundary for what the model may REACH, not whether a reached tool runs without a human.
-   `[tools] default_policy = "allow"` with `[tools.policies]` naming every offered tool is the fix,
-   and a withheld tool is now denied at both doors.
-
-A third fix was in the DIMENSION, not the product: the artifact row compared the page's file cards
-against the files of that turn alone, which assumes no earlier turn ever writes. `gemini-3.1-pro-
-preview` wrote `output.txt` carrying its answer on the FOLLOW-UP turn, so the row read "the cards
-do not match the record: cards [output.txt,hello-vtcode.txt] vs record [hello-vtcode.txt]" while
-both the page and the record were right. The check now asks what the rule is actually for: every
-file this turn stored has a card, no card is rendered twice (the 2026-09-07 defect), and no card
-names a file no turn of the session produced.
-
-### An MCP server cannot reach the model on this base in headless mode (2026-10-19)
-The custom-harness dimension is where this came out, and the cause is not the transport. What
-happens, measured through the product and then by hand with the API:
-
-- The harness stored the server (`mcp_stored`), the runner wrote it into `[[mcp.providers]]`, and
-  the turn never called it. The model called `search_tools` — this runtime's own door to anything
-  beyond its five built-ins — and got back `[Execution failed] session tool catalog is not
-  available`, three times, then went looking through the workspace instead
-  (`find … -iname '*mcp*'`, `cat AGENTS.md`, `cat .harness/mcp-bridge/deepwiki.sh`) and tried to
-  run the bridge launcher by hand, which the execution policy refused.
-- Its own source says why: `attach_session_model_tools` is called by the INTERACTIVE runloop only
-  — its doc comment reads "Headless paths may never call this; every consumer of
-  `session_model_tools()` must treat `None` as 'no session tool list available' and degrade
-  gracefully rather than error" — and `execute_search_tools` does the opposite of that last
-  clause: it errors.
-- **The server is spawned and never spoken to.** Measured with a stdio MCP server written for
-  this probe, which appends a line to a log the moment it starts and then answers the protocol by
-  hand: the log holds exactly one line, `spawned <ts>`, and NOT ONE `initialize` — the CLI launches
-  the process the config names and never performs the handshake, so no tool is ever registered for
-  any later layer to show. The model's own account agrees: "`marker_ping` is not in the tools
-  available in this session. The current tool list is `exec_command`, `apply_patch`,
-  `write_stdin`…".
-- **0.180.0 behaves identically** (checked 2026-10-20, three releases newer than the pinned
-  0.177.0, chosen because 0.179.5's notes mention "Keep MCP stdio children on the resolved
-  environment"): same marker log with one line, same `session tool catalog is not available`, same
-  five tools. So the pin stays at 0.177.0 — a bump would cost a full re-measure of this base and
-  buy nothing.
-- Every other layer was checked and is NOT the gate: `[[mcp.providers]]` is the shape the config
-  struct declares (`McpClientConfig.providers`), the exec surface allows every tool
-  (`SessionSurface::AgentRunner => true`), the MCP allow-list is not enforced by default
-  (`default_allowlist_enforced() == false`), and `vtcode mcp list` reads its own registry rather
-  than the workspace config, so there is no warm-up that would populate a cache before a turn.
-- Two settings were tried and neither helps. `[tools] profile = "advanced_vtcode"` (the profile
-  that admits everything except the legacy file tools) adds `task_tracker` and friends to the
-  model's list but no MCP tool, and the model again ended up driving the bridge script with
-  `python3` by hand. Bridging the server as stdio (`_BRIDGED_TRANSPORTS`, which this batch
-  extended to `("sse", "http")` because its HTTP client carries no tools either — its own doc
-  comment: "HTTP transport is partially implemented") changes what is in the config, not what the
-  model is shown.
-
-So for this base the five tools in its catalog are the whole story in exec mode, and a harness's
-MCP servers are configured but unreachable. The gateway's catalog comment now says so.
-
-**A dimension caveat worth keeping:** the first custom-harness run of this base reported `mcp=true`,
-and that was a FALSE PASS. The judge's MCP rule counts a tool name found inside a call's arguments
-(the rule exists because mimo and grok dispatch MCP tools through other tools), and this model had
-typed `read_wiki_structure` into a shell command while hunting. The second run, with the bridge in
-place, reported the same thing for the same reason. What settled it was reading the turn's tool
-RESULTS rather than its tool names — `session tool catalog is not available` — which is the
-evidence this section rests on.
-
-### Two facts about this base's own safety layer, measured on the way
-- Its execution policy permits a FIXED LIST of programs and refuses everything else by name:
-  echo, ls, cat, cp, head, tail, printenv, pwd, rg, grep, sed, which, date, whoami, hostname,
-  uname, wc, git, cargo, python/python3, npm, node. A turn that reached for `truncate` or `od` was
-  told `command '<name>' is not permitted by the execution policy`, and recovered by using one of
-  the permitted programs instead.
-- A command containing `&&` is refused by its own preflight as a `Command injection pattern
-  detected`, before the execution policy is consulted at all.
-Neither is configurable from the harness, and neither stopped a turn that had another way to do
-the work — both are worth knowing before reading a trace from this base.
-
-### The resumed conversation is wrapped in the CLI's own prose, which is what the recall rows read
-What the model receives on a resumed turn, read off the request itself (2026-10-19, a recording
-proxy in front of the relay):
-
-```
-system     # VT Code (Build mode) …
-user       Task: Exec Task | Description: Reply with exactly: M1-haiku
-user       You are running vtcode in non-interactive exec mode. …
-assistant  M1-haiku
-user       No tool calls or completion for 1 consecutive turns. The agent appears to be idle …
-user       Task: Exec Task | Description: Create a file named hello-vtcode.txt … then reply DONE.
-```
-
-Every prompt is wrapped in a `Task: … / Description: …` envelope with a boilerplate user message
-after it, and since `idle_turn_limit = 1` each text-only turn also leaves the CLI's own idle notice
-in the history. The conversation is complete — the session store holds all five turns with the
-right goals, and the checkpoint restores it (`hydrated: true`) — but "my very first message" is not
-a user message in it, which is what two models got wrong on the recall and what 54 others got
-right.
-
-### What it is, and what its own docs get wrong about it
-`vtcode exec --json` streams NDJSON that its documentation calls "the non-interactive Codex schema".
-The FRAME is codex's (`thread.started`, `turn.started|completed|failed`,
-`item.started|updated|completed`); the ITEMS are its own — `tool_invocation`, `tool_output`,
-`harness`, `error` where codex has `command_execution` and `mcp_tool_call`. So it carries its own
-normaliser, the same relationship gemini-cli has to claude's stream-json. Only `item.completed` is
-read: the other two are the same item with less of it.
-
-A turn's LAST `agent_message` is **not its answer**: the harness appends a summary block (`Task: …`
-/ `Agent Type: …` / `Final Status: …`), and `--last-message-file` writes THAT, not the model's
-reply. The normaliser keeps the last message that is not the summary, or every turn's answer would
-be machine prose with the real one pushed out of the transcript a judge reads.
-
-### Four defaults that each had to be closed
-- **stdin.** `vtcode exec --json "<prompt>"` with an inherited stdin made no model call at all for
-  as long as it was left running; the identical argv with stdin closed answered in seconds. The
-  runner now closes stdin for EVERY backend's turn (`_run_turn_bg`), which is the right default for
-  a surface where every CLI is handed its prompt in argv — a CLI that waits on stdin otherwise
-  waits until the turn's wall-clock cap with no output. Its ripgrep and ast-grep installers were
-  the other two suspects and were ruled out by isolating them.
-- **Its continuation loop.** With `continuation_policy = "all"` (the default) a task tracker decides
-  when a turn is finished: a weaker model (gpt-5.4-mini) spent seven turns re-verifying a completed
-  task until the CLI's own loop detector stopped the run (`outcome_code: "loop_detected"`). Off,
-  with `orchestration_mode = "single"`, a capable model answered in three requests. One turn, one
-  answer, is this product's contract — and the record still says `loop_detected` honestly when its
-  detector fires.
-- **`--max-tool-calls` defaults to TEN** per session, which a real task passes long before it is
-  done. The turn's own step budget is the harness's.
-- **Workspace trust.** exec mode refuses an untrusted workspace and the alternative is a TTY prompt
-  a turn cannot answer; `VTCODE_TRUST_WORKSPACE=full-auto` is what grants it. Its memories
-  subsystem (its own model calls on finished threads) and its ATIF telemetry are off.
-
-### The provider and the model have to be named, twice
-Its model→provider resolution reads a vendor prefix: `--model google/gemini-3-flash` alone sent it
-to its BUILT-IN gemini provider and it asked for a `GEMINI_API_KEY` nobody set. And `exec resume`
-restores the model the session STARTED on — a resumed turn whose config named another model was
-refused outright ("Invalid model identifier: 'anthropic/claude-haiku-5.5'") because that id was no
-longer in the provider's list. So every invocation names the provider, the key's env var and the
-model, and the config's `models` list carries the turn's id. That is the third base in two batches
-with the resumed-model shape (checklist item 42).
-
-### What two providers refused was its own request shape, not ours — and the relay repairs it
-On a turn that had already done its work, the next request was refused with a 400 by **all three
-families tried**:
-- `anthropic/claude-haiku-5.5` — "This model does not support assistant message prefill. The
-  conversation must end with a user message";
-- `google/gemini-3-flash` and `openai/gpt-5.4-mini` — "user message must have content", param
-  `messages.5.content`.
-The cause is in the body: it appends its "## Environment" block as a trailing SYSTEM message, and
-it leaves an EMPTY user turn after a tool result. Both are now repaired in the relay, keyed on what
-the provider says rather than on who said it (`_drop_empty_messages`, `_trailing_system_as_user`) —
-the lesson from grok's root-combinator repair, which was gated on the one family it was measured
-on. Two things about the repair are worth recording because each was a bug first:
-- an empty CONTENT ARRAY (`content: []`) is what it actually sends, and the first version read any
-  list as "structured, leave alone", so the repair never fired on the body it was written for;
-- the flag has to be applied to LATER requests too, not only to the retry: the first request was
-  repaired and sent again while the next three were refused untouched. A repair that fixes one
-  request and not the turn is not a repair.
-With both in place, eight consecutive requests were answered 200 and all three turns of the
-end-to-end run succeeded.
-
-### End to end, with the runner's own argv and relay (2026-10-16)
-Three turns in one session, replayed through the shipped normaliser:
-1. first turn — success, `served_model anthropic/claude-haiku-5.5`, usage non-zero, the AGENTS.md
-   token in the answer;
-2. follow-up with a DIFFERENT model — same session id, `served_model google/gemini-3-flash`, the
-   first turn's word recalled, `e2e.txt` written;
-3. the same session with `exec_command` withheld — the model reported that the only tools it had
-   were the other four, the one call it made anyway came back `outcome: "hook_denied"` with nothing
-   run, and the turn's record carries that as a note rather than as a tool row (the vibe rule: a
-   turn's tool list means "what ran", and the custom-harness dimension reads exactly that list).
-
-Its session registry is pinned with `VTCODE_DATA` under `.harness/vtcode/data`: by default it lands
-in the platform's application-support directory, which is inside the redirected HOME but not a path
-this runner can check for a session without guessing the platform. Its workspace state
-(`.vtcode/`, the event store and the task tracker) is excluded from the produced-files list and
-travels in the checkpoint.
-
-### The custom-harness dimension needed three more spellings
-`pickDisabled` chooses what to withhold from a base's own tool list, excluding what the fixture
-needs — and `exec_command`, `write_stdin` and `search_tools` matched none of its patterns, so it
-picked `exec_command`: the tool the fixture runs its script with. It now lands on
-`record_decision`, the spare. `search_tools` matters most of the three: this runtime DEFERS
-code_search, web_search, web_fetch, cron and every MCP tool behind it, so withholding it would take
-the MCP half of the row with it.
-
-### Install
-GitHub release, pinned to 0.177.0, one tarball per target, compared against the `.sha256` upstream
-publishes beside each asset. `install_vtcode` was run on a linux container, where what it installed
-reported 0.177.0; it finds the executable in the archive rather than assuming its depth, which is
-jcode's lesson (a 505-byte launcher on PATH with no binary beside it).
-
-### What is NOT measured
-One column, on one connection (vercel). No second provider yet, and none of the other dimensions:
-the custom-harness run, the plugin matrix, the family tour, the browser, thinking and environments
-columns have not run on this base. Its MCP transports are Stdio and Http only (read off
-`McpTransportConfig`), so SSE is bridged — and that path has still not been exercised against a
-live server here, which is what the plugin matrix is for.
+**Two defects worth filing upstream, in their own words:** a headless path that never attaches the
+session tool catalog while its consumer is documented to "degrade gracefully rather than error", and
+an MCP child process spawned without a handshake.
 
 ## docker-agent: Docker's own runtime, where the config IS the harness (2026-10-16) — behaviour measured, NO column yet
 
