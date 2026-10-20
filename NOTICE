@@ -61,10 +61,10 @@ run, by you, under their own licenses:
                               redistributed: the console falls back to its generic glyph.
   VT Code (vtcode)            Apache-2.0 (vinhnx/VTCode; the release tarball from its GitHub
                               releases, verified against the per-asset SHA256 upstream publishes
-                              beside it). The console's VT Code mark,
-                              ui/public/logos/vtcode.png, is that project's own profile icon
-                              (resources/icons/vtcode-profile-512.png), unchanged, under the same
-                              license.
+                              beside it). Installed only when an operator names it: the gateway
+                              offers no vtcode base today (see
+                              gateway/tests/test_vtcode_not_offered.py), and no mark of this
+                              project is redistributed here any more.
   Mistral Vibe (vibe)         Apache-2.0 (mistralai/mistral-vibe; the wheel from PyPI, pinned by
                               version and hash). The console's Vibe mark,
                               ui/public/logos/vibe.svg, is that project's own editor glyph

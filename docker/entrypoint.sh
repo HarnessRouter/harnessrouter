@@ -212,7 +212,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 #
 # gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
 # this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,vtcode,docker-agent,fast-agent,dcode}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -1240,6 +1240,13 @@ install_vibe() {
 # `.sha256` beside each asset — so the bytes are compared against what UPSTREAM publishes rather
 # than against a digest of our own (the install_omp precedent; install_goose computes its own only
 # because that project publishes none).
+# NOT INSTALLED TODAY: `wanted vtcode` is false unless an operator names it, and the gateway offers
+# no vtcode base — in `vtcode exec` a harness's MCP servers cannot reach the model (the CLI spawns
+# the server its config names and never sends `initialize`, and `search_tools`, the only other door,
+# answers "session tool catalog is not available" because that catalog is attached by the
+# interactive runloop alone). Measured on 0.177.0 and 0.180.0; see
+# gateway/tests/test_vtcode_not_offered.py and docs/support-matrix-notes.md. The installer stays so
+# the day upstream closes that gap is a one-line change.
 install_vtcode() {
   vt_ver="${HR_VTCODE_VERSION:-0.177.0}"; vt_ver="${vt_ver#v}"
   case "$(uname -m)" in

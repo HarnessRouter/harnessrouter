@@ -1391,15 +1391,18 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "dcode"): "tokenrouter",
     ("custom", "dcode"): "openai-api",
     ("harnessrouter", "dcode"): "tokenrouter",
-    # vtcode, the same reach as vibe's and for the same reason: one OpenAI shape, through the
-    # relay, with the provider named in its config rather than inferred from the model id.
-    ("anthropic", "vtcode"): "anthropic",      ("openai", "vtcode"): "openai",
-    ("azure-foundry", "vtcode"): "azure",
-    ("openrouter", "vtcode"): "openai-api",
-    ("tokenrouter", "vtcode"): "tokenrouter",  ("vercel", "vtcode"): "tokenrouter",
-    ("llmtr", "vtcode"): "tokenrouter",
-    ("custom", "vtcode"): "openai-api",
-    ("harnessrouter", "vtcode"): "tokenrouter",
+    # vtcode (VT Code) is implemented and NOT OFFERED, so it has no wiring at all. Its runner
+    # path works — it has a measured column (55 of 56 ids, five scenarios each) — but in `vtcode
+    # exec` a harness's MCP SERVERS CANNOT REACH THE MODEL, which is half of what a harness is for
+    # here. Measured on 0.177.0 and again on 0.180.0 (2026-10-19/20) with a stdio server written
+    # for the probe: the CLI spawns the process its config names and never sends `initialize`, so
+    # no tool is registered; `search_tools`, the only door to anything beyond its five built-ins,
+    # answers `[Execution failed] session tool catalog is not available` because
+    # `attach_session_model_tools` is called by the INTERACTIVE runloop alone ("Headless paths may
+    # never call this", its own comment) and `execute_search_tools` errors instead of degrading.
+    # The profile, the surface gate, the allow-list and `vtcode mcp list` were each ruled out; see
+    # docs/support-matrix-notes.md. Offering a base whose declared MCP servers are silently
+    # unreachable would be the overstatement this product refuses, so it waits for upstream.
     ("anthropic", "vibe"): "anthropic",        ("openai", "vibe"): "openai",
     ("azure-foundry", "vibe"): "azure",
     ("openrouter", "vibe"): "openai-api",
@@ -5700,7 +5703,7 @@ _CUSTOM_FORMAT_BACKENDS = {
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
                "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
                "mimo", "jcode", "opensquilla", "nanobot", "zeroclaw",
-               "vibe", "vtcode", "docker-agent", "fast-agent"},
+               "vibe", "docker-agent", "fast-agent"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
     # The OpenAI Responses API: what codex speaks, and — since this batch — dcode, whose
@@ -7749,12 +7752,6 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # gemini-3-flash, each asked for and each served as itself, including on the model switch a resumed
 # session would otherwise have swallowed. Every other id here is offered so the matrix can measure
 # it on this base, and no column has run yet.
-# vtcode is the same reach again: its custom provider is declared `api_format =
-# "openai-chat"` and every keyed turn rides the relay. MEASURED on it (2026-10-16, the Vercel
-# gateway through the runner's own relay): claude-haiku-5.5 and gemini-3-flash, each asked for and
-# each served as itself, including on the mid-session switch its resume would otherwise have taken
-# back. gpt-5.4-mini also ran, and is where its own loop detector stopped a turn — a weaker model
-# re-verifying a finished task, not a routing failure.
 # docker-agent is the same reach once more: its provider is declared `api_type:
 # openai_chatcompletions` and every keyed turn rides the relay. MEASURED on it (2026-10-16, the
 # Vercel gateway through the runner's own relay): claude-haiku-5.5 and gemini-3-flash, each asked
@@ -7774,7 +7771,7 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # session had pinned. The two Responses-API-only ids codex lists (gpt-5.3-codex, gpt-6-astra) are
 # NOT added here: this base could serve them and no turn has, and a list is not a place to guess.
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
-           "vibe", "vtcode", "docker-agent", "fast-agent", "dcode"):
+           "vibe", "docker-agent", "fast-agent", "dcode"):
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
@@ -7923,16 +7920,13 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # vibe's provider `backend = "generic"` posts to /chat/completions (its generic LLM backend joins
 # that resource onto the provider's api_base), and its only other backend is Mistral's own API, so
 # a Responses-API-only id would be a picker row that fails on send here too.
-# vtcode: its custom provider takes api_format "auto" | "openai-chat" | "openai-responses" |
-# "anthropic-messages", and this runner declares openai-chat — so a Responses-API-only id would be
-# a picker row that fails on send here too.
 # docker-agent: its provider config takes api_type `openai_chatcompletions` or
 # `openai_responses`, and this runner declares chat/completions — so a Responses-API-only id would
 # be a picker row that fails on send here too.
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
                       "cheetahclaws", "grok", "agentzero",
                       "jcode", "opensquilla", "nanobot", "zeroclaw",
-                      "vibe", "vtcode", "docker-agent", "fast-agent")
+                      "vibe", "docker-agent", "fast-agent")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -18070,34 +18064,6 @@ _BASE_CATALOG: dict[str, dict] = {
         # "hard", measured through the product's own path: with write_file, edit_file and shell
         # withheld, the model reported that none of its remaining tools could create or edit a file
         # and nothing was written.
-        "tool_enforcement": "hard",
-    },
-    "vtcode": {
-        "label": "VT Code", "backend": "vtcode", "status": "ready",
-        "system_prompt": ("You are VT Code, an autonomous coding agent. You work on a real git "
-                          "workspace with shell and file access, reading and editing files and "
-                          "running commands to complete the task end to end."),
-        # All five tools its own `vtcode schema tools` reports on 0.177.0, held equal to the
-        # runner's ALL_VTCODE_TOOLS by gateway/tests/test_vtcode_tools.py. Everything else this
-        # runtime can do — code_search, web_search, web_fetch, cron, an MCP server's tools — is
-        # behind `search_tools`, which the model calls to have them defined.
-        #
-        # AND IN HEADLESS MODE THAT DOOR DOES NOT OPEN, measured 2026-10-19: every `search_tools`
-        # call comes back `[Execution failed] session tool catalog is not available`. Its own
-        # source says why — `attach_session_model_tools` is called by the INTERACTIVE runloop only
-        # ("Headless paths may never call this"), and `execute_search_tools` errors rather than
-        # degrading. So on this base, in `vtcode exec`, these five ARE the tools: the five the
-        # model is shown, the five it can use, and no MCP server's tool among them whatever the
-        # harness declares (see docs/support-matrix-notes.md for the whole measurement, including
-        # the two settings that do not change it).
-        "tools": [("exec_command", "Shell"), ("write_stdin", "Shell Input"),
-                  ("apply_patch", "Apply Patch"), ("search_tools", "Tool Lookup"),
-                  ("record_decision", "Record Decision")],
-        # "hard", and withheld at the strongest door of the three this product has seen: exec
-        # mode treats `[automation.full_auto].allowed_tools` as a hard execution boundary, so a
-        # disabled tool is not even DECLARED to the model — measured with exec_command withheld,
-        # where the model reported that the only tools it had were the other four. A call it made
-        # anyway came back `outcome: "hook_denied"` with nothing run.
         "tool_enforcement": "hard",
     },
     "vibe": {

@@ -20,7 +20,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'zeroclaw' | 'qoder' | 'vibe' | 'vtcode' | 'docker-agent' | 'fast-agent' | 'dcode' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'zeroclaw' | 'qoder' | 'vibe' | 'docker-agent' | 'fast-agent' | 'dcode' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -254,11 +254,6 @@ export const OOB: OobHarness[] = [
     models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
     systemPrompt: 'You are Vibe, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
-  { id: 'vtcode', name: 'VT Code', version: 'v0.177.0', backend: 'vtcode', status: 'ready',
-    // Placeholder only; the chat-completions list, for jcode's reason.
-    models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
-    systemPrompt: 'You are VT Code, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
-    tools: [], skills: [] },
   { id: 'docker-agent', name: 'Docker Agent', version: 'v1.150.0', backend: 'docker-agent', status: 'ready',
     // Placeholder only; the chat-completions list, for jcode's reason.
     models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
@@ -300,10 +295,11 @@ const AGENTS_MD_BASES = [
   'codex', 'hermes', 'omp', 'pi', 'opencode', 'kilo', 'dsh', 'qwen', 'cline', 'goose', 'kimi',
   'minimax', 'aider', 'openhands', 'grok', 'agentzero',
   'mimo', 'jcode', 'opensquilla', 'nanobot', 'zeroclaw',
-  // this batch: vibe reads AGENTS.md only in a trusted folder (--trust), vtcode once the
-  // workspace is trusted, docker-agent through its own prompt-files lookup, and fast-agent
-  // has no convention at all — the file is passed as its instruction with -i.
-  'vibe', 'vtcode', 'docker-agent', 'fast-agent',
+  // this batch: vibe reads AGENTS.md only in a trusted folder (--trust), docker-agent through
+  // its own prompt-files lookup, and fast-agent has no convention at all — the file is passed as
+  // its instruction with -i. (vtcode reads it too, and is not offered; see
+  // gateway/tests/test_vtcode_not_offered.py.)
+  'vibe', 'docker-agent', 'fast-agent',
   // dcode reads the project's AGENTS.md through find_project_agent_md — but only when the
   // workspace is a git PROJECT, which every session here is.
   'dcode',

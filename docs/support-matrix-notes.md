@@ -4398,11 +4398,46 @@ base's wiring — anthropic, openai, azure-foundry, openrouter, tokenrouter, llm
 harnessrouter are all unmeasured on it, and a column is one connection's measurement. A turn's input is large — 11.5k tokens on a three-word prompt, 20k characters of system
 prompt — which is worth knowing before reading its usage numbers against another base's.
 
-## vtcode: a codex frame over its own items, two refusals that were the CLIENT's request shape, and a column that cost two config fixes (2026-10-16/19)
+## vtcode: implemented, NOT offered — a harness's MCP servers cannot reach the model in its headless mode (2026-10-16/20)
 
-VT Code 0.177.0, added as the twenty-eighth base. Measured against the pinned release tarball on
-the Vercel AI Gateway, first through a recording proxy, then end to end through the runner's own
-argv and relay — and on 2026-10-19 through a real support-matrix column.
+VT Code 0.177.0 was built as far as the runner — `_build_vtcode`, `_vtcode_to_claude`,
+`_vtcode_eof`, their tests, their captured fixtures — and **is deliberately not registered in the
+gateway, the console, the default install set or either measurement dimension**.
+`gateway/tests/test_vtcode_not_offered.py` pins that state at every surface, the way gajae's does.
+
+**Why, in one sentence:** a turn runs well (its column below is 55 of 56 rows green) but the MCP
+servers a person declares on the harness are silently dropped, and half of what a harness is in
+this product is the tools its owner brings to it.
+
+**The measurement** (0.177.0, and again on 0.180.0 — three releases newer, picked because 0.179.5's
+notes mention "Keep MCP stdio children on the resolved environment"): a stdio MCP server written
+for the probe appends one line the moment it starts and then answers the protocol by hand. Its log
+holds exactly `spawned <ts>` and **not one `initialize`** — the CLI launches the server its own
+config names and never speaks to it, so no tool is ever registered. `search_tools`, the only other
+door and the one this runtime defers everything behind, answers `[Execution failed] session tool
+catalog is not available`: `attach_session_model_tools` is called by the INTERACTIVE runloop alone
+("Headless paths may never call this", its own doc comment) and `execute_search_tools` errors
+instead of degrading as that comment requires. The model's own account matches — "`marker_ping` is
+not in the tools available in this session. The current tool list is `exec_command`, `apply_patch`,
+`write_stdin`…".
+
+**Ruled out, each by measurement rather than by reading:** the tool profile (`advanced_vtcode` adds
+its own tools and no MCP tool; reverted), the surface gate (`SessionSurface::AgentRunner => true`
+allows every tool), the MCP allow-list (`default_allowlist_enforced() == false`), the config shape
+(`[[mcp.providers]]` is what `McpClientConfig.providers` declares, and exec does read it — that is
+how the server gets spawned at all), bridging the server as stdio (the bridge's output IS a stdio
+server, which is the thing being ignored), and `vtcode mcp list` (it reads its own registry rather
+than the workspace config, so no warm-up can populate a cache before a turn).
+
+**What this is worth to upstream:** two citable defects, both in their own words — a headless path
+that never attaches the session tool catalog while its consumer is documented to "degrade
+gracefully rather than error", and an MCP child process spawned without a handshake.
+
+Everything below was measured while the base was still being prepared, and is kept because it is
+what a restore would start from: the column, the two config fixes it forced, and the facts about
+this CLI's own safety layer. Measured against the pinned release tarball on the Vercel AI Gateway,
+first through a recording proxy, then end to end through the runner's own argv and relay — and on
+2026-10-19 through a real support-matrix column.
 
 ### The column (vercel, 2026-10-19): 55 of 56, one row reproduced as a finding
 Run against a locally built image of this branch (`HR_BACKENDS=vtcode`, one Vercel connection from
