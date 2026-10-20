@@ -4476,6 +4476,23 @@ happens, measured through the product and then by hand with the API:
   `session_model_tools()` must treat `None` as 'no session tool list available' and degrade
   gracefully rather than error" — and `execute_search_tools` does the opposite of that last
   clause: it errors.
+- **The server is spawned and never spoken to.** Measured with a stdio MCP server written for
+  this probe, which appends a line to a log the moment it starts and then answers the protocol by
+  hand: the log holds exactly one line, `spawned <ts>`, and NOT ONE `initialize` — the CLI launches
+  the process the config names and never performs the handshake, so no tool is ever registered for
+  any later layer to show. The model's own account agrees: "`marker_ping` is not in the tools
+  available in this session. The current tool list is `exec_command`, `apply_patch`,
+  `write_stdin`…".
+- **0.180.0 behaves identically** (checked 2026-10-20, three releases newer than the pinned
+  0.177.0, chosen because 0.179.5's notes mention "Keep MCP stdio children on the resolved
+  environment"): same marker log with one line, same `session tool catalog is not available`, same
+  five tools. So the pin stays at 0.177.0 — a bump would cost a full re-measure of this base and
+  buy nothing.
+- Every other layer was checked and is NOT the gate: `[[mcp.providers]]` is the shape the config
+  struct declares (`McpClientConfig.providers`), the exec surface allows every tool
+  (`SessionSurface::AgentRunner => true`), the MCP allow-list is not enforced by default
+  (`default_allowlist_enforced() == false`), and `vtcode mcp list` reads its own registry rather
+  than the workspace config, so there is no warm-up that would populate a cache before a turn.
 - Two settings were tried and neither helps. `[tools] profile = "advanced_vtcode"` (the profile
   that admits everything except the legacy file tools) adds `task_tracker` and friends to the
   model's list but no MCP tool, and the model again ended up driving the bridge script with
