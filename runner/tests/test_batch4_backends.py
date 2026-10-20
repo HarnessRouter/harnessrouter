@@ -450,6 +450,30 @@ def test_an_abnormal_stop_fails_the_turn_with_its_reason():
     assert res["is_error"] is True and "max_iterations" in res["result"]
 
 
+def test_a_turn_that_never_said_anything_is_not_reported_as_an_answer():
+    """MEASURED in its first column (2026-10-20, gemini-3.5-flash-lite, the recycle scenario): the
+    CLI exited 0, reported no error, and not one `agent_choice` fragment arrived — one provider
+    request, one tool call, its result, and the run ended. The record said `success` with
+    `result: ""`, which the console renders as a done pill over a blank reply. It did not reproduce
+    on a re-run, so nothing here claims why it stopped; what the result must not do is present
+    nothing as the answer. The raw CLI stream of that turn was not captured, so the state is built
+    the way the stream leaves it rather than replayed from a fixture."""
+    state = {"model": "gemini-3.5-flash-lite", "cwd": _ws()}
+    _docker_agent_to_claude({"type": "token_usage", "usage": {"last_message": {
+        "input_tokens": 3950, "output_tokens": 54, "finish_reason": "tool_calls"}}}, state)
+    res = _docker_agent_eof(state, 0)[-1]
+    assert res["subtype"] == "error" and res["is_error"] is True
+    assert "without answering" in res["result"]
+    assert "tool_calls" in res["result"]          # the one fact about the stop that was in the stream
+    assert res["usage"]["input_tokens"] == 3950   # and the turn's usage is still reported
+
+
+def test_a_turn_that_did_answer_is_untouched_by_that_branch():
+    state = {"model": "gpt-5.4", "final": "DONE", "cwd": _ws()}
+    res = _docker_agent_eof(state, 0)[-1]
+    assert res["subtype"] == "success" and res["result"] == "DONE"
+
+
 def test_the_tools_are_the_ones_its_toolsets_declare():
     assert "write_file" in ALL_DOCKER_AGENT_TOOLS and "shell" in ALL_DOCKER_AGENT_TOOLS
     assert "think" in ALL_DOCKER_AGENT_TOOLS and "list_todos" in ALL_DOCKER_AGENT_TOOLS

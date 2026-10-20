@@ -12211,6 +12211,22 @@ def _docker_agent_eof(state: dict, rc: int) -> list[dict]:
     usage = _docker_agent_usage(state)
     why = state.get("_da_error") or ""
     ok = rc == 0 and not why
+    if ok and not str(state.get("final") or "").strip():
+        # NOTHING was said: the CLI exited 0, reported no error, and not one agent_choice fragment
+        # arrived all turn. An empty string in the result slot would reach the person as a done
+        # pill over a blank reply, which is the shape opencode's eof already refuses to leave
+        # blank. MEASURED in the first column (2026-10-20, gemini-3.5-flash-lite, the recycle
+        # scenario): one provider request, one tool call, its result, and then the run ended —
+        # 46 s, exit 0, `result: ""`, rendered as a completed turn with no answer. It did NOT
+        # reproduce on a re-run, so what the CLI or the model did is not established and this
+        # claims nothing about it; what is established is that the record said success and
+        # carried no answer and no reason. The finish_reason the CLI's own token_usage event
+        # carried is named because it is the one fact about the stop that was in the stream, and
+        # having it in the record is the difference between one look and five.
+        fin = str(state.get("_da_finish") or "")
+        why = ("the agent ended the turn without answering"
+               + (f" (the last finish_reason it reported was {fin})" if fin else ""))
+        ok = False
     return evs + [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
                    "result": state.get("final", "") if ok else (why or state.get("final", "")),
                    "usage": usage}]
