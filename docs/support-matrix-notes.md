@@ -4601,7 +4601,7 @@ The browser, thinking and environments columns. Its `--sandbox` / `--cloud` mode
 its RAG and its MCP catalog: a turn gets the four toolsets above and nothing else. Why the one
 no-answer turn stopped — it did not reproduce, and the raw CLI stream of it was not captured.
 
-## dcode (deepagents-code): the first base driven over ACP, because its headless mode cannot continue a conversation (2026-10-19) — behaviour measured, NO column yet
+## dcode (deepagents-code): the first base driven over ACP, because its headless mode cannot continue a conversation (2026-10-19; measured through all five steps 2026-10-20)
 
 LangChain's `deepagents-code` 0.1.84 (`dcode`) is the thirty-first base, and the only one here
 driven over the **Agent Client Protocol** instead of a CLI flag. Measured through a recording proxy
@@ -4745,6 +4745,95 @@ had no shell tool and ran nothing.
   price auto-updates, the project `.env` applied to the process environment, and
   `MEMORY_AUTO_SAVE` — the agent is otherwise told to persist learnings into the AGENTS.md the
   harness rewrites every turn.
+
+### All five steps, in the order docs/harness-verification.md sets (2026-10-20)
+
+| step | result |
+|---|---|
+| matrix, vercel | **56 of 58 ids, 279 of 280 scenarios.** The one failure is `grok-4.5`, below |
+| custom harness | **pass**, 14 s: the skill was read, its own script ran (`execute` → `stamp.txt`), the withheld `delete` went unused, and the harness's own MCP server answered (`deepwiki_read_wiki_structure`, 11 s) |
+| plugin matrix | **5 of 5 columns** — skill 5.4 s, stdio MCP 5.4 s, free-form rows 6.2 s, streamable-HTTP 7.5 s, SSE 7.2 s. The FIRST live MCP measurement on this base, which had none of any transport before. SSE needed two runs; see below |
+| family tour | **11 of 12 families in one conversation.** `muse-spark-1.1` fails for a measured reason that is not ours, below |
+| matrix, google | **not available, and measured rather than assumed**: dcode speaks the Responses API and Google's OpenAI-compatible surface does not serve it. 0 of 58 ids offered, which is the honest answer |
+
+The audit past the pass flags: two `served` ids on every one of the 56 pairs, every session deleted
+except the two the driver keeps for a failed pair, every turn on the connection the column names,
+nothing substituted. The vercel column was assembled across the no-answer repair below — 31 pairs
+before it and 25 after, the provoking pair re-run on the fixed build — and that repair touches only
+the path a turn with no text at all takes, which no passing row reaches.
+
+### `grok-4.5` answers with reasoning and no content, intermittently (the one failed row)
+Twice in three runs of that pair, a different scenario each time (`first`, then `followup`): the
+turn's record held `output: []` — no content, no tool call — with 18 output tokens billed and all
+18 of them reasoning, while the ACP server reported `stopReason: end_turn`. The same model passed
+every scenario on docker-agent's column, which rides chat/completions; this base is the second
+Responses-API client here after codex, and that is the difference the row records. Why a provider
+answers that way is not measured and nothing here claims it. The id stays in the catalog and this
+is a row-level finding, which is the call `grok-build-0.1` got on vtcode's column.
+
+**What was ours in it, and is fixed:** `end_turn` with an empty answer was reported as a COMPLETED
+turn whose answer was `""` — a done pill over a blank reply. It now fails with "the agent ended the
+turn without answering", and the second occurrence is how that was confirmed end to end: the
+console showed the reason and a failed pill. The same shape was measured once on docker-agent, in a
+different place in the code, and is fixed there too.
+
+### The muse family refuses a .pptx, and the whole chain is upstream
+`muse-spark-1.1` failed the tour's edit, twice, deterministically, with the provider's own words:
+
+    Error code: 400 … unsupported media type for ZDR inline scan:
+    `application/vnd.openxmlformats-officedocument.presentationml.presentation`.
+    Supported: image/*, video/*, application/pdf.
+
+Read in dcode's own dependency, not inferred: `deepagents/middleware/filesystem.py` returns a
+non-text file as a base64 **file content block** whose `mime_type` is `mimetypes.guess_type` of the
+extension, so reading `tour.pptx` attaches the deck to the conversation. It ships an
+`unsupported_content` middleware for exactly this, but that one drops a block only when the model's
+`ModelProfile` explicitly rejects it ("Missing `ModelProfile` fields read as supported"), and a
+model behind this relay has no profile — while `_OPENAI_FILE_MIME_TYPES` lists that pptx type as
+acceptable. So the block goes out and the provider decides. Seven other families in the same
+conversation, holding the same deck, accepted it, and docker-agent's tour passed this family.
+
+Nothing here is repaired: the relay could strip a file part the provider refuses and retry, but
+that changes what the model is shown without saying so, which is worse than a turn that fails with
+the provider's sentence in it. The honest statement is the one this table makes — this base, this
+family, a binary artifact.
+
+**What was ours in it, and is fixed:** the reason reached the console as "The turn failed: **the
+turn failed:** Error code: 400 …". The gateway frames every failed turn (`_turn_failure_message`),
+and this driver framed it a second time; of the thirty-odd bases here it was the only one that did.
+It now hands up the provider's sentence alone, and a test asserts the driver's reason never
+contains "turn failed".
+
+### The SSE column timed out once, and four things were ruled out
+The first plugin-matrix run failed `sse` at exactly 120.4 s — the driver's own `_RPC_TIMEOUT` — with
+"the agent did not answer initialize in time". The re-run passed in 7.2 s. Ruled out by
+measurement, in this order: the probe server and the client library (dcode's OWN FastMCP, in its
+own venv, connected to that `/sse` URL and listed `probe_sse`); the config shape (the runner writes
+`{"type": "sse", "url": …}`, and `mcp_tools._build_transport` pins SSE for exactly that); and the
+startup path itself — `dcode --acp` with that same config answered `initialize` in 2.1 s as root
+and in 3.9 s as the session uid, in that session's own workspace, with the file the runner had
+written. So the hang is not reproducible and no cause is claimed. One clue is recorded for the next
+occurrence: dcode mounts MCP servers through a FastMCP **proxy**, whose log said "Proxy detected
+connected client - reusing existing session for all requests. This may cause context mixing in
+concurrent scenarios".
+
+### Google's surface cannot drive this base, and that is a measurement
+Two probes on 2026-10-20, one through the product and one straight at the endpoint:
+
+    POST generativelanguage.googleapis.com/v1beta/openai/responses        -> 404, empty body
+    POST generativelanguage.googleapis.com/v1beta/openai/chat/completions -> 200
+
+So there is no `("google", "dcode")` wiring row, and the comment in `_INTEGRATION_WIRING` says it
+was probed rather than left unprobed. The product's own model view then reported **0 of 58 ids
+available** for dcode on an account holding only that connection — the picker fix from
+docker-agent's column, seen working on a base that genuinely cannot run there. A gemini model
+reaches this base through an aggregator that serves `/responses`, which the Vercel column did on
+nine gemini ids.
+
+### What is still NOT measured
+The browser, thinking and environments columns. Why `grok-4.5` sometimes answers with reasoning
+only, and why one `initialize` took longer than 120 s — neither reproduced. The `ask_user` hazard
+is still a protocol fact reproduced against a fake agent; no live turn has tripped it.
 
 ## fast-agent: a framework with no tools of its own, and a store that pins the model (2026-10-16) — behaviour measured, NO column yet
 

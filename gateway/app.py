@@ -1397,6 +1397,15 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("tokenrouter", "dcode"): "tokenrouter",   ("vercel", "dcode"): "tokenrouter",
     ("llmtr", "dcode"): "tokenrouter",
     ("custom", "dcode"): "openai-api",
+    # NO ("google", "dcode") row, and this one is PROBED rather than unprobed: dcode speaks the
+    # Responses API (it is the second client here that does, after codex), and Google's
+    # OpenAI-compatible surface does not serve that endpoint. Measured twice on 2026-10-20, once
+    # through the product and once against the endpoint itself:
+    #   POST generativelanguage.googleapis.com/v1beta/openai/responses        -> 404, empty body
+    #   POST generativelanguage.googleapis.com/v1beta/openai/chat/completions -> 200
+    # so the turn failed with "Error code: 404" and the terse reason is the endpoint's own (it
+    # sends no body with the 404). A gemini model reaches this base through an aggregator that
+    # serves /responses instead — which the Vercel column did, on nine gemini ids.
     ("harnessrouter", "dcode"): "tokenrouter",
     # No vtcode rows: VT Code is not in this tree. It was built, measured (a column of 55 green
     # rows out of 56) and then taken out whole, because in `vtcode exec` a harness's MCP servers
