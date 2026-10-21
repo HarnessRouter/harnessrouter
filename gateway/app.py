@@ -9682,6 +9682,17 @@ async def _idem_replay(resp_id: str, stream: bool):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+def _want_partial(backend: str, meta: dict) -> bool:
+    """Token-level streaming (CT-127): opt in globally via env HARNESS_STREAM_PARTIAL=1, or per-request
+    via metadata.stream_partial (for testing). Claude uses --include-partial-messages; codex diffs
+    item.updated (self-healing → batch if it doesn't emit updates); grok (Grok Build 1.0.41) takes the
+    same --include-partial-messages and emits Claude Code's stream_event text deltas, which
+    _grok_to_claude passes through the claude normaliser. Default off = current batch behavior, so a
+    rollback is just flipping the env with no redeploy."""
+    return backend in ("claude", "codex", "grok") and (
+        os.environ.get("HARNESS_STREAM_PARTIAL", "0") == "1" or bool(meta.get("stream_partial")))
+
+
 @app.post("/v1/responses")
 async def create_response(body: CreateResponseBody, request: Request):
     principal = await _principal(request)
@@ -9807,12 +9818,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                or _route_backend(model_req or body.model, body.backend))
     # Server-side model permission (CT-124): a model this backend cannot serve is refused here.
     model_req = await _resolve_model_policy(model_req, hv, backend, org)
-    # Token-level streaming (CT-127): opt in globally via env HARNESS_STREAM_PARTIAL=1, or per-request
-    # via metadata.stream_partial (for testing). Claude uses --include-partial-messages; codex diffs
-    # item.updated (self-healing → batch if it doesn't emit updates). Default off = current batch
-    # behavior, so a rollback is just flipping the env with no redeploy.
-    want_partial = (backend in ("claude", "codex") and (
-        os.environ.get("HARNESS_STREAM_PARTIAL", "0") == "1" or bool(meta.get("stream_partial"))))
+    want_partial = _want_partial(backend, meta)
     # Codex streaming path: run the codex turn via the app-server protocol (the only codex mode that
     # streams assistant text). Flag-gated (env HARNESS_CODEX_APPSERVER or metadata.codex_appserver);
     # default off keeps codex on the stable `codex exec` path. Rollback = flip env, no redeploy.

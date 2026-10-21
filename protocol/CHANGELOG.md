@@ -13,6 +13,29 @@ wire: the field keeps its type, and servers keep sending it. Under the
 [deprecation rules](VERSIONING.md#deprecation) it is removed no earlier than the second version
 after this one. A client reads `default` and each model's `available`.
 
+## Conformance suite 2026.10.19.post3 (2026-10-19)
+
+No change to the protocol, the schema or any verdict a conformant server gets.
+
+T-12 measures the step budget (Tasks §1.1). A task sent with `max_step: 1` whose work needs three
+tool calls must end `incomplete`, never `completed` or `failed`. Nothing in the suite sent
+`max_step` before this, so a server that ignored the budget scored as well as one that honoured
+it. The fixture gains a tool, `uhp_steps`, whose answer asks for the next step, and the check
+counts the rounds from the response's own items: the tool call and the answer to it are two items
+the server produced, so a model that only claims a call cannot make the count rise. A tool named
+with a server's own MCP prefix (`mcp__<server>__uhp_steps`) counts as the fixture's tool.
+
+- A server that ran the chain past the budget and reported `completed` or `failed` fails.
+- A server that names `max_step` in `metadata.ignored_fields`, the answer §1.1 gives a server that
+  cannot bound a base, passes.
+- `incomplete_details.reason` is reported in the result and never failed: §1.1 requires the status
+  and not the reason, and a UEP is what would make the reason a rule.
+- A chain that stayed inside the budget, or never began, says nothing about the rule and is
+  skipped.
+
+T-12 needs the fixture's `uhp_steps`, so the public copy of the fixture is rebuilt from this commit;
+until it is, T-12 skips against the default `--plugin-mcp-url`.
+
 ## Conformance suite 2026.10.19.post2 (2026-10-19)
 
 The packaged copy of the 2026-10-19 schema marks `HarnessModels.fallback` deprecated. No check or
