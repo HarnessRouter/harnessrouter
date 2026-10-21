@@ -416,6 +416,20 @@ def _load_reasoning():
 reasoning = _load_reasoning()
 
 
+def _load_tracecontext():
+    """runner/tracecontext.py, by path, as _load_reasoning: the gateway checks the caller's trace
+    context with the rules the runner applies before a provider sees it."""
+    import importlib.util
+    path = pathlib.Path(__file__).resolve().parents[1] / "runner" / "tracecontext.py"
+    spec = importlib.util.spec_from_file_location("hr_tracecontext", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+tracecontext = _load_tracecontext()
+
+
 def _reasoning_level(value, where: str = "") -> str:
     """A level as the API takes it, "" for none given. A value that is not a level is refused when
     it came with the request (`where` names the field) and read as none when it was stored."""
@@ -8516,7 +8530,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         partial_messages: bool = False, probe: dict | None = None,
                         codex_appserver: bool = False,
                         hv: dict | None = None,
-                        environment: dict | None = None) -> tuple[str, list[dict], dict]:
+                        environment: dict | None = None,
+                        trace_ctx: dict | None = None) -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
     files → checkpoint + persist trace. Returns (status, produced_files, rec).
     model_req: the caller-selected model (honored over the connection default when provided)."""
@@ -8747,7 +8762,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 # does not depend on the model chosen to write with. See _vision_auth.
                 "vision_auth": vision_auth,
                 # codex streaming: run via the app-server protocol (item/agentMessage/delta)
-                "codex_appserver": bool(codex_appserver)}
+                "codex_appserver": bool(codex_appserver),
+                # The caller's W3C trace context (#473): the runner puts it in the CLI's
+                # environment and gives the model calls a child of it. Empty when the caller sent
+                # none, so a turn without a trace context sends none.
+                **(trace_ctx or {})}
         # Stop requested while we were resolving the connection / provisioning the previous
         # attempt? Honor it BEFORE launching a CLI process (from any replica, via the one signal).
         if await _turn_cancelled(sid, org, translator.resp_id):
@@ -9618,6 +9637,15 @@ def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
     return [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
 
 
+def _trace_context(traceparent: str | None, tracestate: str | None) -> dict:
+    """The caller's W3C trace context (#473), as the runner's /turn takes it: the traceparent and,
+    only with one, the tracestate. runner/tracecontext.py holds the rules, one copy for both
+    services: a value that is not valid W3C syntax is dropped, never refused, since a broken tracing
+    header must not fail a turn; and only these two headers are read. `baggage` carries the
+    caller's own data to whoever reads it, and it never leaves the box."""
+    return tracecontext.parse(traceparent, tracestate)
+
+
 _IDEM_TERMINAL = {"completed", "failed", "incomplete", "cancelled", "error"}
 
 # The event name a terminal status gets on the wire. streaming.md §2.1 names all three; the
@@ -9851,6 +9879,9 @@ async def create_response(body: CreateResponseBody, request: Request):
         _v = request.headers.get(_hn)
         if _v is not None:
             hdr_vals[_hn.lower()] = _v
+    # The caller's W3C trace context (#473): read once here, carried to the runner with the turn.
+    # `baggage` is never read — only these two headers may leave the box.
+    trace_ctx = _trace_context(request.headers.get("traceparent"), request.headers.get("tracestate"))
     # Fail fast, not deep in the tool: if an ENABLED MCP server references $headers.{name} and this
     # request didn't supply that header, the tool call would fail opaquely (bad auth at the MCP).
     # Reject up-front instead, naming exactly what's missing and where it's needed.
@@ -9961,8 +9992,12 @@ async def create_response(body: CreateResponseBody, request: Request):
         async def persist(status: str) -> None:
             if status != "running":
                 await _browser_close(sid, "turn_end")     # the turn's browser, if it opened one
+            # The trace context is kept on the turn record under internal names: a leading
+            # underscore is dropped by _strip_internal, so the caller's trace id never reaches the
+            # response object the caller and the console read.
             stored = {**tr._response_obj(status), "_session_id": sid, "_org": org,
-                      "_member": member, "_input": input_items, "_backend": backend}
+                      "_member": member, "_input": input_items, "_backend": backend,
+                      **{"_" + k: v for k, v in trace_ctx.items()}}
             await _resp_put(resp_id, stored, org, sid, body.previous_response_id, status, created_at, body.store)
 
         # Persist the turn as 'running' NOW so GET /v1/sessions/{sid}/turns surfaces the in-flight
@@ -10001,7 +10036,8 @@ async def create_response(body: CreateResponseBody, request: Request):
                         prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit_bg,
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
-                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
+                        trace_ctx=trace_ctx)
                     end["status"] = status
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
@@ -10055,7 +10091,8 @@ async def create_response(body: CreateResponseBody, request: Request):
                             tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
-                            timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                            timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
+                            trace_ctx=trace_ctx)
                         end["status"] = status
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
@@ -10115,7 +10152,8 @@ async def create_response(body: CreateResponseBody, request: Request):
                 tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
-                timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
+                trace_ctx=trace_ctx)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):

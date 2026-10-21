@@ -15,7 +15,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from server import _hermes_relay_route, _normalize_openai_chat_body  # noqa: E402
+import server as rs  # noqa: E402
+from server import Auth, _hermes_relay_route, _normalize_openai_chat_body  # noqa: E402
 
 
 def _norm(obj):
@@ -431,3 +432,284 @@ def test_probes_still_reach_a_local_server_behind_a_custom_connection():
         assert len(seen) == len(_PROBES)
     finally:
         up.shutdown()
+
+
+# ── the caller's trace context (#473) ─────────────────────────────────────────────────────────
+# The gateway hands the runner the caller's W3C traceparent/tracestate. The relay puts a CHILD of
+# the traceparent on the model calls it forwards — the same trace id, a new span id, so the
+# provider's log joins the caller's trace and this hop is a span of its own. Only these two
+# headers leave the box: `baggage` carries the caller's own data and never goes out. A malformed
+# value is dropped, never forwarded, and never fails the turn.
+
+TRACE_PARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+
+def _relay_with_trace(upstream_port: int, trace: dict | None):
+    """Register a route for a turn carrying `trace`, and return (relay base, placeholder token)."""
+    token = rs._TURN_TRACE.set(trace or {})
+    try:
+        return rs._hermes_relay_route(f"http://127.0.0.1:{upstream_port}/v1", "sk-real")
+    finally:
+        rs._TURN_TRACE.reset(token)
+
+
+def _relay_upstream(seen: dict):
+    """A fake provider that records the headers it was sent."""
+    class Upstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):  # noqa: N802
+            seen["traceparent"] = self.headers.get("traceparent")
+            seen["tracestate"] = self.headers.get("tracestate")
+            seen["baggage"] = self.headers.get("baggage")
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            data = b'{"ok": true}'
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    return Upstream
+
+
+def test_a_relayed_call_carries_a_child_of_the_callers_traceparent():
+    seen = {}
+    up = ThreadingHTTPServer(("127.0.0.1", 0), _relay_upstream(seen))
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = _relay_with_trace(up.server_address[1], {"traceparent": TRACE_PARENT})
+        body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
+        req = urllib.request.Request(base + "/chat/completions", data=body, method="POST",
+                                     headers={"authorization": f"Bearer {tok}",
+                                              "content-type": "application/json"})
+        urllib.request.urlopen(req, timeout=10).read()
+    finally:
+        up.shutdown()
+    got = seen.get("traceparent")
+    assert got, "the relayed call carried no traceparent at all"
+    parts = got.split("-")
+    assert len(parts) == 4, f"the relayed traceparent is not a W3C traceparent: {got!r}"
+    version, trace_id, span_id, flags = parts
+    assert version == "00", f"the child changed the trace version: {got!r}"
+    assert trace_id == "4bf92f3577b34da6a3ce929d0e0e4736", f"the child lost the caller's trace: {got!r}"
+    assert span_id != "00f067aa0ba902b7", f"the relay forwarded the caller's own span id: {got!r}"
+    assert len(span_id) == 16 and span_id == span_id.lower() and all(c in "0123456789abcdef" for c in span_id), (
+        f"the child's span id is not 16 lowercase hex characters: {got!r}")
+    assert flags == "01", f"the child changed the sampled flag: {got!r}"
+
+
+def test_a_turn_with_no_trace_context_sends_no_traceparent():
+    seen = {}
+    up = ThreadingHTTPServer(("127.0.0.1", 0), _relay_upstream(seen))
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = _relay_with_trace(up.server_address[1], None)
+        body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
+        req = urllib.request.Request(base + "/chat/completions", data=body, method="POST",
+                                     headers={"authorization": f"Bearer {tok}",
+                                              "content-type": "application/json"})
+        urllib.request.urlopen(req, timeout=10).read()
+    finally:
+        up.shutdown()
+    assert not seen.get("traceparent"), f"a turn with no trace context still sent {seen.get('traceparent')!r}"
+
+
+def test_a_malformed_traceparent_is_not_forwarded():
+    seen = {}
+    up = ThreadingHTTPServer(("127.0.0.1", 0), _relay_upstream(seen))
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = _relay_with_trace(up.server_address[1], {"traceparent": "not-a-traceparent"})
+        body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
+        req = urllib.request.Request(base + "/chat/completions", data=body, method="POST",
+                                     headers={"authorization": f"Bearer {tok}",
+                                              "content-type": "application/json"})
+        urllib.request.urlopen(req, timeout=10).read()
+    finally:
+        up.shutdown()
+    assert not seen.get("traceparent"), f"a malformed traceparent was forwarded as {seen.get('traceparent')!r}"
+
+
+def test_the_turn_validates_the_trace_context_it_is_handed():
+    """The runner is the last place before a provider sees the value, so it checks it itself: a
+    header nobody can read is worth less than a turn."""
+    assert rs.tracecontext.parse(TRACE_PARENT, "") == {"traceparent": TRACE_PARENT}
+    assert rs.tracecontext.parse(TRACE_PARENT.upper(), "") == {}   # lower-case hex only (HEXDIGLC)
+    for bad in ("not-a-traceparent",
+                "00-" + "0" * 32 + "-00f067aa0ba902b7-01",     # an all-zero trace-id
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-" + "0" * 16 + "-01",   # an all-zero span-id
+                "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",  # version ff
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",     # no flags
+                ""):
+        assert rs.tracecontext.parse(bad, "vendor=1") == {}, f"{bad!r} was accepted as a trace context"
+    # A tracestate is only ever read with a traceparent, and a malformed member drops the
+    # tracestate alone — never the traceparent beside it.
+    assert rs.tracecontext.parse("", "vendor=1") == {}
+    assert rs.tracecontext.parse(TRACE_PARENT, "vendor=1") == {"traceparent": TRACE_PARENT, "tracestate": "vendor=1"}
+    assert rs.tracecontext.parse(TRACE_PARENT, "not a member") == {"traceparent": TRACE_PARENT}
+    # The spec's own rules for a member: a value may hold a space anywhere but its last character
+    # and must not be empty, and only one entry per key may exist.
+    assert rs.tracecontext.parse(TRACE_PARENT, "vendor=a b") == {"traceparent": TRACE_PARENT,
+                                                             "tracestate": "vendor=a b"}
+    assert rs.tracecontext.parse(TRACE_PARENT, "vendor=") == {"traceparent": TRACE_PARENT}
+    assert rs.tracecontext.parse(TRACE_PARENT, "vendor=1,vendor=2") == {"traceparent": TRACE_PARENT}
+    assert rs.tracecontext.parse(TRACE_PARENT, "a=1,b=2") == {"traceparent": TRACE_PARENT,
+                                                           "tracestate": "a=1,b=2"}
+    # A newer version may carry fields this code does not know yet: the spec parses the first 55
+    # characters and ignores the rest, so the trace is kept. Version `00` has no trailing data.
+    assert rs.tracecontext.parse("01-" + "4bf92f3577b34da6a3ce929d0e0e4736" + "-00f067aa0ba902b7-01-extra",
+                             "") == {"traceparent": "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    assert rs.tracecontext.parse(TRACE_PARENT + "-extra", "") == {}
+
+
+def test_the_turn_hands_the_trace_context_to_the_cli(monkeypatch, tmp_path):
+    """The CLI's own environment carries it, so a tool in the turn that speaks OpenTelemetry joins
+    the caller's trace."""
+    launched = []
+    started = threading.Event()
+
+    def _fake(*args):
+        launched.append(args)
+        started.set()
+    monkeypatch.setattr(rs, "_run_hermes_bg", _fake)
+    cwd = tmp_path / "w"
+    cwd.mkdir()
+    rs.turn(rs.TurnReq(backend="hermes", provider="anthropic", model="claude-haiku-4.5", prompt="hi",
+                        auth=Auth(api_key="sk-test", base_url="https://proxy.example/v1"),
+                        cwd=str(cwd), traceparent=TRACE_PARENT, tracestate="vendor=1"))
+    assert started.wait(10), "the hermes turn was never launched"
+    env = launched[-1][2]
+    assert env.get("TRACEPARENT") == TRACE_PARENT, f"the CLI's env carries {env.get('TRACEPARENT')!r}"
+    assert env.get("TRACESTATE") == "vendor=1", f"the CLI's env carries {env.get('TRACESTATE')!r}"
+
+
+def test_a_turn_with_no_trace_context_gives_the_cli_none(monkeypatch, tmp_path):
+    launched = []
+    started = threading.Event()
+
+    def _fake(*args):
+        launched.append(args)
+        started.set()
+    monkeypatch.setattr(rs, "_run_hermes_bg", _fake)
+    cwd = tmp_path / "w"
+    cwd.mkdir()
+    rs.turn(rs.TurnReq(backend="hermes", provider="anthropic", model="claude-haiku-4.5", prompt="hi",
+                        auth=Auth(api_key="sk-test", base_url="https://proxy.example/v1"),
+                        cwd=str(cwd)))
+    assert started.wait(10), "the hermes turn was never launched"
+    env = launched[-1][2]
+    assert "TRACEPARENT" not in env and "TRACESTATE" not in env, (
+        f"a turn with no trace context still got {env.get('TRACEPARENT')!r} / {env.get('TRACESTATE')!r}")
+
+
+def test_every_route_of_the_turn_carries_the_trace_context(monkeypatch):
+    """Every way a route is registered must carry the turn's traceparent, not just the one the
+    hermes builders use. The relay mints the provider's child span from the route's flag, so a
+    route registered without it sends the provider a request the caller's trace cannot be joined
+    to — and the route that missed it would be whichever base nobody tested."""
+    routes: dict = {}
+    monkeypatch.setattr(rs, "_HERMES_RELAY", {"server": None, "port": 0, "routes": routes, "lock": threading.Lock()})
+    token = rs._TURN_TRACE.set({"traceparent": TRACE_PARENT, "tracestate": "vendor=1"})
+    try:
+        rs._hermes_relay_route("https://proxy.example/v1", "sk-test")
+        rs._qoder_relay_route("https://proxy.example/api/v1/cloud", "pat-test")
+        rs._bedrock_anthropic_route("https://bedrock.example", "sk-test")
+        rs._gemini_relay_route("https://generativelanguage.example", "sk-test", "gemini-4-argon", "gemini-4-argon")
+        rs._systemone_relay_route("openrouter", "https://openrouter.example/api/v1", "sk-test")
+    finally:
+        rs._TURN_TRACE.reset(token)
+
+    assert routes, "no route was registered"
+    for tok, (_base, _key, flags) in routes.items():
+        assert flags.get("traceparent") == TRACE_PARENT, (
+            f"the route {tok} carries {flags.get('traceparent')!r} instead of the caller's traceparent")
+
+
+def _relay_call(headers: dict | None = None) -> dict:
+    """Send one call through the relay to a fake provider, and return what the provider saw."""
+    seen: dict = {}
+    up = ThreadingHTTPServer(("127.0.0.1", 0), _relay_upstream(seen))
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = _relay_with_trace(up.server_address[1], {"traceparent": TRACE_PARENT,
+                                                             "tracestate": "vendor=1"})
+        body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
+        req = urllib.request.Request(base + "/chat/completions", data=body, method="POST",
+                                     headers={"authorization": f"Bearer {tok}",
+                                              "content-type": "application/json",
+                                              **(headers or {})})
+        urllib.request.urlopen(req, timeout=10).read()
+    finally:
+        up.shutdown()
+    return seen
+
+
+def test_a_client_cannot_replace_the_callers_trace_id():
+    """The turn's context is the trace's root: the caller's trace id is never taken from the
+    client. A client that sends a traceparent of its own would otherwise send the provider a
+    request under a different trace, which the caller's trace cannot be joined to."""
+    foreign = "00-11111111111111111111111111111111-2222222222222222-01"
+    seen = _relay_call({"traceparent": foreign})
+    got = seen.get("traceparent")
+    assert got, "the relayed call carried no traceparent at all"
+    assert got.split("-")[1] == "4bf92f3577b34da6a3ce929d0e0e4736", (
+        f"the provider got {got!r}: the client's own trace id replaced the caller's")
+    assert got.split("-")[1] != foreign.split("-")[1], f"the provider got the client's trace: {got!r}"
+
+
+def test_a_clients_own_child_of_the_callers_trace_is_the_parent():
+    """A CLI that read TRACEPARENT from its environment has already made a child of the caller's
+    span, and the provider's request belongs under THAT span: the same trace id, a new span id."""
+    child = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    seen = _relay_call({"traceparent": child})
+    got = seen.get("traceparent")
+    assert got, "the relayed call carried no traceparent at all"
+    assert got.split("-")[1] == "4bf92f3577b34da6a3ce929d0e0e4736", f"the provider got {got!r}"
+    assert got.split("-")[2] != "00f067aa0ba902b7", f"the relay forwarded the CLI's own span id: {got!r}"
+
+
+def test_a_malformed_client_traceparent_does_not_reach_the_provider():
+    """A header nobody can read is worth less than a turn: the client's own value is dropped and
+    the provider gets the caller's trace, not the client's all-zero one."""
+    seen = _relay_call({"traceparent": "00-" + "0" * 32 + "-00f067aa0ba902b7-01"})
+    got = seen.get("traceparent")
+    assert got, "the relayed call carried no traceparent at all"
+    assert got.split("-")[1] == "4bf92f3577b34da6a3ce929d0e0e4736", f"the provider got {got!r}"
+
+
+def test_baggage_never_reaches_the_provider():
+    """`baggage` carries the caller's own data to whoever reads it, and it does not leave the
+    box — not even the client's own."""
+    seen = _relay_call({"baggage": "userid=secret,tenant=acme"})
+    assert not seen.get("baggage"), f"the provider got baggage {seen.get('baggage')!r}"
+
+
+def test_the_callers_tracestate_reaches_the_provider():
+    """The tracestate is the caller's vendor state for that trace, and the provider is the other
+    end of it."""
+    seen = _relay_call()
+    assert seen.get("tracestate") == "vendor=1", f"the provider got {seen.get('tracestate')!r}"
+
+
+def test_a_turn_with_no_trace_context_leaves_the_clients_headers_alone():
+    """No header in means nothing out: a turn with no trace context changes nothing, so a client
+    that traces already keeps the span it made."""
+    seen: dict = {}
+    up = ThreadingHTTPServer(("127.0.0.1", 0), _relay_upstream(seen))
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = _relay_with_trace(up.server_address[1], None)
+        body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
+        req = urllib.request.Request(base + "/chat/completions", data=body, method="POST",
+                                     headers={"authorization": f"Bearer {tok}",
+                                              "content-type": "application/json",
+                                              "traceparent": TRACE_PARENT})
+        urllib.request.urlopen(req, timeout=10).read()
+    finally:
+        up.shutdown()
+    assert seen.get("traceparent") == TRACE_PARENT, (
+        f"a turn with no trace context changed the client's own header: {seen.get('traceparent')!r}")
