@@ -635,17 +635,70 @@ def test_a_switch_rewrites_the_sessions_stored_model_and_nothing_else():
 
 
 def test_an_mcp_server_carries_its_bearer_and_its_transport():
+    """PARSED, not substring-matched. The first version of this test asserted `'transport:
+    "http"' in cfg`, which is true at ANY indentation — and the indentation was wrong: the server
+    name and its fields were emitted at the same depth, so `mcp.servers` loaded as three sibling
+    keys and the CLI refused to start ("3 validation errors for Settings / mcp: Invalid
+    configuration value", one per key). Every turn of every harness that declared an MCP server on
+    this base died before its first model call, and the support-matrix column could not see it
+    because a column declares no MCP servers. Found by the custom-harness dimension, 2026-10-20."""
+    import yaml
     ws = _ws()
     _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
                       mcp_servers=[{"name": "plugs", "url": "https://p.example/mcp",
                                     "transport": "http", "auth": "tok-7"},
                                    {"name": "legacy", "url": "https://l.example/sse",
-                                    "transport": "sse"}])
-    cfg = (_fast_agent_home(ws) / "fastagent.config.yaml").read_text()
-    assert 'transport: "http"' in cfg and 'url: "https://p.example/mcp"' in cfg
-    assert '"Authorization": "Bearer tok-7"' in cfg
-    assert 'transport: "sse"' in cfg, "its client takes sse natively, so nothing is bridged"
+                                    "transport": "sse"},
+                                   {"name": "local", "command": ["/bin/echo", "hi"],
+                                    "args": ["more"]}])
+    doc = yaml.safe_load((_fast_agent_home(ws) / "fastagent.config.yaml").read_text())
+    servers = doc["mcp"]["servers"]
+    assert sorted(servers) == ["legacy", "local", "plugs"], servers
+    assert servers["plugs"] == {"transport": "http", "url": "https://p.example/mcp",
+                                "headers": {"Authorization": "Bearer tok-7"}}
+    # its client takes sse natively, so nothing is bridged
+    assert servers["legacy"] == {"transport": "sse", "url": "https://l.example/sse"}
+    assert servers["local"] == {"transport": "stdio", "command": "/bin/echo",
+                                "args": ["hi", "more"]}
     assert "fast-agent" not in _BRIDGED_TRANSPORTS
+
+
+def test_a_declared_server_is_also_enabled_on_the_command_line():
+    """MEASURED by the custom-harness dimension (2026-10-20), after the indentation fix above made
+    the config load at all: the turn ran, recorded ZERO tool calls, and the harness's own MCP
+    server was never called. `go` builds an ad-hoc agent and its `--servers` is "a comma-separated
+    list of server names to enable from config", so declaring a server in the file is not enough —
+    the flag has to name it. The names come back from the writer, so this asserts the flag against
+    the DOCUMENT rather than against a second copy of the naming rule."""
+    import yaml
+    ws = _ws()
+    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                            mcp_servers=[{"name": "one", "url": "https://a.example/mcp"},
+                                         {"name": "two", "command": ["/bin/echo"]}])
+    doc = yaml.safe_load((_fast_agent_home(ws) / "fastagent.config.yaml").read_text())
+    named = cmd[cmd.index("--servers") + 1].split(",")
+    assert sorted(named) == sorted(doc["mcp"]["servers"]), (named, doc["mcp"]["servers"])
+
+
+def test_no_servers_means_no_servers_flag():
+    ws = _ws()
+    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    assert "--servers" not in cmd
+    assert "mcp:" not in (_fast_agent_home(ws) / "fastagent.config.yaml").read_text()
+
+
+def test_every_server_body_sits_under_its_own_name():
+    """The invariant the bug broke, asked of the DOCUMENT: a server's fields are its own, and
+    `mcp.servers` holds nothing but server names."""
+    import yaml
+    ws = _ws()
+    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                      mcp_servers=[{"name": "one", "url": "https://a.example/mcp"},
+                                   {"name": "two", "url": "https://b.example/mcp"}])
+    doc = yaml.safe_load((_fast_agent_home(ws) / "fastagent.config.yaml").read_text())
+    for name, body in doc["mcp"]["servers"].items():
+        assert isinstance(body, dict) and body.get("transport"), (name, body)
+        assert not set(body) - {"transport", "url", "command", "args", "headers"}, body
 
 
 def test_a_turns_record_is_its_own_steps_and_not_the_whole_conversation():

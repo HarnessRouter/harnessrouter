@@ -12551,11 +12551,16 @@ def _fast_agent_set_model(cwd: str, session_id: str, model: str) -> bool:
 
 
 def _fast_agent_config(cwd: str, tools_disabled: list[str] | None,
-                       mcp_servers: list[dict] | None) -> pathlib.Path:
-    """Write the fastagent.config.yaml this turn runs with.
+                       mcp_servers: list[dict] | None) -> tuple[pathlib.Path, list[str]]:
+    """Write the fastagent.config.yaml this turn runs with, and name the servers it declares.
 
     Only three things are in it: the tool switches a harness's disabled set travels on, the MCP
-    servers it declared, and the logger turned down so the answer is the only thing on stdout."""
+    servers it declared, and the logger turned down so the answer is the only thing on stdout.
+
+    The server NAMES come back with the path because `go` needs them on the command line as well:
+    `--servers` is "a comma-separated list of server names to enable FROM CONFIG" (its own help),
+    so a declaration this file carries reaches the agent only when the flag names it. They are
+    returned rather than recomputed in the builder so the flag and the file cannot disagree."""
     disabled = {str(t) for t in (tools_disabled or ())}
 
     def q(v) -> str:
@@ -12604,15 +12609,24 @@ def _fast_agent_config(cwd: str, tools_disabled: list[str] | None,
             body += [f"      {q(k)}: {q(v)}" for k, v in hdrs.items()]
         entries.append((name, body))
     if entries:
+        # `mcp.servers.<name>.<field>`: the body is indented UNDER the name, which it was not —
+        # the name and its fields were emitted at the same depth, so `servers` came out as three
+        # sibling keys (`deepwiki: null`, `transport`, `url`) and the CLI refused to start at all:
+        # "Error loading fast-agent settings: 3 validation errors for Settings / mcp: Invalid
+        # configuration value" — one per key. MEASURED by the custom-harness dimension
+        # (2026-10-20), which is the first thing here to declare an MCP server on this base; the
+        # support-matrix column declares none and passed 274 of 280 scenarios with this broken.
+        # The indent is applied HERE, once, rather than written into each body line, so a body
+        # built anywhere above cannot carry the wrong depth.
         lines += ["mcp:", "  servers:"]
         for name, body in entries:
-            lines.append(f"  {' ' * 2}{name}:")
-            lines += body
+            lines.append(f"    {name}:")
+            lines += [f"  {b}" for b in body]
         lines.append("")
     path = _fast_agent_home(cwd) / "fastagent.config.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines))
-    return path
+    return path, [name for name, _body in entries]
 
 
 def _fast_agent_to_claude(obj: dict, state: dict) -> list[dict]:
@@ -12714,7 +12728,7 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home = _fast_agent_home(cwd)
     home.mkdir(parents=True, exist_ok=True)
-    cfg = _fast_agent_config(cwd, tools_disabled, mcp_servers)
+    cfg, server_names = _fast_agent_config(cwd, tools_disabled, mcp_servers)
     env["FAST_AGENT_HOME"] = str(home)
     env[_FA_BASE_ENV] = (auth.base_url or "").rstrip("/")
     env[_FA_KEY_ENV] = auth.api_key or ""
@@ -12749,6 +12763,15 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
            "-c", str(cfg),
            "--trajectory-output", str(traj),
            "--trajectory-format", "atif"]
+    if server_names:
+        # DECLARED IS NOT ENABLED on this entry point. `go` builds an ad-hoc agent, and its
+        # `--servers` is "a comma-separated list of server names to enable from config" (its own
+        # help), so a server this runner wrote into the config reaches the model only when the
+        # flag names it. MEASURED by the custom-harness dimension (2026-10-20): with the config
+        # valid and the flag missing, the turn ran, recorded ZERO tool calls, and the harness's
+        # own MCP server was never called — the model simply had nothing attached. The names come
+        # from the writer, so the flag and the file cannot disagree.
+        cmd += ["--servers", ",".join(server_names)]
     if "bash" in disabled:
         # EXPLICITLY off, not merely un-asked-for: a resumed session brings its shell runtime back,
         # so a turn that only omitted -x had bash anyway and ran the command it was supposed to be
