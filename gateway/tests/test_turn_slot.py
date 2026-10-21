@@ -6,6 +6,7 @@ settled it, session and response, as failed, and the turn's own final write late
 (measured 2026-10-12: a background poller read `failed`, error null, four seconds into a 28-second
 wait for a slot, and `completed` at 55 s)."""
 import asyncio
+import json
 import os
 import pathlib
 import sys
@@ -231,3 +232,162 @@ def test_past_the_limit_plus_margin_it_settles_timed_out_and_the_runners_turn_is
     assert settled is True
     assert writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "timeout"}
     assert ("POST", "/turn/rt_1/cancel") in calls
+
+
+def _record_sweep(monkeypatch, vertex: dict, rec: dict):
+    """The sweep on `vertex` with its running response record `rec`; returns whether it settled and
+    the record as it was persisted. Scaled: the cap is max(2, 2) + 1 = 3 s."""
+    monkeypatch.setattr(gw, "_GW_MAX_TURN_S", 2)
+    monkeypatch.setattr(gw, "_RUNNER_MAX_TURN_S", 2)
+    monkeypatch.setattr(gw, "_CAP_MARGIN_S", 1)
+    monkeypatch.setattr(gw, "_RECONCILE_STALE_S", 4)
+    stored: dict = {}
+
+    async def _vup(sid, props):
+        vertex.update(props)
+
+    async def _vget(sid):
+        return dict(vertex)
+
+    async def _tts(base, since_ms=0):
+        return None
+
+    async def _resp_get(rid):
+        return dict(rec)
+
+    async def _blob_get(*a, **k):
+        return None
+
+    async def _blob_put(key, data, **k):
+        stored.update(json.loads(data))
+        return True
+
+    async def _nothing(*a, **k):
+        return None
+
+    async def sandbox(*a, **k):
+        raise AssertionError("no runner turn on record: nothing to ask or cancel")
+    for name, fn in (("_vertex_upsert", _vup), ("_vertex_get", _vget), ("_trace_terminal_status", _tts),
+                     ("_resp_get", _resp_get), ("_blob_get", _blob_get), ("_blob_put", _blob_put),
+                     ("_vg_upsert", _nothing), ("_sandbox", sandbox)):
+        monkeypatch.setattr(gw, name, fn)
+    return asyncio.run(gw._reconcile_session(dict(vertex))), stored
+
+
+def test_a_capped_turn_whose_slot_still_beats_settles_its_response_record_too(monkeypatch):
+    """Past the cap with no runner turn on record, the sweep settles the session while the slot still
+    beats (a restore that hangs), and the response record must settle in the same pass. The record's
+    guard for an owner that is finalizing reads a terminal session with a fresh heartbeat as one about
+    to write its own record, so the record stayed `running` for as long as the slot beat, and a
+    background poller never saw the turn end (found by the hosted port, 2026-10-21)."""
+    now = time.time()
+    vertex = {"id": "hsess1", "tenant": "org", "status": "running", "turn_status": "starting",
+              "runner_turn_id": "", "running_response_id": "resp_1", "turn_at": str(now - 10),
+              "heartbeat": str(now)}
+    rec = {"id": "resp_1", "status": "running", "_session_id": "hsess1", "output": [], "created_at": now - 10}
+    settled, stored = _record_sweep(monkeypatch, vertex, rec)
+    assert settled is True and vertex["end_reason"] == "timeout"
+    assert stored.get("status") == "failed", "the response record stayed running"
+    assert stored["error"] == gw._cap_error()
+
+
+def test_a_session_an_owner_is_finalizing_still_leaves_its_record_to_the_owner(monkeypatch):
+    """The guard stands for what it is for: a terminal session whose owner beat moments ago, with no
+    reason the sweep proved, is an owner writing its own record, and the record is left alone."""
+    now = time.time()
+    v = {"id": "hsess1", "status": "done", "heartbeat": str(now), "running_response_id": "resp_1"}
+    rec = {"id": "resp_1", "status": "running", "_session_id": "hsess1", "output": []}
+
+    async def _vget(sid):
+        return dict(v)
+
+    async def _blob_put(*a, **k):
+        raise AssertionError("the owner writes this record, not the reconciler")
+    monkeypatch.setattr(gw, "_vertex_get", _vget)
+    monkeypatch.setattr(gw, "_blob_put", _blob_put)
+    assert asyncio.run(gw._reconcile_response("resp_1", dict(rec)))["status"] == "running"
+    # a reason on the session that belongs to another response does not open the guard either
+    v.update(status="failed", end_reason="timeout", running_response_id="resp_2")
+    assert asyncio.run(gw._reconcile_response("resp_1", dict(rec)))["status"] == "running"
+
+
+def _drive_a_late_turn(monkeypatch, age_s: float, hydrate=None):
+    """Run `_resp_execute` for a turn accepted `age_s` seconds ago (a restore or a wait that hung),
+    with the world's edges stubbed; returns (status, rec, vertex writes, runner calls). Scaled: the
+    cap is max(2, 2) + 1 = 3 s."""
+    monkeypatch.setattr(gw, "_GW_MAX_TURN_S", 2)
+    monkeypatch.setattr(gw, "_RUNNER_MAX_TURN_S", 2)
+    monkeypatch.setattr(gw, "_CAP_MARGIN_S", 1)
+    calls, writes = [], []
+
+    async def _sandbox_json(path, sid, method="POST", body=None, **kw):
+        calls.append(path)
+        if path == "/turn":
+            return {"turn_id": "t1", "status": "running"}
+        if path.startswith("/turn/"):
+            return {"done": True, "status": "done", "events": [], "n_total": 0}
+        return {}
+
+    async def _nothing(*a, **kw):
+        return None
+
+    async def _vup(sid, props):
+        writes.append(dict(props))
+
+    async def _get_connection(org, name):
+        return ({"provider": "anthropic", "base_url": "https://proxy.example/v1"}, "tenant-1")
+
+    async def _harness_plugins(*a, **kw):
+        return ([], [], [], [], [])
+
+    async def _harness_env(*a, **kw):
+        return ({}, [])
+
+    async def _false(*a, **kw):
+        return False
+
+    async def _collect_produced(*a, **kw):
+        return []
+    for name, fn in (("_sandbox_json", _sandbox_json), ("_vertex_get", _nothing), ("_vertex_upsert", _vup),
+                     ("_hydrate", hydrate or _nothing), ("_harness_plugins", _harness_plugins), ("_harness_env", _harness_env),
+                     ("_image_auth", _nothing), ("_get_connection", _get_connection),
+                     ("_auth_from_conn", lambda *a, **k: {"token": "t", "base_url": "https://proxy.example/v1"}),
+                     ("_turn_cancelled", _false), ("_collect_produced", _collect_produced), ("_blob_put", _nothing),
+                     ("_checkpoint", _nothing), ("_trace_finalize", _nothing), ("_browser_close", _nothing),
+                     ("_recover_trace_cursor", _nothing)):
+        monkeypatch.setattr(gw, name, fn)
+    monkeypatch.setattr(gw, "RESP_POLL_S", 0)
+    monkeypatch.setattr(gw.control_store, "enabled", lambda: False)
+    translator = gw._RespTranslator("resp_late", "m", None, True, time.time() - age_s)
+    status, _produced, rec = asyncio.run(gw._resp_execute(
+        translator, org="org", member="me@local", sid="sess_late", backend="claude",
+        chain=["anthropic"], prompt="hi", files_in=[], resume=None, emit=lambda ev: asyncio.sleep(0)))
+    return status, rec, writes, calls, translator
+
+
+def test_a_turn_that_waited_past_the_cap_for_its_slot_never_runs(monkeypatch):
+    """The sweep settled it as timed out while it waited; when the slot comes, the turn must not be
+    stamped running again, restore, or start the agent and finish over that answer (terminal is
+    final). It ends as the sweep said: failed, reason timeout, and nothing runs."""
+    status, rec, writes, calls, tr = _drive_a_late_turn(monkeypatch, age_s=10)
+    assert "/turn" not in calls, "a turn past the cap started the agent"
+    assert status == "failed" and rec["error"] == gw._cap_error()
+    assert writes == [{"status": "failed", "turn_status": "failed", "end_reason": "timeout"}], (
+        f"a settled turn was written over: {writes}")
+    evs = gw._fail_events(tr, rec)
+    assert evs[-2]["code"] == "harness_error"
+    assert evs[-1]["response"]["error"] == gw._cap_error()
+
+
+def test_a_turn_inside_the_cap_starts_as_before(monkeypatch):
+    status, rec, writes, calls, _tr = _drive_a_late_turn(monkeypatch, age_s=1)
+    assert "/turn" in calls and status == "completed" and "error" not in rec
+
+
+def test_a_restore_that_hung_past_the_cap_ends_the_turn_before_the_agent_starts(monkeypatch):
+    """The turn began inside the cap and its restore hung past it: it stops before the agent starts."""
+    async def _slow_hydrate(sid, rec):
+        await asyncio.sleep(2.5)
+    status, rec, writes, calls, _tr = _drive_a_late_turn(monkeypatch, age_s=1, hydrate=_slow_hydrate)
+    assert "/turn" not in calls and status == "failed" and rec["error"] == gw._cap_error()
+    assert writes[-1] == {"status": "failed", "turn_status": "failed", "end_reason": "timeout"}

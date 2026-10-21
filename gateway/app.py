@@ -3333,10 +3333,19 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     vs = str(v.get("status") or "")
     settled = None
     capped = False                       # settled by this reconciler's own hard cap
-    if vs in ("done", "failed", "cancelled", "incomplete") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
+    # The sweep settled THIS response's turn and wrote why on the session (a restart lost it, or
+    # the hard cap): the session's word is final, whatever the heartbeat says.
+    proven = (v.get("end_reason") in ("interrupted", "timeout")
+              and rid == str(v.get("running_response_id") or ""))
+    if (vs in ("done", "failed", "cancelled", "incomplete") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S
+            and not proven):
         # The session is terminal but its owner heartbeated moments ago: the owner is finalizing
         # (collecting files, writing the checkpoint) and will write the full record itself,
         # output, usage and served model included. Only an orphan is settled from the session.
+        # A proven end is not an owner finalizing: the sweep settles a turn past the cap while its
+        # slot still beats (a restore that hangs, _turn_slot), and leaving the record to an owner
+        # that never writes kept it `running` for as long as the slot beat (found by the hosted
+        # port, 2026-10-21).
         return rec
     if vs in ("done", "failed", "cancelled", "incomplete"):
         settled = _RESP_STATUS_MAP.get(vs)
@@ -3393,8 +3402,7 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     except Exception:  # noqa: BLE001
         pass
     rec["status"] = settled
-    if (settled == "failed" and vs == "failed" and v.get("end_reason") in ("interrupted", "timeout")
-            and rid == str(v.get("running_response_id") or "")):
+    if settled == "failed" and vs == "failed" and proven:
         # the sweep proved why (a restart lost the turn, or the hard cap) and wrote it on the session
         rec["error"] = _interrupted_error() if v["end_reason"] == "interrupted" else _cap_error()
     elif settled == "failed" and capped and not rec.get("error"):
@@ -4362,6 +4370,12 @@ def _refusal_message(conn: dict | None, err: str) -> str:
     provider = str((conn or {}).get("provider") or "your provider")
     what = "connection" if str((conn or {}).get("auth") or "").strip().lower() == "entra" else "key"
     return f"Your {provider} {what} was refused: {err or 'the provider returned an error'}"
+
+
+def _fail_events(tr: "_RespTranslator", rec: dict) -> list[dict]:
+    """A failed turn's closing events: the error the turn proved (rec["error"], the hard cap's),
+    else its reason in words."""
+    return tr.fail(_turn_failure_message(rec), rec.get("error"))
 
 
 def _turn_failure_message(rec: dict) -> str:
@@ -8572,6 +8586,22 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
     return sid, None
 
 
+async def _past_cap_stand_down(sid: str, translator: "_RespTranslator", rec: dict) -> bool:
+    """True when the turn is past the sweep's cap before it reached the runner, settled as such.
+
+    The sweep settles a turn past the cap as timed out while it still waits (_reconcile_session:
+    a slot that never came, a restore that hung, with _turn_slot beating), and a turn that went on
+    to start the agent would finish over that answer, and a terminal status is final. It ends as the
+    sweep said, with nothing run. Checked where the turn would next begin work: before it is stamped
+    running and restores, and before it starts the agent. The clock is the accept's, as the sweep's."""
+    if not translator.created_at or time.time() - float(translator.created_at) <= _sweep_cap_s():
+        return False
+    rec["status"] = "failed"
+    rec["error"] = _cap_error()
+    await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed", "end_reason": "timeout"})
+    return True
+
+
 async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, sid: str,
                         backend: str, chain: list[str], prompt: str, files_in: list[dict],
                         resume: str | None, emit, model_req: str = "", user_text: str = "",
@@ -8611,6 +8641,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # finished session at running/starting with a fresh heartbeat, the orphan sweep then took it
     # for a dead turn, and a client retrying its follow-up never got back in (omp, 2026-09-15).
     rec["lease_fence"] = 0
+    if await _past_cap_stand_down(sid, translator, rec):        # it waited past the cap for its slot
+        return "failed", [], rec
     if LEASE_MODE != "off" and control_store.enabled():
         try:
             _adm = await control_store.lease_admit(
@@ -8819,6 +8851,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 # environment and gives the model calls a child of it. Empty when the caller sent
                 # none, so a turn without a trace context sends none.
                 **(trace_ctx or {})}
+        if await _past_cap_stand_down(sid, translator, rec):    # a restore or a resolve that hung
+            status = "failed"
+            break
         # Stop requested while we were resolving the connection / provisioning the previous
         # attempt? Honor it BEFORE launching a CLI process (from any replica, via the one signal).
         if await _turn_cancelled(sid, org, translator.resp_id):
@@ -10094,7 +10129,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                     end["status"] = status
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
-                    for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
+                    for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
                         await bus_emit_bg(ev)
                     end["told"] = True
                     await persist(status)
@@ -10149,7 +10184,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         end["status"] = status
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
-                        for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
+                        for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
                             await emit(ev)
                         end["told"] = True
                         await persist(status)
@@ -10209,7 +10244,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 trace_ctx=trace_ctx)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
-            for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
+            for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
                 await bus_emit(ev)
             obj = tr._response_obj(status)
     except Exception as e:  # noqa: BLE001
