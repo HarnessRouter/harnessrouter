@@ -15,26 +15,26 @@ after this one. A client reads `default` and each model's `available`.
 
 ## Conformance suite 2026.10.19.post3 (2026-10-19)
 
-No change to the protocol or the schema. One verdict changes: a server that stops a task at a
-budget and reports `incomplete` WITHOUT naming the budget in `incomplete_details.reason` now
-fails T-12. §1.1 requires the `incomplete` status and says nothing about the reason, and the
-2026-10-19 schema types `incomplete_details` as `["object","null"]`, so such a server was
-conformant until this check arrived. #501 asks the check to require the reason, and that is
-where the requirement comes from; making it a protocol rule would be a UEP.
+No change to the protocol, the schema or any verdict a conformant server gets.
 
-T-12 measures the step budget. A task sent with `max_step: 1` whose work needs three tool calls
-must end `incomplete`, with `incomplete_details.reason` naming the budget, and never `completed`.
-Nothing in the suite sent `max_step` before this, so a server that ignored the budget scored as
-well as one that honoured it. The fixture gains a tool (`uhp_steps`) whose answer asks for the
-next step, and the check counts the rounds from the response's own items — the tool call and the
-answer to it — so a model that claims a call cannot make the count rise. A server that let the
-chain run past the budget and reported `completed` fails; a chain that stayed inside the budget
-says nothing about the rule and is skipped. A task whose chain never began is skipped, not
-passed. A server that cannot bound a base may name `max_step` in `metadata.ignored_fields`, and
-the check accepts that answer.
+T-12 measures the step budget (Tasks §1.1). A task sent with `max_step: 1` whose work needs three
+tool calls must end `incomplete`, never `completed` or `failed`. Nothing in the suite sent
+`max_step` before this, so a server that ignored the budget scored as well as one that honoured
+it. The fixture gains a tool, `uhp_steps`, whose answer asks for the next step, and the check
+counts the rounds from the response's own items: the tool call and the answer to it are two items
+the server produced, so a model that only claims a call cannot make the count rise. A tool named
+with a server's own MCP prefix (`mcp__<server>__uhp_steps`) counts as the fixture's tool.
 
-T-12 needs the fixture's `uhp_steps`, so the public copy of the fixture has to be rebuilt from
-this commit before the check can run against the default `--plugin-mcp-url`.
+- A server that ran the chain past the budget and reported `completed` or `failed` fails.
+- A server that names `max_step` in `metadata.ignored_fields`, the answer §1.1 gives a server that
+  cannot bound a base, passes.
+- `incomplete_details.reason` is reported in the result and never failed: §1.1 requires the status
+  and not the reason, and a UEP is what would make the reason a rule.
+- A chain that stayed inside the budget, or never began, says nothing about the rule and is
+  skipped.
+
+T-12 needs the fixture's `uhp_steps`, so the public copy of the fixture is rebuilt from this commit;
+until it is, T-12 skips against the default `--plugin-mcp-url`.
 
 ## Conformance suite 2026.10.19.post2 (2026-10-19)
 

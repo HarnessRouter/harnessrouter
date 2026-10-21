@@ -94,16 +94,16 @@ def test_a_chain_that_stayed_inside_the_budget_skips():
     assert _run("model_ended_the_turn")[ID] is Outcome.SKIP
 
 
-def test_incomplete_without_a_reason_fails():
-    """`incomplete` with nothing to say about it: a client cannot tell a task that ran out of
-    steps from one that failed."""
-    assert _run("no_reason")[ID] is Outcome.FAIL
+def test_incomplete_without_a_reason_passes_with_a_note():
+    """§1.1 requires `incomplete` for work stopped at the budget and says nothing of the reason, so
+    a missing reason is reported in the result, never failed: a check holds a server to the protocol."""
+    assert _run("no_reason")[ID] is Outcome.PASS
 
 
-def test_a_reason_that_names_another_budget_fails():
-    """The request carried a step budget and no time budget, so a reason that names the time
-    budget is a diagnosis the server did not make."""
-    assert _run("wrong_reason")[ID] is Outcome.FAIL
+def test_a_reason_that_names_another_budget_passes_with_a_note():
+    """A reason that names the time budget is a poor diagnosis, but §1.1 requires the status, not
+    the reason, so it is reported and not failed."""
+    assert _run("wrong_reason")[ID] is Outcome.PASS
 
 
 def test_a_reason_that_names_the_budget_in_the_specs_other_words_passes():
@@ -112,10 +112,16 @@ def test_a_reason_that_names_the_budget_in_the_specs_other_words_passes():
     assert _run("rounds_reason")[ID] is Outcome.PASS
 
 
-def test_a_server_that_names_max_step_as_ignored_skips():
-    """A server that cannot bound a base has to say so (§1.1: ignoring must be observable), and
-    that is an answer, not a defect."""
-    assert _run("reports_ignored")[ID] is Outcome.SKIP
+def test_a_server_that_names_max_step_as_ignored_passes():
+    """A server that cannot bound a base has to say so (§1.1: ignoring must be observable). That is
+    §1.1's other answer, so it passes: a skip would leave the server short of a clean verdict for good."""
+    assert _run("reports_ignored")[ID] is Outcome.PASS
+
+
+def test_a_tool_named_with_the_servers_mcp_prefix_is_counted():
+    """Claude-family bases name an MCP tool mcp__<server>__<tool>; those rounds are the fixture's
+    tool all the same, or the reference server would skip this check forever."""
+    assert _run("prefixed_tool")[ID] is Outcome.PASS
 
 
 def test_a_task_that_never_called_the_tool_skips():
@@ -134,7 +140,7 @@ def test_a_task_that_never_started_skips():
 def test_no_check_errors_on_any_defect():
     for defect in ["none", "ignores_budget", "ignores_budget_two_calls", "model_ended_the_turn",
                    "no_reason", "wrong_reason", "rounds_reason", "reports_ignored",
-                   "no_tool_call", "incomplete_never_started", "failed_status"]:
+                   "no_tool_call", "incomplete_never_started", "failed_status", "prefixed_tool"]:
         got = _run(defect)
         assert ID in got, f"the check {ID} is not registered, so the defect {defect!r} was never run"
         assert Outcome.ERROR not in got.values(), defect

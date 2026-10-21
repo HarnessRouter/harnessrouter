@@ -40,6 +40,7 @@ DEFECTS = {
     "no_tool_call",    # the agent never called the tool, so nothing needed a budget
     "incomplete_never_started",  # reports `incomplete` without the work ever starting
     "failed_status",   # runs past the budget and reports `failed`
+    "prefixed_tool",   # stops at the budget; names the tool the way claude-family bases name MCP tools
 }
 assert DEFECT in DEFECTS, f"unknown defect {DEFECT!r}; one of {sorted(DEFECTS)}"
 
@@ -47,7 +48,7 @@ assert DEFECT in DEFECTS, f"unknown defect {DEFECT!r}; one of {sorted(DEFECTS)}"
 CALLS = {"none": 1, "ignores_budget": 3, "ignores_budget_two_calls": 2,
          "model_ended_the_turn": 1, "no_reason": 1, "wrong_reason": 1, "rounds_reason": 1,
          "reports_ignored": 1, "no_tool_call": 0, "incomplete_never_started": 0,
-         "failed_status": 3}
+         "failed_status": 3, "prefixed_tool": 1}
 
 # The nonce the check puts in the task's prompt, so the stub answers as the fixture would.
 NONCE_RE = re.compile(r"set to ([0-9a-f]+)")
@@ -123,12 +124,13 @@ class H(BaseHTTPRequestHandler):
         # the chain on, and the chain is longer than the budget either way.
         for i in range(1, CALLS[DEFECT] + 1):
             out.append({"id": f"fc_{i}", "type": "function_call", "call_id": f"call_{i}",
-                        "name": "uhp_steps", "arguments": json.dumps({"nonce": nonce}),
+                        "name": ("mcp__conformance-fixture__uhp_steps" if DEFECT == "prefixed_tool"
+                                 else "uhp_steps"), "arguments": json.dumps({"nonce": nonce}),
                         "status": "completed"})
             out.append({"id": f"fco_{i}", "type": "function_call_output", "call_id": f"call_{i}",
                         "output": step_answer(i, nonce), "status": "completed"})
         status, details = "completed", None
-        if DEFECT in ("none", "incomplete_never_started"):
+        if DEFECT in ("none", "incomplete_never_started", "prefixed_tool"):
             status, details = "incomplete", {"reason": "max_steps"}
         elif DEFECT == "no_reason":
             status = "incomplete"

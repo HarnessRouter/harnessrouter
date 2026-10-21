@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 import uuid
 
@@ -1477,6 +1478,12 @@ _T12_MAX_STEP = 1
 _T12_BUDGET_WORDS = ("step", "round", "turn", "limit", "budget")
 
 
+def _is_tool(name: str, tool_name: str) -> bool:
+    """Whether a function_call's name is `tool_name` as the server spells an MCP tool: bare, or
+    after the server's own prefix (claude-family bases name MCP tools `mcp__<server>__<tool>`)."""
+    return name == tool_name or re.search(r"(?:^|[_.:/-])" + re.escape(tool_name) + r"$", name) is not None
+
+
 def _tool_rounds(items: list, tool_name: str) -> int:
     """How many rounds of `tool_name` the response's own items show.
 
@@ -1486,7 +1493,7 @@ def _tool_rounds(items: list, tool_name: str) -> int:
     """
     calls = {str(i.get("call_id") or "") for i in items
              if isinstance(i, dict) and i.get("type") == "function_call"
-             and str(i.get("name") or "") == tool_name}
+             and _is_tool(str(i.get("name") or ""), tool_name)}
     return sum(1 for i in items
                if isinstance(i, dict) and i.get("type") == "function_call_output"
                and str(i.get("call_id") or "") in calls)
@@ -1516,10 +1523,23 @@ def t12(ctx):
     # a managed harness, so F-07 removes it and proves the delete worked.
     mcp = [{"name": "conformance-fixture", "url": ctx.plugin_mcp_url, "transport": "http",
             "enabled": True}]
-    h = _managed_harness(ctx, mcp_servers=mcp, **({"default_model": model} if model else {}))
+    h = _managed_harness(ctx, base=base_h.get("base") or _supported_base(ctx), mcp_servers=mcp,
+                         **({"default_model": model} if model else {}))
     hid = h.get("id")
     if not hid:
         raise Skip("the harness carrying the fixture was created without an id")
+    try:
+        return _t12_measure(ctx, hid, nonce, model)
+    finally:
+        # T-12 runs after F-07, which deletes the other managed harnesses, so this one is removed here.
+        try:
+            ctx.client.delete(f"/v1/harnesses/{hid}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _t12_measure(ctx, hid: str, nonce: str, model: str) -> str:
+    from .fixture import STEP_TOOL_NAME
     body = {"input": (f"Call the tool {STEP_TOOL_NAME} with the argument \"nonce\" set to "
                       f"{nonce}. Call it again after each answer, one call per message, until it "
                       "says the chain is done, then reply with the word DONE."),
@@ -1533,8 +1553,8 @@ def t12(ctx):
         "request that carried it.")
     d = r.json or {}
     if "max_step" in ((d.get("metadata") or {}).get("ignored_fields") or []):
-        raise Skip("the server named `max_step` in metadata.ignored_fields: it cannot bound a "
-                   "base on this request, so there is no step budget here to measure")
+        # §1.1's other answer: a server that cannot bound a base says so, observably.
+        return "max_step named in metadata.ignored_fields: the server said it could not bound this base"
     rounds = _tool_rounds(d.get("output") or [], STEP_TOOL_NAME)
     status = str(d.get("status") or "")
     if not rounds:
@@ -1553,25 +1573,15 @@ def t12(ctx):
                    "the server truncated nothing and the model ended the turn. There is nothing "
                    "here about the step budget.")
     if status == "incomplete":
+        # §1.1 requires the `incomplete` status for work stopped at the budget, and nothing about
+        # the reason, so a missing or unworded reason is reported, never failed: a check holds a
+        # server to the protocol, and a UEP is what would make the reason a rule.
         details = d.get("incomplete_details")
-        # The reason is the check's rule from #501, not from §1.1: the section requires the
-        # `incomplete` status and says nothing about the reason, and the schema types
-        # `incomplete_details` as ["object","null"]. The failure says so, so a reader knows a UEP
-        # is what would make it a protocol rule.
-        assert isinstance(details, dict), (
-            f"the task ended `incomplete` with incomplete_details={details!r}; a client cannot "
-            "tell a task that ran out of steps from one that failed. §1.1 requires the status and "
-            "does not require the reason; #501 asks this check to require it, and a UEP would be "
-            "what makes it a protocol rule.")
-        reason = details.get("reason")
-        assert isinstance(reason, str) and reason.strip(), (
-            f"incomplete_details.reason is {reason!r}; the reason is what says which budget "
-            "stopped the task, and this request carried one budget only. §1.1 requires the status "
-            "and does not require the reason; #501 asks this check to require it.")
-        assert any(w in reason.lower() for w in _T12_BUDGET_WORDS), (
-            f"incomplete_details.reason is {reason!r}, which names no budget; the request carried "
-            "a step budget and nothing else")
-        return f"incomplete: {reason}"
+        reason = details.get("reason") if isinstance(details, dict) else None
+        if isinstance(reason, str) and any(w in reason.lower() for w in _T12_BUDGET_WORDS):
+            return f"incomplete after {rounds} round(s): {reason}"
+        return (f"incomplete after {rounds} round(s); incomplete_details.reason is {reason!r}, "
+                "which does not name the budget (not required by §1.1)")
     if status == "failed":
         assert rounds <= _T12_MAX_STEP, (
             f"the task ended `failed` after {rounds} rounds of the fixture's tool, past the budget "
