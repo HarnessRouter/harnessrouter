@@ -4835,7 +4835,7 @@ The browser, thinking and environments columns. Why `grok-4.5` sometimes answers
 only, and why one `initialize` took longer than 120 s — neither reproduced. The `ask_user` hazard
 is still a protocol fact reproduced against a fake agent; no live turn has tripped it.
 
-## fast-agent: a framework with no tools of its own, and a store that pins the model (2026-10-16) — behaviour measured, NO column yet
+## fast-agent: a framework with no tools of its own, and a store that pins the model (2026-10-16; measured through all five steps 2026-10-20/21)
 
 `fast-agent-mcp` 0.10.45, added as the thirtieth base. Measured through a recording proxy and then
 end to end through the runner's own argv and relay. **No support-matrix column has run.** Its
@@ -4890,7 +4890,88 @@ architecture. Its own venv. The install check also asserts that its generic clie
 `GENERIC_BASE_URL`, which is the relay door. `install_fast_agent` was run on a `python:3.12-slim`
 container, where what it installed reported `fast-agent-mcp v0.10.45`.
 
-### What is NOT measured
-No column, no other dimension, no MCP server exercised (its client takes stdio, sse and streamable
-http with headers, so nothing is bridged — untested against a live server here), and two model ids
-served as themselves.
+### All five steps, in the order docs/harness-verification.md sets (2026-10-20/21)
+
+| step | result |
+|---|---|
+| matrix, vercel | **56 of 58 ids, 274 of 280 scenarios.** Six failed rows, two findings, both the model's — below |
+| custom harness | **pass**, 11 s + 9 s — but only after the two config bugs below; two of its three thirds, since this base has no tool to withhold |
+| plugin matrix | **5 of 5 columns**, the fastest of the three bases measured (3.9–5.0 s each) and the FIRST live MCP measurement on it, SSE and streamable-HTTP **natively** rather than through the runner's bridge |
+| family tour | **12 of 12 families in one conversation**, `muse-spark-1.1` included — the family dcode could not carry a deck for |
+| matrix, google | **8 of 8 ids, 40 of 40**, on a wiring row probed here |
+
+The audit past the pass flags, on both columns: two `served` ids on every pair that ran a switch,
+every session deleted but the two the driver keeps for a failed pair, every turn on the connection
+the column names, nothing substituted.
+
+### THE BUG THIS COLUMN EXISTED TO FIND: every follow-up turn silently started a new conversation
+
+`_record_cli_session_id` now carries the capture, and the point is where it is called from. The
+streaming loop remembered the CLI's own conversation id out of an `init` event; the **eof branch
+did not**. This base's stream carries nothing at all — its ATIF trajectory is read at eof — so its
+init event only ever appeared in the eof batch. The id was never recorded, the gateway had none to
+send back, the builder's `if resume_session_id and …` was false, `--resume` was never passed, and
+every follow-up turn began an empty conversation. `_resume_lost` stayed silent because an EMPTY
+resume id is not a lost one.
+
+What it looked like from outside, and why nothing caught it sooner:
+
+- **Four of the five matrix scenarios passed anyway.** They ask the model to echo a token; only the
+  recycle scenario tests the history, and it answered the literal word "word".
+- Each turn reported a DIFFERENT fast-agent session id, and turn two's `input_tokens` was 985 —
+  byte for byte the first turn's. A second turn carrying a conversation cannot be the same size.
+- A clean two-turn probe through the API, with a word that is nowhere in the workspace, answered
+  **"remember"** with 993 input tokens against the first turn's 989.
+- **The CLI was never at fault.** By hand, `fast-agent go --resume <id>` answered the word, kept
+  the same session id, and its trajectory grew from three steps to five.
+- After the fix, the same probe answered **FLAMINGO-7** with **2009** input tokens, and the
+  recycle scenario passed. A later column row shows two turns sharing one session id with input
+  growing 1688 → 3168.
+
+**Why the end-to-end rig missed it, which is the lesson worth keeping:** that rig calls
+`_build_fast_agent(... resume_session_id=sid ...)` itself, so it measured "given the id, does the
+CLI continue?" — which was always yes. The bug is one step earlier, in how the id is DISCOVERED and
+handed back, and there is no gateway in that loop. Only a real column walks first-turn-reports-id →
+stored → sent back.
+
+### Two config bugs that made every MCP path on this base fail, found by the dimension
+
+Neither could be seen by a support-matrix column: a column declares no MCP servers.
+
+1. **The config was invalid YAML-shaped-wrongly.** A server's fields were emitted at the same depth
+   as its name, so `mcp.servers` loaded as three sibling keys (`deepwiki: null`, `transport`,
+   `url`) and the CLI refused to start: *"Error loading fast-agent settings: 3 validation errors
+   for Settings / mcp: Invalid configuration value"*, one per key. Every turn of every harness that
+   declared a server died before its first model call. The indent is now applied once at emit time,
+   so a body built anywhere cannot carry the wrong depth, and the test that missed this — it
+   asserted `'transport: "http"' in cfg`, true at any indentation — now PARSES the YAML and asserts
+   the structure, with a second test holding `mcp.servers` to server names only.
+2. **Declared is not enabled on this entry point.** With the config valid, the turn ran, recorded
+   ZERO tool calls, and the server was never called. `go` builds an ad-hoc agent and its
+   `--servers` is "a comma-separated list of server names to enable from config" (its own help), so
+   a declaration reaches the model only when the flag names it. `_fast_agent_config` now returns
+   the names it wrote and the builder passes them, so the flag and the file cannot disagree.
+
+With both fixed: the skill was read, its script ran, `stamp.txt` was produced, and the harness's own
+MCP server answered (`deepwiki__read_wiki_structure`). The plugin matrix's four MCP columns —
+stdio, free-form rows, SSE, streamable-HTTP — would all have died at settings load before this.
+
+### The two failed rows on the vercel column, both the model's
+- **`grok-4.5` claims DONE without writing the file**, deterministically (2 of 2 runs, the artifact
+  scenario). Separated from our wiring by measurement: asked to list its tools it answered `bash,
+  process, read_text_file, write_text_file, edit_file`, and told explicitly to use its shell it
+  called `bash`. It has the tools and uses them when told; on this prompt it answers DONE and calls
+  nothing. Same model, same batch, a different shape on dcode (reasoning and no content) and green
+  on docker-agent.
+- **`qwen3.8-27b` refused to echo its own version string** — "I can't reply with that exact string,
+  as it would imply a specific model version I don't confirm" — on the FIRST scenario, which cost
+  the pair its other four rows ("first turn failed"), so one refusal is five of the six failures.
+  The prompt reached it intact. It did NOT reproduce: the pair re-ran 5 of 5. The row stays failed,
+  because that is what the column measured and no fix stands between the two runs.
+
+### What is still NOT measured
+The browser, thinking and environments columns. **Tool policy on this base**: its catalog is `bash`,
+`read_text_file`, `edit_file` and the fixture needs all three, so the dimension withheld nothing and
+reported `disabled_tool: null` — aider's honest gap rather than a vacuous pass. Why `grok-4.5`
+answers DONE without acting, and why `qwen3.8-27b` refused once: neither is ours and neither is
+explained here.

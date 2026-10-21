@@ -1365,6 +1365,14 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("tokenrouter", "fast-agent"): "tokenrouter", ("vercel", "fast-agent"): "tokenrouter",
     ("llmtr", "fast-agent"): "tokenrouter",
     ("custom", "fast-agent"): "openai-api",
+    # PROBED rather than assumed, which is this table's own rule (the same row on vibe and
+    # docker-agent): a pair on fast-agent-mcp 0.10.45 against
+    # generativelanguage.googleapis.com/v1beta/openai passed all five matrix scenarios on
+    # gemini-3.5-flash, with the mid-session switch served as gemini-4-argon — two served ids on
+    # one session, read off the relay (2026-10-20). Its generic client speaks chat/completions,
+    # which is what that surface serves; dcode has no row here for the opposite reason (it speaks
+    # the Responses API, which that surface answers with a 404).
+    ("google", "fast-agent"): "openai-api",
     ("harnessrouter", "fast-agent"): "tokenrouter",
     # docker-agent, the same reach again: one OpenAI shape through the relay, named in the YAML
     # this runner writes per turn.
