@@ -82,7 +82,7 @@ def test_the_sweep_leaves_a_queued_turn_alone(monkeypatch):
     async def _vup(sid, props):
         writes.append(props)
 
-    async def _tts(blob):
+    async def _tts(blob, since_ms=0):
         return None
 
     monkeypatch.setattr(gw, "_vertex_upsert", _vup)
