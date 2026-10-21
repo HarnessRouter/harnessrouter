@@ -13096,6 +13096,33 @@ _GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "qwen", "gemini", "cline",
                         "opencode", "mimo", "kilo", "qoder"}
 
 
+def _record_cli_session_id(rec: dict, ev: dict) -> None:
+    """Remember the CLI's own conversation id from an `init` event: it is what the gateway sends
+    back as the next turn's resume id, and therefore what every `--resume` is built from.
+
+    Called from BOTH places a turn's events are produced — the streaming loop and the eof — and
+    that is the whole point. MEASURED on fast-agent's first column (2026-10-20): its stream
+    carries nothing at all (the ATIF trajectory is read at eof), so its init event only ever
+    appeared in the eof batch, where the capture did not exist. The id was never recorded, the
+    gateway had none to send, the builder's `if resume_session_id and ...` was false, and EVERY
+    follow-up turn silently started a new conversation — while `_resume_lost` stayed quiet,
+    because an EMPTY resume id is not a lost one.
+
+    What that looked like from outside: four of the five matrix scenarios passed, because they ask
+    the model to echo a token and never test the history; the recall scenario answered the literal
+    word "word", and a clean two-turn probe (a word that is nowhere in the workspace) answered
+    "remember" with 993 input tokens against the first turn's 989 — no history at all. The CLI was
+    never at fault: by hand, `fast-agent go --resume <id>` answered the word and its trajectory
+    grew from three steps to five.
+
+    This is the opencode lesson (see _resume_lost) arriving through a different door: there, four
+    hosted sessions answered recalls from an empty history and nothing said so."""
+    # Last init wins, which is what the streaming loop did before this was factored out: a turn
+    # that reports a second id has continued into it, and nothing here changes that.
+    if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
+        rec["session_id"] = ev["session_id"]
+
+
 def _running_usage(state: dict) -> dict:
     """What a translator has counted of a turn's usage so far: pi's (omp's) per message,
     dsh's per step. It is the turn's usage on their result, and on a budget's stop, which comes
@@ -13221,8 +13248,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 _settle(ev)
                 with _turns_lock:
                     rec["events"].append(ev)
-                if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
-                    rec["session_id"] = ev["session_id"]   # CLI conversation id → next turn's --resume
+                _record_cli_session_id(rec, ev)
                 if ev.get("type") == "result":
                     result_ev = ev
                     # Claude's stream-json carries the final assistant text on the result event;
@@ -13254,6 +13280,9 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             _settle(ev)
             with _turns_lock:
                 rec["events"].append(ev)
+            # The SAME capture the streaming loop does, because a base whose stream carries nothing
+            # emits its init HERE (see _record_cli_session_id for what it cost to learn that).
+            _record_cli_session_id(rec, ev)
             if ev.get("type") == "result":
                 result_ev = ev
                 state["final"] = state.get("final") or ev.get("result") or ""

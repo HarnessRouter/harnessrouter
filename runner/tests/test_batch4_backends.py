@@ -32,6 +32,7 @@ from server import (ALL_VIBE_TOOLS, Auth, BACKENDS,  # noqa: E402
                     _docker_agent_home, _docker_agent_session_db,
                     _docker_agent_session_present, _docker_agent_to_claude,
                     ALL_FAST_AGENT_TOOLS, _build_fast_agent, _fast_agent_eof,
+                    _record_cli_session_id,
                     _fast_agent_home, _fast_agent_session_file,
                     _fast_agent_session_present, _fast_agent_set_model,
                     _fast_agent_to_claude, _fast_agent_traj)
@@ -686,6 +687,40 @@ def test_the_session_id_and_the_usage_come_off_the_trajectory_too():
     assert res["usage"]["input_tokens"] == 4524
     assert res["usage"]["output_tokens"] == 715
     assert "cache_read_tokens" not in res["usage"]
+
+
+def test_an_init_that_only_the_eof_emits_still_records_the_cli_session_id():
+    """THE BUG THIS BASE'S FIRST COLUMN FOUND (2026-10-20). Its stream carries nothing — the ATIF
+    trajectory is read at eof — so its `init` event only ever appears in the eof batch, and the
+    capture that remembers the CLI's conversation id lived in the streaming loop alone. The id was
+    never recorded, so the gateway had none to send back, so the builder never passed `--resume`,
+    and every follow-up turn silently began a new conversation. `_resume_lost` stayed quiet because
+    an EMPTY resume id is not a lost one.
+
+    Four of the five matrix scenarios passed anyway: they ask the model to echo a token and never
+    test the history. The recall scenario answered the literal word "word"; a clean two-turn probe
+    with a word that is nowhere in the workspace answered "remember", 993 input tokens against the
+    first turn's 989. The CLI was never at fault — by hand, `--resume` answered the word and the
+    trajectory grew from three steps to five."""
+    ws = _fa_ws()
+    evs, _state = _fa_eof(ws, FA_PROMPTS[0])
+    init = next(e for e in evs if e.get("subtype") == "init")
+    rec: dict = {}
+    for ev in evs:                      # exactly what the eof branch now does, in order
+        _record_cli_session_id(rec, ev)
+    assert rec["session_id"] == init["session_id"] == "2610160220-7kil4q"
+
+
+def test_both_places_a_turns_events_are_produced_record_the_session_id():
+    """The invariant, not the symptom: the streaming loop and the eof loop must BOTH capture it.
+    One of them having the line and the other not is the whole of the bug above, and a reader
+    adding a third place to produce events needs to see this failing rather than guess."""
+    src = pathlib.Path(__file__).resolve().parents[1] / "server.py"
+    body = src.read_text()
+    assert body.count("_record_cli_session_id(rec, ev)") == 2, (
+        "both the streaming loop and the eof loop call it, and nothing else does")
+    # and the capture exists nowhere else in a hand-written form, which is how they drifted
+    assert 'rec["session_id"] = ev["session_id"]' not in body.split("def _record_cli_session_id")[0]
 
 
 def test_a_cumulative_message_contributes_only_its_new_text():
