@@ -866,6 +866,17 @@ def _tenant_sem(t: str) -> asyncio.Semaphore:
     return _tenant_sems.setdefault(t or "_", asyncio.Semaphore(_conc_limit("tenant")))
 
 
+# Set once a turn's runner turn is on record (the vertex carries runner_turn_id): from then the poll
+# loop renews the heartbeat itself, and _turn_slot's own beat stops. One per session, while its slot is held.
+_RUNNER_TURN_ON: "dict[str, asyncio.Event]" = {}
+
+
+def _runner_turn_recorded(sid: str) -> None:
+    ev = _RUNNER_TURN_ON.get(sid)
+    if ev is not None:
+        ev.set()
+
+
 @contextlib.asynccontextmanager
 async def _turn_slot(org: str, sid: str):
     """Both concurrency gates, held for the turn, with the session's heartbeat kept fresh while the
@@ -877,14 +888,22 @@ async def _turn_slot(org: str, sid: str):
     read it as a dead turn and settled it, session and response, as failed; the turn then ran and
     its final write said completed. Measured 2026-10-12 on a 4-core instance with nine turns in
     flight: a background poller read `failed` (error null) four seconds in, for the 28 seconds the
-    turn waited, and `completed` at 55 s. The newborn trap of 0.23.2, one stage later."""
+    turn waited, and `completed` at 55 s. The newborn trap of 0.23.2, one stage later.
+
+    The beat goes on past the gates, through every phase before the runner turn is on record (the
+    lease, the workspace restore, plugins, the runner's /turn start and its retries): until then the
+    sweep has neither a runner turn to ask nor a heartbeat from the poll loop, and "no runner turn on
+    record" read a live turn restoring a large workspace as gone (CAT, 2026-10-21; restores past the
+    120 s stale window were measured on the hosted service). It stops when the poll loop takes over
+    (_runner_turn_recorded) or the slot is released."""
     beat_s = max(1, _RECONCILE_STALE_S // 4)
-    got = asyncio.Event()
+    on_record = asyncio.Event()
+    _RUNNER_TURN_ON[sid] = on_record
 
     async def beat():
         while True:
             try:
-                await asyncio.wait_for(got.wait(), timeout=beat_s)
+                await asyncio.wait_for(on_record.wait(), timeout=beat_s)
                 return
             except asyncio.TimeoutError:
                 pass
@@ -896,11 +915,12 @@ async def _turn_slot(org: str, sid: str):
     t = asyncio.create_task(beat())
     try:
         async with _global_sem(), _tenant_sem(org):
-            got.set()
             yield
     finally:
-        got.set()
+        on_record.set()
         t.cancel()
+        if _RUNNER_TURN_ON.get(sid) is on_record:
+            _RUNNER_TURN_ON.pop(sid, None)
 
 
 def _pool_is_local() -> bool:
@@ -2774,6 +2794,19 @@ _SESSION_TERMINAL = {"done", "completed", "failed", "incomplete", "max_turns", "
 _RECONCILE_STALE_S = int(os.environ.get("HARNESS_RECONCILE_STALE_S", "120"))
 _RECONCILE_EVERY_S = int(os.environ.get("HARNESS_RECONCILE_EVERY_S", "60"))
 _GW_MAX_TURN_S = int(os.environ.get("HARNESS_MAX_TURN_S", "21600"))
+# The runner's own wall-clock ceiling for a turn (runner/server.py MAX_TURN_SECONDS, read from the same
+# environment on one container), and the time a turn may spend before the runner's clock starts: the
+# lease, placement and the workspace restore. The sweep and the response reconciler settle a turn as
+# timed out only past BOTH limits plus that margin, counted from the turn's start (turn_at, stamped at
+# accept). The gateway's clock starts first, so a cap equal to the runner's would settle a turn that is
+# still working, minutes inside the runner's own limit, as timed out for good (CAT, 2026-10-21).
+_RUNNER_MAX_TURN_S = int(os.environ.get("MAX_TURN_SECONDS", "21600"))
+_CAP_MARGIN_S = int(os.environ.get("HARNESS_CAP_MARGIN_S", "1800"))
+
+
+def _sweep_cap_s() -> int:
+    """Seconds from a turn's start after which nothing can still be working on it."""
+    return max(_GW_MAX_TURN_S, _RUNNER_MAX_TURN_S) + _CAP_MARGIN_S
 
 
 def _turn_since_ms(rec: dict | None, for_result: bool = True) -> int:
@@ -3141,7 +3174,18 @@ async def _reconcile_session(v: dict) -> bool:
     if not seen:
         return False                       # no time on record at all: an unknown age is past no cap
     age = time.time() - seen
-    if age < _RECONCILE_STALE_S:
+    # The hard cap runs from the TURN's start (turn_at, stamped at accept), never from the heartbeat:
+    # _turn_slot beats until the runner turn is on record, and a beat that goes on while a restore
+    # hangs must not keep the turn alive forever (CAT, 2026-10-21). Past the cap with no runner turn
+    # on record, a fresh beat is the slot's and not proof of progress, so it does not protect the
+    # turn. Once a runner turn exists the poll loop holds its own wall-clock cap.
+    try:
+        turn_at = float(v.get("turn_at") or 0)
+    except (TypeError, ValueError):
+        turn_at = 0.0
+    turn_age = time.time() - turn_at if turn_at > 0 else age
+    stuck = turn_at > 0 and turn_age > _sweep_cap_s() and not str(v.get("runner_turn_id") or "")
+    if age < _RECONCILE_STALE_S and not stuck:
         return False                       # fresh heartbeat (or a newborn turn) -> still being polled
     base = v.get("trace_blob")
     rid_run = str(v.get("running_response_id") or "")
@@ -3162,15 +3206,23 @@ async def _reconcile_session(v: dict) -> bool:
     status = await _trace_terminal_status(base, since)
     end_reason = ""
     if status is None:
-        if age > _GW_MAX_TURN_S:
-            status = "failed"              # past the hard cap with no result
+        if turn_age > _sweep_cap_s():
+            status = "failed"              # past the hard cap, from the turn's start, with no result
             end_reason = "timeout"
+            rt_cap = str(v.get("runner_turn_id") or "")
+            if rt_cap:
+                # nothing may keep working on a turn settled as timed out: stop the runner's turn too
+                try:
+                    await _sandbox(f"/turn/{rt_cap}/cancel", str(sid), "POST")
+                except Exception:  # noqa: BLE001 — gone already, or unreachable; the settle stands
+                    pass
         else:
             # First ask the RUNNER whether the recorded turn still exists. Turn records are
             # in-memory there, so a restart answers 404 — and a 404 means the process that owned
             # this turn is gone and it can never finish. Settle it NOW: failed, its error saying a
-            # restart cut it (#505, _interrupted_error), so a follow-up continues it. Only the 404
-            # proves that; no runner turn recorded at all is failed with no reason claimed.
+            # restart cut it (#505, _interrupted_error), so a follow-up continues it. A runner turn
+            # never on record says the same: the turn never reached the runner, and the process that
+            # owned it stopped beating (_turn_slot beats until the runner turn is on record).
             # Without this the single-container deployment showed "Working" for the full six-hour cap after any
             # restart: adoption below is gated on the control store, which self-hosted does not
             # have, so nothing else could ever settle the record. Seen live: a SIGKILLed container
@@ -3321,8 +3373,8 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
             ts = await _trace_terminal_status(v.get("trace_blob"), _turn_since_ms(rec))
             if ts:
                 settled = _RESP_STATUS_MAP.get(ts, "failed")
-            elif time.time() - hb > _GW_MAX_TURN_S:
-                settled = "failed"                       # past the hard cap with no result
+            elif time.time() - (_born_seconds(rec) or hb) > _sweep_cap_s():
+                settled = "failed"                       # past the hard cap, from the turn's start, with no result
                 capped = True
     if not settled or settled == str(rec.get("status") or ""):
         return rec
@@ -4924,7 +4976,7 @@ async def _card_settle(sid: str, m: dict) -> dict | None:
             hb = float(v.get("heartbeat") or 0)
         except Exception:  # noqa: BLE001
             hb = 0
-        if hb and time.time() - hb > _GW_MAX_TURN_S:
+        if hb and time.time() - hb > _sweep_cap_s():     # the sweep's cap, so card and record agree
             status = "failed"
     if not status or status == str(m.get("status") or ""):
         return None
@@ -8818,6 +8870,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         else:
             await _vertex_upsert(sid, {"status": "running", "turn_status": "running",
                                        "last_connection": name, "runner_turn_id": rt or ""})
+        _runner_turn_recorded(sid)          # the runner turn is on record; the poll loop beats from here
         # cursor = how far the durable trace has been written; fed_upto = how far events have been
         # fed to the translator and emitted. Events are asked for from fed_upto, so nothing comes
         # twice, and what is fed and not yet written waits in `pending`.
