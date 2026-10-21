@@ -459,7 +459,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
   // The turn lifecycle (store binding, history load, send, reconcile, stop) lives in the shared
   // controller so Tasks and Arena run the exact same machine; this component owns only the view
   // and its own composer state.
-  const { msgs, busy, loading, stopping, outOfCredits, clearOutOfCredits,
+  const { msgs, busy, loading, loadFailed, reload, stopping, outOfCredits, clearOutOfCredits,
           liveSessionId, send, stop, setMsgs, updateLast } = useConversationTurn({
     onMissing,
     harnessId, sessionId, target, onRan, onSession, extraHeaders,
@@ -481,7 +481,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);   // shared Composer auto-grows it (15-row cap)
   // A fresh draft is for typing: the caret is already in the box when the page settles on it.
-  const hero = !loading && msgs.length === 0 && !busy;
+  const hero = !loading && !loadFailed && msgs.length === 0 && !busy;
   useEffect(() => { if (hero) taRef.current?.focus(); }, [hero, harnessId]);   // a fresh draft in another harness is a fresh box too
   const [files, setFiles] = useState<{ name: string; dataUri: string }[]>([]);
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
@@ -548,7 +548,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
     <div ref={convRef} className={'wbx-conv' + (preview || browserDocked ? ' split' : '')}>
       {/* A fresh draft centers on what it is for: the harness, named under its base's mark, with
           the composer right under it. The first message turns it into the running thread. */}
-      <div className={'wbx-conv-main' + (!loading && msgs.length === 0 && !busy ? ' is-hero' : '')}>
+      <div className={'wbx-conv-main' + (hero ? ' is-hero' : '')}>
       {/* The bar exists for one thing: the header-values gear of a harness with declared headers.
           The host page names the harness above; nothing else belongs here. */}
       {declared.length > 0 && (
@@ -587,7 +587,13 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
       )}
       <div className="wbx-conv-msgs" ref={scrollRef} onScroll={onScroll}>
         {loading && <div className="hr-empty" style={{ marginTop: 40 }}>Loading conversation…</div>}
-        {!loading && msgs.length === 0 && (
+        {!loading && loadFailed && (
+          <div className="hr-empty" role="alert" style={{ marginTop: 40 }}>
+            This task could not be read just now.{' '}
+            <button type="button" className="hr-btn" onClick={reload}>Try again</button>
+          </div>
+        )}
+        {!loading && !loadFailed && msgs.length === 0 && (
           <div className="wbx-hero">
             <h1>{target.baseId ? <HarnessLogo id={target.baseId} size={30} /> : null}<span>{target.name}</span></h1>
           </div>
@@ -703,7 +709,7 @@ function Conversation({ harnessId, sessionId, target, models, onModel, onRan, on
             <iconify-icon icon="tabler:player-stop-filled"></iconify-icon>{stopping ? 'Stopping…' : 'Stop'}
           </button>
         ) : (
-          <button className="hr-btn primary wbx-send" type="button" onClick={() => send(input, files)} disabled={!target.backend || busy || (!input.trim() && files.length === 0)}>Send</button>
+          <button className="hr-btn primary wbx-send" type="button" onClick={() => send(input, files)} disabled={!target.backend || busy || loadFailed || (!input.trim() && files.length === 0)}>Send</button>
         ))}
         tray={models.length > 0 ? (
           // The route chip, as in Arena: the runtime, the model for this task, a menu to change it.

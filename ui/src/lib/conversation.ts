@@ -385,6 +385,15 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
   const setPrevId = (id: string | null) => setConvState(convKeyRef.current, { prevId: id });
   const setFirstTurn = (b: boolean) => setConvState(convKeyRef.current, { firstTurn: b });
   const [loading, setLoading] = useState(false);
+  // The task's record could not be read on open (not a 404: a 5xx, the network, a body that is not
+  // its turns). Nothing was written from it: the store keeps what it held, and the page says the
+  // read failed, with Try again (`reload`). Until a read succeeds, a message is not sent from here,
+  // since the conversation it would follow is not known.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadFailedRef = useRef(false);
+  loadFailedRef.current = loadFailed;
+  const [loadTry, setLoadTry] = useState(0);
+  const loadSeq = useRef(0);
   const [outOfCredits, setOutOfCredits] = useState<{ balance: number | null } | null>(null);
   // Stop is one-shot: disabled the moment it is clicked so a slow cancel cannot be spammed.
   const [stopping, setStopping] = useState(false);
@@ -420,13 +429,22 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
   // shown done with its content even if the store was left stuck at busy:true (e.g. a terminal bus
   // event was dropped on a full queue / reconnect race), which previously stranded it at "Working…"
   // until a hard refresh. A genuinely in-flight turn keeps its live placeholder for the bus to stream.
+  // A read that fails (one quiet second try, then an end) writes nothing: an empty answer here would
+  // open the task empty, or wipe a live turn and end it.
   useEffect(() => {
+    const seq = ++loadSeq.current;
+    const current = () => seq === loadSeq.current;
+    setLoadFailed(false);
     const existing = getConvState(convKey);
-    if (!sessionId) { if (!existing.loaded) setConvState(convKey, { loaded: true }); return; }
+    if (!sessionId) { setLoading(false); if (!existing.loaded) setConvState(convKey, { loaded: true }); return; }
     // Already loaded, idle, and has content → trust it (no refetch on every open).
-    if (existing.loaded && !existing.busy && existing.msgs.length) return;
+    if (existing.loaded && !existing.busy && existing.msgs.length) { setLoading(false); return; }
     setLoading(true);
-    loadSessionTurns(sessionId).then(({ turns, lastResponseId, missing }) => {
+    loadSessionTurns(sessionId).catch(() => new Promise((r) => setTimeout(r, 1500)).then(() => {
+      if (!current()) throw new Error('superseded');
+      return loadSessionTurns(sessionId);
+    })).then(({ turns, lastResponseId, missing }) => {
+      if (!current()) return;
       if (missing) {
         // a deleted task: nothing to show and nothing to send to (a follow-up typed into one ran on
         // the deleted session and billed, 2026-09-07); the page lets go of it
@@ -447,8 +465,12 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
         setConvState(convKey, { loaded: true });
       }
       setLoading(false);
-    }).catch(() => setLoading(false));
-  }, [convKey, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+    }).catch(() => {
+      if (!current()) return;
+      setLoading(false);
+      setLoadFailed(true);
+    });
+  }, [convKey, sessionId, loadTry]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // RECONCILIATION: SSE (POST stream or bus) is best-effort delivery, a reconnect gap, a
   // replica switch, or a dropped terminal event must NEVER strand the conversation at
@@ -537,6 +559,8 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     // reader watches the answer arrive three times over. The latch is a ref because it has to
     // flip now, not at the next render.
     if ((!text && attach.length === 0) || busy || sendingRef.current || !target.backend) return;
+    // a task whose record could not be read: what this message would follow is not known (Try again)
+    if (loadFailedRef.current && sessionId) return;
     sendingRef.current = true;
     const sent = attach;
     // OpenAI Responses input: a string, or a user MESSAGE whose content is text + file parts.
@@ -686,6 +710,8 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
   }
 
   return { msgs, busy, loading, stopping, prevId, firstTurn, outOfCredits,
+           /** the task's record could not be read on open; `reload` reads it again */
+           loadFailed, reload: () => setLoadTry((n) => n + 1),
            clearOutOfCredits: () => setOutOfCredits(null),
            liveSessionId: sessionId ?? sidRef.current, convKey,
            send, stop, setMsgs, updateLast };

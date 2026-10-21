@@ -106,9 +106,18 @@ export interface SessionTurn {
 export async function loadSessionTurns(sid: string): Promise<{ turns: SessionTurn[]; lastResponseId: string | null; missing?: boolean }> {
   const res = await harnessFetch(`${BASE}/v1/sessions/${encodeURIComponent(sid)}/turns?limit=200`, { headers: authHeaders() });
   // 404 is a task that no longer exists (deleted): the caller must not keep a composer on it
-  if (!res.ok) return { turns: [], lastResponseId: null, missing: res.status === 404 };
-  const d = await res.json();
-  return { turns: d.turns || [], lastResponseId: d.last_response_id || null };
+  if (res.status === 404) return { turns: [], lastResponseId: null, missing: true };
+  // Any other failure is a read that failed (the gateway answers 503 when it cannot read the
+  // conversation), never a task with no turns: the caller says so and offers a retry.
+  if (!res.ok) throw new TurnsReadError(res.status);
+  const d = await res.json().catch(() => null) as { turns?: unknown; last_response_id?: unknown } | null;
+  if (!d || typeof d !== 'object' || !Array.isArray(d.turns)) throw new TurnsReadError(res.status);
+  return { turns: d.turns as SessionTurn[], lastResponseId: typeof d.last_response_id === 'string' && d.last_response_id ? d.last_response_id : null };
+}
+
+/** A task's turns could not be read (not a 404): the caller shows that, never an empty task. */
+export class TurnsReadError extends Error {
+  constructor(public status: number) { super('This task could not be read just now.'); this.name = 'TurnsReadError'; }
 }
 
 /** Stop a running session's turn (kills the CLI in the sandbox; terminal event follows on the bus).
