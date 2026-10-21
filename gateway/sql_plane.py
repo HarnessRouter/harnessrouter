@@ -102,8 +102,12 @@ def check_readonly(sql: str) -> str:
     return raw
 
 
-# `LIMIT n`, `LIMIT n OFFSET m`, and MySQL's `LIMIT offset, count`.
-_LIMIT_TAIL = re.compile(r"\blimit\s+\d+\s*(?:(?:offset\s+\d+|,\s*\d+)\s*)?$", re.I)
+# `LIMIT n`, `LIMIT n OFFSET m`, MySQL's `LIMIT offset, count`, and Postgres's `LIMIT ALL`, which
+# is the statement's own limit too (`LIMIT { count | ALL }`): a second LIMIT after it is two LIMIT
+# clauses, which Postgres refuses. ALL counts only directly after LIMIT at the end of the
+# statement, so a column called `all_rows` is not read as one.
+_LIMIT_TAIL = re.compile(
+    r"\blimit\s+(?:\d+\s*(?:(?:offset\s+\d+|,\s*\d+)\s*)?|all\s*(?:offset\s+\d+\s*)?)$", re.I)
 
 
 def with_limit(sql: str, max_rows: int) -> tuple[str, bool]:

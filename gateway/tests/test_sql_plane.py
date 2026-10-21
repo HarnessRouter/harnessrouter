@@ -119,6 +119,25 @@ def test_mysqls_limit_offset_count_is_respected():
         assert not added and out == sql
 
 
+def test_postgres_limit_all_is_respected():
+    """Postgres spells "no limit" `LIMIT ALL` (`LIMIT { count | ALL }`). The tail check read only a
+    digit, so it appended a second LIMIT after this one — `LIMIT ALL LIMIT 500`, two LIMIT clauses,
+    which Postgres refuses, so the query never ran. The fetch is bounded by the cursor either way
+    (_pg_query, _mysql_query), so leaving the statement alone still returns at most max_rows."""
+    for sql in ("SELECT * FROM t LIMIT ALL", "SELECT * FROM t ORDER BY x limit all",
+                "SELECT * FROM t LIMIT ALL OFFSET 20"):
+        out, added = with_limit(sql, 500)
+        assert not added and out == sql, sql
+
+
+def test_all_as_a_name_is_not_read_as_a_limit():
+    """`ALL` is only the statement's own limit directly after LIMIT at the end of it."""
+    out, added = with_limit("SELECT all_rows FROM t", 500)
+    assert added and out.rstrip().endswith("LIMIT 500")
+    out, added = with_limit("SELECT * FROM (SELECT * FROM t LIMIT ALL) s", 500)
+    assert added and out.rstrip().endswith("LIMIT 500")
+
+
 def test_a_comma_inside_the_query_is_not_read_as_a_limit():
     out, added = with_limit("SELECT a, b FROM (SELECT a, b FROM t LIMIT 5, 10) s", 500)
     assert added and out.rstrip().endswith("LIMIT 500")
