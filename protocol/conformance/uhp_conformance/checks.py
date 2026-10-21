@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 import uuid
 
@@ -1452,6 +1453,143 @@ def t10(ctx):
         f"the response names {over} in ignored_fields for a request that sent neither. "
         "ignored_fields reports what this request carried and the server dropped, not a "
         "catalogue of what the server would drop.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# Full — the step budget (Tasks §1.1)
+# ══════════════════════════════════════════════════════════════════════════════════════
+# `max_step` and `timeout_seconds` are budgets: a server must stop the task at or after the
+# budget, must report `incomplete`, and must not report `completed` for work it truncated.
+# Nothing in the suite sent either field, so the rule was never measured — a server that
+# ignored the budget scored as well as one that honoured it.
+#
+# The check needs work that cannot fit in the budget, and it must be able to say how many
+# rounds of it happened: the fixture's `uhp_steps` tool answers with the step it is on and asks
+# for the next one, and the rounds are counted from the response's own items — the tool call and
+# the answer to it are two items the SERVER produced, so a model that merely claims to have made
+# the calls cannot make the count rise.
+
+# The budget this check asks for, in tool-call rounds (Tasks §1.1: "Upper bound on agent steps
+# (tool-call rounds)").
+_T12_MAX_STEP = 1
+# The words a reason may use to name the budget it stopped at. §1.1 calls `max_step` an upper
+# bound on "agent steps (tool-call rounds)", and a server may say "steps", "rounds", "turns" or
+# "limit" for the same thing.
+_T12_BUDGET_WORDS = ("step", "round", "turn", "limit", "budget")
+
+
+def _is_tool(name: str, tool_name: str) -> bool:
+    """Whether a function_call's name is `tool_name` as the server spells an MCP tool: bare, or
+    after the server's own prefix (claude-family bases name MCP tools `mcp__<server>__<tool>`)."""
+    return name == tool_name or re.search(r"(?:^|[_.:/-])" + re.escape(tool_name) + r"$", name) is not None
+
+
+def _tool_rounds(items: list, tool_name: str) -> int:
+    """How many rounds of `tool_name` the response's own items show.
+
+    A round is a `function_call` for the tool and the `function_call_output` that answers it:
+    both are items the server produced, so a model that claims a call in its text cannot add a
+    round. Only an ANSWERED call counts — a call the server never answered did not happen.
+    """
+    calls = {str(i.get("call_id") or "") for i in items
+             if isinstance(i, dict) and i.get("type") == "function_call"
+             and _is_tool(str(i.get("name") or ""), tool_name)}
+    return sum(1 for i in items
+               if isinstance(i, dict) and i.get("type") == "function_call_output"
+               and str(i.get("call_id") or "") in calls)
+
+
+@check("T-12", "A task over its step budget ends incomplete, naming the budget", "full",
+       f"{SPEC}/tasks.md#11-request-fields")
+def t12(ctx):
+    """The step budget, measured on work that cannot fit in it.
+
+    The request carries `max_step: 1` — one tool-call round — and the work is a chain of three
+    rounds, so the task cannot finish inside the budget. §1.1 requires the server to stop it at
+    the budget, report `incomplete`, and say which budget stopped it. A server that cannot bound
+    a base has another way out — it names `max_step` in `metadata.ignored_fields`, and this check
+    accepts that answer, because §1.1 requires ignoring to be observable and a server that says
+    so has told the client the truth.
+
+    What the check does NOT say: a chain that stayed inside the budget proves nothing about the
+    rule, so a task that ended `completed` after one round is a SKIP and not a failure — the model
+    ended the turn, and the server truncated nothing.
+    """
+    from .fixture import STEP_TOOL_NAME
+    base_h = _harness(ctx)
+    nonce = uuid.uuid4().hex[:10]
+    model = ctx.model or str(base_h.get("defaultModel") or "").strip()
+    # The harness carries the fixture as an MCP server, so the agent can be asked to call it. It is
+    # a managed harness, so F-07 removes it and proves the delete worked.
+    mcp = [{"name": "conformance-fixture", "url": ctx.plugin_mcp_url, "transport": "http",
+            "enabled": True}]
+    h = _managed_harness(ctx, base=base_h.get("base") or _supported_base(ctx), mcp_servers=mcp,
+                         **({"default_model": model} if model else {}))
+    hid = h.get("id")
+    if not hid:
+        raise Skip("the harness carrying the fixture was created without an id")
+    try:
+        return _t12_measure(ctx, hid, nonce, model)
+    finally:
+        # T-12 runs after F-07, which deletes the other managed harnesses, so this one is removed here.
+        try:
+            ctx.client.delete(f"/v1/harnesses/{hid}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _t12_measure(ctx, hid: str, nonce: str, model: str) -> str:
+    from .fixture import STEP_TOOL_NAME
+    body = {"input": (f"Call the tool {STEP_TOOL_NAME} with the argument \"nonce\" set to "
+                      f"{nonce}. Call it again after each answer, one call per message, until it "
+                      "says the chain is done, then reply with the word DONE."),
+            "max_step": _T12_MAX_STEP, "metadata": {"harness_id": hid}, "stream": False}
+    if model:
+        body["model"] = model
+    r = ctx.client.post("/v1/responses", body=body)
+    assert r.status == 200, (
+        f"a task carrying `max_step` returned HTTP {r.status}: {r.body[:200]!r}. §1.1 requires "
+        "a server to ignore a request field it does not understand rather than refuse the "
+        "request that carried it.")
+    d = r.json or {}
+    if "max_step" in ((d.get("metadata") or {}).get("ignored_fields") or []):
+        # §1.1's other answer: a server that cannot bound a base says so, observably.
+        return "max_step named in metadata.ignored_fields: the server said it could not bound this base"
+    rounds = _tool_rounds(d.get("output") or [], STEP_TOOL_NAME)
+    status = str(d.get("status") or "")
+    if not rounds:
+        raise Skip(f"the fixture's tool {STEP_TOOL_NAME} was never called, so no work was cut at "
+                   f"the budget and nothing was measured. The fixture at {ctx.plugin_mcp_url} may "
+                   "predate this check's tool.")
+    if status == "completed":
+        # The chain ran past the budget and the server said the task was done: the work was
+        # truncated, and §1.1 forbids reporting `completed` for work the server truncated.
+        assert rounds <= _T12_MAX_STEP, (
+            f"the task reported `completed` after {rounds} rounds of the fixture's tool, past the "
+            f"budget of {_T12_MAX_STEP} the request carried, so the work was truncated and "
+            "reported as done. §1.1 says a server must not report `completed` for work it "
+            "truncated.")
+        raise Skip(f"the chain stayed inside the budget: {rounds} round(s) of {_T12_MAX_STEP}, so "
+                   "the server truncated nothing and the model ended the turn. There is nothing "
+                   "here about the step budget.")
+    if status == "incomplete":
+        # §1.1 requires the `incomplete` status for work stopped at the budget, and nothing about
+        # the reason, so a missing or unworded reason is reported, never failed: a check holds a
+        # server to the protocol, and a UEP is what would make the reason a rule.
+        details = d.get("incomplete_details")
+        reason = details.get("reason") if isinstance(details, dict) else None
+        if isinstance(reason, str) and any(w in reason.lower() for w in _T12_BUDGET_WORDS):
+            return f"incomplete after {rounds} round(s): {reason}"
+        return (f"incomplete after {rounds} round(s); incomplete_details.reason is {reason!r}, "
+                "which does not name the budget (not required by §1.1)")
+    if status == "failed":
+        assert rounds <= _T12_MAX_STEP, (
+            f"the task ended `failed` after {rounds} rounds of the fixture's tool, past the budget "
+            f"of {_T12_MAX_STEP}. §1.1 says a server that stops a task at the budget must report "
+            "it `incomplete`.")
+        raise Skip(f"the task ended `failed` after {rounds} round(s), inside the budget: the "
+                   "failure is not the budget's, so there is nothing here about the step budget.")
+    raise Skip(f"the task ended {status!r}, which is not an ending the step budget explains")
 
 # Full — session sharing
 # ══════════════════════════════════════════════════════════════════════════════════════

@@ -180,6 +180,15 @@ def _reap_workspaces(keep: str = "") -> int:
             removed += 1
         except OSError:
             continue
+    # A marker whose folder went some other way (by hand, while the runner was down): markers live
+    # on the volume now, so nothing else would ever remove it.
+    try:
+        for m in os.scandir(_WS_MARKER_DIR):
+            name = m.name.removesuffix(".sha")
+            if m.name.endswith(".sha") and name != keep and not os.path.isdir(os.path.join(WORKSPACE_ROOT, name)):
+                _ws_marker_clear(name)
+    except OSError:
+        pass
     if removed:
         print(f"[reap] removed {removed} workspace(s) idle > {WS_TTL_HOURS}h", flush=True)
     return removed
@@ -12652,7 +12661,30 @@ def backends() -> dict:
 # sha256 of the checkpoint each session's workspace currently holds. PER SESSION, and outside
 # the workspace so it survives the wipe: one shared marker meant a second session's hydrate
 # answered the first session's "do you already have this checkpoint?" probe.
-_WS_MARKER_DIR = "/tmp/hr-ws"
+#
+# It has to live as long as the workspace does. Self-hosted keeps workspaces on the /data volume
+# so a restart doesn't discard work in flight, but the markers sat in /tmp, which a restart empties:
+# the next probe missed, the gateway restored the last end-of-turn checkpoint over the surviving
+# folder, and everything the interrupted turn had written was deleted, files and conversation
+# (#505). The entrypoint names the place on the volume (HR_WS_MARKER_DIR). Without it, a runner
+# that holds several sessions puts them beside its workspace root, as environments.py does with its
+# own root, so a runner started some other way keeps them as long as its workspaces too; a
+# per-session sandbox, or a runner that cannot write there, keeps /tmp.
+def _ws_marker_dir() -> str:
+    named = os.environ.get("HR_WS_MARKER_DIR")
+    if named:
+        return named
+    if _SANDBOX_PER_SESSION:
+        return "/tmp/hr-ws"
+    beside = os.path.join(os.path.dirname(WORKSPACE_ROOT.rstrip("/")) or "/", "ws-markers")
+    try:
+        os.makedirs(beside, mode=0o700, exist_ok=True)
+    except OSError:
+        return "/tmp/hr-ws"
+    return beside if os.access(beside, os.W_OK) else "/tmp/hr-ws"
+
+
+_WS_MARKER_DIR = _ws_marker_dir()
 
 
 def _ws_marker_path(identifier: str) -> pathlib.Path:
@@ -12752,6 +12784,9 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         # Warm-pool sandboxes are REUSED across sessions, so /workspace may hold a PRIOR session's
         # files (incl. another tenant's). Wipe it before restoring so this session starts from
         # exactly its own checkpoint (or empty) — multi-tenant isolation, not best-effort.
+        # The marker goes first: a restart in the middle of the wipe or the untar must not leave it
+        # vouching for a half-restored folder, now that it outlives a restart.
+        _ws_marker_clear(identifier)
         for child in ws_path.iterdir():
             try:
                 if child.is_dir() and not child.is_symlink():

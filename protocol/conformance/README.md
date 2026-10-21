@@ -52,13 +52,13 @@ anything that only inspects a schema.
 
 ## What it checks
 
-100 checks across three classes.
+101 checks across three classes.
 
 | Class | Checks | Covers |
 |---|---|---|
 | **Core** | 41 | Discovery, version negotiation, authentication, the error envelope, harnesses, models, task execution (streaming and not), the event stream, sessions, cancellation, reserved request fields |
 | **Extended** | +9 | Session listing and inspection, file input, artifacts, download headers, path-traversal probes |
-| **Full** | +50 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing, plugins (package round trip, derivation, refusals, export, and a tool call through a plugin's server) |
+| **Full** | +51 | Harness create / update / delete, refusal of an unsupported base, skill-folder round trip, MCP and disabled-tool persistence, session sharing, plugins (package round trip, derivation, refusals, export, and a tool call through a plugin's server), the step budget |
 
 Every check names the section of the specification it enforces, so a failure points at the sentence
 it violates rather than at a test name.
@@ -102,6 +102,13 @@ A few of them are worth calling out, because they catch things a schema check ne
   ignored. Both halves matter: before these, the suite sent neither field, so a server that
   rejected them outright and a server that silently acted on them scored the same as a correct
   one. T-10 covers the third mistake, a server that reports fields the request never sent.
+- **T-12**: the step budget, measured. A task sent with `max_step: 1` whose work needs three tool
+  calls must end `incomplete`, never `completed` or `failed`. Nothing in the suite sent `max_step`
+  before this, so a server that ignored the budget scored as well as one that honoured it. The
+  rounds are counted from the response's own items: the tool call and the answer to it are two
+  items the server produced, so a model that only claims a call cannot make the count rise. A chain
+  that stayed inside the budget says nothing about the rule, so it is skipped rather than failed. A
+  server that cannot bound a base may name `max_step` in `metadata.ignored_fields`, which passes.
 - **R-01…R-08** — session sharing, which is mostly a set of refusals. Sessions §5 requires that a
   shared view be read-only, revocable, and free of credentials, and a check that merely opens a
   link and reads the conversation passes against a server that also lets that link continue the
@@ -136,13 +143,20 @@ uhp-conformance --base-url https://your-uhp-server --api-key "$UHP_API_KEY" --cl
   --plugin-mcp-url https://fixture.example.com/mcp
 ```
 
-It is a streamable-HTTP MCP server with two tools: `uhp_echo`, whose answer is a function of its
+It is a streamable-HTTP MCP server with three tools: `uhp_echo`, whose answer is a function of its
 input (the prefix `UHP-FIXTURE:` and the text reversed), which is how P-11 proves the agent called
-it; and `uhp_time`. A run defaults to a public copy of the same code at `https://uhp-fixture.harnessrouter.ai/mcp`
+it; `uhp_time`; and `uhp_steps`, whose answer names the step of a chain it is on and asks for the
+next one, which is how T-12's work runs one round longer than its budget.
+A run defaults to a public copy of the same code at `https://uhp-fixture.harnessrouter.ai/mcp`
 (`DEFAULT_PLUGIN_MCP_URL` in the package; `fixture/Dockerfile` is how it is built), reachable from
 any host with outbound HTTPS.
 A host under test whose agents cannot reach the public internet needs a copy it can reach, and the
 address goes on `--plugin-mcp-url`.
+
+The public copy is built from `fixture/Dockerfile`, so it has the tools of the commit it was built
+from and not of the commit that runs the suite. A check that needs a tool the copy lacks skips
+with the reason; T-12 needs `uhp_steps`, so the public copy has to be rebuilt and redeployed from
+the commit that adds it before T-12 can run against the default URL.
 
 ## Outcomes
 
