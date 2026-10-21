@@ -210,7 +210,7 @@ def _run_credits(model: str, usage: dict, elapsed_s: float) -> float:
 
 
 # HR-INF-019: how long a draining replica waits for detached turns to finish before it settles the
-# stragglers 'incomplete' (interrupted) and lets the process exit. Must stay under ACA's
+# stragglers 'failed', their error saying interrupted, and lets the process exit. Must stay under ACA's
 # terminationGracePeriodSeconds (600s) so the settle writes land before SIGKILL.
 _DRAIN_S = int(os.environ.get("HR_DRAIN_S", "570"))
 
@@ -239,9 +239,8 @@ async def _settle_drained(persist, tr, emit, end: dict | None = None) -> None:
     """Settle a turn cancelled by shutdown drain: emit a terminal event to the bus (so an open
     Workbench stops showing 'running') and persist it. Best-effort; never raises.
 
-    'incomplete' with reason 'interrupted', not 'failed' (#505): nothing went wrong with the task,
-    the gateway stopped under it. That is the status worth continuing, and the console says a
-    restart cut the turn instead of showing an error the task never had.
+    'failed', with the interrupted error (_interrupted_error): nothing went wrong with the task, the
+    gateway stopped under it, and the error says so (server_error, so a client may retry it).
 
     `end` is the turn's own end once _resp_execute returned it ({"status", "told"}): a drain that
     cuts in after that, while its closing events or its record are being written, did not interrupt
@@ -3146,9 +3145,9 @@ async def _reconcile_session(v: dict) -> bool:
         else:
             # First ask the RUNNER whether the recorded turn still exists. Turn records are
             # in-memory there, so a restart answers 404 — and a 404 means the process that owned
-            # this turn is gone and it can never finish. Settle it NOW: incomplete, interrupted
-            # (#505), because the task did not fail, a restart cut it, and a follow-up continues
-            # it. Only the 404 proves that; no runner turn recorded at all is still 'failed'.
+            # this turn is gone and it can never finish. Settle it NOW: failed, its error saying a
+            # restart cut it (#505, _interrupted_error), so a follow-up continues it. Only the 404
+            # proves that; no runner turn recorded at all is failed with no reason claimed.
             # Without this the single-container deployment showed "Working" for the full six-hour cap after any
             # restart: adoption below is gated on the control store, which self-hosted does not
             # have, so nothing else could ever settle the record. Seen live: a SIGKILLed container
@@ -3394,7 +3393,7 @@ async def _drain_inflight() -> None:
     cover them and the old `except Exception` never caught the cancellation. Wait up to _DRAIN_S for
     in-flight turns to finish NATURALLY (checkpoint + metering happen on completion); then cancel any
     stragglers and await them HERE — while the loop is still alive — so each turn's CancelledError
-    handler settles it 'incomplete', interrupted (honest), instead of leaving a 6h phantom 'running'."""
+    handler settles it 'failed', its error saying interrupted (honest), instead of leaving a 6h phantom 'running'."""
     if not _inflight:
         return
     pending = list(_inflight)
@@ -9993,7 +9992,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                     await persist(status)
             except asyncio.CancelledError:
                 # HR-INF-019: the replica is draining (SIGTERM) and this detached turn didn't finish
-                # inside the drain window. Settle it HONESTLY (incomplete, interrupted) instead of
+                # inside the drain window. Settle it HONESTLY (failed, saying interrupted) instead of
                 # leaving a 6h phantom 'running', then re-raise so the loop can shut down. Best-effort I/O — the
                 # shutdown hook awaits us while the loop is still alive so these writes can land.
                 await _settle_drained(persist, tr, bus_emit_bg, end)
