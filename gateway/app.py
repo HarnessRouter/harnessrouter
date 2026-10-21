@@ -3147,7 +3147,18 @@ async def _reconcile_session(v: dict) -> bool:
     if not seen:
         return False                       # no time on record at all: an unknown age is past no cap
     age = time.time() - seen
-    if age < _RECONCILE_STALE_S:
+    # The hard cap runs from the TURN's start (turn_at, stamped at accept), never from the heartbeat:
+    # _turn_slot beats until the runner turn is on record, and a beat that goes on while a restore
+    # hangs must not keep the turn alive forever (CAT, 2026-10-21). Past the cap with no runner turn
+    # on record, a fresh beat is the slot's and not proof of progress, so it does not protect the
+    # turn. Once a runner turn exists the poll loop holds its own wall-clock cap.
+    try:
+        turn_at = float(v.get("turn_at") or 0)
+    except (TypeError, ValueError):
+        turn_at = 0.0
+    turn_age = time.time() - turn_at if turn_at > 0 else age
+    stuck = turn_at > 0 and turn_age > _GW_MAX_TURN_S and not str(v.get("runner_turn_id") or "")
+    if age < _RECONCILE_STALE_S and not stuck:
         return False                       # fresh heartbeat (or a newborn turn) -> still being polled
     base = v.get("trace_blob")
     rid_run = str(v.get("running_response_id") or "")
@@ -3168,15 +3179,16 @@ async def _reconcile_session(v: dict) -> bool:
     status = await _trace_terminal_status(base, since)
     end_reason = ""
     if status is None:
-        if age > _GW_MAX_TURN_S:
-            status = "failed"              # past the hard cap with no result
+        if turn_age > _GW_MAX_TURN_S:
+            status = "failed"              # past the hard cap, from the turn's start, with no result
             end_reason = "timeout"
         else:
             # First ask the RUNNER whether the recorded turn still exists. Turn records are
             # in-memory there, so a restart answers 404 — and a 404 means the process that owned
             # this turn is gone and it can never finish. Settle it NOW: failed, its error saying a
-            # restart cut it (#505, _interrupted_error), so a follow-up continues it. Only the 404
-            # proves that; no runner turn recorded at all is failed with no reason claimed.
+            # restart cut it (#505, _interrupted_error), so a follow-up continues it. A runner turn
+            # never on record says the same: the turn never reached the runner, and the process that
+            # owned it stopped beating (_turn_slot beats until the runner turn is on record).
             # Without this the single-container deployment showed "Working" for the full six-hour cap after any
             # restart: adoption below is gated on the control store, which self-hosted does not
             # have, so nothing else could ever settle the record. Seen live: a SIGKILLed container

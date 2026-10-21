@@ -339,11 +339,12 @@ def test_a_running_turn_with_no_readable_record_is_scoped_by_its_turn_at(monkeyp
     async def _tts(blob, since_ms=0):
         seen.append(since_ms)
         return None
+    turn_at = round(time.time() - 600, 3)               # inside the hard cap, which runs from turn_at
     v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
-         "running_response_id": "", "trace_blob": "org/inv_hsess1", "turn_at": "4.25",
+         "running_response_id": "", "trace_blob": "org/inv_hsess1", "turn_at": str(turn_at),
          "heartbeat": str(time.time() - 600)}
     settled, writes, _ = _sweep(monkeypatch, v, 404, None, tts=_tts)
-    assert seen[0] == 4250 and writes[0]["end_reason"] == "interrupted"
+    assert seen[0] == int(turn_at * 1000) and writes[0]["end_reason"] == "interrupted"
 
 
 def test_the_reconcilers_own_hard_cap_is_never_a_bare_failed(monkeypatch):

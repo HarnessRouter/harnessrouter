@@ -137,3 +137,41 @@ def test_the_accept_time_write_stamps_the_heartbeat():
     assert '"heartbeat": str(time.time())' in src[i:i + 200]
     assert src.count("async with _turn_slot(org, sid):") == 3
     assert src.count("async with _global_sem(), _tenant_sem(org):") == 1   # inside _turn_slot only
+
+
+def test_a_restore_that_hangs_past_the_cap_settles_at_the_cap_though_the_slot_still_beats(monkeypatch):
+    """The slot's beat keeps a restoring turn alive, but not forever: the hard cap runs from the
+    turn's start (turn_at), so a turn still without a runner turn past the cap is settled failed with
+    reason timeout even while its heartbeat is fresh (CAT, 2026-10-21). Scaled: a 3 s cap, a 4 s stale
+    window, a restore that hangs for 4.5 s."""
+    started = time.time()
+    vertex = {"id": "hsess1", "tenant": "org", "status": "running", "turn_status": "starting",
+              "runner_turn_id": "", "running_response_id": "", "turn_at": str(started), "heartbeat": str(started)}
+    writes: list = []
+
+    async def _vup(sid, props):
+        writes.append(dict(props))
+        vertex.update(props)
+
+    async def _tts(base, since_ms=0):
+        return None
+
+    async def sandbox(*a, **k):
+        raise AssertionError("past the cap, nothing needs asking")
+    monkeypatch.setattr(gw, "_vertex_upsert", _vup)
+    monkeypatch.setattr(gw, "_trace_terminal_status", _tts)
+    monkeypatch.setattr(gw, "_sandbox", sandbox)
+    monkeypatch.setattr(gw, "_RECONCILE_STALE_S", 4)
+    monkeypatch.setattr(gw, "_GW_MAX_TURN_S", 3)
+
+    async def main():
+        _gates(monkeypatch)
+        async with gw._turn_slot("org", "hsess1"):
+            await asyncio.sleep(4.5)                     # the restore hangs past the cap
+            fresh = time.time() - float(vertex["heartbeat"]) < 4
+            return fresh, await gw._reconcile_session(dict(vertex))
+
+    fresh, settled = asyncio.run(main())
+    assert fresh, "the slot was still beating"
+    assert settled is True
+    assert {"status": "failed", "turn_status": "failed", "end_reason": "timeout"} in writes
