@@ -45,8 +45,9 @@ def api(monkeypatch):
 
 def test_a_valid_traceparent_is_kept():
     assert gw._trace_context(TRACE_PARENT, "") == {"traceparent": TRACE_PARENT}
-    # A client that sends the hex in upper case still means the same trace.
-    assert gw._trace_context(TRACE_PARENT.upper(), "") == {"traceparent": TRACE_PARENT}
+    # The spec's ids are lower-case hex (HEXDIGLC): an upper-case value is not a trace context, and
+    # it is dropped rather than rewritten.
+    assert gw._trace_context(TRACE_PARENT.upper(), "") == {}
 
 
 def test_a_malformed_traceparent_is_dropped_and_never_refused():

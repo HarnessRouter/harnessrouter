@@ -366,6 +366,20 @@ def _load_reasoning():
 reasoning = _load_reasoning()
 
 
+def _load_tracecontext():
+    """runner/tracecontext.py, by path, as _load_reasoning: the gateway checks the caller's trace
+    context with the rules the runner applies before a provider sees it."""
+    import importlib.util
+    path = pathlib.Path(__file__).resolve().parents[1] / "runner" / "tracecontext.py"
+    spec = importlib.util.spec_from_file_location("hr_tracecontext", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+tracecontext = _load_tracecontext()
+
+
 def _reasoning_level(value, where: str = "") -> str:
     """A level as the API takes it, "" for none given. A value that is not a level is refused when
     it came with the request (`where` names the field) and read as none when it was stored."""
@@ -9508,69 +9522,13 @@ def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
     return [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
 
 
-# The caller's W3C trace context (#473). A value that is not valid W3C syntax is DROPPED, never
-# refused: a broken tracing header must not fail a turn. Only `traceparent` and `tracestate` are
-# read — `baggage` carries the caller's own data to whoever reads it, and it never leaves the box.
-#
-# The runner keeps the same rules (the two are separate packages with no shared module), and the
-# runner is the last place before a provider sees the value.
-_TRACEPARENT_RE = re.compile(
-    r"^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})(-.*)?$")
-# A tracestate member: `key=value`. The value may hold a space anywhere but its last character and
-# must not be empty (W3C Trace Context, `value = 0*255(chr) nblk-chr`).
-_TRACESTATE_RE = re.compile(
-    r"^(?:[a-z][a-z0-9_\-*/]{0,255}|[a-z0-9][a-z0-9_\-*/]{0,240}@[a-z][a-z0-9_\-*/]{0,13})"
-    r"=[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]$")
-
-
-def _valid_traceparent(value: str | None) -> str:
-    """The traceparent of `value` if it is valid W3C syntax, else "".
-
-    Valid means: the shape the spec gives, a version that is not `ff`, and neither an all-zero
-    trace id nor an all-zero parent id — the spec calls those invalid, and a provider that reads
-    one cannot join the trace anyway. A newer version may carry fields this code does not know
-    yet: the spec parses the first 55 characters and ignores the rest, so the trace is kept.
-    """
-    tp = str(value or "").strip().lower()
-    m = _TRACEPARENT_RE.match(tp)
-    if not m:
-        return ""
-    version, trace_id, parent_id, flags, extra = m.groups()
-    if version == "ff" or trace_id == "0" * 32 or parent_id == "0" * 16:
-        return ""
-    if extra and version == "00":
-        return ""
-    return f"{version}-{trace_id}-{parent_id}-{flags}"
-
-
-def _valid_tracestate(value: str | None) -> str:
-    """The tracestate of `value` if it is valid W3C syntax, else "".
-
-    A tracestate is a list of at most 32 `key=value` members, at most 512 characters overall, and
-    no key twice: "Only one entry per key may exist". A member that does not parse, or a key that
-    repeats, drops the whole tracestate — never the traceparent beside it.
-    """
-    ts = str(value or "").strip()
-    if not ts or len(ts) > 512:
-        return ""
-    members = [m.strip() for m in ts.split(",")]
-    if len(members) > 32 or not all(_TRACESTATE_RE.match(m) for m in members):
-        return ""
-    keys = [m.split("=", 1)[0] for m in members]
-    if len(keys) != len(set(keys)):
-        return ""
-    return ts
-
-
 def _trace_context(traceparent: str | None, tracestate: str | None) -> dict:
-    """The caller's trace context, as the runner's /turn wants it: the traceparent and, only with
-    one, the tracestate. Nothing else is taken. An all-zero trace-id or span-id, version `ff` and
-    any malformed value are dropped: a header nobody can read is worth less than a turn."""
-    tp = _valid_traceparent(traceparent)
-    if not tp:
-        return {}
-    ts = _valid_tracestate(tracestate)
-    return {"traceparent": tp, **({"tracestate": ts} if ts else {})}
+    """The caller's W3C trace context (#473), as the runner's /turn takes it: the traceparent and,
+    only with one, the tracestate. runner/tracecontext.py holds the rules, one copy for both
+    services: a value that is not valid W3C syntax is dropped, never refused, since a broken tracing
+    header must not fail a turn; and only these two headers are read. `baggage` carries the
+    caller's own data to whoever reads it, and it never leaves the box."""
+    return tracecontext.parse(traceparent, tracestate)
 
 
 _IDEM_TERMINAL = {"completed", "failed", "incomplete", "cancelled", "error"}

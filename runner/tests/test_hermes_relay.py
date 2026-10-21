@@ -537,33 +537,33 @@ def test_a_malformed_traceparent_is_not_forwarded():
 def test_the_turn_validates_the_trace_context_it_is_handed():
     """The runner is the last place before a provider sees the value, so it checks it itself: a
     header nobody can read is worth less than a turn."""
-    assert rs._trace_context(TRACE_PARENT, "") == {"traceparent": TRACE_PARENT}
-    assert rs._trace_context(TRACE_PARENT.upper(), "") == {"traceparent": TRACE_PARENT}
+    assert rs.tracecontext.parse(TRACE_PARENT, "") == {"traceparent": TRACE_PARENT}
+    assert rs.tracecontext.parse(TRACE_PARENT.upper(), "") == {}   # lower-case hex only (HEXDIGLC)
     for bad in ("not-a-traceparent",
                 "00-" + "0" * 32 + "-00f067aa0ba902b7-01",     # an all-zero trace-id
                 "00-4bf92f3577b34da6a3ce929d0e0e4736-" + "0" * 16 + "-01",   # an all-zero span-id
                 "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",  # version ff
                 "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",     # no flags
                 ""):
-        assert rs._trace_context(bad, "vendor=1") == {}, f"{bad!r} was accepted as a trace context"
+        assert rs.tracecontext.parse(bad, "vendor=1") == {}, f"{bad!r} was accepted as a trace context"
     # A tracestate is only ever read with a traceparent, and a malformed member drops the
     # tracestate alone — never the traceparent beside it.
-    assert rs._trace_context("", "vendor=1") == {}
-    assert rs._trace_context(TRACE_PARENT, "vendor=1") == {"traceparent": TRACE_PARENT, "tracestate": "vendor=1"}
-    assert rs._trace_context(TRACE_PARENT, "not a member") == {"traceparent": TRACE_PARENT}
+    assert rs.tracecontext.parse("", "vendor=1") == {}
+    assert rs.tracecontext.parse(TRACE_PARENT, "vendor=1") == {"traceparent": TRACE_PARENT, "tracestate": "vendor=1"}
+    assert rs.tracecontext.parse(TRACE_PARENT, "not a member") == {"traceparent": TRACE_PARENT}
     # The spec's own rules for a member: a value may hold a space anywhere but its last character
     # and must not be empty, and only one entry per key may exist.
-    assert rs._trace_context(TRACE_PARENT, "vendor=a b") == {"traceparent": TRACE_PARENT,
+    assert rs.tracecontext.parse(TRACE_PARENT, "vendor=a b") == {"traceparent": TRACE_PARENT,
                                                              "tracestate": "vendor=a b"}
-    assert rs._trace_context(TRACE_PARENT, "vendor=") == {"traceparent": TRACE_PARENT}
-    assert rs._trace_context(TRACE_PARENT, "vendor=1,vendor=2") == {"traceparent": TRACE_PARENT}
-    assert rs._trace_context(TRACE_PARENT, "a=1,b=2") == {"traceparent": TRACE_PARENT,
+    assert rs.tracecontext.parse(TRACE_PARENT, "vendor=") == {"traceparent": TRACE_PARENT}
+    assert rs.tracecontext.parse(TRACE_PARENT, "vendor=1,vendor=2") == {"traceparent": TRACE_PARENT}
+    assert rs.tracecontext.parse(TRACE_PARENT, "a=1,b=2") == {"traceparent": TRACE_PARENT,
                                                            "tracestate": "a=1,b=2"}
     # A newer version may carry fields this code does not know yet: the spec parses the first 55
     # characters and ignores the rest, so the trace is kept. Version `00` has no trailing data.
-    assert rs._trace_context("01-" + "4bf92f3577b34da6a3ce929d0e0e4736" + "-00f067aa0ba902b7-01-extra",
+    assert rs.tracecontext.parse("01-" + "4bf92f3577b34da6a3ce929d0e0e4736" + "-00f067aa0ba902b7-01-extra",
                              "") == {"traceparent": "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
-    assert rs._trace_context(TRACE_PARENT + "-extra", "") == {}
+    assert rs.tracecontext.parse(TRACE_PARENT + "-extra", "") == {}
 
 
 def test_the_turn_hands_the_trace_context_to_the_cli(monkeypatch, tmp_path):
