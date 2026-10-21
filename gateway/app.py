@@ -8590,10 +8590,13 @@ async def _past_cap_stand_down(sid: str, translator: "_RespTranslator", rec: dic
     """True when the turn is past the sweep's cap before it reached the runner, settled as such.
 
     The sweep settles a turn past the cap as timed out while it still waits (_reconcile_session:
-    a slot that never came, a restore that hung, with _turn_slot beating), and a turn that went on
-    to start the agent would finish over that answer, and a terminal status is final. It ends as the
-    sweep said, with nothing run. Checked where the turn would next begin work: before it is stamped
-    running and restores, and before it starts the agent. The clock is the accept's, as the sweep's."""
+    a slot that came late, a restore that hung, with _turn_slot beating), and a turn that went on to
+    start the agent would finish over that answer, and a terminal status is final. It ends as the
+    sweep said, with nothing run. Checked once, just before the agent would start, so the turn ends
+    the way any turn that fails before its agent runs does: its message and card written, the trace
+    finalized, so the task stays in the person's list. (A check before the turn is stamped running
+    returned before any of that, and a new task settled this way vanished from the list.) The clock
+    is the accept's, as the sweep's."""
     if not translator.created_at or time.time() - float(translator.created_at) <= _sweep_cap_s():
         return False
     rec["status"] = "failed"
@@ -8641,8 +8644,6 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # finished session at running/starting with a fresh heartbeat, the orphan sweep then took it
     # for a dead turn, and a client retrying its follow-up never got back in (omp, 2026-09-15).
     rec["lease_fence"] = 0
-    if await _past_cap_stand_down(sid, translator, rec):        # it waited past the cap for its slot
-        return "failed", [], rec
     if LEASE_MODE != "off" and control_store.enabled():
         try:
             _adm = await control_store.lease_admit(
@@ -8851,7 +8852,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 # environment and gives the model calls a child of it. Empty when the caller sent
                 # none, so a turn without a trace context sends none.
                 **(trace_ctx or {})}
-        if await _past_cap_stand_down(sid, translator, rec):    # a restore or a resolve that hung
+        if await _past_cap_stand_down(sid, translator, rec):
             status = "failed"
             break
         # Stop requested while we were resolving the connection / provisioning the previous

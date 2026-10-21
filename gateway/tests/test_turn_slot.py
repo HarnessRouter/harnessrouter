@@ -348,12 +348,15 @@ def _drive_a_late_turn(monkeypatch, age_s: float, hydrate=None):
 
     async def _collect_produced(*a, **kw):
         return []
+
+    async def _finalize(sid, rec):
+        rec["finalized"] = rec.get("status")
     for name, fn in (("_sandbox_json", _sandbox_json), ("_vertex_get", _nothing), ("_vertex_upsert", _vup),
                      ("_hydrate", hydrate or _nothing), ("_harness_plugins", _harness_plugins), ("_harness_env", _harness_env),
                      ("_image_auth", _nothing), ("_get_connection", _get_connection),
                      ("_auth_from_conn", lambda *a, **k: {"token": "t", "base_url": "https://proxy.example/v1"}),
                      ("_turn_cancelled", _false), ("_collect_produced", _collect_produced), ("_blob_put", _nothing),
-                     ("_checkpoint", _nothing), ("_trace_finalize", _nothing), ("_browser_close", _nothing),
+                     ("_checkpoint", _nothing), ("_trace_finalize", _finalize), ("_browser_close", _nothing),
                      ("_recover_trace_cursor", _nothing)):
         monkeypatch.setattr(gw, name, fn)
     monkeypatch.setattr(gw, "RESP_POLL_S", 0)
@@ -365,15 +368,17 @@ def _drive_a_late_turn(monkeypatch, age_s: float, hydrate=None):
     return status, rec, writes, calls, translator
 
 
-def test_a_turn_that_waited_past_the_cap_for_its_slot_never_runs(monkeypatch):
-    """The sweep settled it as timed out while it waited; when the slot comes, the turn must not be
-    stamped running again, restore, or start the agent and finish over that answer (terminal is
-    final). It ends as the sweep said: failed, reason timeout, and nothing runs."""
+def test_a_turn_that_waited_past_the_cap_for_its_slot_never_starts_the_agent(monkeypatch):
+    """The sweep settled it as timed out while it waited; when the slot comes, the turn must not start
+    the agent and finish over that answer (terminal is final). It ends as the sweep said: failed,
+    reason timeout, nothing run, and it is finalized like any turn that fails before its agent runs,
+    so the task stays in the person's list (live on the test VM, 2026-10-21: a check that returned
+    before the turn's card was written left a new task out of the list)."""
     status, rec, writes, calls, tr = _drive_a_late_turn(monkeypatch, age_s=10)
     assert "/turn" not in calls, "a turn past the cap started the agent"
     assert status == "failed" and rec["error"] == gw._cap_error()
-    assert writes == [{"status": "failed", "turn_status": "failed", "end_reason": "timeout"}], (
-        f"a settled turn was written over: {writes}")
+    assert writes[-1] == {"status": "failed", "turn_status": "failed", "end_reason": "timeout"}
+    assert rec.get("finalized") == "failed", "the turn was not finalized, so its card never says how it ended"
     evs = gw._fail_events(tr, rec)
     assert evs[-2]["code"] == "harness_error"
     assert evs[-1]["response"]["error"] == gw._cap_error()
@@ -391,3 +396,4 @@ def test_a_restore_that_hung_past_the_cap_ends_the_turn_before_the_agent_starts(
     status, rec, writes, calls, _tr = _drive_a_late_turn(monkeypatch, age_s=1, hydrate=_slow_hydrate)
     assert "/turn" not in calls and status == "failed" and rec["error"] == gw._cap_error()
     assert writes[-1] == {"status": "failed", "turn_status": "failed", "end_reason": "timeout"}
+    assert rec.get("finalized") == "failed"
