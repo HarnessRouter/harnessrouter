@@ -130,19 +130,20 @@ def _sweep(monkeypatch, v, probe_code=404, rec=None, tts=None):
     return settled, writes, stored
 
 
-def test_a_turn_the_runner_lost_to_a_restart_is_interrupted_not_failed(monkeypatch):
-    """#505: the runner restarted under the turn, so it answers 404 for it. The task did not fail;
-    the turn was cut, and a follow-up continues it. The session and the response both say so."""
+def test_a_turn_the_runner_lost_to_a_restart_fails_saying_it_was_interrupted(monkeypatch):
+    """#505: the runner restarted under the turn, so it answers 404 for it. Within UHP 2026-10-19 the
+    turn is `failed` (lifecycle §3 keeps `incomplete` for budgets), and the error says a restart cut
+    it: server_error, so a client may retry, code harness_error, detail.reason interrupted."""
     import time
     v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
          "running_response_id": "resp_1", "heartbeat": str(time.time() - 600)}
     rec = {"id": "resp_1", "status": "running", "_session_id": "hsess1", "output": []}
     settled, writes, stored = _sweep(monkeypatch, v, 404, rec)
     assert settled is True
-    assert writes[0] == {"status": "incomplete", "turn_status": "incomplete",
-                         "incomplete_reason": "interrupted"}
-    assert stored["status"] == "incomplete"
-    assert stored["incomplete_details"] == {"reason": "interrupted", "handoff": None}
+    assert writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "interrupted"}
+    assert stored["status"] == "failed" and not stored.get("incomplete_details")
+    assert stored["error"] == {"type": "server_error", "code": "harness_error",
+                               "message": A._INTERRUPTED_MESSAGE, "detail": {"reason": "interrupted"}}
 
 
 def test_a_turn_with_no_runner_turn_recorded_is_still_failed(monkeypatch):
@@ -168,13 +169,13 @@ def test_a_new_turn_drops_the_last_turns_reason():
     not inherit 'interrupted' from an earlier one."""
     import inspect
     src = inspect.getsource(A)
-    i = src.index('"heartbeat": str(time.time()), "runner_turn_id": "", "incomplete_reason": ""')
+    i = src.index('"heartbeat": str(time.time()), "runner_turn_id": "", "end_reason": ""')
     assert '"turn_status": "starting"' in src[i - 200:i]
     j = src.index('"running_response_id": resp_id, "runner_turn_id": "",')
-    assert '"incomplete_reason": ""' in src[j:j + 250]
+    assert '"end_reason": ""' in src[j:j + 250]
 
 
-def test_a_turn_the_gateway_drains_under_is_interrupted(monkeypatch):
+def test_a_turn_the_gateway_drains_under_fails_saying_it_was_interrupted(monkeypatch):
     import asyncio
     tr = _tr()
     emitted, persisted = [], []
@@ -183,10 +184,12 @@ def test_a_turn_the_gateway_drains_under_is_interrupted(monkeypatch):
     async def _persist(status):
         persisted.append((status, tr._response_obj(status)))
     asyncio.run(A._settle_drained(_persist, tr, _emit))
-    assert emitted[-1]["type"] == "response.incomplete"
-    assert persisted[0][0] == "incomplete"
-    assert persisted[0][1]["incomplete_details"]["reason"] == "interrupted"
-    assert persisted[0][1]["error"] is None
+    assert emitted[-1]["type"] == "response.failed"
+    assert [e for e in emitted if e["type"] == "error"][0]["code"] == "harness_error"
+    assert persisted[0][0] == "failed"
+    assert persisted[0][1]["incomplete_details"] is None
+    assert persisted[0][1]["error"]["detail"] == {"reason": "interrupted"}
+    assert persisted[0][1]["error"]["type"] == "server_error"
 
 
 def test_a_dead_follow_up_is_not_settled_by_the_turn_before_it(monkeypatch):
@@ -224,7 +227,7 @@ def test_the_sweep_reads_the_trace_from_the_running_turns_start(monkeypatch):
         seen.append(since_ms)
         return None
     settled, writes, _ = _sweep(monkeypatch, v, 404, rec, tts=_tts)
-    assert seen[0] == 5000 and writes[0]["incomplete_reason"] == "interrupted"
+    assert seen[0] == 5000 and writes[0]["end_reason"] == "interrupted"
 
 
 def test_the_record_carries_its_start_to_the_millisecond(monkeypatch):
@@ -249,10 +252,10 @@ def test_the_record_carries_its_start_to_the_millisecond(monkeypatch):
 
 
 def test_the_reason_is_written_only_onto_the_turn_it_was_proved_for(monkeypatch):
-    """The session's incomplete_reason belongs to its running response. An older orphan of the
-    same session settled later must not be told it was interrupted."""
+    """The session's end reason belongs to its running response. An older orphan of the same
+    session settled later must not be told it was interrupted."""
     import asyncio, time
-    v = {"id": "hsess1", "status": "incomplete", "incomplete_reason": "interrupted",
+    v = {"id": "hsess1", "status": "failed", "end_reason": "interrupted",
          "running_response_id": "resp_2", "heartbeat": str(time.time() - 600)}
     async def _vget(sid):
         return dict(v)
@@ -267,10 +270,29 @@ def test_the_reason_is_written_only_onto_the_turn_it_was_proved_for(monkeypatch)
         monkeypatch.setattr(A, name, fn)
     old = asyncio.run(A._reconcile_response("resp_1", {"id": "resp_1", "status": "running",
                                                        "_session_id": "hsess1", "output": []}))
-    assert old["status"] == "incomplete" and not old.get("incomplete_details")
+    assert old["status"] == "failed" and ((old.get("error") or {}).get("detail") or {}).get("reason") != "interrupted"
     cur = asyncio.run(A._reconcile_response("resp_2", {"id": "resp_2", "status": "running",
                                                        "_session_id": "hsess1", "output": []}))
-    assert cur["incomplete_details"] == {"reason": "interrupted", "handoff": None}
+    assert cur["status"] == "failed" and cur["error"]["detail"] == {"reason": "interrupted"}
+
+
+def test_a_restart_never_reports_incomplete(monkeypatch):
+    """`incomplete` is a budget stop (lifecycle §3, UHP 2026-10-19). Neither restart path produces
+    it: the sweep's 404 and the shutdown drain both end `failed`."""
+    import asyncio, time
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
+         "running_response_id": "resp_1", "heartbeat": str(time.time() - 600)}
+    rec = {"id": "resp_1", "status": "running", "_session_id": "hsess1", "output": []}
+    _, writes, stored = _sweep(monkeypatch, v, 404, rec)
+    assert "incomplete" not in {writes[0]["status"], writes[0]["turn_status"], stored["status"]}
+    tr = _tr()
+    seen = []
+    async def _emit(ev):
+        seen.append(ev["type"])
+    async def _persist(status):
+        seen.append(status)
+    asyncio.run(A._settle_drained(_persist, tr, _emit))
+    assert "incomplete" not in seen and "response.incomplete" not in seen
 
 
 def test_a_drain_after_the_turn_ended_keeps_its_own_end():
@@ -304,4 +326,4 @@ def test_a_running_turn_with_no_readable_record_is_scoped_by_its_turn_at(monkeyp
          "running_response_id": "", "trace_blob": "org/inv_hsess1", "turn_at": "4.25",
          "heartbeat": str(time.time() - 600)}
     settled, writes, _ = _sweep(monkeypatch, v, 404, None, tts=_tts)
-    assert seen[0] == 4250 and writes[0]["incomplete_reason"] == "interrupted"
+    assert seen[0] == 4250 and writes[0]["end_reason"] == "interrupted"

@@ -219,6 +219,22 @@ _TERMINAL_EVENT = {"completed": "response.completed", "incomplete": "response.in
                    "failed": "response.failed", "cancelled": "response.failed"}
 
 
+# A turn the server itself cut short (the runner lost it to a restart, or the gateway's shutdown drain)
+# settles `failed` within UHP 2026-10-19: lifecycle §3 makes `incomplete` a budget stop and forbids it
+# for anything else. The error says what happened: type server_error, so a client may retry (errors
+# §4); code harness_error, the §3.3 code that applies; detail.reason "interrupted", an additive key a
+# client can tell this end by. Reporting it as `incomplete` is the UEP #505 asks for, for a later
+# version (CAT's ruling, 2026-10-21). The message promises nothing about files: a self-hosted
+# workspace on /data survives a restart, a hosted sandbox keeps only what the last checkpoint saved.
+_INTERRUPTED_MESSAGE = ("The server restarted while this task was running, so it stopped before it "
+                        "finished. Send a follow-up to continue from the work that was saved.")
+
+
+def _interrupted_error() -> dict:
+    return {"type": "server_error", "code": "harness_error", "message": _INTERRUPTED_MESSAGE,
+            "detail": {"reason": "interrupted"}}
+
+
 async def _settle_drained(persist, tr, emit, end: dict | None = None) -> None:
     """Settle a turn cancelled by shutdown drain: emit a terminal event to the bus (so an open
     Workbench stops showing 'running') and persist it. Best-effort; never raises.
@@ -244,14 +260,14 @@ async def _settle_drained(persist, tr, emit, end: dict | None = None) -> None:
         except Exception:  # noqa: BLE001
             pass
         return
-    tr.incomplete_reason = "interrupted"
+    err = _interrupted_error()
     try:
-        for ev in tr.complete("incomplete"):
+        for ev in tr.fail(err["message"], err):
             await emit(ev)
     except Exception:  # noqa: BLE001
         pass
     try:
-        await persist("incomplete")
+        await persist("failed")
     except Exception:  # noqa: BLE001
         pass
 
@@ -3147,8 +3163,9 @@ async def _reconcile_session(v: dict) -> bool:
                 except Exception:  # noqa: BLE001
                     probe_gone = False
             if probe_gone:
-                status = "incomplete" if rt_probe else "failed"
-            gone = status in ("failed", "incomplete")
+                status = "failed"
+                interrupted = bool(rt_probe)   # the runner answered 404: a restart lost the turn
+            gone = status == "failed"
             # Stale heartbeat but no terminal result yet: the owning replica likely died mid-turn
             # (deploy / scale-in / crash) while the turn keeps executing in its sandbox. ADOPT it —
             # resume harvesting its events to the trace + bus so viewers don't freeze. Run it
@@ -3171,9 +3188,8 @@ async def _reconcile_session(v: dict) -> bool:
                 _t.add_done_callback(_inflight.discard)
             if not gone:
                 return False               # not settled yet; the detached adopter (or a later sweep) will
-            interrupted = status == "incomplete"
     await _vertex_upsert(sid, {"status": status, "turn_status": status,
-                               **({"incomplete_reason": "interrupted"} if interrupted else {})})
+                               **({"end_reason": "interrupted"} if interrupted else {})})
     # Settle the RESPONSE record in the same pass. The session vertex and the response blob are two
     # records of one fact; settling only the vertex left the turn list showing a live "Working…"
     # spinner on a turn whose process died — the exact confusion this sweep exists to remove — and
@@ -3301,10 +3317,10 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     except Exception:  # noqa: BLE001
         pass
     rec["status"] = settled
-    if (settled == "incomplete" and vs == "incomplete" and v.get("incomplete_reason")
+    if (settled == "failed" and vs == "failed" and v.get("end_reason") == "interrupted"
             and rid == str(v.get("running_response_id") or "")):
-        # the sweep proved why (the runner lost the turn: interrupted) and wrote it on the session
-        rec["incomplete_details"] = {"reason": str(v["incomplete_reason"]), "handoff": None}
+        # the sweep proved why (the runner lost the turn to a restart) and wrote it on the session
+        rec["error"] = _interrupted_error()
     try:
         _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
@@ -6595,15 +6611,15 @@ class _RespTranslator:
         evs.append(self._ev(ev_type, response=self._response_obj(status)))
         return evs
 
-    def fail(self, message: str) -> list[dict]:
+    def fail(self, message: str, error: dict | None = None) -> list[dict]:
         # The spec's Error object (schema.json §Error) requires `type` from the closed enum,
         # with `code` left for the SPECIFIC condition — emitting the type in `code` and no
         # `type` at all made every failed Response fail schema validation, which conformance
         # T-01/S-03/S-07 caught the first time a run actually failed (issue #7's suite, run
         # 2026-08-20). The error EVENT mirrors error.code, so the two never disagree.
-        self.error = {"type": "harness_error", "code": "turn_failed", "message": message}
+        self.error = error or {"type": "harness_error", "code": "turn_failed", "message": message}
         evs = self._close_cur()
-        evs.append(self._ev("error", code="turn_failed", message=message, param=None))
+        evs.append(self._ev("error", code=self.error["code"], message=self.error["message"], param=None))
         evs.append(self._ev("response.failed", response=self._response_obj("failed")))
         return evs
 
@@ -8537,7 +8553,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         except Exception:  # noqa: BLE001 — lease is best-effort; never block a turn on it
             pass
     await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
-                               "heartbeat": str(time.time()), "runner_turn_id": "", "incomplete_reason": "",
+                               "heartbeat": str(time.time()), "runner_turn_id": "", "end_reason": "",
                                **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
     # Under the session's change lock: an app's PUT, delete, mkdir or move that passed its busy check
     # before this turn was stamped running finishes before the restore reads the workspace, and one
@@ -9899,7 +9915,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                    "running_response_id": resp_id, "runner_turn_id": "",
                                    "billing_org": billing_org, "heartbeat": str(time.time()),
-                                   "turn_at": str(time.time()), "incomplete_reason": ""})
+                                   "turn_at": str(time.time()), "end_reason": ""})
     except Exception as e:  # noqa: BLE001 — this write is load-bearing for cross-replica cancel: log it
         print(f"[cancel] accept-time running_response_id write failed sid={sid} resp={resp_id}: {str(e)[:120]}",
               flush=True)
@@ -10404,9 +10420,9 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
         vst = str(v.get("turn_status") or v.get("status") or "")
         if vst in ("cancelled", "failed", "error", "done", "completed", "incomplete", "max_turns", "timeout"):
             turns[-1]["status"] = vst
-            if (vst == "incomplete" and not turns[-1].get("incomplete_reason")
+            if (vst == "failed" and not turns[-1].get("error") and v.get("end_reason") == "interrupted"
                     and turns[-1]["id"] == str(v.get("running_response_id") or "")):
-                turns[-1]["incomplete_reason"] = v.get("incomplete_reason") or None   # the sweep's proof
+                turns[-1]["error"] = _INTERRUPTED_MESSAGE   # the sweep's proof: a restart cut it
         # (2) Trace catch-up whenever the stored record has NO content yet — output[] is only
         # written by persist() at finalize, so this covers BOTH cases with one mechanism:
         #   • turn still running → show progress-so-far, the bus streams new events on top;
