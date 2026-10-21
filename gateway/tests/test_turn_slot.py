@@ -162,7 +162,9 @@ def test_a_restore_that_hangs_past_the_cap_settles_at_the_cap_though_the_slot_st
     monkeypatch.setattr(gw, "_trace_terminal_status", _tts)
     monkeypatch.setattr(gw, "_sandbox", sandbox)
     monkeypatch.setattr(gw, "_RECONCILE_STALE_S", 4)
-    monkeypatch.setattr(gw, "_GW_MAX_TURN_S", 3)
+    monkeypatch.setattr(gw, "_GW_MAX_TURN_S", 2)
+    monkeypatch.setattr(gw, "_RUNNER_MAX_TURN_S", 2)
+    monkeypatch.setattr(gw, "_CAP_MARGIN_S", 1)               # the cap: max(2, 2) + 1 = 3 s
 
     async def main():
         _gates(monkeypatch)
@@ -175,3 +177,57 @@ def test_a_restore_that_hangs_past_the_cap_settles_at_the_cap_though_the_slot_st
     assert fresh, "the slot was still beating"
     assert settled is True
     assert {"status": "failed", "turn_status": "failed", "end_reason": "timeout"} in writes
+
+
+def _cap_sweep(monkeypatch, turn_age: float, probe: int = 200):
+    """The sweep on a turn whose runner turn is on record and whose heartbeat went stale (its poll loop
+    is gone), `turn_age` seconds after its start; the runner answers `probe` for the turn. Scaled: the
+    gateway's and the runner's limit 100 s, the placement and restore margin 30 s."""
+    monkeypatch.setattr(gw, "_GW_MAX_TURN_S", 100)
+    monkeypatch.setattr(gw, "_RUNNER_MAX_TURN_S", 100)
+    monkeypatch.setattr(gw, "_CAP_MARGIN_S", 30)
+    monkeypatch.setattr(gw, "_adopting", {"hsess1"})          # an adoption is already running: spawn none
+    now = time.time()
+    v = {"id": "hsess1", "tenant": "org", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
+         "running_response_id": "", "turn_at": str(now - turn_age), "heartbeat": str(now - 300)}
+    writes, calls = [], []
+
+    async def _vup(sid, props):
+        writes.append(dict(props))
+
+    async def _tts(base, since_ms=0):
+        return None
+
+    class _R:
+        def __init__(self, code):
+            self.status_code = code
+
+    async def sandbox(path, sid, method="POST", **k):
+        calls.append((method, path))
+        return _R(probe)
+    monkeypatch.setattr(gw, "_vertex_upsert", _vup)
+    monkeypatch.setattr(gw, "_trace_terminal_status", _tts)
+    monkeypatch.setattr(gw, "_sandbox", sandbox)
+    return asyncio.run(gw._reconcile_session(v)), writes, calls
+
+
+def test_the_sweep_cap_is_the_runners_limit_plus_the_placement_margin(monkeypatch):
+    monkeypatch.setattr(gw, "_GW_MAX_TURN_S", 100)
+    monkeypatch.setattr(gw, "_RUNNER_MAX_TURN_S", 120)
+    monkeypatch.setattr(gw, "_CAP_MARGIN_S", 30)
+    assert gw._sweep_cap_s() == 150
+
+
+def test_a_turn_still_inside_the_runners_limit_plus_margin_is_not_settled_as_timed_out(monkeypatch):
+    """The gateway's clock starts at accept, before placement and restore; past the runner's limit
+    but inside the margin, the runner may still be working on it, so nothing is settled as timed out."""
+    settled, writes, calls = _cap_sweep(monkeypatch, turn_age=120)
+    assert settled is False and not any(w.get("end_reason") == "timeout" for w in writes)
+    assert ("POST", "/turn/rt_1/cancel") not in calls
+
+
+def test_past_the_limit_plus_margin_it_settles_timed_out_and_the_runners_turn_is_cancelled(monkeypatch):
+    settled, writes, calls = _cap_sweep(monkeypatch, turn_age=140)
+    assert settled is True
+    assert writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "timeout"}
+    assert ("POST", "/turn/rt_1/cancel") in calls

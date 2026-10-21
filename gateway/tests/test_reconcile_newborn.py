@@ -59,7 +59,7 @@ def test_a_vertex_the_turn_has_not_stamped_yet_is_a_newborn_not_an_orphan(monkey
 
 
 def test_a_turn_that_stopped_heartbeating_past_the_cap_is_still_settled(monkeypatch):
-    old = time.time() - gw._GW_MAX_TURN_S - 600
+    old = time.time() - gw._sweep_cap_s() - 600
     rec = {"status": "running", "_session_id": "hsess1", "created_at": int(old)}
     vertex = {"status": "running", "created_at": str(old), "heartbeat": str(old)}
     out, puts = _run(rec, vertex, monkeypatch)

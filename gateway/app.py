@@ -2780,6 +2780,19 @@ _SESSION_TERMINAL = {"done", "completed", "failed", "incomplete", "max_turns", "
 _RECONCILE_STALE_S = int(os.environ.get("HARNESS_RECONCILE_STALE_S", "120"))
 _RECONCILE_EVERY_S = int(os.environ.get("HARNESS_RECONCILE_EVERY_S", "60"))
 _GW_MAX_TURN_S = int(os.environ.get("HARNESS_MAX_TURN_S", "21600"))
+# The runner's own wall-clock ceiling for a turn (runner/server.py MAX_TURN_SECONDS, read from the same
+# environment on one container), and the time a turn may spend before the runner's clock starts: the
+# lease, placement and the workspace restore. The sweep and the response reconciler settle a turn as
+# timed out only past BOTH limits plus that margin, counted from the turn's start (turn_at, stamped at
+# accept). The gateway's clock starts first, so a cap equal to the runner's would settle a turn that is
+# still working, minutes inside the runner's own limit, as timed out for good (CAT, 2026-10-21).
+_RUNNER_MAX_TURN_S = int(os.environ.get("MAX_TURN_SECONDS", "21600"))
+_CAP_MARGIN_S = int(os.environ.get("HARNESS_CAP_MARGIN_S", "1800"))
+
+
+def _sweep_cap_s() -> int:
+    """Seconds from a turn's start after which nothing can still be working on it."""
+    return max(_GW_MAX_TURN_S, _RUNNER_MAX_TURN_S) + _CAP_MARGIN_S
 
 
 def _turn_since_ms(rec: dict | None, for_result: bool = True) -> int:
@@ -3157,7 +3170,7 @@ async def _reconcile_session(v: dict) -> bool:
     except (TypeError, ValueError):
         turn_at = 0.0
     turn_age = time.time() - turn_at if turn_at > 0 else age
-    stuck = turn_at > 0 and turn_age > _GW_MAX_TURN_S and not str(v.get("runner_turn_id") or "")
+    stuck = turn_at > 0 and turn_age > _sweep_cap_s() and not str(v.get("runner_turn_id") or "")
     if age < _RECONCILE_STALE_S and not stuck:
         return False                       # fresh heartbeat (or a newborn turn) -> still being polled
     base = v.get("trace_blob")
@@ -3179,9 +3192,16 @@ async def _reconcile_session(v: dict) -> bool:
     status = await _trace_terminal_status(base, since)
     end_reason = ""
     if status is None:
-        if turn_age > _GW_MAX_TURN_S:
+        if turn_age > _sweep_cap_s():
             status = "failed"              # past the hard cap, from the turn's start, with no result
             end_reason = "timeout"
+            rt_cap = str(v.get("runner_turn_id") or "")
+            if rt_cap:
+                # nothing may keep working on a turn settled as timed out: stop the runner's turn too
+                try:
+                    await _sandbox(f"/turn/{rt_cap}/cancel", str(sid), "POST")
+                except Exception:  # noqa: BLE001 — gone already, or unreachable; the settle stands
+                    pass
         else:
             # First ask the RUNNER whether the recorded turn still exists. Turn records are
             # in-memory there, so a restart answers 404 — and a 404 means the process that owned
@@ -3339,8 +3359,8 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
             ts = await _trace_terminal_status(v.get("trace_blob"), _turn_since_ms(rec))
             if ts:
                 settled = _RESP_STATUS_MAP.get(ts, "failed")
-            elif time.time() - hb > _GW_MAX_TURN_S:
-                settled = "failed"                       # past the hard cap with no result
+            elif time.time() - (_born_seconds(rec) or hb) > _sweep_cap_s():
+                settled = "failed"                       # past the hard cap, from the turn's start, with no result
                 capped = True
     if not settled or settled == str(rec.get("status") or ""):
         return rec
@@ -4942,7 +4962,7 @@ async def _card_settle(sid: str, m: dict) -> dict | None:
             hb = float(v.get("heartbeat") or 0)
         except Exception:  # noqa: BLE001
             hb = 0
-        if hb and time.time() - hb > _GW_MAX_TURN_S:
+        if hb and time.time() - hb > _sweep_cap_s():     # the sweep's cap, so card and record agree
             status = "failed"
     if not status or status == str(m.get("status") or ""):
         return None

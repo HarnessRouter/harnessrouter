@@ -162,10 +162,10 @@ def test_a_turn_past_the_hard_cap_fails_saying_it_ran_out_of_time(monkeypatch):
     """Past the hard cap with no result: failed, never bare, with detail.reason timeout."""
     import time
     v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
-         "running_response_id": "resp_1", "heartbeat": str(time.time() - A._GW_MAX_TURN_S - 60),
-         "turn_at": str(time.time() - A._GW_MAX_TURN_S - 60)}
+         "running_response_id": "resp_1", "heartbeat": str(time.time() - A._sweep_cap_s() - 60),
+         "turn_at": str(time.time() - A._sweep_cap_s() - 60)}
     rec = {"id": "resp_1", "status": "running", "_session_id": "hsess1", "output": [],
-           "created_at": int(time.time() - A._GW_MAX_TURN_S - 60)}
+           "created_at": int(time.time() - A._sweep_cap_s() - 60)}
     settled, writes, stored = _sweep(monkeypatch, v, 200, rec)
     assert settled is True and writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "timeout"}
     assert stored["error"] == {"type": "harness_error", "code": "harness_error",
@@ -351,7 +351,7 @@ def test_the_reconcilers_own_hard_cap_is_never_a_bare_failed(monkeypatch):
     """A background poll's reconcile that settles a record past the hard cap gives it the timeout
     error, so a failed task always says why (lifecycle §3)."""
     import asyncio, time
-    long_ago = time.time() - A._GW_MAX_TURN_S - 60
+    long_ago = time.time() - A._sweep_cap_s() - 60
     v = {"id": "hsess1", "status": "running", "turn_status": "running", "heartbeat": str(long_ago),
          "created_at": str(long_ago), "running_response_id": "resp_1"}
     async def _vget(sid):
