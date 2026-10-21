@@ -4597,7 +4597,7 @@ full eight-id column followed. Before the row, this base reached the gemini fami
 aggregator.
 
 ### What is still NOT measured
-The browser, thinking and environments columns. Its `--sandbox` / `--cloud` modes, its sub-agents,
+Its `--sandbox` / `--cloud` modes, its sub-agents,
 its RAG and its MCP catalog: a turn gets the four toolsets above and nothing else. Why the one
 no-answer turn stopped — it did not reproduce, and the raw CLI stream of it was not captured.
 
@@ -4831,7 +4831,7 @@ reaches this base through an aggregator that serves `/responses`, which the Verc
 nine gemini ids.
 
 ### What is still NOT measured
-The browser, thinking and environments columns. Why `grok-4.5` sometimes answers with reasoning
+Why `grok-4.5` sometimes answers with reasoning
 only, and why one `initialize` took longer than 120 s — neither reproduced. The `ask_user` hazard
 is still a protocol fact reproduced against a fake agent; no live turn has tripped it.
 
@@ -4970,8 +4970,87 @@ stdio, free-form rows, SSE, streamable-HTTP — would all have died at settings 
   because that is what the column measured and no fix stands between the two runs.
 
 ### What is still NOT measured
-The browser, thinking and environments columns. **Tool policy on this base**: its catalog is `bash`,
+**Tool policy on this base**: its catalog is `bash`,
 `read_text_file`, `edit_file` and the fixture needs all three, so the dimension withheld nothing and
 reported `disabled_tool: null` — aider's honest gap rather than a vacuous pass. Why `grok-4.5`
 answers DONE without acting, and why `qwen3.8-27b` refused once: neither is ours and neither is
 explained here.
+
+## The last three dimensions, on all four of batch 4 (2026-10-21)
+
+The browser, thinking and environments columns, which every base in this batch had open. One
+instance, the four bases installed together, the Vercel connection, a headless Chromium in the
+container for the browser plugin and one environment built for the packages column.
+
+| dimension | vibe | docker-agent | fast-agent | dcode |
+|---|---|---|---|---|
+| browser (navigate + click, the page named, the session stopped) | pass 18 s | pass 18 s | pass 12 s | pass 12 s |
+| thinking (unset / none / low / high, judged on the provider's own count) | pass | pass | pass | pass |
+| environments (pip, npm, apt from the layer, no install) | 3 of 3 | 3 of 3 | 3 of 3 | 3 of 3 |
+
+**12 of 12 environment tasks with `installs=0`** in every trace, each answer showing the package's
+path under `/env/matrix-pkgs` (`tabulate` 0.10.0 from the layer's venv, `qrcode` 1.5.4 from its
+node_modules, `jq` 1.7.1 from its apt root). **4 of 4 on browser**, each trace carrying `navigate`
+and `click` with the landing page named. **4 of 4 on thinking**, with the order holding on every
+base: low spends fewer thinking tokens than high, `none` spends none.
+
+### What the browser column found: two of the four need the loopback bridge
+
+The `plugs` server is how every base gets the browser tools, and it is injected at
+`http://127.0.0.1:8080/v1/mcp/plugs`. `_BRIDGE_LOOPBACK_BACKENDS` existed for exactly one base
+(nanobot, found by this column in October); this run added two more, each failing differently:
+
+- **docker-agent dropped it silently.** No browser call in the trace at all, and the model answered
+  "unable to open the page or click the link interactively … If you enable the browser toolset, I
+  can do it directly" — while its config held the server correctly as a `type: mcp` toolset with
+  the streamable url and the bearer. The A/B that settles it, same config and transport, only the
+  host changed: a public https url gave `mcp_init_started` / `mcp_init_finished` and 16 tools;
+  `http://127.0.0.1:8080/...` gave **no mcp_init event at all** and 15 — its four built-in toolsets
+  — with nothing on stderr and nothing in the record. What inside it refuses is NOT established:
+  its binary's loopback strings are all about its own API server's bind address. The bridge does
+  not need that answer.
+- **fast-agent tried it and died.** Three runs, the same crash each time, no browser call in any of
+  them: "MCP Server: 'plugs': Failed to initialize … Details: MCPError: Not Found", then
+  "RuntimeError: Core not initialized, please call initialize() first". Bridged, it passed in 12 s.
+
+Bridged, there is no url left for either to refuse, and both keep their own client for PUBLIC
+servers — which the plugin matrix measured on each of them, on both transports.
+
+### A record-honesty defect this column exposed, fixed only in part
+fast-agent writes a rich-rendered traceback to stderr when its MCP startup fails, and a tail is
+read from the END, so the turn's reason reached the console as `│   579 │   try:` and its answer as
+`│  1585 │   │   │   exc` — box-drawing gutter lines, while the CLI's own sentence sat three lines
+above the box. `_failure_reason` now drops frames and rules (`_without_traceback_frames`), and on
+the REAL captured stderr it returns "RuntimeError: Core not initialized, please call initialize()
+first" instead; a tail that is nothing but frames falls through to the exit code. Three tests hold
+it, including that an ordinary tail is untouched.
+
+**What is NOT confirmed:** end to end the record still showed the frame line on a turn run with
+that filter live, and the layer that puts it there is NOT located — `rec["error"]`,
+`result_ev["result"]` (which the settle path fills from the raw tail) and the gateway's
+`error or result` fallback were each read without finding a consistent explanation. The filter is
+right where it is tested; the record-level cleanup is unproven. The bridging fix removed the crash
+that produced it here, so this column no longer exercises that path.
+
+### fast-agent thinks when nobody asked, and the other three do not
+On the same model and the same prompt, with no level asked: vibe, docker-agent and dcode spend
+**0** thinking tokens; fast-agent spends **331**. Its own `fastagent_llm.py` falls back to the
+model spec's default effort when nothing sets one (`reasoning = self.reasoning_effort_spec.default`),
+and its table treats gpt-5.4 as a reasoning model. The column's `unset` criterion is about the
+RECORD — no `reasoning` field, the base behaving as it did before levels existed — and this base's
+pre-levels behaviour IS that default, so the row passes correctly. Nothing was changed: making
+`unset` mean `none` would override the CLI's own default on an assumption nobody measured. A
+harness that wants nothing spent asks for `none`, which works (0 tokens, measured).
+
+### Rig notes
+- The browser column ran on the **operator's-own-browser** path: a headless Chromium installed in
+  the container (`chromium --headless=new --remote-debugging-port=9222`) with
+  `HR_BROWSER_CDP_URL=http://127.0.0.1:9222`, NOT a browser-use vendor key. The two are different
+  paths and a row proved on one is not proof for the other — the same caveat main's October runs
+  carry.
+- An environment cannot be built until it holds at least one file: `POST .../build` answers 409
+  `environment_not_ready` ("the environment has no files yet"). One README through
+  `PUT /v1/environments/{id}/files/{path}` is enough, and the build then took under ten seconds for
+  the three packages.
+- `packages` on `POST /v1/environments` is a dict keyed by manager (`{"pip": [...], "npm": [...],
+  "apt": [...]}`), not a list of `{manager, name}` rows.
