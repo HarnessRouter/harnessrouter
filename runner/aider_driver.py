@@ -559,9 +559,45 @@ def _files_asked_for(prompt: str, root: str = ".", names: "set | None | bool" = 
     return found
 
 
-def _file_nudge(names: list) -> str:
+def _example_block(name: str) -> str:
+    """The block the model is asked to write, with the path in it.
+
+    The path is the part the driver knows; the contents are the request's, and the slot for them
+    is left to it. The block is aider's own wire format (editblock_coder.py:
+    find_original_update_blocks), so a model that copies it writes the file."""
+    return (f"{name}\n```\n<<<<<<< SEARCH\n=======\n"
+            "<the contents the request asks for>\n>>>>>>> REPLACE\n```")
+
+
+def _repeats_a_word_of(reply: str, prompt: str) -> str:
+    """The word a reply is nothing but, when the request holds that word too.
+
+    "" for a reply that says more than one word, or a word the request does not contain."""
+    words = [w.strip(".,:;!?\"'()[]`") for w in (reply or "").split()]
+    words = [w for w in words if w]
+    if not words or len({w.lower() for w in words}) != 1:
+        return ""
+    return words[0] if words[0].lower() in (prompt or "").lower() else ""
+
+
+def _file_nudge(names: list, word: str = "") -> str:
+    """The nudge for a file the request asked for and the turn has not written.
+
+    `word` is the word the reply was, when it was nothing but a word of the request ("DONE" to
+    "…then reply DONE."). gpt-5.4-mini answers a file request that way once a few exact-reply
+    turns have primed it (#513): "DONE", no file, 5 of 6, and "DONE" again after the nudge. A
+    paragraph asking for a block does not lift it out of the pattern, so the nudge then carries
+    the block to write, with the path in it: a block to copy beats a paragraph to obey."""
     listed = ", ".join(f"`{n}`" for n in names)
     one = len(names) == 1
+    if word:
+        blocks = "\n\n".join(_example_block(n) for n in names)
+        return (f"'{word}' is not the answer: the request asks for {listed}, and "
+                f"{'it is' if one else 'they are'} not written yet. Write "
+                f"{'it' if one else 'them'} now, in this reply, with a SEARCH/REPLACE block "
+                f"{'like this one' if one else 'each, like these'}:\n\n{blocks}\n\nA new file does "
+                "not need to be added to the chat first. The reply the request asks for comes "
+                "after the file.")
     return (f"The request asks for {listed}, and {'it is' if one else 'they are'} not written yet. "
             f"Write {'it' if one else 'them'} now in this reply with a SEARCH/REPLACE block "
             "each: the path, an empty SEARCH section and the contents in the REPLACE section. A "
@@ -694,7 +730,9 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
     files and asks for the edit blocks, since the general nudge's "otherwise give your final
     answer" is the way out the model already took. A reply that asks the person
     something is not nudged. A command counts only by what it left on disk: a turn that read a
-    skill with `cat` and answered "DONE" made no file.
+    skill with `cat` and answered "DONE" made no file. A reply that is nothing but a word of the
+    request gets the block to write in the nudge, with the path in it (#513): gpt-5.4-mini, primed
+    by a few exact-reply turns, answers that way and writes no file whatever the nudge says.
 
     And the same one nudge the other way round: a request that asks for words back ("then say
     done") answered by a pass that edited or ran something and said nothing besides. Without it the
@@ -741,19 +779,20 @@ def _run_turn(coder, prompt: str, gate: "_Gate | None" = None) -> None:
         acted = bool(edited) or (gate is not None and len(gate.calls) > calls_before)
         if not coder.reflected_message and not nudged:
             reply = (coder.partial_response_content or "").rstrip()
+            words = strip_edit_blocks(reply)
             # Asked for and still not at its path: a turn that wrote a.txt of "a.txt and b.txt" is
             # nudged for b.txt alone, and a command that wrote the file left it there. A reply that
             # asks the person something is waiting for them, and an empty one is a failed call
             # (a provider error, a timeout) that a second call would only repeat.
             missing = [n for n in wanted if n not in reported
                        and not os.path.exists(os.path.join(root, n))]
-            if missing and reply and not _ASKS_PERSON.search(strip_edit_blocks(reply)):
+            if missing and reply and not _ASKS_PERSON.search(words):
                 nudged = True
-                coder.reflected_message = _file_nudge(missing)
+                coder.reflected_message = _file_nudge(missing, _repeats_a_word_of(words, prompt))
             elif not acted and _announces_without_acting(reply):
                 nudged = True
                 coder.reflected_message = NUDGE
-            elif acted and reply and wants_reply and not strip_edit_blocks(reply):
+            elif acted and reply and wants_reply and not words:
                 nudged = True
                 coder.reflected_message = REPLY_NUDGE
         if not coder.reflected_message:
