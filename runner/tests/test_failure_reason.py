@@ -20,3 +20,45 @@ def test_a_real_result_message_and_a_refusal_still_come_first():
 def test_without_any_lines_the_sentence_and_then_the_exit_code_remain():
     assert _failure_reason("", "goose exited 1 without reporting an error", "", 1) == "goose exited 1 without reporting an error"
     assert _failure_reason("", "", "", 3) == "exit_code=3, no diagnostic output"
+
+
+# ── a rich-rendered traceback is frames, not a reason ───────────────────────────────────────
+# MEASURED by the browser column (2026-10-21): fast-agent writes a rich traceback to stderr when an
+# MCP server fails to start. A tail is read from the END, so the reason came out as the gutter line
+# `│   579 │   try:` and the turn's answer as `│  1585 │   │   │   exc` — while the CLI had said
+# what happened three lines above the box.
+_RICH_TAIL = """
+MCP Server Startup Error:
+MCP Server: 'plugs': Failed to initialize - see details. Check the server's
+fast-agent.yaml configuration.
+
+Details:
+MCPError: Not Found
+
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /path/mcp_connection_manager.py:465 in _run_server_lifecycle                 │
+│                                                                              │
+│    462 │   │   connection = server_conn._client_connection_factory()         │
+│ ❱  465 │   │   │   async with connection:                                    │
+│    579 │   try:                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+"""
+
+
+def test_the_clis_own_sentence_wins_over_its_traceback_frames():
+    got = _failure_reason("", "", _RICH_TAIL, 1)
+    assert got.startswith("MCP Server Startup Error:")
+    assert "MCPError: Not Found" in got
+    assert "│" not in got and "╭" not in got and "❱" not in got
+    assert "try:" not in got, "a source line from a frame is not the reason"
+
+
+def test_a_tail_of_nothing_but_frames_falls_through_to_the_exit_code():
+    only_frames = "╭── Traceback ──╮\n│   579 │   try:   │\n╰───────────────╯"
+    assert _failure_reason("", "", only_frames, 1) == "exit_code=1, no diagnostic output"
+
+
+def test_an_ordinary_tail_is_untouched_by_the_frame_filter():
+    tail = "Permission denied (os error 13) at path /tmp/x\nthread 'tokio-runtime-worker' panicked"
+    got = _failure_reason("", "", tail, 1)
+    assert got == tail, "nothing here is a frame, so nothing is dropped"

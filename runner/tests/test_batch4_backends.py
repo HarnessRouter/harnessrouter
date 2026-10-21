@@ -29,7 +29,7 @@ from server import (ALL_VIBE_TOOLS, Auth, BACKENDS,  # noqa: E402
                     _BRIDGED_TRANSPORTS, _vibe_eof, _vibe_home, _vibe_out,
                     _vibe_session_present, _vibe_to_claude, _resume_lost, _write_skills,
                     ALL_DOCKER_AGENT_TOOLS, _build_docker_agent, _docker_agent_eof,
-                    _docker_agent_home, _docker_agent_session_db,
+                    _docker_agent_home, _docker_agent_session_db, _sse_bridges,
                     _docker_agent_session_present, _docker_agent_to_claude,
                     ALL_FAST_AGENT_TOOLS, _build_fast_agent, _fast_agent_eof,
                     _record_cli_session_id,
@@ -479,6 +479,68 @@ def test_the_tools_are_the_ones_its_toolsets_declare():
     assert "write_file" in ALL_DOCKER_AGENT_TOOLS and "shell" in ALL_DOCKER_AGENT_TOOLS
     assert "think" in ALL_DOCKER_AGENT_TOOLS and "list_todos" in ALL_DOCKER_AGENT_TOOLS
     assert len(ALL_DOCKER_AGENT_TOOLS) == 15
+
+
+# ── docker-agent refuses a loopback MCP url too, which is how the browser plugin reaches it ──
+# MEASURED by the browser column (2026-10-21): it was the one base of four that made no browser
+# call, and answered "unable to open the page or click the link interactively … If you enable the
+# browser toolset, I can do it directly" — while its config held the server as a `type: mcp`
+# toolset with the streamable url and the bearer. The A/B, same config and transport, host changed:
+# a public https url gave mcp_init_started/finished and 16 tools; http://127.0.0.1:8080/v1/mcp/plugs
+# gave NO mcp_init event at all and 15 (its four built-in toolsets), with nothing on stderr. What
+# inside it refuses is not established, and the bridge does not need that answer.
+
+def test_a_loopback_server_is_bridged_for_docker_agent():
+    ws = _ws()
+    out = _sse_bridges(ws, [{"name": "plugs", "url": "http://127.0.0.1:8080/v1/mcp/plugs",
+                             "headers": {"Authorization": "Bearer t"}}], "docker-agent")
+    assert out[0].get("command"), "it has to arrive as a stdio command, with no url to refuse"
+    assert "url" not in out[0] and "headers" not in out[0]
+    launcher = pathlib.Path(out[0]["command"]).read_text()
+    assert "HR_MCP_URL" in launcher and "127.0.0.1:8080" in launcher
+
+
+def test_a_loopback_server_is_bridged_for_fast_agent_too():
+    """The same class, the other failure mode: fast-agent DOES try the loopback url and its MCP
+    startup dies, taking the whole turn with it — "MCP Server: 'plugs': Failed to initialize …
+    MCPError: Not Found", then "RuntimeError: Core not initialized". Three runs of the browser
+    column, the same crash each time and no browser call in any of them; bridged, it passed in 12 s
+    (2026-10-21)."""
+    ws = _ws()
+    out = _sse_bridges(ws, [{"name": "plugs", "url": "http://127.0.0.1:8080/v1/mcp/plugs",
+                             "headers": {"Authorization": "Bearer t"}}], "fast-agent")
+    assert out[0].get("command") and "url" not in out[0]
+
+
+def test_a_public_server_still_goes_to_fast_agents_own_client():
+    ws = _ws()
+    out = _sse_bridges(ws, [{"name": "probe", "url": "https://probe.example/mcp"}], "fast-agent")
+    assert out[0].get("url") == "https://probe.example/mcp" and "command" not in out[0]
+
+
+def test_a_public_server_still_goes_to_docker_agents_own_client():
+    # its own remote client handles a public server on both transports, measured by the plugin
+    # matrix (sse and streamable-HTTP columns), so bridging those would add a hop for nothing
+    ws = _ws()
+    out = _sse_bridges(ws, [{"name": "probe", "url": "https://probe.example/mcp"}], "docker-agent")
+    assert out[0].get("url") == "https://probe.example/mcp" and "command" not in out[0]
+
+
+def test_the_bridged_server_is_written_as_a_stdio_toolset():
+    """The config half, at the right layer: the BRIDGING happens in the dispatch (_sse_bridges
+    runs over req.mcp_servers before any builder is called), so what the builder must get right is
+    the stdio shape for a server that already arrived as a command. The first version of this test
+    called the builder with a loopback URL and asserted it bridged — it does not, and should not."""
+    import yaml
+    ws = _ws()
+    bridged = _sse_bridges(ws, [{"name": "plugs", "url": "http://127.0.0.1:8080/v1/mcp/plugs",
+                                 "headers": {"Authorization": "Bearer t"}}], "docker-agent")
+    _build_docker_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+                        mcp_servers=bridged)
+    doc = yaml.safe_load((_docker_agent_home(ws) / "agent.yaml").read_text())
+    mcp = [t for t in doc["agents"]["root"]["toolsets"] if t.get("type") == "mcp"]
+    assert len(mcp) == 1 and mcp[0].get("command"), mcp
+    assert "remote" not in mcp[0], "a bridged server has no url to put in a remote block"
 
 
 # ══ fast-agent (fast-agent-mcp 0.10.45) ═══════════════════════════════════════════════════════

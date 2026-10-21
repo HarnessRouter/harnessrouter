@@ -1886,7 +1886,27 @@ _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_brid
 # guard is there to stop. Bridged, there is no url for nanobot to validate: the runner speaks to the
 # server and the agent sees a stdio command. Its own remote client keeps handling PUBLIC servers,
 # which is measured (the deepwiki server over streamable HTTP and SSE, both columns).
-_BRIDGE_LOOPBACK_BACKENDS = {"nanobot"}
+# docker-agent is the SECOND base in this class, measured the same way (the browser column,
+# 2026-10-21): it was the one base of four that made no browser call and answered "unable to open
+# the page or click the link interactively … If you enable the browser toolset, I can do it
+# directly", while its config held the server correctly as a `type: mcp` toolset with the
+# streamable url and the bearer. The A/B that settles it, same config and same transport, only the
+# host changed:
+#   https://<public probe>/mcp          -> mcp_init_started, mcp_init_finished, 16 tools
+#   http://127.0.0.1:8080/v1/mcp/plugs  -> NO mcp_init event at all, 15 tools (its four built-in
+#                                          toolsets), nothing on stderr, nothing in the record
+# So it does not attempt a loopback url. WHAT inside it refuses is NOT established — its binary's
+# loopback strings are all about its own API server's bind address, and nothing was logged — so
+# nothing here claims a guard by name the way nanobot's comment can. The bridge does not need that
+# answer: bridged, there is no url left to refuse, and its own remote client keeps handling public
+# servers, which the plugin matrix measured on both transports.
+# fast-agent is the THIRD, and it fails the other way: it DOES try the loopback url and its MCP
+# startup dies, taking the turn with it — "MCP Server: 'plugs': Failed to initialize … Details:
+# MCPError: Not Found", then "RuntimeError: Core not initialized, please call initialize() first".
+# Three runs of the browser column, same crash each time, no browser call in any of them. Bridged
+# it has no url to start, and its own remote client keeps the public servers the plugin matrix
+# measured on both transports.
+_BRIDGE_LOOPBACK_BACKENDS = {"nanobot", "docker-agent", "fast-agent"}
 _LOOPBACK_HOSTS = ("localhost", "127.", "::1", "0.0.0.0", "169.254.", "10.", "192.168.")
 
 
@@ -13380,9 +13400,39 @@ def _failure_reason(refusal: str, ev_err: str, tail: str, rc: int) -> str:
     # nor that path, and both name internals the product does not show. The sentence before them
     # is the reason and stays.
     tail = "\n".join(ln for ln in tail.splitlines() if not _CLI_RESUME_HINT.match(ln.strip())).strip()
+    tail = _without_traceback_frames(tail)
     if tail and _NO_DIAGNOSTIC_RE.fullmatch(ev_err):
         ev_err = ""
     return (refusal or ev_err or tail or f"exit_code={rc}, no diagnostic output")[:2000]
+
+
+# A rich-rendered traceback: box-drawing borders, a gutter of line numbers and source, and the
+# arrow rich puts on the failing line. These are FRAMES, not a reason, and a tail is read from the
+# END, so they win over the CLI's own sentence unless they are dropped.
+# The first non-space character decides it: a box-drawing char (U+2500..U+257F covers every border,
+# corner and gutter rich draws) or the arrow it marks the failing line with. A line of CLI prose
+# never starts with one, and this catches the bordered title line ("╭── Traceback … ──╮") that a
+# rule-only test would miss.
+_FRAME_LEAD = "\u2500\u2501\u2502\u2503\u250c\u250f\u2510\u2513\u2514\u2517\u2518\u251b" \
+              "\u251c\u2523\u2524\u252b\u2550\u2551\u2554\u2557\u255a\u255d\u2560\u2563" \
+              "\u256d\u256e\u256f\u2570\u2571\u2572\u2574\u2575\u2576\u2577\u2578\u2579" \
+              "\u257a\u257b\u257c\u257d\u257e\u257f\u276f\u2771"
+
+
+def _without_traceback_frames(tail: str) -> str:
+    """The CLI's own words out of a tail that ends in a traceback.
+
+    MEASURED by the browser column (2026-10-21): fast-agent writes a rich-formatted traceback to
+    stderr when an MCP server fails to start, so the turn's reason — the last lines of stderr —
+    came out as `│   579 │   try:` and its answer as `│  1585 │   │   │   exc`. The CLI had said
+    what happened three lines above the box: "MCP Server: 'plugs': Failed to initialize … Details:
+    MCPError: Not Found". A person reading the record got a gutter line instead.
+
+    Frames and rules go; everything else stays in order. A tail that is NOTHING but frames comes
+    back empty, so the caller falls through to the exit code rather than quoting a border."""
+    kept = [ln for ln in tail.splitlines()
+            if ln.strip() and ln.strip()[0] not in _FRAME_LEAD]
+    return "\n".join(kept).strip()
 
 
 # Codex app-server JSON-RPC driver — the ONLY codex mode that streams assistant text (via
