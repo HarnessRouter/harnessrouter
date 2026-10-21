@@ -852,6 +852,17 @@ def _tenant_sem(t: str) -> asyncio.Semaphore:
     return _tenant_sems.setdefault(t or "_", asyncio.Semaphore(_conc_limit("tenant")))
 
 
+# Set once a turn's runner turn is on record (the vertex carries runner_turn_id): from then the poll
+# loop renews the heartbeat itself, and _turn_slot's own beat stops. One per session, while its slot is held.
+_RUNNER_TURN_ON: "dict[str, asyncio.Event]" = {}
+
+
+def _runner_turn_recorded(sid: str) -> None:
+    ev = _RUNNER_TURN_ON.get(sid)
+    if ev is not None:
+        ev.set()
+
+
 @contextlib.asynccontextmanager
 async def _turn_slot(org: str, sid: str):
     """Both concurrency gates, held for the turn, with the session's heartbeat kept fresh while the
@@ -863,14 +874,22 @@ async def _turn_slot(org: str, sid: str):
     read it as a dead turn and settled it, session and response, as failed; the turn then ran and
     its final write said completed. Measured 2026-10-12 on a 4-core instance with nine turns in
     flight: a background poller read `failed` (error null) four seconds in, for the 28 seconds the
-    turn waited, and `completed` at 55 s. The newborn trap of 0.23.2, one stage later."""
+    turn waited, and `completed` at 55 s. The newborn trap of 0.23.2, one stage later.
+
+    The beat goes on past the gates, through every phase before the runner turn is on record (the
+    lease, the workspace restore, plugins, the runner's /turn start and its retries): until then the
+    sweep has neither a runner turn to ask nor a heartbeat from the poll loop, and "no runner turn on
+    record" read a live turn restoring a large workspace as gone (CAT, 2026-10-21; restores past the
+    120 s stale window were measured on the hosted service). It stops when the poll loop takes over
+    (_runner_turn_recorded) or the slot is released."""
     beat_s = max(1, _RECONCILE_STALE_S // 4)
-    got = asyncio.Event()
+    on_record = asyncio.Event()
+    _RUNNER_TURN_ON[sid] = on_record
 
     async def beat():
         while True:
             try:
-                await asyncio.wait_for(got.wait(), timeout=beat_s)
+                await asyncio.wait_for(on_record.wait(), timeout=beat_s)
                 return
             except asyncio.TimeoutError:
                 pass
@@ -882,11 +901,12 @@ async def _turn_slot(org: str, sid: str):
     t = asyncio.create_task(beat())
     try:
         async with _global_sem(), _tenant_sem(org):
-            got.set()
             yield
     finally:
-        got.set()
+        on_record.set()
         t.cancel()
+        if _RUNNER_TURN_ON.get(sid) is on_record:
+            _RUNNER_TURN_ON.pop(sid, None)
 
 
 def _pool_is_local() -> bool:
@@ -8799,6 +8819,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         else:
             await _vertex_upsert(sid, {"status": "running", "turn_status": "running",
                                        "last_connection": name, "runner_turn_id": rt or ""})
+        _runner_turn_recorded(sid)          # the runner turn is on record; the poll loop beats from here
         # cursor = how far the durable trace has been written; fed_upto = how far events have been
         # fed to the translator and emitted. Events are asked for from fed_upto, so nothing comes
         # twice, and what is fed and not yet written waits in `pending`.
