@@ -2017,6 +2017,12 @@ async def _blob_get(file_id: str, kb: str = BLOB_KB) -> bytes | None:
     return await BACKING.blob.get(kb, file_id)
 
 
+async def _blob_get_or_raise(file_id: str, kb: str = BLOB_KB) -> bytes | None:
+    """`_blob_get`, except that a read that failed raises (backing.BlobUnavailable): None only when
+    the object is not there."""
+    return await BACKING.blob.get_or_raise(kb, file_id)
+
+
 async def _blob_put(file_id: str, data: bytes, kb: str = BLOB_KB) -> bool:
     return await BACKING.blob.put(kb, file_id, data)
 
@@ -4844,6 +4850,7 @@ async def readyz(response: Response) -> dict:
     checks["redis"] = {"configured": bool(REDIS_URL), **_redis_ok}   # reported, not gating
     checks["bus_drops"] = dict(_bus_drops.counts)   # cumulative live-event drops (HR-INF-018 visibility)
     checks["billing_drops"] = dict(_billing_drops.counts)   # lost usage reports (HR-INF-023 visibility)
+    checks["turns_reads"] = dict(_turns_reads.counts)   # conversation reads that failed; turns taken from their session
     checks["identity"] = {"mode": HR_IDENTITY_MODE, **_identity_obs.counts}   # LIVE-B rollout visibility
     checks["credit"] = {"mode": HR_CREDIT_GATE, **_credit_obs.counts}   # HR-INF-023 admission-gate rollout
     checks["build"] = HR_BUILD_SHA   # deploy fingerprint: bind a live instance to its source revision
@@ -8291,14 +8298,38 @@ async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None
         # when the turn began, to the millisecond: created_at is whole seconds, too coarse to tell
         # this turn's trace chunks from the previous turn's (_turn_since_ms)
         stored = {**stored, "_created_ms": int(float(created_at) * 1000)}
-    try:
-        _resp_cache_forget(rid)
-        await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
-    except Exception:  # noqa: BLE001
-        pass
-    await _vg_upsert("HarnessResponse", rid, {"org": org, "session_id": sid,
-                     "previous_response_id": prev or "", "status": status,
-                     "created_at": str(created_at), "store": "1" if store else "0"})
+    # The record and its index entry, each tried twice: either one missing hides the turn from its
+    # conversation (the index finds it, the record is the turn), and both failures used to pass in
+    # silence. A failure still never fails the turn: it is counted on /readyz (turns_reads) and
+    # logged, and the conversation takes the session's current turn from the session itself
+    # (_session_turns_data). A blob put answers False for a write the store refused, as well as
+    # raising for one it never reached; both are a failed write.
+    body = json.dumps(stored, default=str).encode()
+    for attempt in (1, 2):
+        try:
+            _resp_cache_forget(rid)
+            if await _blob_put(f"responses/{rid}.json", body, kb=RESP_BLOB_KB):
+                break
+            err = "refused"
+        except Exception as e:  # noqa: BLE001
+            err = type(e).__name__
+        if attempt == 2:
+            _turns_reads.bump("record_write_failed")
+            print(f"[turns] the turn's record could not be written resp={rid}: {err}", flush=True)
+        else:
+            await asyncio.sleep(0.3)
+    idx = {"org": org, "session_id": sid, "previous_response_id": prev or "", "status": status,
+           "created_at": str(created_at), "store": "1" if store else "0"}
+    for attempt in (1, 2):
+        try:
+            await _vg_upsert("HarnessResponse", rid, idx, raise_on_fail=True)
+            break
+        except Exception as e:  # noqa: BLE001
+            if attempt == 2:
+                _turns_reads.bump("index_write_failed")
+                print(f"[turns] the turn's index entry could not be written resp={rid}: {type(e).__name__}", flush=True)
+            else:
+                await asyncio.sleep(0.3)
 
 
 # A response record is written while its turn runs and once more when it ends; after that it is
@@ -8315,12 +8346,15 @@ def _resp_cache_forget(rid: str) -> None:
     _RESP_CACHE.pop(rid, None)
 
 
-async def _resp_get(rid: str) -> dict | None:
+async def _resp_get(rid: str, *, strict: bool = False) -> dict | None:
+    """A turn's record, None when there is none. strict: a read that failed raises instead of
+    answering None, for a reader that must not show a failure as a missing turn."""
     hit = _RESP_CACHE.get(rid)
     if hit is not None:
         _RESP_CACHE.move_to_end(rid)
         return hit
-    b = await _blob_get(f"responses/{rid}.json", kb=RESP_BLOB_KB)
+    key = f"responses/{rid}.json"
+    b = await (_blob_get_or_raise(key, kb=RESP_BLOB_KB) if strict else _blob_get(key, kb=RESP_BLOB_KB))
     if not b:
         return None
     try:
@@ -8743,7 +8777,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         if not seen and resume:
             try:
                 _turns = (await _session_turns_data(sid)).get("turns") or []
-                seen = [str(t.get("_model") or "") for t in _turns if t.get("_model")]
+                seen = [str(t.get("model") or "") for t in _turns if t.get("model")]
             except Exception:  # noqa: BLE001
                 seen = []
         rec["model_req"], rec["models_before"] = model_req, [m for m in seen if m != model_req]
@@ -10469,8 +10503,8 @@ async def session_turns(sid: str, request: Request, limit: int = 0) -> dict:
     oldest-first. Powers the Workbench 'open a recent session → see its chat history' flow.
     ?limit=N returns only the LAST N turns (HR-INF-015: bounds the per-open blob fan-out on
     long-horizon sessions; 0/absent = all, preserving existing callers)."""
-    await _owned_session(request, sid)   # LIVE-B: enforce org ownership before returning content
-    return await _session_turns_data(sid, limit=limit)
+    _org, v = await _owned_session(request, sid)   # LIVE-B: enforce org ownership before returning content
+    return await _session_turns_data(sid, limit=limit, strict=True, v=v)
 
 
 def _unix_s(ts) -> int | None:
@@ -10482,15 +10516,44 @@ def _unix_s(ts) -> int | None:
         return None
 
 
-async def _session_turns_data(sid: str, limit: int = 0) -> dict:
+# A session's turns come from the store's index (HarnessResponse by session_id) and each turn's
+# record. A read of either that failed used to be answered as no turn at all (find swallows its
+# error into [], a blob read its error into None), so a finished task could draw as a new, empty
+# one. For a reader (strict: the conversation and a shared link) it is now said, 503 server_error
+# (errors.md: retrying MAY succeed); for a follow-up's history it is counted and logged and the turn
+# goes on. And the session's own current turn (running_response_id) always shows, taken from the
+# session when the index does not hold it yet (its write may lag or have failed).
+_turns_reads = _OpsDrops("turns", 60, ("index_failed", "record_failed", "from_session",
+                                       "record_write_failed", "index_write_failed"))
+_TURNS_UNREADABLE = "This conversation could not be loaded just now. Try again in a moment."
+
+
+async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False, v: dict | None = None) -> dict:
     # find this session's response ids (HarnessResponse vertices carry session_id)
     ids: list[str] = []
     safe_sid = re.sub(r"[^A-Za-z0-9_-]", "", sid)
-    rows = await BACKING.graph.find("HarnessResponse", {"session_id": safe_sid})
+    try:
+        rows = await BACKING.graph.find_strict("HarnessResponse", {"session_id": safe_sid})
+    except Exception as e:  # noqa: BLE001
+        _turns_reads.bump("index_failed")
+        print(f"[turns] the turn index could not be read sid={safe_sid}: {type(e).__name__}", flush=True)
+        if strict:
+            raise uhp_error(503, "server_error", _TURNS_UNREADABLE) from e
+        rows = []
     rows.sort(key=lambda x: str(x.get("created_at") or ""))
     ids = [str(x.get("id")) for x in rows if x.get("id")]
     # each row's birth as the index holds it: a turn's time when its record carries none
     born = {str(x.get("id")): x.get("created_at") for x in rows if x.get("id")}
+    if v is None and strict:
+        v = await _vertex_get(sid) or {}
+    # The session's current turn when the index does not hold it. Counted only once its record shows:
+    # the id is stamped at accept, before the turn's first record write, so a queued turn has none yet.
+    from_session = str((v or {}).get("running_response_id") or "")
+    if from_session in ids:
+        from_session = ""
+    elif from_session:
+        ids.append(from_session)
+        born[from_session] = (v or {}).get("turn_at")
     if limit and limit > 0:
         ids = ids[-limit:]   # last N turns only — bounds blob fetches AND response size
     turns = []
@@ -10500,12 +10563,19 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
 
     async def _fetch(rid: str) -> dict | None:
         async with _sem:
-            return await _resp_get(rid)
+            return await _resp_get(rid, strict=strict)
 
-    recs = await asyncio.gather(*(_fetch(rid) for rid in ids))
+    try:
+        recs = await asyncio.gather(*(_fetch(rid) for rid in ids))
+    except Exception as e:  # noqa: BLE001 — only a strict read raises: a record that could not be read
+        _turns_reads.bump("record_failed")
+        print(f"[turns] a turn's record could not be read sid={safe_sid}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error", _TURNS_UNREADABLE) from e
     for rid, rec in zip(ids, recs):
         if not rec or rec.get("_deleted"):
             continue
+        if rid == from_session:
+            _turns_reads.bump("from_session")
         # user text + attached input files from the stored input items; assistant text +
         # tool calls + files from the output. Attachments hydrate the user bubble's file
         # chips after a refresh (the bytes live in the session workspace; the by-path
@@ -10853,7 +10923,7 @@ async def share_turns(token: str) -> dict:
     sid = await _share_sid(token)
     if not sid:
         raise HTTPException(404, "share not found")
-    return await _session_turns_data(sid)
+    return await _session_turns_data(sid, strict=True)
 
 
 @app.get("/share/{token}/files")
