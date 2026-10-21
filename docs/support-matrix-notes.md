@@ -5016,21 +5016,41 @@ The `plugs` server is how every base gets the browser tools, and it is injected 
 Bridged, there is no url left for either to refuse, and both keep their own client for PUBLIC
 servers — which the plugin matrix measured on each of them, on both transports.
 
-### A record-honesty defect this column exposed, fixed only in part
-fast-agent writes a rich-rendered traceback to stderr when its MCP startup fails, and a tail is
-read from the END, so the turn's reason reached the console as `│   579 │   try:` and its answer as
-`│  1585 │   │   │   exc` — box-drawing gutter lines, while the CLI's own sentence sat three lines
-above the box. `_failure_reason` now drops frames and rules (`_without_traceback_frames`), and on
-the REAL captured stderr it returns "RuntimeError: Core not initialized, please call initialize()
-first" instead; a tail that is nothing but frames falls through to the exit code. Three tests hold
-it, including that an ordinary tail is untouched.
+### A record-honesty defect this column exposed: a source line number read as an HTTP 5xx
+fast-agent writes a rich-rendered traceback when its MCP startup fails, and every failed turn in
+this column reported the same reason: the single line `│   579 │   try:`. The answer a person saw
+was `│  1585 │   │   │   exc`. The CLI's own sentence — "RuntimeError: Core not initialized, please
+call initialize() first" — was two lines further down and never appeared.
 
-**What is NOT confirmed:** end to end the record still showed the frame line on a turn run with
-that filter live, and the layer that puts it there is NOT located — `rec["error"]`,
-`result_ev["result"]` (which the settle path fills from the raw tail) and the gateway's
-`error or result` fallback were each read without finding a consistent explanation. The filter is
-right where it is tested; the record-level cleanup is unproven. The bridging fix removed the crash
-that produced it here, so this column no longer exercises that path.
+**The cause, measured rather than inferred.** The first two filters (frames out of the reason, and
+of the result event) did not change the record, so the settle path was instrumented in a throwaway
+container build to log `_failure_reason`'s three arguments as they really were:
+
+    refusal:        "│   579 │   try:                      │"
+    ev_err:         ""
+    tail_filtered:  "RuntimeError: Core not initialized, please call initialize() first, …"
+
+`refusal` wins over everything else in `_failure_reason`, and it is chosen by
+`_PROVIDER_REFUSAL.search` over the captured output. That matcher's `\b(401|403|429|5\d\d)\b` arm
+— there for "HTTP 503", "Error code: 429", "503 Service Unavailable" — read **579**, the SOURCE
+LINE NUMBER in rich's gutter, as a 5xx status. A traceback frame became "the provider's refusal".
+
+**The fix** is to take the frames out ONCE, where the tail is built, so the refusal search, the
+reason and the result event all read the same filtered text. The regex is left exactly as it is: it
+carries many providers' phrasings, and tightening it to reject a bare number would risk missing a
+real refusal — the frames are what does not belong in the search.
+
+**Confirmed end to end** on a live turn (a harness declaring `https://nope.invalid/mcp`, which
+fails the same way a loopback server used to):
+
+    reason:  The turn failed: RuntimeError: Core not initialized, please call initialize() first, …
+    answer:  RuntimeError: Core not initialized, please call initialize() first, …
+
+Tests hold the shape and the trap: that `_PROVIDER_REFUSAL` does fire on the frame (so the filter
+is what protects the search), that a real refusal in prose still wins, that a tail of nothing but
+frames falls through to the exit code, and that an ordinary tail is untouched. The class is wider
+than this base — any bare 401/403/429/5xx-looking number in a CLI's output could hijack a failed
+turn's reason, and a line number is only the first one that did.
 
 ### fast-agent thinks when nobody asked, and the other three do not
 On the same model and the same prompt, with no level asked: vibe, docker-agent and dcode spend

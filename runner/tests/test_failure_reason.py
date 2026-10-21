@@ -62,3 +62,26 @@ def test_an_ordinary_tail_is_untouched_by_the_frame_filter():
     tail = "Permission denied (os error 13) at path /tmp/x\nthread 'tokio-runtime-worker' panicked"
     got = _failure_reason("", "", tail, 1)
     assert got == tail, "nothing here is a frame, so nothing is dropped"
+
+
+# ── a gutter line number is not an HTTP status ───────────────────────────────────────────────
+# MEASURED end to end (2026-10-21, the browser column): every failed fast-agent turn reported the
+# single line `│   579 │   try:` as its reason. _PROVIDER_REFUSAL's `\b5\d\d\b` arm — there for
+# "HTTP 503", "Error code: 429" and the rest — read 579, a SOURCE LINE NUMBER in rich's gutter, as
+# a 5xx; and a refusal wins over every other candidate. The CLI's own sentence was two lines below.
+def test_a_line_number_in_a_traceback_frame_is_not_a_provider_refusal():
+    from server import _PROVIDER_REFUSAL, _without_traceback_frames
+    frame = "│   579 │   try:                                     │"
+    assert _PROVIDER_REFUSAL.search(frame), "the matcher does fire on it; that is the trap"
+    kept = _without_traceback_frames("\n".join([frame, "RuntimeError: Core not initialized"]))
+    assert not any(_PROVIDER_REFUSAL.search(ln) for ln in kept.splitlines())
+    assert kept == "RuntimeError: Core not initialized"
+
+
+def test_a_real_refusal_in_prose_still_wins():
+    from server import _PROVIDER_REFUSAL, _without_traceback_frames
+    # the arm is left as it is: these are the phrasings it carries, and none is a frame
+    for line in ("HTTP 503 Service Unavailable", "Error code: 429 - rate limit exceeded",
+                 "401 Unauthorized", "insufficient_quota: your quota is exhausted"):
+        kept = _without_traceback_frames(line)
+        assert any(_PROVIDER_REFUSAL.search(ln) for ln in kept.splitlines()), line

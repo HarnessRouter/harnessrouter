@@ -13361,9 +13361,22 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     # Never leave a failure opaque: surface the captured CLI stderr (and result-event error) so the
     # gateway/trace shows WHY it failed (throttling, model error, etc.) instead of an empty string.
     if rec["status"] in ("failed", "error", "timeout"):
-        tail = "\n".join(errbuf[-30:]).strip()
+        # FRAMES OUT FIRST, once, because everything below reads this tail: the refusal search, the
+        # reason, and the result event a failed turn shows as its answer.
+        tail = _without_traceback_frames("\n".join(errbuf[-30:]).strip())
         ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
-        refusal = next((ln.strip() for ln in errbuf if _PROVIDER_REFUSAL.search(ln)), "")
+        # A TRACEBACK FRAME IS NOT A REFUSAL, and the refusal wins over everything else below.
+        # MEASURED end to end (2026-10-21): the
+        # reason for every failed fast-agent turn in the browser column was the single line
+        # `│   579 │   try:` — rich's gutter, where 579 is a SOURCE LINE NUMBER that
+        # `_PROVIDER_REFUSAL`'s `\b5\d\d\b` arm reads as an HTTP 5xx. The CLI's own sentence
+        # ("RuntimeError: Core not initialized, please call initialize() first") was two lines
+        # further down and never stood a chance. The arm itself is left alone: it carries many
+        # providers' phrasings ("HTTP 503", "Error code: 429", "503 Service Unavailable") and
+        # tightening it to exclude a bare number would risk missing a real refusal — the frames
+        # are what does not belong in the search.
+        refusal = next((ln.strip() for ln in tail.splitlines()
+                        if _PROVIDER_REFUSAL.search(ln)), "")
         if not refusal and _relay_last_finish(env) == "content_filter":
             # THE PROVIDER DECLINED, and the CLI's own account of a failure it could not see is not
             # the reason. A refused request comes back as an answer with no content and no
@@ -13377,6 +13390,8 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             refusal = "the provider declined the request (finish_reason content_filter)"
         rec["error"] = _failure_reason(refusal, str(ev_err), tail, rc)
         if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
+            # ...and the ANSWER a failed turn shows is this same filtered text: before the filter
+            # it was `│  1585 │   │   │   exc`, the frame that happened to be 30 lines from the end.
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
     rec["done"] = True
 
