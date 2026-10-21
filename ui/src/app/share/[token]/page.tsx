@@ -35,6 +35,10 @@ export default function SharePage() {
   const [turns, setTurns] = useState<ShareTurn[] | null>(null);
   const [files, setFiles] = useState<ShareFile[] | null>(null);
   const [gone, setGone] = useState(false);
+  // the conversation could not be read (the service answered an error): said, with a way to read
+  // again, never drawn as a conversation with nothing in it
+  const [turnsFailed, setTurnsFailed] = useState(false);
+  const [turnsTry, setTurnsTry] = useState(0);
 
   useEffect(() => {
     if (!token) return;
@@ -43,16 +47,22 @@ export default function SharePage() {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setMeta(d); })
       .catch(() => { if (alive) setGone(true); });
-    fetch(`/api/share/${encodeURIComponent(token)}/turns`, { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => { if (alive) setTurns(d.turns || []); })
-      .catch(() => { if (alive) setTurns([]); });
     fetch(`/api/share/${encodeURIComponent(token)}/files`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setFiles(d.files || []); })
       .catch(() => { if (alive) setFiles([]); });
     return () => { alive = false; };
   }, [token]);
+  useEffect(() => {
+    if (!token) return;
+    let alive = true;
+    setTurnsFailed(false);
+    fetch(`/api/share/${encodeURIComponent(token)}/turns`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => { if (alive) setTurns(Array.isArray(d?.turns) ? d.turns : []); })
+      .catch(() => { if (alive) { setTurns(null); setTurnsFailed(true); } });
+    return () => { alive = false; };
+  }, [token, turnsTry]);
 
   // Canonical artifact address: /{harness}/{session}/workspace/{path} (single cached
   // shared-flag check server-side). Token route stays as the fallback while meta loads.
@@ -94,7 +104,11 @@ export default function SharePage() {
         </div>
 
         <div className="share-conv">
-          {turns === null && <span className="sk" style={{ display: 'block', height: 120, borderRadius: 10 }} />}
+          {turns === null && !turnsFailed && <span className="sk" style={{ display: 'block', height: 120, borderRadius: 10 }} />}
+          {turnsFailed ? (
+            <div className="session-empty" role="alert">This conversation could not be loaded just now.{' '}
+              <button type="button" className="hr-btn" onClick={() => setTurnsTry((n) => n + 1)}>Try again</button></div>
+          ) : null}
           {turns?.map((t) => (
             <div key={t.id} className="share-turn">
               {t.user && <div className="share-user"><div className="share-user-bubble">{t.user}</div></div>}

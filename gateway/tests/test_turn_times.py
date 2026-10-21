@@ -43,6 +43,8 @@ class Store:
     async def find(self, label, props):
         return [dict(r) for r in self.rows.values() if r.get("session_id") == props.get("session_id")]
 
+    find_strict = find
+
     def record(self, rid: str) -> dict:
         return json.loads(self.blobs[f"responses/{rid}.json"])
 
@@ -52,6 +54,7 @@ def store(monkeypatch):
     s = Store()
     monkeypatch.setattr(A, "_blob_put", s.blob_put)
     monkeypatch.setattr(A, "_blob_get", s.blob_get)
+    monkeypatch.setattr(A, "_blob_get_or_raise", s.blob_get)
     monkeypatch.setattr(A, "_vg_upsert", s.vg_upsert)
     monkeypatch.setattr(A.BACKING, "graph", s, raising=False)
 

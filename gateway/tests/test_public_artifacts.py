@@ -37,7 +37,7 @@ def shared(monkeypatch):
     async def trace_base(sid):
         return None
 
-    async def turns(sid):
+    async def turns(sid, **kw):
         return {"turns": []}
 
     async def files(sid):

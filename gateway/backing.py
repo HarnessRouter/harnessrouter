@@ -52,6 +52,9 @@ class GraphStore(Protocol):
     async def upsert(self, label: str, vid: str, props: dict, *, raise_on_fail: bool = False) -> None: ...
     async def add_edge(self, label: str, src: str, dst: str) -> None: ...
     async def find(self, label: str, eq: dict | None = None, neq: dict | None = None) -> list[dict]: ...
+    async def find_strict(self, label: str, eq: dict | None = None, neq: dict | None = None) -> list[dict]:
+        """`find`, raising when the store cannot answer: an empty list means nothing matches."""
+        ...
     async def delete(self, vid: str, label: str | None = None) -> bool:
         """Remove one vertex and its edges; False when there was none (or the label differs)."""
         ...
@@ -61,8 +64,16 @@ class GraphStore(Protocol):
         ...
 
 
+class BlobUnavailable(RuntimeError):
+    """The blob store could not answer a read (as opposed to: the object is not there)."""
+
+
 class BlobStore(Protocol):
     async def get(self, kb: str, file_id: str) -> bytes | None: ...
+    async def get_or_raise(self, kb: str, file_id: str) -> bytes | None:
+        """`get`, except that only a missing object answers None: a read that failed raises
+        BlobUnavailable, for a reader that must not show a failure as nothing there."""
+        ...
     async def put(self, kb: str, file_id: str, data: bytes) -> bool: ...
     async def delete(self, kb: str, file_id: str) -> bool: ...
     async def list(self, kb: str, prefix: str, limit: int = 20, cursor: str | None = None) -> dict: ...
@@ -233,6 +244,12 @@ class SqliteGraphStore:
             return False
 
     async def find(self, label: str, eq: dict | None = None, neq: dict | None = None) -> list[dict]:
+        try:
+            return await self.find_strict(label, eq, neq)
+        except Exception:  # noqa: BLE001
+            return []
+
+    async def find_strict(self, label: str, eq: dict | None = None, neq: dict | None = None) -> list[dict]:
         def _do():
             with self._conn() as c:
                 rows = c.execute("SELECT vid, props FROM vertices WHERE label=?", (label,)).fetchall()
@@ -245,10 +262,7 @@ class SqliteGraphStore:
                     continue
                 out.append({"id": vid, **p})
             return out
-        try:
-            return await asyncio.to_thread(_do)
-        except Exception:  # noqa: BLE001
-            return []
+        return await asyncio.to_thread(_do)
 
     async def probe(self) -> None:
         def _do():
@@ -279,6 +293,16 @@ class FileBlobStore:
                 return self._p(kb, file_id).read_bytes()
             except (OSError, ValueError):
                 return None
+        return await asyncio.to_thread(_do)
+
+    async def get_or_raise(self, kb: str, file_id: str) -> bytes | None:
+        def _do():
+            try:
+                return self._p(kb, file_id).read_bytes()
+            except (FileNotFoundError, NotADirectoryError, ValueError):
+                return None                         # not there (or an id that is no key at all)
+            except OSError as e:
+                raise BlobUnavailable(type(e).__name__) from e
         return await asyncio.to_thread(_do)
 
     async def put(self, kb: str, file_id: str, data: bytes) -> bool:
