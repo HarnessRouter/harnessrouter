@@ -55,7 +55,7 @@ def test_a_session_dead_past_the_cap_by_a_known_time_still_settles(monkeypatch):
     v = _running(created_at=str(time.time() - 2 * 86400), heartbeat=str(time.time() - 7 * 3600),
                  turn_at=str(time.time() - 7 * 3600))
     settled, writes = _sweep(monkeypatch, v)
-    assert settled is True and writes == [("hsess1", {"status": "failed", "turn_status": "failed"})]
+    assert settled is True and writes == [("hsess1", {"status": "failed", "turn_status": "failed", "end_reason": "timeout"})]
 
 
 def test_a_session_with_no_time_on_record_is_left_alone(monkeypatch):

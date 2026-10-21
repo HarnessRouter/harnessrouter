@@ -133,7 +133,8 @@ def _sweep(monkeypatch, v, probe_code=404, rec=None, tts=None):
 def test_a_turn_the_runner_lost_to_a_restart_fails_saying_it_was_interrupted(monkeypatch):
     """#505: the runner restarted under the turn, so it answers 404 for it. Within UHP 2026-10-19 the
     turn is `failed` (lifecycle §3 keeps `incomplete` for budgets), and the error says a restart cut
-    it: server_error, so a client may retry, code harness_error, detail.reason interrupted."""
+    it: harness_error (the type of an error inside a failed response, and the §3.3 code), with
+    detail.reason interrupted, in the same words as the hosted service."""
     import time
     v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
          "running_response_id": "resp_1", "heartbeat": str(time.time() - 600)}
@@ -142,17 +143,33 @@ def test_a_turn_the_runner_lost_to_a_restart_fails_saying_it_was_interrupted(mon
     assert settled is True
     assert writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "interrupted"}
     assert stored["status"] == "failed" and not stored.get("incomplete_details")
-    assert stored["error"] == {"type": "server_error", "code": "harness_error",
+    assert stored["error"] == {"type": "harness_error", "code": "harness_error",
                                "message": A._INTERRUPTED_MESSAGE, "detail": {"reason": "interrupted"}}
 
 
-def test_a_turn_with_no_runner_turn_recorded_is_still_failed(monkeypatch):
-    """Nothing proves a restart when no runner turn was ever recorded: no reason is claimed."""
+def test_a_turn_with_no_runner_turn_on_record_fails_saying_it_was_interrupted(monkeypatch):
+    """No runner turn was ever on record: the turn never reached the runner, and the process that
+    owned it is gone. It is failed, and a failed task's error says why (lifecycle §3): interrupted,
+    as the hosted service names the same case."""
     import time
     v = {"id": "hsess1", "status": "running", "turn_status": "starting", "runner_turn_id": "",
          "heartbeat": str(time.time() - 600)}
     settled, writes, _ = _sweep(monkeypatch, v, 404)
-    assert settled is True and writes[0] == {"status": "failed", "turn_status": "failed"}
+    assert settled is True and writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "interrupted"}
+
+
+def test_a_turn_past_the_hard_cap_fails_saying_it_ran_out_of_time(monkeypatch):
+    """Past the hard cap with no result: failed, never bare, with detail.reason timeout."""
+    import time
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
+         "running_response_id": "resp_1", "heartbeat": str(time.time() - A._GW_MAX_TURN_S - 60),
+         "turn_at": str(time.time() - A._GW_MAX_TURN_S - 60)}
+    rec = {"id": "resp_1", "status": "running", "_session_id": "hsess1", "output": [],
+           "created_at": int(time.time() - A._GW_MAX_TURN_S - 60)}
+    settled, writes, stored = _sweep(monkeypatch, v, 200, rec)
+    assert settled is True and writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "timeout"}
+    assert stored["error"] == {"type": "harness_error", "code": "harness_error",
+                               "message": A._CAP_MESSAGE, "detail": {"reason": "timeout"}}
 
 
 def test_a_runner_that_still_holds_the_turn_is_not_settled(monkeypatch):
@@ -189,7 +206,7 @@ def test_a_turn_the_gateway_drains_under_fails_saying_it_was_interrupted(monkeyp
     assert persisted[0][0] == "failed"
     assert persisted[0][1]["incomplete_details"] is None
     assert persisted[0][1]["error"]["detail"] == {"reason": "interrupted"}
-    assert persisted[0][1]["error"]["type"] == "server_error"
+    assert persisted[0][1]["error"]["type"] == "harness_error"
 
 
 def test_a_dead_follow_up_is_not_settled_by_the_turn_before_it(monkeypatch):
@@ -327,3 +344,30 @@ def test_a_running_turn_with_no_readable_record_is_scoped_by_its_turn_at(monkeyp
          "heartbeat": str(time.time() - 600)}
     settled, writes, _ = _sweep(monkeypatch, v, 404, None, tts=_tts)
     assert seen[0] == 4250 and writes[0]["end_reason"] == "interrupted"
+
+
+def test_the_reconcilers_own_hard_cap_is_never_a_bare_failed(monkeypatch):
+    """A background poll's reconcile that settles a record past the hard cap gives it the timeout
+    error, so a failed task always says why (lifecycle §3)."""
+    import asyncio, time
+    long_ago = time.time() - A._GW_MAX_TURN_S - 60
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "heartbeat": str(long_ago),
+         "created_at": str(long_ago), "running_response_id": "resp_1"}
+    async def _vget(sid):
+        return dict(v)
+    async def _tts(blob, since_ms=0):
+        return None
+    async def _blob_get(*a, **k):
+        return None
+    async def _blob_put(*a, **k):
+        return True
+    async def _vg_upsert(*a, **k):
+        return None
+    for name, fn in (("_vertex_get", _vget), ("_trace_terminal_status", _tts), ("_blob_get", _blob_get),
+                     ("_blob_put", _blob_put), ("_vg_upsert", _vg_upsert)):
+        monkeypatch.setattr(A, name, fn)
+    out = asyncio.run(A._reconcile_response("resp_1", {"id": "resp_1", "status": "running", "_session_id": "hsess1",
+                                                       "output": [], "created_at": int(long_ago)}))
+    assert out["status"] == "failed"
+    assert out["error"] == {"type": "harness_error", "code": "harness_error", "message": A._CAP_MESSAGE,
+                            "detail": {"reason": "timeout"}}

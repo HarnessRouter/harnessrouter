@@ -219,20 +219,28 @@ _TERMINAL_EVENT = {"completed": "response.completed", "incomplete": "response.in
                    "failed": "response.failed", "cancelled": "response.failed"}
 
 
-# A turn the server itself cut short (the runner lost it to a restart, or the gateway's shutdown drain)
-# settles `failed` within UHP 2026-10-19: lifecycle §3 makes `incomplete` a budget stop and forbids it
-# for anything else. The error says what happened: type server_error, so a client may retry (errors
-# §4); code harness_error, the §3.3 code that applies; detail.reason "interrupted", an additive key a
-# client can tell this end by. Reporting it as `incomplete` is the UEP #505 asks for, for a later
-# version (CAT's ruling, 2026-10-21). The message promises nothing about files: a self-hosted
-# workspace on /data survives a restart, a hosted sandbox keeps only what the last checkpoint saved.
-_INTERRUPTED_MESSAGE = ("The server restarted while this task was running, so it stopped before it "
-                        "finished. Send a follow-up to continue from the work that was saved.")
+# A turn cut short settles `failed` within UHP 2026-10-19, with an error that says why: lifecycle §3
+# makes `incomplete` a budget stop and forbids it for anything else, and a failed task's error explains
+# it. Type and code harness_error (errors §2, the type of an error inside a failed response; §3.3, the
+# code that applies), and detail.reason, an additive key a client can tell the two ends by:
+# "interrupted" when the server itself cut the turn (the runner has no such turn after a restart, or
+# none was ever on record, or the gateway's shutdown drain), "timeout" past the hard cap. Reporting
+# the first as `incomplete` is the UEP #505 asks for, for a later version (CAT's ruling, 2026-10-21).
+# The words are the hosted service's own (e30941ea), so both servers say the same thing; they promise
+# nothing about files, since a hosted sandbox keeps only what its last checkpoint saved.
+_INTERRUPTED_MESSAGE = ("This task stopped before it finished because the service running it restarted. "
+                        "Start a new turn to continue.")
+_CAP_MESSAGE = "This task did not finish within its time limit. Start a new turn to continue."
 
 
 def _interrupted_error() -> dict:
-    return {"type": "server_error", "code": "harness_error", "message": _INTERRUPTED_MESSAGE,
+    return {"type": "harness_error", "code": "harness_error", "message": _INTERRUPTED_MESSAGE,
             "detail": {"reason": "interrupted"}}
+
+
+def _cap_error() -> dict:
+    return {"type": "harness_error", "code": "harness_error", "message": _CAP_MESSAGE,
+            "detail": {"reason": "timeout"}}
 
 
 async def _settle_drained(persist, tr, emit, end: dict | None = None) -> None:
@@ -3138,10 +3146,11 @@ async def _reconcile_session(v: dict) -> bool:
         except (TypeError, ValueError):
             since = 0
     status = await _trace_terminal_status(base, since)
-    interrupted = False
+    end_reason = ""
     if status is None:
         if age > _GW_MAX_TURN_S:
-            status = "failed"              # past the hard cap with no result, and nothing proves why
+            status = "failed"              # past the hard cap with no result
+            end_reason = "timeout"
         else:
             # First ask the RUNNER whether the recorded turn still exists. Turn records are
             # in-memory there, so a restart answers 404 — and a 404 means the process that owned
@@ -3163,7 +3172,7 @@ async def _reconcile_session(v: dict) -> bool:
                     probe_gone = False
             if probe_gone:
                 status = "failed"
-                interrupted = bool(rt_probe)   # the runner answered 404: a restart lost the turn
+                end_reason = "interrupted"     # the runner has no such turn (404), or none was ever on record
             gone = status == "failed"
             # Stale heartbeat but no terminal result yet: the owning replica likely died mid-turn
             # (deploy / scale-in / crash) while the turn keeps executing in its sandbox. ADOPT it —
@@ -3188,7 +3197,7 @@ async def _reconcile_session(v: dict) -> bool:
             if not gone:
                 return False               # not settled yet; the detached adopter (or a later sweep) will
     await _vertex_upsert(sid, {"status": status, "turn_status": status,
-                               **({"end_reason": "interrupted"} if interrupted else {})})
+                               **({"end_reason": end_reason} if end_reason else {})})
     # Settle the RESPONSE record in the same pass. The session vertex and the response blob are two
     # records of one fact; settling only the vertex left the turn list showing a live "Working…"
     # spinner on a turn whose process died — the exact confusion this sweep exists to remove — and
@@ -3257,6 +3266,7 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         return rec
     vs = str(v.get("status") or "")
     settled = None
+    capped = False                       # settled by this reconciler's own hard cap
     if vs in ("done", "failed", "cancelled", "incomplete") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
         # The session is terminal but its owner heartbeated moments ago: the owner is finalizing
         # (collecting files, writing the checkpoint) and will write the full record itself,
@@ -3299,6 +3309,7 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
                 settled = _RESP_STATUS_MAP.get(ts, "failed")
             elif time.time() - hb > _GW_MAX_TURN_S:
                 settled = "failed"                       # past the hard cap with no result
+                capped = True
     if not settled or settled == str(rec.get("status") or ""):
         return rec
     # RE-READ before persisting: the owning replica may have written the FULL final record
@@ -3316,10 +3327,12 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     except Exception:  # noqa: BLE001
         pass
     rec["status"] = settled
-    if (settled == "failed" and vs == "failed" and v.get("end_reason") == "interrupted"
+    if (settled == "failed" and vs == "failed" and v.get("end_reason") in ("interrupted", "timeout")
             and rid == str(v.get("running_response_id") or "")):
-        # the sweep proved why (the runner lost the turn to a restart) and wrote it on the session
-        rec["error"] = _interrupted_error()
+        # the sweep proved why (a restart lost the turn, or the hard cap) and wrote it on the session
+        rec["error"] = _interrupted_error() if v["end_reason"] == "interrupted" else _cap_error()
+    elif settled == "failed" and capped and not rec.get("error"):
+        rec["error"] = _cap_error()                # the reconciler's own hard cap: never a bare failed
     try:
         _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
@@ -10395,6 +10408,9 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       # one banner for every cause. Absent on records from before the field.
                       # A failed turn's reason, the sentence its error event carried live.
                       "error": ((rec.get("error") or {}).get("message") or None) if isinstance(rec.get("error"), dict) else None,
+                      # and why, when the record knows (error.detail.reason: "interrupted", "timeout")
+                      "error_reason": ((((rec.get("error") or {}).get("detail") or {}).get("reason") or None)
+                                       if isinstance(rec.get("error"), dict) and isinstance(rec["error"].get("detail"), dict) else None),
                       "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
                                             or None),
                       "handoff": ((rec.get("incomplete_details") or {}).get("handoff") or None),
@@ -10419,9 +10435,11 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
         vst = str(v.get("turn_status") or v.get("status") or "")
         if vst in ("cancelled", "failed", "error", "done", "completed", "incomplete", "max_turns", "timeout"):
             turns[-1]["status"] = vst
-            if (vst == "failed" and not turns[-1].get("error") and v.get("end_reason") == "interrupted"
+            if (vst == "failed" and not turns[-1].get("error") and v.get("end_reason") in ("interrupted", "timeout")
                     and turns[-1]["id"] == str(v.get("running_response_id") or "")):
-                turns[-1]["error"] = _INTERRUPTED_MESSAGE   # the sweep's proof: a restart cut it
+                # the sweep's proof: a restart cut it, or the hard cap
+                turns[-1]["error"] = _INTERRUPTED_MESSAGE if v["end_reason"] == "interrupted" else _CAP_MESSAGE
+                turns[-1]["error_reason"] = v["end_reason"]
         # (2) Trace catch-up whenever the stored record has NO content yet — output[] is only
         # written by persist() at finalize, so this covers BOTH cases with one mechanism:
         #   • turn still running → show progress-so-far, the bus streams new events on top;
