@@ -55,6 +55,25 @@ run, by you, under their own licenses:
   Agent Zero (agentzero)      MIT, "Copyright (c) 2025 Agent Zero, s.r.o" (agent0ai/agent-zero; the
                               tagged source archive, with its Python dependencies from PyPI under
                               their own licenses)
+  Docker Agent (docker-agent) Apache-2.0 (docker/docker-agent; the static binary from its GitHub
+                              releases, pinned by version and by a digest computed here — upstream
+                              publishes no checksums beside the assets). No mark of its own is
+                              redistributed: the console falls back to its generic glyph.
+  Mistral Vibe (vibe)         Apache-2.0 (mistralai/mistral-vibe; the wheel from PyPI, pinned by
+                              version and hash). The console's Vibe mark,
+                              ui/public/logos/vibe.svg, is that project's own editor glyph
+                              (distribution/zed/icons/mistral_vibe.svg), unchanged, under the same
+                              license.
+  fast-agent (fast-agent)     Apache-2.0 (evalstate/fast-agent, PyPI fast-agent-mcp; the wheel
+                              from PyPI, pinned by version and hash, with its own NOTICE file as
+                              that license requires). No mark of its own is redistributed: its
+                              repository ships none, so the console falls back to its generic
+                              glyph.
+  Deep Agents Code (dcode)    MIT (langchain-ai/deepagents, PyPI deepagents-code; the wheel from
+                              PyPI, pinned by version and hash, together with deepagents-acp
+                              (MIT) and agent-client-protocol, which its ACP server mode needs,
+                              and the deepagents SDK underneath them). No mark of its own is
+                              redistributed: the console falls back to its generic glyph.
 
 Claude Code is distributed under Anthropic's terms and may not be redistributed inside a
 public image; hermes-agent's publisher declared no license before 0.19.0. Installing the

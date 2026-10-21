@@ -1438,6 +1438,86 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("llmtr", "aider"): "tokenrouter",
     ("custom", "aider"): "openai-api",
     ("google", "aider"): "openai-api",
+    # vibe speaks ONE shape, OpenAI chat/completions, so every connection reaches it that way —
+    # including a direct Anthropic key, whose OpenAI-compatible surface lives under /v1 (cline's
+    # and qwen's route). Its `anthropic` provider type is that surface, not Messages.
+    # fast-agent, the same reach: one OpenAI shape through the relay, pointed at it by the two
+    # environment variables its generic client reads.
+    ("anthropic", "fast-agent"): "anthropic",   ("openai", "fast-agent"): "openai",
+    ("azure-foundry", "fast-agent"): "azure",
+    ("openrouter", "fast-agent"): "openai-api",
+    ("tokenrouter", "fast-agent"): "tokenrouter", ("vercel", "fast-agent"): "tokenrouter",
+    ("llmtr", "fast-agent"): "tokenrouter",
+    ("custom", "fast-agent"): "openai-api",
+    # PROBED rather than assumed, which is this table's own rule (the same row on vibe and
+    # docker-agent): a pair on fast-agent-mcp 0.10.45 against
+    # generativelanguage.googleapis.com/v1beta/openai passed all five matrix scenarios on
+    # gemini-3.5-flash, with the mid-session switch served as gemini-4-argon — two served ids on
+    # one session, read off the relay (2026-10-20). Its generic client speaks chat/completions,
+    # which is what that surface serves; dcode has no row here for the opposite reason (it speaks
+    # the Responses API, which that surface answers with a 404).
+    ("google", "fast-agent"): "openai-api",
+    ("harnessrouter", "fast-agent"): "tokenrouter",
+    # docker-agent, the same reach again: one OpenAI shape through the relay, named in the YAML
+    # this runner writes per turn.
+    ("anthropic", "docker-agent"): "anthropic",   ("openai", "docker-agent"): "openai",
+    ("azure-foundry", "docker-agent"): "azure",
+    ("openrouter", "docker-agent"): "openai-api",
+    ("tokenrouter", "docker-agent"): "tokenrouter", ("vercel", "docker-agent"): "tokenrouter",
+    ("llmtr", "docker-agent"): "tokenrouter",
+    ("custom", "docker-agent"): "openai-api",
+    ("harnessrouter", "docker-agent"): "tokenrouter",
+    # PROBED rather than assumed, which is this table's own rule (see the same row on vibe): a
+    # pair on v1.150.0 against generativelanguage.googleapis.com/v1beta/openai passed all five
+    # matrix scenarios on gemini-3.5-flash, with the mid-session switch served as gemini-4-argon
+    # — two served ids on one session, read off the relay (2026-10-20). Before this row the base
+    # had no google row at all, and the picker offered google's whole gemini family anyway; that
+    # half is fixed in _servable_models, which is where the measurement landed first.
+    ("google", "docker-agent"): "openai-api",
+    # dcode (deepagents-code) is the ONLY base here besides codex that speaks the Responses API,
+    # so its reach is codex's rather than the other four's: langchain-openai posts to
+    # /v1/responses, and the providers listed are the ones that serve it. An Anthropic or Google
+    # native endpoint is absent for that reason — a Messages or generativelanguage base URL has no
+    # /v1/responses to post to, and this builder only ever sets OPENAI_BASE_URL. MEASURED on the
+    # Vercel connection through the runner's own relay (2026-10-19, five scenarios): every request
+    # went to /v1/responses, and claude-haiku-5.5 and gemini-3-flash were each asked for and each
+    # served as itself, including on the mid-session switch its session would otherwise have taken
+    # back. The other rows are the same endpoints codex is already wired to.
+    ("openai", "dcode"): "openai",
+    ("azure-foundry", "dcode"): "azure",
+    ("openrouter", "dcode"): "openai-api",
+    ("tokenrouter", "dcode"): "tokenrouter",   ("vercel", "dcode"): "tokenrouter",
+    ("llmtr", "dcode"): "tokenrouter",
+    ("custom", "dcode"): "openai-api",
+    # NO ("google", "dcode") row, and this one is PROBED rather than unprobed: dcode speaks the
+    # Responses API (it is the second client here that does, after codex), and Google's
+    # OpenAI-compatible surface does not serve that endpoint. Measured twice on 2026-10-20, once
+    # through the product and once against the endpoint itself:
+    #   POST generativelanguage.googleapis.com/v1beta/openai/responses        -> 404, empty body
+    #   POST generativelanguage.googleapis.com/v1beta/openai/chat/completions -> 200
+    # so the turn failed with "Error code: 404" and the terse reason is the endpoint's own (it
+    # sends no body with the 404). A gemini model reaches this base through an aggregator that
+    # serves /responses instead — which the Vercel column did, on nine gemini ids.
+    ("harnessrouter", "dcode"): "tokenrouter",
+    # No vtcode rows: VT Code is not in this tree. It was built, measured (a column of 55 green
+    # rows out of 56) and then taken out whole, because in `vtcode exec` a harness's MCP servers
+    # cannot reach the model — the CLI spawns the server its config names and never sends
+    # `initialize`, and `search_tools`, the only other door, answers "session tool catalog is not
+    # available" (that catalog is attached by the interactive runloop alone). Measured on 0.177.0
+    # and 0.180.0. The implementation is parked on the branch `parked/vtcode-and-gajae` and the
+    # measurement is in docs/support-matrix-notes.md; restoring it is that branch, not a rewrite.
+    ("anthropic", "vibe"): "anthropic",        ("openai", "vibe"): "openai",
+    ("azure-foundry", "vibe"): "azure",
+    ("openrouter", "vibe"): "openai-api",
+    ("tokenrouter", "vibe"): "tokenrouter",    ("vercel", "vibe"): "tokenrouter",
+    ("llmtr", "vibe"): "tokenrouter",
+    ("custom", "vibe"): "openai-api",
+    # PROBED rather than assumed, which is this table's own rule: a turn on 2.26.1 against
+    # generativelanguage.googleapis.com/v1beta/openai completed on gemini-3.8-flash with usage
+    # reported (2026-10-15). The id matters — `gemini-3-flash`, which that endpoint does not serve,
+    # came back as a 404 the CLI reported as an infrastructure_failure, not as a silent fallback.
+    ("google", "vibe"): "openai-api",
+    ("harnessrouter", "vibe"): "tokenrouter",
     ("anthropic", "kimi"): "anthropic",        ("openai", "kimi"): "openai",
     ("azure-foundry", "kimi"): "azure",
     ("openrouter", "kimi"): "openai-api",
@@ -1874,6 +1954,10 @@ async def _mapped_integration_conn(backend: str, canonical: str) -> dict | None:
     models = _integration_models(integ)
     pid = models.get(canon) or models.get(canon.lower()) or ""
     conn = {"name": f"integration:{iname}", "backend": backend, "provider": provider,
+            # the vendor beside the runner's name for it, for the same reason as in _chain_wired:
+            # this connection's model id table is the VENDOR's, and an integration whose model
+            # list has no entry for the canonical falls through to _map_model
+            "_vendor": (integ.get("provider") or "").lower(),
             **{k: v for k, v in (integ.get("config") or {}).items() if v not in (None, "")}}
     if pid:
         conn["model"] = pid
@@ -5855,13 +5939,19 @@ _CUSTOM_FORMAT_BACKENDS = {
     # Anthropic, so a custom integration declaring the anthropic format would be offered a path the
     # runner does not take for it — unlisted rather than nearly true.
     # kilo passes api_format to the same ai-sdk package choice opencode makes (_opencode_npm).
+    # vibe: a custom OpenAI endpoint is exactly what its `generic` provider backend speaks, and it
+    # has no Messages client at all (Backend is MISTRAL | GENERIC), so the openai set alone.
     "openai": {"hermes", "opencode", "kilo", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi",
                "aider", "openhands", "minimax", "cheetahclaws", "grok", "agentzero",
-               "mimo", "jcode", "opensquilla", "nanobot", "zeroclaw"},
+               "mimo", "jcode", "opensquilla", "nanobot", "zeroclaw",
+               "vibe", "docker-agent", "fast-agent"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
-    # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
-    "responses": {"codex"},
+    # The OpenAI Responses API: what codex speaks, and — since this batch — dcode, whose
+    # langchain-openai model posts to /v1/responses on every turn (measured through a recording
+    # proxy and again through the runner's own relay). A custom integration declaring
+    # chat/completions cannot serve it, which is why dcode is in this set and in neither other one.
+    "responses": {"codex", "dcode"},
 }
 
 
@@ -5907,10 +5997,36 @@ def _chain_refusal(conn: dict, backend: str) -> str:
 
 def _chain_wired(conn: dict, backend: str) -> dict:
     """The chain connection under the runner's own name for its provider, as an integration is
-    sent (see _integration_conn); api_format rides along for the backends that read it."""
+    sent (see _mapped_integration_conn); api_format rides along for the backends that read it.
+
+    A provider whose endpoint this product knows also gets that endpoint here, exactly as the
+    integrations form supplies it on save ("A provider whose endpoint we know supplies its own
+    base_url"). Without it, a connection set from the environment — the scripted-deploy path in
+    the self-hosting guide — reached the runner with no base, and every backend that needs one
+    failed the turn in the runner's vocabulary: `vibe provider 'tokenrouter' needs a base_url
+    (none configured)`, measured on a Vercel connection written as
+    HR_SECRET_GLOBAL_HARNESS_CONN_VERCEL while bringing up the support matrix (2026-10-19). The
+    catalog is read under the connection's OWN provider name, before the rename: the runner's
+    name for a Vercel or HarnessRouter connection is `tokenrouter`, whose endpoint is something
+    else entirely. A provider the catalog does not know, or one whose base is genuinely
+    per-deployment (Azure, Bedrock), is left as the operator wrote it."""
     provider = str(conn.get("provider") or "").lower()
+    patch: dict = {}
+    known = (_PROVIDER_CATALOG.get(provider) or {}).get("base_url")
+    if known and not str(conn.get("base_url") or "").strip():
+        patch["base_url"] = known
     mapped = _INTEGRATION_WIRING.get((provider, backend)) if provider in _PROVIDER_CATALOG else None
-    return {**conn, "provider": mapped} if mapped and mapped != provider else conn
+    if mapped and mapped != provider:
+        patch["provider"] = mapped
+        # WHICH VENDOR this is, kept beside the runner's name for it, because the rename is
+        # lossy: `tokenrouter` is the runner's name for TokenRouter, Vercel, llmtr AND the
+        # HarnessRouter API, and `openai-api` is its name for Google AI Studio as well as an
+        # OpenAI-compatible endpoint. _map_model needs the vendor to pick the right id table —
+        # see the comment there for what sending the wrong vendor's slug actually did.
+        patch["_vendor"] = provider
+    # The connection itself when there is nothing to change, as before: the caller's own test
+    # asks for the same object (test_chain_pairing), and a copy is made only where it is needed.
+    return {**conn, **patch} if patch else conn
 
 
 # Built-in agent tools an endpoint may refuse (a proxy that gates codex's web_search per model,
@@ -7352,7 +7468,18 @@ def _map_model(conn: dict, friendly: str) -> str | None:
     400 with 'invalid model identifier', failing the whole turn. So an unmappable/empty name falls
     back to the connection's configured default, then the provider's sonnet id — always something valid."""
     backend = (conn.get("backend") or "").lower()
-    provider = (conn.get("provider") or "").lower()
+    # THE VENDOR, not the runner's name for it. A connection renamed for the runner (`vercel`,
+    # `llmtr` and `harnessrouter` all become `tokenrouter`; `google` becomes `openai-api`) would
+    # otherwise be given another vendor's id table, and the id would be sent to an endpoint that
+    # never published it. MEASURED on a Vercel connection while running this batch's first matrix
+    # column (2026-10-19, the recording proxy in front of the gateway): `grok-4.20` went out as
+    # TokenRouter's `x-ai/grok-4.20-beta` and Vercel answered as
+    # `spacexai/grok-4.20-non-reasoning-beta` — the NON-reasoning model, where _VERCEL_RESLUG
+    # names `spacexai/grok-4.20-reasoning`; `qwen3.8-max` went out as `qwen/qwen3.8-max` and came
+    # back as `alibaba/qwen3.8-2.4t-a95b`. Both turns PASSED, because that gateway resolves a slug
+    # it does not publish to something near it, so the only trace was the served-model check: the
+    # substitution rule of docs/harness-verification.md, which is why that rule exists.
+    provider = (conn.get("_vendor") or conn.get("provider") or "").lower()
     default = conn.get("model") or ""
 
     def _valid_default() -> str | None:
@@ -7834,33 +7961,48 @@ _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models
 # mimo is an opencode FORK that kept opencode's provider model — the config names an ai-sdk package
 # and a baseURL, so it reaches what opencode reaches, Responses ids included.
 _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
-# ── gajae (Gajae-Code) is implemented and NOT offered ─────────────────────────────────────────
-# It has no entry here, none in _BASE_CATALOG, and no wiring row, so this server neither lists it,
-# routes it (_SUPPORTED_BASES and _HID_PREFIX_RE are derived from _BASE_CATALOG) nor runs it. The
-# runner's implementation stays in place — _build_gajae, _gajae_to_claude, their tests and their
-# captured fixtures — because the base WORKS; what stops it is this product's own write-wall, and
-# that is a decision to revisit rather than a defect to fix.
-#
-# MEASURED (2026-10-03, on a real instance, both directions of the switch):
-#   gjc's native lock helper walks from / down to the path it is locking and opens EVERY ancestor
-#   with O_RDONLY|O_DIRECTORY|O_NOFOLLOW (pi-natives, open_parent_no_follow), which needs READ on
-#   each ancestor rather than traverse. docker/entrypoint.sh sets /data and /data/workspaces to
-#   751 — "traversable by sessions, neither listable nor writable" — so a session uid gets EACCES,
-#   the addon reports io_error, and the turn dies before its first model call.
-#   With those two directories at 755 a real turn completed in 4.6 s; put back to 751 it failed
-#   again with the same error. Both sides are defending the same thing from opposite ends: gjc
-#   refuses to trust path resolution for a lock, and this product makes the ancestors unreadable.
-#
-# To offer it: relax those two modes (which gives up "neither listable", not "nor writable"), then
-# restore this entry, the _BASE_CATALOG entry, the _INTEGRATION_WIRING rows and the
-# _CUSTOM_FORMAT_BACKENDS membership. gateway/tests/test_gajae_not_offered.py pins the current
-# state so a half-restore cannot pass unnoticed. docs/support-matrix-notes.md has the full record.
+# No gajae entry: Gajae-Code is not in this tree either. It was built and measured, and what
+# stops it is this product's own write-wall rather than a defect: gjc's native lock helper walks
+# from / down to the path it is locking and opens EVERY ancestor with
+# O_RDONLY|O_DIRECTORY|O_NOFOLLOW (pi-natives, open_parent_no_follow), which needs READ on each
+# ancestor rather than traverse, and docker/entrypoint.sh sets /data and /data/workspaces to 751
+# — "traversable by sessions, neither listable nor writable" — so a session uid gets EACCES and
+# the turn dies before its first model call. MEASURED both ways on a real instance (2026-10-03):
+# at 755 a turn completed in 4.6 s, back at 751 it failed again with the same error. The
+# implementation is parked on the branch `parked/vtcode-and-gajae` and the measurement is in
+# docs/support-matrix-notes.md; offering it means relaxing those two modes first, and restoring
+# that branch rather than writing it again.
 # jcode, opensquilla and nanobot each speak ONE OpenAI shape — chat/completions — through the
 # loopback relay, which is kimi's reach exactly, so they take kimi's list and are in
 # CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
 # only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
 # relay so its served model stays readable — see _build_jcode.)
-for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw"):
+# vibe (mistral-vibe) is the same shape: its `generic` backend is an OpenAI chat/completions
+# client and every keyed turn rides the relay, so its wire reach is kimi's. MEASURED on it so far
+# (2026-10-14/15, an OpenAI-compatible gateway through a recording proxy): claude-haiku-5.5 and
+# gemini-3-flash, each asked for and each served as itself, including on the model switch a resumed
+# session would otherwise have swallowed. Every other id here is offered so the matrix can measure
+# it on this base, and no column has run yet.
+# docker-agent is the same reach once more: its provider is declared `api_type:
+# openai_chatcompletions` and every keyed turn rides the relay. MEASURED on it (2026-10-16, the
+# Vercel gateway through the runner's own relay): claude-haiku-5.5 and gemini-3-flash, each asked
+# for and each served as itself, across a mid-session model switch — and the gemini turn needed the
+# relay's schema repair, because its filesystem toolset declares an optional array parameter
+# Google's validator refuses.
+# fast-agent's `generic` provider is its OpenAI-compatible client (GENERIC_BASE_URL +
+# GENERIC_API_KEY), so its reach is the same chat/completions one. MEASURED on it (2026-10-16,
+# through the runner's own relay): claude-haiku-5.5 and gemini-3-flash, each asked for and each
+# served as itself, including on a mid-session switch its own session store would otherwise have
+# taken back.
+# dcode takes the same multi-family list, with one difference that is about the WIRE rather than
+# the ids: it drives the Responses API, so the chat-only reasoning below is reversed for it — a
+# chat-completions-only channel is what would fail here. MEASURED (2026-10-19, the Vercel
+# connection through the runner's own relay, five scenarios): claude-haiku-5.5 and gemini-3-flash,
+# each asked for and each served as itself over /v1/responses, across a mid-session switch its
+# session had pinned. The two Responses-API-only ids codex lists (gpt-5.3-codex, gpt-6-astra) are
+# NOT added here: this base could serve them and no turn has, and a list is not a place to guess.
+for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
+           "vibe", "docker-agent", "fast-agent", "dcode"):
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
@@ -8006,9 +8148,16 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # grok: the runner's one custom model is `api_backend = "chat_completions"` (Grok Build can speak the
 # Responses and Messages APIs too, but that is not the model the runner defines).
 # agentzero too: its model is litellm's openai provider (Agent Zero's `other`, a0_api_mode chat).
+# vibe's provider `backend = "generic"` posts to /chat/completions (its generic LLM backend joins
+# that resource onto the provider's api_base), and its only other backend is Mistral's own API, so
+# a Responses-API-only id would be a picker row that fails on send here too.
+# docker-agent: its provider config takes api_type `openai_chatcompletions` or
+# `openai_responses`, and this runner declares chat/completions — so a Responses-API-only id would
+# be a picker row that fails on send here too.
 CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "minimax",
                       "cheetahclaws", "grok", "agentzero",
-                      "jcode", "opensquilla", "nanobot", "zeroclaw")
+                      "jcode", "opensquilla", "nanobot", "zeroclaw",
+                      "vibe", "docker-agent", "fast-agent")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -8223,6 +8372,19 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
     # so the restriction silently restricts nothing.
     for name in await _resolve_chain(org, backend, None):
         conn, _tenant = await _get_connection(org, name)
+        # A connection the ROUTER would refuse for this base serves none of its models, so it
+        # contributes nothing here — the picker asks the same question the turn will ask, in the
+        # same words (_chain_refusal), and the two cannot drift apart.
+        #
+        # MEASURED on the support matrix (2026-10-20): an instance holding one google connection
+        # offered docker-agent the whole gemini family as AVAILABLE — eight ids — because this
+        # loop read google's per-model table and never asked whether google can drive that base.
+        # It cannot: there is no ("google", "docker-agent") wiring row, so every one of those
+        # turns came back "No connection on this account serves gemini-4-argon" after the point
+        # of no return, which is the promise this function's own docstring exists to stop breaking.
+        # vibe was unaffected only because it happens to have a google row.
+        if conn and _chain_refusal(conn, backend):
+            continue
         table = _vendor_models(str((conn or {}).get("provider") or "").lower())
         if not table:
             return None
@@ -18219,6 +18381,96 @@ _BASE_CATALOG: dict[str, dict] = {
         # construction would have withheld the built-ins and let every MCP tool through. Measured:
         # with write_file withheld the model wrote the file with `exec` instead, which is the honest
         # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
+    },
+    "dcode": {
+        "label": "Deep Agents Code", "backend": "dcode", "status": "ready",
+        "system_prompt": ("You are Deep Agents Code, an autonomous coding agent. You work on a "
+                          "real git workspace with shell and file access, reading and editing "
+                          "files and running commands to complete the task end to end."),
+        # SEVEN of the fourteen tools a turn declares, and the seven are the ones that can really
+        # be switched off: `--allow-fs-tools` is the single door, and on this surface it governs
+        # the shell as well (FS_TOOL_NAMES includes `execute`), so the filesystem set minus
+        # read_file is the whole offer. read_file is excluded because the flag's own parser
+        # rejects a list without it; task, compact_conversation, update_goal, ask_user, fetch_url
+        # and get_current_thread_id are excluded because nothing withholds them, and a toggle that
+        # disables nothing is what UHP §4.3 forbids. Held equal to the runner's ALL_DCODE_TOOLS by
+        # gateway/tests/test_dcode_tools.py, and read off a turn's own request body rather than
+        # from the docs — which is how the two differences from its headless mode were found
+        # (`js_eval` is not declared over ACP, `ask_user` is).
+        "tools": [("ls", "List"), ("write_file", "File Write"), ("edit_file", "Edit"),
+                  ("delete", "Delete"), ("glob", "Glob"), ("grep", "Grep"),
+                  ("execute", "Shell")],
+        # "hard", measured twice over: a turn launched with the shell outside the allow-list did
+        # not DECLARE it (read off the request), and asked to run `echo NOPE` on a resumed session
+        # the model answered that it had no shell tool and ran nothing.
+        "tool_enforcement": "hard",
+    },
+    "fast-agent": {
+        "label": "fast-agent", "backend": "fast-agent", "status": "ready",
+        "system_prompt": ("You are an autonomous coding agent. You work on a real git workspace "
+                          "with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # THREE tools, and the list is short for a measured reason: this framework ships no tools
+        # of its own — they come from MCP servers — and `-x` turns on a local runtime that declares
+        # four (bash, process, read_text_file, edit_file). Only three of those have a switch:
+        # `--no-shell` withholds bash, and the config withholds read_text_file
+        # (`enable_read_text_file`) and the edit tool (`write_text_file_mode: off`). `process` is
+        # the shell runtime's second tool with no switch of its own, so offering it would either
+        # disable nothing or take bash away too — and a toggle that does neither of the things it
+        # says is what UHP §4.3 forbids.
+        "tools": [("bash", "Shell"), ("read_text_file", "File Read"), ("edit_file", "Edit")],
+        # "hard", measured at the door on a RESUMED session, which is where it nearly went wrong:
+        # omitting -x was not enough (the session brings its runtime back), and with --no-shell the
+        # request declared no bash at all and the model said it could not run the command.
+        "tool_enforcement": "hard",
+    },
+    "docker-agent": {
+        "label": "Docker Agent", "backend": "docker-agent", "status": "ready",
+        "system_prompt": ("You are an autonomous coding agent working in a real git workspace "
+                          "with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # The fifteen tools the four toolsets this runner declares bring to the model, measured off
+        # a turn's own request on v1.150.0 and held equal to the runner's ALL_DOCKER_AGENT_TOOLS by
+        # gateway/tests/test_docker_agent_tools.py. Its runtime groups tools into TOOLSETS, and a
+        # tool is withheld by narrowing its toolset's include list — there is no per-tool deny, so
+        # a tool id that is not one of these fifteen would disable nothing.
+        "tools": [("read_file", "File Read"), ("read_multiple_files", "File Read Many"),
+                  ("write_file", "File Write"), ("edit_file", "Edit"),
+                  ("list_directory", "List"), ("directory_tree", "Tree"),
+                  ("search_files_content", "Search"), ("create_directory", "Make Directory"),
+                  ("remove_directory", "Remove Directory"), ("shell", "Shell"),
+                  ("create_todo", "Todo Create"), ("create_todos", "Todos Create"),
+                  ("update_todos", "Todos Update"), ("list_todos", "Todos List"),
+                  ("think", "Think")],
+        # "hard", measured through the product's own path: with write_file, edit_file and shell
+        # withheld, the model reported that none of its remaining tools could create or edit a file
+        # and nothing was written.
+        "tool_enforcement": "hard",
+    },
+    "vibe": {
+        "label": "Mistral Vibe", "backend": "vibe", "status": "ready",
+        "system_prompt": ("You are Vibe, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The tools a turn actually declares to the provider, read off the requests of a measured
+        # turn on 2.26.1 rather than from the docs, and held equal to the runner's ALL_VIBE_TOOLS by
+        # gateway/tests/test_vibe_tools.py. Two of them are DISPATCHERS and are listed as such:
+        # `run_typescript` runs a script with the tool registry in scope and `search_tool_functions`
+        # looks a tool up by name, which is how this runtime reaches an MCP server's tools — so a
+        # judge reading tool NAMES alone will not see an MCP call here (mimo's lesson).
+        "tools": [("bash", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit", "Edit"), ("skill", "Skill"), ("todo", "Todo"),
+                  ("run_typescript", "Run TypeScript"),
+                  ("search_tool_functions", "Tool Lookup"),
+                  ("unified_harness_scratchpad", "Scratchpad")],
+        # "hard", measured at the door, and the MECHANISM is worth stating because it is not the
+        # usual one: a disabled tool is still DECLARED to the model, and the call is refused
+        # (`tool_denied`, nothing written) rather than the tool being withheld. The effect is
+        # withheld, which is what this claim is about; the runner turns such a refusal into a note
+        # on the reply instead of a tool row, so the turn's tool list still means "what ran".
+        # The usual limit is not overstated either: withholding a tool withholds that tool, not the
+        # capability — a model left with `bash` can still write a file with a shell command.
         "tool_enforcement": "hard",
     },
     "zeroclaw": {

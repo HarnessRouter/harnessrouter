@@ -211,15 +211,12 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-# Four of the five added in this batch are in the DEFAULT set rather than opt-in, for the reason
+# The four added in this batch are in the DEFAULT set rather than opt-in, for the reason
 # agentzero's PR settled: the console lists every base in the catalog, so a base the operator
 # did not opt into is a row that fails on its first turn with no explanation. Disk is the
 # trade — jcode is a ~127 MB static Rust binary and the two Python bases bring their own venvs —
 # and an operator who wants them out sets HR_BACKENDS.
-#
-# gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
-# this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -252,9 +249,12 @@ backend_bin() {
     # interpreter is what "installed" means here.
     qoder) echo "$TOOLS/qoder-venv/bin/python" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
-    gajae)  echo "$TOOLS/bin/gjc" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
+    vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
+    docker-agent) echo "$TOOLS/bin/docker-agent" ;;
+    fast-agent) echo "$TOOLS/fast-agent-venv/bin/fast-agent" ;;
+    dcode) echo "$TOOLS/dcode-venv/bin/dcode" ;;
     nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
     zeroclaw) echo "$TOOLS/bin/zeroclaw" ;;
   esac
@@ -1034,38 +1034,6 @@ install_mimo() {
   fi
 }
 
-# Gajae-Code (MIT, Yeachan-Heo/gajae-code) publishes standalone prebuilt binaries per target on
-# GitHub releases WITH a checksum file beside them (gajae-release-binaries.sha256), so the bytes are
-# compared against upstream's own list rather than against a digest we computed. NOT the npm
-# package `gajae-code`: its bin shim is `#!/usr/bin/env bun`, and bun is not in this image.
-# NOT INSTALLED TODAY: `wanted gajae` is false unless an operator names it, and the gateway offers
-# no gajae base, so this runs for nobody. Kept against the day the write-wall decision is revisited
-# — the integration itself works; see the note in gateway/app.py above _MODEL_CATALOG["mimo"].
-install_gajae() {
-  case "$(uname -m)" in
-    x86_64)        gj_arch="x64" ;;
-    aarch64|arm64) gj_arch="arm64" ;;
-    *) echo "unsupported architecture $(uname -m) for gajae"; return 1 ;;
-  esac
-  gj_ver="${HR_GAJAE_VERSION:-0.18.5}"; gj_ver="${gj_ver#v}"
-  gj_base="https://github.com/Yeachan-Heo/gajae-code/releases/download/v${gj_ver}"
-  gj_tmp="$(mktemp -d)"
-  curl -fsSL "$gj_base/gjc-linux-$gj_arch" -o "$gj_tmp/gjc" || { rm -rf "$gj_tmp"; return 1; }
-  curl -fsSL "$gj_base/gajae-release-binaries.sha256" -o "$gj_tmp/SHA256SUMS" || { rm -rf "$gj_tmp"; return 1; }
-  gj_want="$(grep "  gjc-linux-$gj_arch\$" "$gj_tmp/SHA256SUMS" | awk '{print $1}')"
-  gj_have="$(sha256sum "$gj_tmp/gjc" | awk '{print $1}')"
-  if [ -z "$gj_want" ] || [ "$gj_want" != "$gj_have" ]; then
-    echo "gajae $gj_ver: checksum mismatch for gjc-linux-$gj_arch (want ${gj_want:-none}, have $gj_have)"
-    rm -rf "$gj_tmp"; return 1
-  fi
-  mkdir -p "$TOOLS/bin" && install -m 755 "$gj_tmp/gjc" "$TOOLS/bin/gjc"; rm -rf "$gj_tmp"
-  # The same proof jcode's install owes, for the same reason.
-  gj_got="$("$TOOLS/bin/gjc" --version 2>/dev/null | head -n 1)"
-  if [ "$gj_got" != "gjc/$gj_ver" ]; then
-    echo "gajae installed but reports '${gj_got:-nothing}', wanted gjc/$gj_ver"; rm -f "$TOOLS/bin/gjc"; return 1
-  fi
-}
-
 # jcode (MIT, 1jehuang/jcode) publishes one prebuilt archive per target with a SHA256SUMS file, so
 # it is fetched and compared the same way. v0.90.0 is the release _build_jcode and _jcode_to_claude
 # were measured against — the NDJSON event names, the per-request `tokens` accounting, the resume
@@ -1178,6 +1146,230 @@ for name in ("Nanobot", "STREAM_EVENT_TEXT_DELTA", "STREAM_EVENT_REASONING_DELTA
     if not hasattr(nanobot, name):
         sys.exit("nanobot-ai %s does not export %s, which runner/nanobot_driver.py needs" % (have, name))
 ' "$nb_ver" || { rm -rf "$TOOLS/nanobot-venv"; return 1; }
+}
+
+# Mistral Vibe (Apache-2.0, mistralai/mistral-vibe) from PyPI, pinned to the release the runner's
+# code was measured against: the programmatic flags, the session-journal entry shapes, the export
+# fields and the agent-profile door that carries a turn's model.
+#
+# Its own venv, for opensquilla's reason, and THE WHEEL IS FETCHED BY URL AND COMPARED TO A PINNED
+# DIGEST rather than installed by name: `pip install mistral-vibe==X` trusts whatever the index
+# serves under that name today, and the wheels are platform-specific (cp312-abi3, a compiled CLI
+# inside), so the digest is per architecture. Upstream publishes no checksum file of its own; these
+# are PyPI's own recorded hashes for 2.26.1, read from its JSON API. Its dependencies are pinned
+# exactly in the package's own metadata (every requirement is ==), so resolving them from the index
+# is deterministic even though they are not hashed here.
+install_vibe() {
+  vb_ver="${HR_VIBE_VERSION:-2.26.1}"; vb_ver="${vb_ver#v}"
+  case "$(uname -m)" in
+    x86_64|amd64)
+      vb_whl="mistral_vibe-${vb_ver}-cp312-abi3-manylinux_2_28_x86_64.whl"
+      vb_want="1ceb43e38a2e82cb8c54e1032b011874f8422e998cf87b4a3fdf58704133de55" ;;
+    aarch64|arm64)
+      vb_whl="mistral_vibe-${vb_ver}-cp312-abi3-manylinux_2_28_aarch64.whl"
+      vb_want="896a432651b922b7e16f01e26b4fce55b4ebd7a5ca122cf82c1e9d6a8a849821" ;;
+    *) echo "vibe: no wheel pinned for $(uname -m)"; return 1 ;;
+  esac
+  # A version override has no digest here, so it SAYS the bytes are unverified rather than
+  # pretending the check ran (goose's installer sets the precedent).
+  if [ -n "${HR_VIBE_VERSION:-}" ] && [ "$vb_ver" != "2.26.1" ]; then
+    if [ -n "${HR_VIBE_SHA256:-}" ]; then vb_want="$HR_VIBE_SHA256"; else
+      echo "[harnessrouter] WARN: HR_VIBE_VERSION=$vb_ver without HR_VIBE_SHA256 — the wheel is NOT verified"
+      vb_want=""
+    fi
+  fi
+  vb_tmp="$(mktemp -d)"
+  vb_url="https://pypi.org/simple/mistral-vibe/"
+  # The file URL is read out of PyPI's simple index rather than hard-coded: the hash is what pins
+  # the artifact, and the CDN path for a file is not part of the release's identity.
+  vb_href="$(curl -fsSL -H 'Accept: text/html' "$vb_url" | grep -o "https://files.pythonhosted.org/[^\"#]*${vb_whl}" | head -1)"
+  [ -n "$vb_href" ] || { echo "vibe $vb_ver: $vb_whl is not in the index"; rm -rf "$vb_tmp"; return 1; }
+  curl -fsSL "$vb_href" -o "$vb_tmp/$vb_whl" || { rm -rf "$vb_tmp"; return 1; }
+  if [ -n "$vb_want" ]; then
+    vb_have="$(sha256sum "$vb_tmp/$vb_whl" | awk '{print $1}')"
+    if [ "$vb_want" != "$vb_have" ]; then
+      echo "vibe $vb_ver: checksum mismatch for $vb_whl (want $vb_want, have $vb_have)"
+      rm -rf "$vb_tmp"; return 1
+    fi
+  fi
+  "${HR_VIBE_BASE_PYTHON:-python3}" -m venv "$TOOLS/vibe-venv" \
+    || { rm -rf "$vb_tmp" "$TOOLS/vibe-venv"; return 1; }
+  "$TOOLS/vibe-venv/bin/pip" install -q --disable-pip-version-check "$vb_tmp/$vb_whl" \
+    || { rm -rf "$vb_tmp" "$TOOLS/vibe-venv"; return 1; }
+  rm -rf "$vb_tmp"
+  # RUN WHAT WAS INSTALLED and compare the version it REPORTS: an installer that exits 0 without a
+  # working executable is the same lie as a check with no input (jcode's 505-byte shim).
+  vb_got="$("$TOOLS/vibe-venv/bin/vibe" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if [ "$vb_got" != "$vb_ver" ]; then
+    echo "vibe installed but reports '${vb_got:-nothing}', wanted $vb_ver"
+    rm -rf "$TOOLS/vibe-venv"; return 1
+  fi
+}
+
+# fast-agent (Apache-2.0, evalstate/fast-agent) from PyPI as fast-agent-mcp, pinned to the release
+# the runner's code was measured against. Its own venv, for opensquilla's reason: it pins a large
+# dependency set (mcp, anthropic, openai, google-genai, a2a-sdk) and must not share the runner's
+# interpreter. The wheel is fetched by URL and compared to PyPI's own recorded digest, as vibe's is;
+# it is a pure-python wheel, so one digest covers every architecture.
+install_fast_agent() {
+  fa_ver="${HR_FAST_AGENT_VERSION:-0.10.45}"; fa_ver="${fa_ver#v}"
+  fa_whl="fast_agent_mcp-${fa_ver}-py3-none-any.whl"
+  fa_want="b88aac3f2a4060abae7bfd41e64a66269e6b86367dd90f3e8905ce75f0bcea94"
+  if [ -n "${HR_FAST_AGENT_VERSION:-}" ] && [ "$fa_ver" != "0.10.45" ]; then
+    if [ -n "${HR_FAST_AGENT_SHA256:-}" ]; then fa_want="$HR_FAST_AGENT_SHA256"; else
+      echo "[harnessrouter] WARN: HR_FAST_AGENT_VERSION=$fa_ver without HR_FAST_AGENT_SHA256 — the wheel is NOT verified"
+      fa_want=""
+    fi
+  fi
+  fa_tmp="$(mktemp -d)"
+  fa_href="$(curl -fsSL -H 'Accept: text/html' "https://pypi.org/simple/fast-agent-mcp/" | grep -o "https://files.pythonhosted.org/[^\"#]*${fa_whl}" | head -1)"
+  [ -n "$fa_href" ] || { echo "fast-agent $fa_ver: $fa_whl is not in the index"; rm -rf "$fa_tmp"; return 1; }
+  curl -fsSL "$fa_href" -o "$fa_tmp/$fa_whl" || { rm -rf "$fa_tmp"; return 1; }
+  if [ -n "$fa_want" ]; then
+    fa_have="$(sha256sum "$fa_tmp/$fa_whl" | awk '{print $1}')"
+    if [ "$fa_want" != "$fa_have" ]; then
+      echo "fast-agent $fa_ver: checksum mismatch for $fa_whl (want $fa_want, have $fa_have)"
+      rm -rf "$fa_tmp"; return 1
+    fi
+  fi
+  "${HR_FAST_AGENT_BASE_PYTHON:-python3}" -m venv "$TOOLS/fast-agent-venv" \
+    || { rm -rf "$fa_tmp" "$TOOLS/fast-agent-venv"; return 1; }
+  "$TOOLS/fast-agent-venv/bin/pip" install -q --disable-pip-version-check "$fa_tmp/$fa_whl" \
+    || { rm -rf "$fa_tmp" "$TOOLS/fast-agent-venv"; return 1; }
+  rm -rf "$fa_tmp"
+  # RUN what was installed and compare the version it REPORTS, and prove the two surfaces this
+  # backend depends on: the generic client's own env-var names and the ATIF trajectory writer.
+  "$TOOLS/fast-agent-venv/bin/python" -c '
+import sys, importlib.metadata as md
+have = md.version("fast-agent-mcp")
+if have != sys.argv[1]:
+    sys.exit("fast-agent-mcp %s installed, wanted %s" % (have, sys.argv[1]))
+from fast_agent.llm.provider.openai import llm_generic
+src = open(llm_generic.__file__).read()
+for name in ("GENERIC_BASE_URL",):
+    if name not in src:
+        sys.exit("fast-agent-mcp %s no longer reads %s, which the runner sets" % (have, name))
+' "$fa_ver" || { rm -rf "$TOOLS/fast-agent-venv"; return 1; }
+}
+
+# Docker Agent (Apache-2.0, docker/docker-agent) from its GitHub release: one static binary per
+# platform, ~145 MB, and UPSTREAM PUBLISHES NO CHECKSUMS beside them — so the digests are computed
+# here and pinned, which is install_goose's arrangement rather than install_omp's. They were
+# compared against the real assets before being written down.
+install_docker_agent() {
+  da_ver="${HR_DOCKER_AGENT_VERSION:-1.150.0}"; da_ver="${da_ver#v}"
+  case "$(uname -m)" in
+    x86_64|amd64)
+      da_asset="docker-agent-linux-amd64"
+      da_want="791fa6bac9f829847f00ab948f838bf54d11e0830988a5e5bce88d65ea65f2d1" ;;
+    aarch64|arm64)
+      da_asset="docker-agent-linux-arm64"
+      da_want="12ae093844531a60f32c344f4afb90bc92a010ea8438a5a760b3e79f8e81c8e7" ;;
+    *) echo "docker-agent: no binary pinned for $(uname -m)"; return 1 ;;
+  esac
+  # An override has no digest of ours, so it SAYS the bytes are unverified rather than pretending
+  # the check ran (goose's installer sets the precedent).
+  if [ -n "${HR_DOCKER_AGENT_VERSION:-}" ] && [ "$da_ver" != "1.150.0" ]; then
+    if [ -n "${HR_DOCKER_AGENT_SHA256:-}" ]; then da_want="$HR_DOCKER_AGENT_SHA256"; else
+      echo "[harnessrouter] WARN: HR_DOCKER_AGENT_VERSION=$da_ver without HR_DOCKER_AGENT_SHA256 — the binary is NOT verified"
+      da_want=""
+    fi
+  fi
+  da_tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/docker/docker-agent/releases/download/v${da_ver}/${da_asset}" \
+    -o "$da_tmp/docker-agent" || { rm -rf "$da_tmp"; return 1; }
+  if [ -n "$da_want" ]; then
+    da_have="$(sha256sum "$da_tmp/docker-agent" | awk '{print $1}')"
+    if [ "$da_want" != "$da_have" ]; then
+      echo "docker-agent $da_ver: checksum mismatch for $da_asset (want $da_want, have $da_have)"
+      rm -rf "$da_tmp"; return 1
+    fi
+  fi
+  mkdir -p "$TOOLS/bin"
+  install -m 0755 "$da_tmp/docker-agent" "$TOOLS/bin/docker-agent" || { rm -rf "$da_tmp"; return 1; }
+  rm -rf "$da_tmp"
+  # RUN it and compare the version it REPORTS: `docker-agent version` prints
+  # "docker-agent version v<version>" — there is no --version flag.
+  da_got="$("$TOOLS/bin/docker-agent" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if [ "$da_got" != "$da_ver" ]; then
+    echo "docker-agent installed but reports '${da_got:-nothing}', wanted $da_ver"
+    rm -f "$TOOLS/bin/docker-agent"; return 1
+  fi
+}
+
+# Deep Agents Code (MIT, langchain-ai/deepagents) from PyPI: the CLI wheel plus the ACP server
+# wheel, which is a SEPARATE distribution and the one this backend is driven through — `dcode --acp`
+# exits 1 with "ACP dependencies not available" without it. Both are pinned by version and by the
+# sha256 PyPI publishes for the file; their dependency trees (the deepagents SDK, langchain,
+# agent-client-protocol) are resolved by pip as vibe's and fast-agent's are.
+install_dcode() {
+  dc_ver="${HR_DCODE_VERSION:-0.1.84}"; dc_ver="${dc_ver#v}"
+  dc_acp_ver="${HR_DCODE_ACP_VERSION:-0.0.13}"; dc_acp_ver="${dc_acp_ver#v}"
+  dc_whl="deepagents_code-${dc_ver}-py3-none-any.whl"
+  dc_want="321437c72cdc109db70e9e9c06b2b4f9b1bfc2aac362b6678b18e01882a3b183"
+  dc_acp_whl="deepagents_acp-${dc_acp_ver}-py3-none-any.whl"
+  dc_acp_want="90c58385e44fe32b70e88980f83c930a25532c3d5c4de10dbc9dca09941313c2"
+  # A version override has no digest here, so it SAYS the bytes are unverified rather than
+  # pretending the check ran (goose's installer sets the precedent).
+  if [ -n "${HR_DCODE_VERSION:-}" ] && [ "$dc_ver" != "0.1.84" ]; then
+    if [ -n "${HR_DCODE_SHA256:-}" ]; then dc_want="$HR_DCODE_SHA256"; else
+      echo "[harnessrouter] WARN: HR_DCODE_VERSION=$dc_ver without HR_DCODE_SHA256 — the wheel is NOT verified"
+      dc_want=""
+    fi
+  fi
+  if [ -n "${HR_DCODE_ACP_VERSION:-}" ] && [ "$dc_acp_ver" != "0.0.13" ]; then
+    if [ -n "${HR_DCODE_ACP_SHA256:-}" ]; then dc_acp_want="$HR_DCODE_ACP_SHA256"; else
+      echo "[harnessrouter] WARN: HR_DCODE_ACP_VERSION=$dc_acp_ver without HR_DCODE_ACP_SHA256 — the wheel is NOT verified"
+      dc_acp_want=""
+    fi
+  fi
+  dc_tmp="$(mktemp -d)"
+  # The file URL is read out of PyPI's simple index rather than hard-coded: the hash is what pins
+  # the artifact, and the CDN path for a file is not part of the release's identity.
+  for dc_pair in "deepagents-code|$dc_whl|$dc_want" "deepagents-acp|$dc_acp_whl|$dc_acp_want"; do
+    dc_pkg="${dc_pair%%|*}"; dc_rest="${dc_pair#*|}"
+    dc_file="${dc_rest%%|*}"; dc_sum="${dc_rest#*|}"
+    dc_href="$(curl -fsSL -H 'Accept: text/html' "https://pypi.org/simple/$dc_pkg/" \
+               | grep -o "https://files.pythonhosted.org/[^\"#]*${dc_file}" | head -1)"
+    [ -n "$dc_href" ] || { echo "dcode: $dc_file is not in the $dc_pkg index"; rm -rf "$dc_tmp"; return 1; }
+    curl -fsSL "$dc_href" -o "$dc_tmp/$dc_file" || { rm -rf "$dc_tmp"; return 1; }
+    if [ -n "$dc_sum" ]; then
+      dc_have="$(sha256sum "$dc_tmp/$dc_file" | awk '{print $1}')"
+      if [ "$dc_sum" != "$dc_have" ]; then
+        echo "dcode: checksum mismatch for $dc_file (want $dc_sum, have $dc_have)"
+        rm -rf "$dc_tmp"; return 1
+      fi
+    fi
+  done
+  "${HR_DCODE_BASE_PYTHON:-python3}" -m venv "$TOOLS/dcode-venv" \
+    || { rm -rf "$dc_tmp" "$TOOLS/dcode-venv"; return 1; }
+  "$TOOLS/dcode-venv/bin/pip" install -q --disable-pip-version-check \
+      "$dc_tmp/$dc_whl" "$dc_tmp/$dc_acp_whl" \
+    || { rm -rf "$dc_tmp" "$TOOLS/dcode-venv"; return 1; }
+  rm -rf "$dc_tmp"
+  # The managed ripgrep, fetched HERE and not inside a turn: this CLI downloads a pinned,
+  # SHA-256-verified `rg` of its own the first time `grep` is called, and a turn is not the place
+  # for a download. With DEEPAGENTS_CODE_OFFLINE=1 (which the runner sets on every turn) it would
+  # instead fall back to "the slow Python regex path" its own documentation names. Not fatal: that
+  # fallback is a working search, so a failure here costs speed and nothing else.
+  HOME="$TOOLS/dcode-venv" "$TOOLS/dcode-venv/bin/dcode" tools install --json >/dev/null 2>&1 \
+    || echo "[harnessrouter] note: dcode's managed ripgrep was not installed; its grep uses the slower Python path"
+  # RUN what was installed and compare the version it REPORTS, and prove the surface this backend
+  # is driven through: the ACP server mode, which lives in a different distribution and whose
+  # absence `dcode --acp` reports as an exit rather than as a missing feature.
+  "$TOOLS/dcode-venv/bin/python" -c '
+import sys, importlib.metadata as md
+have = md.version("deepagents-code")
+if have != sys.argv[1]:
+    sys.exit("deepagents-code %s installed, wanted %s" % (have, sys.argv[1]))
+from deepagents_acp.server import AgentServerACP           # what `dcode --acp` imports
+from acp import run_agent                                  # and the protocol package under it
+import inspect
+src = inspect.getsource(AgentServerACP.__init__)
+if "load_sessions" not in src:
+    sys.exit("deepagents-acp %s no longer takes load_sessions, which is how a turn resumes"
+             % md.version("deepagents-acp"))
+' "$dc_ver" || { rm -rf "$TOOLS/dcode-venv"; return 1; }
 }
 
 # Run an install and, if it fails, SAY WHY.
@@ -1398,13 +1590,6 @@ install_backends() {
     try_install "MiMo Code" install_mimo || true
   fi
 
-  GAJAE_PIN="${HR_GAJAE_VERSION:-0.18.5}"
-  # `gjc --version` prints `gjc/<version>`, so the pin is compared against that spelling.
-  if wanted gajae && [ "$("$(backend_bin gajae)" --version 2>/dev/null | head -n 1)" != "gjc/$GAJAE_PIN" ]; then
-    echo "[harnessrouter] installing Gajae-Code $GAJAE_PIN (MIT, version-pinned)…"
-    try_install "Gajae-Code" install_gajae || true
-  fi
-
   JCODE_PIN="${HR_JCODE_VERSION:-0.90.0}"
   # `jcode --version` prints `jcode v<version> (<commit>)`; the version field is what is pinned.
   if wanted jcode && [ "$("$(backend_bin jcode)" --version 2>/dev/null | awk '{print $2}')" != "v$JCODE_PIN" ]; then
@@ -1426,6 +1611,41 @@ install_backends() {
     try_install "nanobot" install_nanobot || true
   fi
   [ -x "$TOOLS/nanobot-venv/bin/python" ] && export HR_NANOBOT_PYTHON="$TOOLS/nanobot-venv/bin/python"
+
+  VIBE_PIN="${HR_VIBE_VERSION:-2.26.1}"
+  if wanted vibe && [ "$("$TOOLS/vibe-venv/bin/vibe" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$VIBE_PIN" ]; then
+    rm -rf "$TOOLS/vibe-venv"
+    echo "[harnessrouter] installing Mistral Vibe $VIBE_PIN (Apache-2.0, version-pinned)…"
+    try_install "Mistral Vibe" install_vibe || true
+  fi
+  [ -x "$TOOLS/vibe-venv/bin/vibe" ] && export HR_VIBE_BIN="$TOOLS/vibe-venv/bin/vibe"
+
+  FAST_AGENT_PIN="${HR_FAST_AGENT_VERSION:-0.10.45}"
+  if wanted fast-agent && [ "$("$TOOLS/fast-agent-venv/bin/python" -c 'import importlib.metadata as m;print(m.version("fast-agent-mcp"))' 2>/dev/null)" != "$FAST_AGENT_PIN" ]; then
+    rm -rf "$TOOLS/fast-agent-venv"
+    echo "[harnessrouter] installing fast-agent $FAST_AGENT_PIN (Apache-2.0, version-pinned)…"
+    try_install "fast-agent" install_fast_agent || true
+  fi
+  [ -x "$TOOLS/fast-agent-venv/bin/fast-agent" ] && export HR_FAST_AGENT_BIN="$TOOLS/fast-agent-venv/bin/fast-agent"
+
+  DCODE_PIN="${HR_DCODE_VERSION:-0.1.84}"
+  if wanted dcode && [ "$("$TOOLS/dcode-venv/bin/python" -c 'import importlib.metadata as m;print(m.version("deepagents-code"))' 2>/dev/null)" != "$DCODE_PIN" ]; then
+    rm -rf "$TOOLS/dcode-venv"
+    echo "[harnessrouter] installing Deep Agents Code $DCODE_PIN (MIT, version-pinned)…"
+    try_install "Deep Agents Code" install_dcode || true
+  fi
+  if [ -x "$TOOLS/dcode-venv/bin/dcode" ]; then
+    export HR_DCODE_BIN="$TOOLS/dcode-venv/bin/dcode"
+    # The driver is stdlib-only, so the CLI's own interpreter runs it and no second venv exists
+    # for a backend to drift out of (nanobot's arrangement).
+    export HR_DCODE_PYTHON="$TOOLS/dcode-venv/bin/python"
+  fi
+
+  DOCKER_AGENT_PIN="${HR_DOCKER_AGENT_VERSION:-1.150.0}"
+  if wanted docker-agent && [ "$("$(backend_bin docker-agent)" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$DOCKER_AGENT_PIN" ]; then
+    echo "[harnessrouter] installing Docker Agent $DOCKER_AGENT_PIN (Apache-2.0, version-pinned) — ~145 MB…"
+    try_install "Docker Agent" install_docker_agent || true
+  fi
 
   # `zeroclaw --version` prints "zeroclaw 0.8.5", so comparing it to the pin both installs a missing
   # binary and replaces one left by an older image.

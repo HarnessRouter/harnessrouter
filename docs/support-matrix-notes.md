@@ -3608,15 +3608,18 @@ Owner trust, the Qoder connection added to the instance, driven through the cons
   2.36, qmodel_38max 2.44, qmodel_latest 2.47, performance 4.27, smodel 11.2. Qoder also lists
   `cmodel` (Cantus, price factor 4); it is not in the catalog, not having been measured.
 
-## Five bases added together, four of them offered (2026-10-02/06)
+## Five bases added together, four of them kept (2026-10-02/06; gajae taken out 2026-10-20)
 
 MiMo Code (XiaomiMiMo/MiMo-Code, MIT), Gajae-Code (Yeachan-Heo/gajae-code, MIT), jcode
 (1jehuang/jcode, MIT), OpenSquilla (TokenRhythm/opensquilla, Apache-2.0) and nanobot
 (HKUDS/nanobot, MIT), as the seventeenth to twenty-first bases.
 
-**gajae is implemented and NOT OFFERED**: its CLI cannot run under this product's session
-write-wall, measured both ways on a live instance — see "gajae: the write-wall and a lock that
-walks its ancestors" below. The other four are offered.
+**gajae is NOT IN THIS TREE.** It was built and measured in full, and then taken out whole —
+runner, gateway, console, installer, tests and fixtures — because its CLI cannot run under this
+product's session write-wall, measured both ways on a live instance. The work is parked on the
+branch `parked/vtcode-and-gajae`; what was measured about it, and what offering it would cost, is
+under "gajae: the write-wall and a lock that walks its ancestors" below. The other four are
+offered, and everything else in this section describes those four.
 
 **The FULL Vercel column, 2026-10-11**: every catalog id this connection was probed to serve — 50
 of the 54 common to all four catalogs, muse's four excluded and not probed — on all four bases, the
@@ -3685,7 +3688,6 @@ turn at a time. It says each base works; the column above is what says each MODE
 | base | pinned | lineage | normaliser | turn process |
 |---|---|---|---|---|
 | mimo | @mimo-ai/cli 0.1.15 | an **opencode fork** (its repo root package.json is still `"name": "opencode"`) | `_opencode_to_claude`, unchanged | `mimo run --format json` |
-| gajae | gjc 0.18.5 | **pi's lineage** (docs/porting-from-pi-mono.md; its deps still carry `pi-ai`) | `_gajae_to_claude`, which delegates to `_pi_to_claude` | `gjc -p --mode json` |
 | jcode | v0.90.0 | its own (Rust) | `_jcode_to_claude`, its own | `jcode … run --ndjson` |
 | opensquilla | 0.5.6 | openclaw/hermes lineage (it migrates `~/.openclaw` and `~/.hermes`; its transcript is the pi message shape) | `_opensquilla_to_claude`, its own | `opensquilla agent --json --event-stream-stderr` |
 | nanobot | nanobot-ai 0.3.5 | its own (a personal-agent runtime, not a coding CLI) | the claude passthrough | `runner/nanobot_driver.py`, in process through its SDK |
@@ -3759,8 +3761,10 @@ turn at a time. It says each base works; the column above is what says each MODE
   families, before any model switch had real effect, finished in 27-33 s. jcode has no step or
   iteration flag of any kind, so nothing bounds this but the turn's wall clock
   (`MAX_TURN_SECONDS`, six hours by default); the operator's step budget — the gateway's `max_step`,
-  which reaches the runner as `max_turns` — is forwarded by nine of twenty builders and is a no-op
-  on the other eleven, this one included.
+  which reaches the runner as `max_turns` — is forwarded by seventeen of the thirty-one builders
+  (hermes through its config file rather than a flag) and is a no-op on the other fourteen, this one
+  included. Counted off the builders themselves, 2026-10-19; the number moved when dcode joined
+  them, which is the sort of count that goes stale silently.
 
 - **nanobot's CLI seeds the workspace and makes a second git repository in it.** `nanobot agent -m`
   calls `sync_workspace_templates()`, which creates AGENTS.md, SOUL.md, USER.md, HEARTBEAT.md,
@@ -3802,11 +3806,6 @@ turn at a time. It says each base works; the column above is what says each MODE
 - **nanobot's usage is gross too.** A measured two-request turn: `input_tokens` 11,107 with
   `cache_read_tokens` 5,503, while the requests reported 5,506 and 5,601 — the cached read is a
   SUBSET. The driver nets it.
-- **gajae auto-enables `/v1/models` discovery on a custom provider.** Against Vercel it listed 376
-  upstream models under our provider name. It is marked optional, so an endpoint without a models
-  list degrades to the static entry, and the builder names the model fully qualified so a fuzzy
-  `--model` cannot land on a discovered id. Its signed model-preset registry — an HTTPS fetch that
-  can rewrite which model a preset names — is turned off.
 - **jcode's Linux release is a PAIR, and its macOS release is not.** `jcode-linux-<arch>.tar.gz`
   holds a 505-byte `sh` launcher plus `jcode-linux-<arch>.bin`; the launcher puts its own directory
   on `LD_LIBRARY_PATH` and execs the `.bin` beside it. The macOS archive holds a single binary and
@@ -3814,8 +3813,8 @@ turn at a time. It says each base works; the column above is what says each MODE
   Installing "the file called jcode*" took the launcher, left its `.bin` behind, and produced an
   executable that is on PATH, satisfies `backend_bin`, and dies on its first turn. Found by running
   the installer function against the real Linux asset, which is now part of what is done before a
-  base is called installed: `install_mimo`, `install_gajae` and `install_jcode` each run the binary
-  and compare the version it REPORTS, and remove what they put down when it does not match.
+  base is called installed: `install_mimo` and `install_jcode` each run the binary and compare the
+  version it REPORTS, and remove what they put down when it does not match.
 - **mimo's first run on a fresh volume is a one-time SQLite migration.** Measured: over nine
   minutes with no output before it was killed, about twenty seconds warm. The installer warms a
   throwaway home so a turn never pays it.
@@ -3825,15 +3824,14 @@ turn at a time. It says each base works; the column above is what says each MODE
 | base | how a provider failure arrives | exit |
 |---|---|---|
 | mimo | opencode's `error` event | 1 |
-| gajae | assistant `message_end` with `stopReason:"error"`, `errorStatus`, `errorMessage` — pi's contract exactly; ONE attempt on a 401, no retry storm. Also an `agent_failed` event pi has no branch for, which is why gajae carries its own wrapper | 1 |
 | jcode | a real `error` event naming the endpoint, the model, the auth variable's NAME (never its value), the status and the provider's body | 1 |
 | opensquilla | an `_event` of kind `error`, and `errors[]` on the final object | 1 |
 | nanobot | `run.failed`, or a `run.completed` whose RunResult carries an `error` or a non-completed `stop_reason` | driver's |
 
 ### Tool enforcement, measured
 
-`hard` on four, and each was proven by asking the model for its own tool list with one tool
-withheld: gajae's `--tools` allowlist (write absent), jcode's `--disabled-tools` (write absent),
+`hard` on three, and each was proven by asking the model for its own tool list with one tool
+withheld: jcode's `--disabled-tools` (write absent),
 mimo's `permission.<key>: "deny"` (opencode's, inherited), nanobot's session policy (write_file
 absent — and the model then wrote the file with `exec`, which is the honest limit every
 shell-bearing base has). `instruction` on opensquilla, because `--permissions` picks a posture and
@@ -3855,7 +3853,6 @@ each: write a file and reply with exactly DONE.
 
 | base | file written | result | usage read off the record |
 |---|---|---|---|
-| gajae | `e2e.txt` = kiwi | success, `DONE`, served model `openai/gpt-6-luna` | 6 fresh in / 37 out, 11,105 cache read, 11,157 cache write |
 | jcode | `e2e.txt` = kiwi | success, `DONE` | 6 fresh in / 66 out, 10,592 cache read, 10,741 cache write |
 | opensquilla | `e2e.txt` = kiwi | success, `DONE` (from the transcript, not the concatenated `text`) | 6 fresh in / 189 out, 8,281 cache read, 8,408 cache write |
 | nanobot | `workspace/e2e.txt` = kiwi | success, `DONE` | 5,596 fresh in / 31 out, 5,505 cache read |
@@ -3867,7 +3864,9 @@ data volume, not of a turn, and it is exactly why `install_mimo` warms a throwaw
 
 The relay is the one that matters for rule 2: all five reached the provider through it with the
 placeholder bearer in the environment, so `_relay_served_model` has its input on every one of them.
-gajae also names the served model itself, on every assistant message.
+(The fifth was gajae, since removed — it answered `DONE` with `openai/gpt-6-luna` as its served
+model, which it names itself on every assistant message; 6 fresh in / 37 out, 11,105 cache read,
+11,157 cache write.)
 
 ### The Google column, and what a DIRECT provider showed that the aggregator hid (2026-10-11)
 
@@ -3954,8 +3953,8 @@ records before it is given a thousand turns to score.
 
 ### What every dimension measured, and what is still not measured
 
-All four offered bases have now been through all four dimensions on the Vercel connection. gajae is
-not offered and is in none of them (see the write-wall section below).
+All four offered bases have now been through all four dimensions on the Vercel connection. gajae
+is not in the tree and is in none of them (see the write-wall section below).
 
 | dimension | mimo | jcode | opensquilla | nanobot |
 |---|---|---|---|---|
@@ -4029,12 +4028,12 @@ write — that would fail the task rather than test the policy):
 | codex | `git` | cheetahclaws | `WebSearch` |
 | hermes | `web_search` | openhands | `Todo` |
 | pi | `edit` | mimo | `websearch` |
-| dsh | `web_search` | gajae | `web_search` |
-| opencode | `websearch` | jcode | `websearch` |
-| qwen | `web_fetch` | opensquilla | `web_search` |
-| gemini | `google_web_search` | nanobot | `web_search` |
-| cline | `fetch_web_content` | goose | `read_image` |
-| omp | `web_search` | **aider** | **null — not testable** |
+| dsh | `web_search` | jcode | `websearch` |
+| opencode | `websearch` | opensquilla | `web_search` |
+| qwen | `web_fetch` | nanobot | `web_search` |
+| gemini | `google_web_search` | goose | `read_image` |
+| cline | `fetch_web_content` | **aider** | **null — not testable** |
+| omp | `web_search` | | |
 
 aider's catalog is one tool, Shell, and the task needs it, so its row reports that the policy is
 not testable on that base rather than passing. A vacuous pass is worse than an honest gap.
@@ -4092,16 +4091,29 @@ Neither side is wrong. gjc assumes it may be running where an attacker can write
 ancestor itself; this product makes those ancestors unwritable so nobody can, and in doing so makes
 them unreadable, which is what gjc's verification needs.
 
-**Decision (the user's, 2026-10-06): do not weaken the wall.** gajae is removed from everything
-that offers, routes or installs it — `_MODEL_CATALOG`, `_BASE_CATALOG`, `_INTEGRATION_WIRING`,
-`_CUSTOM_FORMAT_BACKENDS`, the console's `OOB` and logo map, the default `HR_BACKENDS`, and both
-measurement dimensions' base lists. The runner's implementation stays (`_build_gajae`,
-`_gajae_to_claude`, 13 tests and two captured fixtures) because the base works and the blocker is a
-product decision; `gateway/tests/test_gajae_not_offered.py` pins every one of those surfaces so a
-half-restore — listed but not routable, or routable but not installed — cannot pass unnoticed.
+**Decision (the user's, 2026-10-06): do not weaken the wall.** gajae was first left implemented
+but not offered. **Superseded (the user's, 2026-10-20): take the whole thing out.** A base this
+product cannot run is not carried in the tree — the runner builder and normaliser, the installer,
+the catalog, wiring and console rows, the tests and the two captured fixtures are all gone, and the
+pre-removal state is the branch `parked/vtcode-and-gajae`. Restoring it is that branch plus the
+mode change below, not a rewrite; the record here is what the measurement bought.
+
+**What the measurement bought, kept because it cost a live instance to learn.**
+
+- **gajae auto-enables `/v1/models` discovery on a custom provider.** Against Vercel it listed 376
+  upstream models under our provider name. It is marked optional, so an endpoint without a models
+  list degrades to the static entry; the builder named the model fully qualified so a fuzzy
+  `--model` could not land on a discovered id, and turned off the signed model-preset registry —
+  an HTTPS fetch that can rewrite which model a preset names.
+- **Its failure reporting is pi's contract exactly**: an assistant `message_end` carrying
+  `stopReason:"error"`, `errorStatus` and `errorMessage`, one attempt on a 401 with no retry storm,
+  plus an `agent_failed` event pi has no branch for — which is why its normaliser wrapped pi's
+  rather than reusing it.
+- **Its tool switch is hard**: a `--tools` allowlist, proven by asking the model for its own tool
+  list with `write` absent from the allowlist.
 
 **What it would take to offer it.** Relax `/data` and `/data/workspaces` to `755`, then restore the
-catalog entries, the wiring rows and the `_CUSTOM_FORMAT_BACKENDS` membership. What that gives up is
+parked branch. What that gives up is
 "neither listable", not "nor writable": a session uid could then enumerate other session ids and
 environment names. It could not read them — `control.db` and `graph.db` are `0600` and `blobs/` is
 `0700`, and a session uid already has traverse, so file contents are governed by each file's own
@@ -4208,3 +4220,857 @@ the loopback relay, so it is wired row for row with nanobot and is in `CHAT_ONLY
 The expensive models of the catalog (Sonnet, Opus, Fable, the GPT sol and terra lines, Gemini Pro), the
 other providers (the direct Anthropic and OpenAI connections, Vercel, TokenRouter), the browser column
 on an instance with a browser service, the environments column and the benchmark dimension.
+## vibe: Mistral's own CLI, a model switch a resumed session would have swallowed, and the FIRST COLUMN of this batch (2026-10-14/19)
+
+`mistral-vibe` 2.26.1, added as the twenty-seventh base. Measured against the pinned wheel through a
+proxy that recorded every request the CLI made, on the Vercel AI Gateway and on Google's
+OpenAI-compatible endpoint — and then, on 2026-10-19, through a real support-matrix column.
+
+### The column (vercel, 2026-10-19): 56 pairs, 56 passes, and two gateway bugs it found
+Run against a locally built image of this branch (`HR_BACKENDS=vibe`, one Vercel connection set
+from the environment), `scripts/support-matrix/run.mjs` driving the console as a person:
+**56 of the 58 ids in its catalog ran, every one of them passing all five scenarios** — first turn,
+follow-up, switch, artifact, recycle. The other two are `llama-3.3-70b` and
+`nemotron-3.5-lightning`, both already in `_VERCEL_NO_CHANNEL` for measured reasons of their own
+(that gateway's Llama route refuses tools in streaming mode; its nemotron-3.5-lightning garbles
+tool-call arguments), so the picker correctly did not offer them. The audit beyond the pass flags
+is clean too: every pair's `served` carries two ids (its own and the switch partner's, which is
+what proves the chip's move reached the provider), no pair's file cards disagree with its record,
+and every session deleted. 2.3M input tokens for the whole column.
+
+**The column's real yield was two bugs in the gateway, neither in any harness**, both on the
+connection path and both now fixed with tests:
+1. A connection set from the environment — the scripted-deploy shape the self-hosting guide
+   documents — reached the runner with **no base_url**, because the integrations form fills a known
+   provider's endpoint on save and the chain path never did. The first turn of the first pair failed
+   with the runner's own sentence, `vibe provider 'tokenrouter' needs a base_url (none configured)`.
+2. The rename to the runner's provider name is **lossy about which vendor the connection is**:
+   `tokenrouter` is the runner's name for TokenRouter, Vercel, llmtr AND the HarnessRouter API, and
+   `_map_model` read that renamed name to pick a model-id table. So a Vercel connection was sent
+   TokenRouter's slugs. Measured through a recording proxy in front of the gateway: `grok-4.20` went
+   out as `x-ai/grok-4.20-beta` and came back `spacexai/grok-4.20-non-reasoning-beta` — the
+   NON-reasoning model, where this product's own table names `spacexai/grok-4.20-reasoning` — and
+   `qwen3.8-max` went out as `qwen/qwen3.8-max` and came back `alibaba/qwen3.8-2.4t-a95b`. **Both
+   pairs passed all five scenarios**: that aggregator resolves a slug it does not publish to
+   something near it, so nothing but the served-model check could see it. Of the fourteen ids whose
+   Vercel slug differs from TokenRouter's, twelve were saved by that leniency and two ran a model
+   other than the one picked. This is what matrix rule 2 is for, and the first time it has caught a
+   routing fault rather than a harness fault. After the fix, the same four pairs send and are served
+   `spacexai/grok-4.20-reasoning`, `alibaba/qwen3.8-max`, `zai/glm-5.3` and `google/gemini-3-flash`.
+
+Neither bug is this base's, and both would have hit every backend on an environment-set connection,
+which is why they are written up here rather than in a harness's section: the column is what found
+them.
+
+### The custom-harness dimension, the plugin matrix and the family tour (2026-10-19)
+Run in that order after the column, each only once the one before it was green (see "The order a
+harness is tested in" in docs/harness-verification.md).
+
+- **Custom harness: pass, 11 s.** The configuration a person builds, not a built-in: its own skill
+  carrying its own script RAN (`skill_reached`, `script_ran`, `stamp.txt` produced), the tool
+  switched off (`todo`) was not used, and the person's own MCP server was called —
+  `mcp_deepwiki.read_wiki_structure`, reached through two `search_tool_functions` calls, which is
+  this runtime's own deferred-tool dispatcher doing exactly what its catalog entry says it does.
+- **Plugin matrix: five of five columns pass.** One Agent Plugins package and nothing on the
+  harness's direct lists: `skills` 4.5 s, stdio `mcp` 8.0 s, `rows` 8.7 s (the free-form rows
+  arrived carrying their fields — `first=1 second=2`, the tool's own token, not the agent's
+  account of its call), `sse` 9.9 s and `http` 9.2 s, both answering the public probe's fixed
+  token. **This is the first time this base's remote MCP paths have been measured against a live
+  server** rather than read off its transport enum: the SSE column proves the runner's bridge for
+  it (its own `mcp_servers` has no SSE client) and the HTTP column proves its native
+  streamable-HTTP client.
+- **Family tour: 12 of 12 families in one conversation.** One `tour.pptx` carried from a first turn
+  through twelve model families, each making its own edit and each keeping the file: gpt-5.4-mini,
+  claude-sonnet-5, gemini-3.5-flash, grok-4.5, muse-spark-1.1, deepseek-v4-flash, kimi-k3,
+  qwen3.8-flash, glm-5.3-flash, mistral-medium-3.5, step-3.7-flash, hunyuan-4-preview. Every turn's
+  served model was the family asked for, 12 to 58 s each, 3 to 6 tool calls. `llama-3.3-70b` and
+  `nemotron-3.5-lightning` were skipped as not offered on this connection, which is
+  `_VERCEL_NO_CHANNEL` working.
+
+One RIG difference, recorded because it is not a finding about the base: the image these ran on was
+built lean (`WITH_DOC_PREVIEW=0`, no built-in skills) to keep the build short, so `python-pptx` was
+installed into the container before the tour. A deck task on a stock image needs no such thing —
+the product's own image bakes those libraries in — and a tour run without it would have measured
+the rig.
+
+### The SECOND column (google, 2026-10-19): 8 of 8, and the relay repair it forced
+A fresh instance holding ONE connection — Google AI Studio and nothing else — which is what "one
+provider at a time" means here. Its menu offered **8 of the catalog's 58 ids**, the whole gemini
+family, and the other 50 were correctly not offered: that is the honest-catalog rule working per
+connection rather than per base. All 8 pairs passed all five scenarios, nothing substituted (and on
+this endpoint the served ids come back BARE — `gemini-3.8-flash`, not `google/gemini-3.8-flash`),
+every pair's `served` carrying two ids, cards agreeing, every session deleted.
+
+It did not start that way. **The artifact scenario failed twice** — 211 s, then 162 s on the
+re-run — with `The turn failed: Tool call chunk missing index`, after the model had answered and
+with the file never written. That sentence is the CLIENT's (vibe 2.26.1 raises it in its own
+`core/types.py` while merging a streamed tool call's chunks) and the cause is the PROVIDER's shape:
+measured straight at `generativelanguage.googleapis.com/v1beta/openai`, a streamed `tool_calls`
+delta carries `id`, `type`, `function` and Google's own `extra_content.google.thought_signature`
+and NO `index`, where OpenAI's streaming shape has one on every delta because that is how a client
+merges chunks. The relay now supplies it (`_tool_call_index_line`, route flag `tool_index_fill`),
+and the scenario that failed twice passes in 19.76 s.
+
+Worth keeping about that fix: **the first version of it did nothing.** The rewriter was extended
+and ten unit tests passed, but the streaming loop's gate — the expression that decides whether the
+client is given the rewritten lines or the raw read — still named only the two older flags, so the
+bytes went through untouched and the column failed again with the identical error. The whole
+8-pair column was then re-run on the fixed build rather than kept, per "a column is never assembled
+from two builds".
+
+### What it is
+Not a fork of anything this runner already drives. Its programmatic mode is a written contract:
+`vibe -p` with `--output streaming` puts one JSON session-journal entry per line on stdout
+(`message` for prose, `effect` for a tool call with its input, its result and the approval decision
+in one object), and `--output-dir` writes an `export.json` with the outcome, the session id, the
+usage and the reason the run ended. Exit codes are documented per outcome (0 finished, 1
+usage/config, 2 the model API or the runtime, 3 a limit or a refusal, 4 an aborted socket run). Its
+`[[providers]] backend = "generic"` is an OpenAI chat/completions client, so every keyed turn rides
+the loopback relay and rule 2 is answerable: the relay stamped `anthropic/claude-haiku-5.5` and
+`google/gemini-3-flash` on the turns that asked for them.
+
+### The two defaults that would have been defects, both closed
+- **A programmatic run does not read the project's `AGENTS.md`.** Without `--trust` the CLI says so
+  on stderr ("project configuration (AGENTS.md) will be ignored") and the harness's whole workspace
+  contract reaches nobody; the turn still completes, so nothing would have failed. With `--trust`,
+  an instruction written in that file was obeyed in the answer. `_build_vibe` passes it.
+- **There is no `--model` flag, and a resumed session restores the model it started on.** A resumed
+  run whose `config.toml` named a second model asked the provider for the FIRST model and its own
+  export agreed — matrix rule 2 broken by configuration, not by bug, and invisible in the reply.
+  What does change it is an agent profile: `$VIBE_HOME/agents/<name>.toml` with `active_model`,
+  selected with `--agent`. Measured both ways (the request carried the profile's model where the
+  session had started on another, the conversation was intact and the AGENTS.md contract still
+  applied), so the builder writes a profile per turn as well as a config. Checklist item 42's shape
+  exactly, found by running two turns with different models and reading what the provider was asked.
+
+Also turned off per turn, each a default: `enable_telemetry` (traces to Mistral's endpoint,
+authenticated with the provider's key), `enable_update_checks` / `enable_auto_update` (a pinned CLI
+that updates itself changes under a measurement — Muse Code's launcher did exactly that),
+`enable_notifications`, and `[session_logging] generate_titles`, which is a SECOND model call on the
+turn's own route to name the session.
+
+### Tool enforcement, and a first reading that was wrong
+A turn declares NINE tools — `search_tool_functions`, `run_typescript`, `read_file`, `write_file`,
+`edit`, `bash`, `skill`, `todo`, `unified_harness_scratchpad` — the same nine with nothing disabled
+and with two disabled. Two are DISPATCHERS (`run_typescript` runs a script with the tool registry in
+scope, `search_tool_functions` looks a tool up by name), which is how the runtime reaches everything
+else including an MCP server's tools, so a judge reading tool NAMES alone will not see an MCP call
+here. The custom-harness dimension's `NEEDED_ID` now covers both, or `pickDisabled` could withhold
+the MCP path and fail the row for the dimension's reason.
+
+`--disabled-tools` is enforced, and **not** by withholding the declaration: with `write_file` and
+`edit` disabled the request still declared both, the model called `write_file`, and the call came
+back `status: "failed"`, `decision: "skip"`, `error.code: "tool_denied"` with nothing written. The
+policy beats `--auto-approve` and the profile's `bypass_tool_permissions`. So the tool's EFFECT is
+withheld, which is what `hard` claims, and the usual limit holds — a model left with `bash` can
+still write a file with a shell command.
+
+The first version of this note said `--disabled-tools web_search` proved withholding because
+web_search vanished from the declared list. It had never been in it: web_search is not among the
+nine. That check had no input (checklist item 18), and the real mechanism only appeared when the
+measurement was retaken against a tool the base actually has.
+
+Because of that mechanism, a refused call is recorded as the `system/notice` the gateway renders on
+the reply, not as a tool row: on every other base a disabled tool is withheld, so a turn's tool list
+means "what ran", and the custom-harness dimension reads exactly that list to decide whether a
+withheld tool stayed unused. Recording the attempt would have failed a row for a call that never
+happened; swallowing it would hide from the user that their own switch stopped the agent.
+
+### End to end, with the runner's own argv and the runner's own relay (2026-10-15)
+Three turns in one session, through `_build_vibe` and `_hermes_relay_route`, against the Vercel
+gateway, replayed back through the shipped normaliser:
+1. first turn — success, `served_model anthropic/claude-haiku-5.5`, usage non-zero;
+2. follow-up with a DIFFERENT model — same session id, `served_model google/gemini-3-flash`, the
+   first turn's word recalled, the AGENTS.md token in the answer, and `e2e.txt` written;
+3. the same session with `write_file` and `edit` disabled — the write refused, no file, the notice
+   on the reply, no tool row.
+The produced-files list after all three held exactly the agent doc and the file the agent wrote:
+everything the CLI writes for itself is under `.harness/vibe/`, which `_PRODUCED_EXCLUDE_PREFIX`
+already drops (item 36's check, answered before a column rather than after it).
+
+Its `config.toml` (which can carry an MCP server's Authorization header), `$VIBE_HOME/.env` (what
+its own setup wizard writes a key into) and the per-turn export directory are in
+`CHECKPOINT_EXCLUDE`; the session store under `$VIBE_HOME/logs/session` is NOT, because that is what
+makes `--resume` survive a sandbox recycle.
+
+### Install
+PyPI, pinned to 2.26.1, and the wheel is fetched by URL and compared to a per-architecture digest
+(PyPI's own recorded hashes: `1ceb43e3…` x86_64, `896a4326…` aarch64) rather than installed by name
+— the wheels are platform-specific, cp312-abi3 with a compiled CLI inside, and `pip install
+mistral-vibe==X` trusts whatever the index serves under that name today. Both digests were compared
+against the real assets, and `install_vibe` itself was run on a `python:3.12-slim` container, where
+the installed binary reported `vibe 2.26.1`.
+
+### What is NOT measured
+Two columns (vercel, google), the custom-harness dimension, the plugin matrix and the family tour
+have run. What has NOT: the browser, thinking and environments columns, and every other row of this
+base's wiring — anthropic, openai, azure-foundry, openrouter, tokenrouter, llmtr, custom and
+harnessrouter are all unmeasured on it, and a column is one connection's measurement. A turn's input is large — 11.5k tokens on a three-word prompt, 20k characters of system
+prompt — which is worth knowing before reading its usage numbers against another base's.
+
+## vtcode (VT Code 0.177.0): measured, then taken out of the tree — its headless mode drops a harness's MCP servers (2026-10-16/20)
+
+Not in this repository any more: the runner implementation, its tests, its fixtures and its
+installer were removed whole, and the console, the gateway and both measurement dimensions never
+got it. **The work is parked on the branch `parked/vtcode-and-gajae`**, which is where a restore
+starts; this section is the record of why it is not here.
+
+**It ran.** A full support-matrix column on the Vercel connection (2026-10-19): 56 of the catalog's
+58 ids ran and **55 passed all five scenarios**, no substitution on any row, file cards agreeing
+with their records, sessions deleted. The one failing row, `grok-build-0.1`, failed the same way
+twice — `first` and `switch` pass, and the three turns the model answers itself end in
+`Stopped due to infinite loop detection` at 207 to 310 s.
+
+**What stopped it.** A harness's MCP servers cannot reach the model in `vtcode exec`. Measured on
+0.177.0 and again on 0.180.0 with a stdio MCP server written for the probe, which appends a line
+the moment it starts and then answers the protocol by hand: its log holds exactly `spawned <ts>`
+and **not one `initialize`**. The CLI launches the server its own config names and never speaks to
+it, so no tool is registered. `search_tools` — the only other door, and the one this runtime defers
+everything else behind — answers `[Execution failed] session tool catalog is not available`,
+because `attach_session_model_tools` is called by the INTERACTIVE runloop alone ("Headless paths
+may never call this", its own doc comment) while `execute_search_tools` errors instead of degrading
+as that comment requires. Ruled out by measurement, not by reading: the tool profile
+(`advanced_vtcode` adds its own tools and no MCP tool), the surface gate (`AgentRunner => true`),
+the MCP allow-list (not enforced by default), the config shape (`[[mcp.providers]]` is what the
+struct declares, and exec reads it — that is how the server gets spawned), bridging the server as
+stdio (the bridge's output IS a stdio server, the thing being ignored), and `vtcode mcp list` (its
+own registry, not the workspace config).
+
+**What the column taught the product before it was removed**, all of it still in the tree: a
+streamed tool call with no `index` gets one from the relay (Google's OpenAI-compatible surface sends
+none, and this client merged by it); the matrix's artifact row compares the page's file cards
+against the SESSION's files rather than one turn's; and the relay repairs a client's request shape
+(an empty user message after a tool result, a trailing system message) — all three were found here
+and all three serve every base.
+
+**Two defects worth filing upstream, in their own words:** a headless path that never attaches the
+session tool catalog while its consumer is documented to "degrade gracefully rather than error", and
+an MCP child process spawned without a handshake.
+
+## docker-agent: Docker's own runtime, where the config IS the harness (2026-10-16; measured through all five steps 2026-10-20)
+
+Docker Agent v1.150.0, added as the twenty-ninth base and the first one whose whole turn — provider,
+model, instructions, toolsets, skills, MCP servers — comes from a YAML file this runner writes per
+turn. Measured against the pinned release binary, first through a recording proxy and then end to
+end through the runner's own argv and relay. **No support-matrix column has run.**
+
+### What it is
+`docker-agent run --exec --json` streams its own NDJSON: `tool_call` (id, name, arguments),
+`tool_call_response` (tool_call_id, response), `agent_choice`, `token_usage`, `stream_stopped`,
+plus the TUI's own progress (`team_info`, `toolset_info`, `mcp_init_*`, `message_added`,
+`hook_*`, `partial_tool_call`) which is not rendered. `user_message` is the prompt played back.
+
+Three things about that stream had to be measured rather than assumed:
+- **`agent_choice` is a DELTA.** A two-sentence answer arrived as nineteen of them across two
+  message ids. Read as whole messages, a turn's reply became its LAST fragment — "RST" for an
+  answer of "DA-E2E-FIRST", which is what the first end-to-end run reported. They are buffered and
+  flushed as one text block when the message changes, when a tool call interrupts, or at the end,
+  so the order a reader sees is the order things happened.
+- **`token_usage` is per REQUEST, and its top-level numbers move with the CONTEXT, not with what
+  was billed** (3059 then 3157 on a two-request turn). The turn's usage is the sum of each event's
+  `last_message`, which is jcode's defect read before it could happen here.
+- **`partial_tool_call`** is one call arriving in fragments; rendering those would put a row on the
+  transcript per keystroke.
+
+### The session id is the harness's own
+`--session <id>` takes an id that does not exist yet and creates it, so the gateway's session id
+travels unchanged — no mapping, no second identifier. The flip side is that an id the store has lost
+is created silently as a NEW conversation, so `_docker_agent_session_present` asks the sqlite store
+(read-only, by the id, whatever table holds it) and `_resume_lost` tells the user when the
+conversation is gone. That is opencode's lesson, where four hosted sessions answered three recalls
+each from an empty history and nothing said so.
+
+A mid-session model switch needs nothing special: the YAML is rewritten per turn and the resumed
+session does not pin the model — measured (claude-haiku-5.5, then gemini-3-flash on turn two, both
+read off the relay).
+
+### Defaults closed per turn
+- `TELEMETRY_ENABLED=false` — the CLI's own first-run message names that variable, and it is NOT
+  `DOCKER_AGENT_`-prefixed (`pkg/telemetry/utils.go`). A probe that set the prefixed name got the
+  banner anyway, which is how the right name was found.
+- `DOCKER_AGENT_AUTO_INSTALL=false` — a toolset whose command is missing otherwise fetches it from
+  the aqua registry at the moment the model calls it.
+- `DOCKER_AGENT_AUTO_UPDATE=false` — opt-in upstream, said out loud because a pinned binary that
+  can replace itself is how Muse Code's version changed under a measurement.
+- Its data and config dirs are pinned under `.harness/docker-agent/`, and $HOME is already
+  redirected there, which catches the cache path those two do not cover.
+
+### The config needs version 8, and the schema repair the relay already had
+`providers:` does not exist before config version 8: version 2 is refused with a hint naming the
+version to use. And its filesystem toolset declares `excludePatterns` as an optional array with no
+`items`, which Google's validator refuses outright
+("GenerateContentRequest.tools[0].function_declarations[5].parameters.properties[excludePatterns].items:
+field predicate failed"). The relay's `_with_gemini_schemas` already repairs exactly that shape
+once a channel names it; this backend's route asks for it up front rather than paying one failed
+request per gemini turn.
+
+### Tool policy is by TOOLSET
+Its runtime groups tools into toolsets (filesystem, shell, todo, think here) and a toolset's
+`tools` key is an INCLUDE list — there is no per-tool deny. So a disabled tool is removed from its
+toolset's list, and a toolset with nothing left is dropped entirely (an empty include list means
+"include nothing"). Measured through the product: with write_file, edit_file and shell withheld,
+the model reported that none of its remaining tools could create or edit a file, and nothing was
+written. The fifteen tools the four toolsets bring are the catalog's list, read off a turn's own
+request.
+
+The custom-harness dimension needed its spares spelled out too: `think` and the four todo tools
+(`create_todo`, `create_todos`, `update_todos`, `list_todos`) matched none of `PREFERRED`, so
+`pickDisabled` fell through to `read_multiple_files` — a file tool, one of the kinds the fixture
+needs. It now lands on `create_todo`.
+
+### End to end (2026-10-16)
+Three turns in one session: the first answered with the AGENTS.md token (its prompt-files lookup
+reads the file this runner writes, named in `add_prompt_files`); the second, on a different model,
+wrote `e2e.txt`, recalled the first turn's word and recorded five tool calls; the third, with
+write_file, edit_file and shell withheld, refused to write and said so. Session presence read False
+before the first turn and True after it. The produced-files list held the agent doc and the agent's
+own file, with everything the CLI writes for itself under `.harness/`.
+
+### Install
+GitHub release, pinned to v1.150.0, one ~145 MB static binary per platform. **Upstream publishes no
+checksums**, so the digests are computed here and pinned beside the version (install_goose's
+arrangement, not install_omp's), compared against the real assets first. `install_docker_agent` was
+run on a linux container, where what it installed reported `docker-agent version v1.150.0`. There is
+no `--version` flag: the subcommand is `version`.
+
+### All five steps, in the order docs/harness-verification.md sets (2026-10-20)
+
+A locally built image of this branch, `scripts/support-matrix/run.mjs` driving the console, one
+base installed and one connection configured per step.
+
+| step | result |
+|---|---|
+| matrix, vercel | **56 of 58 ids, all five scenarios each — 280 of 280.** The two left out are `llama-3.3-70b` and `nemotron-3.5-lightning`, already excluded on that gateway for measured reasons |
+| custom harness | **pass**, 16 s: a person's own skill was read (`read_skill matrix-stamp`), its own script ran and produced `stamp.txt`, the withheld `create_todo` went unused, and their own MCP server answered (`deepwiki_read_wiki_structure`, 14 s) |
+| plugin matrix | **5 of 5 columns**: skill 9.4 s, stdio MCP 5.5 s, free-form rows 5.5 s (`first=1 second=2`), **SSE 9.9 s** and **streamable-HTTP 5.4 s** — the first live measurement of this base's remote MCP paths, which until now were bridged on the strength of reading its transport enum |
+| family tour | **12 of 12 families in one conversation**, one `tour.pptx` carried through all of them, every turn served by the family asked for. Slowest: `qwen3.8-flash` 112.8 s over 12 tool calls and `hunyuan-4-preview` 106.8 s over 15, both inside the 600 s cap |
+| matrix, google | **8 of 8 — 40 of 40.** The whole gemini family, which is all this connection serves of the 58; the other 50 correctly not offered |
+
+The audit beyond the pass flags, on both columns: **two `served` ids on every pair** (which is what
+proves the model switch reached the provider), every session deleted (200), every turn on the
+connection the column names, and nothing substituted. Three ids are served under another spelling
+on Vercel — `claude-fable-5-1` → `anthropic/claude-fable-5.1`, `gemini-3-flash-preview` →
+`google/gemini-3-flash`, `hunyuan-4-preview` → `tencent/hy4-preview` — each a `_VERCEL_RESLUG` row
+with its own measured reason, and `gemini-3-flash-preview` comes back under its full name on
+Google's own surface.
+
+**How the vercel column was assembled, said plainly:** 26 pairs ran before the no-answer repair
+below and 30 after it, including the one pair that provoked it, re-run from zero. The repair
+touches only the path a turn takes when it produced no text at all, which no passing row reaches.
+
+### The two things those steps found, neither of them in a harness
+
+**1. A turn that said nothing was reported as success with an empty answer.** `_docker_agent_eof`
+asked only `rc == 0 and not why`, so a run that exited 0 without a single `agent_choice` fragment
+put `result: ""` in the record, which the console renders as a done pill over a blank reply — the
+shape opencode's own eof already refuses to leave blank. MEASURED on `gemini-3.5-flash-lite`'s
+recycle scenario: 46 s, one provider request whose `output` was `[function_call,
+function_call_output]` and nothing else, exit 0, no answer. It did NOT reproduce (the same pair
+re-ran 5 of 5, that scenario in 7.6 s), so **why** the run stopped is not established and nothing
+here claims it. What is established is that the record said success and carried neither an answer
+nor a reason. It now fails with "the agent ended the turn without answering", naming the
+`finish_reason` the CLI's own `token_usage` event carried — `state["_da_finish"]` was already
+being collected and was read by nobody, which is the difference between one look and five.
+
+**2. The model picker offered models the router then refused.** An instance holding one google
+connection reported **eight gemini ids as `available: true`** for docker-agent through the
+product's own `/v1/models`, and every one of those turns came back "No connection on this account
+serves gemini-4-argon" — after the point of no return. `_servable_models` unions the per-model
+table of each chain connection's provider and never asked whether that provider can drive the
+base; the router asks exactly that (`_chain_refusal`: a known provider with no
+`_INTEGRATION_WIRING` row is refused). The picker now asks the router's own question, so the two
+cannot drift, and a connection the router would refuse contributes no models rather than its whole
+table. The second half of the fix is the failure mode to avoid while making it: a skipped
+connection must not fall through to "no restriction", which is this product's original
+offer-everything bug. Both halves are pinned in `gateway/tests/test_servable_models.py`.
+
+This was reachable only because docker-agent had no google row. `goose` has none deliberately
+("unprobed is unlisted", in the table itself) and carries nine gemini ids, so the picker had nine
+promises to break there too; `fast-agent` and `dcode` are in the same position. They are now
+correctly greyed instead of offered-then-failed.
+
+### Google's own surface, probed rather than assumed
+`("google", "docker-agent"): "openai-api"` was added on a measurement, which is that table's own
+rule: a pair on v1.150.0 against `generativelanguage.googleapis.com/v1beta/openai` passed all five
+scenarios on `gemini-3.5-flash` with the mid-session switch served as `gemini-4-argon`, and the
+full eight-id column followed. Before the row, this base reached the gemini family only through an
+aggregator.
+
+### What is still NOT measured
+Its `--sandbox` / `--cloud` modes, its sub-agents,
+its RAG and its MCP catalog: a turn gets the four toolsets above and nothing else. Why the one
+no-answer turn stopped — it did not reproduce, and the raw CLI stream of it was not captured.
+
+## dcode (deepagents-code): the first base driven over ACP, because its headless mode cannot continue a conversation (2026-10-19; measured through all five steps 2026-10-20)
+
+LangChain's `deepagents-code` 0.1.84 (`dcode`) is the thirty-first base, and the only one here
+driven over the **Agent Client Protocol** instead of a CLI flag. Measured through a recording proxy
+and then end to end through the runner's own argv and relay, five scenarios in one workspace. **No
+support-matrix column has run.** One recorded turn's whole `session/update` stream is committed as
+`runner/tests/fixtures/batch4/dcode-six-tools.ndjson` and replayed by
+`runner/tests/test_dcode_acp.py`, which also drives the shipped driver against a fake ACP agent
+(`runner/tests/fixtures/batch4/fake_acp_agent.py`) for the parts only a live conversation has.
+
+### Why not its headless flag
+`dcode -n "<task>"` always starts a fresh thread. Its own source says so, about `--rubric`:
+
+> `--rubric` cannot reach that state: it requires `-n`, and `run_non_interactive` takes no resume or
+> thread-id argument, so it always starts a fresh thread with no checkpointed goal. … Add the
+> combined check here if the non-interactive path ever gains thread resumption.
+
+MEASURED against that, because a comment is a claim too: five turns in one workspace, each passing
+`-r <thread_id>` for a thread whose row and 22 checkpoints were in the store. Five NEW rows in
+`dcode_thread_workspaces`, and every recall answered "this thread has no earlier message". Moving
+`-r` before `-n` instead of after it changed nothing. A base on that path passes `first turn` and
+fails `follow-up`, `switch` and `recycle` — three of the matrix's five scenarios — so the headless
+groundwork was built, left unregistered, and is now replaced rather than offered.
+
+### The first reading of this was wrong, which is the part worth keeping
+An earlier probe "resumed" and recalled the right word. It looked like continuity and was not: the
+question was *what word did I ask you to put in the file*, and the file was sitting in the workspace
+for the agent to read. The control that settled it asks for something only the conversation could
+carry (*what word did I ask you to reply with*), and the memory file that could otherwise have
+carried it — `$HOME/.deepagents/agent/AGENTS.md`, which this CLI's memory prompt writes "learnings"
+into by default — was empty on both sides. A recall question answerable from the workspace measures
+the workspace. The ACP measurement below uses that control: the first turn was told to answer one
+word and write nothing (its updates carry no tool call at all), and the second process, a different
+process with a different pipe, answered what the word was.
+
+### What ACP gives this base that no flag did
+- `initialize` answers `agentCapabilities.loadSession: true`, and the server is constructed with
+  `load_sessions=True` (main.py:3703), so **`session/load` continues a thread across processes** —
+  which is what one-process-per-turn needs. The client advertises no filesystem capability, so the
+  agent uses its own tools instead of asking the runner to read and write files.
+- `session/new` makes the id; it is not ours to choose. `session/load` requires the same `cwd` the
+  session was created with (invalid_params otherwise), and that is the session directory here, so a
+  resume holds across a sandbox recycle.
+- The session id IS the LangGraph thread id, and the thread's **checkpoints** are where it lives.
+  The ACP path never writes `dcode_thread_workspaces` — that table is the TUI's, and in a workspace
+  that has only run ACP turns it does not exist at all (measured: after two turns the store held
+  `checkpoints` and `writes` and no third table). `_dcode_threads` reads `checkpoints`, and the db
+  is per session directory under the redirected HOME, so a thread_id in it is this workspace's.
+- Tool calls arrive as `tool_call` / `tool_call_update`, so the record carries the turn's tools —
+  which the `-q` text path could never have done.
+
+### Five things that each had to be measured
+- **A loaded session REPLAYS its whole conversation as updates** before the prompt is sent. The
+  driver starts recording only after `session/load` returns; a turn that recorded from the start
+  would open with every earlier turn's reply — the same shape fast-agent's trajectory had in
+  another protocol, found there by a test and here before one was needed.
+- **The model belongs to the session, not to the flag.** `_restore_persisted_selections` puts the
+  model a loaded session was created with back onto it, so the driver sends
+  `session/set_config_option {configId: "model"}` on every turn. The value is validated against a
+  list whose FIRST entry is the launch `-M` resolved spec — which is why `-M` is still passed: it
+  is what puts this turn's model in the list at all. Measured on the switch scenario: the resumed
+  thread's turn asked for `google/gemini-3-flash` and the relay read that model off the answer.
+- **ACP's `tool_call` has no field for the tool's name** — a `title` for a human and a `kind` from
+  a fixed vocabulary. deepagents' server renames exactly four tools (read_file, write_file,
+  edit_file, execute) and passes `title = tool_name` for every other one, so the driver puts the id
+  back from the pair. Without that, a record would say ``Write `/ws/e2e.txt` `` where every other
+  base says `write_file`, and the custom-harness dimension — which reads these names — would count
+  a write as a CUSTOM tool.
+- **One call never gets a completion.** An `edit_file` with a full diff goes out through the
+  server's `start_edit_tool_call` branch and nothing follows it: measured on a six-tool turn, the
+  edit landed and the status stayed `pending` forever. A `tool_use` with no `tool_result` is a hole
+  in the record, so the driver closes it by saying exactly that rather than claiming an outcome
+  nobody reported.
+- **`ask_user` is declared, cannot be withheld, and cannot work here.** ACP mode leaves
+  `enable_ask_user` at its True default, and the tool raises a free-form LangGraph `interrupt()`,
+  which this protocol has no shape for — the server answers the prompt with error -32600 ("ACP
+  limitation … ACP only supports human-in-the-loop permission prompts with a fixed set of
+  decisions"). The driver reports that as *the agent tried to ask the user a question mid-turn,
+  which this connection cannot carry*, instead of handing back a protocol complaint. This is the
+  one tool on this base that can end a turn by being used.
+
+### Tools, and the one door that governs them
+Fourteen reach the model over ACP, read off a turn's own request body: ls, read_file, write_file,
+edit_file, delete, glob, grep, execute, task, compact_conversation, update_goal, ask_user,
+fetch_url, get_current_thread_id. **Two differ from its headless mode**, which is why the docs (or
+the other mode) would have produced the wrong list: `js_eval` is absent (ACP leaves
+`enable_interpreter` at its False default and `--no-interpreter` is not plumbed into it) and
+`ask_user` is present.
+
+`--allow-fs-tools` is the single door, and on this surface it governs the shell as well:
+`FS_TOOL_NAMES` includes `execute`, and a turn launched with `--allow-fs-tools read_file,ls`
+declared neither the shell nor the five write tools. No `-S` is needed for the shell to be there
+(measured: a turn with no `-S` ran `echo SHELLOK`). So the catalog offers **seven** — the filesystem
+set minus read_file, which the flag's own parser refuses to drop — and the other six are not
+offered because nothing withholds them. Enforcement is **hard**: a withheld tool is not declared,
+and asked to run `echo NOPE` on a resumed session with `execute` withheld the model answered that it
+had no shell tool and ran nothing.
+
+### Everything else that was measured
+- `-M openai:<id>` with OPENAI_BASE_URL and OPENAI_API_KEY is langchain-openai pointed at the relay,
+  and it posts to **/v1/responses**, not chat/completions. So this is the second Responses client
+  here after codex: it is NOT in `CHAT_ONLY_BACKENDS`, it IS in the `responses` custom-format set,
+  and its provider wiring is codex's — no Anthropic or Google native endpoint, which have no
+  /v1/responses to post to.
+- It reads the project's `AGENTS.md` only when the workspace is a git PROJECT (its lookup is
+  `find_project_agent_md(project_root)`); in a plain directory the same file reached nobody.
+  Measured both ways, and again end to end: an instruction in it was obeyed on all five turns.
+- Skills land in `$HOME/.deepagents/agent/skills/<name>/SKILL.md` and are visible: asked which
+  skills it had, a turn named the harness's `stamp` beside its own four.
+- The operator's step budget is a **no-op** on this base, as it is on the other builders with no
+  knob for it (jcode's note above counts them): `--max-turns` "requires -n or piped stdin" and is
+  rejected in ACP mode, and the only neighbouring
+  flag, `--recursion-limit`, counts LangGraph graph steps rather than turns. The turn's wall clock
+  (`MAX_TURN_SECONDS`) is what bounds it.
+- `dcode threads list --json` with an inherited stdin hung for eight minutes and returned at once
+  with it closed — the second base this batch where stdin was the whole problem, and the reason
+  `_run_turn_bg` closes stdin for every turn now.
+- **A provider failure fails the turn** rather than being narrated as its answer — checked, not
+  assumed, because several CLIs here do narrate it. Measured with a bad key through the relay: the
+  prompt is answered with JSON-RPC -32603 "Internal error" and the real sentence in `data.details`
+  ("Error code: 401 - … 'Authentication failed' …"), and the driver reports that sentence. Its
+  first version reported the envelope plus the agent's stderr tail — this CLI writes a full Python
+  traceback there at the same moment — which made a 711-character result out of a 274-character
+  reason, so the stderr tail is now kept only for the failures that have no reason of their own (a
+  refused initialize, no session id, a turn that never answers).
+- Permission: the agent calls `session/request_permission` on the client and the driver allows,
+  which is the grant claude gets with `--dangerously-skip-permissions`; the sandbox is the trust
+  boundary and nobody is attached to answer. `--yolo` is not the route — ACP mode exits 2 unless the
+  YOLO acknowledgement was given in the interactive TUI — and `--auto-approve` would install a
+  classifier that spends a second model on every decision.
+- ripgrep: this CLI downloads a pinned, SHA-256-verified `rg` of its own the first time `grep` is
+  called. `install_dcode` does that at install time instead, into the venv
+  (`share/deepagents-code/bin/rg`, verified on `python:3.12-slim`), which is where it is found
+  whatever HOME a turn runs with; `DEEPAGENTS_CODE_OFFLINE=1` then keeps a turn from fetching
+  anything, and if that copy is missing the search falls back to the slower Python path its own
+  documentation names rather than failing.
+- The ACP server lives in a SEPARATE distribution: `dcode --acp` exits 1 with "ACP dependencies not
+  available" unless `deepagents-acp` is installed beside the CLI. The installer pins both wheels by
+  the sha256 PyPI publishes, and then imports `deepagents_acp.server` and checks `load_sessions` is
+  still a parameter of it — the one thing this base cannot do without.
+- Defaults that would have cost something: LangSmith tracing (on), the update check, the plugin and
+  price auto-updates, the project `.env` applied to the process environment, and
+  `MEMORY_AUTO_SAVE` — the agent is otherwise told to persist learnings into the AGENTS.md the
+  harness rewrites every turn.
+
+### All five steps, in the order docs/harness-verification.md sets (2026-10-20)
+
+| step | result |
+|---|---|
+| matrix, vercel | **56 of 58 ids, 279 of 280 scenarios.** The one failure is `grok-4.5`, below |
+| custom harness | **pass**, 14 s: the skill was read, its own script ran (`execute` → `stamp.txt`), the withheld `delete` went unused, and the harness's own MCP server answered (`deepwiki_read_wiki_structure`, 11 s) |
+| plugin matrix | **5 of 5 columns** — skill 5.4 s, stdio MCP 5.4 s, free-form rows 6.2 s, streamable-HTTP 7.5 s, SSE 7.2 s. The FIRST live MCP measurement on this base, which had none of any transport before. SSE needed two runs; see below |
+| family tour | **11 of 12 families in one conversation.** `muse-spark-1.1` fails for a measured reason that is not ours, below |
+| matrix, google | **not available, and measured rather than assumed**: dcode speaks the Responses API and Google's OpenAI-compatible surface does not serve it. 0 of 58 ids offered, which is the honest answer |
+
+The audit past the pass flags: two `served` ids on every one of the 56 pairs, every session deleted
+except the two the driver keeps for a failed pair, every turn on the connection the column names,
+nothing substituted. The vercel column was assembled across the no-answer repair below — 31 pairs
+before it and 25 after, the provoking pair re-run on the fixed build — and that repair touches only
+the path a turn with no text at all takes, which no passing row reaches.
+
+### `grok-4.5` answers with reasoning and no content, intermittently (the one failed row)
+Twice in three runs of that pair, a different scenario each time (`first`, then `followup`): the
+turn's record held `output: []` — no content, no tool call — with 18 output tokens billed and all
+18 of them reasoning, while the ACP server reported `stopReason: end_turn`. The same model passed
+every scenario on docker-agent's column, which rides chat/completions; this base is the second
+Responses-API client here after codex, and that is the difference the row records. Why a provider
+answers that way is not measured and nothing here claims it. The id stays in the catalog and this
+is a row-level finding, which is the call `grok-build-0.1` got on vtcode's column.
+
+**What was ours in it, and is fixed:** `end_turn` with an empty answer was reported as a COMPLETED
+turn whose answer was `""` — a done pill over a blank reply. It now fails with "the agent ended the
+turn without answering", and the second occurrence is how that was confirmed end to end: the
+console showed the reason and a failed pill. The same shape was measured once on docker-agent, in a
+different place in the code, and is fixed there too.
+
+### The muse family refuses a .pptx, and the whole chain is upstream
+`muse-spark-1.1` failed the tour's edit, twice, deterministically, with the provider's own words:
+
+    Error code: 400 … unsupported media type for ZDR inline scan:
+    `application/vnd.openxmlformats-officedocument.presentationml.presentation`.
+    Supported: image/*, video/*, application/pdf.
+
+Read in dcode's own dependency, not inferred: `deepagents/middleware/filesystem.py` returns a
+non-text file as a base64 **file content block** whose `mime_type` is `mimetypes.guess_type` of the
+extension, so reading `tour.pptx` attaches the deck to the conversation. It ships an
+`unsupported_content` middleware for exactly this, but that one drops a block only when the model's
+`ModelProfile` explicitly rejects it ("Missing `ModelProfile` fields read as supported"), and a
+model behind this relay has no profile — while `_OPENAI_FILE_MIME_TYPES` lists that pptx type as
+acceptable. So the block goes out and the provider decides. Seven other families in the same
+conversation, holding the same deck, accepted it, and docker-agent's tour passed this family.
+
+Nothing here is repaired: the relay could strip a file part the provider refuses and retry, but
+that changes what the model is shown without saying so, which is worse than a turn that fails with
+the provider's sentence in it. The honest statement is the one this table makes — this base, this
+family, a binary artifact.
+
+**What was ours in it, and is fixed:** the reason reached the console as "The turn failed: **the
+turn failed:** Error code: 400 …". The gateway frames every failed turn (`_turn_failure_message`),
+and this driver framed it a second time; of the thirty-odd bases here it was the only one that did.
+It now hands up the provider's sentence alone, and a test asserts the driver's reason never
+contains "turn failed".
+
+### The SSE column timed out once, and four things were ruled out
+The first plugin-matrix run failed `sse` at exactly 120.4 s — the driver's own `_RPC_TIMEOUT` — with
+"the agent did not answer initialize in time". The re-run passed in 7.2 s. Ruled out by
+measurement, in this order: the probe server and the client library (dcode's OWN FastMCP, in its
+own venv, connected to that `/sse` URL and listed `probe_sse`); the config shape (the runner writes
+`{"type": "sse", "url": …}`, and `mcp_tools._build_transport` pins SSE for exactly that); and the
+startup path itself — `dcode --acp` with that same config answered `initialize` in 2.1 s as root
+and in 3.9 s as the session uid, in that session's own workspace, with the file the runner had
+written. So the hang is not reproducible and no cause is claimed. One clue is recorded for the next
+occurrence: dcode mounts MCP servers through a FastMCP **proxy**, whose log said "Proxy detected
+connected client - reusing existing session for all requests. This may cause context mixing in
+concurrent scenarios".
+
+### Google's surface cannot drive this base, and that is a measurement
+Two probes on 2026-10-20, one through the product and one straight at the endpoint:
+
+    POST generativelanguage.googleapis.com/v1beta/openai/responses        -> 404, empty body
+    POST generativelanguage.googleapis.com/v1beta/openai/chat/completions -> 200
+
+So there is no `("google", "dcode")` wiring row, and the comment in `_INTEGRATION_WIRING` says it
+was probed rather than left unprobed. The product's own model view then reported **0 of 58 ids
+available** for dcode on an account holding only that connection — the picker fix from
+docker-agent's column, seen working on a base that genuinely cannot run there. A gemini model
+reaches this base through an aggregator that serves `/responses`, which the Vercel column did on
+nine gemini ids.
+
+### What is still NOT measured
+Why `grok-4.5` sometimes answers with reasoning
+only, and why one `initialize` took longer than 120 s — neither reproduced. The `ask_user` hazard
+is still a protocol fact reproduced against a fake agent; no live turn has tripped it.
+
+## fast-agent: a framework with no tools of its own, and a store that pins the model (2026-10-16; measured through all five steps 2026-10-20/21)
+
+`fast-agent-mcp` 0.10.45, added as the thirtieth base. Measured through a recording proxy and then
+end to end through the runner's own argv and relay. **No support-matrix column has run.** Its
+captured three-turn trajectory is committed as
+`runner/tests/fixtures/batch4/fast-agent-three-turns.atif.json` and the shipped eof is replayed
+against it by 16 tests in `runner/tests/test_batch4_backends.py`.
+
+### What it is
+`fast-agent go -m "<task>" --quiet` prints the answer; `--trajectory-output … --trajectory-format
+atif` writes the whole turn as a structured record — steps, each step's tool calls AND their
+results, per-step token metrics, the session id. So the stream carries nothing and the EOF carries
+everything: `_fast_agent_eof` reads that file, which is opensquilla's arrangement.
+
+### Five things that each had to be measured
+- **It ships no tools.** A first turn asked to write a file answered "I can't create files in this
+  conversation because I have no file-system tool", and its request declared ZERO tools: this
+  framework's tools come from MCP servers. `-x` turns on a local runtime with four (bash, process,
+  read_text_file, edit_file) and the file was written.
+- **The agent's working directory is its HOME, not the workspace.** A turn asked for `e2e.txt`
+  wrote it into `.harness/fast-agent/` — which this product excludes from the produced-files list,
+  so the user's deliverable would not have existed for them. `--workspace <session dir>` fixes it.
+- **`--workspace` then moved the session store INTO the workspace** (`<cwd>/.fast-agent`,
+  overriding `FAST_AGENT_HOME`), so `--home` is named explicitly as well; the store belongs under
+  `.harness/`, excluded from deliverables and carried in the checkpoint.
+- **A resumed session restores its own model** (the fourth base in this batch with that shape): it
+  lives in `session.json` at `continuation.agents.<name>.model` / `.model_spec`, and the builder
+  writes this turn's model there before `--resume` reads it. Nothing else in that file is touched —
+  `shell_enabled` looked like the way to withhold the shell and is NOT, because `--no-shell` does
+  it on the command line, so writing it would be a change with no measurement behind it.
+- **Withholding the shell needs `--no-shell`, not the absence of `-x`**: on a resumed session,
+  omitting `-x` left bash in place and the model ran the command; with `--no-shell` the request
+  declared no bash at all and the model said it could not. Measured both ways, which is why this
+  base's `tool_enforcement` is "hard".
+
+Its trajectory on a resumed session holds EVERY turn of the conversation (eight steps across three
+in the captured one), so the eof cuts to this turn: from after the last `user` step carrying this
+turn's prompt, up to the next `user` step. Without the front cut each reply arrived with every
+earlier reply glued in front of it; the back cut was added when a test over the captured fixture
+asked what the MIDDLE turn produced and got that turn plus the one after it. Two independent guards
+for one invariant — a turn's record is one turn — the other being the builder clearing the file.
+
+### End to end (2026-10-16)
+Three turns in one session: the first answered with the instruction-file token; the second, on a
+different model, wrote `e2e.txt` into the workspace, recalled the first turn's word and recorded its
+tool call; the third, with bash withheld, made no tool call and said it could not run the command.
+Served models read off the relay on each (claude-haiku-5.5, gemini-3-flash, claude-haiku-5.5).
+
+### Install
+PyPI, pinned to 0.10.45, the wheel fetched by URL and compared to PyPI's own recorded digest
+(`b88aac3f…`, verified against the real asset); pure-python, so one digest covers every
+architecture. Its own venv. The install check also asserts that its generic client still reads
+`GENERIC_BASE_URL`, which is the relay door. `install_fast_agent` was run on a `python:3.12-slim`
+container, where what it installed reported `fast-agent-mcp v0.10.45`.
+
+### All five steps, in the order docs/harness-verification.md sets (2026-10-20/21)
+
+| step | result |
+|---|---|
+| matrix, vercel | **56 of 58 ids, 274 of 280 scenarios.** Six failed rows, two findings, both the model's — below |
+| custom harness | **pass**, 11 s + 9 s — but only after the two config bugs below; two of its three thirds, since this base has no tool to withhold |
+| plugin matrix | **5 of 5 columns**, the fastest of the three bases measured (3.9–5.0 s each) and the FIRST live MCP measurement on it, SSE and streamable-HTTP **natively** rather than through the runner's bridge |
+| family tour | **12 of 12 families in one conversation**, `muse-spark-1.1` included — the family dcode could not carry a deck for |
+| matrix, google | **8 of 8 ids, 40 of 40**, on a wiring row probed here |
+
+The audit past the pass flags, on both columns: two `served` ids on every pair that ran a switch,
+every session deleted but the two the driver keeps for a failed pair, every turn on the connection
+the column names, nothing substituted.
+
+### THE BUG THIS COLUMN EXISTED TO FIND: every follow-up turn silently started a new conversation
+
+`_record_cli_session_id` now carries the capture, and the point is where it is called from. The
+streaming loop remembered the CLI's own conversation id out of an `init` event; the **eof branch
+did not**. This base's stream carries nothing at all — its ATIF trajectory is read at eof — so its
+init event only ever appeared in the eof batch. The id was never recorded, the gateway had none to
+send back, the builder's `if resume_session_id and …` was false, `--resume` was never passed, and
+every follow-up turn began an empty conversation. `_resume_lost` stayed silent because an EMPTY
+resume id is not a lost one.
+
+What it looked like from outside, and why nothing caught it sooner:
+
+- **Four of the five matrix scenarios passed anyway.** They ask the model to echo a token; only the
+  recycle scenario tests the history, and it answered the literal word "word".
+- Each turn reported a DIFFERENT fast-agent session id, and turn two's `input_tokens` was 985 —
+  byte for byte the first turn's. A second turn carrying a conversation cannot be the same size.
+- A clean two-turn probe through the API, with a word that is nowhere in the workspace, answered
+  **"remember"** with 993 input tokens against the first turn's 989.
+- **The CLI was never at fault.** By hand, `fast-agent go --resume <id>` answered the word, kept
+  the same session id, and its trajectory grew from three steps to five.
+- After the fix, the same probe answered **FLAMINGO-7** with **2009** input tokens, and the
+  recycle scenario passed. A later column row shows two turns sharing one session id with input
+  growing 1688 → 3168.
+
+**Why the end-to-end rig missed it, which is the lesson worth keeping:** that rig calls
+`_build_fast_agent(... resume_session_id=sid ...)` itself, so it measured "given the id, does the
+CLI continue?" — which was always yes. The bug is one step earlier, in how the id is DISCOVERED and
+handed back, and there is no gateway in that loop. Only a real column walks first-turn-reports-id →
+stored → sent back.
+
+### Two config bugs that made every MCP path on this base fail, found by the dimension
+
+Neither could be seen by a support-matrix column: a column declares no MCP servers.
+
+1. **The config was invalid YAML-shaped-wrongly.** A server's fields were emitted at the same depth
+   as its name, so `mcp.servers` loaded as three sibling keys (`deepwiki: null`, `transport`,
+   `url`) and the CLI refused to start: *"Error loading fast-agent settings: 3 validation errors
+   for Settings / mcp: Invalid configuration value"*, one per key. Every turn of every harness that
+   declared a server died before its first model call. The indent is now applied once at emit time,
+   so a body built anywhere cannot carry the wrong depth, and the test that missed this — it
+   asserted `'transport: "http"' in cfg`, true at any indentation — now PARSES the YAML and asserts
+   the structure, with a second test holding `mcp.servers` to server names only.
+2. **Declared is not enabled on this entry point.** With the config valid, the turn ran, recorded
+   ZERO tool calls, and the server was never called. `go` builds an ad-hoc agent and its
+   `--servers` is "a comma-separated list of server names to enable from config" (its own help), so
+   a declaration reaches the model only when the flag names it. `_fast_agent_config` now returns
+   the names it wrote and the builder passes them, so the flag and the file cannot disagree.
+
+With both fixed: the skill was read, its script ran, `stamp.txt` was produced, and the harness's own
+MCP server answered (`deepwiki__read_wiki_structure`). The plugin matrix's four MCP columns —
+stdio, free-form rows, SSE, streamable-HTTP — would all have died at settings load before this.
+
+### The two failed rows on the vercel column, both the model's
+- **`grok-4.5` claims DONE without writing the file**, deterministically (2 of 2 runs, the artifact
+  scenario). Separated from our wiring by measurement: asked to list its tools it answered `bash,
+  process, read_text_file, write_text_file, edit_file`, and told explicitly to use its shell it
+  called `bash`. It has the tools and uses them when told; on this prompt it answers DONE and calls
+  nothing. Same model, same batch, a different shape on dcode (reasoning and no content) and green
+  on docker-agent.
+- **`qwen3.8-27b` refused to echo its own version string** — "I can't reply with that exact string,
+  as it would imply a specific model version I don't confirm" — on the FIRST scenario, which cost
+  the pair its other four rows ("first turn failed"), so one refusal is five of the six failures.
+  The prompt reached it intact. It did NOT reproduce: the pair re-ran 5 of 5. The row stays failed,
+  because that is what the column measured and no fix stands between the two runs.
+
+### What is still NOT measured
+**Tool policy on this base**: its catalog is `bash`,
+`read_text_file`, `edit_file` and the fixture needs all three, so the dimension withheld nothing and
+reported `disabled_tool: null` — aider's honest gap rather than a vacuous pass. Why `grok-4.5`
+answers DONE without acting, and why `qwen3.8-27b` refused once: neither is ours and neither is
+explained here.
+
+## The last three dimensions, on all four of batch 4 (2026-10-21)
+
+The browser, thinking and environments columns, which every base in this batch had open. One
+instance, the four bases installed together, the Vercel connection, a headless Chromium in the
+container for the browser plugin and one environment built for the packages column.
+
+| dimension | vibe | docker-agent | fast-agent | dcode |
+|---|---|---|---|---|
+| browser (navigate + click, the page named, the session stopped) | pass 18 s | pass 18 s | pass 12 s | pass 12 s |
+| thinking (unset / none / low / high, judged on the provider's own count) | pass | pass | pass | pass |
+| environments (pip, npm, apt from the layer, no install) | 3 of 3 | 3 of 3 | 3 of 3 | 3 of 3 |
+
+**12 of 12 environment tasks with `installs=0`** in every trace, each answer showing the package's
+path under `/env/matrix-pkgs` (`tabulate` 0.10.0 from the layer's venv, `qrcode` 1.5.4 from its
+node_modules, `jq` 1.7.1 from its apt root). **4 of 4 on browser**, each trace carrying `navigate`
+and `click` with the landing page named. **4 of 4 on thinking**, with the order holding on every
+base: low spends fewer thinking tokens than high, `none` spends none.
+
+### What the browser column found: two of the four need the loopback bridge
+
+The `plugs` server is how every base gets the browser tools, and it is injected at
+`http://127.0.0.1:8080/v1/mcp/plugs`. `_BRIDGE_LOOPBACK_BACKENDS` existed for exactly one base
+(nanobot, found by this column in October); this run added two more, each failing differently:
+
+- **docker-agent dropped it silently.** No browser call in the trace at all, and the model answered
+  "unable to open the page or click the link interactively … If you enable the browser toolset, I
+  can do it directly" — while its config held the server correctly as a `type: mcp` toolset with
+  the streamable url and the bearer. The A/B that settles it, same config and transport, only the
+  host changed: a public https url gave `mcp_init_started` / `mcp_init_finished` and 16 tools;
+  `http://127.0.0.1:8080/...` gave **no mcp_init event at all** and 15 — its four built-in toolsets
+  — with nothing on stderr and nothing in the record. What inside it refuses is NOT established:
+  its binary's loopback strings are all about its own API server's bind address. The bridge does
+  not need that answer.
+- **fast-agent tried it and died.** Three runs, the same crash each time, no browser call in any of
+  them: "MCP Server: 'plugs': Failed to initialize … Details: MCPError: Not Found", then
+  "RuntimeError: Core not initialized, please call initialize() first". Bridged, it passed in 12 s.
+
+Bridged, there is no url left for either to refuse, and both keep their own client for PUBLIC
+servers — which the plugin matrix measured on each of them, on both transports.
+
+### A record-honesty defect this column exposed: a source line number read as an HTTP 5xx
+fast-agent writes a rich-rendered traceback when its MCP startup fails, and every failed turn in
+this column reported the same reason: the single line `│   579 │   try:`. The answer a person saw
+was `│  1585 │   │   │   exc`. The CLI's own sentence — "RuntimeError: Core not initialized, please
+call initialize() first" — was two lines further down and never appeared.
+
+**The cause, measured rather than inferred.** The first two filters (frames out of the reason, and
+of the result event) did not change the record, so the settle path was instrumented in a throwaway
+container build to log `_failure_reason`'s three arguments as they really were:
+
+    refusal:        "│   579 │   try:                      │"
+    ev_err:         ""
+    tail_filtered:  "RuntimeError: Core not initialized, please call initialize() first, …"
+
+`refusal` wins over everything else in `_failure_reason`, and it is chosen by
+`_PROVIDER_REFUSAL.search` over the captured output. That matcher's `\b(401|403|429|5\d\d)\b` arm
+— there for "HTTP 503", "Error code: 429", "503 Service Unavailable" — read **579**, the SOURCE
+LINE NUMBER in rich's gutter, as a 5xx status. A traceback frame became "the provider's refusal".
+
+**The fix** is to take the frames out ONCE, where the tail is built, so the refusal search, the
+reason and the result event all read the same filtered text. The regex is left exactly as it is: it
+carries many providers' phrasings, and tightening it to reject a bare number would risk missing a
+real refusal — the frames are what does not belong in the search.
+
+**Confirmed end to end** on a live turn (a harness declaring `https://nope.invalid/mcp`, which
+fails the same way a loopback server used to):
+
+    reason:  The turn failed: RuntimeError: Core not initialized, please call initialize() first, …
+    answer:  RuntimeError: Core not initialized, please call initialize() first, …
+
+Tests hold the shape and the trap: that `_PROVIDER_REFUSAL` does fire on the frame (so the filter
+is what protects the search), that a real refusal in prose still wins, that a tail of nothing but
+frames falls through to the exit code, and that an ordinary tail is untouched. The class is wider
+than this base — any bare 401/403/429/5xx-looking number in a CLI's output could hijack a failed
+turn's reason, and a line number is only the first one that did.
+
+### fast-agent thinks when nobody asked, and the other three do not
+On the same model and the same prompt, with no level asked: vibe, docker-agent and dcode spend
+**0** thinking tokens; fast-agent spends **331**. Its own `fastagent_llm.py` falls back to the
+model spec's default effort when nothing sets one (`reasoning = self.reasoning_effort_spec.default`),
+and its table treats gpt-5.4 as a reasoning model. The column's `unset` criterion is about the
+RECORD — no `reasoning` field, the base behaving as it did before levels existed — and this base's
+pre-levels behaviour IS that default, so the row passes correctly. Nothing was changed: making
+`unset` mean `none` would override the CLI's own default on an assumption nobody measured. A
+harness that wants nothing spent asks for `none`, which works (0 tokens, measured).
+
+### Rig notes
+- The browser column ran on the **operator's-own-browser** path: a headless Chromium installed in
+  the container (`chromium --headless=new --remote-debugging-port=9222`) with
+  `HR_BROWSER_CDP_URL=http://127.0.0.1:9222`, NOT a browser-use vendor key. The two are different
+  paths and a row proved on one is not proof for the other — the same caveat main's October runs
+  carry.
+- An environment cannot be built until it holds at least one file: `POST .../build` answers 409
+  `environment_not_ready` ("the environment has no files yet"). One README through
+  `PUT /v1/environments/{id}/files/{path}` is enough, and the build then took under ten seconds for
+  the three packages.
+- `packages` on `POST /v1/environments` is a dict keyed by manager (`{"pip": [...], "npm": [...],
+  "apt": [...]}`), not a list of `{manager, name}` rows.

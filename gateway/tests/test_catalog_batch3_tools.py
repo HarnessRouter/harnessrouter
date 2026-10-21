@@ -9,8 +9,7 @@ runner's own measured list, which is also where the measurement is recorded:
                               --disabled-tools write proving the switch is enforcement
   nanobot ALL_NANOBOT_TOOLS — the 22 its loop logs at start-up on 0.3.5
 
-mimo and opensquilla are checked differently and for stated reasons, below. gajae is checked by
-test_gajae_not_offered.py instead: it is implemented but deliberately not offered.
+mimo and opensquilla are checked differently and for stated reasons, below.
 """
 import os
 import pathlib
@@ -20,7 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "runner"))
 os.environ.setdefault("HR_BACKING", "local")
 import app as A  # noqa: E402
-from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
+from server import (ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
                     BACKENDS, _opencode_denies)
 
 
