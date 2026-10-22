@@ -648,6 +648,9 @@ def test_a_file_request_answered_with_the_requested_word_gets_the_block_to_write
     # digit in it is not a word, so that reply is the word too.
     assert repeats("\u0000\u0000\n\nDONE", ask) == "DONE"
     assert repeats("he", "Write the file") == ""          # a word of the request, not part of one
+    # rc.1 of 0.35.14 (2026-10-22): 2 of 6 primed runs answered with the word in a fenced block, twice.
+    # A fence and its language tag are formatting, not words.
+    assert repeats("```text\nDONE\n```\n\n```text\nDONE\n```", ask) == "DONE"
 
 
 def test_a_request_for_words_back_answered_by_an_edit_alone_is_nudged_once():

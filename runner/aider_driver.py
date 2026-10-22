@@ -574,8 +574,9 @@ def _repeats_a_word_of(reply: str, prompt: str) -> str:
 
     "" for a reply that says more than one word, or a word the request does not contain. What has
     no letter or digit in it is not a word: gpt-5.4-mini answered a fresh file request with two NUL
-    characters, a blank line and "DONE" (0.35.13's release check, 2026-10-21)."""
-    words = [w.strip(".,:;!?\"'()[]`") for w in (reply or "").split()]
+    characters, a blank line and "DONE" (0.35.13's release check, 2026-10-21). A code fence and its
+    language tag are formatting: it answered "```text DONE ```" twice in one reply as well (2026-10-22)."""
+    words = [w.strip(".,:;!?\"'()[]`") for w in re.sub(r"`{3,}[^\s`]*", " ", reply or "").split()]
     words = [w for w in words if any(ch.isalnum() for ch in w)]
     if not words or len({w.lower() for w in words}) != 1:
         return ""
