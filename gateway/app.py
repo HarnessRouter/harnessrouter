@@ -18459,6 +18459,19 @@ async def _vg_list_by_org(label: str, org: str) -> list[dict]:
     return await BACKING.graph.find(label, {"org": org})
 
 
+async def _vg_list_by_org_strict(label: str, org: str) -> list[dict]:
+    """`_vg_list_by_org`, except that an empty answer is established to be empty rather than taken
+    on trust. The plain read swallows a failed read and returns the same `[]` as "the organization
+    holds none" (backing.GraphStore.probe: "the normal read paths swallow errors and return
+    empty"), which a caller that provisions on an empty list must not act on. Only an empty answer
+    pays for the strict re-read, and only an empty answer needs it: `find_strict` either answers
+    with every row of the label or raises."""
+    rows = await _vg_list_by_org(label, org)
+    if not rows:
+        rows = await BACKING.graph.find_strict(label, {"org": org})
+    return rows
+
+
 def _harness_props(body: HarnessBody) -> dict:
     base = _require_supported_base(body.base)   # refuse at create, not at the first task
     return {"name": body.name, "base": base, "base_label": body.base_label or base,
@@ -20064,7 +20077,17 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     # Per workspace (see list_kits): launching in a second workspace makes that workspace its own
     # Harness rather than handing back the first workspace's, which its members could not see.
     ws, wsd = str(p.get("workspace") or ""), bool(p.get("workspace_default"))
-    existing = next((r for r in await _vg_list_by_org("Harness", org)
+    # Read strictly: this list is what makes launch idempotent, and a read that failed looks
+    # exactly like an organization with no Harnesses, so provisioning on it is how the second
+    # press leaves someone with two.
+    try:
+        rows = await _vg_list_by_org_strict("Harness", org)
+    except Exception as e:  # noqa: BLE001
+        print(f"[kits] {kit_id}: the harness list could not be read org={org}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error",
+                        "Your Harnesses could not be read just now, so nothing was launched. "
+                        "Try again in a moment.") from e
+    existing = next((r for r in rows
                      if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"
                      and _workspace_keep(str(r.get("workspace") or ""), ws, wsd)),
                     None)
