@@ -347,7 +347,10 @@ async def introspect(engine: str, dsn: str, *, sample_rows: int = 0,
         t["columns"].append({"name": column, "type": dtype, "nullable": nullable == "YES"})
 
     out = list(tables.values())[:max_tables]
-    truncated_tables = len(tables) > len(out)
+    # Either cut loses schema. The table cap drops whole tables off the end; the row cap inside
+    # run_query cuts the column list itself, and because the query orders by ordinal_position the
+    # cut lands INSIDE a table — a real table with a short column list. Both must say so.
+    truncated_tables = len(tables) > len(out) or bool(raw["truncated"])
 
     if sample_rows > 0:
         for t in out:
