@@ -6214,8 +6214,19 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         # Persisting the derived list instead is what made this list go stale — and worse, a
         # model later retired from the table would live on forever in whatever was written here.
         table = _vendor_models(provider)
-        rows = [(str(m.get("canonical") or "").strip(), str(m.get("provider_id") or "").strip())
-                for m in (i.get("models") or [])]
+        # A row is {canonical, provider_id}; a bare id is that id with a blank wire id, which is the
+        # same model on the wire (below). Anything else is refused by name: it used to fail the whole
+        # save with a 500 (`'str' object has no attribute 'get'` for a list of ids).
+        rows = []
+        given = i.get("models")
+        if given is not None and not isinstance(given, list):
+            raise HTTPException(400, f"integration '{name}': models is a list")
+        for m in (given or []):
+            if isinstance(m, str):
+                m = {"canonical": m}
+            if not isinstance(m, dict):
+                raise HTTPException(400, f"integration '{name}': each model is an id or {{canonical, provider_id}}")
+            rows.append((str(m.get("canonical") or "").strip(), str(m.get("provider_id") or "").strip()))
         if provider == "custom":
             # No vendor table: the rows are the endpoint's model list, kept whole (see
             # _integration_models); a blank wire id is the canonical, written out so the stored
