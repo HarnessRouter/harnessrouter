@@ -42,6 +42,7 @@ def test_a_missing_cited_file_refuses_the_archive_by_name(monkeypatch, tmp_path)
     r = TestClient(gw.app).get(f"/v1/sessions/s1/files/archive?files={ids}")
     assert r.status_code == 404
     assert "1 of 2 files" in r.text and "output/gone.json" in r.text
+    assert r.json()["error"]["code"] == "file_not_found"     # the protocol's code (errors.md §3.1)
 
 
 def test_the_single_download_names_the_file_without_its_folder(monkeypatch):
@@ -70,6 +71,14 @@ def test_an_unreadable_changed_file_refuses_the_archive_by_name(monkeypatch, tmp
     r = TestClient(gw.app).get("/v1/sessions/s1/files/archive?changed=true")
     assert r.status_code == 404
     assert "1 of 2 files" in r.text and "output/gone.json" in r.text
+    assert r.json()["error"]["code"] == "file_not_found"
+
+
+def test_an_archive_with_nothing_in_it_is_a_file_not_found(monkeypatch, tmp_path):
+    _wire_changed(monkeypatch, tmp_path, {})
+    r = TestClient(gw.app).get("/v1/sessions/s1/files/archive?changed=true")
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "file_not_found"
 
 
 def test_a_readable_changed_set_still_archives_every_file(monkeypatch, tmp_path):

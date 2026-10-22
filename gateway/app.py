@@ -11785,8 +11785,9 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                     data, _media, fname = got
                     _add_bytes(fname, data)
                 if missing:
-                    raise HTTPException(404, f"{len(missing)} of {len(want_ids)} files are no longer available: "
-                                             + ", ".join(missing[:5]) + (", …" if len(missing) > 5 else ""))
+                    raise uhp_error(404, "file_not_found",
+                                    f"{len(missing)} of {len(want_ids)} files are no longer available: "
+                                    + ", ".join(missing[:5]) + (", …" if len(missing) > 5 else ""))
             elif changed:
                 blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
                 try:
@@ -11809,8 +11810,8 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                         continue
                     _add_bytes(path, got[0])
                 if gone:
-                    raise HTTPException(404, f"{len(gone)} of {asked} files are no longer available: "
-                                             + ", ".join(gone[:5]) + (", …" if len(gone) > 5 else ""))
+                    raise uhp_error(404, "file_not_found", f"{len(gone)} of {asked} files are no longer available: "
+                                    + ", ".join(gone[:5]) + (", …" if len(gone) > 5 else ""))
             else:
                 tf = await _workspace_tar(sid)
                 if tf is None:
@@ -11851,7 +11852,8 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                 nput += _n
                 total += _tot
         if not nput:
-            raise HTTPException(404, "no files to archive")
+            # the protocol's own code for a file that is not there (errors.md §3.1), not the generic one
+            raise uhp_error(404, "file_not_found", "There are no files to put in an archive.")
     except BaseException:
         try:
             os.unlink(zpath)
