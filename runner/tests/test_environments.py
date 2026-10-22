@@ -753,6 +753,27 @@ def test_an_npm_range_is_a_name_with_no_pin(monkeypatch):
     assert "not published" in E.check_package("npm", "lodash@9.9.9")["error"]
 
 
+def test_a_pip_wildcard_pin_is_a_name_with_no_pin(monkeypatch):
+    """PEP 440's prefix match (`numpy==1.4.*`) is every release beginning `1.4.`, not one version,
+    the way npm's `lodash@4.x` is not. It went through as an exact pin, so it was checked against
+    PyPI's exact releases and refused as "not published" though pip installs it."""
+    for spec in ("numpy==1.4.*", "numpy==1.*", "numpy == 1.4.* "):
+        assert E.spec_parts(spec, "pip") == ("numpy", ""), spec
+    for spec, want in (("numpy==1.4.0", ("numpy", "1.4.0")), ("numpy==1.4.0rc1", ("numpy", "1.4.0rc1")),
+                       ("numpy", ("numpy", ""))):
+        assert E.spec_parts(spec, "pip") == want, spec
+
+    answers = {"https://pypi.org/pypi/numpy/json": (200, {"info": {"version": "2.3.1", "name": "numpy"},
+                                                          "releases": {"1.4.0": {}, "1.4.1": {}, "2.3.1": {}}})}
+    monkeypatch.setattr(E, "_http_json", lambda url: answers.get(url, (503, {})))
+    ranged = E.check_package("pip", "numpy==1.4.*")
+    assert ranged["exists"] is True and ranged["error"] == "" and ranged["version"] == ""
+    assert "not published" in E.check_package("pip", "numpy==9.9.9")["error"]
+    # and an apt declaration keeps its pin verbatim: apt has no wildcard, so `=1.4.*` is a pin
+    # that is genuinely not in the sources, which is what the check should say.
+    assert E.spec_parts("jq=1.4.*", "apt") == ("jq", "1.4.*")
+
+
 def test_an_npm_dist_tag_resolves_to_its_version(monkeypatch):
     """#494: `lodash@latest` names a dist-tag, not a version — the check resolves the tag
     instead of reporting it "not published". An unknown tag keeps the error."""
