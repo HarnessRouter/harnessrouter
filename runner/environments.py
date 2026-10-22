@@ -66,7 +66,12 @@ TREE_MAX = 20_000                                                        # entri
 # thing SPI-001 says not to trust).
 NOT_COPIED = {".venv", "venv", "node_modules", "__pycache__", ".pnpm-store", ".cache", ".hr-build.json"}
 _ID_SAFE = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
-_SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)[A-Za-z0-9._*+^~<>-]{0,60})?$")   # one declared package
+# One declared package. A version may carry apt's epoch — digits and a colon before the upstream
+# version, as in `ffmpeg=7:4.4.2-0ubuntu0.22.04.1`: the form apt itself prints as the candidate and
+# the one check_package tells an owner to declare. The colon is admitted only in that position
+# (`[0-9]{1,4}:`), so nothing else a colon introduces — npm's `pkg@npm:other`, a `pkg@https:` direct
+# reference — becomes a spec for pip or npm, which share this pattern and have no epoch.
+_SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)(?:[0-9]{1,4}:)?[A-Za-z0-9._*+^~<>-]{0,60})?$")
 _ARCH_DIRS = {"amd64": "x86_64-linux-gnu", "arm64": "aarch64-linux-gnu"}
 
 # ── who may read an environment ─────────────────────────────────────────────────────────────────
