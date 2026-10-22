@@ -11706,13 +11706,24 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                     items = ((json.loads(blob) or {}).get("files") or []) if blob else []
                 except Exception:  # noqa: BLE001
                     items = []
+                # "All" means all here too: the changed set is a named list of files, so one of
+                # them that cannot be read is refused with the names, not dropped from a zip
+                # handed over as if it held the whole turn's output.
+                gone: list[str] = []
+                asked = 0
                 for it in items[:200]:
                     fid, path = it.get("file_id"), it.get("path")
                     if not (fid and path):
                         continue
+                    asked += 1
                     got = await _container_file_bytes(sid, fid)
-                    if got:
-                        _add_bytes(path, got[0])
+                    if got is None:
+                        gone.append(path)
+                        continue
+                    _add_bytes(path, got[0])
+                if gone:
+                    raise HTTPException(404, f"{len(gone)} of {asked} files are no longer available: "
+                                             + ", ".join(gone[:5]) + (", …" if len(gone) > 5 else ""))
             else:
                 tf = await _workspace_tar(sid)
                 if tf is None:
