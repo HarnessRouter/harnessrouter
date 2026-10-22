@@ -874,36 +874,36 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6")
-CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-5.4")
+CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-6.1-sol")
 # Hermes default (the gateway maps friendly names to provider ids before the /turn call).
-HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
+HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-6.1-sol")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
-PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
-OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
-KILO_DEFAULT_MODEL = os.environ.get("KILO_DEFAULT_MODEL", "gpt-5.4")
+PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-6.1-sol")
+OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-6.1-sol")
+KILO_DEFAULT_MODEL = os.environ.get("KILO_DEFAULT_MODEL", "gpt-6.1-sol")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
-CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
+CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-6.1-sol")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
-OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
-GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
+OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-6.1-sol")
+GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-6.1-sol")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
 # MiniMax Code runs any OpenAI-compatible model; its vendor's own is the natural default.
 MINIMAX_DEFAULT_MODEL = os.environ.get("MINIMAX_DEFAULT_MODEL", "minimax-m3")
 GROK_DEFAULT_MODEL = os.environ.get("GROK_DEFAULT_MODEL", "grok-4.6")
-AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
-OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
-CHEETAHCLAWS_DEFAULT_MODEL = os.environ.get("CHEETAHCLAWS_DEFAULT_MODEL", "gpt-5.4")
-AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-5.4")
+AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-6.1-sol")
+OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-6.1-sol")
+CHEETAHCLAWS_DEFAULT_MODEL = os.environ.get("CHEETAHCLAWS_DEFAULT_MODEL", "gpt-6.1-sol")
+AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-6.1-sol")
 # MiMo Code is an opencode fork (its repo root package.json is still literally "opencode"), so it
 # shares opencode's default for the same reason: multi-family through one connection.
-MIMO_DEFAULT_MODEL = os.environ.get("MIMO_DEFAULT_MODEL", "gpt-5.4")
+MIMO_DEFAULT_MODEL = os.environ.get("MIMO_DEFAULT_MODEL", "gpt-6.1-sol")
 # Gajae-Code is pi's lineage (docs/porting-from-pi-mono.md), so it shares pi's default too.
 GAJAE_DEFAULT_MODEL = os.environ.get("GAJAE_DEFAULT_MODEL", "gpt-5.4")
-JCODE_DEFAULT_MODEL = os.environ.get("JCODE_DEFAULT_MODEL", "gpt-5.4")
+JCODE_DEFAULT_MODEL = os.environ.get("JCODE_DEFAULT_MODEL", "gpt-6.1-sol")
 OPENSQUILLA_DEFAULT_MODEL = os.environ.get("OPENSQUILLA_DEFAULT_MODEL", "gpt-5.4")
-NANOBOT_DEFAULT_MODEL = os.environ.get("NANOBOT_DEFAULT_MODEL", "gpt-5.4")
-ZEROCLAW_DEFAULT_MODEL = os.environ.get("ZEROCLAW_DEFAULT_MODEL", "gpt-5.4")
+NANOBOT_DEFAULT_MODEL = os.environ.get("NANOBOT_DEFAULT_MODEL", "gpt-6.1-sol")
+ZEROCLAW_DEFAULT_MODEL = os.environ.get("ZEROCLAW_DEFAULT_MODEL", "gpt-6.1-sol")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "medium")
 # The window Codex plans compaction against. Its own catalog says 272k for every gpt-5.x; a larger
 # number here made it compact late and let a long thread overflow the real window first.
