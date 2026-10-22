@@ -794,3 +794,52 @@ def test_an_npm_dist_tag_resolves_to_its_version(monkeypatch):
     assert exact["version"] == "" and "9.9.9 is not published" in exact["error"]
     pinned = E.check_package("npm", "lodash@4.17.20")
     assert pinned["version"] == "4.17.20" and not pinned["error"]
+
+
+def test_an_apt_epoch_is_a_spec_the_check_recommends_and_both_the_check_and_the_build_accept(monkeypatch, tmp_path):
+    """An apt version may carry an epoch (`7:4.4.2-0ubuntu0.22.04.1`), and `_SPEC_RE` left `:` out of
+    its version class, so the spec `check_package` itself tells an owner to declare came back from
+    `check_package` as HTTP 400 "that is not a package spec" and was dropped from a build's
+    declaration by `clean_specs` with no error at all. The rest of the file already reads epochs:
+    the `Candidate:` line is split once on `:`, and `_apt_packages` decodes `%3a` back to one."""
+    candidate = "7:4.4.2-0ubuntu0.22.04.1"
+
+    def fake_run(cmd, **kw):
+        class R:
+            stdout, stderr, returncode = "", "", 0
+        out = R()
+        if cmd[:2] == ["apt-cache", "policy"]:
+            assert cmd[2] == "ffmpeg", cmd
+            out.stdout = f"ffmpeg:\n  Installed: (none)\n  Candidate: {candidate}\n"
+        if cmd[:2] == ["apt-cache", "madison"]:
+            out.stdout = f" ffmpeg | {candidate} | http://archive.ubuntu.com jammy/main amd64 Packages\n"
+        return out
+    monkeypatch.setattr(E.subprocess, "run", fake_run)
+    monkeypatch.setattr(E, "_apt_lists", lambda: None)
+
+    # the round trip: the advice a range gets names a spec, and that spec is accepted
+    advice = E.check_package("apt", "ffmpeg>=7")["error"]
+    recommended = advice.split(", or ", 1)[1].split(" to pin", 1)[0]
+    assert recommended == f"ffmpeg={candidate}", advice
+    pinned = E.check_package("apt", recommended)
+    assert pinned["error"] == "" and pinned["exists"] is True and pinned["version"] == candidate
+    assert E.spec_parts(recommended, "apt") == ("ffmpeg", candidate)
+
+    # and the build keeps it instead of silently dropping it: it reaches apt-get as declared
+    assert E.clean_specs([recommended]) == [recommended]
+    argv = _apt_install_argv(monkeypatch, tmp_path, [recommended])
+    assert argv[-1] == f"ffmpeg={candidate}", argv
+
+    # the gate is still a gate: the colon is admitted only as apt's epoch, so nothing else a colon
+    # introduces becomes a spec, and a malformed version is refused as before
+    for bad in ("foo@npm:other", "pkg@https://example.invalid/x", "ffmpeg=1:2:3", ":1.0",
+                "ffmpeg=99999:1.0", "jq==1.0;rm -rf /", "jq=1.0 2.0"):
+        assert E.clean_specs([bad]) == [], bad
+        with pytest.raises(HTTPException) as e:
+            E.check_package("apt", bad)
+        assert e.value.status_code == 400 and e.value.detail == "that is not a package spec", bad
+
+    # `_SPEC_RE` is shared with pip and npm, which have no epoch: their own spellings are unchanged
+    for ok in ("requests==2.31.0", "numpy==1.4.*", "numpy>=1.4", "lodash@^4.17.0", "lodash@4.x",
+               "@types/node@24.1.0", "lodash@latest", "jq"):
+        assert E.clean_specs([ok]) == [ok], ok
