@@ -102,8 +102,15 @@ def check_readonly(sql: str) -> str:
     return raw
 
 
-# `LIMIT n`, `LIMIT n OFFSET m`, and MySQL's `LIMIT offset, count`.
-_LIMIT_TAIL = re.compile(r"\blimit\s+\d+\s*(?:(?:offset\s+\d+|,\s*\d+)\s*)?$", re.I)
+# The row-limit clauses a statement can end in: `LIMIT n`, MySQL's `LIMIT offset, count`, Postgres's
+# `LIMIT ALL` (`LIMIT { count | ALL }`), the SQL standard's `FETCH {FIRST|NEXT} [n] {ROW|ROWS} {ONLY|WITH
+# TIES}`, and an OFFSET (which may say ROWS), in any order Postgres takes them. A second LIMIT after any
+# of them is a syntax error there, so the query never ran. Read only at the very end of the statement,
+# so a subquery's own limit or a column called `all_rows` is not taken for the outer one.
+_ROW_CLAUSE = (r"(?:limit\s+(?:\d+(?:\s*,\s*\d+)?|all)|offset\s+\d+(?:\s+rows?)?"
+               r"|fetch\s+(?:first|next)\s+(?:\d+\s+)?rows?\s+(?:only|with\s+ties))")
+_LIMIT_TAIL = re.compile(rf"(?:\b{_ROW_CLAUSE}\s*)+$", re.I)
+_LIMITS = re.compile(r"\b(?:limit|fetch)\b", re.I)   # an OFFSET alone limits nothing
 
 
 def with_limit(sql: str, max_rows: int) -> tuple[str, bool]:
@@ -114,7 +121,8 @@ def with_limit(sql: str, max_rows: int) -> tuple[str, bool]:
     in one; a query with its own smaller LIMIT keeps it.
     """
     bare = _strip(sql).strip().rstrip(";").strip()
-    if _LIMIT_TAIL.search(bare):
+    tail = _LIMIT_TAIL.search(bare)
+    if tail and _LIMITS.search(tail.group(0)):
         return sql, False
     return f"{sql}\nLIMIT {int(max_rows)}", True
 
@@ -339,7 +347,10 @@ async def introspect(engine: str, dsn: str, *, sample_rows: int = 0,
         t["columns"].append({"name": column, "type": dtype, "nullable": nullable == "YES"})
 
     out = list(tables.values())[:max_tables]
-    truncated_tables = len(tables) > len(out)
+    # Either cut loses schema. The table cap drops whole tables off the end; the row cap inside
+    # run_query cuts the column list itself, and because the query orders by ordinal_position the
+    # cut lands INSIDE a table — a real table with a short column list. Both must say so.
+    truncated_tables = len(tables) > len(out) or bool(raw["truncated"])
 
     if sample_rows > 0:
         for t in out:
