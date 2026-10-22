@@ -112,6 +112,17 @@ def test_a_cli_that_died_before_it_said_anything_still_leaves_a_result_event(tmp
     assert detail["tool"] == ""              # no tool ran: nothing to name
 
 
+def test_the_result_made_for_a_cli_that_said_nothing_is_not_an_answer(tmp_path):
+    """The gateway shows a result's text as the turn's answer when nothing was said before it
+    (_RespTranslator), so the result the runner makes for a dead CLI carries the reason as `error`:
+    with it as `result`, the failure was drawn as the agent's own reply."""
+    script = f"import sys\nsys.stderr.write({json.dumps(TRACEBACK)})\nsys.exit(3)\n"
+    rec = _run(tmp_path, script, "claude", rs._claude_passthrough)
+    ev = [e for e in rec["events"] if e.get("type") == "result"][-1]
+    assert not ev.get("result")
+    assert ev["error"] == rec["error"] and "ValueError: the tool blew up" in ev["error"]
+
+
 def test_the_diagnostic_is_capped(tmp_path):
     tail = TRACEBACK + ("padding line\n" * 2000)
     rec = _run(tmp_path, _claude_cli(stderr_text=tail), "claude", rs._claude_passthrough)

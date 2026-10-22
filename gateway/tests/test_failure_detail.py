@@ -152,3 +152,18 @@ def test_the_whole_path_names_the_base_and_the_tool_and_keeps_the_exception(monk
     result_ev = [ev for ev in traced if ev.get("type") == "result"]
     assert result_ev and "ValueError: the tool blew up" in result_ev[-1]["error_detail"]["exception"]
     assert 'line 42, in run' in result_ev[-1]["error_detail"]["exception"]
+
+
+def test_a_result_with_the_failure_as_error_adds_no_answer():
+    """The runner's own result for a CLI that died before it said anything carries the reason as
+    `error` (runner/tests/test_failure_detail.py): fed to the translator it closes the turn and says
+    nothing, where a reason in `result` was drawn as the agent's reply."""
+    made = {"type": "result", "subtype": "error", "is_error": True, "result": "",
+            "error": "ValueError: the tool blew up", "error_detail": {"base": "claude", "tool": ""}}
+    tr = gw._RespTranslator("resp_made", "m", None, False, 0.0)
+    tr.feed(made)
+    assert not tr.any_text
+    assert not [o for o in tr.output if o.get("type") == "message"]
+    said = gw._RespTranslator("resp_said", "m", None, False, 0.0)
+    said.feed({**made, "result": "ValueError: the tool blew up", "error": None})
+    assert said.any_text      # what the reason in `result` did: an answer the agent never gave

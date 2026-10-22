@@ -11989,14 +11989,17 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         # the spec forbids a stack trace in a message — and this rides the trace's result event.
         detail = _failure_detail(str(rec.get("backend") or ""), rec["events"], tail)
         rec["error_detail"] = detail
-        if result_ev is None:
+        made = result_ev is None
+        if made:
             # The CLI died before it said anything terminal: the trace gets a result event of its
-            # own, so the failure is in the trace and not only in the record (#504).
+            # own, so the failure is in the trace and not only in the record (#504). The reason
+            # rides as `error`, never as `result`: the gateway shows a result's text as the turn's
+            # answer when nothing was said before it, and the CLI said nothing.
             result_ev = {"type": "result", "subtype": "error", "is_error": True,
-                         "result": rec["error"]}
+                         "result": "", "error": rec["error"]}
             _settle(result_ev)
         result_ev["error_detail"] = detail
-        if not str(result_ev.get("result") or "").strip() and tail:
+        if not made and not str(result_ev.get("result") or "").strip() and tail:
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
     if result_ev is not None:
         # The turn's ending goes out last, with the failure's own account of itself on it (#504).
