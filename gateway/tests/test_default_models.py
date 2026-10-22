@@ -3,7 +3,7 @@
 The default is what a task runs when nobody picks a model: the gateway's catalog says it, the runner
 falls back to its own copy (<BACKEND>_DEFAULT_MODEL), and the console preselects a third
 (ui/src/lib/harness.ts). gpt-6.1-sol replaced gpt-5.4 as the default (2026-10-22) wherever it ran
-every scenario; a copy left behind would run the old model with nothing saying so.
+every scenario on the common connections; a copy left behind would run the old model with nothing saying so.
 """
 import os
 import pathlib
@@ -62,8 +62,8 @@ def test_the_console_preselects_the_catalogs_default():
 
 def test_gpt_6_1_sol_is_the_default_where_gpt_5_4_was_and_it_runs():
     sol = sorted(b for b, e in gw._MODEL_CATALOG.items() if e["default"] == "gpt-6.1-sol")
-    assert sol == sorted(["codex", "hermes", "pi", "opencode", "kilo", "cline", "omp", "goose", "aider",
-                          "openhands", "cheetahclaws", "agentzero", "mimo", "jcode", "nanobot",
-                          "zeroclaw"])
-    # opensquilla does not offer it (_NOT_OFFERED): it keeps gpt-5.4
-    assert gw._MODEL_CATALOG["opensquilla"]["default"] == "gpt-5.4"
+    # where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter (2026-10-22)
+    assert sol == sorted(["codex", "hermes", "pi", "opencode", "kilo", "omp", "goose", "aider", "agentzero", "mimo"])
+    # refused it on a common connection (chat/completions with reasoning_effort "none"), or not offered it
+    for b in ("cline", "cheetahclaws", "jcode", "nanobot", "zeroclaw", "openhands", "opensquilla"):
+        assert gw._MODEL_CATALOG[b]["default"] == "gpt-5.4", b

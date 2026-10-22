@@ -7648,7 +7648,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # VERCEL_AI_GATEWAY_API_KEY` on a resumed turn. It was `openai/` until 2026-09-27, which is
     # stripped twice on the way to the wire, so an aggregator's openai/<id> reached TokenRouter bare
     # and was refused; the gpt-6 tokenrouter column found it (runner/server.py, _build_openhands).
-    "openhands": {"default": "gpt-6.1-sol",
+    "openhands": {"default": "gpt-5.4",
                   "models": [
                       "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                       "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
@@ -7667,7 +7667,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # PR that added the base ran its column on a custom OpenAI-format connection only, and the
     # hosted provider columns decide which of these ids stay. The id reaches the provider verbatim
     # (the runner sends `custom/<id>`, and providers.py strips the prefix before the request).
-    "cheetahclaws": {"default": "gpt-6.1-sol",
+    "cheetahclaws": {"default": "gpt-5.4",
                      "models": [
                          "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                          "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5",
@@ -7722,7 +7722,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # operator whose integration reaches gpt-5.6 via a plain chat/completions aggregator will
     # see every agent turn fail, not an edge case. Same trap class as _TOKENROUTER_NO_CHANNEL:
     # the CHANNEL decides, not the model.
-    "cline": {"default": "gpt-6.1-sol",
+    "cline": {"default": "gpt-5.4",
               "models": ["gpt-5.4", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
                          "gpt-5.5", "gpt-5.4-mini", "gpt-5.2", "claude-opus-5.5", "claude-opus-5",
                          "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.7",
@@ -7861,9 +7861,15 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
 # relay so its served model stays readable — see _build_jcode.)
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw"):
-    # opensquilla keeps gpt-5.4: gpt-6.1-sol is not offered there (_NOT_OFFERED, with what it did).
-    _MODEL_CATALOG[_b] = {"default": "gpt-5.4" if _b == "opensquilla" else "gpt-6.1-sol",
-                          "models": list(_MODEL_CATALOG["kimi"]["models"])}
+    # gpt-5.4 by default: see _GPT_6_1_DEFAULT below
+    _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
+# _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
+# on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
+# opencode, kilo, omp, goose, aider, agentzero and mimo. The rest keep gpt-5.4. cline, cheetahclaws, jcode, nanobot
+# and zeroclaw speak chat/completions, which OpenAI and Azure refuse for gpt-6.1-sol with the reasoning_effort
+# "none" those requests carry; openhands was refused the same way through TokenRouter; opensquilla is not offered
+# it. (TokenRouter serves gpt-6.1-sol from more than one upstream account, so a codex task's encrypted reasoning
+# does not reopen on a later turn there; OpenAI and Azure pass.)
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
