@@ -4,7 +4,7 @@
 // derived on the client.
 import { authHeaders } from '@/lib/chat';
 import { harnessFetch } from '@/lib/hfetch';
-import { gw } from '@/lib/harness';
+import { gwHeaders } from '@/lib/harness';
 
 export interface EnvironmentPackage { manager: string; name: string; version: string }
 export interface EnvironmentVersion {
@@ -35,7 +35,25 @@ export interface DeclaredPackage { name: string; version: string; spec: string }
 export interface EnvironmentRuntimes { python: string[]; node: string[]; os: { name: string; version: string }; apt: boolean }
 export interface EnvironmentFileEntry { path: string; dir: boolean; bytes: number; mtime: number; link?: boolean }
 
-export const listEnvironments = () => gw<{ environments: Environment[] }>('GET', '/v1/environments').then((d) => d.environments);
+/** A refusal as an Error: its text is what the page showed before (the server's sentence, else the
+ *  status), and the status, the code and the structured detail ride along, so a surface can say what
+ *  happened in its own words and tell the service's limits apart. */
+async function refusal(r: Response, text: (j: { detail?: unknown; error?: { message?: unknown } } | null) => unknown): Promise<Error> {
+  let j: { detail?: unknown; error?: { code?: unknown; message?: unknown; detail?: unknown } } | null = null;
+  try { j = await r.json(); } catch { /* keep the status */ }
+  return Object.assign(new Error(String(text(j) || r.status)), { status: r.status, code: String(j?.error?.code || ''), detail: j?.error?.detail ?? null });
+}
+/** One call to the service, made as lib/harness gw makes it, its refusal carrying the status. */
+async function gw<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  const r = await harnessFetch(`/api/harness${path}`, {
+    method, headers: gwHeaders(), cache: 'no-store', signal,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!r.ok) throw await refusal(r, (j) => j?.detail);
+  return r.json() as Promise<T>;
+}
+
+export const listEnvironments = (signal?: AbortSignal) => gw<{ environments: Environment[] }>('GET', '/v1/environments', undefined, signal).then((d) => d.environments);
 export const getEnvironment = (id: string) => gw<Environment>('GET', `/v1/environments/${id}`);
 export type EnvironmentInput = { name: string; description?: string; entry?: string; packages?: Record<Manager, string[]>; runtime?: { python: string } };
 export const listRuntimes = () => gw<EnvironmentRuntimes>('GET', '/v1/environments/runtimes');
@@ -66,16 +84,13 @@ async function raw(method: string, path: string, body?: BodyInit | null, content
   delete headers['content-type']; delete headers['Content-Type'];
   if (contentType) headers['content-type'] = contentType;
   const r = await harnessFetch(`/api/harness${path}`, { method, headers, body: body ?? undefined, cache: 'no-store' });
-  if (!r.ok) {
-    let detail = `${r.status}`;
-    try { const j = await r.json(); detail = j?.error?.message || j?.detail || detail; } catch { /* keep the status */ }
-    throw new Error(String(detail));
-  }
+  if (!r.ok) throw await refusal(r, (j) => j?.error?.message || j?.detail);
   return r;
 }
 
-/** One file's bytes, as text when it is text (the caller decides what to do with a binary). */
-export async function readEnvironmentFile(id: string, path: string): Promise<{ text: string | null; bytes: number; type: string }> {
+/** One file's bytes, as text when it is text; a file that is not text comes back as its bytes (blob),
+ *  for the caller to show (an image, a PDF) or not. */
+export async function readEnvironmentFile(id: string, path: string): Promise<{ text: string | null; bytes: number; type: string; blob: Blob | null }> {
   const r = await raw('GET', `/v1/environments/${id}/files/${encodePath(path)}`);
   const type = r.headers.get('content-type') || 'application/octet-stream';
   const buf = await r.arrayBuffer();
@@ -85,7 +100,7 @@ export async function readEnvironmentFile(id: string, path: string): Promise<{ t
     const dec = new TextDecoder('utf-8', { fatal: true });
     try { text = dec.decode(buf); } catch { text = null; }
   }
-  return { text, bytes: buf.byteLength, type };
+  return { text, bytes: buf.byteLength, type, blob: text === null ? new Blob([buf], { type }) : null };
 }
 export const writeEnvironmentFile = (id: string, path: string, body: Blob | string) =>
   raw('PUT', `/v1/environments/${id}/files/${encodePath(path)}`, body, typeof body === 'string' ? 'text/plain; charset=utf-8' : (body.type || 'application/octet-stream')).then((r) => r.json());

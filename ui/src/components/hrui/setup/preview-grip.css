@@ -1,0 +1,13 @@
+/* The handle between a task's conversation and its file's preview (PreviewGrip.tsx), where the
+   preview is docked (from 1280 px): the preview's column takes its width from --pv-w, and the handle
+   sits in the preview's grid cell, a 9 px grip centered on its left hairline, drawn in the accent on
+   hover, focus and while it drags. `#hrui .page` outranks the generated rules (hrui.css) and the
+   console's own (hrui-console.css), whichever stylesheet loads last. */
+#hrui .page .tk-split.previewing{grid-template-columns:300px minmax(0,1fr) var(--pv-w,min(620px,46vw))}
+#hrui .page .tk-split.previewing>.tk-preview{grid-column:3;grid-row:1}
+#hrui .page .tk-split.previewing>.tk-pv-grip{grid-column:3;grid-row:1;justify-self:start;align-self:stretch;position:relative;z-index:3;width:9px;margin-left:-5px;cursor:col-resize;touch-action:none;outline:0}
+#hrui .page .tk-pv-grip::after{content:"";position:absolute;top:0;bottom:0;left:4px;width:1px;background:transparent;transition:background .12s,left .12s,width .12s}
+#hrui .page .tk-pv-grip:hover::after,#hrui .page .tk-pv-grip:focus-visible::after,#hrui .page .tk-pv-grip.on::after{left:3px;width:3px;border-radius:2px;background:var(--accent)}
+body.hr-pv-resizing{cursor:col-resize;user-select:none;-webkit-user-select:none}
+body.hr-pv-resizing iframe{pointer-events:none}
+@media (prefers-reduced-motion:reduce){#hrui .page .tk-pv-grip::after{transition:none}}

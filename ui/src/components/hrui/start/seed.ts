@@ -1,0 +1,38 @@
+// A setup just made in this tab, handed to its page (setups.ts useSetup): the record the create answered
+// with, kept in memory by the setup's id. The page a new setup opens on then draws its first frame with
+// the setup already there, and reads it again from the server behind it, so the hand-off from New
+// setup shows no loading in between. Only a page opened in this tab right after the create has one: a
+// reload or a link opens cold, with its loading lines. The tab also notes which setups it made
+// (madeHere), so the page of one never calls it missing while the server catches up with its create,
+// even after a page load.
+import type { CustomHarness } from '@/lib/harness';
+
+export interface Seed { h: CustomHarness }
+const seeds = new Map<string, Seed>();
+
+const MADE = 'hr.made:';
+/** How long after its create a setup made here is waited for, rather than called missing. */
+const MADE_WAIT = 10 * 60_000;
+const made = new Map<string, number>();
+const tabStore = (): Pick<Storage, 'getItem' | 'setItem'> | null => { try { return globalThis.sessionStorage ?? null; } catch { return null; } };
+
+/** This tab has just made this setup (every create path says so as it opens the setup, start/open.ts). */
+export function markMade(id: string, now = Date.now()): void {
+  if (!id) return;
+  made.set(id, now);
+  try { tabStore()?.setItem(MADE + id, String(now)); } catch { /* this page's note still says so */ }
+}
+export function seedSetup(id: string, s: Seed): void {
+  if (!id) return;
+  seeds.set(id, s);
+  markMade(id);
+}
+/** The setup this tab has just made, by its id, or null. */
+export function seededSetup(id: string): Seed | null { return (id && seeds.get(id)) || null; }
+/** This tab made this setup a moment ago: its page reads it again instead of calling it missing. */
+export function madeHere(id: string, now = Date.now()): boolean {
+  if (!id) return false;
+  let at = made.get(id) || 0;
+  if (!at) { try { at = Number(tabStore()?.getItem(MADE + id) || 0); } catch { at = 0; } }
+  return at > 0 && now - at < MADE_WAIT;
+}

@@ -5,7 +5,10 @@
 // drifted: the console advertised four built-in skills (docx, pdf, pptx, xlsx) that exist nowhere,
 // with Replace and Disable buttons next to them acting on nothing, while the agent actually had a
 // completely different set the CLI discovers for itself. The static table below now carries only
-// identity and presentation; every capability field is filled in from the server.
+// identity and presentation (and the model placeholders the gateway's tests hold to its catalog);
+// every capability field is filled in from the server.
+// Custom harnesses (setups) are persisted by the gateway (/v1/harnesses) through the console's own
+// proxy (/api/harness).
 import { useEffect, useState } from 'react';
 
 import { harnessFetch } from '@/lib/hfetch';
@@ -26,8 +29,7 @@ export interface OobHarness {
   skills: string[];        // built-in skills (read-only)
 }
 
-/** One entry in a Harness's tool list. Every entry, with no exceptions and no kinds: a database
- *  a kit connected is one of these and reads back exactly like a server somewhere else. */
+/** One entry in a Harness's tool list: a server somewhere else, addressed by URL. */
 export interface McpServer {
   id: string; name: string; enabled: boolean;
   url?: string; auth?: string; transport?: string;
@@ -46,9 +48,11 @@ export interface CustomHarness {
   // resolved back to files via getSkillFiles() when editing. Either shape is a REAL own skill.
   skills: { id: string; name: string; enabled: boolean; files?: { path: string; content?: string; content_b64?: string }[]; blob?: string }[];
   disabledTools?: string[];  // inherited/built-in tool names disabled for this harness
-  maxStep?: number | null;        // default agent step budget per turn (blank = 40)
-  timeoutSeconds?: number | null; // default per-turn wall-clock cap (blank = server default)
+  maxStep?: number | null;        // default agent step budget per turn (blank = the server's runtime default)
+  timeoutSeconds?: number | null; // default per-turn wall-clock cap (blank = the server's runtime default)
   reasoningEffort?: string;       // how much the model thinks on this harness's Tasks ('' = the model's default)
+  // The environment (henv_) every Task of this Harness reads at its mount path, read-only; '' for none.
+  environment?: string;
   additionalHeaders?: string[]; // declared header NAMES callers pass per request (app-level auth)
   // Variables every Task's shell and tools start with. A value is `$headers.X-Name` (a declared
   // request header), `vault:ref` (a stored secret) or a literal. Resolved by the service per turn.
@@ -57,8 +61,6 @@ export interface CustomHarness {
   // skipped from the package on every save; a saved plugin round-trips as {name, enabled, blob}
   // plus those derived fields, and a freshly picked one carries its `files` until it is saved.
   plugins?: HarnessPlugin[];
-  // The environment (henv_) every Task of this Harness reads at its mount path, read-only; '' for none.
-  environment?: string;
   createdAt: number;
 }
 
@@ -251,47 +253,19 @@ export const OOB: OobHarness[] = [
     tools: [], skills: [] },
 ];
 
-export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
-
-// ── the instruction file each base actually reads ─────────────────────────────────────────────
-// The NAME of the file the runner writes for a base, which is the label the settings page puts on
-// the instructions box. It has to agree with runner/server.py's `_agent_doc_path`, and until
-// 2026-10-03 it did not: the page labelled qwen and gemini "AGENTS.md" while the runner wrote
-// QWEN.md and GEMINI.md, so a person edited a box named for a file their agent never read.
-// gateway/tests/test_instruction_file_label.py now holds this map to the runner's function, so the
-// next base that chooses its own name cannot drift the same way.
-//
-// systemone and qoder have no file at all: systemone reads no workspace and its instructions travel
-// in the job, and qoder's travel with the hosted session it drives, so the page calls the box
-// "Instructions".
-export const INSTRUCTION_FILE: Record<string, string> = {
-  qwen: 'QWEN.md',
-  gemini: 'GEMINI.md',
-  systemone: 'Instructions',
-  qoder: 'Instructions',
-};
-const AGENTS_MD_BASES = [
-  'codex', 'hermes', 'omp', 'pi', 'opencode', 'kilo', 'dsh', 'qwen', 'cline', 'goose', 'kimi',
-  'minimax', 'aider', 'openhands', 'grok', 'agentzero',
-  'mimo', 'jcode', 'opensquilla', 'nanobot', 'zeroclaw',
-];
-export function instructionFileLabel(baseId: string | null | undefined): string {
-  const id = baseId || '';
-  return INSTRUCTION_FILE[id] || (AGENTS_MD_BASES.includes(id) ? 'AGENTS.md' : 'CLAUDE.md');
+/** The built-in harnesses a person can pick: the ones the server's bases document lists. None until
+ *  it has been read (useBasesRead says whether it could be). */
+export function offeredOob(bases: Record<string, BaseInfo> | null): OobHarness[] {
+  return OOB.filter((o) => o.status === 'ready' && !!bases?.[o.id]);
 }
 
+export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
+
 // ── model catalog: the GATEWAY owns it, this file does not ────────────────────────────
-// The `models` / `defaultModel` fields above used to be the console's own copy of the
-// gateway's _MODEL_CATALOG. Two lists meant two places to edit, and only one of them got
-// edited: adding deepseek-v4-flash to the gateway left it invisible in every picker here,
-// and grok-4.5 has been wired in the TokenRouter integration all along without ever
-// appearing in the UI. A picker that disagrees with what the server will accept is worse
-// than a slow picker.
-//
-// So the catalog is fetched from GET /v1/models (same shape the gateway serves) and cached
-// for the tab. The literals above remain ONLY as the pre-fetch placeholder so first paint
-// isn't empty; once the fetch lands the server's list wins. Never add a model here — add it
-// to _MODEL_CATALOG in the gateway and it shows up everywhere.
+// The `models` / `defaultModel` fields above are the pre-fetch placeholder only (so first paint
+// isn't empty). The catalog is fetched from GET /v1/models and cached for the tab; once it lands
+// the server's list wins everywhere. Never add a model here: add it to _MODEL_CATALOG in the
+// gateway and it shows up everywhere (and the gateway's tests ask for it here too).
 export type ModelCatalog = Record<string, {
   default: string;
   models: string[];
@@ -336,20 +310,27 @@ export async function fetchModelCatalog(): Promise<ModelCatalog> {
   return _catalogInflight;
 }
 
-/** Models for a base harness — server catalog when loaded, placeholder literals until then. */
+/** Models for a base harness: the server catalog once loaded, the placeholder literals until then. */
 export const oobModels = (o: OobHarness | null | undefined): string[] => {
   if (!o) return [];
   const fromServer = o.backend ? _catalog?.[o.backend]?.models : undefined;
   return (fromServer && fromServer.length) ? fromServer : o.models;
 };
 
+/** The base's default model: the server catalog's once loaded, else the placeholder's. Never the
+ *  first entry of the list (2026-09-27: Oh My Pi opened on gpt-6-astra that way). */
+export const oobDefaultModel = (o: OobHarness | null | undefined): string => {
+  if (!o) return '';
+  const fromServer = o.backend ? _catalog?.[o.backend]?.default : '';
+  return fromServer || o.defaultModel || '';
+};
+
 /** Whether this backend can run this model, as three answers rather than two. "unknown" is the
  *  state before the server's catalog has arrived (or while every read of it has failed), and it
  *  is not "yes": the picker used to treat it that way, offering the placeholder list as runnable
  *  for the second or two before the catalog landed, and a model picked in that window was refused
- *  at the send ("no provider serves it") after it had been accepted. Measured 2026-09-08: a
- *  matrix worker read the picker in that window and was offered four models the platform's
- *  provider has no channel for. Unknown is shown as unknown, and nothing unknown can be sent. */
+ *  at the send ("no provider serves it") after it had been accepted. Unknown is shown as unknown,
+ *  and nothing unknown can be sent. */
 export type ModelAvailability = 'yes' | 'no' | 'unknown';
 export function modelAvailability(backend: string | null | undefined, id: string): ModelAvailability {
   const entry = backend ? _catalog?.[backend] : undefined;
@@ -363,12 +344,6 @@ export function availabilityNote(state: ModelAvailability): string {
 export function modelAvailable(backend: string | null | undefined, id: string): boolean {
   return modelAvailability(backend, id) === 'yes';
 }
-
-export const oobDefaultModel = (o: OobHarness | null | undefined): string => {
-  if (!o) return '';
-  const fromServer = o.backend ? _catalog?.[o.backend]?.default : '';
-  return fromServer || o.defaultModel || '';
-};
 
 export interface BaseTool { name: string; label: string; enforcement: 'hard' | 'instruction' }
 export interface BuiltinSkill { name: string; title: string; description: string; defaultEnabled: boolean; origin: string }
@@ -390,8 +365,8 @@ export interface BaseInfo {
    *  on older gateways, which is the same as true. */
   takesSkills?: boolean;
   /** false means a Task on this base cannot open an environment (Qoder Cloud Agent runs in its own
-   *  cloud, and the layer is mounted on this box only), so none is offered. Absent on older
-   *  gateways, which is the same as true. */
+   *  cloud, and the layer is mounted on this box's sandboxes only), so none is offered. Absent on
+   *  older gateways, which is the same as true. */
   takesEnvironments?: boolean;
 }
 
@@ -406,23 +381,37 @@ async function fetchBases(): Promise<Record<string, BaseInfo>> {
   if (_bases) return _bases;
   if (_basesInflight) return _basesInflight;
   _basesInflight = (async () => {
+    // a few tries of the same read, as the model catalog's: one failed read must not leave the page
+    // with no harness for the life of the tab
     try {
-      const r = await harnessFetch('/api/harness/v1/bases', { headers: gwHeaders(), cache: 'no-store' });
-      if (!r.ok) return {};
-      const doc = await r.json();
-      const map: Record<string, BaseInfo> = {};
-      for (const b of doc.bases || []) map[b.id] = b as BaseInfo;
-      const rd = doc.runtimeDefaults;
-      if (rd && Number(rd.maxStep) > 0 && Number(rd.timeoutSeconds) > 0) {
-        _runtimeDefaults = { maxStep: Number(rd.maxStep), timeoutSeconds: Number(rd.timeoutSeconds) };
+      for (const wait of [0, 1500, 3000]) {
+        if (wait) await new Promise((r) => setTimeout(r, wait));
+        try {
+          const r = await harnessFetch('/api/harness/v1/bases', { headers: gwHeaders(), cache: 'no-store' });
+          if (!r.ok) throw new Error(String(r.status));
+          const doc = await r.json();
+          if (!doc || typeof doc !== 'object' || !Array.isArray(doc.bases)) throw new Error('not the bases document');
+          const map: Record<string, BaseInfo> = {};
+          for (const b of doc.bases) map[b.id] = b as BaseInfo;
+          const rd = doc.runtimeDefaults;
+          if (rd && Number(rd.maxStep) > 0 && Number(rd.timeoutSeconds) > 0) {
+            _runtimeDefaults = { maxStep: Number(rd.maxStep), timeoutSeconds: Number(rd.timeoutSeconds) };
+          }
+          _bases = map;
+          return map;
+        } catch {
+          // try again
+        }
       }
-      _bases = map;
-      return map;
-    } catch { return {}; }
-    finally { _basesInflight = null; }
+      return {};
+    } finally { _basesInflight = null; }
   })();
   return _basesInflight;
 }
+
+/** The server-described bases for a caller that is not a component (once per tab; {} when it could not
+ *  be read, which offers no harness: the caller says it could not read them). */
+export const loadBases = fetchBases;
 
 /** The server's runtime defaults, once the bases document has landed. */
 export function useRuntimeDefaults(): RuntimeDefaults | null {
@@ -435,85 +424,76 @@ export function useRuntimeDefaults(): RuntimeDefaults | null {
   return d;
 }
 
-/** Server-described bases. null until loaded — a caller shows nothing rather than a guess. */
-export function useBases(): Record<string, BaseInfo> | null {
-  const [b, setB] = useState<Record<string, BaseInfo> | null>(_bases);
+/** A read the page waits on: its value once it has landed (null until then), whether the last
+ *  read failed, and `retry` to read it again. */
+export interface Read<T> { value: T | null; failed: boolean; retry: () => void }
+function useServerRead<T extends object>(get: () => Promise<T>, have: T | null): Read<T> {
+  const [value, setValue] = useState<T | null>(have);
+  const [failed, setFailed] = useState(false);
+  const [n, setN] = useState(0);
   useEffect(() => {
     let alive = true;
-    fetchBases().then((m) => { if (alive && Object.keys(m).length) setB(m); });
+    get().then((v) => {
+      if (!alive) return;
+      if (Object.keys(v).length) { setValue(v); setFailed(false); } else setFailed(true);
+    });
     return () => { alive = false; };
-  }, []);
-  return b;
+  // `n` is a Try again
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [n]);
+  return { value, failed: failed && !value, retry: () => { setFailed(false); setN((x) => x + 1); } };
 }
 
-/** Load the server catalog once per tab and re-render when it lands. Any surface that shows a
- *  model picker calls this; without it the placeholder literals would be what the user sees. */
-export function useModelCatalog(): ModelCatalog | null {
-  const [cat, setCat] = useState<ModelCatalog | null>(_catalog);
-  useEffect(() => {
-    let alive = true;
-    fetchModelCatalog().then((c) => { if (alive && Object.keys(c).length) setCat(c); });
-    return () => { alive = false; };
-  }, []);
-  return cat;
-}
+/** The server-described bases, null until loaded (a caller shows nothing rather than a guess). */
+export function useBasesRead(): Read<Record<string, BaseInfo>> { return useServerRead(fetchBases, _bases); }
+export function useBases(): Record<string, BaseInfo> | null { return useBasesRead().value; }
 
-// HarnessRouter business logic is VISUAL WORKFLOWS in the engine (the HarnessRouter
-// Space), not a bespoke backend. Every CRUD op runs hr.harness.* against HR's own
-// VectorGraph tenant via the engine run API; the JWT carries the principal.
-const ENGINE = '/api/engine';
-
-/** Shadow User vertex id (HR tenant), sanitized email; '@' can't be a vertex id. */
-function memberUid(email: string): string {
-  return 'usr.' + email.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.|\.$/g, '');
-}
-/** Shadow Account vertex id (HR tenant), HR-local; org_id kept as the link prop. */
-function orgUid(orgId: string): string {
-  return 'acct.' + orgId;
-}
+/** The server's model catalog, once per tab: every model picker reads it, and offers the
+ *  placeholders until it lands (`failed` once every try failed: the picker says so, with Try again). */
+export function useModelCatalogRead(): Read<ModelCatalog> { return useServerRead(fetchModelCatalog, _catalog); }
+export function useModelCatalog(): ModelCatalog | null { return useModelCatalogRead().value; }
 
 function principal() {
   const s = getSession();
-  const orgId = s?.orgId || '';
-  const org = (s?.orgs || []).find((o) => o.id === orgId);
-  return {
-    token: s?.token || '',
-    orgId,
-    orgName: (org?.name as string) || orgId,
-    member: s?.member?.email || s?.member?.id || '',
-    memberName: (s?.member?.name as string) || (s?.member?.display_name as string) || '',
-  };
+  return { orgId: s?.orgId || '', member: s?.member?.email || s?.member?.id || '' };
 }
 
 /** Gateway CRUD via the same-origin BFF (/api/harness injects the trust headers).
  *  All harness writes go through the gateway so config validation (skills need a
  *  SKILL.md) and large-bundle offloading apply no matter which surface saved. The
  *  gateway returns the camelCase CustomHarness shape directly. */
-function gwHeaders(): Record<string, string> {
+export function gwHeaders(): Record<string, string> {
   const p = principal();
   return { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member,
            ...workspaceHeaders() };
 }
 
-export async function gw<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** `signal`: a read with its own end (readSettled, lib/settle.ts) in place of harnessFetch's 30 s. */
+export async function gw<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const r = await harnessFetch(`/api/harness${path}`, {
-    method, headers: gwHeaders(), cache: 'no-store',
+    method, headers: gwHeaders(), cache: 'no-store', signal,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!r.ok) {
     let detail = `${r.status}`;
-    try { detail = (await r.json())?.detail || detail; } catch { /* keep the status */ }
-    throw new Error(String(detail));
+    try {
+      const d = await r.json() as { detail?: unknown; error?: { message?: unknown } } | null;
+      detail = String(d?.detail || d?.error?.message || detail);
+    } catch { /* keep the status */ }
+    throw new Error(detail);
   }
   return r.json() as Promise<T>;
 }
 
+/** The record as the gateway takes it. Only the fields a harness has: the gateway refuses any other
+ *  by name (a field it would not apply is never saved). */
 function harnessBody(input: Partial<CustomHarness> & { name: string; base: string }) {
   const base = oobById(input.base);
   return {
     name: input.name, base: input.base,
     base_label: input.baseLabel || base?.name || input.base,
-    default_model: input.defaultModel || oobDefaultModel(base) || '',
+    // what the person chose; '' when they chose none: the server runs it on the base's default
+    default_model: input.defaultModel || '',
     system_prompt: input.systemPrompt || '',
     mcp_servers: input.mcpServers || [],
     skills: input.skills || [],
@@ -528,19 +508,32 @@ function harnessBody(input: Partial<CustomHarness> & { name: string; base: strin
   };
 }
 
-export async function listCustom(): Promise<CustomHarness[]> {
+export async function listCustom(signal?: AbortSignal): Promise<CustomHarness[]> {
   if (!principal().orgId) return [];
   // Workspace scoping rides the request headers (gwHeaders); the query params make the
   // filter explicit for the gateway's list handler as well.
   const q = new URLSearchParams();
   appendWorkspaceQuery(q);
   const qs = q.toString();
-  return (await gw<{ harnesses: CustomHarness[] }>('GET', `/v1/harnesses${qs ? `?${qs}` : ''}`)).harnesses || [];
+  // an answer without the list is a failed read, never "no setups"
+  const d = await gw<{ harnesses?: CustomHarness[] }>('GET', `/v1/harnesses${qs ? `?${qs}` : ''}`, undefined, signal);
+  if (!d || !Array.isArray(d.harnesses)) throw new Error('Your setups could not be read just now.');
+  return d.harnesses;
 }
 
 export async function getCustom(id: string): Promise<CustomHarness | null> {
   try { return await gw<CustomHarness>('GET', `/v1/harnesses/${encodeURIComponent(id)}`); }
   catch { return null; }
+}
+
+/** One setup by id for a page that must tell "not here" from "could not be read": null only when the
+ *  server answers 404 (not in this workspace, or gone); any other failure throws, so a moment of
+ *  downtime is never shown as a missing setup. */
+export async function readCustom(id: string): Promise<CustomHarness | null> {
+  const r = await harnessFetch(`/api/harness/v1/harnesses/${encodeURIComponent(id)}`, { headers: gwHeaders(), cache: 'no-store' });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json() as Promise<CustomHarness>;
 }
 
 export async function createCustom(input: Partial<CustomHarness> & { name: string; base: string }): Promise<CustomHarness> {
@@ -553,18 +546,16 @@ export async function saveCustom(c: CustomHarness): Promise<CustomHarness> {
   return gw<CustomHarness>('PUT', `/v1/harnesses/${encodeURIComponent(c.id)}`, harnessBody(c));
 }
 
-/** Delete a session for good: transcript, trace, and working folder. The space it held stops
- *  counting toward the org's agent memory at once. */
+/** Delete a session for good: transcript, trace, and working folder. */
 export async function deleteSession(sid: string): Promise<void> {
   await gw<{ deleted: boolean }>('DELETE', `/v1/sessions/${encodeURIComponent(sid)}`);
 }
 
+/** Delete a setup: it stops at once and is removed for good after 30 days; its tasks stay. */
 export async function deleteCustom(id: string): Promise<void> {
   await gw<{ deleted: boolean }>('DELETE', `/v1/harnesses/${encodeURIComponent(id)}`);
 }
 
-/** Full files of one skill on a harness, resolving the server-side blob offload, used to
- *  hydrate a folder skill for editing when the record only carries {name, enabled, blob}. */
 let _pluginSchemas: Promise<string[]> | null = null;
 /** The Agent Plugins manifest schemas this server installs, from its discovery document; empty
  *  when the server reports no plugin support (the Console then leaves the check to Save). */
@@ -577,7 +568,7 @@ export function pluginSchemas(): Promise<string[]> {
   return _pluginSchemas;
 }
 
-/** The complete package of one installed plugin, byte for byte (UHP Plugins §3.1). */
+/** The complete package of one installed plugin, byte for byte (UHP Plugins 3.1). */
 export async function getPluginFiles(harnessId: string, name: string):
   Promise<{ path: string; content?: string; content_b64?: string }[]> {
   const r = await gw<{ files: { path: string; content?: string; content_b64?: string }[] }>(
@@ -585,29 +576,13 @@ export async function getPluginFiles(harnessId: string, name: string):
   return r.files || [];
 }
 
-/** This Harness's own tools and Skills as an Agent Plugins package (UHP Plugins §5). Credentials
- *  are never in it; each omission is listed in `skipped`. */
-export async function exportPlugin(harnessId: string): Promise<HarnessPlugin> {
-  return gw<HarnessPlugin>('GET', `/v1/harnesses/${encodeURIComponent(harnessId)}/plugin`);
-}
-
+/** Full files of one skill on a harness, resolving the server-side blob offload, used to
+ *  hydrate a folder skill for editing when the record only carries {name, enabled, blob}. */
 export async function getSkillFiles(harnessId: string, skillId: string):
   Promise<{ path: string; content?: string; content_b64?: string }[]> {
   const r = await gw<{ files: { path: string; content?: string; content_b64?: string }[] }>(
     'GET', `/v1/harnesses/${encodeURIComponent(harnessId)}/skills/${encodeURIComponent(skillId)}/files`);
   return r.files || [];
-}
-
-export async function cloneCustom(id: string): Promise<CustomHarness | null> {
-  const c = await getCustom(id);
-  if (!c) return null;
-  return createCustom({ ...c, name: c.name + ' (copy)' });
-}
-
-export async function cloneFromOob(oobId: string): Promise<CustomHarness | null> {
-  const o = oobById(oobId);
-  if (!o) return null;
-  return createCustom({ name: o.name + ' (custom)', base: o.id, defaultModel: oobDefaultModel(o) });
 }
 
 /** Probe an MCP server (server-side handshake via the gateway) and return its tools. `auth` may
@@ -624,9 +599,21 @@ export async function testMcp(url: string, auth?: string): Promise<{ ok: boolean
   return r.json();
 }
 
-/** Probe a database before connecting it: the server opens it, lists what the account can see,
- *  and holds on to nothing. Same 200-either-way contract as testMcp — a refused password is an
- *  answer, not a failed request — and the same degrade when the request itself does not land. */
+/** Store an MCP bearer token securely and return a 'vault:<ref>' reference. The token never lands
+ *  on the harness record; only the reference is kept there. */
+export async function storeMcpSecret(serverId: string, token: string): Promise<string> {
+  const p = principal();
+  const r = await harnessFetch(`/api/harness/v1/orgs/${encodeURIComponent(p.orgId)}/mcp-secrets/${encodeURIComponent(serverId)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member },
+    body: JSON.stringify({ token }),
+    cache: 'no-store',
+  });
+  if (!r.ok) throw new Error(`mcp-secret store failed: ${r.status}`);
+  return (await r.json()).ref as string;
+}
+
+/** Try a database connection string the way a kit's launch will: engine, host, database, table count. */
 export async function testDatabase(engine: string, connectionString: string):
   Promise<{ ok: boolean; error?: string; host?: string; database?: string; tableCount?: number; tables?: string[] }> {
   const p = principal();
@@ -640,21 +627,36 @@ export async function testDatabase(engine: string, connectionString: string):
   return r.json();
 }
 
-/** Store an MCP bearer token in the vault and return a 'vault:<ref>' reference. The token never
- *  lands in the graph, only the ref is persisted on the harness config. */
-export async function storeMcpSecret(serverId: string, token: string): Promise<string> {
-  const p = principal();
-  const r = await harnessFetch(`/api/harness/v1/orgs/${encodeURIComponent(p.orgId)}/mcp-secrets/${encodeURIComponent(serverId)}`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member },
-    body: JSON.stringify({ token }),
-    cache: 'no-store',
-  });
-  if (!r.ok) throw new Error(`mcp-secret store failed: ${r.status}`);
-  return (await r.json()).ref as string;
+// ── the instruction file each base actually reads ─────────────────────────────────────────────
+// The NAME of the file the runner writes for a base, which is the label the settings page puts on
+// the instructions box. It has to agree with runner/server.py's `_agent_doc_path`, and until
+// 2026-10-03 it did not: the page labelled qwen and gemini "AGENTS.md" while the runner wrote
+// QWEN.md and GEMINI.md, so a person edited a box named for a file their agent never read.
+// gateway/tests/test_instruction_file_label.py now holds this map to the runner's function, so the
+// next base that chooses its own name cannot drift the same way.
+//
+// systemone and qoder have no file at all: systemone reads no workspace and its instructions travel
+// in the job, and qoder's travel with the hosted session it drives, so the page calls the box
+// "Instructions".
+export const INSTRUCTION_FILE: Record<string, string> = {
+  qwen: 'QWEN.md',
+  gemini: 'GEMINI.md',
+  systemone: 'Instructions',
+  qoder: 'Instructions',
+};
+const AGENTS_MD_BASES = [
+  'codex', 'hermes', 'omp', 'pi', 'opencode', 'kilo', 'dsh', 'qwen', 'cline', 'goose', 'kimi',
+  'minimax', 'aider', 'openhands', 'grok', 'agentzero',
+  'mimo', 'jcode', 'opensquilla', 'nanobot', 'zeroclaw',
+];
+export function instructionFileLabel(baseId: string | null | undefined): string {
+  const id = baseId || '';
+  return INSTRUCTION_FILE[id] || (AGENTS_MD_BASES.includes(id) ? 'AGENTS.md' : 'CLAUDE.md');
 }
 
 // ── plugins: services a workspace connects once, each Harness including the ones it needs ────
+// The workspace's catalog and a plugin's attachments are read through lib/plugs.ts (reads with a
+// signal); the calls that change a plugin, and a Harness's own binding, are here.
 export interface PlugPricing { unit: string; usd_per_unit: number; markup: number; source: string; vendor: string; billed_as: string; rounding: string; session_cap_minutes: number; session_estimate_usd: number }
 export interface Plug {
   type: string; label: string; source: 'platform' | 'local'; official: boolean;
@@ -666,10 +668,6 @@ export interface Plug {
 }
 export const PLUGS_ENTRY_ID = 'mcp.plugs';
 
-/** The plugin catalog for the current workspace, with each plugin's state here. */
-export function listPlugs(): Promise<{ workspace: string; plugs: Plug[] }> {
-  return gw<{ workspace: string; plugs: Plug[] }>('GET', '/v1/plugs');
-}
 /** Connect a plugin for the workspace, change its settings, or turn it off. */
 export function setPlug(type: string, body: { enabled: boolean; config?: Record<string, unknown>; secrets?: Record<string, string> }): Promise<Plug> {
   return gw<Plug>('PUT', `/v1/plugs/${encodeURIComponent(type)}`, body);
@@ -692,9 +690,6 @@ export function plugTools(type: string): Promise<{ type: string; label: string; 
 /** Remove a plugin from the workspace: the record and the credential it kept are deleted. */
 export function deletePlug(type: string): Promise<{ type: string; workspace: string; removed: boolean }> {
   return gw<{ type: string; workspace: string; removed: boolean }>('DELETE', `/v1/plugs/${encodeURIComponent(type)}`);
-}
-export function plugAttachments(type: string): Promise<{ harnesses: number; attached: number; harness_list: { id: string; name: string }[] }> {
-  return gw<{ harnesses: number; attached: number; harness_list: { id: string; name: string }[] }>('GET', `/v1/plugs/${encodeURIComponent(type)}/attachments`);
 }
 export interface HarnessPlugs { id: string; name: string; enabled: boolean; workspace: string; plugs: string[]; tools?: Record<string, string[]>; status: Record<string, string> }
 /** The plugins one Harness includes, or null when it includes none. */

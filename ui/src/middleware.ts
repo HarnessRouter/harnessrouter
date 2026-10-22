@@ -1,4 +1,4 @@
-// The gate for a self-hosted instance that anyone can reach.
+// The gate for a self-hosted instance that anyone can reach, and the redirects for older addresses.
 //
 // Self-hosted has no accounts service, and on a machine only you can reach that is the right
 // answer — a login would be ceremony with nothing behind it. The moment the box has a public URL
@@ -17,6 +17,7 @@
 //   HR_AUTH_DISABLED=1                no gate at all. Only for a box nobody else can reach.
 import { NextResponse, type NextRequest } from 'next/server';
 import { AUTH_DISABLED, SELF_HOSTED, SESSION_COOKIE, sessionValid } from '@/lib/selfhost-auth';
+import { movedTo } from '@/components/hrui/moved';
 
 // Static assets shipped IN the image: brand marks, icons, fonts. They are public by
 // construction — baked into a published container and containing no user data — so gating them
@@ -68,10 +69,22 @@ function isPublic(path: string): boolean {
 }
 
 export async function middleware(req: NextRequest) {
+  const { pathname, search } = req.nextUrl;
+  // An older console address is answered with its place in this console before any page loads, so
+  // a bookmark or a link never shows an old page first. A redirect carries no data, so it comes
+  // before the sign-in gate, which then applies to where it lands.
+  const moved = movedTo(pathname, req.nextUrl.searchParams);
+  if (moved) {
+    const to = req.nextUrl.clone();
+    const [p, q] = moved.split('?');
+    to.pathname = p;
+    to.search = q ? `?${q}` : '';
+    return NextResponse.redirect(to, 307);
+  }
+
   // Hosted has its own login; this gate exists only for the self-hosted image.
   if (!SELF_HOSTED || AUTH_DISABLED) return NextResponse.next();
 
-  const { pathname, search } = req.nextUrl;
   if (isPublic(pathname)) return NextResponse.next();
   if (isApiKeyCall(req, pathname)) return NextResponse.next();
   if (await sessionValid(req.cookies.get(SESSION_COOKIE)?.value)) return NextResponse.next();

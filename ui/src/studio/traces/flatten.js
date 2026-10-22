@@ -102,6 +102,10 @@ export function flatten(events) {
         break;
       }
       case 'user': {
+        // A user event the CLI marks isSynthetic is the CLI talking to its model, not the person:
+        // Claude Code sends a loaded skill's body this way ("Base directory for this skill: ..."). Its
+        // Skill step stands for it; as a row it opened a second turn and showed an internal path.
+        if (ev.isSynthetic === true) break;
         const msg = ev.message || {};
         if (typeof msg.content === 'string') {
           if (msg.content.trim()) rows.push({ kind: 'user', role: 'user', label: 'User', text: msg.content, md: true, ts, sub, clipped: clip });
@@ -123,6 +127,14 @@ export function flatten(events) {
           tokens: (u.input_tokens != null || u.output_tokens != null) ? { in: u.input_tokens, out: u.output_tokens } : null,
           dur: ev.duration_ms != null ? ev.duration_ms / 1000 : null, ts, clipped: clip,
         });
+        break;
+      }
+      case 'limited': {
+        // the gateway withheld this event's content (no tracing on the workspace): its kind and
+        // time are what the API gave, so the row is an indicator and opens nothing
+        const kind = ev.kind === 'result' ? 'result' : ev.kind;
+        const label = kind === 'tool' ? 'Tool' : kind === 'thinking' ? 'Thinking' : kind === 'user' ? 'User' : kind === 'result' ? 'Result' : 'Agent';
+        rows.push({ kind, role: kind, label, text: '', md: false, ts, sub, limited: true });
         break;
       }
       default:
