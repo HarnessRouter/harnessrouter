@@ -130,6 +130,32 @@ def test_postgres_limit_all_is_respected():
         assert not added and out == sql, sql
 
 
+def test_the_standards_fetch_and_an_offset_in_rows_are_the_statements_own_limit():
+    """Postgres takes the SQL standard's row limit too, `FETCH {FIRST|NEXT} [n] {ROW|ROWS} {ONLY|WITH
+    TIES}`, before or after an OFFSET, and an OFFSET may say ROWS. Each ended in a shape the tail
+    check did not read, so a second LIMIT went after it, and Postgres 16 refused every one of them
+    (`syntax error at or near "LIMIT"`, measured 2026-10-22): the query never ran."""
+    for sql in ("SELECT * FROM t ORDER BY x FETCH FIRST 4 ROWS ONLY",
+                "SELECT * FROM t ORDER BY x fetch first row only",
+                "SELECT * FROM t ORDER BY x FETCH NEXT 2 ROWS WITH TIES",
+                "SELECT * FROM t ORDER BY x OFFSET 2 ROWS FETCH FIRST 2 ROWS ONLY",
+                "SELECT * FROM t ORDER BY x FETCH FIRST 2 ROWS ONLY OFFSET 3",
+                "SELECT * FROM t ORDER BY x LIMIT 2 OFFSET 3 ROWS",
+                "SELECT * FROM t ORDER BY x OFFSET 3 LIMIT 2"):
+        out, added = with_limit(sql, 500)
+        assert not added and out == sql, sql
+
+
+def test_an_offset_alone_still_gets_the_cap():
+    """An OFFSET with no LIMIT or FETCH beside it limits nothing: the cap goes after it, which
+    Postgres takes (`OFFSET 5 ROWS LIMIT 501` answered, 2026-10-22)."""
+    for sql in ("SELECT * FROM t OFFSET 5", "SELECT * FROM t OFFSET 5 ROWS"):
+        out, added = with_limit(sql, 500)
+        assert added and out.rstrip().endswith("LIMIT 500"), sql
+    out, added = with_limit("SELECT fetch_count, rows FROM t", 500)
+    assert added and out.rstrip().endswith("LIMIT 500")
+
+
 def test_all_as_a_name_is_not_read_as_a_limit():
     """`ALL` is only the statement's own limit directly after LIMIT at the end of it."""
     out, added = with_limit("SELECT all_rows FROM t", 500)
