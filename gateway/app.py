@@ -16004,6 +16004,9 @@ async def post_media_export(hid: str, eid: str, sid: str, request: Request) -> d
         job = await _media_export_start(hid, sid, org, str(entry.get("id") or eid), "")
     except media_plane.MediaError as e:
         raise uhp_error(400, "export_refused", str(e)) from e
+    except backing.BlobUnavailable as e:
+        # the export plans from the canvas: one that could not be read is said, as the scene routes say it
+        raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
     return {"job_id": job["id"], "shots": job.get("shots"),
             "total_seconds": job.get("planned_seconds"), "status": job["status"]}
 
@@ -16068,7 +16071,11 @@ async def post_media_import(hid: str, eid: str, sid: str, request: Request) -> d
             scene["elements"] = els
             return el["id"]
 
-        _rev, element_id = await _media_scene_touch(sid, mutate)
+        try:
+            _rev, element_id = await _media_scene_touch(sid, mutate)
+        except backing.BlobUnavailable as e:
+            # stored but not placed: the canvas could not be read, so it is not written over either
+            raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
 
     return {"media_id": rec["media_id"], "kind": rec["kind"], "mime": rec["mime"],
             "bytes": rec["bytes"], "width": rec["width"], "height": rec["height"],

@@ -3430,3 +3430,24 @@ def test_the_app_says_a_canvas_it_could_not_read_rather_than_serving_an_empty_on
         assert w.status_code == 503, f"{w.status_code}: {w.text[:300]}"
 
     assert api.get(base).json() == kept, "the canvas did not survive the failed reads"
+
+
+def test_export_and_import_say_a_canvas_they_could_not_read(api, client, harness, session, provider,
+                                                            monkeypatch):
+    """The two other routes that read the canvas. An export plans its shots from it and an import places
+    its picture on it; over a canvas that could not be read, both are a 503 that says so, never a bare
+    500, and the import writes nothing back over it."""
+    tok = _cred(harness, session)
+    _ok(_call(client, tok, "place", {"items": [{"text": "SHOT LIST"}]}))
+    before = _element_ids(session)
+    base = f"/v1/harnesses/{harness}/servers/{ENTRY_ID}/sessions/{session}"
+    with monkeypatch.context() as m:
+        _unreadable_scene(m, session)
+        r = api.post(f"{base}/media", content=_still("png"))
+        assert r.status_code == 503, f"{r.status_code}: {r.text[:300]}"
+        assert r.json()["error"]["message"] == app._MEDIA_SCENE_UNREADABLE
+        if media_plane.have_ffmpeg():
+            e = api.post(f"{base}/export")
+            assert e.status_code == 503, f"{e.status_code}: {e.text[:300]}"
+    assert _element_ids(session) == before
+
