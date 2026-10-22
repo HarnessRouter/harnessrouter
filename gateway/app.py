@@ -20877,6 +20877,8 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
     hb = HarnessBody(name=str(v.get("name") or ""), base=str(v.get("base") or ""), plugins=[item] + kept)
     hb.plugins = await _plugins_prepare(hb, org, previous=previous)
     await _vg_upsert("Harness", hid, {"plugins": json.dumps(hb.plugins), "updated_at": str(int(time.time() * 1000))})
+    # AFTER the write, as in update_harness_public: this route installs a package too.
+    await _plugs_ensure_required(org, hid)
     out = _harness_out(await _vertex_get(hid) or {"id": hid})
     return {"id": hid, "published": name, "plugins": out["plugins"]}
 

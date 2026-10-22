@@ -398,6 +398,24 @@ def test_a_package_that_requires_plugs_gets_them_on_install(client, world, monke
     assert r.status_code == 422 and "requires" in r.text
 
 
+def test_publishing_a_package_that_requires_plugs_attaches_them(client, world):
+    """PUT …/plugin installs a package, so it binds what the package requires, as every other
+    install route does. A package that requires nothing still attaches nothing."""
+    hid = _harness(client)
+    r = client.put(f"/v1/harnesses/{hid}/plugin", headers=HEADERS, json=_package({"plugs": ["github"]}))
+    assert r.status_code == 200, r.text
+    assert r.json()["published"] == "needs-plugs"
+    assert [e["id"] for e in _get(client, f"/v1/harnesses/{hid}").json()["mcpServers"]] == ["mcp.plugs"]
+    assert _get(client, f"/v1/harnesses/{hid}/servers/mcp.plugs").json()["plugs"] == ["github"]
+    # a package that declares no plugs leaves the harness with no plugs server at all
+    hid2 = _harness(client)
+    r = client.put(f"/v1/harnesses/{hid2}/plugin", headers=HEADERS, json=_package({}))
+    assert r.status_code == 200, r.text
+    assert _get(client, f"/v1/harnesses/{hid2}").json()["mcpServers"] == []
+    r = _get(client, f"/v1/harnesses/{hid2}/servers/mcp.plugs")
+    assert r.status_code == 404 and r.json()["error"]["code"] == "server_not_connected", r.text
+
+
 # ── the tool surface itself ──────────────────────────────────────────────────────────────────
 def test_the_tool_table_is_well_formed():
     for plug in plugs_plane.TYPES:
