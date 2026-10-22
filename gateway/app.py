@@ -4378,10 +4378,30 @@ def _refusal_message(conn: dict | None, err: str) -> str:
     return f"Your {provider} {what} was refused: {err or 'the provider returned an error'}"
 
 
+def _failure_detail(rec: dict) -> dict:
+    """Which base ran the turn and which tool failed, for the error's detail (#504). The message
+    says the turn failed and why; this says WHICH harness and WHICH tool, so the debugging does
+    not stop at the router. The runner's account of the failure names the tool; the base is the
+    harness's own name for the family that ran it."""
+    detail: dict = {}
+    base = str(rec.get("base") or rec.get("backend") or "")
+    if base:
+        detail["base"] = base
+    tool = str((rec.get("error_detail") or {}).get("tool") or "")
+    if tool:
+        detail["tool"] = tool
+    return detail
+
+
 def _fail_events(tr: "_RespTranslator", rec: dict) -> list[dict]:
     """A failed turn's closing events: the error the turn proved (rec["error"], the hard cap's),
-    else its reason in words."""
-    return tr.fail(_turn_failure_message(rec), rec.get("error"))
+    else its reason in words — with the detail that names the base and the tool that failed."""
+    err = rec.get("error")
+    if not isinstance(err, dict):
+        err = {"type": "harness_error", "code": "turn_failed", "message": _turn_failure_message(rec)}
+        if (detail := _failure_detail(rec)):
+            err["detail"] = detail
+    return tr.fail(_turn_failure_message(rec), err)
 
 
 def _turn_failure_message(rec: dict) -> str:
@@ -5312,6 +5332,11 @@ async def get_trace_events(sid: str, request: Request, chunk: int = 0) -> Respon
     return Response(content=b, media_type="application/x-ndjson")
 
 
+# A chunk read that could not be answered is said (503 server_error, as the conversation's turns say
+# it since #540), never served as a transcript that happens to end early.
+_TRACE_UNREADABLE = "This transcript could not be loaded just now. Try again in a moment."
+
+
 @app.get("/v1/traces/{sid}/all")
 async def get_trace_all(sid: str, request: Request, compact: int = 0) -> Response:
     """ALL events for a session in ONE response.
@@ -5367,7 +5392,15 @@ async def get_trace_all(sid: str, request: Request, compact: int = 0) -> Respons
             except Exception:  # noqa: BLE001
                 n = 0
         chunk_ids = [f"{base}/events/{i:06d}.jsonl" for i in range(max(n, 1))]
-    parts = await asyncio.gather(*[_blob_get(cid, kb=TRACE_KB) for cid in chunk_ids])
+    # STRICT reads (#540's instrument): the cache below already refuses to store a join whose chunk
+    # read failed — the same failure must not be SERVED either, as a short 200. get_or_raise answers
+    # None only for a chunk that is not there (the synthesized fallback key above may name one, and
+    # that is still an empty transcript), and raises when a read could not be answered.
+    try:
+        parts = await asyncio.gather(*[_blob_get_or_raise(cid, kb=TRACE_KB) for cid in chunk_ids])
+    except backing.BlobUnavailable as e:
+        print(f"[trace] a trace chunk could not be read sid={sid}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error", _TRACE_UNREADABLE) from e
     body = b"".join(p for p in parts if p)
     if finalized and body and all(p is not None for p in parts):
         # Cache ONLY a provably-complete join (a transient chunk-get failure must never become a
@@ -6214,8 +6247,19 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         # Persisting the derived list instead is what made this list go stale — and worse, a
         # model later retired from the table would live on forever in whatever was written here.
         table = _vendor_models(provider)
-        rows = [(str(m.get("canonical") or "").strip(), str(m.get("provider_id") or "").strip())
-                for m in (i.get("models") or [])]
+        # A row is {canonical, provider_id}; a bare id is that id with a blank wire id, which is the
+        # same model on the wire (below). Anything else is refused by name: it used to fail the whole
+        # save with a 500 (`'str' object has no attribute 'get'` for a list of ids).
+        rows = []
+        given = i.get("models")
+        if given is not None and not isinstance(given, list):
+            raise HTTPException(400, f"integration '{name}': models is a list")
+        for m in (given or []):
+            if isinstance(m, str):
+                m = {"canonical": m}
+            if not isinstance(m, dict):
+                raise HTTPException(400, f"integration '{name}': each model is an id or {{canonical, provider_id}}")
+            rows.append((str(m.get("canonical") or "").strip(), str(m.get("provider_id") or "").strip()))
         if provider == "custom":
             # No vendor table: the rows are the endpoint's model list, kept whole (see
             # _integration_models); a blank wire id is the canonical, written out so the stored
@@ -7450,7 +7494,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # it takes: low, medium, high, xhigh). List prices, no markup: sol $2 in / $10 out, cached
     # $0.20; luna $0.10 / $0.50, cached $0.01; astra $10 / $50, cached $1; all doubled above
     # 272k prompt tokens as the gpt-5.x line is.
-    "codex":  {"default": "gpt-5.4",
+    "codex":  {"default": "gpt-6.1-sol",
                "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           # Codex-optimized line (separate from the general one; 5.3-codex is
@@ -7467,7 +7511,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # names are shared with the codex/claude catalogs, so pricing/billing metrics stay identical
     # (2026-07-21: gpt-5.5 via azure-foundry + opus-4.8/haiku-4.5 via Bedrock probe-verified
     # through the hermes CLI).
-    "hermes": {"default": "gpt-5.4",
+    "hermes": {"default": "gpt-6.1-sol",
                "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
@@ -7517,7 +7561,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # STILL UNPROBED ON THIS BACKEND: inheriting a serving path is not the same as a completed
     # turn, which is what the bar at the top of this table asks for. Probe before relying on any
     # single row here.
-    "opencode": {"default": "gpt-5.4",
+    "opencode": {"default": "gpt-6.1-sol",
                  "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
@@ -7551,7 +7595,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # claude-haiku-5.5 is NOT offered here: on 2026-10-07 aider passed the first four scenarios on it
     # and failed the recycle scenario in two of three runs (after a recycle it answered a word that
     # was never asked for), while every other base held the conversation. Re-measure before adding it.
-    "aider": {"default": "gpt-5.4",
+    "aider": {"default": "gpt-6.1-sol",
               "models": [
                   "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                   "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
@@ -7698,7 +7742,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # openai/gpt-6-sol, gpt-5.4, google/gemini-3.1-flash-lite and anthropic/claude-sonnet-4.6 each
     # arrived as `model` unchanged (Agent Zero's provider `other` hands litellm `openai/<id>`, and
     # litellm 1.88.1 takes off that one prefix and nothing else).
-    "agentzero": {"default": "gpt-5.4", "models": []},
+    "agentzero": {"default": "gpt-6.1-sol", "models": []},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
@@ -7732,7 +7776,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
                           "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
-    "pi": {"default": "gpt-5.4",
+    "pi": {"default": "gpt-6.1-sol",
            "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
@@ -7765,7 +7809,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # omp (Oh My Pi) is pi's lineage and speaks the OpenAI and Anthropic shapes through the same
     # loopback relay, so it reaches what pi reaches; the list is pi's, and the support matrix
     # measures each provider column with the served-model rule as judge (2026-09-07).
-    "omp": {"default": "gpt-5.4", "models": []},
+    "omp": {"default": "gpt-6.1-sol", "models": []},
     # goose reaches models the way cline and qwen do — one OpenAI chat/completions client pointed
     # at the loopback relay — so the serving PATHS here are the ones cline's rows already earned.
     #
@@ -7782,7 +7826,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # gpt-6-sol and gpt-6-luna joined on 2026-09-27 after cline's rows passed all five scenarios on
     # every connection of the gpt-6 columns (tokenrouter, openrouter, vercel, openai, azure-e2), the
     # bar this list has always used; goose's own rows follow in the matrix.
-    "goose": {"default": "gpt-5.4",
+    "goose": {"default": "gpt-6.1-sol",
               # THE SERVED MODEL COMES FROM THE RELAY, NOT THE CLI. goose reports none of its own: the served
               # model would have to ride its message metadata (metadata.inference.resolvedModel), and only
               # the databricks provider format populates that — crates/goose-providers/src/openai.rs, the
@@ -7825,7 +7869,7 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # aggregator ride chat/completions (_kilo_npm) and a direct Anthropic connection rides Messages, both through the relay. The wire itself was checked at a stub: kilo 7.8.1 sends the
 # id it is given verbatim (gpt-5.4, claude-sonnet-4.6, gemini-3.8-flash, deepseek-v4-flash), so any
 # substitution would be the provider's, and the relay's served model shows it.
-_MODEL_CATALOG["kilo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+_MODEL_CATALOG["kilo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models"])   # see its entry
 # This batch's bases, each starting from the list of the base whose WIRE REACH it shares. That is
 # the reach, not the offer: each then loses every model that did not run reliably on it in the
@@ -7833,7 +7877,7 @@ _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models
 #
 # mimo is an opencode FORK that kept opencode's provider model — the config names an ai-sdk package
 # and a baseURL, so it reaches what opencode reaches, Responses ids included.
-_MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+_MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 # ── gajae (Gajae-Code) is implemented and NOT offered ─────────────────────────────────────────
 # It has no entry here, none in _BASE_CATALOG, and no wiring row, so this server neither lists it,
 # routes it (_SUPPORTED_BASES and _HID_PREFIX_RE are derived from _BASE_CATALOG) nor runs it. The
@@ -7861,7 +7905,15 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
 # relay so its served model stays readable — see _build_jcode.)
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw"):
+    # gpt-5.4 by default: see _GPT_6_1_DEFAULT below
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
+# _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
+# on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
+# opencode, kilo, omp, goose, aider, agentzero and mimo. The rest keep gpt-5.4. cline, cheetahclaws, jcode, nanobot
+# and zeroclaw speak chat/completions, which OpenAI and Azure refuse for gpt-6.1-sol with the reasoning_effort
+# "none" those requests carry; openhands was refused the same way through TokenRouter; opensquilla is not offered
+# it. (TokenRouter serves gpt-6.1-sol from more than one upstream account, so a codex task's encrypted reasoning
+# does not reopen on a later turn there; OpenAI and Azure pass.)
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
@@ -8475,7 +8527,13 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
         items = (r.json() or {}).get("files") or []
     except Exception:  # noqa: BLE001
         return []
-    _produced_total[sid] = len([it for it in items if (it or {}).get("path")
+    # The same two filters the selection below applies, for the same reason: the total is a count of
+    # what the turn PRODUCED, so an internal name and an input file the caller attached are both out
+    # of it. Counting the attachments made a one-file turn carrying one input report a total of 2,
+    # and the console's banner read "Showing 1 of 2" with nothing else to show.
+    _produced_total[sid] = len([it for it in items
+                                if (it or {}).get("path")
+                                and _produced_rel(it["path"]) not in exclude
                                 and not _is_internal_output(_produced_rel(it["path"]))])
     out: list[dict] = []
     # The response carries at most RESP_MAX_FILES of them. Newest first when the runner says when
@@ -8658,6 +8716,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
            "prompt": prompt, "user_text": user_text,   # raw user message — card titles use THIS,
            "model": model_req or translator.model, "tried": [], "status": "starting"}
     #        never the runtime prompt with its file-note/instructions prepends
+    # The base family that ran this turn (its own name for it, e.g. "claude-code"), for the error's
+    # detail: which base failed is half of what a debugger needs (#504). The backend is the
+    # fallback when the harness says no base of its own.
+    rec["base"] = str((hv or {}).get("base") or backend)
     tr = _session_trace.setdefault(sid, {"prefix": None, "org": org, "since": 0, "chunk": 0, "count": 0})
     if not tr.get("prefix"):
         tr["prefix"] = _prefix_from_vertex(sid, await _vertex_get(sid))
@@ -8994,6 +9056,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     break
                 continue
             held = bool(s.get("held"))
+            if s.get("error_detail"):
+                # The runner's own account of the failure (#504): the base that ran, the tool that
+                # failed, and the exception it printed. The base and the tool name the failure in
+                # the response's error.detail.
+                rec["error_detail"] = s["error_detail"]
             new = s.get("events") or []
             n_total = s.get("n_total", fed_upto)
             # Fed and emitted the moment they arrive. Asked for from fed_upto, so nothing comes twice.
@@ -9590,8 +9657,16 @@ async def storage_usage() -> dict:
     # Sum checkpoint_bytes per tenant. Done client-side (not a backend aggregate): props are
     # stored as strings, so a backend sum() may not coerce — this was already the fallback path
     # and is the only one that behaves identically across backings.
+    # The index read is strict: find swallows a failure into [] (backing.py: "the normal read paths
+    # swallow errors and return empty"), which here is indistinguishable from an org that stores
+    # nothing, so a store that could not answer billed every org zero for that day. An empty index
+    # still answers {} — that is a true total; a failed read is not a total at all.
+    try:
+        sessions = await BACKING.graph.find_strict("HarnessSession", neq={"status": "deleted"})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, "session index unreadable; storage usage is unknown, retry") from e
     by_org: dict[str, int] = {}
-    for v in await BACKING.graph.find("HarnessSession", neq={"status": "deleted"}):
+    for v in sessions:
         tenant = str(v.get("tenant") or "")
         if not tenant:
             continue
@@ -10479,10 +10554,22 @@ async def harness_events(harness_id: str, request: Request):
                                       "Connection": "keep-alive"})
 
 
+_RESPONSE_UNREADABLE = "This response could not be read just now. Try again in a moment."
+
+
 @app.get("/v1/responses/{response_id}")
 async def get_response(response_id: str, request: Request):
     principal = await _principal(request)
-    rec = await _resp_get(response_id)
+    # strict: this route is the ONLY completion signal a background poller has (see
+    # `_reconcile_response`), so a record the store could not read must never be answered
+    # response_not_found — a permanent answer to a transient failure. 503 says "ask again";
+    # a record that is genuinely not there is still a 404.
+    try:
+        rec = await _resp_get(response_id, strict=True)
+    except backing.BlobUnavailable as e:
+        # the store could not answer; any other exception is a fault in this route and stays a 500
+        print(f"[responses] a record could not be read rid={response_id}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error", _RESPONSE_UNREADABLE) from e
     if not rec:
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # Object-level ownership (LIVE-B): one org must not read another's response. 404 (not 403)
@@ -11706,13 +11793,24 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                     items = ((json.loads(blob) or {}).get("files") or []) if blob else []
                 except Exception:  # noqa: BLE001
                     items = []
+                # "All" means all here too: the changed set is a named list of files, so one of
+                # them that cannot be read is refused with the names, not dropped from a zip
+                # handed over as if it held the whole turn's output.
+                gone: list[str] = []
+                asked = 0
                 for it in items[:200]:
                     fid, path = it.get("file_id"), it.get("path")
                     if not (fid and path):
                         continue
+                    asked += 1
                     got = await _container_file_bytes(sid, fid)
-                    if got:
-                        _add_bytes(path, got[0])
+                    if got is None:
+                        gone.append(path)
+                        continue
+                    _add_bytes(path, got[0])
+                if gone:
+                    raise HTTPException(404, f"{len(gone)} of {asked} files are no longer available: "
+                                             + ", ".join(gone[:5]) + (", …" if len(gone) > 5 else ""))
             else:
                 tf = await _workspace_tar(sid)
                 if tf is None:
@@ -11866,10 +11964,12 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
         if ok:
             _ws_changed(sid)
     if not ok:
-        # The only ways to get here are a path that tried to leave the workspace and a storage
-        # failure. Both are the caller's problem to see, not something to swallow.
+        # A path that tried to leave the workspace, one of the agent's own files (the runner refuses
+        # those as it does for delete, mkdir and move), or a storage failure. All are the caller's
+        # problem to see, not something to swallow, and the answer names both path rules.
         raise uhp_error(400, "write_failed",
-                        "Could not write that path. It must be inside the session workspace.")
+                        "Could not write that path. It must be inside the session workspace, and not "
+                        "one of the agent's own files.")
     return {"session_id": sid, "path": path, "bytes": len(data), "written": True}
 
 
@@ -12215,6 +12315,28 @@ async def list_keys(org: str, request: Request) -> dict:
     if _key_scope(p):     # a key held to a workspace sees that workspace's keys
         keys = [k for k in keys if _scope_keeps(p, k["workspace"])]
     return {"keys": keys}
+
+
+class KeyPatch(BaseModel):
+    """The parts of a key a person may edit. Only the name: the secret never changes in place
+    (rotate = a new key, then revoke the old one), and the scope is fixed at creation."""
+    name: str | None = None
+
+
+@app.patch("/v1/orgs/{org}/keys/{kid}")
+async def rename_key(org: str, kid: str, body: KeyPatch, request: Request) -> dict:
+    """A key's new name. The console's Rename has sent this since the keys page shipped, and the
+    route was the hosted service's alone, so every rename on a self-hosted box answered 405."""
+    p = await _owned_org(request, org)
+    kv = await _vertex_get(kid)
+    if not kv or str(kv.get("org") or "") != org or kv.get("kind") != "harness_api_key" \
+            or not _scope_keeps(p, kv.get("workspace")):
+        raise HTTPException(404, "key not found")
+    name = (body.name or "").strip()[:120]
+    if not name:
+        raise HTTPException(422, "name is required")
+    await _vg_upsert("HarnessApiKey", kid, {"name": name}, raise_on_fail=True)
+    return {"id": kid, "name": name}
 
 
 @app.delete("/v1/orgs/{org}/keys/{kid}")
@@ -14106,7 +14228,16 @@ def _media_scene_key(sid: str) -> str:
 
 
 async def _media_scene_read(sid: str) -> dict:
-    raw = await _blob_get(_media_scene_key(sid), kb=BLOB_KB)
+    """The session's canvas, a new one when there is none.
+
+    The read RAISES when the store could not answer, and that is the whole point: this is the read
+    half of `_media_scene_touch`, a read-modify-write. A failure answered as an empty scene is not
+    a blank canvas on screen for one turn — the next landing render reads nothing, mutates nothing
+    and WRITES THAT BACK, so every element the person had is gone and the revision says the
+    document is newer than the one that held them. An absent scene is still a new scene: that is a
+    session whose canvas has not been started, and the only thing to answer there.
+    """
+    raw = await _blob_get_or_raise(_media_scene_key(sid), kb=BLOB_KB)
     if not raw:
         return media_plane.new_scene()
     try:
@@ -15703,7 +15834,7 @@ async def _media_export_run(job: dict, plan: list[dict], audio_plan: list[dict],
             data = await _blob_get(_media_blob(sid, a["media_id"], str(meta.get("ext") or "wav")),
                                    kb=BLOB_KB)
             if not data:
-                continue
+                raise media_plane.ExportRefused(f"Sound {j + 1} is no longer readable.")
             path = os.path.join(tmp, f"track{j}.{meta.get('ext') or 'wav'}")
             pathlib.Path(path).write_bytes(data)
             tracks.append({"path": path, "start_s": a["start_s"], "gain_db": a["gain_db"]})
@@ -15886,10 +16017,17 @@ class SceneWrite(BaseModel):
     scene: dict
 
 
+_MEDIA_SCENE_UNREADABLE = "This canvas could not be read just now. Try again."
+
+
 @app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene", include_in_schema=False)
 async def get_media_scene(hid: str, eid: str, sid: str, request: Request) -> dict:
     await _media_route(hid, sid, eid, request)
-    scene = await _media_scene_read(sid)
+    try:
+        scene = await _media_scene_read(sid)
+    except backing.BlobUnavailable as e:
+        # Said, rather than drawn as a blank canvas the person then edits on top of.
+        raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
     return {"rev": int(float((scene.get("meta") or {}).get("rev") or 0)), "scene": scene}
 
 
@@ -15911,7 +16049,13 @@ async def put_media_scene(hid: str, eid: str, sid: str, body: SceneWrite,
                         "saving.")
     want = request.headers.get("if-match") or ""
     async with _media_scene_lock(sid):
-        cur = await _media_scene_read(sid)
+        try:
+            cur = await _media_scene_read(sid)
+        except backing.BlobUnavailable as e:
+            # This write is a read-modify-write too: the revision check and the media-element
+            # check are both against `cur`, so a failed read here would accept the body as if the
+            # canvas were empty.
+            raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
         rev = int(float((cur.get("meta") or {}).get("rev") or 0))
         if want and want.strip('"') != str(rev):
             raise uhp_error(412, "scene_moved",
@@ -15982,6 +16126,9 @@ async def post_media_export(hid: str, eid: str, sid: str, request: Request) -> d
         job = await _media_export_start(hid, sid, org, str(entry.get("id") or eid), "")
     except media_plane.MediaError as e:
         raise uhp_error(400, "export_refused", str(e)) from e
+    except backing.BlobUnavailable as e:
+        # the export plans from the canvas: one that could not be read is said, as the scene routes say it
+        raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
     return {"job_id": job["id"], "shots": job.get("shots"),
             "total_seconds": job.get("planned_seconds"), "status": job["status"]}
 
@@ -16046,7 +16193,11 @@ async def post_media_import(hid: str, eid: str, sid: str, request: Request) -> d
             scene["elements"] = els
             return el["id"]
 
-        _rev, element_id = await _media_scene_touch(sid, mutate)
+        try:
+            _rev, element_id = await _media_scene_touch(sid, mutate)
+        except backing.BlobUnavailable as e:
+            # stored but not placed: the canvas could not be read, so it is not written over either
+            raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
 
     return {"media_id": rec["media_id"], "kind": rec["kind"], "mime": rec["mime"],
             "bytes": rec["bytes"], "width": rec["width"], "height": rec["height"],
@@ -18459,6 +18610,19 @@ async def _vg_list_by_org(label: str, org: str) -> list[dict]:
     return await BACKING.graph.find(label, {"org": org})
 
 
+async def _vg_list_by_org_strict(label: str, org: str) -> list[dict]:
+    """`_vg_list_by_org`, except that an empty answer is established to be empty rather than taken
+    on trust. The plain read swallows a failed read and returns the same `[]` as "the organization
+    holds none" (backing.GraphStore.probe: "the normal read paths swallow errors and return
+    empty"), which a caller that provisions on an empty list must not act on. Only an empty answer
+    pays for the strict re-read, and only an empty answer needs it: `find_strict` either answers
+    with every row of the label or raises."""
+    rows = await _vg_list_by_org(label, org)
+    if not rows:
+        rows = await BACKING.graph.find_strict(label, {"org": org})
+    return rows
+
+
 def _harness_props(body: HarnessBody) -> dict:
     base = _require_supported_base(body.base)   # refuse at create, not at the first task
     return {"name": body.name, "base": base, "base_label": body.base_label or base,
@@ -18587,7 +18751,10 @@ class EnvironmentBody(BaseModel):
     runtime: dict | None = None    # {"python": "3.12"}: the interpreter a build makes the venv with
 
 
-_ENV_SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)[A-Za-z0-9._*+^~<>-]{0,60})?$")
+# One declared package: the runner's own pattern (runner/environments.py _SPEC_RE), so a spec the runner
+# builds is never refused here first; an apt version may carry its epoch ("7:4.4.2-0ubuntu0.22.04.1").
+# gateway/tests/test_env_spec_parity.py holds the two equal.
+_ENV_SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)(?:[0-9]{1,4}:)?[A-Za-z0-9._*+^~<>-]{0,60})?$")
 _ENV_MANAGERS = ("pip", "npm", "apt")
 
 
@@ -20064,7 +20231,17 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     # Per workspace (see list_kits): launching in a second workspace makes that workspace its own
     # Harness rather than handing back the first workspace's, which its members could not see.
     ws, wsd = str(p.get("workspace") or ""), bool(p.get("workspace_default"))
-    existing = next((r for r in await _vg_list_by_org("Harness", org)
+    # Read strictly: this list is what makes launch idempotent, and a read that failed looks
+    # exactly like an organization with no Harnesses, so provisioning on it is how the second
+    # press leaves someone with two.
+    try:
+        rows = await _vg_list_by_org_strict("Harness", org)
+    except Exception as e:  # noqa: BLE001
+        print(f"[kits] {kit_id}: the harness list could not be read org={org}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error",
+                        "Your Harnesses could not be read just now, so nothing was launched. "
+                        "Try again in a moment.") from e
+    existing = next((r for r in rows
                      if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"
                      and _workspace_keep(str(r.get("workspace") or ""), ws, wsd)),
                     None)
@@ -20877,6 +21054,8 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
     hb = HarnessBody(name=str(v.get("name") or ""), base=str(v.get("base") or ""), plugins=[item] + kept)
     hb.plugins = await _plugins_prepare(hb, org, previous=previous)
     await _vg_upsert("Harness", hid, {"plugins": json.dumps(hb.plugins), "updated_at": str(int(time.time() * 1000))})
+    # AFTER the write, as in update_harness_public: this route installs a package too.
+    await _plugs_ensure_required(org, hid)
     out = _harness_out(await _vertex_get(hid) or {"id": hid})
     return {"id": hid, "published": name, "plugins": out["plugins"]}
 

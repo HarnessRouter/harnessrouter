@@ -163,16 +163,25 @@ def test_the_nesting_base_s_own_directory_is_not_a_user_path(ws, c):
 @pytest.mark.parametrize("call", [
     ("delete", {"path": "skills"}), ("delete", {"path": "AGENTS.md"}),
     ("delete", {"path": "skills/s/SKILL.md"}), ("move", {"path": "skills", "to": "s2"}),
-    ("move", {"path": "deck.json", "to": "skills/deck.json"}), ("mkdir", {"path": "memory/new"})])
+    ("move", {"path": "deck.json", "to": "skills/deck.json"}), ("mkdir", {"path": "memory/new"}),
+    # PUT is the fourth route into the workspace and belongs in this table: `AGENTS.md` replaces the
+    # base's own instructions where the agent reads them, and `memory/notes.txt` lands at the session
+    # root, which the next turn adopts into the excluded directory.
+    ("put", {"path": "AGENTS.md"}), ("put", {"path": "memory/notes.txt"})])
 def test_the_base_s_excluded_machinery_is_refused(ws, c, call):
     _nanobot(ws)
     op, params = call
     if op == "delete":
         r = c.delete("/file", params={"identifier": "s", **params})
+    elif op == "put":
+        r = c.put("/file", params={"identifier": "s", **params}, content=b"OVERWRITTEN BY AN APP")
     else:
         r = c.post(f"/file/{op}", params={"identifier": "s", **params})
     assert r.status_code == 400
-    assert (ws / "workspace" / "skills" / "s" / "SKILL.md").exists() and (ws / "workspace" / "AGENTS.md").exists()
+    # the contents, not just the names: a put that was let through leaves the file there, overwritten
+    assert (ws / "workspace" / "skills" / "s" / "SKILL.md").read_text() == "skill"
+    assert (ws / "workspace" / "AGENTS.md").read_text() == "doc"
+    assert not list(ws.rglob("notes.txt")) and not (ws / "workspace" / "memory").exists()
 
 
 def test_a_flat_base_s_excluded_files_are_refused(ws, c):
@@ -181,8 +190,14 @@ def test_a_flat_base_s_excluded_files_are_refused(ws, c):
     (ws / "SOUL.md").write_text("s")
     (ws / "notes.md").write_text("n")
     assert c.delete("/file", params={"identifier": "s", "path": "SOUL.md"}).status_code == 400
+    assert c.put("/file", params={"identifier": "s", "path": "SOUL.md"},
+                 content=b"OVERWRITTEN BY AN APP").status_code == 400
+    assert c.put("/file", params={"identifier": "s", "path": "memory/notes.txt"},
+                 content=b"in").status_code == 400
+    # and an ordinary workspace path still writes: the refusal reaches the base's machinery only
+    assert c.put("/file", params={"identifier": "s", "path": "notes.md"}, content=b"ok").status_code == 200
     assert c.delete("/file", params={"identifier": "s", "path": "notes.md"}).status_code == 200
-    assert (ws / "SOUL.md").exists()
+    assert (ws / "SOUL.md").read_text() == "s" and not (ws / "memory").exists()
 
 
 def test_a_file_written_at_the_root_between_turns_is_still_reachable(ws, c):

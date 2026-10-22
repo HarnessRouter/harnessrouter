@@ -119,6 +119,51 @@ def test_mysqls_limit_offset_count_is_respected():
         assert not added and out == sql
 
 
+def test_postgres_limit_all_is_respected():
+    """Postgres spells "no limit" `LIMIT ALL` (`LIMIT { count | ALL }`). The tail check read only a
+    digit, so it appended a second LIMIT after this one — `LIMIT ALL LIMIT 500`, two LIMIT clauses,
+    which Postgres refuses, so the query never ran. The fetch is bounded by the cursor either way
+    (_pg_query, _mysql_query), so leaving the statement alone still returns at most max_rows."""
+    for sql in ("SELECT * FROM t LIMIT ALL", "SELECT * FROM t ORDER BY x limit all",
+                "SELECT * FROM t LIMIT ALL OFFSET 20"):
+        out, added = with_limit(sql, 500)
+        assert not added and out == sql, sql
+
+
+def test_the_standards_fetch_and_an_offset_in_rows_are_the_statements_own_limit():
+    """Postgres takes the SQL standard's row limit too, `FETCH {FIRST|NEXT} [n] {ROW|ROWS} {ONLY|WITH
+    TIES}`, before or after an OFFSET, and an OFFSET may say ROWS. Each ended in a shape the tail
+    check did not read, so a second LIMIT went after it, and Postgres 16 refused every one of them
+    (`syntax error at or near "LIMIT"`, measured 2026-10-22): the query never ran."""
+    for sql in ("SELECT * FROM t ORDER BY x FETCH FIRST 4 ROWS ONLY",
+                "SELECT * FROM t ORDER BY x fetch first row only",
+                "SELECT * FROM t ORDER BY x FETCH NEXT 2 ROWS WITH TIES",
+                "SELECT * FROM t ORDER BY x OFFSET 2 ROWS FETCH FIRST 2 ROWS ONLY",
+                "SELECT * FROM t ORDER BY x FETCH FIRST 2 ROWS ONLY OFFSET 3",
+                "SELECT * FROM t ORDER BY x LIMIT 2 OFFSET 3 ROWS",
+                "SELECT * FROM t ORDER BY x OFFSET 3 LIMIT 2"):
+        out, added = with_limit(sql, 500)
+        assert not added and out == sql, sql
+
+
+def test_an_offset_alone_still_gets_the_cap():
+    """An OFFSET with no LIMIT or FETCH beside it limits nothing: the cap goes after it, which
+    Postgres takes (`OFFSET 5 ROWS LIMIT 501` answered, 2026-10-22)."""
+    for sql in ("SELECT * FROM t OFFSET 5", "SELECT * FROM t OFFSET 5 ROWS"):
+        out, added = with_limit(sql, 500)
+        assert added and out.rstrip().endswith("LIMIT 500"), sql
+    out, added = with_limit("SELECT fetch_count, rows FROM t", 500)
+    assert added and out.rstrip().endswith("LIMIT 500")
+
+
+def test_all_as_a_name_is_not_read_as_a_limit():
+    """`ALL` is only the statement's own limit directly after LIMIT at the end of it."""
+    out, added = with_limit("SELECT all_rows FROM t", 500)
+    assert added and out.rstrip().endswith("LIMIT 500")
+    out, added = with_limit("SELECT * FROM (SELECT * FROM t LIMIT ALL) s", 500)
+    assert added and out.rstrip().endswith("LIMIT 500")
+
+
 def test_a_comma_inside_the_query_is_not_read_as_a_limit():
     out, added = with_limit("SELECT a, b FROM (SELECT a, b FROM t LIMIT 5, 10) s", 500)
     assert added and out.rstrip().endswith("LIMIT 500")
@@ -346,3 +391,63 @@ def test_the_mysql_cursor_calls_match_real_aiomysql():
     aiomysql = pytest.importorskip("aiomysql")
     assert issubclass(aiomysql.SSCursor, aiomysql.Cursor)
     assert aiomysql.SSCursor.close is not aiomysql.Cursor.close
+
+
+# ── a schema the row cap cut short says truncated ───────────────────────────────
+# `introspect` runs its schema query through run_query with max_rows=20000 and read only its own
+# table-cap comparison, never run_query's `truncated`. A database past 20,000 columns therefore
+# answered `truncated: false` with columns missing — and since the query orders by
+# ordinal_position, the cut lands inside a table, so an agent sees a real table carrying a short
+# column list and is told nothing was left out.
+
+def _schema_rows(n_tables: int, cols_per_table: int = 3):
+    return [("public", f"t{t}", f"c{c}", "text", "NO")
+            for t in range(n_tables) for c in range(cols_per_table)]
+
+
+def _stub_schema_query(monkeypatch, rows, truncated):
+    """Stand in for run_query the way introspect calls it: rows plus the flags it returns."""
+    import sql_plane
+
+    async def fake(engine, dsn, sql, *, timeout=None, max_rows=None):
+        return {"columns": ["table_schema", "table_name", "column_name", "data_type",
+                            "is_nullable"],
+                "rows": rows, "row_count": len(rows), "truncated": truncated,
+                "limit_applied": max_rows if truncated else None}
+
+    monkeypatch.setattr(sql_plane, "run_query", fake)
+
+
+def test_a_schema_the_row_cap_cut_short_says_truncated(monkeypatch):
+    """run_query reported the schema query itself was capped, so columns are missing from the last
+    table returned. The response must say truncated even though every table that was read fits
+    under max_tables."""
+    import asyncio
+    import sql_plane
+
+    _stub_schema_query(monkeypatch, _schema_rows(5), truncated=True)
+    out = asyncio.run(sql_plane.introspect("postgres", "postgres://u@h/db"))
+    assert out["table_count"] == 5 and len(out["tables"]) == 5   # the table cap cut nothing
+    assert out["truncated"] is True
+
+
+def test_a_whole_schema_within_both_caps_is_not_marked_truncated(monkeypatch):
+    """The guard against the flag becoming always-on: nothing was cut, so nothing is claimed."""
+    import asyncio
+    import sql_plane
+
+    _stub_schema_query(monkeypatch, _schema_rows(5), truncated=False)
+    out = asyncio.run(sql_plane.introspect("postgres", "postgres://u@h/db"))
+    assert out["table_count"] == 5 and len(out["tables"]) == 5
+    assert out["truncated"] is False
+
+
+def test_the_table_cap_still_marks_a_schema_truncated(monkeypatch):
+    """The original condition is kept: more tables than max_tables, with an uncapped row query."""
+    import asyncio
+    import sql_plane
+
+    _stub_schema_query(monkeypatch, _schema_rows(5), truncated=False)
+    out = asyncio.run(sql_plane.introspect("postgres", "postgres://u@h/db", max_tables=2))
+    assert out["table_count"] == 5 and len(out["tables"]) == 2
+    assert out["truncated"] is True
