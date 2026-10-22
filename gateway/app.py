@@ -4378,10 +4378,30 @@ def _refusal_message(conn: dict | None, err: str) -> str:
     return f"Your {provider} {what} was refused: {err or 'the provider returned an error'}"
 
 
+def _failure_detail(rec: dict) -> dict:
+    """Which base ran the turn and which tool failed, for the error's detail (#504). The message
+    says the turn failed and why; this says WHICH harness and WHICH tool, so the debugging does
+    not stop at the router. The runner's account of the failure names the tool; the base is the
+    harness's own name for the family that ran it."""
+    detail: dict = {}
+    base = str(rec.get("base") or rec.get("backend") or "")
+    if base:
+        detail["base"] = base
+    tool = str((rec.get("error_detail") or {}).get("tool") or "")
+    if tool:
+        detail["tool"] = tool
+    return detail
+
+
 def _fail_events(tr: "_RespTranslator", rec: dict) -> list[dict]:
     """A failed turn's closing events: the error the turn proved (rec["error"], the hard cap's),
-    else its reason in words."""
-    return tr.fail(_turn_failure_message(rec), rec.get("error"))
+    else its reason in words — with the detail that names the base and the tool that failed."""
+    err = rec.get("error")
+    if not isinstance(err, dict):
+        err = {"type": "harness_error", "code": "turn_failed", "message": _turn_failure_message(rec)}
+        if (detail := _failure_detail(rec)):
+            err["detail"] = detail
+    return tr.fail(_turn_failure_message(rec), err)
 
 
 def _turn_failure_message(rec: dict) -> str:
@@ -7450,7 +7470,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # it takes: low, medium, high, xhigh). List prices, no markup: sol $2 in / $10 out, cached
     # $0.20; luna $0.10 / $0.50, cached $0.01; astra $10 / $50, cached $1; all doubled above
     # 272k prompt tokens as the gpt-5.x line is.
-    "codex":  {"default": "gpt-5.4",
+    "codex":  {"default": "gpt-6.1-sol",
                "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           # Codex-optimized line (separate from the general one; 5.3-codex is
@@ -7467,7 +7487,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # names are shared with the codex/claude catalogs, so pricing/billing metrics stay identical
     # (2026-07-21: gpt-5.5 via azure-foundry + opus-4.8/haiku-4.5 via Bedrock probe-verified
     # through the hermes CLI).
-    "hermes": {"default": "gpt-5.4",
+    "hermes": {"default": "gpt-6.1-sol",
                "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
@@ -7517,7 +7537,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # STILL UNPROBED ON THIS BACKEND: inheriting a serving path is not the same as a completed
     # turn, which is what the bar at the top of this table asks for. Probe before relying on any
     # single row here.
-    "opencode": {"default": "gpt-5.4",
+    "opencode": {"default": "gpt-6.1-sol",
                  "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
@@ -7551,7 +7571,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # claude-haiku-5.5 is NOT offered here: on 2026-10-07 aider passed the first four scenarios on it
     # and failed the recycle scenario in two of three runs (after a recycle it answered a word that
     # was never asked for), while every other base held the conversation. Re-measure before adding it.
-    "aider": {"default": "gpt-5.4",
+    "aider": {"default": "gpt-6.1-sol",
               "models": [
                   "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                   "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
@@ -7698,7 +7718,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # openai/gpt-6-sol, gpt-5.4, google/gemini-3.1-flash-lite and anthropic/claude-sonnet-4.6 each
     # arrived as `model` unchanged (Agent Zero's provider `other` hands litellm `openai/<id>`, and
     # litellm 1.88.1 takes off that one prefix and nothing else).
-    "agentzero": {"default": "gpt-5.4", "models": []},
+    "agentzero": {"default": "gpt-6.1-sol", "models": []},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
@@ -7732,7 +7752,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
                           "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
-    "pi": {"default": "gpt-5.4",
+    "pi": {"default": "gpt-6.1-sol",
            "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
@@ -7765,7 +7785,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # omp (Oh My Pi) is pi's lineage and speaks the OpenAI and Anthropic shapes through the same
     # loopback relay, so it reaches what pi reaches; the list is pi's, and the support matrix
     # measures each provider column with the served-model rule as judge (2026-09-07).
-    "omp": {"default": "gpt-5.4", "models": []},
+    "omp": {"default": "gpt-6.1-sol", "models": []},
     # goose reaches models the way cline and qwen do — one OpenAI chat/completions client pointed
     # at the loopback relay — so the serving PATHS here are the ones cline's rows already earned.
     #
@@ -7782,7 +7802,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # gpt-6-sol and gpt-6-luna joined on 2026-09-27 after cline's rows passed all five scenarios on
     # every connection of the gpt-6 columns (tokenrouter, openrouter, vercel, openai, azure-e2), the
     # bar this list has always used; goose's own rows follow in the matrix.
-    "goose": {"default": "gpt-5.4",
+    "goose": {"default": "gpt-6.1-sol",
               # THE SERVED MODEL COMES FROM THE RELAY, NOT THE CLI. goose reports none of its own: the served
               # model would have to ride its message metadata (metadata.inference.resolvedModel), and only
               # the databricks provider format populates that — crates/goose-providers/src/openai.rs, the
@@ -7825,7 +7845,7 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # aggregator ride chat/completions (_kilo_npm) and a direct Anthropic connection rides Messages, both through the relay. The wire itself was checked at a stub: kilo 7.8.1 sends the
 # id it is given verbatim (gpt-5.4, claude-sonnet-4.6, gemini-3.8-flash, deepseek-v4-flash), so any
 # substitution would be the provider's, and the relay's served model shows it.
-_MODEL_CATALOG["kilo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+_MODEL_CATALOG["kilo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models"])   # see its entry
 # This batch's bases, each starting from the list of the base whose WIRE REACH it shares. That is
 # the reach, not the offer: each then loses every model that did not run reliably on it in the
@@ -7833,7 +7853,7 @@ _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models
 #
 # mimo is an opencode FORK that kept opencode's provider model — the config names an ai-sdk package
 # and a baseURL, so it reaches what opencode reaches, Responses ids included.
-_MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+_MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 # ── gajae (Gajae-Code) is implemented and NOT offered ─────────────────────────────────────────
 # It has no entry here, none in _BASE_CATALOG, and no wiring row, so this server neither lists it,
 # routes it (_SUPPORTED_BASES and _HID_PREFIX_RE are derived from _BASE_CATALOG) nor runs it. The
@@ -7861,7 +7881,15 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
 # relay so its served model stays readable — see _build_jcode.)
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw"):
+    # gpt-5.4 by default: see _GPT_6_1_DEFAULT below
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
+# _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
+# on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
+# opencode, kilo, omp, goose, aider, agentzero and mimo. The rest keep gpt-5.4. cline, cheetahclaws, jcode, nanobot
+# and zeroclaw speak chat/completions, which OpenAI and Azure refuse for gpt-6.1-sol with the reasoning_effort
+# "none" those requests carry; openhands was refused the same way through TokenRouter; opensquilla is not offered
+# it. (TokenRouter serves gpt-6.1-sol from more than one upstream account, so a codex task's encrypted reasoning
+# does not reopen on a later turn there; OpenAI and Azure pass.)
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
@@ -8658,6 +8686,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
            "prompt": prompt, "user_text": user_text,   # raw user message — card titles use THIS,
            "model": model_req or translator.model, "tried": [], "status": "starting"}
     #        never the runtime prompt with its file-note/instructions prepends
+    # The base family that ran this turn (its own name for it, e.g. "claude-code"), for the error's
+    # detail: which base failed is half of what a debugger needs (#504). The backend is the
+    # fallback when the harness says no base of its own.
+    rec["base"] = str((hv or {}).get("base") or backend)
     tr = _session_trace.setdefault(sid, {"prefix": None, "org": org, "since": 0, "chunk": 0, "count": 0})
     if not tr.get("prefix"):
         tr["prefix"] = _prefix_from_vertex(sid, await _vertex_get(sid))
@@ -8994,6 +9026,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     break
                 continue
             held = bool(s.get("held"))
+            if s.get("error_detail"):
+                # The runner's own account of the failure (#504): the base that ran, the tool that
+                # failed, and the exception it printed. The base and the tool name the failure in
+                # the response's error.detail.
+                rec["error_detail"] = s["error_detail"]
             new = s.get("events") or []
             n_total = s.get("n_total", fed_upto)
             # Fed and emitted the moment they arrive. Asked for from fed_upto, so nothing comes twice.
