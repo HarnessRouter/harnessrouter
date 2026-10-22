@@ -4378,10 +4378,30 @@ def _refusal_message(conn: dict | None, err: str) -> str:
     return f"Your {provider} {what} was refused: {err or 'the provider returned an error'}"
 
 
+def _failure_detail(rec: dict) -> dict:
+    """Which base ran the turn and which tool failed, for the error's detail (#504). The message
+    says the turn failed and why; this says WHICH harness and WHICH tool, so the debugging does
+    not stop at the router. The runner's account of the failure names the tool; the base is the
+    harness's own name for the family that ran it."""
+    detail: dict = {}
+    base = str(rec.get("base") or rec.get("backend") or "")
+    if base:
+        detail["base"] = base
+    tool = str((rec.get("error_detail") or {}).get("tool") or "")
+    if tool:
+        detail["tool"] = tool
+    return detail
+
+
 def _fail_events(tr: "_RespTranslator", rec: dict) -> list[dict]:
     """A failed turn's closing events: the error the turn proved (rec["error"], the hard cap's),
-    else its reason in words."""
-    return tr.fail(_turn_failure_message(rec), rec.get("error"))
+    else its reason in words — with the detail that names the base and the tool that failed."""
+    err = rec.get("error")
+    if not isinstance(err, dict):
+        err = {"type": "harness_error", "code": "turn_failed", "message": _turn_failure_message(rec)}
+        if (detail := _failure_detail(rec)):
+            err["detail"] = detail
+    return tr.fail(_turn_failure_message(rec), err)
 
 
 def _turn_failure_message(rec: dict) -> str:
@@ -8658,6 +8678,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
            "prompt": prompt, "user_text": user_text,   # raw user message — card titles use THIS,
            "model": model_req or translator.model, "tried": [], "status": "starting"}
     #        never the runtime prompt with its file-note/instructions prepends
+    # The base family that ran this turn (its own name for it, e.g. "claude-code"), for the error's
+    # detail: which base failed is half of what a debugger needs (#504). The backend is the
+    # fallback when the harness says no base of its own.
+    rec["base"] = str((hv or {}).get("base") or backend)
     tr = _session_trace.setdefault(sid, {"prefix": None, "org": org, "since": 0, "chunk": 0, "count": 0})
     if not tr.get("prefix"):
         tr["prefix"] = _prefix_from_vertex(sid, await _vertex_get(sid))
@@ -8994,6 +9018,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     break
                 continue
             held = bool(s.get("held"))
+            if s.get("error_detail"):
+                # The runner's own account of the failure (#504): the base that ran, the tool that
+                # failed, and the exception it printed. The base and the tool name the failure in
+                # the response's error.detail.
+                rec["error_detail"] = s["error_detail"]
             new = s.get("events") or []
             n_total = s.get("n_total", fed_upto)
             # Fed and emitted the moment they arrive. Asked for from fed_upto, so nothing comes twice.
