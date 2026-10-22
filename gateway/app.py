@@ -11785,8 +11785,9 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                     data, _media, fname = got
                     _add_bytes(fname, data)
                 if missing:
-                    raise HTTPException(404, f"{len(missing)} of {len(want_ids)} files are no longer available: "
-                                             + ", ".join(missing[:5]) + (", …" if len(missing) > 5 else ""))
+                    raise uhp_error(404, "file_not_found",
+                                    f"{len(missing)} of {len(want_ids)} files are no longer available: "
+                                    + ", ".join(missing[:5]) + (", …" if len(missing) > 5 else ""))
             elif changed:
                 blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
                 try:
@@ -11809,8 +11810,8 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                         continue
                     _add_bytes(path, got[0])
                 if gone:
-                    raise HTTPException(404, f"{len(gone)} of {asked} files are no longer available: "
-                                             + ", ".join(gone[:5]) + (", …" if len(gone) > 5 else ""))
+                    raise uhp_error(404, "file_not_found", f"{len(gone)} of {asked} files are no longer available: "
+                                    + ", ".join(gone[:5]) + (", …" if len(gone) > 5 else ""))
             else:
                 tf = await _workspace_tar(sid)
                 if tf is None:
@@ -11851,7 +11852,8 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                 nput += _n
                 total += _tot
         if not nput:
-            raise HTTPException(404, "no files to archive")
+            # the protocol's own code for a file that is not there (errors.md §3.1), not the generic one
+            raise uhp_error(404, "file_not_found", "There are no files to put in an archive.")
     except BaseException:
         try:
             os.unlink(zpath)
@@ -14228,7 +14230,16 @@ def _media_scene_key(sid: str) -> str:
 
 
 async def _media_scene_read(sid: str) -> dict:
-    raw = await _blob_get(_media_scene_key(sid), kb=BLOB_KB)
+    """The session's canvas, a new one when there is none.
+
+    The read RAISES when the store could not answer, and that is the whole point: this is the read
+    half of `_media_scene_touch`, a read-modify-write. A failure answered as an empty scene is not
+    a blank canvas on screen for one turn — the next landing render reads nothing, mutates nothing
+    and WRITES THAT BACK, so every element the person had is gone and the revision says the
+    document is newer than the one that held them. An absent scene is still a new scene: that is a
+    session whose canvas has not been started, and the only thing to answer there.
+    """
+    raw = await _blob_get_or_raise(_media_scene_key(sid), kb=BLOB_KB)
     if not raw:
         return media_plane.new_scene()
     try:
@@ -15825,7 +15836,7 @@ async def _media_export_run(job: dict, plan: list[dict], audio_plan: list[dict],
             data = await _blob_get(_media_blob(sid, a["media_id"], str(meta.get("ext") or "wav")),
                                    kb=BLOB_KB)
             if not data:
-                continue
+                raise media_plane.ExportRefused(f"Sound {j + 1} is no longer readable.")
             path = os.path.join(tmp, f"track{j}.{meta.get('ext') or 'wav'}")
             pathlib.Path(path).write_bytes(data)
             tracks.append({"path": path, "start_s": a["start_s"], "gain_db": a["gain_db"]})
@@ -16008,10 +16019,17 @@ class SceneWrite(BaseModel):
     scene: dict
 
 
+_MEDIA_SCENE_UNREADABLE = "This canvas could not be read just now. Try again."
+
+
 @app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene", include_in_schema=False)
 async def get_media_scene(hid: str, eid: str, sid: str, request: Request) -> dict:
     await _media_route(hid, sid, eid, request)
-    scene = await _media_scene_read(sid)
+    try:
+        scene = await _media_scene_read(sid)
+    except backing.BlobUnavailable as e:
+        # Said, rather than drawn as a blank canvas the person then edits on top of.
+        raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
     return {"rev": int(float((scene.get("meta") or {}).get("rev") or 0)), "scene": scene}
 
 
@@ -16033,7 +16051,13 @@ async def put_media_scene(hid: str, eid: str, sid: str, body: SceneWrite,
                         "saving.")
     want = request.headers.get("if-match") or ""
     async with _media_scene_lock(sid):
-        cur = await _media_scene_read(sid)
+        try:
+            cur = await _media_scene_read(sid)
+        except backing.BlobUnavailable as e:
+            # This write is a read-modify-write too: the revision check and the media-element
+            # check are both against `cur`, so a failed read here would accept the body as if the
+            # canvas were empty.
+            raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
         rev = int(float((cur.get("meta") or {}).get("rev") or 0))
         if want and want.strip('"') != str(rev):
             raise uhp_error(412, "scene_moved",
@@ -16104,6 +16128,9 @@ async def post_media_export(hid: str, eid: str, sid: str, request: Request) -> d
         job = await _media_export_start(hid, sid, org, str(entry.get("id") or eid), "")
     except media_plane.MediaError as e:
         raise uhp_error(400, "export_refused", str(e)) from e
+    except backing.BlobUnavailable as e:
+        # the export plans from the canvas: one that could not be read is said, as the scene routes say it
+        raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
     return {"job_id": job["id"], "shots": job.get("shots"),
             "total_seconds": job.get("planned_seconds"), "status": job["status"]}
 
@@ -16168,7 +16195,11 @@ async def post_media_import(hid: str, eid: str, sid: str, request: Request) -> d
             scene["elements"] = els
             return el["id"]
 
-        _rev, element_id = await _media_scene_touch(sid, mutate)
+        try:
+            _rev, element_id = await _media_scene_touch(sid, mutate)
+        except backing.BlobUnavailable as e:
+            # stored but not placed: the canvas could not be read, so it is not written over either
+            raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
 
     return {"media_id": rec["media_id"], "kind": rec["kind"], "mime": rec["mime"],
             "bytes": rec["bytes"], "width": rec["width"], "height": rec["height"],
@@ -21034,6 +21065,8 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
     hb = HarnessBody(name=str(v.get("name") or ""), base=str(v.get("base") or ""), plugins=[item] + kept)
     hb.plugins = await _plugins_prepare(hb, org, previous=previous)
     await _vg_upsert("Harness", hid, {"plugins": json.dumps(hb.plugins), "updated_at": str(int(time.time() * 1000))})
+    # AFTER the write, as in update_harness_public: this route installs a package too.
+    await _plugs_ensure_required(org, hid)
     out = _harness_out(await _vertex_get(hid) or {"id": hid})
     return {"id": hid, "published": name, "plugins": out["plugins"]}
 
