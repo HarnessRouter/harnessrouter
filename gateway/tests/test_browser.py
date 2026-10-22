@@ -904,10 +904,18 @@ def test_a_takeover_keeps_the_browser_alive_but_not_past_the_session_cap(client,
     # the agent has not called for longer than the idle bound, but the person has the browser
     rec["last_used"] -= browser_plane.IDLE_S + 1
     assert asyncio.run(browser_plane.expired_sessions()) == []
-    # both clocks old: idle, as before
+    # the person browsing moves neither clock (their browsing is in the vendor's live view): while they
+    # hold it, it is not idle however old both clocks are
     rec["control_at"] -= browser_plane.IDLE_S + 1
+    assert asyncio.run(browser_plane.expired_sessions()) == []
+    # handed back to the agent with both clocks old: idle, as before
+    assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "agent"},
+                       headers=HEADERS).json()["control"] == "agent"
+    rec = asyncio.run(browser_plane.registry.get(sid))
+    rec["last_used"] = rec["control_at"] = time.time() - browser_plane.IDLE_S - 1
     assert [(x["sid"], why) for x, why in asyncio.run(browser_plane.expired_sessions())] == [(sid, "idle")]
-    # the cap is on the session's whole length and fires however fresh either clock is
+    rec["control"] = "user"
+    # the cap is on the session's whole length and fires however fresh either clock is, held or not
     rec["last_used"] = rec["control_at"] = time.time()
     assert asyncio.run(browser_plane.expired_sessions()) == []
     rec["created"] -= browser_plane.SESSION_CAP_MIN * 60 + 1

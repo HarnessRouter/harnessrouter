@@ -283,6 +283,11 @@ def expired(rec: dict, now: float | None = None) -> str | None:
     now = now or time.time()
     if now - float(rec.get("created") or now) > SESSION_CAP_MIN * 60:
         return "session_cap"
+    # While the person holds the browser it is never idle: their browsing happens in the vendor's live
+    # view, which this process never sees, so neither clock moves while they use it. The session cap
+    # above still ends it, and handing it back starts the agent's idle clock from the takeover's time.
+    if str(rec.get("control") or "") == "user":
+        return None
     if now - max(float(rec.get("last_used") or now), float(rec.get("control_at") or 0)) > IDLE_S:
         return "idle"
     return None
