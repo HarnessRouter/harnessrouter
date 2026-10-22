@@ -8527,7 +8527,13 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
         items = (r.json() or {}).get("files") or []
     except Exception:  # noqa: BLE001
         return []
-    _produced_total[sid] = len([it for it in items if (it or {}).get("path")
+    # The same two filters the selection below applies, for the same reason: the total is a count of
+    # what the turn PRODUCED, so an internal name and an input file the caller attached are both out
+    # of it. Counting the attachments made a one-file turn carrying one input report a total of 2,
+    # and the console's banner read "Showing 1 of 2" with nothing else to show.
+    _produced_total[sid] = len([it for it in items
+                                if (it or {}).get("path")
+                                and _produced_rel(it["path"]) not in exclude
                                 and not _is_internal_output(_produced_rel(it["path"]))])
     out: list[dict] = []
     # The response carries at most RESP_MAX_FILES of them. Newest first when the runner says when
