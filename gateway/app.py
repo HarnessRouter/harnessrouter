@@ -19928,8 +19928,17 @@ def _workspace_out(v: dict) -> dict:
 
 
 async def _workspace_rows(org: str) -> list[dict]:
-    rows = [v for v in await _vg_list_by_org("Workspace", org)
-            if str(v.get("deleted") or "0") != "1"]
+    """The organization's workspaces, or a 503 when they could not be read. Every caller acts on the
+    answer: the list backfills the default when it is missing (an upsert, so over a renamed default it
+    put back "Default Workspace"), create picks a free id from it (so it could take an existing one's and
+    write over it), and rename looks the workspace up in it. A failed read taken as "none" did each."""
+    try:
+        found = await _vg_list_by_org_strict("Workspace", org)
+    except Exception as e:  # noqa: BLE001 — the strict read raises only when the store could not answer
+        print(f"[workspaces] the workspace list could not be read org={org}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error",
+                        "Your workspaces could not be read just now. Try again in a moment.") from e
+    rows = [v for v in found if str(v.get("deleted") or "0") != "1"]
     rows.sort(key=lambda v: (str(v.get("ws_id")) != _WORKSPACE_DEFAULT_ID,
                              str(v.get("created_at") or "")))
     return rows
