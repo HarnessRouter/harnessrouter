@@ -572,12 +572,15 @@ def _example_block(name: str) -> str:
 def _repeats_a_word_of(reply: str, prompt: str) -> str:
     """The word a reply is nothing but, when the request holds that word too.
 
-    "" for a reply that says more than one word, or a word the request does not contain."""
+    "" for a reply that says more than one word, or a word the request does not contain. What has
+    no letter or digit in it is not a word: gpt-5.4-mini answered a fresh file request with two NUL
+    characters, a blank line and "DONE" (0.35.13's release check, 2026-10-21)."""
     words = [w.strip(".,:;!?\"'()[]`") for w in (reply or "").split()]
-    words = [w for w in words if w]
+    words = [w for w in words if any(ch.isalnum() for ch in w)]
     if not words or len({w.lower() for w in words}) != 1:
         return ""
-    return words[0] if words[0].lower() in (prompt or "").lower() else ""
+    found = re.search(rf"(?<!\w){re.escape(words[0])}(?!\w)", prompt or "", re.I)
+    return words[0] if found else ""
 
 
 def _file_nudge(names: list, word: str = "") -> str:

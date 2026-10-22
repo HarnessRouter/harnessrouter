@@ -643,6 +643,11 @@ def test_a_file_request_answered_with_the_requested_word_gets_the_block_to_write
     assert repeats("DONE\n\nDONE", ask) == "DONE"             # the same word twice
     assert repeats("I wrote DONE", ask) == "" and repeats("Sure", ask) == ""
     assert repeats("", ask) == "" and repeats("DONE", "") == ""
+    # The release check of 0.35.13 (2026-10-21): a fresh session answered the same request with two
+    # NUL characters, a blank line and "DONE" (8 output tokens, no file). What has no letter or
+    # digit in it is not a word, so that reply is the word too.
+    assert repeats("\u0000\u0000\n\nDONE", ask) == "DONE"
+    assert repeats("he", "Write the file") == ""          # a word of the request, not part of one
 
 
 def test_a_request_for_words_back_answered_by_an_edit_alone_is_nudged_once():
