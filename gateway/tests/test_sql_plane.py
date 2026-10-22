@@ -346,3 +346,63 @@ def test_the_mysql_cursor_calls_match_real_aiomysql():
     aiomysql = pytest.importorskip("aiomysql")
     assert issubclass(aiomysql.SSCursor, aiomysql.Cursor)
     assert aiomysql.SSCursor.close is not aiomysql.Cursor.close
+
+
+# ── a schema the row cap cut short says truncated ───────────────────────────────
+# `introspect` runs its schema query through run_query with max_rows=20000 and read only its own
+# table-cap comparison, never run_query's `truncated`. A database past 20,000 columns therefore
+# answered `truncated: false` with columns missing — and since the query orders by
+# ordinal_position, the cut lands inside a table, so an agent sees a real table carrying a short
+# column list and is told nothing was left out.
+
+def _schema_rows(n_tables: int, cols_per_table: int = 3):
+    return [("public", f"t{t}", f"c{c}", "text", "NO")
+            for t in range(n_tables) for c in range(cols_per_table)]
+
+
+def _stub_schema_query(monkeypatch, rows, truncated):
+    """Stand in for run_query the way introspect calls it: rows plus the flags it returns."""
+    import sql_plane
+
+    async def fake(engine, dsn, sql, *, timeout=None, max_rows=None):
+        return {"columns": ["table_schema", "table_name", "column_name", "data_type",
+                            "is_nullable"],
+                "rows": rows, "row_count": len(rows), "truncated": truncated,
+                "limit_applied": max_rows if truncated else None}
+
+    monkeypatch.setattr(sql_plane, "run_query", fake)
+
+
+def test_a_schema_the_row_cap_cut_short_says_truncated(monkeypatch):
+    """run_query reported the schema query itself was capped, so columns are missing from the last
+    table returned. The response must say truncated even though every table that was read fits
+    under max_tables."""
+    import asyncio
+    import sql_plane
+
+    _stub_schema_query(monkeypatch, _schema_rows(5), truncated=True)
+    out = asyncio.run(sql_plane.introspect("postgres", "postgres://u@h/db"))
+    assert out["table_count"] == 5 and len(out["tables"]) == 5   # the table cap cut nothing
+    assert out["truncated"] is True
+
+
+def test_a_whole_schema_within_both_caps_is_not_marked_truncated(monkeypatch):
+    """The guard against the flag becoming always-on: nothing was cut, so nothing is claimed."""
+    import asyncio
+    import sql_plane
+
+    _stub_schema_query(monkeypatch, _schema_rows(5), truncated=False)
+    out = asyncio.run(sql_plane.introspect("postgres", "postgres://u@h/db"))
+    assert out["table_count"] == 5 and len(out["tables"]) == 5
+    assert out["truncated"] is False
+
+
+def test_the_table_cap_still_marks_a_schema_truncated(monkeypatch):
+    """The original condition is kept: more tables than max_tables, with an uncapped row query."""
+    import asyncio
+    import sql_plane
+
+    _stub_schema_query(monkeypatch, _schema_rows(5), truncated=False)
+    out = asyncio.run(sql_plane.introspect("postgres", "postgres://u@h/db", max_tables=2))
+    assert out["table_count"] == 5 and len(out["tables"]) == 2
+    assert out["truncated"] is True
