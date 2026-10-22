@@ -17,6 +17,7 @@ import re
 import time
 import uuid
 
+from .context import ValidatorUnavailable
 from .registry import Skip, check
 
 SPEC = "protocol/versions/2026-10-19"
@@ -1701,7 +1702,7 @@ def _share(ctx) -> dict:
         "revoke what it just published.")
     try:
         ctx.validate(d, "SessionShare")
-    except Skip:
+    except ValidatorUnavailable:
         # Validator unavailable (no jsonschema, or the schema file is not alongside an installed
         # wheel). The structural asserts above already ran; degrading here is the difference
         # between one weaker check and the ENTIRE R-series cascade-skipping through this cached
