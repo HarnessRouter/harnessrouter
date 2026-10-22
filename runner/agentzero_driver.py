@@ -521,7 +521,17 @@ def _error_reason(ctx, exc: BaseException) -> str:
     return text[:2000]
 
 
-_DIAGNOSTIC_MAX = 8000   # the runner caps the trace's copy again (server._DIAG_MAX)
+_DIAGNOSTIC_MAX = 4000   # what the runner keeps of any base's diagnostic (server._DIAG_MAX)
+
+
+def _keep_ends(text: str, cap: int) -> str:
+    """A long diagnostic, kept to `cap` by its two ends: the first line (the exception's message) and
+    the end, where a traceback's innermost frames and the exception line are. Every other base's
+    diagnostic is the tail of its output, so that end is the one kept there too."""
+    if len(text) <= cap:
+        return text
+    head = text.split("\n", 1)[0][:cap // 4]
+    return head + "\n…\n" + text[-(cap - len(head) - 3):]
 
 
 def _error_diagnostic(ctx, exc: BaseException) -> str:
@@ -535,7 +545,7 @@ def _error_diagnostic(ctx, exc: BaseException) -> str:
         import traceback
         inner = getattr(exc, "exception", None) or exc
         text = "".join(traceback.format_exception(type(inner), inner, inner.__traceback__)).strip()
-    return text[:_DIAGNOSTIC_MAX]
+    return _keep_ends(text, _DIAGNOSTIC_MAX)
 
 
 def _mcp_down() -> list[dict]:
