@@ -147,3 +147,33 @@ def test_a_launch_on_a_base_and_model_nothing_serves_is_422_model_unavailable(wo
     assert e.value.status_code == 422
     assert e.value.detail["code"] == "model_unavailable" and e.value.detail["param"] == "model"
     assert "deepseek-v4-pro" in e.value.detail["message"]           # the words are unchanged
+
+
+def test_a_kit_whose_harness_list_could_not_be_read_is_not_launched(world, monkeypatch):
+    """Launch is idempotent on the harness list alone, and the forgiving read answers a failed
+    read with the same empty list as an organization that holds no Harness — so provisioning on
+    it is exactly how "the second press must not leave them with two Harnesses" is broken. A read
+    the store could not answer refuses the launch instead, with nothing written."""
+    store, who = world
+
+    async def unreadable(label, eq=None, neq=None):
+        raise RuntimeError("graph plane unreachable")
+    monkeypatch.setattr(gw.BACKING.graph, "find_strict", unreadable)
+    with pytest.raises(gw.HTTPException) as e:
+        asyncio.run(gw.launch_kit("slides", _Req(), None))
+    assert e.value.status_code == 503 and e.value.detail["type"] == "server_error"
+    assert not store                                     # refused BEFORE anything was provisioned
+
+
+def test_an_organization_holding_no_harness_still_launches_the_kit_once(world, monkeypatch):
+    """The distinction the strict read keeps: an empty list the store answered with is a first
+    launch, not a failure. The first press provisions, the second hands the same Harness back."""
+    store, who = world
+
+    async def nothing(label, eq=None, neq=None):
+        return []
+    monkeypatch.setattr(gw.BACKING.graph, "find_strict", nothing)
+    first = asyncio.run(gw.launch_kit("slides", _Req(), None))
+    again = asyncio.run(gw.launch_kit("slides", _Req(), None))
+    assert first["created"] and not again["created"]
+    assert again["harnessId"] == first["harnessId"] and len([v for v in store.values() if v.get("kit") == "slides"]) == 1
