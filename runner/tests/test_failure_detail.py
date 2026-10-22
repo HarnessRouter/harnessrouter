@@ -140,3 +140,42 @@ def test_a_secret_in_the_diagnostic_is_redacted(tmp_path):
     assert secret not in json.dumps(out)
     assert "[redacted]" in out["error_detail"]["exception"]
     assert "[redacted]" in out["events"][-1]["error_detail"]["exception"]
+
+
+def _agentzero_cli(diagnostic: str) -> str:
+    """The agentzero driver's stream: it handles the exception in-process and prints nothing the runner
+    reads as a diagnostic, so its own result event is the only place the frames can come from (#546)."""
+    lines = [
+        "import json,sys",
+        "print(json.dumps({'m':'init','p':{'session_id':'harness'}}), flush=True)",
+        "print(json.dumps({'m':'result','p':{'ok':False,'final':'','error':'ValueError: the tool blew up',"
+        "'diagnostic':" + json.dumps(diagnostic) + "}}), flush=True)",
+        "sys.exit(1)",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def test_agentzero_hands_over_the_frames_it_handled_in_process(tmp_path):
+    """Every other base prints its exception and the runner reads it from the output's tail. Agent
+    Zero's is handled inside the driver, which cut it at the traceback, so the trace's detail had the
+    message and no frames. The driver now hands the whole text over on its result event."""
+    whole = "ValueError: the tool blew up\n\n" + TRACEBACK
+    rec = _run(tmp_path, _agentzero_cli(whole), "agentzero", rs._agentzero_to_claude)
+    assert rec["status"] == "failed"
+    detail = _detail(rec)
+    assert detail["base"] == "agentzero"
+    assert 'File "/app/tools.py", line 42, in run' in detail["exception"]
+    assert "ValueError: the tool blew up" in detail["exception"]
+    # the record keeps its one line, and the trace's result event carries no second copy
+    assert rec["error"] == "ValueError: the tool blew up" and "Traceback" not in rec["error"]
+    ev = [e for e in rec["events"] if e.get("type") == "result"][-1]
+    assert "diagnostic" not in ev and "Traceback" not in str(ev.get("result"))
+
+
+def test_a_secret_in_agentzeros_diagnostic_is_redacted(tmp_path):
+    secret = "sk-the-calls-own-secret"
+    whole = "ValueError: the tool blew up " + secret + "\n\n" + TRACEBACK
+    rec = _run(tmp_path, _agentzero_cli(whole), "agentzero", rs._agentzero_to_claude, secrets=[secret])
+    out = rs._turn_answer(rec["turn_id"], rec, 0, False)
+    assert secret not in json.dumps(out)
+

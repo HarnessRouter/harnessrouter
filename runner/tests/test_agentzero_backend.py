@@ -285,6 +285,26 @@ def test_the_error_reason_is_cut_at_the_traceback():
     assert drv._error_reason(ctx, Exception("x")) == "litellm.AuthenticationError: bad key"
 
 
+def test_the_diagnostic_keeps_what_the_reason_cuts():
+    """#546: the reason is one line for the record; the diagnostic is the same log item whole, frames
+    included, for the trace's error_detail."""
+    whole = "litellm.AuthenticationError: bad key\n\nTraceback (most recent call last):\n  File \"x.py\", line 3"
+    item = type("I", (), {"type": "error", "content": whole})()
+    ctx = type("C", (), {"log": type("L", (), {"logs": [item]})()})()
+    assert drv._error_reason(ctx, Exception("x")) == "litellm.AuthenticationError: bad key"
+    assert drv._error_diagnostic(ctx, Exception("x")) == whole
+
+
+def test_with_no_log_item_the_diagnostic_is_the_exceptions_own_traceback():
+    ctx = type("C", (), {"log": type("L", (), {"logs": []})()})()
+    try:
+        raise RuntimeError("the step budget ran out")
+    except RuntimeError as e:
+        text = drv._error_diagnostic(ctx, e)
+    assert "RuntimeError: the step budget ran out" in text and "Traceback" in text
+    assert "test_with_no_log_item_the_diagnostic_is_the_exceptions_own_traceback" in text   # its frame
+
+
 # ── the runner side ──
 from server import (Auth, _agent_doc_path, _agentzero_to_claude, _build_agentzero,  # noqa: E402
                     _resume_lost, BACKENDS, CHECKPOINT_EXCLUDE)

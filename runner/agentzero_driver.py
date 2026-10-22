@@ -521,6 +521,23 @@ def _error_reason(ctx, exc: BaseException) -> str:
     return text[:2000]
 
 
+_DIAGNOSTIC_MAX = 8000   # the runner caps the trace's copy again (server._DIAG_MAX)
+
+
+def _error_diagnostic(ctx, exc: BaseException) -> str:
+    """The failure whole, for the trace's error_detail (#546): the `error` log item Agent Zero wrote,
+    traceback included, or the exception's own traceback when it wrote none. _error_reason keeps one
+    line for the record (a message carries no stack trace); this keeps the frames that line leaves
+    out. The exception is handled in-process, so it never reaches the stream the runner reads its
+    other bases' diagnostics from: the driver is the only place that still has the frames."""
+    text = _last_log(ctx, ("error",))
+    if not text:
+        import traceback
+        inner = getattr(exc, "exception", None) or exc
+        text = "".join(traceback.format_exception(type(inner), inner, inner.__traceback__)).strip()
+    return text[:_DIAGNOSTIC_MAX]
+
+
 def _mcp_down() -> list[dict]:
     try:
         from helpers.mcp_handler import MCPConfig
@@ -560,11 +577,12 @@ async def _run(job: dict) -> int:
                    "import_s": round(time.time() - _T0, 2)})
 
     task = ctx.communicate(UserMessage(message=job["prompt"], attachments=[], id=str(uuid.uuid4())))
-    ok, reason = True, ""
+    ok, reason, diagnostic = True, "", ""
     try:
         result = await task.result()
     except BaseException as e:  # noqa: BLE001 — HandledException, CancelledError, the step budget
         ok, result, reason = False, None, _error_reason(ctx, e)
+        diagnostic = _error_diagnostic(ctx, e)
     final = _STATE["final"] or (str(result) if isinstance(result, str) else "")
     if ok and not final:
         ok, reason = False, "the turn ended without an answer"
@@ -574,7 +592,7 @@ async def _run(job: dict) -> int:
     except Exception as e:  # noqa: BLE001
         _emit("warning", {"text": f"the conversation could not be saved: {e}"})
     _emit("result", {"ok": ok, "final": final if ok else "", "error": reason,
-                     "seconds": round(time.time() - _T0, 2)})
+                     "diagnostic": "" if ok else diagnostic, "seconds": round(time.time() - _T0, 2)})
     return 0 if ok else 1
 
 
