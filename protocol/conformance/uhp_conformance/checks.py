@@ -1701,7 +1701,7 @@ def _share(ctx) -> dict:
         "revoke what it just published.")
     try:
         ctx.validate(d, "SessionShare")
-    except Skip:
+    except RuntimeError:
         # Validator unavailable (no jsonschema, or the schema file is not alongside an installed
         # wheel). The structural asserts above already ran; degrading here is the difference
         # between one weaker check and the ENTIRE R-series cascade-skipping through this cached

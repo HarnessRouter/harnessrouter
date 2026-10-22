@@ -22,6 +22,7 @@ import urllib.request
 import pytest
 
 from uhp_conformance import checks  # noqa: F401 — importing populates the registry
+from uhp_conformance import context
 from uhp_conformance.client import Client
 from uhp_conformance.context import Context
 from uhp_conformance.registry import REGISTRY, Outcome
@@ -165,3 +166,59 @@ def test_the_toggle_dialect_is_not_a_licence_to_refuse_a_bodyless_post():
     out = _run_series("bodyless_rejected")
     assert out["R-08"] is Outcome.FAIL, out
     assert [i for i, o in out.items() if o is Outcome.FAIL] == ["R-08"], out
+
+
+# ── a broken installation of the suite ────────────────────────────────────────────────
+# `ctx.validate` raises RuntimeError when the suite cannot validate anything: no jsonschema, or
+# no schema file beside the installed package. #203 ruled that condition an ERROR rather than a
+# SKIP, and the checks whose subject IS a schema still report it that way.
+#
+# The R-series' subject is what a shared view refuses, and `_share` validates the one share
+# object it mints and caches on all eight checks' behalf. So the unavailable validator must not
+# escape that mint: every check downstream of the cache would report a suite bug in place of a
+# §5 measurement, and the whole series would say "broken install" six more times than the one
+# cause deserves.
+
+
+def _break_the_validator(monkeypatch, how: str) -> None:
+    """Put `ctx.validate` in the state a broken installation puts it in.
+
+    Both conditions are the two its own docstring names, and it raises RuntimeError — not Skip —
+    for each. Asserted here, so a handler written for the wrong exception type cannot pass this
+    file by catching something `ctx.validate` never raises.
+    """
+    if how == "no_jsonschema":
+        monkeypatch.setattr(context, "jsonschema", None)
+    elif how == "no_schema_file":
+        monkeypatch.setattr(context, "SCHEMA_RESOURCE",
+                            pathlib.Path("/nonexistent/uhp_conformance/uhp.schema.json"))
+    else:
+        raise AssertionError(f"unknown way to break the validator: {how!r}")
+    with pytest.raises(RuntimeError):
+        context.Context(client=Client("http://127.0.0.1:1", "unused")).validate({}, "SessionShare")
+
+
+@pytest.mark.parametrize("how", ["no_jsonschema", "no_schema_file"])
+def test_an_unavailable_validator_does_not_cascade_through_the_shared_mint(monkeypatch, how):
+    """One unavailable validator, not six suite bugs: the series still measures §5."""
+    _break_the_validator(monkeypatch, how)
+    out = _run_series("none")
+    errored = [i for i, o in out.items() if o is Outcome.ERROR]
+    assert not errored, (
+        f"{how}: {errored} report a suite bug because the mint they all share could not validate "
+        f"its own share object: {out}")
+    assert all(o is Outcome.PASS for o in out.values()), f"{how}: {out}"
+
+
+@pytest.mark.parametrize("defect,expected", sorted(CAUGHT_BY.items()))
+def test_a_real_defect_is_still_caught_when_the_validator_is_unavailable(monkeypatch, defect,
+                                                                        expected):
+    """Degrading the mint's own validation must cost no detection.
+
+    A suite that cannot fail is worse than one that cannot run, so the whole defect matrix is
+    driven again without a validator: each defect must still be caught by its own check.
+    """
+    _break_the_validator(monkeypatch, "no_jsonschema")
+    out = _run_series(defect)
+    assert out[expected] is Outcome.FAIL, (
+        f"{defect!r} went uncaught by {expected} without a validator: {out}")
