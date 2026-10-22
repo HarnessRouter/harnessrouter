@@ -10527,10 +10527,22 @@ async def harness_events(harness_id: str, request: Request):
                                       "Connection": "keep-alive"})
 
 
+_RESPONSE_UNREADABLE = "This response could not be read just now. Try again in a moment."
+
+
 @app.get("/v1/responses/{response_id}")
 async def get_response(response_id: str, request: Request):
     principal = await _principal(request)
-    rec = await _resp_get(response_id)
+    # strict: this route is the ONLY completion signal a background poller has (see
+    # `_reconcile_response`), so a record the store could not read must never be answered
+    # response_not_found — a permanent answer to a transient failure. 503 says "ask again";
+    # a record that is genuinely not there is still a 404.
+    try:
+        rec = await _resp_get(response_id, strict=True)
+    except backing.BlobUnavailable as e:
+        # the store could not answer; any other exception is a fault in this route and stays a 500
+        print(f"[responses] a record could not be read rid={response_id}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error", _RESPONSE_UNREADABLE) from e
     if not rec:
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # Object-level ownership (LIVE-B): one org must not read another's response. 404 (not 403)
