@@ -158,3 +158,24 @@ def test_a_non_ascii_name_is_listed_as_the_agent_wrote_it():
     by = {f["path"]: f for f in _produced_list(d)}          # committed reader (diff vs the cursor)
     assert set(by) == {accented, "plain.txt"}
     assert by[accented]["size"] == 11 and by[accented]["mtime"] > 0
+
+
+def test_a_name_git_would_escape_whatever_the_config_is_listed_as_written():
+    """core.quotepath stops only the octal escapes of non-ASCII bytes: git still quotes and escapes a
+    path holding a double quote, a backslash, a tab or a newline, so such a name was listed in an
+    escaped spelling no file has (and stranded as above). The listings read git's NUL-separated
+    output (-z), which is never quoted, for untracked and for committed files, renames included."""
+    d = _ws()
+    names = ['say "hi".txt', 'back\\slash.txt', 'tab\there.txt', 'two\nlines.txt', 'résumé.pptx']
+    for i, n in enumerate(names):
+        (pathlib.Path(d) / n).write_text("z" * (i + 1))
+    by = {f["path"]: f for f in _produced_list(d)}          # untracked
+    assert set(by) == set(names)
+    assert all(by[n]["size"] == i + 1 for i, n in enumerate(names))
+    _git(d, "add", "-A")
+    _git(d, "commit", "-q", "-m", "agent's own commit")
+    _git(d, "mv", 'say "hi".txt', 'said "hi".txt')
+    _git(d, "commit", "-q", "-m", "renamed")
+    by = {f["path"]: f for f in _produced_list(d)}          # committed past the cursor (diff), a rename among them
+    assert set(by) == (set(names) - {'say "hi".txt'}) | {'said "hi".txt'}
+    assert by['said "hi".txt']["size"] == 1 and by['two\nlines.txt']["mtime"] > 0
