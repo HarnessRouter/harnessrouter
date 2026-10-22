@@ -285,6 +285,43 @@ def test_the_error_reason_is_cut_at_the_traceback():
     assert drv._error_reason(ctx, Exception("x")) == "litellm.AuthenticationError: bad key"
 
 
+def test_the_diagnostic_keeps_what_the_reason_cuts():
+    """#546: the reason is one line for the record; the diagnostic is the same log item whole, frames
+    included, for the trace's error_detail."""
+    whole = "litellm.AuthenticationError: bad key\n\nTraceback (most recent call last):\n  File \"x.py\", line 3"
+    item = type("I", (), {"type": "error", "content": whole})()
+    ctx = type("C", (), {"log": type("L", (), {"logs": [item]})()})()
+    assert drv._error_reason(ctx, Exception("x")) == "litellm.AuthenticationError: bad key"
+    assert drv._error_diagnostic(ctx, Exception("x")) == whole
+
+
+def test_with_no_log_item_the_diagnostic_is_the_exceptions_own_traceback():
+    ctx = type("C", (), {"log": type("L", (), {"logs": []})()})()
+    try:
+        raise RuntimeError("the step budget ran out")
+    except RuntimeError as e:
+        text = drv._error_diagnostic(ctx, e)
+    assert "RuntimeError: the step budget ran out" in text and "Traceback" in text
+    assert "test_with_no_log_item_the_diagnostic_is_the_exceptions_own_traceback" in text   # its frame
+
+
+def test_a_long_diagnostic_keeps_the_message_and_the_innermost_frames():
+    """Agent Zero writes the message first and the traceback after it, innermost frame last. Cut from
+    the front, the frames that name where it failed were the ones lost (measured: a dead endpoint's
+    4,000 characters ended mid-frame). Both ends are kept, and the runner's cap is never exceeded."""
+    frames = "".join(f'  File "/a0/m{i}.py", line {i}, in f{i}\n    call()\n' for i in range(400))
+    whole = "BadGatewayError: the provider did not answer\n\nTraceback (most recent call last):\n" + frames \
+        + "litellm.BadGatewayError: the provider did not answer"
+    item = type("I", (), {"type": "error", "content": whole})()
+    ctx = type("C", (), {"log": type("L", (), {"logs": [item]})()})()
+    text = drv._error_diagnostic(ctx, Exception("x"))
+    assert len(text) <= drv._DIAGNOSTIC_MAX
+    assert text.startswith("BadGatewayError: the provider did not answer\n…\n")
+    assert text.endswith("litellm.BadGatewayError: the provider did not answer")
+    assert 'File "/a0/m399.py", line 399' in text          # the innermost frame
+    assert 'File "/a0/m0.py", line 0' not in text           # the outermost goes first
+
+
 # ── the runner side ──
 from server import (Auth, _agent_doc_path, _agentzero_to_claude, _build_agentzero,  # noqa: E402
                     _resume_lost, BACKENDS, CHECKPOINT_EXCLUDE)
