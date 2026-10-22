@@ -9590,8 +9590,16 @@ async def storage_usage() -> dict:
     # Sum checkpoint_bytes per tenant. Done client-side (not a backend aggregate): props are
     # stored as strings, so a backend sum() may not coerce — this was already the fallback path
     # and is the only one that behaves identically across backings.
+    # The index read is strict: find swallows a failure into [] (backing.py: "the normal read paths
+    # swallow errors and return empty"), which here is indistinguishable from an org that stores
+    # nothing, so a store that could not answer billed every org zero for that day. An empty index
+    # still answers {} — that is a true total; a failed read is not a total at all.
+    try:
+        sessions = await BACKING.graph.find_strict("HarnessSession", neq={"status": "deleted"})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, "session index unreadable; storage usage is unknown, retry") from e
     by_org: dict[str, int] = {}
-    for v in await BACKING.graph.find("HarnessSession", neq={"status": "deleted"}):
+    for v in sessions:
         tenant = str(v.get("tenant") or "")
         if not tenant:
             continue
