@@ -272,10 +272,23 @@ def minutes(rec: dict) -> int:
 
 
 def expired(rec: dict, now: float | None = None) -> str | None:
+    """Why this browser should be stopped, or None. Idle means nobody has touched it: the agent's
+    last tool call (`last_used`) AND the person's last takeover (`control_at`, written by the
+    console's live view), whichever is later. Only the agent's clock was read before, so a person
+    who took the browser over and browsed for IDLE_S without the agent calling had their live
+    session stopped under them — which is what the "stopped while the person had it" answer was
+    there for as a race, not as the ordinary end of a takeover. A record with no takeover has no
+    `control_at` and reads exactly as it did. The session cap is deliberate and still fires on
+    `created` alone, whoever is driving."""
     now = now or time.time()
     if now - float(rec.get("created") or now) > SESSION_CAP_MIN * 60:
         return "session_cap"
-    if now - float(rec.get("last_used") or now) > IDLE_S:
+    # While the person holds the browser it is never idle: their browsing happens in the vendor's live
+    # view, which this process never sees, so neither clock moves while they use it. The session cap
+    # above still ends it, and handing it back starts the agent's idle clock from the takeover's time.
+    if str(rec.get("control") or "") == "user":
+        return None
+    if now - max(float(rec.get("last_used") or now), float(rec.get("control_at") or 0)) > IDLE_S:
         return "idle"
     return None
 
