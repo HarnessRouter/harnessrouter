@@ -602,7 +602,7 @@ def _turn_secrets(env: dict, names: list | None) -> list[str]:
 # gateway reads the transcript by) or a role, and erase its own transcript from the trace (reported
 # privately, GHSA-7pwj-vv9r-rh2m). The turn's own fields are kept by POSITION, not by name anywhere:
 # a tool's input is an arbitrary map, and a "type" inside it is the agent's content.
-_ANSWER_CONTENT = ("result", "error", "reason", "handoff", "events")
+_ANSWER_CONTENT = ("result", "error", "reason", "handoff", "events", "error_detail")
 _ANSWER_KEEP = {
     "event": frozenset({"type", "subtype", "session_id", "uuid", "parent_tool_use_id", "model", "usage", "modelUsage",
                         "stop_reason"}),
@@ -874,30 +874,30 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6")
-CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-5.4")
+CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-6.1-sol")
 # Hermes default (the gateway maps friendly names to provider ids before the /turn call).
-HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
+HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-6.1-sol")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
-PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
-OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
-KILO_DEFAULT_MODEL = os.environ.get("KILO_DEFAULT_MODEL", "gpt-5.4")
+PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-6.1-sol")
+OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-6.1-sol")
+KILO_DEFAULT_MODEL = os.environ.get("KILO_DEFAULT_MODEL", "gpt-6.1-sol")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
-OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
-GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
+OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-6.1-sol")
+GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-6.1-sol")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
 # MiniMax Code runs any OpenAI-compatible model; its vendor's own is the natural default.
 MINIMAX_DEFAULT_MODEL = os.environ.get("MINIMAX_DEFAULT_MODEL", "minimax-m3")
 GROK_DEFAULT_MODEL = os.environ.get("GROK_DEFAULT_MODEL", "grok-4.6")
-AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
+AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-6.1-sol")
 OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
 CHEETAHCLAWS_DEFAULT_MODEL = os.environ.get("CHEETAHCLAWS_DEFAULT_MODEL", "gpt-5.4")
-AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-5.4")
+AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-6.1-sol")
 # MiMo Code is an opencode fork (its repo root package.json is still literally "opencode"), so it
 # shares opencode's default for the same reason: multi-family through one connection.
-MIMO_DEFAULT_MODEL = os.environ.get("MIMO_DEFAULT_MODEL", "gpt-5.4")
+MIMO_DEFAULT_MODEL = os.environ.get("MIMO_DEFAULT_MODEL", "gpt-6.1-sol")
 # Gajae-Code is pi's lineage (docs/porting-from-pi-mono.md), so it shares pi's default too.
 GAJAE_DEFAULT_MODEL = os.environ.get("GAJAE_DEFAULT_MODEL", "gpt-5.4")
 JCODE_DEFAULT_MODEL = os.environ.get("JCODE_DEFAULT_MODEL", "gpt-5.4")
@@ -11896,15 +11896,19 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 continue
             for ev in normalize(obj, state):
                 _settle(ev)
-                with _turns_lock:
-                    rec["events"].append(ev)
-                if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
-                    rec["session_id"] = ev["session_id"]   # CLI conversation id → next turn's --resume
                 if ev.get("type") == "result":
+                    # The turn's own ending is HELD BACK until the process is done (#504): the
+                    # harness's account of its failure (the exception and the stack frames) rides
+                    # this event, and an event already handed to the gateway cannot carry it.
                     result_ev = ev
                     # Claude's stream-json carries the final assistant text on the result event;
                     # the codex normalizer already fills state['final'], so prefer that.
                     state["final"] = state.get("final") or ev.get("result") or ""
+                    continue
+                with _turns_lock:
+                    rec["events"].append(ev)
+                if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
+                    rec["session_id"] = ev["session_id"]   # CLI conversation id → next turn's --resume
                 if (step_cap and not state.get("_stop") and ev.get("type") == "assistant"
                         and _count_tool_calls(ev, state) > step_cap):
                     state["_stop"] = "max_turns"
@@ -11929,11 +11933,12 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     if eof is not None and result_ev is None:
         for ev in eof(state, rc):
             _settle(ev)
+            if ev.get("type") == "result":
+                result_ev = ev      # held back like the CLI's own (see the loop above)
+                state["final"] = state.get("final") or ev.get("result") or ""
+                continue
             with _turns_lock:
                 rec["events"].append(ev)
-            if ev.get("type") == "result":
-                result_ev = ev
-                state["final"] = state.get("final") or ev.get("result") or ""
     if result_ev is None and state.get("_stop") == "max_turns":
         # Stopped at its budget before the CLI said anything terminal (codex's turn.completed
         # never comes once it is killed): the turn's result is the budget's, with what its
@@ -11943,8 +11948,6 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         if _running_usage(state):
             result_ev["usage"] = _running_usage(state)   # the translator's count so far (pi, dsh)
         _settle(result_ev)
-        with _turns_lock:
-            rec["events"].append(result_ev)
     if (result_ev is not None and not result_ev.get("is_error")
             and _relay_last_finish(env) == "content_filter"):
         # The provider declined the last request (finish_reason content_filter, seen by the relay)
@@ -11981,8 +11984,27 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             # keeps for a provider's refusal.
             refusal = "the provider declined the request (finish_reason content_filter)"
         rec["error"] = _failure_reason(refusal, str(ev_err), tail, rc)
-        if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
+        # The harness's own account of the failure, kept whole (#504): the exception and the stack
+        # frames it printed, and the tool that failed. rec["error"] stays one line for a person —
+        # the spec forbids a stack trace in a message — and this rides the trace's result event.
+        detail = _failure_detail(str(rec.get("backend") or ""), rec["events"], tail)
+        rec["error_detail"] = detail
+        made = result_ev is None
+        if made:
+            # The CLI died before it said anything terminal: the trace gets a result event of its
+            # own, so the failure is in the trace and not only in the record (#504). The reason
+            # rides as `error`, never as `result`: the gateway shows a result's text as the turn's
+            # answer when nothing was said before it, and the CLI said nothing.
+            result_ev = {"type": "result", "subtype": "error", "is_error": True,
+                         "result": "", "error": rec["error"]}
+            _settle(result_ev)
+        result_ev["error_detail"] = detail
+        if not made and not str(result_ev.get("result") or "").strip() and tail:
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
+    if result_ev is not None:
+        # The turn's ending goes out last, with the failure's own account of itself on it (#504).
+        with _turns_lock:
+            rec["events"].append(result_ev)
     rec["done"] = True
 
 
@@ -12008,6 +12030,36 @@ def _failure_reason(refusal: str, ev_err: str, tail: str, rc: int) -> str:
     if tail and _NO_DIAGNOSTIC_RE.fullmatch(ev_err):
         ev_err = ""
     return (refusal or ev_err or tail or f"exit_code={rc}, no diagnostic output")[:2000]
+
+
+_DIAG_MAX = 4000   # the harness's own diagnostic (its exception and stack frames), capped
+
+
+def _failed_tool(events: list[dict]) -> str:
+    """The name of the tool whose result came back an error. Every normaliser emits the same
+    Claude-shaped blocks — a tool_use carries the name, the tool_result that follows carries
+    is_error — so this reads the same for every base; the LAST failed tool is the turn's."""
+    names: dict[str, str] = {}
+    failed = ""
+    for ev in events:
+        msg = ev.get("message")
+        blocks = msg.get("content") if isinstance(msg, dict) else None
+        for blk in blocks if isinstance(blocks, list) else []:
+            if not isinstance(blk, dict):
+                continue
+            if blk.get("type") == "tool_use":
+                names[str(blk.get("id") or "")] = str(blk.get("name") or "")
+            elif blk.get("type") == "tool_result" and blk.get("is_error"):
+                failed = names.get(str(blk.get("tool_use_id") or ""), "")
+    return failed
+
+
+def _failure_detail(base: str, events: list[dict], diagnostic: str) -> dict:
+    """What the harness itself said about the failure, kept whole (#504): the base that ran it,
+    the tool that failed, and the exception and stack frames it printed (capped). The one line
+    in rec["error"] is for a person — a message may not carry a stack trace (UHP errors §1) —
+    and this is what a debugger needs."""
+    return {"base": base, "tool": _failed_tool(events), "exception": diagnostic[:_DIAG_MAX]}
 
 
 # Codex app-server JSON-RPC driver — the ONLY codex mode that streams assistant text (via
@@ -12276,6 +12328,12 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         ev["model"] = served
     _fill_relay_usage(ev, env)
     _stamp_thinking(ev, rec)
+    if not ok and not stopped:
+        # The app-server's own account of the failure, kept whole (#504): the exception and the
+        # stack frames it printed, and the tool that failed.
+        detail = _failure_detail(str(rec.get("backend") or ""), rec["events"], err_txt)
+        ev["error_detail"] = detail
+        rec["error_detail"] = detail
     append(ev)
     rec["result"] = state["final"]
     rec["status"] = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
@@ -12635,12 +12693,19 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
         ev["model"] = served
     _fill_relay_usage(ev, env)
     _stamp_thinking(ev, rec)
+    status = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
+              else "done" if ok else "failed")
+    if not ok and status in ("failed", "timeout"):
+        # hermes's own account of the failure, kept whole (#504): the exception and the stack
+        # frames it printed, and the tool that failed.
+        detail = _failure_detail(str(rec.get("backend") or ""), rec["events"], err_txt)
+        ev["error_detail"] = detail
+        rec["error_detail"] = detail
     append(ev)
     rec["exit_code"] = rc
     rec["result"] = final
-    rec["status"] = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
-                     else "done" if ok else "failed")
-    if not ok and rec["status"] in ("failed", "timeout"):
+    rec["status"] = status
+    if not ok and status in ("failed", "timeout"):
         rec["error"] = err_txt
     rec["done"] = True
 
@@ -13111,6 +13176,7 @@ async def put_file(request: Request, path: str, identifier: str = "") -> dict:
             inside = _safe_join(vis, path)
             if inside is not None:
                 dest = inside
+    _refuse_protected(ws, dest)
     data = await request.body()
     pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
     _isolate_session(ws)
@@ -13911,6 +13977,10 @@ def _turn_answer(turn_id: str, rec: dict, since: int, held: bool) -> dict:
            "error": rec.get("error"), "backend": rec["backend"], "model": rec["model"],
            "session_id": rec.get("session_id"), "reason": rec.get("reason") or "",
            "handoff": rec.get("handoff"),
+           # The harness's own account of a failure (#504): the base, the tool that failed and the
+           # exception and stack frames it printed. The gateway puts the base and the tool in the
+           # response's error.detail; the trace carries the rest.
+           "error_detail": rec.get("error_detail"),
            "events": evs, "n_total": n, "elapsed": round(time.time() - rec["started"], 1)}
     if held:
         out["held"] = True
