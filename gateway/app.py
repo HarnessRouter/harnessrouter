@@ -15703,7 +15703,7 @@ async def _media_export_run(job: dict, plan: list[dict], audio_plan: list[dict],
             data = await _blob_get(_media_blob(sid, a["media_id"], str(meta.get("ext") or "wav")),
                                    kb=BLOB_KB)
             if not data:
-                continue
+                raise media_plane.ExportRefused(f"Sound {j + 1} is no longer readable.")
             path = os.path.join(tmp, f"track{j}.{meta.get('ext') or 'wav'}")
             pathlib.Path(path).write_bytes(data)
             tracks.append({"path": path, "start_s": a["start_s"], "gain_db": a["gain_db"]})
