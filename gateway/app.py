@@ -18587,7 +18587,10 @@ class EnvironmentBody(BaseModel):
     runtime: dict | None = None    # {"python": "3.12"}: the interpreter a build makes the venv with
 
 
-_ENV_SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)[A-Za-z0-9._*+^~<>-]{0,60})?$")
+# One declared package: the runner's own pattern (runner/environments.py _SPEC_RE), so a spec the runner
+# builds is never refused here first; an apt version may carry its epoch ("7:4.4.2-0ubuntu0.22.04.1").
+# gateway/tests/test_env_spec_parity.py holds the two equal.
+_ENV_SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)(?:[0-9]{1,4}:)?[A-Za-z0-9._*+^~<>-]{0,60})?$")
 _ENV_MANAGERS = ("pip", "npm", "apt")
 
 
