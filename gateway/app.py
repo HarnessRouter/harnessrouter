@@ -5332,6 +5332,11 @@ async def get_trace_events(sid: str, request: Request, chunk: int = 0) -> Respon
     return Response(content=b, media_type="application/x-ndjson")
 
 
+# A chunk read that could not be answered is said (503 server_error, as the conversation's turns say
+# it since #540), never served as a transcript that happens to end early.
+_TRACE_UNREADABLE = "This transcript could not be loaded just now. Try again in a moment."
+
+
 @app.get("/v1/traces/{sid}/all")
 async def get_trace_all(sid: str, request: Request, compact: int = 0) -> Response:
     """ALL events for a session in ONE response.
@@ -5387,7 +5392,15 @@ async def get_trace_all(sid: str, request: Request, compact: int = 0) -> Respons
             except Exception:  # noqa: BLE001
                 n = 0
         chunk_ids = [f"{base}/events/{i:06d}.jsonl" for i in range(max(n, 1))]
-    parts = await asyncio.gather(*[_blob_get(cid, kb=TRACE_KB) for cid in chunk_ids])
+    # STRICT reads (#540's instrument): the cache below already refuses to store a join whose chunk
+    # read failed — the same failure must not be SERVED either, as a short 200. get_or_raise answers
+    # None only for a chunk that is not there (the synthesized fallback key above may name one, and
+    # that is still an empty transcript), and raises when a read could not be answered.
+    try:
+        parts = await asyncio.gather(*[_blob_get_or_raise(cid, kb=TRACE_KB) for cid in chunk_ids])
+    except backing.BlobUnavailable as e:
+        print(f"[trace] a trace chunk could not be read sid={sid}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error", _TRACE_UNREADABLE) from e
     body = b"".join(p for p in parts if p)
     if finalized and body and all(p is not None for p in parts):
         # Cache ONLY a provably-complete join (a transient chunk-get failure must never become a
