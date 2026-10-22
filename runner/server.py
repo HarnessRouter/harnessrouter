@@ -12914,7 +12914,12 @@ def _produced_list(ws: str) -> list[dict]:
     _collected_init(ws)
     seen: dict[str, str] = {}
     if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode == 0:
-        d = _git(ws, "diff", "--name-status", _COLLECTED_REF)
+        # -c core.quotepath=false: without it git renders a non-ASCII path as \NNN octal
+        # escapes inside double quotes, and the strip below hands on the escaped spelling —
+        # so a file the agent named "résumé.pptx" was listed as r\303\251sum\303\251.pptx, could
+        # not be stat'ed (mtime 0, size 0), and the gateway's GET /file 404'd while the ack
+        # advanced the cursor past it. Both readers below pass it so they cannot disagree.
+        d = _git(ws, "-c", "core.quotepath=false", "diff", "--name-status", _COLLECTED_REF)
         for line in (d.stdout or "").splitlines():
             parts = line.split("\t")
             if len(parts) < 2:
@@ -12922,7 +12927,7 @@ def _produced_list(ws: str) -> list[dict]:
             status, path = parts[0], parts[-1].strip().strip('"')
             if _produced_keep(status, path):
                 seen[path] = status[:1]
-    p = _git(ws, "status", "--porcelain", "-uall")
+    p = _git(ws, "-c", "core.quotepath=false", "status", "--porcelain", "-uall")
     for line in (p.stdout or "").splitlines():
         if len(line) < 4:
             continue

@@ -131,3 +131,30 @@ def test_each_produced_item_says_how_big_it_is():
     (pathlib.Path(d) / "out" / "a.txt").write_text("abc")
     by = {f["path"]: f for f in _produced_list(d)}
     assert by["hero.png"]["size"] == 4096 and by["out/a.txt"]["size"] == 3
+
+
+def test_a_non_ascii_name_is_listed_as_the_agent_wrote_it():
+    """git renders a non-ASCII path as \\NNN octal escapes in double quotes unless core.quotepath
+    is off, and the listing's unquoting does not undo them. An escaped name is a name no file has:
+    it cannot be stat'ed (mtime 0, size 0) and the gateway's GET /file 404s on it — whereupon
+    _collect_produced `continue`s and acks anyway, stranding the artifact for good. Both readers
+    (untracked via status, committed via diff) are checked, since they must never disagree.
+    An ASCII name beside it pins that ordinary paths are unchanged."""
+    d = _ws()
+    accented = "résumé.pptx"
+    (pathlib.Path(d) / accented).write_text("x" * 11)
+    (pathlib.Path(d) / "plain.txt").write_text("y" * 7)
+    # the premise: git really does quote this name under the default config
+    raw = _git(d, "status", "--porcelain", "-uall").stdout
+    assert '\\303\\251' in raw, f"fixture name is not quoted by this git; the test proves nothing: {raw!r}"
+
+    by = {f["path"]: f for f in _produced_list(d)}          # untracked reader (status)
+    assert set(by) == {accented, "plain.txt"}
+    assert by[accented]["size"] == 11 and by[accented]["mtime"] > 0
+    assert by["plain.txt"]["size"] == 7 and by["plain.txt"]["mtime"] > 0
+
+    _git(d, "add", "-A")
+    _git(d, "commit", "-q", "-m", "checkpoint")
+    by = {f["path"]: f for f in _produced_list(d)}          # committed reader (diff vs the cursor)
+    assert set(by) == {accented, "plain.txt"}
+    assert by[accented]["size"] == 11 and by[accented]["mtime"] > 0
