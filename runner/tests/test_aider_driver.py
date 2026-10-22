@@ -522,7 +522,8 @@ def test_a_file_request_answered_with_a_word_and_no_edit_is_nudged_once():
                 self.gate.calls.append({"command": "cat SKILL.md", "approved": True})
             return iter(())
     ask = "Create a file named hello-aider.txt containing exactly the word HELLO, then reply DONE."
-    nudge = aider_driver._file_nudge(["hello-aider.txt"])
+    nudge = aider_driver._file_nudge(["hello-aider.txt"], "DONE")   # the reply was the word
+    plain = aider_driver._file_nudge(["hello-aider.txt"])           # the reply was more than that
     assert "`hello-aider.txt`" in nudge and "SEARCH/REPLACE" in nudge
     assert "does not need to be added to the chat" in nudge
     assert "`a.txt`, `b.txt`" in aider_driver._file_nudge(["a.txt", "b.txt"])
@@ -538,7 +539,7 @@ def test_a_file_request_answered_with_a_word_and_no_edit_is_nudged_once():
     c = Coder(["DONE", "DONE"]); aider_driver._run_turn(c, ask, gate)
     assert c.sent == [ask, nudge]                                    # once, not twice
     c = Coder(["I'll create it now.", "I'll do it."]); aider_driver._run_turn(c, ask, gate)
-    assert c.sent == [ask, nudge]                                    # one nudge, the specific one
+    assert c.sent == [ask, plain]                                    # one nudge, the specific one
     c = Coder(["Paris."]); aider_driver._run_turn(c, "What is the capital of France?", gate)
     assert c.sent == ["What is the capital of France?"]              # a question is not nudged
     c = Coder(["It would hold HELLO."]); aider_driver._run_turn(c, "what would a hello.txt contain?", gate)
@@ -564,7 +565,7 @@ def test_a_file_request_answered_with_a_word_and_no_edit_is_nudged_once():
     # two files asked for and one written: nudged for the other alone, once
     two = "Create a.txt and b.txt, then reply DONE."
     c = Coder(["DONE", "DONE"], edits=["edit:a.txt", "edit:b.txt"]); aider_driver._run_turn(c, two, gate)
-    assert c.sent == [two, aider_driver._file_nudge(["b.txt"])]
+    assert c.sent == [two, aider_driver._file_nudge(["b.txt"], "DONE")]
     assert "`a.txt`" not in c.sent[1] and "it is not written yet" in c.sent[1]
     pathlib.Path(root, "hello-aider.txt").write_text("HELLO\n")
     c = Coder(["DONE"]); aider_driver._run_turn(c, ask, gate)
@@ -601,6 +602,55 @@ def test_a_file_request_answered_with_a_word_and_no_edit_is_nudged_once():
     c.send_message = pending
     aider_driver._run_turn(c, ask, gate)
     assert c.sent == [ask, "lint: fix this", nudge]
+
+
+def test_a_file_request_answered_with_the_requested_word_gets_the_block_to_write():
+    """#513: a file request that comes after a few exact-reply turns ("Reply with exactly:
+    M1-gpt-5.4-mini", M2, M3) is answered by gpt-5.4-mini with the requested word and no file:
+    "Create a file named hello-aider.txt containing exactly the word HELLO, then reply DONE."
+    answered "DONE", 5 of 6, and answered "DONE" again after the nudge; a fresh session wrote the
+    file 3 of 3. The nudge a paragraph asks for does not lift the model out of the pattern, so a
+    reply that is nothing but a word of the request gets the block to write, with the path in it.
+    A reply that says more than that word keeps the plain nudge."""
+    root = tempfile.mkdtemp()
+
+    class Coder:
+        def __init__(self, replies):
+            self.replies = list(replies); self.reflected_message = None
+            self.partial_response_content = ""; self.root = root
+            self.aider_edited_files = set(); self.max_reflections = 5
+            self.io = types.SimpleNamespace(user_input=lambda p: None); self.sent = []
+        def init_before_message(self): pass
+        def send_message(self, m):
+            self.sent.append(m); self.partial_response_content = self.replies.pop(0)
+            return iter(())
+    gate = aider_driver._Gate([])
+    ask = "Create a file named hello-aider.txt containing exactly the word HELLO, then reply DONE."
+
+    c = Coder(["DONE", "DONE"]); aider_driver._run_turn(c, ask, gate)
+    assert len(c.sent) == 2
+    nudge = c.sent[1]
+    assert "'DONE' is not the answer" in nudge                # the word is not the answer
+    assert "<<<<<<< SEARCH" in nudge and "hello-aider.txt\n```" in nudge   # the block, path in it
+    assert "does not need to be added to the chat" in nudge
+    c = Coder(["I'll create it now.", "I'll do it."]); aider_driver._run_turn(c, ask, gate)
+    assert "<<<<<<< SEARCH" not in c.sent[1]                  # more than a word: the plain nudge
+    c = Coder(["Sure", "Sure"]); aider_driver._run_turn(c, ask, gate)
+    assert "<<<<<<< SEARCH" not in c.sent[1]                  # a word that is not the request's
+
+    repeats = aider_driver._repeats_a_word_of
+    assert repeats("DONE", ask) == "DONE" and repeats("done.", ask) == "done"
+    assert repeats("DONE\n\nDONE", ask) == "DONE"             # the same word twice
+    assert repeats("I wrote DONE", ask) == "" and repeats("Sure", ask) == ""
+    assert repeats("", ask) == "" and repeats("DONE", "") == ""
+    # The release check of 0.35.13 (2026-10-21): a fresh session answered the same request with two
+    # NUL characters, a blank line and "DONE" (8 output tokens, no file). What has no letter or
+    # digit in it is not a word, so that reply is the word too.
+    assert repeats("\u0000\u0000\n\nDONE", ask) == "DONE"
+    assert repeats("he", "Write the file") == ""          # a word of the request, not part of one
+    # rc.1 of 0.35.14 (2026-10-22): 2 of 6 primed runs answered with the word in a fenced block, twice.
+    # A fence and its language tag are formatting, not words.
+    assert repeats("```text\nDONE\n```\n\n```text\nDONE\n```", ask) == "DONE"
 
 
 def test_a_request_for_words_back_answered_by_an_edit_alone_is_nudged_once():
