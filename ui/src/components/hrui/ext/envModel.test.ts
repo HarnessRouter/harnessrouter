@@ -25,6 +25,10 @@ describe('a package spec', () => {
     expect(specProblem('-rf', 'npm', [])).toBe('Write it as name@1.0, or just the name for the latest.');
     expect(specProblem('ffmpeg;rm', 'apt', [])).toBe('Write it as name.');
     expect(specProblem('requests==2.31', 'pip', [])).toBe('');
+    // an apt version with its epoch, as the package check recommends it
+    expect(specProblem('ffmpeg=7:4.4.2-0ubuntu0.22.04.1', 'apt', [])).toBe('');
+    expect(specParts('ffmpeg=7:4.4.2-0ubuntu0.22.04.1', 'apt')).toEqual({ name: 'ffmpeg', version: '7:4.4.2-0ubuntu0.22.04.1' });
+    expect(specProblem('ffmpeg=1:2:3', 'apt', [])).toBe('Write it as name.');
     expect(specProblem('sharp@^0.33', 'npm', [])).toBe('');
   });
   it('stops at the most the service keeps, but a name already there can still change its pin', () => {

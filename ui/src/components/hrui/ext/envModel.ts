@@ -8,8 +8,9 @@ export const MANAGERS: Manager[] = ['pip', 'npm', 'apt'];
 export const SPEC_HINT: Record<Manager, string> = { pip: 'name==1.0', npm: 'name@1.0', apt: 'name' };
 /** The service keeps at most this many declared packages per manager and drops the rest unsaid. */
 export const MAX_PER_MANAGER = 200;
-/** The one shape of spec the service keeps (the gateway's _ENV_SPEC_RE); anything else it drops. */
-const SPEC_RE = /^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)[A-Za-z0-9._*+^~<>-]{0,60})?$/;
+/** The one shape of spec the service keeps (the gateway's _ENV_SPEC_RE, gateway/tests/test_env_spec_parity.py holds
+ *  them equal); anything else it drops. An apt version may carry its epoch: ffmpeg=7:4.4.2-0ubuntu0.22.04.1. */
+const SPEC_RE = /^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)(?:[0-9]{1,4}:)?[A-Za-z0-9._*+^~<>-]{0,60})?$/;
 
 /** The parts of a spec as a row shows them: the name, and the version when one was given (the
  *  service's own split, _env_spec_parts). */
