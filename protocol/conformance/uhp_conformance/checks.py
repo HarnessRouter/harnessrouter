@@ -1885,11 +1885,21 @@ def r07(ctx):
     if ctx.client.get(path, auth=False).status != 200:
         raise Skip("the disposable share's view did not resolve, so its disappearance proves nothing")
 
-    gone = ctx.client.delete(f"/v1/traces/{sid}")
+    # §6 names DELETE /v1/sessions/{id}; /v1/traces/{id} is "the older path for the same
+    # operation", which a server MAY keep. So the named path is tried first and the alias only
+    # as a fallback — driving the alias first is how this check came to skip on every server
+    # that serves only what §6 names, and a skip here reports nothing about the one thing R-07
+    # watches. Whether the named path works at all is F-08's finding, not this one's, so a
+    # server serving only the alias is still measured rather than failed twice.
+    gone = ctx.client.delete(f"/v1/sessions/{sid}")
+    used = "/v1/sessions/{id}"
     if gone.status in (404, 405, 501):
-        raise Skip(f"DELETE /v1/traces/{{id}} returned HTTP {gone.status}, so a session cannot be "
-                   "deleted here and this check has nothing to observe")
-    assert 200 <= gone.status < 300, f"deleting the session returned HTTP {gone.status}"
+        gone = ctx.client.delete(f"/v1/traces/{sid}")
+        used = "/v1/traces/{id}"
+    if gone.status in (404, 405, 501):
+        raise Skip(f"DELETE {used} returned HTTP {gone.status} and neither path §6 gives for "
+                   "deletion removed the session, so this check has nothing to observe")
+    assert 200 <= gone.status < 300, f"deleting the session via {used} returned HTTP {gone.status}"
     after = ctx.client.get(path, auth=False)
     assert after.status in (404, 410), (
         f"the shared link still returns HTTP {after.status} for a session that was deleted. §6 "

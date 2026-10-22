@@ -27,6 +27,13 @@ DEFECT = os.environ.get("DEFECT", "none")
 DIALECT = os.environ.get("DIALECT", "plain")
 assert DIALECT in ("plain", "enabled"), f"unknown dialect {DIALECT!r}"
 PORT = int(os.environ.get("PORT", "8931"))
+# Which of §6's two delete paths this server serves. §6 names DELETE /v1/sessions/{id} and says
+# /v1/traces/{id} is "the older path for the same operation" that a server MAY keep, so all three
+# combinations are servers the suite has to measure — and "sessions" alone is the one R-07 skipped
+# on, because it drove the alias and nothing else.
+DELETE_PATHS = tuple(sorted(filter(None, os.environ.get("DELETE_PATHS", "sessions,traces").split(","))))
+assert DELETE_PATHS and set(DELETE_PATHS) <= {"sessions", "traces"}, \
+    f"unknown delete paths {DELETE_PATHS!r}"
 KEY = "stub-key"
 
 DEFECTS = {
@@ -149,7 +156,8 @@ class H(BaseHTTPRequestHandler):
                 "metadata": {"session_id": sid, "harness_id": "h1"}})
         if p[:2] == ["v1", "sessions"] and len(p) >= 4 and p[3] == "share":
             return self.share_endpoint(method, p[2], p[4:])
-        if method == "DELETE" and p[:2] == ["v1", "traces"] and len(p) == 3:
+        if (method == "DELETE" and len(p) == 3 and p[0] == "v1"
+                and p[1] in DELETE_PATHS):
             return self.delete_session(p[2])
         return self.send(404, {"error": {"code": "not_found", "message": "no such endpoint"}})
 
@@ -256,5 +264,6 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"stub: defect={DEFECT} dialect={DIALECT} port={PORT}", flush=True)
+    print(f"stub: defect={DEFECT} dialect={DIALECT} delete_paths={DELETE_PATHS} port={PORT}",
+          flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()

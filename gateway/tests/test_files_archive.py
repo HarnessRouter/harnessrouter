@@ -1,6 +1,7 @@
 """The archive of a turn's cited files keeps the workspace's folders, keeps two files that share a
 basename, and is refused with the names when a cited file is no longer there: "all" means all."""
 import io
+import json
 import zipfile
 
 from fastapi.testclient import TestClient
@@ -53,3 +54,27 @@ def test_the_single_download_names_the_file_without_its_folder(monkeypatch):
     assert r.status_code == 200
     assert r.headers["content-disposition"] == (
         'attachment; filename="notes.txt"; filename*=UTF-8\'\'notes.txt')
+
+
+def _wire_changed(monkeypatch, tmp_path, files: dict[str, bytes | None]):
+    _wire(monkeypatch, tmp_path, files)
+
+    async def blob_get(key, kb=None):
+        return json.dumps(
+            {"files": [{"file_id": gw._wf_id(p), "path": p} for p in files]}).encode()
+    monkeypatch.setattr(gw, "_blob_get", blob_get)
+
+
+def test_an_unreadable_changed_file_refuses_the_archive_by_name(monkeypatch, tmp_path):
+    _wire_changed(monkeypatch, tmp_path, {"report.pdf": b"ok", "output/gone.json": None})
+    r = TestClient(gw.app).get("/v1/sessions/s1/files/archive?changed=true")
+    assert r.status_code == 404
+    assert "1 of 2 files" in r.text and "output/gone.json" in r.text
+
+
+def test_a_readable_changed_set_still_archives_every_file(monkeypatch, tmp_path):
+    _wire_changed(monkeypatch, tmp_path, {"report.pdf": b"ok", "output/notes.txt": b"n"})
+    r = TestClient(gw.app).get("/v1/sessions/s1/files/archive?changed=true")
+    assert r.status_code == 200
+    assert sorted(zipfile.ZipFile(io.BytesIO(r.content)).namelist()) == [
+        "output/notes.txt", "report.pdf"]

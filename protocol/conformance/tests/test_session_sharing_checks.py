@@ -50,12 +50,13 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _run_series(defect: str, dialect: str = "plain") -> dict[str, Outcome]:
+def _run_series(defect: str, dialect: str = "plain",
+                delete_paths: str = "sessions,traces") -> dict[str, Outcome]:
     """Every R- check against a stub carrying `defect`, in registration order."""
     port = _free_port()
     srv = subprocess.Popen([sys.executable, str(STUB)],
                            env={"DEFECT": defect, "DIALECT": dialect, "PORT": str(port),
-                                "PATH": "/usr/bin:/bin"},
+                                "DELETE_PATHS": delete_paths, "PATH": "/usr/bin:/bin"},
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.time() + 10
@@ -166,6 +167,30 @@ def test_the_toggle_dialect_is_not_a_licence_to_refuse_a_bodyless_post():
     out = _run_series("bodyless_rejected")
     assert out["R-08"] is Outcome.FAIL, out
     assert [i for i, o in out.items() if o is Outcome.FAIL] == ["R-08"], out
+
+
+# ── §6's two delete paths ─────────────────────────────────────────────────────────────
+# §6 names `DELETE /v1/sessions/{id}` and says `DELETE /v1/traces/{id}` is the older path for
+# the same operation, which a server MAY keep. R-07 drove only the alias, so against a server
+# serving only the named path it skipped — and `share_outlives_session` went unreported while
+# every other R- check passed. The stub matched that drift (it too served only the alias), so
+# the diagonal above was green by coincidence rather than by coverage.
+
+
+@pytest.mark.parametrize("delete_paths", ["sessions", "traces", "sessions,traces"])
+def test_a_published_link_outliving_its_session_is_caught_at_either_delete_path(delete_paths):
+    out = _run_series("share_outlives_session", delete_paths=delete_paths)
+    assert out["R-07"] is Outcome.FAIL, (
+        f"a server serving delete at {delete_paths!r} let share_outlives_session through: {out}")
+    assert [i for i, o in out.items() if o is Outcome.FAIL] == ["R-07"], out
+
+
+@pytest.mark.parametrize("delete_paths", ["sessions", "traces", "sessions,traces"])
+def test_a_conformant_server_passes_every_check_at_either_delete_path(delete_paths):
+    """The fix must not turn a passing server into a failing one: whichever of §6's paths a
+    conformant server serves, the series stays green rather than reporting the other missing."""
+    out = _run_series("none", delete_paths=delete_paths)
+    assert all(o is Outcome.PASS for o in out.values()), f"{delete_paths!r}: {out}"
 
 
 # ── a broken installation of the suite ────────────────────────────────────────────────
