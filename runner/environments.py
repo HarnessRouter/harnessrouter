@@ -609,7 +609,14 @@ def spec_parts(spec: str, manager: str) -> tuple[str, str]:
     for sep in ("==", "="):
         if sep in s:
             n, v = s.split(sep, 1)
-            return n.strip(), v.strip()
+            n, v = n.strip(), v.strip()
+            # PEP 440's prefix match (`numpy==1.4.*`) is every release whose version begins `1.4.`,
+            # not one version, just as npm's `4.x` is not: PyPI's `releases` names exact ones, so a
+            # range read as a pin was "not published". pip resolves it at build time. apt keeps its
+            # pin verbatim: it has no wildcard, so `=1.4.*` really is not in the sources.
+            if manager == "pip" and v.endswith(".*"):
+                return n, ""
+            return n, v
     return s, ""
 
 
