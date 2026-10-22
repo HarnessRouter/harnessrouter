@@ -14106,7 +14106,16 @@ def _media_scene_key(sid: str) -> str:
 
 
 async def _media_scene_read(sid: str) -> dict:
-    raw = await _blob_get(_media_scene_key(sid), kb=BLOB_KB)
+    """The session's canvas, a new one when there is none.
+
+    The read RAISES when the store could not answer, and that is the whole point: this is the read
+    half of `_media_scene_touch`, a read-modify-write. A failure answered as an empty scene is not
+    a blank canvas on screen for one turn — the next landing render reads nothing, mutates nothing
+    and WRITES THAT BACK, so every element the person had is gone and the revision says the
+    document is newer than the one that held them. An absent scene is still a new scene: that is a
+    session whose canvas has not been started, and the only thing to answer there.
+    """
+    raw = await _blob_get_or_raise(_media_scene_key(sid), kb=BLOB_KB)
     if not raw:
         return media_plane.new_scene()
     try:
@@ -15886,10 +15895,17 @@ class SceneWrite(BaseModel):
     scene: dict
 
 
+_MEDIA_SCENE_UNREADABLE = "This canvas could not be read just now. Try again."
+
+
 @app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene", include_in_schema=False)
 async def get_media_scene(hid: str, eid: str, sid: str, request: Request) -> dict:
     await _media_route(hid, sid, eid, request)
-    scene = await _media_scene_read(sid)
+    try:
+        scene = await _media_scene_read(sid)
+    except backing.BlobUnavailable as e:
+        # Said, rather than drawn as a blank canvas the person then edits on top of.
+        raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
     return {"rev": int(float((scene.get("meta") or {}).get("rev") or 0)), "scene": scene}
 
 
@@ -15911,7 +15927,13 @@ async def put_media_scene(hid: str, eid: str, sid: str, body: SceneWrite,
                         "saving.")
     want = request.headers.get("if-match") or ""
     async with _media_scene_lock(sid):
-        cur = await _media_scene_read(sid)
+        try:
+            cur = await _media_scene_read(sid)
+        except backing.BlobUnavailable as e:
+            # This write is a read-modify-write too: the revision check and the media-element
+            # check are both against `cur`, so a failed read here would accept the body as if the
+            # canvas were empty.
+            raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
         rev = int(float((cur.get("meta") or {}).get("rev") or 0))
         if want and want.strip('"') != str(rev):
             raise uhp_error(412, "scene_moved",

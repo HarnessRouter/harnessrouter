@@ -60,6 +60,7 @@ os.environ.update({
 })
 
 import app  # noqa: E402
+import backing  # noqa: E402
 import media_plane  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -3303,3 +3304,129 @@ def test_a_render_that_ended_without_a_reason_says_how_it_ended():
     assert st == "failed" and err == "the render ended as cancelled", err
     st, _, err, _ = media_plane.read_poll({"shape": "vercel-video"}, 200, {"status": "failed", "error": "nsfw"})
     assert st == "failed" and "nsfw" in err, err
+
+
+# ══ the canvas read that failed ══════════════════════════════════════════════════
+
+class _SceneUnreadable:
+    """The session's own blob store with ONE object unreadable, answering the two ways a real
+    store answers when the object is there and the read fails: `get` swallows it and answers None
+    (FileBlobStore.get returns None for any OSError), `get_or_raise` raises BlobUnavailable.
+
+    Both, on purpose. A fake that only raised would make the fix untestable from the outside — the
+    broken reader never called the raising read, so it would have passed by never asking.
+    """
+
+    def __init__(self, inner, key: str):
+        self._inner, self._key = inner, key
+
+    async def get(self, kb: str, file_id: str):
+        if file_id == self._key:
+            return None
+        return await self._inner.get(kb, file_id)
+
+    async def get_or_raise(self, kb: str, file_id: str):
+        if file_id == self._key:
+            raise backing.BlobUnavailable("OSError")
+        return await self._inner.get_or_raise(kb, file_id)
+
+    def __getattr__(self, name):            # put/delete/list/probe are the real store's
+        return getattr(self._inner, name)
+
+
+def _unreadable_scene(monkeypatch, sid: str) -> None:
+    monkeypatch.setattr(app.BACKING, "blob",
+                        _SceneUnreadable(app.BACKING.blob, app._media_scene_key(sid)))
+
+
+def _element_ids(sid: str) -> set:
+    return {e.get("id") for e in asyncio.run(app._media_scene_read(sid)).get("elements") or []}
+
+
+def test_a_scene_read_that_failed_never_lets_a_landing_render_destroy_the_canvas(
+        client, harness, session, provider, monkeypatch):
+    """THE DESTRUCTIVE ONE. `_media_scene_read` answered a FAILED read with `new_scene()`, and
+    `_media_scene_touch` is a read-modify-write: a landing render read the wrongly-empty scene,
+    mutated nothing in it, and wrote it back as the session's canvas at rev 1. Nine elements the
+    person had were gone, and the document said it was newer than the one that held them.
+
+    Driven through the real path: nine placed elements plus a video job's placeholder, then the
+    sweeper landing that render while the scene object cannot be read.
+    """
+    tok = _cred(harness, session)
+    provider.video_bytes = _mp4(1.0)
+    for i in range(9):
+        _ok(_call(client, tok, "place", {"items": [{"text": f"SHOT LIST {i}"}]}))
+    jid = _ok(_call(client, tok, "generate_video", {"prompt": "a", "seconds": 6}))["job_id"]
+    _ok(_call(client, tok, "place", {"items": [{"job_id": jid}]}))   # the render's placeholder
+    before = _element_ids(session)
+    assert len(before) == 10, f"the canvas this test is about was never built: {before}"
+    rev_before = asyncio.run(app._media_scene_read(session))["meta"]["rev"]
+
+    with monkeypatch.context() as m:
+        _unreadable_scene(m, session)
+        _due(jid)
+        asyncio.run(app._media_sweep())          # the landing render, over the unreadable scene
+
+    after = _element_ids(session)
+    assert after == before, (
+        f"the landing render destroyed {len(before - after)} of {len(before)} elements "
+        f"(the canvas now holds {len(after)}): {sorted(before - after)}")
+    assert asyncio.run(app._media_scene_read(session))["meta"]["rev"] == rev_before, (
+        "the scene was written back over the failed read")
+
+
+def test_a_canvas_that_could_not_be_read_is_a_failure_the_agent_is_told_about(
+        client, harness, session, provider, monkeypatch):
+    """The read half, in the shape test_media_attack.py already pins for this reader: the failure
+    reaches the agent as a tool result with a sentence in it, not as a canvas with nothing on it."""
+    tok = _cred(harness, session)
+    _ok(_call(client, tok, "place", {"items": [{"text": "SHOT LIST"}]}))
+    _unreadable_scene(monkeypatch, session)
+    with pytest.raises(backing.BlobUnavailable):
+        asyncio.run(app._media_scene_read(session))
+    said = _err(_call(client, tok, "describe_canvas", {}))
+    assert said.strip(), "describe_canvas refused with an empty sentence"
+
+
+def test_a_session_whose_canvas_was_never_started_still_gets_a_new_scene(client, harness, api,
+                                                                        provider):
+    """The other half of the fix, and the reason it is not "raise on anything falsy": a scene that
+    is ABSENT is a canvas nobody has drawn on, and a new one is the right answer there."""
+    fresh = _session_of(harness)
+    assert asyncio.run(app._blob_get(app._media_scene_key(fresh))) is None
+    scene = asyncio.run(app._media_scene_read(fresh))
+    assert scene["type"] == "excalidraw" and scene["elements"] == []
+    out = _ok(_call(client, _cred(harness, fresh), "describe_canvas", {}))
+    assert out["elements"] == [] if isinstance(out.get("elements"), list) else out
+
+
+def test_a_readable_canvas_round_trips_unchanged(client, harness, session, provider):
+    """The fix must not change the ordinary path: the same document, at the same revision."""
+    tok = _cred(harness, session)
+    _ok(_call(client, tok, "place", {"items": [{"text": "a"}, {"text": "b"}]}))
+    first = asyncio.run(app._media_scene_read(session))
+    _ok(_call(client, tok, "describe_canvas", {}))
+    assert asyncio.run(app._media_scene_read(session)) == first
+
+
+def test_the_app_says_a_canvas_it_could_not_read_rather_than_serving_an_empty_one(
+        api, client, harness, session, provider, monkeypatch):
+    """The browser's two scene routes. GET drew a blank canvas; PUT is a read-modify-write whose
+    revision and media-element checks are both against the read, so it accepted a body as if the
+    canvas were empty."""
+    tok = _cred(harness, session)
+    _ok(_call(client, tok, "place", {"items": [{"text": "SHOT LIST"}]}))
+    base = f"/v1/harnesses/{harness}/servers/{ENTRY_ID}/sessions/{session}/scene"
+    kept = api.get(base).json()
+    assert kept["scene"]["elements"], "nothing was placed; the assertions below would be vacuous"
+
+    with monkeypatch.context() as m:
+        _unreadable_scene(m, session)
+        r = api.get(base)
+        assert r.status_code == 503, f"{r.status_code}: {r.text[:300]}"
+        assert not r.json().get("scene"), r.text[:300]
+        w = api.put(base, json={"scene": media_plane.new_scene()})
+        assert w.status_code == 503, f"{w.status_code}: {w.text[:300]}"
+
+    assert api.get(base).json() == kept, "the canvas did not survive the failed reads"
