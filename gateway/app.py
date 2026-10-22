@@ -11914,10 +11914,12 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
         if ok:
             _ws_changed(sid)
     if not ok:
-        # The only ways to get here are a path that tried to leave the workspace and a storage
-        # failure. Both are the caller's problem to see, not something to swallow.
+        # A path that tried to leave the workspace, one of the agent's own files (the runner refuses
+        # those as it does for delete, mkdir and move), or a storage failure. All are the caller's
+        # problem to see, not something to swallow, and the answer names both path rules.
         raise uhp_error(400, "write_failed",
-                        "Could not write that path. It must be inside the session workspace.")
+                        "Could not write that path. It must be inside the session workspace, and not "
+                        "one of the agent's own files.")
     return {"session_id": sid, "path": path, "bytes": len(data), "written": True}
 
 

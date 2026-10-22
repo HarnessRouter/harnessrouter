@@ -13164,6 +13164,7 @@ async def put_file(request: Request, path: str, identifier: str = "") -> dict:
             inside = _safe_join(vis, path)
             if inside is not None:
                 dest = inside
+    _refuse_protected(ws, dest)
     data = await request.body()
     pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
     _isolate_session(ws)
