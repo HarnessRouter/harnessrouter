@@ -229,7 +229,7 @@ export function ConfigChat({ oob, ch, harnessId, harnessName, deepSid, onClearDe
 
   const catalog = useModelCatalog();   // server catalog is the source of truth for the picker and the default
   const models = oobModels(oob).length ? oobModels(oob) : oobModels(oobById(draft?.base || ''));
-  // The safe fallback is the BACKEND DEFAULT (gpt-5.4 / sonnet-4.6), never models[0], the lists
+  // The safe fallback is the BACKEND DEFAULT (gpt-6.1-sol / sonnet-4.6), never models[0], the lists
   // lead with the newest/priciest entries (gpt-5.6-*, fable-5) and those must never be picked
   // implicitly.
   const fallbackModel = oobDefaultModel(oob) || oobDefaultModel(oobById(draft?.base || '')) || '';

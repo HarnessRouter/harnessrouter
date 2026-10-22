@@ -393,6 +393,10 @@ class _Fake:
         self.calls.append(("mkdir", path))
         return self.outcome
 
+    async def write(self, sid, path, data):
+        self.calls.append(("write", path))
+        return self.outcome == B.WS_OK
+
     async def move(self, sid, path, to):
         self.calls.append(("move", path, to))
         return self.outcome
@@ -454,6 +458,19 @@ async def test_routes_refuse_escapes_and_internal_paths(routes, path):
             await call()
         assert e.value.status_code == 400 and e.value.detail["code"] == "invalid_input"
     assert routes["fake"].calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_put_the_runner_refuses_says_which_paths_it_may_write(routes):
+    """The runner refuses a PUT to the base's own machinery as it refuses delete, mkdir and move, and the
+    backing answers that as a failed write: the answer names that rule beside the workspace rule, so a
+    caller writing AGENTS.md on a base that keeps it is not told the path left the workspace."""
+    routes["fake"].outcome = B.WS_BAD_PATH
+    with pytest.raises(Exception) as e:
+        await A.write_session_file("s", "AGENTS.md", A.WorkspaceWrite(content="x"), request=None)
+    assert e.value.status_code == 400 and e.value.detail["code"] == "write_failed"
+    assert "not one of the agent's own files" in e.value.detail["message"]
+    assert routes["fake"].calls == [("write", "AGENTS.md")] and "changed" not in routes
 
 
 @pytest.mark.asyncio
