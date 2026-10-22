@@ -12254,6 +12254,28 @@ async def list_keys(org: str, request: Request) -> dict:
     return {"keys": keys}
 
 
+class KeyPatch(BaseModel):
+    """The parts of a key a person may edit. Only the name: the secret never changes in place
+    (rotate = a new key, then revoke the old one), and the scope is fixed at creation."""
+    name: str | None = None
+
+
+@app.patch("/v1/orgs/{org}/keys/{kid}")
+async def rename_key(org: str, kid: str, body: KeyPatch, request: Request) -> dict:
+    """A key's new name. The console's Rename has sent this since the keys page shipped, and the
+    route was the hosted service's alone, so every rename on a self-hosted box answered 405."""
+    p = await _owned_org(request, org)
+    kv = await _vertex_get(kid)
+    if not kv or str(kv.get("org") or "") != org or kv.get("kind") != "harness_api_key" \
+            or not _scope_keeps(p, kv.get("workspace")):
+        raise HTTPException(404, "key not found")
+    name = (body.name or "").strip()[:120]
+    if not name:
+        raise HTTPException(422, "name is required")
+    await _vg_upsert("HarnessApiKey", kid, {"name": name}, raise_on_fail=True)
+    return {"id": kid, "name": name}
+
+
 @app.delete("/v1/orgs/{org}/keys/{kid}")
 async def revoke_key(org: str, kid: str, request: Request) -> dict:
     p = await _owned_org(request, org)
