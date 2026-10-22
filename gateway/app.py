@@ -10491,7 +10491,8 @@ async def get_response(response_id: str, request: Request):
     # a record that is genuinely not there is still a 404.
     try:
         rec = await _resp_get(response_id, strict=True)
-    except Exception as e:  # noqa: BLE001 — only a strict read raises: the record could not be read
+    except backing.BlobUnavailable as e:
+        # the store could not answer; any other exception is a fault in this route and stays a 500
         print(f"[responses] a record could not be read rid={response_id}: {type(e).__name__}", flush=True)
         raise uhp_error(503, "server_error", _RESPONSE_UNREADABLE) from e
     if not rec:
