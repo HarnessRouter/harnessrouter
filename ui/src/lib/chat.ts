@@ -201,7 +201,12 @@ export async function streamResponse(
     // raw status + JSON, the user sees the actionable sentence, not a transport artifact.
     let detail = '';
     try { detail = String((JSON.parse(t) as { detail?: unknown })?.detail || ''); } catch { /* not JSON */ }
-    throw new Error(detail || `responses failed: ${res.status} ${t.slice(0, 200)}`);
+    // Carry the HTTP status on the error: the caller classifies a refused start by it (the 402
+    // credit wall opens the credits door, a transport drop is reported as transport), and a bare
+    // Error reads as a transport failure no matter what the gateway answered.
+    const err = new Error(detail || `responses failed: ${res.status} ${t.slice(0, 200)}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
   }
 
   // Shared parser: SSE framing + native-Responses dispatch (tool-call pairing by output_index)
