@@ -194,7 +194,7 @@ def _break_the_validator(monkeypatch, how: str) -> None:
                             pathlib.Path("/nonexistent/uhp_conformance/uhp.schema.json"))
     else:
         raise AssertionError(f"unknown way to break the validator: {how!r}")
-    with pytest.raises(RuntimeError):
+    with pytest.raises(context.ValidatorUnavailable):   # what _share catches, and nothing wider
         context.Context(client=Client("http://127.0.0.1:1", "unused")).validate({}, "SessionShare")
 
 
