@@ -85,3 +85,54 @@ def test_the_changed_listing_serves_the_turns_total_beside_the_captured_count(ap
                              json.dumps({"at": 1.0, "files": files}).encode(), kb=gw.RESP_BLOB_KB))
     d = api.get(f"/v1/sessions/{sid}/files?changed=true").json()
     assert d["count"] == 2 and d["produced"] == 2
+
+
+def test_the_total_counts_what_the_turn_produced_and_not_the_inputs_it_carried(monkeypatch):
+    """The caller's attached input files are in the runner's /produced listing (the agent's working
+    directory holds them), and the selection below already sets them aside via `exclude` — but the
+    total was counted before that filter, so it counted them as produced. A turn carrying one input
+    and producing one file reported 2, and the console's banner read "Showing 1 of 2" with nothing
+    else to show. The existing test above calls _collect_produced with NO exclude, which is why the
+    gap survived. A case with no attached input is kept here so the filter cannot under-count an
+    ordinary turn."""
+    listed: list[dict] = []
+    stored: dict[str, bytes] = {}
+
+    async def _sandbox(path, s, method, body=None, params=None):
+        if path == "/produced":
+            return _Resp(200, json.dumps({"files": listed}).encode())
+        return _Resp(200, b"{}")
+
+    async def _file(s, path, cap):
+        return 200, b"bytes", "text/plain", 5
+
+    async def _blob_put(key, data, kb=0):
+        stored[key] = data
+        return True
+    monkeypatch.setattr(gw, "_sandbox", _sandbox)
+    monkeypatch.setattr(gw, "_blob_put", _blob_put)
+    monkeypatch.setattr(gw, "_sandbox_file", _file)
+    monkeypatch.setattr(gw, "RESP_MAX_FILES", 25)
+
+    # N = 1 attached input, M = 1 produced file: the total is M, not M + N
+    sid = "hsessprod" + os.urandom(4).hex()
+    listed[:] = [{"path": "data.csv", "mtime": 1_700_000_000},
+                 {"path": "report.md", "mtime": 1_700_000_001}]
+    out = asyncio.run(gw._collect_produced(sid, {"data.csv"}))
+    assert [o["filename"] for o in out] == ["report.md"]
+    assert gw._produced_total[sid] == 1
+
+    # N = 2, M = 3, with an internal name beside them that was already excluded
+    sid = "hsessprod" + os.urandom(4).hex()
+    listed[:] = [{"path": "in/a.csv", "mtime": 1}, {"path": "in/b.csv", "mtime": 2},
+                 {"path": "AGENTS.md", "mtime": 3},
+                 {"path": "r1.txt", "mtime": 4}, {"path": "r2.txt", "mtime": 5},
+                 {"path": "r3.txt", "mtime": 6}]
+    asyncio.run(gw._collect_produced(sid, {"in/a.csv", "in/b.csv"}))
+    assert gw._produced_total[sid] == 3
+
+    # no attached inputs: the count is every produced file, capped response or not
+    sid = "hsessprod" + os.urandom(4).hex()
+    listed[:] = [{"path": f"f{i:03d}.txt", "mtime": 1_700_000_000 + i} for i in range(30)]
+    out = asyncio.run(gw._collect_produced(sid, set()))
+    assert len(out) == 25 and gw._produced_total[sid] == 30
