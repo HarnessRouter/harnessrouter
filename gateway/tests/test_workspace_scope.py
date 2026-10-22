@@ -55,7 +55,7 @@ def world(monkeypatch):
     async def vertex_get(vid):
         return dict(GRAPH[vid]) if vid in GRAPH else None
 
-    async def resp_get(rid):
+    async def resp_get(rid, *, strict=False):
         return dict(RESP[rid]) if rid in RESP else None
 
     async def upsert(label, vid, props, **kw):
