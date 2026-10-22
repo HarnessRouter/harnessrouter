@@ -883,6 +883,37 @@ def test_the_person_takes_the_browser_over_and_the_agent_waits(client, world):
 
 
 
+def test_a_takeover_keeps_the_browser_alive_but_not_past_the_session_cap(client, world):
+    """The reaper's idle clock counts the person's takeover, not only the agent's calls. A person
+    who takes the browser over from the console's live view and browses without the agent calling
+    kept the agent's `last_used` from moving, so the reaper stopped their live session under them
+    at IDLE_S. The takeover is handed over through the real route, which is what writes
+    `control_at`. Still reaped when BOTH clocks are old, and the session cap still fires whatever
+    either clock says."""
+    reg, ven, _ = world
+    reg.record = _record()
+    hid = _harness(client)
+    _include(client, hid)
+    sid = _session_of(hid)
+    tok = gw._mint_hosted_cred(hid, sid, _key(hid))
+    assert _call(client, tok, "navigate", url="example.com")["isError"] is False
+    assert client.post(f"/v1/sessions/{sid}/browser/control", json={"control": "user"},
+                       headers=HEADERS).json()["control"] == "user"
+    rec = asyncio.run(browser_plane.registry.get(sid))
+    assert float(rec["control_at"]) > 0, "the route writes the person's clock"
+    # the agent has not called for longer than the idle bound, but the person has the browser
+    rec["last_used"] -= browser_plane.IDLE_S + 1
+    assert asyncio.run(browser_plane.expired_sessions()) == []
+    # both clocks old: idle, as before
+    rec["control_at"] -= browser_plane.IDLE_S + 1
+    assert [(x["sid"], why) for x, why in asyncio.run(browser_plane.expired_sessions())] == [(sid, "idle")]
+    # the cap is on the session's whole length and fires however fresh either clock is
+    rec["last_used"] = rec["control_at"] = time.time()
+    assert asyncio.run(browser_plane.expired_sessions()) == []
+    rec["created"] -= browser_plane.SESSION_CAP_MIN * 60 + 1
+    assert [why for _, why in asyncio.run(browser_plane.expired_sessions())] == ["session_cap"]
+
+
 def test_a_harness_with_the_browser_tells_its_agent_to_use_it():
     """The agent's doc gets a Browser section when the harness includes the plugin, after its own
     instructions, and nothing when it does not (Codex opened a page with curl while the card
