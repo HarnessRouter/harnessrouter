@@ -9657,8 +9657,16 @@ async def storage_usage() -> dict:
     # Sum checkpoint_bytes per tenant. Done client-side (not a backend aggregate): props are
     # stored as strings, so a backend sum() may not coerce — this was already the fallback path
     # and is the only one that behaves identically across backings.
+    # The index read is strict: find swallows a failure into [] (backing.py: "the normal read paths
+    # swallow errors and return empty"), which here is indistinguishable from an org that stores
+    # nothing, so a store that could not answer billed every org zero for that day. An empty index
+    # still answers {} — that is a true total; a failed read is not a total at all.
+    try:
+        sessions = await BACKING.graph.find_strict("HarnessSession", neq={"status": "deleted"})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, "session index unreadable; storage usage is unknown, retry") from e
     by_org: dict[str, int] = {}
-    for v in await BACKING.graph.find("HarnessSession", neq={"status": "deleted"}):
+    for v in sessions:
         tenant = str(v.get("tenant") or "")
         if not tenant:
             continue
@@ -14222,7 +14230,16 @@ def _media_scene_key(sid: str) -> str:
 
 
 async def _media_scene_read(sid: str) -> dict:
-    raw = await _blob_get(_media_scene_key(sid), kb=BLOB_KB)
+    """The session's canvas, a new one when there is none.
+
+    The read RAISES when the store could not answer, and that is the whole point: this is the read
+    half of `_media_scene_touch`, a read-modify-write. A failure answered as an empty scene is not
+    a blank canvas on screen for one turn — the next landing render reads nothing, mutates nothing
+    and WRITES THAT BACK, so every element the person had is gone and the revision says the
+    document is newer than the one that held them. An absent scene is still a new scene: that is a
+    session whose canvas has not been started, and the only thing to answer there.
+    """
+    raw = await _blob_get_or_raise(_media_scene_key(sid), kb=BLOB_KB)
     if not raw:
         return media_plane.new_scene()
     try:
@@ -15819,7 +15836,7 @@ async def _media_export_run(job: dict, plan: list[dict], audio_plan: list[dict],
             data = await _blob_get(_media_blob(sid, a["media_id"], str(meta.get("ext") or "wav")),
                                    kb=BLOB_KB)
             if not data:
-                continue
+                raise media_plane.ExportRefused(f"Sound {j + 1} is no longer readable.")
             path = os.path.join(tmp, f"track{j}.{meta.get('ext') or 'wav'}")
             pathlib.Path(path).write_bytes(data)
             tracks.append({"path": path, "start_s": a["start_s"], "gain_db": a["gain_db"]})
@@ -16002,10 +16019,17 @@ class SceneWrite(BaseModel):
     scene: dict
 
 
+_MEDIA_SCENE_UNREADABLE = "This canvas could not be read just now. Try again."
+
+
 @app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene", include_in_schema=False)
 async def get_media_scene(hid: str, eid: str, sid: str, request: Request) -> dict:
     await _media_route(hid, sid, eid, request)
-    scene = await _media_scene_read(sid)
+    try:
+        scene = await _media_scene_read(sid)
+    except backing.BlobUnavailable as e:
+        # Said, rather than drawn as a blank canvas the person then edits on top of.
+        raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
     return {"rev": int(float((scene.get("meta") or {}).get("rev") or 0)), "scene": scene}
 
 
@@ -16027,7 +16051,13 @@ async def put_media_scene(hid: str, eid: str, sid: str, body: SceneWrite,
                         "saving.")
     want = request.headers.get("if-match") or ""
     async with _media_scene_lock(sid):
-        cur = await _media_scene_read(sid)
+        try:
+            cur = await _media_scene_read(sid)
+        except backing.BlobUnavailable as e:
+            # This write is a read-modify-write too: the revision check and the media-element
+            # check are both against `cur`, so a failed read here would accept the body as if the
+            # canvas were empty.
+            raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
         rev = int(float((cur.get("meta") or {}).get("rev") or 0))
         if want and want.strip('"') != str(rev):
             raise uhp_error(412, "scene_moved",
@@ -16098,6 +16128,9 @@ async def post_media_export(hid: str, eid: str, sid: str, request: Request) -> d
         job = await _media_export_start(hid, sid, org, str(entry.get("id") or eid), "")
     except media_plane.MediaError as e:
         raise uhp_error(400, "export_refused", str(e)) from e
+    except backing.BlobUnavailable as e:
+        # the export plans from the canvas: one that could not be read is said, as the scene routes say it
+        raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
     return {"job_id": job["id"], "shots": job.get("shots"),
             "total_seconds": job.get("planned_seconds"), "status": job["status"]}
 
@@ -16162,7 +16195,11 @@ async def post_media_import(hid: str, eid: str, sid: str, request: Request) -> d
             scene["elements"] = els
             return el["id"]
 
-        _rev, element_id = await _media_scene_touch(sid, mutate)
+        try:
+            _rev, element_id = await _media_scene_touch(sid, mutate)
+        except backing.BlobUnavailable as e:
+            # stored but not placed: the canvas could not be read, so it is not written over either
+            raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
 
     return {"media_id": rec["media_id"], "kind": rec["kind"], "mime": rec["mime"],
             "bytes": rec["bytes"], "width": rec["width"], "height": rec["height"],
@@ -18575,6 +18612,19 @@ async def _vg_list_by_org(label: str, org: str) -> list[dict]:
     return await BACKING.graph.find(label, {"org": org})
 
 
+async def _vg_list_by_org_strict(label: str, org: str) -> list[dict]:
+    """`_vg_list_by_org`, except that an empty answer is established to be empty rather than taken
+    on trust. The plain read swallows a failed read and returns the same `[]` as "the organization
+    holds none" (backing.GraphStore.probe: "the normal read paths swallow errors and return
+    empty"), which a caller that provisions on an empty list must not act on. Only an empty answer
+    pays for the strict re-read, and only an empty answer needs it: `find_strict` either answers
+    with every row of the label or raises."""
+    rows = await _vg_list_by_org(label, org)
+    if not rows:
+        rows = await BACKING.graph.find_strict(label, {"org": org})
+    return rows
+
+
 def _harness_props(body: HarnessBody) -> dict:
     base = _require_supported_base(body.base)   # refuse at create, not at the first task
     return {"name": body.name, "base": base, "base_label": body.base_label or base,
@@ -20183,7 +20233,17 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     # Per workspace (see list_kits): launching in a second workspace makes that workspace its own
     # Harness rather than handing back the first workspace's, which its members could not see.
     ws, wsd = str(p.get("workspace") or ""), bool(p.get("workspace_default"))
-    existing = next((r for r in await _vg_list_by_org("Harness", org)
+    # Read strictly: this list is what makes launch idempotent, and a read that failed looks
+    # exactly like an organization with no Harnesses, so provisioning on it is how the second
+    # press leaves someone with two.
+    try:
+        rows = await _vg_list_by_org_strict("Harness", org)
+    except Exception as e:  # noqa: BLE001
+        print(f"[kits] {kit_id}: the harness list could not be read org={org}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error",
+                        "Your Harnesses could not be read just now, so nothing was launched. "
+                        "Try again in a moment.") from e
+    existing = next((r for r in rows
                      if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"
                      and _workspace_keep(str(r.get("workspace") or ""), ws, wsd)),
                     None)
@@ -20996,6 +21056,8 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
     hb = HarnessBody(name=str(v.get("name") or ""), base=str(v.get("base") or ""), plugins=[item] + kept)
     hb.plugins = await _plugins_prepare(hb, org, previous=previous)
     await _vg_upsert("Harness", hid, {"plugins": json.dumps(hb.plugins), "updated_at": str(int(time.time() * 1000))})
+    # AFTER the write, as in update_harness_public: this route installs a package too.
+    await _plugs_ensure_required(org, hid)
     out = _harness_out(await _vertex_get(hid) or {"id": hid})
     return {"id": hid, "published": name, "plugins": out["plugins"]}
 
