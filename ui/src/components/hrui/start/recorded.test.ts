@@ -46,23 +46,25 @@ describe('a recorded first run', () => {
         expect(fs.statSync(kept).size).toBe(f.bytes);
       }
       // the setups made from them are ones this console can save
-      expect(templateOf(i, r)).not.toBeNull();
+      expect(templateOf(i, r, 'Hermes')).not.toBeNull();
     }
     expect(n).toBe(DEMOS.length);
   });
-  test('the setup: what the recording ran on, its own skills saved under fresh ids, without the hosted image tools', () => {
-    const c = templateOf(0, RUN);
-    expect(c).toMatchObject({ name: 'Product images', instructions: DEMOS[0].instr, base: 'hermes', model: 'gpt-5.4' });
-    expect(c?.skills).toHaveLength(1);
-    expect(c?.skills[0]).toMatchObject({ name: 'product-shot-style', enabled: true, files: [{ path: 'SKILL.md', content: 'x' }] });
-    expect(c?.skills[0].id).toMatch(/^skl_[a-z0-9]+$/i);
-    expect(templateOf(0, RUN)?.skills[0].id).not.toBe(c?.skills[0].id);
+  test('the setup: what the recording ran on, its own skills saved under fresh ids, its request, without the hosted image tools', () => {
+    const c = templateOf(0, RUN, 'Hermes');
+    expect(c).toMatchObject({ name: 'Product images', instructions: DEMOS[0].instr, exampleTask: RUN.request, base: 'hermes', baseName: 'Hermes', model: 'gpt-5.4' });
+    expect(c?.skills).toEqual([{ id: RUN.template.skills[0].id, name: RUN.template.skills[0].name }]);
+    expect(c?.ownSkills).toHaveLength(1);
+    expect(c?.ownSkills?.[0]).toMatchObject({ name: 'product-shot-style', enabled: true, files: [{ path: 'SKILL.md', content: 'x' }] });
+    expect(c?.ownSkills?.[0].id).toMatch(/^skl_[a-z0-9]+$/i);
+    expect(templateOf(0, RUN, 'Hermes')?.ownSkills?.[0].id).not.toBe(c?.ownSkills?.[0].id);
     expect(SKIPPED_PLUGINS).toEqual(['media']);
-    expect(c).not.toHaveProperty('plugins');
+    expect(c?.plugins).toEqual([]);
+    expect(c?.connectionsNeeded).toEqual([]);
   });
   test('a recording that ran on a plugin this console cannot add is not saved as one: that demo runs live', () => {
     const other = { ...RUN, template: { ...RUN.template, plugins: [...RUN.template.plugins, { id: 'github', name: 'GitHub' }] } };
-    expect(templateOf(0, other)).toBeNull();
+    expect(templateOf(0, other, 'Hermes')).toBeNull();
   });
   test('it plays in proportion, at most REPLAY_MAX_MS long; a short run at the pace it ran', () => {
     expect(REPLAY_MAX_MS).toBe(15_000);

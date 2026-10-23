@@ -6,11 +6,11 @@
 // layer, the Agent stack with that layer's brick lit. A test is a task: New task starts one, and every
 // task of the setup takes follow-ups.
 //
-// The page opens on the newest task (a link to a task opens that one, and a setup with none opens on
-// New task, or on its recorded first task when it was saved from a demo's recorded run: start/
-// replay.ts, played as the page opens right after the save, drawn whole after that; a recording that
-// could not be read is said, with Try again, never swapped for a live task). The open task is always
-// one the list shows: filtering to Failed opens a failed one. On a
+// The page opens on the newest task (a link to a task opens that one, and a setup just saved opens on
+// New task, its first test's request waiting in the box: start/build.ts; a setup with none opens on New
+// task, or on its recorded first task when it was saved from a demo's recorded run, start/replay.ts,
+// drawn whole; a recording that could not be read is said, with Try again, never swapped for a live
+// task). The open task is always one the list shows: filtering to Failed opens a failed one. On a
 // phone the list and the open task take turns, with a back between. The address carries the tab
 // (?tab=settings), Settings' open layer (?layer=), Capabilities' tab (?cap=) and a task opened by its
 // link or sent from here (?test=); an older link to the Tasks tab (?tab=tasks&task=) opens that task
@@ -32,7 +32,10 @@ import { PreviewGrip, usePreviewWidth } from '@/components/hrui/setup/PreviewGri
 import { BrowserControl, BrowserSlot, browserStepsOf, stepOf, useTaskBrowser } from '@/components/hrui/setup/BrowserSlot';
 import { TurnSteps, type TurnStepsOf } from '@/components/hrui/setup/AgentTurns';
 import { getPaneState, setPaneState, useConvState } from '@/lib/conversation';
+import { takeFirstTest, type FirstTest } from '@/components/hrui/start/check';
+import { useBuildOf } from '@/components/hrui/start/build';
 import { seededSetup } from '@/components/hrui/start/seed';
+import { useBuildStack } from '@/components/hrui/start/buildStack';
 import { useRecordedRunState } from '@/components/hrui/start/replay';
 import { toast } from '@/components/hrui/toast';
 
@@ -56,15 +59,18 @@ export default function SetupPage() {
     if (rawTab === 'tasks' || rawTab === 'playground') router.replace(`/studio/${enc(id)}${linkTask ? `?test=${enc(linkTask)}` : ''}`, { scroll: false });
   }, [rawTab, linkTask, router, id]);
 
+  // the first test New setup handed this setup: the page opens on New task, its request in the box
+  const [first] = useState<FirstTest | null>(() => takeFirstTest(id));
   // the task shown: one continued or shown (from the list, or ?test= in the address), or a new one;
   // null until the list says which (the newest)
   const [slot, setSlot] = useState<Slot | null>(() => {
     const t = params.get('test') || linkTask;
-    return t ? { key: t, resume: t } : null;
+    if (t) return { key: t, resume: t };
+    return first ? { key: 'n0', resume: null, first } : null;
   });
   const [testSid, setTestSid] = useState<string | null>(() => params.get('test') || linkTask);
   // on a phone: the open task shows instead of the list (picked from it, New task, or a link)
-  const [picked, setPicked] = useState(() => !!(params.get('test') || linkTask));
+  const [picked, setPicked] = useState(() => !!(params.get('test') || linkTask || first));
   // when the task shown was opened: a new test's own entry in the list is one sent after it
   const slotAt = useRef(0);
   useEffect(() => { slotAt.current = Date.now(); }, [slot?.key]);
@@ -161,15 +167,30 @@ export default function SetupPage() {
   const [dirty, setDirty] = useState(() => hasSettingsDraft(id));
   // the bricks the open test's running turn is working through now (null when none runs)
   const [working, setWorking] = useState<string[] | null>(null);
-  // the recorded first task, while it is the one open (opened from its row, or as the page opened);
-  // running, as a live run is, while it plays
+  // a setup just made here is still being saved (start/build.ts): the Agent stack follows its answers,
+  // and the record is read again as the save ends
+  const build = useBuildOf(id);
+  const bstack = useBuildStack(row, build);
+  const buildDone = build?.phase === 'done';
+  useEffect(() => { if (buildDone) reload(); }, [buildDone, reload]);
+  // the first request its save handed over, for an unchanged demo: the recorded run that plays when it is
+  // sent (the setup's own, from its record; else its build's), waiting in the box until then
+  const handed = !!slot && !slot.resume && !!slot.first?.setup;
+  const handedRec = handed ? recRun || (buildDone ? build?.recording : null) || null : null;
+  // the recorded first task while it plays: running, as a live run is, until it ends; once it has
+  // begun, the handed request is that recorded task in the list
   const [replaying, setReplaying] = useState(false);
-  const recOn = !!slot?.recorded && !testSid;
+  const [played, setPlayed] = useState(false);
+  // the recorded first task: the setup's own (from its record), or the one its save handed over once
+  // it is sent; not listed while that request still waits in the box (the list shows New task)
+  const recShown = handedRec && !played ? null : recRun || handedRec;
+  // open while it is the task shown (opened from its row, or the handed request played)
+  const recOn = (!!slot?.recorded || (!!handedRec && played)) && !testSid;
   const recRunning = recOn && replaying;
   const openRecorded = () => {
-    if (!recRun || recOn) return;
+    if (!recShown || recOn) return;
     setPreview(null); setPicked(true);
-    setSlot({ key: `rec${Date.now()}`, resume: null, recorded: recRun }); setTestSid(null); router.replace(pgHref(null), { scroll: false });
+    setSlot({ key: `rec${Date.now()}`, resume: null, recorded: recShown }); setTestSid(null); router.replace(pgHref(null), { scroll: false });
   };
   // when the setup was made (its record's createdAt, seconds or ms): the recorded row's time
   const madeAt = row ? (row.h.createdAt > 0 && row.h.createdAt < 1e12 ? row.h.createdAt * 1000 : row.h.createdAt) : 0;
@@ -207,7 +228,8 @@ export default function SetupPage() {
   const appSheet = app ? <SetUpApp r={row} onClose={() => { setApp(false); reload(); }} /> : null;
   const head = <AgentHead r={row} tab={tab} onTab={onTab} onSetUpApp={onSetUpApp} dirty={dirty} />;
   const stack = (focus?: LayerKey) => (
-    <StackPanel r={row} live={tab === 'tasks' ? working : null} off={sideOff} onToggle={toggleSide} focus={focus} />
+    <StackPanel r={bstack.r || row} live={tab === 'tasks' ? working : null} off={sideOff} onToggle={toggleSide} focus={focus}
+      now={bstack.now} drops={bstack.drops} />
   );
 
   if (tab === 'settings') {
@@ -262,7 +284,7 @@ export default function SetupPage() {
       {head}
       <div ref={splitRef} className={`tk-split${docked ? ' previewing' : ' has-side'}${picked ? ' show-d' : ''}`}>
         <TaskList setupName={row.h.name} list={list} f={f} setF={setF} current={testSid} isNew={isNew && !recOn} newOpen={!!slot && !slot.resume && !recOn}
-          recorded={recRun ? { title: recRun.request, at: madeAt, on: recOn, running: recRunning, onOpen: openRecorded } : null}
+          recorded={recShown ? { title: recShown.request, at: madeAt, on: recOn, running: recRunning, onOpen: openRecorded } : null}
           recordedRetry={rec.failed ? rec.retry : undefined}
           onOpen={openTest} onNew={() => newTest()} onGone={gone} />
         <div className="tk-d">
@@ -285,8 +307,8 @@ export default function SetupPage() {
                   browser={hasBrowser ? <BrowserControl shown={browserShown} live={tb.live} onToggle={toggleBrowser} /> : undefined}
                   onBack={() => setPicked(false)}
                   onStopped={() => { setTimeout(() => { list.refresh(); reload(); }, 1500); }} />
-              ) : recOn && slot.recorded ? (
-                <RecordedHead title={slot.recorded.request} running={recRunning} onBack={() => setPicked(false)} />
+              ) : recOn && recShown ? (
+                <RecordedHead title={recShown.request} running={recRunning} onBack={() => setPicked(false)} />
               ) : <NewTaskHead onBack={() => setPicked(false)} />}
               {linkFailed ? (
                 <div className="tk-none" role="alert">This task could not be read just now.{' '}
@@ -295,7 +317,8 @@ export default function SetupPage() {
               <div className="convo" hidden={linkFailed}>
                 <Playground r={row} onRan={() => { setNudge((n) => n + 1); reload(); }}
                   onPreview={(files, key) => setPreview({ files, key })} previewKey={preview?.key || null}
-                  slot={slot} onBorn={bornTest} onLive={setWorking} onFollowUp={() => newTest()} onReplay={setReplaying}
+                  slot={slot} onBorn={bornTest} onLive={setWorking} onFollowUp={() => newTest()} handedRec={handedRec}
+                  onReplay={(on) => { setReplaying(on); if (on) setPlayed(true); }}
                   taskTitle={barCard?.title?.trim() || undefined} />
               </div>
             </>

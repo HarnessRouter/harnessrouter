@@ -1,44 +1,43 @@
 'use client';
 // "Set up an agent harness" (docs/uxuidesign/console-91: openNewAgent / newAgentHtml in its one-step
-// form, nwPickHtml, placeDD, nwArt, nwMsg). Say what the setup does for your users in one sentence,
-// choose the agent harness and the model, and Save makes the setup at once (POST /v1/harnesses):
+// form, nwPickHtml, placeDD, nwArt, nwMsg, then buildAgent and the save card, backendShow / buildSeq).
+// Say what the setup does for your users in one sentence; the agent harness and the model start on
+// Auto and can be chosen. Sending sets up a harness CONFIGURATION, never a task (Richard, 2026-10-18):
 //
-//   - its name is the lead of the sentence (start/names.ts nameFromJob; an unchanged demo keeps the
-//     demo's own name), kept apart from the workspace's other setups, and renamed in its Settings;
-//   - its instructions are the sentence, as written;
-//   - its agent harness and model are the ones chosen here. They start on the demo's own pair when it
-//     can run here, else on the default harness and that harness's own default model; a model only
-//     shows when one of this instance's keys can run it on the chosen harness.
+//   1. the sheet closes and the setup's page opens at once (Richard, 2026-10-19: the build plays in
+//      the chat, not in the popup). The work goes on there (start/build.ts): the server builds the
+//      setup under the tab's key for it (start/compose.ts, /v1/harnesses/builds): its builder, run on
+//      one of the person's own models, turns the sentence into a configuration (a name, standing
+//      instructions written for serving each end user's request, the harness and model where they
+//      were left on Auto, the skills, plugins and tools the job needs from the workspace, and one
+//      request as an end user would send it) and saves it, while one live line says which step it is
+//      on; the save card then shows it at the top of the first task, and the example request waits in
+//      its box, ready to send (Richard, 2026-10-19: nothing runs until the person sends it). An
+//      unchanged demo with a recorded first run is preset from its template and plays that run back
+//      when its request is sent (start/replay.ts), which reaches no server and spends nothing.
 //
-// The sheet closes and the setup's page opens on its Tasks (start/open.ts), with the record the save
-// answered handed to it (start/seed.ts), so it draws without a loading step. The sentence is also the
-// setup's first task: sending it here is asking for it to run (Richard 10-22: the flow went on to an
-// empty task and left the person wondering what to do), so the page runs it as it opens, on the model
-// chosen here, and the person lands on it running (setup/Playground.tsx). A save that fails says so
-// here, with the sentence kept, and saves nothing.
+// The sentence is never sent to the setup, nor saved as its instructions. When the server's build
+// fails, nothing was saved and nothing is saved in its place: the page says why with Try again, which
+// opens this sheet again with the sentence as it was written (a new build, under a new key).
 //
-// An unchanged demo on the harness and model its first request was recorded on (start/replay.ts) is
-// saved from that recording's template instead (its instructions and skills; the hosted image tools
-// it ran with are not added, start/replay.ts SKIPPED_PLUGINS), with `source` naming the recording,
-// and nothing is handed over to run: its first task is the recorded run, played back as its page
-// opens, which sends nothing and spends nothing. A demo with no recording, one on another pair, or a
-// sentence the person changed runs live as above. Recordings that cannot be read are said here, with
-// the sentence kept, and nothing is saved: a demo is never saved to run live in their place.
+// The builder and every setup run on this instance's own model keys: with no key that runs a model,
+// the line under the box says to connect one, and Save waits (the hosted console's request check and
+// free requests are not part of this edition).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
-import { createCustom, listCustom, offeredOob, oobById, oobDefaultModel, useBasesRead, useModelCatalogRead } from '@/lib/harness';
+import { offeredOob, oobById, oobDefaultModel, useBasesRead, useModelCatalogRead } from '@/lib/harness';
 import { providerById, useModelProviders } from '@/lib/providers';
 import { harnessLogoSrc } from '@/components/HarnessLogo';
 import { Sheet } from './Sheet';
 import { SkLine } from './Skel';
 import { toast } from './toast';
 import { nwArt } from './start/art';
+import { startBuild } from './start/build';
 import { openNewSetup } from './start/open';
-import { seedSetup, setFirstReplay, setFirstTask } from './start/seed';
-import { loadRecording, recordedMark, templateOf } from './start/replay';
-import { DEMOS, baseName, defaultBase, defaultModelOf, demoPick, runnableModels } from './start/demos';
+import { AUTO } from './start/compose';
+import { DEMOS, baseName, demoPick, runnableModels } from './start/demos';
 import { Handoff } from './start/Handoff';
-import { nameFromJob, tooShort, uniqName } from './start/names';
+import { tooShort } from './start/names';
 
 export interface NewSetupPre { job?: string; demo?: number }
 
@@ -49,8 +48,10 @@ const UP = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidt
 const LOCK = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
 const NW_SAMPLES = ['Answer support emails: look up the order, then draft a reply in our tone.', 'Review a contract and flag the risky clauses.', 'Turn a product brief into a studio product image.'];
 const SENTENCE = 'Write it as a sentence, e.g. Answer support emails in our tone.';
-const SAVE_FAILED = 'The setup could not be saved just now. Try again.';
-const RECORDING_FAILED = 'The recorded demo run could not be read just now. Try again.';
+// Auto picks among the general agent harnesses the platform can pay a first test on: not one that
+// takes no skills (a decision model), nor one that runs on the organization's own token alone
+// (setup_check.NO_FREE_BASES on the server, which makes the same choice).
+const OWN_TOKEN_ONLY = ['qoder'];
 
 /** Reads like a change to the person's own code: say once where that belongs, without blocking. */
 function codeAsk(t: string): boolean {
@@ -60,18 +61,13 @@ function codeAsk(t: string): boolean {
     || /\b(build|make|create)\s+(me\s+)?(a|an)\s+[a-z\- ]{0,24}\b(app|website|landing page|site)\b/i.test(x);
 }
 
-/** The model a harness opens on: the demo's own when it runs there, else the harness's default when it
- *  can run, else the first one it can run; '' when none can (no key here serves one). */
-function firstModel(base: string, want = ''): string {
-  const ms = runnableModels(base);
-  if (want && ms.includes(want)) return want;
-  return defaultModelOf(base) || ms[0] || '';
-}
-
 type Pick = 'h' | 'm' | null;
 
 export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => void }) {
   const router = useRouter();
+  // the page Save opens is fetched while the sheet is open, so pressing Save needs nothing more from
+  // the server to get there (a page load on the way is still picked up there: start/build.ts)
+  useEffect(() => { router.prefetch('/studio/new'); }, [router]);
   const basesRead = useBasesRead();
   const catalogRead = useModelCatalogRead();
   const bases = basesRead.value;
@@ -80,15 +76,17 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
   const offered = offeredOob(bases);
   const demo = pre?.demo != null && DEMOS[pre.demo] ? pre.demo : null;
   const [job, setJob] = useState(() => (demo != null ? DEMOS[demo].instr : pre?.job || ''));
-  // the harness and the model, once the server has said what it offers and what can run
-  const [h, setH] = useState('');
-  const [m, setM] = useState('');
+  // Auto unless a demo names its pair; a demo's model lands with the catalog
+  // a demo opens on its own harness when the server offers it; else on Auto (the page says the demo's
+  // harness is not available), never another harness in its place
+  const [h, setH] = useState(() => (demo != null ? demoPick(demo, bases).base || AUTO : AUTO));
+  const [m, setM] = useState(() => (demo != null ? '' : AUTO));
   const [pick, setPick] = useState<Pick>(null);
   const [q, setQ] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [hand, setHand] = useState(false);
-  // the sheet was closed while its save was in flight: nothing more happens here
+  // the sheet was closed: nothing more happens
   const gone = useRef(false);
   const ta = useRef<HTMLTextAreaElement | null>(null);
   const btnH = useRef<HTMLButtonElement | null>(null);
@@ -98,17 +96,11 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
   const [pos, setPos] = useState<{ style: CSSProperties; side: boolean } | null>(null);
 
   useEffect(() => () => { gone.current = true; }, []);
-  // the harness it opens on: the demo's own when this instance offers it, else the default one
-  useEffect(() => {
-    if (h || !offered.length) return;
-    const dp = demo != null ? demoPick(demo, bases) : null;
-    setH(dp?.base || defaultBase(offered));
-  }, [h, offered, demo, bases]);
-  // its model, once the catalog has landed
+  // a demo's model, once the server's catalog has landed: its own when the harness runs it
   useEffect(() => {
     if (!catalog || !h || m) return;
     const dp = demo != null ? demoPick(demo, bases) : null;
-    setM(firstModel(h, dp && dp.base === h ? dp.model : ''));
+    setM(dp && dp.base && dp.base === h ? dp.model || AUTO : AUTO);
   }, [catalog, h, m, demo, bases]);
   // the caret goes to the end of the sentence on a desktop; a phone keeps its keyboard down
   useEffect(() => {
@@ -116,15 +108,30 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
     return () => clearTimeout(t);
   }, []);
 
-  const hName = h ? baseName(h, bases) : '';
-  const models = useMemo(() => (catalog && h ? runnableModels(h) : []), [catalog, h]);
+  const hAuto = h === AUTO, mAuto = m === AUTO;
+  const hName = h && !hAuto ? baseName(h, bases) : '';
+  // the harnesses Auto may pick, as the server's composer reads them
+  const autoBases = useMemo(() => offeredOob(bases).filter((o) => bases?.[o.id]?.takesSkills !== false && !OWN_TOKEN_ONLY.includes(o.id)).map((o) => o.id), [bases]);
+  // the models on offer: the harness's own, or with the harness on Auto every model one of Auto's harnesses runs
+  const models = useMemo(() => {
+    if (!catalog) return [];
+    if (!hAuto) return h ? runnableModels(h) : [];
+    const out: string[] = [];
+    for (const b of autoBases) for (const x of runnableModels(b)) if (!out.includes(x)) out.push(x);
+    return out;
+  }, [h, hAuto, catalog, autoBases]);
   const dp = demo != null ? demoPick(demo, bases) : null;
-  const demoNow = demo != null && dp && job.trim() === DEMOS[demo].instr ? demo : null;
+  const demoNow = demo != null && dp && job.trim() === DEMOS[demo].instr && h === dp.base && m === dp.model ? demo : null;
   const code = codeAsk(job);
-  const ready = !!catalog && !!h && !!m;
+  // a model one of this instance's keys runs: on a harness Auto may pick, on any harness, on the one chosen
+  const runs = (b: string) => runnableModels(b).length > 0;
+  const anyRuns = !!catalog && autoBases.some(runs);
+  const noneRuns = !!catalog && !offered.some((o) => runs(o.id));
+  const hRuns = !!catalog && !!h && !hAuto && runs(h);
+  const ready = offered.length > 0 && !!catalog && !!h && !!m && (hAuto ? anyRuns : hRuns);
 
   // the drawing: a brick drops in when its choice changes
-  const artH = hName, artM = m;
+  const artH = hName, artM = mAuto ? '' : m;
   const prev = useRef({ h: '', m: '' });
   const dropH = !!artH && artH !== prev.current.h, dropM = !!artM && (artM !== prev.current.m || dropH);
   useEffect(() => { prev.current = { h: artH, m: artM }; });
@@ -169,11 +176,11 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
   const closePick = () => { const b = pick === 'h' ? btnH.current : btnM.current; setPick(null); setQ(''); b?.focus(); };
   const chooseH = (id: string) => {
     if (id !== h) {
-      // a chosen model the new harness does not run gives way to that harness's own, and says so
-      if (m && catalog && !runnableModels(id).includes(m)) {
-        const next = firstModel(id);
-        toast(next ? `${baseName(id, bases)} doesn’t run ${m}. Model set to ${next}.` : `${baseName(id, bases)} doesn’t run ${m}.`);
-        setM(next);
+      // a chosen model the new harness does not run gives way to Auto, and says so
+      const runs = (b: string) => runnableModels(b).includes(m);
+      if (!mAuto && m && (id === AUTO ? !autoBases.some(runs) : !runs(id))) {
+        toast(id === AUTO ? `No harness Auto picks from runs ${m}. Model set to Auto.` : `${baseName(id, bases)} doesn’t run ${m}. Model set to Auto.`);
+        setM(AUTO);
       }
       setH(id);
     }
@@ -188,44 +195,22 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
     if (demoNow == null && tooShort(j)) { setErr(SENTENCE); ta.current?.focus(); return; }
     if (!ready) return;
     setPick(null); setBusy(true); setErr(''); gone.current = false;
-    // an unchanged demo's recorded first run, when it ran on the pair chosen here (else it runs live)
-    let run: Awaited<ReturnType<typeof loadRecording>> = null;
-    try { run = demoNow != null ? await loadRecording(demoNow) : null; }
-    catch {
-      if (gone.current) return;
-      setErr(RECORDING_FAILED); setBusy(false);
-      ta.current?.focus();
-      return;
-    }
-    const tpl = demoNow != null && run && run.base === h && run.model === m ? templateOf(demoNow, run) : null;
-    try {
-      // a name no other setup of the workspace has; a list that cannot be read keeps the name as it is
-      const taken = await listCustom().then((l) => l.map((x) => x.name), () => [] as string[]);
-      const name = uniqName(demoNow != null ? DEMOS[demoNow].short : nameFromJob(j), taken);
-      const rec = await createCustom(tpl && run
-        ? { name, base: tpl.base, baseLabel: hName, defaultModel: tpl.model, systemPrompt: tpl.instructions, skills: tpl.skills, source: recordedMark(run) }
-        : { name, base: h, baseLabel: hName, defaultModel: m, systemPrompt: j });
-      if (!rec?.id) throw new Error('no id');
-      // its page draws from the record the save answered with
-      seedSetup(rec.id, { h: rec });
-      // a demo saved from its recording plays it as its first task; anything else runs what the
-      // person asked for as its first task as its page opens
-      if (tpl) setFirstReplay(rec.id);
-      else setFirstTask(rec.id, j);
-      openNewSetup(router, { id: rec.id });
-    } catch {
-      if (gone.current) return;
-      setErr(SAVE_FAILED); setBusy(false);
-      ta.current?.focus();
-    }
+    // the sheet closes and the setup's page opens at once: the rest happens there (start/build.ts), and
+    // the only place it lands is that setup's Tasks (start/open.ts). Auto goes to the server as is: it
+    // picks the harness and model, never a guess made here
+    const b = startBuild({
+      job: j, base: h, model: m, demo: demoNow, baseName: baseName(h, bases),
+      pick: { baseName: hAuto ? '' : hName, model: mAuto ? '' : m },
+    });
+    openNewSetup(router, { build: b.key });
   };
 
   if (hand) return <Handoff kind="new" onClose={onClose} />;
 
   const ql = q.trim().toLowerCase();
   const hs = offered.filter((o) => !ql || baseName(o.id, bases).toLowerCase().includes(ql));
-  const ms = models.filter((x) => !ql || x.toLowerCase().includes(ql));
-  const def = h ? oobDefaultModel(oobById(h)) : '';
+  const ms = models.filter((x) => x !== AUTO && (!ql || x.toLowerCase().includes(ql)));
+  const def = hAuto ? '' : oobDefaultModel(oobById(h));
   const keyOf = (x: string) => { const c = providers.connectionFor(x); return c ? (providerById(c.provider)?.name || c.provider) : ''; };
   const logo = (id: string) => { const s = harnessLogoSrc(id); return s ? <img className="h-logo" src={s} alt="" /> : null; };
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -233,15 +218,21 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
     if (e.key === 'Enter') { e.preventDefault(); first?.click(); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); first?.focus(); }
   };
+  const autoRow = (on: boolean, choose: () => void) => (!ql ? (
+    <button type="button" className={`nw-opt dd-o${on ? ' on' : ''}`} role="option" aria-selected={on} onClick={choose}>
+      <span className="chk">{on ? CHECK : null}</span><b>Auto</b><small>picked for the job</small>
+    </button>
+  ) : null);
   const list = pick && pos ? (
     <div ref={pop} className={`nw-pop pl-dd pl-fly${pos.side ? ' side' : ''}`} style={pos.style} role="listbox" aria-label={pick === 'h' ? 'Agent harness' : 'Model'}>
       <div className="dd-s">
         <input ref={qIn} id="ddQ" className="dd-q" autoComplete="off" spellCheck={false} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey}
-          placeholder={pick === 'h' ? `Search ${offered.length} agent harnesses` : `Search ${models.length} models on ${hName}`}
+          placeholder={pick === 'h' ? `Search ${offered.length} agent harnesses` : hAuto ? `Search ${models.length} models` : `Search ${models.length} models on ${hName}`}
           aria-label={pick === 'h' ? 'Search agent harnesses' : 'Search models'} />
       </div>
       {pick === 'h' ? (
         <>
+          {autoRow(hAuto, () => chooseH(AUTO))}
           {hs.map((o) => {
             const on = o.id === h;
             return (
@@ -255,6 +246,7 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
         </>
       ) : (
         <>
+          {autoRow(mAuto, () => chooseM(AUTO))}
           {ms.map((x) => {
             const on = x === m, kp = keyOf(x);
             return (
@@ -272,19 +264,19 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
 
   // loading is drawn as the line that lands (Skel), never a sentence about loading
   const sk = (label: string) => <><SkLine w="58%" h={12} style={{ marginTop: 4 }} /><span className="sr">{label}</span></>;
-  const demoGone = demo != null && bases && dp && !dp.base && h;
-  const noModel = !!catalog && !!h && !models.length;
   const msg: [string, React.ReactNode] = err ? ['bad', err]
     : basesRead.failed || catalogRead.failed ? ['bad', <>The agent harnesses could not be read just now.{' '}
       <button type="button" className="link-q inl" onClick={() => { basesRead.retry(); catalogRead.retry(); }}>Try again</button></>]
     : bases && !offered.length ? ['bad', <>No agent harness is available on this instance.</>]
-    : noModel ? ['warn', <>None of your keys runs a model on {hName} yet. <a className="link-q inl" href="/byok">Add a key</a> or choose another harness.</>]
+    // nothing runs without a model key: the builder and the setup both run on one of yours
+    : catalog && bases && (noneRuns || (hAuto && !anyRuns)) ? ['warn', <>Connect a model key to set up an agent harness. <a className="link-q inl" href="/byok">Connect a key</a></>]
+    : catalog && h && !hAuto && !hRuns ? ['warn', <>None of your keys runs a model on {hName} yet. <a className="link-q inl" href="/byok">Add a key</a> or choose another harness.</>]
     : code ? ['warn', <><b>Changing code in your project?</b> Your coding agent does that.</>]
-    : demoGone && demo != null ? ['warn', <>{`${baseName(DEMOS[demo].base, bases)} is not available here, so it runs on ${hName}.`}</>]
+    : demo != null && bases && dp && !dp.base ? ['warn', <>{`${baseName(DEMOS[demo].base, bases)} is not available to you, so Auto picks the harness.`}</>]
     : !bases || !catalog ? ['', sk('Loading')]
     : ['', null];
-  const pickH = h ? <>{logo(h)}<span>{hName}</span></> : <SkLine w={72} h={11} />;
-  const pickM = m ? <span className="mono">{m}</span> : catalog && h ? <span>None</span> : <SkLine w={72} h={11} />;
+  const pickH = hAuto ? <span>Auto</span> : <>{h ? logo(h) : null}<span>{hName}</span></>;
+  const pickM = mAuto ? <span>Auto</span> : <span className="mono">{m}</span>;
   return (
     // Escape closes an open list first, then the sheet
     <Sheet onClose={() => { if (pick) closePick(); else close(); }} labelledBy="nwh"
@@ -297,40 +289,42 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
         <span className="nw-art" id="nwArt" dangerouslySetInnerHTML={{ __html: art }} />
         <div className="nw-picks" id="nwPicks">
           <button ref={btnH} type="button" className={`nw-pk${pick === 'h' ? ' on' : ''}`} aria-haspopup="listbox" aria-expanded={pick === 'h'}
-            disabled={busy || !offered.length} onClick={() => toggle('h')}>
+            disabled={busy} onClick={() => toggle('h')}>
             <span>Agent harness</span><b>{pickH}</b>{CHEV}
           </button>
           <button ref={btnM} type="button" className={`nw-pk${pick === 'm' ? ' on' : ''}`} aria-haspopup="listbox" aria-expanded={pick === 'm'}
-            disabled={busy || !h} onClick={() => toggle('m')}>
+            disabled={busy} onClick={() => toggle('m')}>
             <span>Model</span><b>{pickM}</b>{CHEV}
           </button>
           {list}
         </div>
       </div>
-      <label className="nw-l" htmlFor="nwJob">What should it do for your users?</label>
-      <div className="nw-ask">
-        <div className="nw-field">
-          <textarea ref={ta} id="nwJob" className="nw-in" rows={3} placeholder=" " aria-describedby="nwCost"
-            aria-invalid={err === SENTENCE ? true : undefined}
-            value={job} readOnly={busy}
-            onChange={(e) => { setJob(e.target.value); if (err) setErr(''); }}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
-          <div className="nw-ph" aria-hidden="true">
-            {NW_SAMPLES.map((t, i) => <span key={i} className="hx-exl" style={{ '--i': i } as CSSProperties}>e.g. {t}</span>)}
+      <>
+          <label className="nw-l" htmlFor="nwJob">What should it do for your users?</label>
+          <div className="nw-ask">
+            <div className="nw-field">
+              <textarea ref={ta} id="nwJob" className="nw-in" rows={3} placeholder=" " aria-describedby="nwCost"
+                aria-invalid={err === SENTENCE ? true : undefined}
+                value={job} readOnly={busy}
+                onChange={(e) => { setJob(e.target.value); if (err) setErr(''); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
+              <div className="nw-ph" aria-hidden="true">
+                {NW_SAMPLES.map((t, i) => <span key={i} className="hx-exl" style={{ '--i': i } as CSSProperties}>e.g. {t}</span>)}
+              </div>
+            </div>
+            <div className="nw-ask-bar">
+              <span aria-hidden="true" />
+              <button type="button" className="send" id={demoNow != null ? 'nwBuild' : 'nwSend'} aria-label="Save setup"
+                aria-busy={busy || undefined} disabled={!job.trim() || busy || !ready} onClick={() => void send()}>{UP}</button>
+            </div>
           </div>
-        </div>
-        <div className="nw-ask-bar">
-          <span aria-hidden="true" />
-          <button type="button" className="send" id={demoNow != null ? 'nwBuild' : 'nwSend'} aria-label="Save setup"
-            aria-busy={busy || undefined} disabled={!job.trim() || busy || !ready} onClick={() => void send()}>{UP}</button>
-        </div>
-      </div>
-      <div className={`nw-cost nw-msg ${msg[0]}`} id="nwCost" role="status">{msg[1]}</div>
-      <div className="au-or nw-or" role="separator"><span>OR</span></div>
-      <div className="nw-alt">
-        <span><b>Building in your own codebase?</b></span>
-        <button type="button" className="link-q inl" disabled={busy} onClick={() => setHand(true)}>Use your coding agent ›</button>
-      </div>
+          <div className={`nw-cost nw-msg ${msg[0]}`} id="nwCost" role="status">{msg[1]}</div>
+          <div className="au-or nw-or" role="separator"><span>OR</span></div>
+          <div className="nw-alt">
+            <span><b>Building in your own codebase?</b></span>
+            <button type="button" className="link-q inl" disabled={busy} onClick={() => setHand(true)}>Use your coding agent ›</button>
+          </div>
+      </>
     </Sheet>
   );
 }

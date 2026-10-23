@@ -2,9 +2,10 @@
 // console, replay the recorded steps so a demo spends no tokens). An unchanged demo, on the harness
 // and model its recording ran on, is saved as a real setup in the workspace from its template
 // (start/recorded.ts: the instructions and skills the recording ran on); everything sent to it later
-// runs live. Only its first request is not run again: the real run recorded for it (each stream event
-// with its offset from the request) plays in the setup's first task through the same handlers a live
-// turn goes through (useConversationTurn.replay), on its own timeline, so it reads the same. It costs
+// runs live. Only its first request is not run again: it waits in the setup's first task's box like
+// any first test (start/build.ts), and sent as it was recorded, the real run recorded for it (each
+// stream event with its offset from the request) plays there through the same handlers a live turn
+// goes through (useConversationTurn.replay), on its own timeline, so it reads the same. It costs
 // nothing and makes no task. Nothing is ever read by the recording's own ids: the turn comes from the
 // recording alone, and the files it made are its kept copies (public/demos). A demo with no
 // recording runs live, as any other setup does: nothing is ever played that did not run. The
@@ -15,6 +16,7 @@
 import { useEffect, useState } from 'react';
 import type { CustomHarness } from '@/lib/harness';
 import type { RespFile } from '@/lib/chat';
+import type { Composed } from './compose';
 import { DEMOS } from './demos';
 import type { RecordedRun } from './recorded';
 
@@ -120,24 +122,21 @@ const skillId = () => 'skl_' + (globalThis.crypto?.randomUUID?.() || `${Date.now
  *  image itself (a live run here produced the product image without them). */
 export const SKIPPED_PLUGINS = ['media'];
 
-/** What a setup saved from a demo's recording is made with (createCustom): the name it saves as, the
- *  agent harness and model the recording ran on, its instructions, and its own skills (the entries
- *  the recorded setup stored, saved under fresh ids). */
-export interface DemoSetup {
-  name: string; base: string; model: string; instructions: string;
-  skills: CustomHarness['skills'];
-}
-
-/** A demo's setup, as its recording ran on it; null when the recording ran on a plugin this edition
- *  cannot add (anything but SKIPPED_PLUGINS), so the setup it plays in would not be the one it ran
- *  on: that demo runs live. */
-export function templateOf(demo: number, run: RecordedRun): DemoSetup | null {
+/** A demo's setup, as its recording ran on it: the name it saves as, the agent harness and model,
+ *  its instructions, its own skills (the entries the recorded setup stored, saved with it under fresh
+ *  ids), its plugins, and its first request (the one recorded). Null when the recording ran on a
+ *  plugin this edition cannot add (anything but SKIPPED_PLUGINS, which are left out), so the setup it
+ *  plays in would not be the one it ran on: that demo is built like any setup and runs live. */
+export function templateOf(demo: number, run: RecordedRun, baseName: string): Composed | null {
   const t = run.template;
   if ((t.plugins || []).some((p) => p && p.id && !SKIPPED_PLUGINS.includes(p.id))) return null;
   const skills = (t.skills || []).filter((s) => s && s.id && s.skill);
   return {
-    name: t.name || DEMOS[demo].short, base: run.base, model: run.model,
-    instructions: t.instructions || DEMOS[demo].instr,
-    skills: skills.map((s): CustomHarness['skills'][number] => ({ ...s.skill, id: skillId(), enabled: s.skill.enabled !== false })),
+    name: t.name || DEMOS[demo].short, instructions: t.instructions || DEMOS[demo].instr, exampleTask: run.request,
+    base: run.base, baseName, model: run.model,
+    skills: skills.map((s) => ({ id: s.id, name: s.name })),
+    plugins: [],
+    connectionsNeeded: [],
+    ownSkills: skills.map((s): CustomHarness['skills'][number] => ({ ...s.skill, id: skillId(), enabled: s.skill.enabled !== false })),
   };
 }

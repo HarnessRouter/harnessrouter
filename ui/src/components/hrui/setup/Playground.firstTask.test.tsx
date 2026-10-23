@@ -1,8 +1,9 @@
 /** @jest-environment jsdom */
-// The task a setup was made with runs as its page opens (New setup: the sentence the person sent there is
-// what they asked to see run; Richard 10-22, the flow went on to an empty task): once, on the setup's own
-// model, as soon as that model is known to run; a model no provider serves leaves it in the box instead;
-// a past task never takes it.
+// A new setup's first task (start/build.ts), as the hosted console draws it: its save card at the top
+// (start/Assembly), the request the build wrote waiting in the box, never sent for the person (Richard
+// 2026-10-19, "Ready in the box"), not even once the model is known to run; held while the save goes
+// on, and the rest of a save that did not answer said under the card with Try again. A past task never
+// takes it, and the sentence the person wrote in New setup is never what is sent.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { CustomHarness, ModelCatalog } from '@/lib/harness';
@@ -36,8 +37,10 @@ jest.mock('../start/prompts', () => ({ API_BASE: 'https://box.example/api/harnes
 jest.mock('./TaskThread', () => ({ Md: () => null }));
 jest.mock('./AgentTurns', () => ({ AgentTurns: () => null, harnessMark: () => ({ mark: null, motion: null }) }));
 jest.mock('./TurnFiles', () => ({ FileCards: () => null, filesOf: () => [] }));
+const mockBuild: { b: unknown } = { b: null };
+jest.mock('../start/build', () => ({ useBuildOf: () => mockBuild.b, noteFirstSid: jest.fn(), retryBuild: jest.fn() }));
 jest.mock('reifyui/agent-chat', () => ({
-  AgentConversation: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  AgentConversation: ({ children, composer }: { children?: React.ReactNode; composer?: React.ReactNode }) => <div>{children}{composer}</div>,
   AgentComposer: (p: { value: string; onChange: (v: string) => void; onSend: () => void; sendDisabled?: boolean; onAttachFiles: (f: File[]) => void; left?: React.ReactNode }) => (
     <div className="composer">
       <textarea aria-label="message" value={p.value} onChange={(e) => p.onChange(e.target.value)} />
@@ -51,7 +54,8 @@ jest.mock('reifyui/agent-chat', () => ({
 import { loadSessionTurns } from '@/lib/chat';
 import { rowOf } from '../setups';
 import { Playground, type Slot } from './Playground';
-import { peekFirstTask, setFirstTask } from '../start/seed';
+import { retryBuild } from '../start/build';
+import type { Build } from '../start/build';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const CAT = (unavailable: string[] = []): ModelCatalog => ({ hermes: { default: 'gpt-5.4', models: ['gpt-5.4', 'glm-5.3', 'kimi-k3'], unavailable } });
@@ -67,7 +71,6 @@ async function open(h: CustomHarness, slot: Partial<Slot> = {}) {
   });
   await flush();
 }
-const pill = () => el.querySelector('.pg-opts .nw-pk') as HTMLButtonElement;
 const run = () => el.querySelector('button.run') as HTMLButtonElement;
 
 beforeEach(() => {
@@ -87,46 +90,52 @@ afterEach(() => { act(() => root.unmount()); el.remove(); });
 
 
 const box = () => (el.querySelector('textarea[aria-label="message"]') as HTMLTextAreaElement).value;
+const FIRST = { input: 'Please review the payment and change order clauses and redline them.', send: false, free: false, setup: true };
+const CFG = { name: 'Contract redlines', instructions: 'You review each construction contract a user sends.', exampleTask: FIRST.input,
+  base: 'hermes', baseName: 'Hermes', model: 'gpt-5.4', skills: [], plugins: [], connectionsNeeded: [] };
+const BUILD = (o: Partial<Build>): Build => ({ key: 'bk1', at: 0, job: 'the sentence', pick: { baseName: '', model: '' }, phase: 'done', step: '',
+  asm: { cfg: CFG, savedAt: 1, plugins: {}, done: true }, id: 'chrn_t', first: { input: FIRST.input, send: false, free: false }, recording: null,
+  firstSid: '', demo: null, error: '', ...o });
+beforeEach(() => { mockBuild.b = null; (retryBuild as jest.Mock).mockClear(); });
 
-test('the first task runs as the new setup\'s page opens, once', async () => {
-  setFirstTask('chrn_t', 'Generate a product image for our store');
-  await open(H({ defaultModel: 'gpt-5.4' }));
-  expect(mockConv.send).toHaveBeenCalledTimes(1);
-  expect(mockConv.send.mock.calls[0]).toEqual(['Generate a product image for our store', []]);
-  expect(mockConv.target?.model).toBe('gpt-5.4');           // on the model chosen when it was made
-  expect(peekFirstTask('chrn_t')).toBe('');                  // handed over: a reopen never runs it again
-  await act(async () => { root.render(<div />); });
-  await open(H({ defaultModel: 'gpt-5.4' }));
-  expect(mockConv.send).toHaveBeenCalledTimes(1);
-});
-
-test('it waits while the model is still being checked, then runs', async () => {
-  mockCat.read = { value: null, failed: false, retry: jest.fn() };
-  setFirstTask('chrn_t', 'Review this contract');
-  await open(H({ defaultModel: 'gpt-5.4' }));
+test('the request the build wrote waits in the box under the save card, and nothing is sent for the person', async () => {
+  mockBuild.b = BUILD({});
+  await open(H({ defaultModel: 'gpt-5.4' }), { key: 'n0', first: FIRST });
+  expect(box()).toBe(FIRST.input);
+  expect(el.querySelector('.bs-save')?.textContent).toContain('Setup saved.');
   expect(mockConv.send).not.toHaveBeenCalled();
-  expect(peekFirstTask('chrn_t')).toBe('Review this contract');
-  mockCat.read = { value: CAT(), failed: false, retry: jest.fn() };
-  await open(H({ defaultModel: 'gpt-5.4' }));
+  expect(run().disabled).toBe(false);
+  await act(async () => { run().click(); });
+  await flush();
   expect(mockConv.send).toHaveBeenCalledTimes(1);
-  expect(mockConv.send.mock.calls[0][0]).toBe('Review this contract');
+  expect(mockConv.send.mock.calls[0]).toEqual([FIRST.input, []]);
+  expect(mockConv.target?.model).toBe('gpt-5.4');
 });
 
-test('a model no provider serves leaves it in the box, sent by nobody', async () => {
-  mockCat.read = { value: CAT(['gpt-5.4']), failed: false, retry: jest.fn() };
-  setFirstTask('chrn_t', 'Check this user message');
-  await open(H({ defaultModel: 'gpt-5.4' }));
-  expect(mockConv.send).not.toHaveBeenCalled();
-  expect(box()).toBe('Check this user message');
+test('while the save goes on, its request is held under the card', async () => {
+  mockBuild.b = BUILD({ phase: 'saving', asm: { cfg: CFG, savedAt: null, plugins: {}, done: false } });
+  await open(H({ defaultModel: 'gpt-5.4' }), { key: 'n0', first: FIRST });
+  expect(el.querySelector('.bs-save')?.textContent).toContain('Saving your setup');
+  expect(run().disabled).toBe(true);
 });
 
-test('a past task never takes it, and a setup with none sends nothing', async () => {
-  setFirstTask('chrn_t', 'not for an old task');
+test('the rest of a save that did not answer is said under the card, with Try again', async () => {
+  mockBuild.b = BUILD({ phase: 'failed', error: 'Your setup couldn’t be finished just now.' });
+  await open(H({ defaultModel: 'gpt-5.4' }), { key: 'n0', first: FIRST });
+  expect(el.querySelector('.bd-fail')?.textContent).toContain('Your setup couldn’t be finished just now.');
+  const again = Array.from(el.querySelectorAll('.bd-fail button')).find((b) => b.textContent === 'Try again') as HTMLButtonElement;
+  act(() => { again.click(); });
+  expect(retryBuild).toHaveBeenCalledWith('bk1');
+  expect(run().disabled).toBe(true);
+});
+
+test('a past task never takes it, and a new task without one starts empty', async () => {
+  mockBuild.b = BUILD({});
   await open(H({ defaultModel: 'gpt-5.4' }), { key: 'old', resume: 'hsess_old' });
   expect(mockConv.send).not.toHaveBeenCalled();
-  expect(peekFirstTask('chrn_t')).toBe('not for an old task');
-  sessionStorage.clear();
   await act(async () => { root.render(<div />); });
-  await open(H({ id: 'chrn_other', defaultModel: 'gpt-5.4' } as never));
+  mockBuild.b = null;
+  await open(H({ defaultModel: 'gpt-5.4' }), { key: 'n1' });
+  expect(box()).toBe('');
   expect(mockConv.send).not.toHaveBeenCalled();
 });

@@ -1,11 +1,12 @@
 /** @jest-environment jsdom */
 // A setup's recorded first task (start/replay.ts) plays in its task, never sent: right after New setup
-// saved it (start/seed.ts setFirstReplay), in proportion, at most REPLAY_MAX_MS long; opened again,
-// whole at once. Its reply says Recorded, with the time the run took when it ran, and offers no request
-// that carries on from it (no server holds it). Where the server cannot continue a recording (this
-// edition's gateway today), a bar in the composer's place says it is a recorded task, with Follow up; a
-// server that says it takes input history gets the box, and a message written there goes on as a task
-// of your own carrying the recording. A recorded task never also runs a live first task.
+// saved it, its request waits in the box like any first test (start/build.ts), and sent as it was
+// recorded it plays in proportion, at most REPLAY_MAX_MS long; changed, it runs live. Opened from its
+// row, it is drawn whole at once. Its reply says Recorded, with the time the run took when it ran, and
+// offers no request that carries on from it (no server holds it). Where the server cannot continue a
+// recording (this edition's gateway today), a bar in the composer's place says it is a recorded task,
+// with Follow up; a server that says it takes input history gets the box, and a message written there
+// goes on as a task of your own carrying the recording.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { CustomHarness, ModelCatalog } from '@/lib/harness';
@@ -68,7 +69,6 @@ jest.mock('reifyui/agent-chat', () => ({
 
 import { rowOf } from '../setups';
 import { Playground, type Slot } from './Playground';
-import { peekFirstTask, setFirstReplay, setFirstTask } from '../start/seed';
 import { REPLAY_MAX_MS } from '../start/replay';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -89,13 +89,20 @@ let root: Root;
 let el: HTMLElement;
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
 const followUp = jest.fn();
-async function open(slot: Partial<Slot> = {}) {
+async function open(slot: Partial<Slot> = {}, handedRec: RecordedRun | null = null) {
   await act(async () => {
     root.render(<Playground r={rowOf(H, 'Hermes', [], false)} onRan={() => {}} onBorn={() => {}} onPreview={() => {}} onFollowUp={followUp}
-      slot={{ key: 'rec', resume: null, recorded: RUN, ...slot }} />);
+      slot={{ key: 'rec', resume: null, recorded: RUN, ...slot }} handedRec={handedRec} />);
   });
   await flush();
 }
+/** The first test New setup handed over for an unchanged demo: its recorded request, waiting in the box. */
+const HANDED: Partial<Slot> = { key: 'n0', recorded: null, first: { input: RUN.request, send: false, free: false, setup: true } };
+const box = () => el.querySelector('textarea[aria-label="message"]') as HTMLTextAreaElement;
+const typeIn = (t: string) => {
+  const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  act(() => { set?.call(box(), t); box().dispatchEvent(new Event('input', { bubbles: true })); });
+};
 const text = () => (el.textContent || '').replace(/\s+/g, ' ');
 
 beforeEach(() => {
@@ -109,9 +116,12 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
-test('right after its save it plays in proportion, at most REPLAY_MAX_MS long, and nothing is sent', async () => {
-  setFirstReplay('chrn_t');
-  await open();
+test('right after its save its request waits in the box; sent as recorded it plays in proportion, and nothing is sent', async () => {
+  await open(HANDED, RUN);
+  expect(box().value).toBe(RUN.request);
+  expect(mockConv.replay).not.toHaveBeenCalled();
+  await act(async () => { (el.querySelector('button.run') as HTMLButtonElement).click(); });
+  await flush();
   expect(mockConv.replay).toHaveBeenCalledTimes(1);
   const [request, events, fileOf, endAt] = mockConv.replay.mock.calls[0];
   expect(request).toBe(RUN.request);
@@ -122,7 +132,7 @@ test('right after its save it plays in proportion, at most REPLAY_MAX_MS long, a
   expect(fileOf({ container_id: 'recorded', file_id: 'recorded-file-1', filename: 'output/mug-v3.png' })).toMatchObject({ url: '/demos/product-images/mug-v3.png' });
   expect(fileOf({ container_id: 'recorded', file_id: 'x', filename: 'other.png' })).toBeNull();
   expect(mockConv.send).not.toHaveBeenCalled();
-  // it plays once: opened again it is drawn whole
+  // opened again from its row it is drawn whole
   await act(async () => { root.render(<div />); });
   await open({ key: 'rec2' });
   expect(mockConv.replay).toHaveBeenCalledTimes(2);
@@ -138,11 +148,14 @@ test('opened from its row it is drawn whole at once', async () => {
   expect(endAt).toBe(0);
 });
 
-test('a recorded task never also runs a live first task', async () => {
-  setFirstTask('chrn_t', 'not for the recording');
-  await open();
-  expect(mockConv.send).not.toHaveBeenCalled();
-  expect(peekFirstTask('chrn_t')).toBe('not for the recording');
+test('its request changed is a request of the person’s own: it runs live, not the recording', async () => {
+  await open(HANDED, RUN);
+  typeIn(`${RUN.request} On a white background.`);
+  await act(async () => { (el.querySelector('button.run') as HTMLButtonElement).click(); });
+  await flush();
+  expect(mockConv.replay).not.toHaveBeenCalled();
+  expect(mockConv.send).toHaveBeenCalledTimes(1);
+  expect(mockConv.send.mock.calls[0][0]).toBe(`${RUN.request} On a white background.`);
 });
 
 test('its reply says Recorded with the time it took when it ran, and offers no request to carry on', async () => {

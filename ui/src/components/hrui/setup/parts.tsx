@@ -4,7 +4,7 @@
 // stack column beside the work, its 56 px head on the same line as every other column's.
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { isoSvg, LAYERS, PARTS, SUBS } from '../tower';
+import { isoSvg, LAYERS, PARTS, SUBS, type Drops } from '../tower';
 import { partIcon } from '../bricks';
 import { tabKeys } from '../tabKeys';
 import { toast } from '../toast';
@@ -158,10 +158,13 @@ const PART_FAM: Record<string, string> = { plugin: 'plugin', skill: 'skill', mcp
  *  `live`: the bricks a test's turn on this page is working through now (stackLive), so each layer
  *  lights as the turn reaches it; without one, a running task lights the layers it uses.
  *  `off` and `onToggle`: folded or open, as the page decides (sideTog); `focus`: beside Settings,
- *  the open layer, whose brick stays solid while the rest step back (setSide). */
-export function StackPanel({ r, live, off, onToggle, focus }: {
+ *  the open layer, whose brick stays solid while the rest step back (setSide).
+ *  While a new setup is being set up (start/build.ts): `now` is the status line the save says
+ *  ("Saving · your setup"), and `drops` the bricks landing as each save answers. */
+export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
   r: SetupRow; live?: string[] | null;
   off: boolean; onToggle: () => void; focus?: LayerKey;
+  now?: React.ReactNode; drops?: Drops | null;
 }) {
   const tower = live ? liveTower(r.tower, live) : r.tower;
   const st = tower.st;
@@ -191,10 +194,10 @@ export function StackPanel({ r, live, off, onToggle, focus }: {
       {/* the status floats over the top of the illustration's room, so one line or two never moves it */}
       <div className="stack-art">
         <div className="now">
-          {running.length ? <><span className="dot run" /><span><b>Running now</b> · {running.join(', ')}</span></>
+          {now ? <><span className="dot run" /><span>{now}</span></> : running.length ? <><span className="dot run" /><span><b>Running now</b> · {running.join(', ')}</span></>
             : <><span className="dot" /><span>Idle{r.lastAny ? ` · last task ${ago(r.lastAny)}` : ''}</span></>}
         </div>
-        <div className="iso-wrap" aria-hidden="true" dangerouslySetInnerHTML={{ __html: isoSvg(tower, 24, true) }} />
+        <div className="iso-wrap" aria-hidden="true" dangerouslySetInnerHTML={{ __html: isoSvg(tower, 24, true, false, drops || null) }} />
       </div>
       {/* the optional parts, as a person added them in Settings (setupParts.ts, scope 'added'): how
           many are on, never a built-in skill or tool; a part with none added says none yet */}

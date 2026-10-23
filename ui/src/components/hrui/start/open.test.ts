@@ -6,7 +6,7 @@
 //   2. in Harness Studio's own files, every Studio address and every navigation to an address worked out
 //      at run time is listed with why it is not a landing after a create (a new one fails this test
 //      until it is reviewed);
-//   3. openNewSetup goes to the setup's own page.
+//   3. openNewSetup goes to the setup's own page (or, while it is being made, that page before it exists).
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative } from 'path';
 
@@ -55,6 +55,8 @@ const CREATE = /\b(createCustom|launchKit)\(/;
 const LANDS: Record<string, string> = {
   'components/hrui/setup/settingsSheets.tsx': 'components/hrui/setup/SetupSettings.tsx',   // Duplicate
   'components/hrui/shop/LaunchSheet.tsx': 'components/hrui/shop/KitTry.tsx',               // a kit launched to users
+  // the save itself (a demo preset from its recording; a page load in the middle resumes it)
+  'components/hrui/start/build.ts': 'components/hrui/start/BuildPage.tsx',
 };
 
 describe('after any create, the only destination is that setup’s Tasks', () => {
@@ -65,13 +67,30 @@ describe('after any create, the only destination is that setup’s Tasks', () =>
     const missing = makers.filter((f) => !opens(LANDS[f] || f)).map((f) => `${f} makes a setup and ${LANDS[f] || 'it'} never calls openNewSetup`);
     expect(missing).toEqual([]);
   });
+  test('New setup’s Save opens the page of the setup being made, and that page the setup’s own', () => {
+    const sheet = ALL.filter((l) => l.file === 'components/hrui/NewSetup.tsx');
+    expect(sheet.some((l) => /const b = startBuild\(/.test(l.text))).toBe(true);
+    expect(sheet.filter((l) => /\bopenNewSetup\(/.test(l.text)).map((l) => l.text.trim())).toEqual(['openNewSetup(router, { build: b.key });']);
+  });
+  test('the page of a setup being made opens the setup and nothing else, whatever happened before it loaded', () => {
+    const page = ALL.filter((l) => l.file === 'components/hrui/start/BuildPage.tsx');
+    const auto = page.filter((l) => /useEffect\(/.test(l.text) && /router\.|location\.|openNewSetup/.test(l.text));
+    expect(auto.map((l) => l.text.trim())).toEqual(['useEffect(() => { if (b?.id) openNewSetup(router, { id: b.id }); }, [b?.id, router]);']);
+    // no fallback to Harness Studio, nor anywhere else
+    expect(page.filter((l) => /router\.replace\(|location\.(assign|replace|href)/.test(l.text))).toEqual([]);
+  });
 });
 
 // ── 2. Harness Studio's own addresses, and addresses worked out at run time ──────────────────────
-const MINE = linesOf(['app/(app)/studio', 'components/hrui/setup', 'components/hrui/setups.ts', 'components/hrui/SetUpApp.tsx', 'components/hrui/start/open.ts']);
+const MINE = linesOf(['app/(app)/studio', 'components/hrui/setup', 'components/hrui/setups.ts', 'components/hrui/SetUpApp.tsx', 'components/hrui/start/open.ts',
+  'components/hrui/start/BuildPage.tsx', 'components/hrui/NewSetup.tsx']);
 const STUDIO = /['"`]\/studio(?=['"`?/]|\$\{)/;
 const STUDIO_ALLOWED: Entry[] = [
   ['components/hrui/start/open.ts', '`/studio/${encodeURIComponent(to.id)}`', 'the one way into a setup just made'],
+  ['components/hrui/start/open.ts', "here === '/studio/new'", 'the one way: replaces the page of a setup being made'],
+  ['components/hrui/NewSetup.tsx', "router.prefetch('/studio/new')", 'fetches the page Save opens ahead of time, goes nowhere'],
+  ['components/hrui/start/BuildPage.tsx', 'className="ag-back" href="/studio"', 'Back, pressed'],
+  ['components/hrui/start/BuildPage.tsx', "onBack={() => router.push('/studio')}", 'Back, pressed (a phone’s task head)'],
   ['components/hrui/setup/SetupSettings.tsx', "toast(`${rec.name} deleted`); router.push('/studio')", 'the setup was deleted: it has no page any more'],
   ['components/hrui/setup/parts.tsx', 'className="ag-back" href="/studio"', 'a setup page’s Back, pressed'],
   ['app/(app)/studio/page.tsx', 'const setupHref = ', 'a setup’s card on Harness Studio, pressed'],
@@ -100,12 +119,22 @@ describe('Harness Studio is never where a create lands', () => {
 
 // ── 3. the one way ─────────────────────────────────────────────────────────────────────────────
 describe('openNewSetup', () => {
+  const nav = () => ({ push: jest.fn(), replace: jest.fn() });
   test('opens the setup’s own Tasks by its id, and its page waits for it rather than call it missing', () => {
     expect(newSetupHref({ id: 'chrn_a b' })).toBe('/studio/chrn_a%20b');
-    const n = { push: jest.fn(), replace: jest.fn() };
-    openNewSetup(n, { id: 'chrn_a' });
+    const n = nav();
+    openNewSetup(n, { id: 'chrn_a' }, '/start');
     expect(n.push).toHaveBeenCalledWith('/studio/chrn_a');
     expect(n.replace).not.toHaveBeenCalled();
     expect(markMade).toHaveBeenCalledWith('chrn_a');
+  });
+  test('while the setup is being made, its page before it exists', () => {
+    expect(newSetupHref({ build: 'bk1' })).toBe('/studio/new?b=bk1');
+  });
+  test('from the page of a setup being made, the setup’s page takes its place (Back goes where the person was)', () => {
+    const n = nav();
+    openNewSetup(n, { id: 'chrn_a' }, '/studio/new');
+    expect(n.replace).toHaveBeenCalledWith('/studio/chrn_a');
+    expect(n.push).not.toHaveBeenCalled();
   });
 });

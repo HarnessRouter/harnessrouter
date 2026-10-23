@@ -15,12 +15,15 @@
 // send to carry on the conversation from that reply. The conversation scrolls in its own column, the
 // composer pinned at its foot.
 //
-// A setup saved from a demo's recorded run (start/replay.ts) has that run as its first task: it plays
-// here through the same handlers a live turn goes through, sends nothing and spends nothing, says
-// Recorded on its reply with the time it took when it ran, and is read, not continued. Under it, where
-// the server takes earlier messages as a new task's history (start/fork.ts), the box takes a message
-// that goes on as a task of your own; anywhere else a bar says it is a recorded task, with Follow up
-// (a new task of yours, run live). It is never also sent as a live first task.
+// A new setup's first task (start/build.ts) starts with its save card (start/Assembly), and its first
+// request, the one the build wrote as an end user would send it, waits in the box until the person
+// sends it; nothing is sent for them. A setup saved from a demo's recorded run (start/replay.ts) has
+// that run as its first task: its request sent as it was recorded plays it here through the same
+// handlers a live turn goes through, sends nothing and spends nothing, says Recorded on its reply with
+// the time it took when it ran, and is read, not continued (opened from the list, it is drawn whole).
+// Under it, where the server takes earlier messages as a new task's history (start/fork.ts), the box
+// takes a message that goes on as a task of your own; anywhere else a bar says it is a recorded task,
+// with Follow up (a new task of yours, run live).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { isInternalOutput, useConversationTurn, useHarnessBus, type AsstMsg, type ChatTarget } from '@/lib/conversation';
 import { replyMarkdown } from './replyMd';
@@ -31,7 +34,9 @@ import { toast } from '../toast';
 import { Skel, SkLine, SkThread } from '../Skel';
 import type { SetupRow } from '../setups';
 import { API_BASE } from '../start/prompts';
-import { peekFirstTask, takeFirstReplay, takeFirstTask } from '../start/seed';
+import type { FirstTest } from '../start/check';
+import { Assembly, RecordCard, withRecord } from '../start/Assembly';
+import { noteFirstSid, retryBuild, useBuildOf } from '../start/build';
 import { recordedFile, replaySpeed, type RecordedRun } from '../start/replay';
 import { forkFiles, forkInput, forkOffered, importedFirst, inputHistory, noteFork } from '../start/fork';
 import { AgentConversation, AgentComposer } from 'reifyui/agent-chat';
@@ -64,13 +69,15 @@ function readFile(f: File): Promise<Attach> {
 }
 
 /** One test: the composer, then its thread once sent. A new test mounts a fresh one. */
-function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, resume, onSeen, onPreview, previewKey, onLive, taskTitle, recording, onFollowUp, onReplay }: {
+function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, first, resume, onSeen, onPreview, previewKey, onLive, taskTitle, top, hold, recording, instant, onFollowUp, onReplay }: {
   r: SetupRow; model: string; defaultModel: string; headerValues: Record<string, string>;
   /** the open task's title, as its bar shows it (a reply's Download all names its zip after it) */
   taskTitle?: string;
   onRan: () => void; onBorn: (sid: string) => void;
   /** the model (and headers) picker, drawn in the composer's bar */
   pgOpts: () => React.ReactNode;
+  /** what the new task's box starts with: the first test New setup handed over */
+  first: FirstTest | null;
   /** a past test to continue (its session), else a new one */
   resume: string | null;
   /** open a produced file in the preview beside the conversation (every file of the test, the one clicked) */
@@ -80,8 +87,16 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
   onSeen: (models: string[], resumed: boolean) => void;
   /** the bricks this test's turn is working through now (null when none runs), for the Agent stack */
   onLive?: (working: string[] | null) => void;
-  /** the setup's recorded first task (start/replay.ts): played back here, never sent */
+  /** the save card at the top of a new setup's first task (start/Assembly): the conversation shows
+   *  from the start, before anything is sent */
+  top?: React.ReactNode;
+  /** the setup is still being saved: its first test waits (start/build.ts) */
+  hold?: boolean;
+  /** an unchanged demo's recorded first run (start/replay.ts): its request, sent as it was recorded,
+   *  plays it back instead of running live */
   recording?: RecordedRun | null;
+  /** the recorded run is shown whole at once (opened from the list), not played */
+  instant?: boolean;
   /** a recorded task's Follow up: a new task of yours, run live */
   onFollowUp?: () => void;
   /** a recorded run is playing here (true) or has ended (false): its row and head show it running */
@@ -117,7 +132,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
   }, [resume]);
   // the page hears which models this test has run (the picker's Codex rule reads them)
   useEffect(() => { seenRef.current(turnModels, fromRecord.current); fromRecord.current = false; }, [turnModels]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(() => first?.input || '');
   const [att, setAtt] = useState<Attach | null>(null);
   const ta = useRef<HTMLTextAreaElement | null>(null);
   // this conversation is a recorded run, played back (whole at once, or in proportion as it ran): it
@@ -173,7 +188,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
     void read(0);
     return () => { alive = false; if (t) clearTimeout(t); };
   }, [conv.busy, sid, conv.liveSessionId]);
-  const started = conv.msgs.length > 0 || !!resume || !!recording;
+  const started = conv.msgs.length > 0 || !!resume || !!top;
   // a recorded run plays as a live one runs: the page's row and head say it is running until it ends
   const playing = recorded && conv.busy && !whole;
   const replayRef = useRef(onReplay);
@@ -199,38 +214,35 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
       setTurnModels((xs) => [...xs, m]);
     });
   };
-  // THE TASK THE SETUP WAS MADE WITH runs as its page opens (New setup: the sentence the person sent is
-  // what they asked to see run), once, on the model chosen there, as soon as that model is known to run.
-  // One no provider serves now leaves it in the box instead, to send once another model is chosen.
-  const avail = modelAvailability(target.backend, model);
-  // A recorded first task is never also sent live: it has no first task to run.
-  useEffect(() => {
-    if (recording || resume || conv.msgs.length || conv.busy || conv.loadFailed || avail === 'unknown' || !peekFirstTask(r.h.id)) return;
-    const text = takeFirstTask(r.h.id);
-    if (avail === 'no') setInput(text);
-    else sendNow(text, []);
-    // sendNow is this render's; the hand-off happens once, when the conditions above first hold
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resume, conv.msgs.length, conv.busy, conv.loadFailed, avail, r.h.id]);
+  // a task whose record could not be read takes no message: it would go on from an unknown point
+  const canSend = !conv.busy && !hold && !conv.loadFailed && (input.trim() || att) && modelAvailability(target.backend, model) !== 'no';
   // A setup's recorded first run, played back here: it reaches no server and takes nothing. In order
-  // and in proportion, at most REPLAY_MAX_MS long, when New setup has just saved it (start/seed.ts
-  // takeFirstReplay); opened from the list, or again, whole at once.
-  const autoPlayed = useRef(false);
+  // and in proportion, at most REPLAY_MAX_MS long; opened from the list, whole at once.
+  const autoSent = useRef(false);
   const play = (all: boolean) => {
     if (!recording) return;
-    autoPlayed.current = true;
+    autoSent.current = true;
     setReplayed(true); setWhole(all); setInput('');
     const speed = all ? 0 : 1 / replaySpeed(recording);
     conv.replay(recording.request, recording.events.map((e) => ({ t: e.t * speed, ev: e.ev })), (f) => recordedFile(recording, f), recording.durMs * speed);
   };
+  // The recorded task opened from the list is drawn whole at once. A first test the caller says runs
+  // now is sent once, as soon as it can be (New setup hands none over that way: its first request
+  // waits in the box, Richard 2026-10-19 "Ready in the box").
   useEffect(() => {
-    if (!recording || autoPlayed.current) return;
-    play(!takeFirstReplay(r.h.id));
-    // play is this render's; a recording plays once, as the task opens
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recording, r.h.id]);
-  // a task whose record could not be read takes no message: it would go on from an unknown point
-  const canSend = !conv.busy && !conv.loadFailed && (input.trim() || att) && modelAvailability(target.backend, model) !== 'no';
+    if (autoSent.current || hold) return;
+    if (recording && instant) { play(true); return; }
+    if (recording || !first?.send || !canSend || !input.trim()) return;
+    autoSent.current = true;
+    sendNow(input.trim(), []);
+  // the first test, once, as soon as it can be sent
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSend, input, conv, hold, recording, instant, first?.send]);
+  // An unchanged demo's first request waits in the box like any example, and sending it as it was
+  // recorded plays its recorded run instead of a live one (compressed, spending nothing). Changed, or
+  // with a file attached, it is a request of the person's own and runs live.
+  const replayNow = !!recording && !instant && !replayed && !att && !!input.trim() && input.trim() === recording.request.trim();
+  const canGo = replayNow ? !conv.busy && !hold : canSend;
   // the recorded run, finished and offered as a conversation like any other (start/fork.ts): the first
   // message written under it starts a task of yours carrying the recording as its earlier messages
   const forkable = recorded && !!recording && offerFork;
@@ -267,6 +279,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
     loadSessionTurns(live).then(({ turns }) => noteFork(importedFirst(turns))).catch(() => { /* asked again on the next fork */ });
   }, [forked, conv.busy, sid, conv.liveSessionId]);
   const send = () => {
+    if (replayNow) { if (canGo) play(false); return; }
     if (!canSend) return;
     if (forkable) { void fork(); return; }
     // a file alone goes as it is: no words are put in the person's mouth
@@ -299,7 +312,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
     </div>
   ) : (
     <AgentComposer value={input} onChange={setInput} onSend={send} onStop={playing ? undefined : () => conv.stop()}
-      running={conv.busy} stopping={conv.stopping} sendDisabled={!canSend}
+      running={conv.busy} stopping={conv.stopping} sendDisabled={!canGo}
       placeholder={ph} runningPlaceholder="Working on it. Write your next message here."
       ariaLabel={ph.replace(/…$/, '')} inputId="input" inputRef={ta}
       attachments={att ? [{ name: att.name, src: att.dataUri }] : []} onRemoveAttachment={() => setAtt(null)}
@@ -308,6 +321,10 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
   ));
   const { mark, motion } = harnessMark(r.h.base);
   const asked = conv.msgs.filter((m) => m.role === 'user').length;
+  // its first message, when it is the example New setup wrote (a request as your app would send it),
+  // says so (the design's m.req)
+  const firstMsg = conv.msgs.find((m) => m.role === 'user');
+  const example = replayed || (!!first?.setup && !!first.input.trim() && firstMsg?.role === 'user' && firstMsg.text.trim() === first.input.trim());
   // what this task made, for the links a reply makes to its own files (TaskThread Md)
   const produced = useMemo(() => conv.msgs.flatMap((m) => (m.role === 'assistant' ? m.files.map((f) => f.filename) : [])), [conv.msgs]);
   const liveSid = sid || conv.liveSessionId || undefined;
@@ -377,7 +394,9 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
         <AgentConversation mode="pane" running={conv.busy} mark={mark} motion={motion} followKey={asked}
           composer={composer(conv.msgs.length ? 'Follow up…' : `Send ${r.h.name} a task to test…`)}>
           <div className="thread-inner" id="threadInner">
+            {top}
             <AgentTurns msgs={conv.msgs} base={r.h.base} md={md}
+              userLabel={example ? (t: number) => (t === 0 ? <span className="from">Example task from your app</span> : null) : undefined}
               files={(m) => (m.status === 'running' ? null : <FileCards files={m.files || []} active={previewKey} onOpen={(k) => onPreview(filesOf(conv.msgs), k)} zipName={taskTitle || r.h.name} />)}
               actions={foot} />
           </div>
@@ -400,12 +419,17 @@ export interface Slot {
   key: string;
   /** a past test to continue (its session), or null for a new one */
   resume: string | null;
-  /** the setup's recorded first task (start/replay.ts): played back, read only */
+  /** what a new task's box starts with (New setup's first test) */
+  first?: FirstTest | null;
+  /** the setup's recorded first task (start/replay.ts), opened from the list: shown whole, read only */
   recorded?: RecordedRun | null;
 }
 
-export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = null, onLive, taskTitle, onFollowUp, onReplay }: {
+export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = null, onLive, taskTitle, onFollowUp, onReplay, handedRec = null }: {
   r: SetupRow; onRan: () => void;
+  /** the setup's first request handed over by its save, for an unchanged demo: the recorded run its
+   *  send plays (the page's: its build's, or the setup's own when the page opened cold) */
+  handedRec?: RecordedRun | null;
   /** a recorded first task's Follow up: a new task, run live */
   onFollowUp?: () => void;
   /** the recorded first task is playing (true) or has ended (false) */
@@ -422,6 +446,27 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
   /** the bricks the open test's turn is working through now, or null: the page's Agent stack lights them */
   onLive?: (working: string[] | null) => void;
 }) {
+  // A new setup's first task (start/build.ts): New setup handed it over, and while the save goes on
+  // it waits under the save card; once the save has ended its request waits in the box until the
+  // person sends it (a demo's sent as recorded plays its recorded run).
+  const b = useBuildOf(r.h.id);
+  const handed = !slot.resume && !!slot.first?.setup;
+  const live = handed && b ? b : null;
+  const hold = !!live && live.phase !== 'done';
+  const first: FirstTest | null = slot.resume ? null : live && slot.first
+    ? { ...slot.first, input: live.first?.input ?? slot.first.input, send: live.phase === 'done' && !!live.first?.send, free: false }
+    : slot.first || null;
+  // the card's skills and tools are the setup's own once it is saved, as the Agent stack counts them;
+  // a recorded first task starts with it too, and so does the first test's task once it has one
+  const card = live?.asm ? <Assembly s={withRecord(live.asm, r)} />
+    : slot.recorded ? (b?.asm ? <Assembly s={withRecord(b.asm, r)} /> : <RecordCard r={r} />)
+      : slot.resume && b?.asm && b.firstSid === slot.resume ? <Assembly s={withRecord(b.asm, r)} /> : null;
+  // the rest of its save did not answer (start/build.ts): said under the card, with Try again; the
+  // first request stays held until the save has ended
+  const top = live?.phase === 'failed' ? (
+    <>{card}<div className="bd-fail" role="alert"><span>{live.error}</span>
+      <button type="button" className="btn small primary" onClick={() => retryBuild(live.key)}>Try again</button></div></>
+  ) : card;
   const catalog = useModelCatalogRead();   // the server's model list: the picker offers nothing else
   const cat = catalog.value;
   const providers = useModelProviders();
@@ -549,9 +594,10 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
   return (
     <>
       <Test key={slot.key} r={r} model={model} defaultModel={defaultModel} headerValues={hv} onRan={onRan}
-        onBorn={(sid) => { onBorn(sid); onRan(); }} pgOpts={pgOpts}
+        onBorn={(sid) => { if (handed && !live?.recording) noteFirstSid(r.h.id, sid); onBorn(sid); onRan(); }} pgOpts={pgOpts} first={first}
         resume={slot.resume} onSeen={onSeen} onPreview={onPreview} previewKey={previewKey} onLive={onLive} taskTitle={taskTitle}
-        recording={slot.recorded || null} onFollowUp={onFollowUp} onReplay={onReplay} />
+        top={top} hold={hold} recording={slot.recorded || (handed ? handedRec : null)} instant={!!slot.recorded}
+        onFollowUp={onFollowUp} onReplay={onReplay} />
       {modelPop}
       {headersPop}
     </>

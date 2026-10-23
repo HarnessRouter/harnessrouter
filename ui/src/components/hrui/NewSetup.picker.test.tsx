@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 // New setup's agent harness list (audit 10-21: at 390 a long name was cut): a harness's name is its own
-// element, whole (it wraps rather than being cut), with its logo beside it and nothing else in it.
+// element, whole (it wraps rather than being cut), with its logo beside it and nothing else in it. Auto
+// leads the list and is chosen until a harness is (the server picks for the job).
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
@@ -19,7 +20,7 @@ jest.mock('./Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode 
 jest.mock('./toast', () => ({ toast: jest.fn() }));
 jest.mock('./start/art', () => ({ nwArt: () => '' }));
 jest.mock('./start/open', () => ({ openNewSetup: jest.fn() }));
-jest.mock('./start/seed', () => ({ seedSetup: jest.fn(), setFirstTask: jest.fn(), setFirstReplay: jest.fn() }));
+jest.mock('./start/build', () => ({ startBuild: jest.fn(() => ({ key: 'bk1' })) }));
 jest.mock('./start/demos', () => ({
   DEMOS: [], baseName: (id: string) => (id === 'qoder' ? 'Qoder Cloud Agent' : 'Claude Code'), defaultBase: () => 'claude-code',
   defaultModelOf: () => 'claude-sonnet', demoPick: () => ({ base: 'claude-code', model: 'claude-sonnet' }), runnableModels: () => ['claude-sonnet'],
@@ -47,8 +48,8 @@ test('each harness: its name whole in its own element, and the one chosen marked
   await act(async () => { opener.click(); });
   await flush();
   const opts = Array.from(document.querySelectorAll('[role="listbox"] [role="option"]')) as HTMLButtonElement[];
-  expect(opts.map((o) => o.querySelector('.dd-hn')?.textContent)).toEqual(['Claude Code', 'Qoder Cloud Agent']);
-  expect(opts.map((o) => o.getAttribute('aria-selected'))).toEqual(['true', 'false']);
+  expect(opts[0].textContent).toContain('Auto');
+  expect(opts.slice(1).map((o) => o.querySelector('.dd-hn')?.textContent)).toEqual(['Claude Code', 'Qoder Cloud Agent']);
+  expect(opts.map((o) => o.getAttribute('aria-selected'))).toEqual(['true', 'false', 'false']);
   expect(document.querySelector('[role="listbox"] .h-pre')).toBeNull();
-  expect(document.body.textContent).not.toContain('Auto');
 });
