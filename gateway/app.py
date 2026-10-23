@@ -6857,7 +6857,7 @@ _input_history_over_cap = {"n": 0}
 # what nobody reads and a terminal may act on: C0 and C1 controls (not the tab or the line break), DEL,
 # lone surrogates (no UTF-8 for them, so no argument either) and the direction overrides; listings'
 # hidden set, less the joiners an emoji or a script needs
-_IMPORT_HIDDEN = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\ud800-\udfff]")
+_IMPORT_HIDDEN = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\ud800-\udfff]")
 
 
 def _import_text(raw) -> str:
@@ -6876,7 +6876,7 @@ def _message_role(it) -> str:
 def _input_history_as_before(inp, org: str, cap: str, earlier: int) -> tuple[list[dict], object]:
     """Over a cap: nothing imported, the input read whole as before; counted and logged (counts only)."""
     _input_history_over_cap["n"] += 1
-    print(f"[input-history] over the {cap} cap org={org or '-'} earlier_messages={earlier}: "
+    print(f"[input-history] over the {cap} cap earlier_messages={earlier}: "
           f"read as one turn, nothing imported", flush=True)
     return [], inp
 

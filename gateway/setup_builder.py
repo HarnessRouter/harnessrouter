@@ -54,12 +54,12 @@ build's own record (the person's, 24 hours) or logged beyond its length and lang
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import re
 import time
 import unicodedata
+import uuid
 
 import setup_compose as sx
 
@@ -554,8 +554,13 @@ async def build(job: str, inv: dict, base_req: str, model_req: str, *, conn: dic
 
 
 # ── the build's record ───────────────────────────────────────────────────────────────────────────
+# The ids a build is kept and saved under are names, not secrets: a name-based UUID (RFC 4122 v5) of
+# their parts gives the same id for the same parts on every call, which is all a retry needs.
+_NS = uuid.UUID("6f1d8c52-3a7e-5b0f-9c41-2e8a7d5b6c13")
+
+
 def _h(*parts: str, n: int = 32) -> str:
-    return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:n]
+    return uuid.uuid5(_NS, "\0".join(parts)).hex[:n]
 
 
 def record_key(org: str, member: str, key: str) -> str:
@@ -666,7 +671,8 @@ def _say(org: str, rec: dict, t0: float, came: str, stats: dict, lang: sx.Lang |
                   f" apps={len(cfg.get('apps') or [])} skills={len(cfg.get('skills') or [])}"
                   f" servers={len(cfg.get('mcpServers') or [])} env={1 if cfg.get('environment') else 0}"
                   f" needs={len(cfg.get('connectionsNeeded') or [])}")
-    print(f"[setup-build] org={org} build={_h(str(rec.get('key') or ''), n=8)} chars={rec.get('chars', 0)}"
+    # no organization: this edition has one, and a log line needs none of the person's identifiers
+    print(f"[setup-build] build={_h(str(rec.get('key') or ''), n=8)} chars={rec.get('chars', 0)}"
           f" status={rec.get('status')} step={rec.get('step') or '-'} ms={int((time.monotonic() - t0) * 1000)}"
           f" from={came}{extra}", flush=True)
 

@@ -96,8 +96,8 @@ def test_over_either_cap_nothing_is_imported_the_input_stays_whole_and_it_is_cou
     assert gw._input_history(long, "org.long") == ([], long)
     assert gw._input_history_over_cap["n"] == before + 2
     log = capsys.readouterr().out
-    assert "[input-history] over the messages cap org=org.many earlier_messages=21" in log
-    assert "[input-history] over the characters cap org=org.long" in log
+    assert "[input-history] over the messages cap earlier_messages=21" in log and "org.many" not in log   # counts only
+    assert "[input-history] over the characters cap earlier_messages=" in log and "org.long" not in log
     assert "xxxx" not in log and "m1" not in log            # counts only, never the text
 
 
