@@ -21340,8 +21340,10 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
         except Exception as e:  # noqa: BLE001
             return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
         if r.status_code in (200, 201):
+            # the form it was sent in (plugins whole, or as their skills and servers): the status
+            # compares the setup now against that same form
             per[tkey] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
-                         "remote_id": attempt, "target": _cloud_label(target)}
+                         "remote_id": attempt, "target": _cloud_label(target), "plugins_ok": plugins_ok}
             return {"id": hid, "ok": True, "action": action, "name": body["name"], "remote_id": attempt}
         detail = ""
         try:
@@ -21576,8 +21578,10 @@ async def cloud_upload_status(hid: str, request: Request) -> dict:
     if not per:
         return {"uploaded": False}
     v = await _vertex_get(hid)
-    fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
     tkey, rec = max(per.items(), key=lambda kv: kv[1].get("uploaded_at") or 0)
+    # compared in the form it was sent in: a copy sent to a Cloud that takes plugins whole carries
+    # them as such, and read back the other way every deploy there looked changed at once (10-23)
+    fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v, bool(rec.get("plugins_ok")))) if v else None
     target = (await _cloud_targets())["targets"].get(tkey)
     return {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
             "changed": bool(fp) and rec.get("fingerprint") != fp,
@@ -21594,8 +21598,8 @@ async def cloud_upload_status_all(request: Request) -> dict:
         if not per:
             continue
         v = await _vertex_get(hid)
-        fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
         rec = max(per.values(), key=lambda r: r.get("uploaded_at") or 0)
+        fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v, bool(rec.get("plugins_ok")))) if v else None
         out[hid] = {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
                     "changed": bool(fp) and rec.get("fingerprint") != fp}
     return {"harnesses": out}

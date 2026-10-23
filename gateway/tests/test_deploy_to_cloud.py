@@ -167,3 +167,29 @@ def test_a_destination_other_than_cloud_itself_has_no_link(api, cloud):
     assert gw._cloud_open_url({"base_url": "https://cloud.test"}, "chrn_x") == ""
     assert gw._cloud_open_url({"base_url": HOSTED + "/"}, "chrn_x") == "https://app.harnessrouter.ai/studio/chrn_x"
     assert gw._cloud_open_url({"base_url": HOSTED}, "") == ""
+
+
+def test_a_copy_sent_to_a_cloud_that_takes_plugins_whole_reads_current_until_it_changes(api, cloud):
+    """HarnessRouter Cloud takes plugins whole (its /v1/uhp says capabilities.plugins), so a deploy
+    sends them that way, and the status compared the setup in the other form: every deploy there
+    read "changed" at once, and a reload right after Deploy showed Update Cloud (the review
+    instance, 10-23). The status compares in the form the copy was sent in."""
+    real = cloud.handle
+
+    def with_uhp(req):
+        if req.url.path == "/v1/uhp":
+            return httpx.Response(200, json={"capabilities": {"plugins": True}})
+        return real(req)
+    cloud.handle = with_uhp
+    code = api.post("/v1/cloud-upload/connect", json={}).json()["code"]
+    cloud.sign_in(code)
+    api.get(f"/v1/cloud-upload/connect/{code}")
+    hid = _harness(api)
+    assert api.post(f"/v1/harnesses/{hid}/upload").status_code == 200
+    assert "plugins" in cloud.harnesses[hid]                           # sent with plugins whole
+    assert api.get(f"/v1/harnesses/{hid}/upload").json()["changed"] is False
+    assert api.get("/v1/cloud-upload/status").json()["harnesses"][hid]["changed"] is False
+    assert api.put(f"/v1/harnesses/{hid}", json={"name": "Weekly feedback summary", "base": "hermes",
+                                                 "system_prompt": "Shorter."}).status_code == 200
+    assert api.get(f"/v1/harnesses/{hid}/upload").json()["changed"] is True
+
