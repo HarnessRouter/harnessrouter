@@ -108,6 +108,21 @@ test('the workspace menu: the workspaces, Workspace settings and New workspace, 
   expect(toast).not.toHaveBeenCalled();
 });
 
+test('the workspace menu fits the window: its workspaces scroll, its two actions stay outside the list', async () => {
+  await mount();
+  await act(async () => { (el.querySelector('.ws-rail') as HTMLButtonElement).click(); });
+  const menu = el.querySelector('.ws-pop') as HTMLElement;
+  const list = menu.querySelector('.ws-list') as HTMLElement;
+  expect(list).toBeTruthy();
+  expect(list.textContent).toContain('Default Workspace');
+  // the actions are the menu's own, never inside the list that scrolls
+  const actions = Array.from(menu.querySelectorAll<HTMLButtonElement>(':scope > .ws-row.plain')).map((b) => b.textContent);
+  expect(actions).toEqual(['Workspace settings', 'New workspace']);
+  expect(list.textContent).not.toContain('New workspace');
+  // held to the room under its top (jsdom's window is 768 tall, the menu at its top: 768 - 0 - 8)
+  expect(menu.style.maxHeight).toBe(`${window.innerHeight - 8}px`);
+});
+
 test('before the list answers: no page, no workspace named, a loading state in the menu', async () => {
   ctx = { ...ctx, workspaces: [], current: UNKNOWN, known: false, loading: true };
   await mount();
