@@ -3870,6 +3870,11 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             continue
         pfiles = await _plugin_files_of(pe, org)
         if not pfiles:
+            # A KIT's package ships in the image, so a kit Harness whose stored copy is gone gets it back
+            # from there before the turn, as opening the kit's page would put it back. Without it the
+            # turn ran with no environment: Super Mario's System One played its built-in order desk.
+            pfiles = await _kit_package_restore(org, harness_id, v, pe["name"])
+        if not pfiles:
             print(f"[plugins] '{pe['name']}' on {harness_id}: package missing from the blob store — not offered this turn", flush=True)
             continue
         plugins_out.append({"name": pe["name"], "files": pfiles})
@@ -20215,6 +20220,24 @@ async def _kit_plugin_ensure(org: str, hid: str, v: dict, kit_plugin: dict,
     print(f"[kits] {v.get('kit')}: package {want['name']} {(want.get('manifest') or {}).get('version')} "
           f"{'replaced' if same else 'installed'} on {hid}", flush=True)
     return await _vertex_get(hid)
+
+
+async def _kit_package_restore(org: str, hid: str, v: dict, name: str) -> list:
+    """The files of a kit Harness's own package, put back from the kit in this image when its stored
+    copy is missing (a restored volume, a copied graph). [] for a Harness that runs no kit, or a
+    package that is not the kit's: only the kit's own package has a copy to put back."""
+    kit = _kits().get(str(v.get("kit") or ""))
+    kp = _kit_plugin(kit) if kit else None
+    if not kp or _plugin_read_package(kp["files"]).get("name") != name:
+        return []
+    reserved = tuple(str(d["name"]) for d in (_kit_launch_database(kit), _kit_launch_media(kit)) if d and d.get("name"))
+    try:
+        v2 = await _kit_plugin_ensure(org, hid, v, kp, reserved)
+    except Exception as e:  # noqa: BLE001 — the turn goes on and says the package is missing, as before
+        print(f"[kits] {v.get('kit')}: package {name} could not be put back on {hid}: {type(e).__name__}", flush=True)
+        return []
+    pe2 = next((e for e in _plugins_of(v2 or {}) if e["name"] == name), None)
+    return await _plugin_files_of(pe2, org) if pe2 else []
 
 
 @app.post("/v1/kits/{kit_id}/launch")
