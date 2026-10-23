@@ -13,12 +13,11 @@
 // Capabilities tab counts the ones on of one of setupParts.ts's lists (setupPlugins, setupSkills,
 // setupTools); Skills and Tools list it, Plugins lists the workspace's connected plugins with a switch
 // each, beside what the setup includes (PluginSwitches.tsx); the layers list's Capabilities line counts
-// what a person added, as the Agent stack and Studio's card do. Under the layers: Upload to cloud
-// (this setup copied to a HarnessRouter Cloud workspace, CloudUploadSheet.tsx), then Delete setup.
+// what a person added, as the Agent stack and Studio's card do. Under the layers: Delete setup.
+// (Deploy to Cloud is the page bar's, beside Set up the app: DeployCloud.tsx.)
 // Every value, list, default and ceiling shown is read from the services: the setup's record, the
 // bases document (tools, built-in skills, thinking levels, runtime defaults), the model catalog,
-// the workspace's plugins and environments, and the setup's cloud status. What is not read yet
-// shows nothing.
+// and the workspace's plugins and environments. What is not read yet shows nothing.
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
@@ -52,7 +51,6 @@ import { SkillSheet, skillDraft, skillFiles, skillSlug, splitSkillMd, type Skill
 import {
   DeleteSetupSheet, EnvPickSheet, PackageSheet, DuplicateSheet,
 } from './settingsSheets';
-import { CloudUploadSheet, cloudLine, useCloudStatus } from './CloudUploadSheet';
 
 type Skill = CustomHarness['skills'][number];
 const isOwn = isOwnSkill;
@@ -80,7 +78,7 @@ const LAYER_ORDER = SET_LAYERS.map(([k]) => k);
 
 type Pop =
   | { k: 'mcp'; i: number | null } | { k: 'delmcp'; i: number } | { k: 'plugin' } | { k: 'env' } | { k: 'pkg'; name: string }
-  | { k: 'skill'; ed: SkillDraft } | { k: 'delskill'; s: Skill } | { k: 'del' } | { k: 'dup' } | { k: 'cloud' };
+  | { k: 'skill'; ed: SkillDraft } | { k: 'delskill'; s: Skill } | { k: 'del' } | { k: 'dup' };
 
 export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewTask }: {
   r: SetupRow;
@@ -157,9 +155,6 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const wsId = wsCurrent.id || wsDefault;
   // the workspace's plugins, each with its state here (lib/plugs, read again after one is connected)
   const ws = usePlugins(wsId, { counts: false });
-  // the setup's cloud copy, as the server says (Upload to cloud's row), read again after an upload
-  const [cloudRead, setCloudRead] = useState(0);
-  const cloud = useCloudStatus(id, cloudRead);
   // the record says whether it has a plugins binding at all: asking for an absent one is a 404
   const hasPlugs = (rec.mcpServers || []).some((m) => m.id === PLUGS_ENTRY_ID);
   const [included, setIncluded] = useState<HarnessPlugs | null | undefined>(undefined);
@@ -637,16 +632,11 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const pkg = pop?.k === 'pkg' ? pkgs.find((p) => p.name === pop.name) || null : null;
   const mcpEdit = pop?.k === 'mcp' && pop.i != null ? c.mcp[pop.i] || null : null;
 
-  // Upload to cloud, then Delete setup: the settings' last rows, a layer row's anatomy, past a hairline
-  // and outside the layers' tablist; Delete setup red, its name alone (the sheet says what deleting
-  // does, Richard 10-18). They are drawn at any width (hrui-console.css): `rail` under the layers,
-  // else at the foot of the open layer.
-  const cl = cloudLine(cloud);
+  // Delete setup: the settings' last row, a layer row's anatomy, past a hairline and outside the
+  // layers' tablist; red, its name alone (the sheet says what deleting does, Richard 10-18). Drawn at
+  // any width (hrui-console.css): `rail` under the layers, else at the foot of the open layer.
   const delRow = (where: 'rail' | 'foot') => (
     <div className="lg-dz" data-where={where}>
-      <button type="button" className="ly-n lg-up" aria-haspopup="dialog" onClick={() => setPop({ k: 'cloud' })}>
-        <b>Upload to cloud</b><small>{cl || 'Copy this setup to a HarnessRouter Cloud workspace'}</small>
-      </button>
       <button type="button" className="ly-n" aria-haspopup="dialog" onClick={() => setPop({ k: 'del' })}><b>Delete setup</b></button>
     </div>
   );
@@ -701,9 +691,6 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
           onClose={() => setPop(null)} />
       ) : null}
       {pop?.k === 'env' ? <EnvPickSheet envs={envs} failed={envsFailed} retry={readEnvs} current={rec.environment || ''} busy={!!busy} onPick={(eid) => void pickEnv(eid)} onClose={() => setPop(null)} /> : null}
-      {pop?.k === 'cloud' ? (
-        <CloudUploadSheet id={id} name={rec.name} status={cloud} onClose={() => setPop(null)} onDone={() => setCloudRead((n) => n + 1)} />
-      ) : null}
       {pop?.k === 'pkg' && pkg ? (
         <PackageSheet p={pkg} hid={id} busy={!!busy} onClose={() => setPop(null)}
           onToggle={() => void apply((h) => ({ plugins: (h.plugins || []).map((x) => (x.name === pkg.name ? { ...x, enabled: x.enabled === false } : x)) }), 'The plugin was not changed. Try again.')}

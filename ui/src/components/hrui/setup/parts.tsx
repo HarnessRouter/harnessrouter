@@ -15,6 +15,7 @@ import { liveTower, runningNames } from './stackLive';
 import { recordNames } from './setupParts';
 import type { LayerKey } from './settingsModel';
 import { OVERLAY_MAX, readFold, stackOff, STACK_KEY, toggled, writeFold, type Fold } from './stackFold';
+import { DeployCloud } from './DeployCloud';
 
 export type SetupTab = 'tasks' | 'settings';
 const SETUP_TABS: readonly SetupTab[] = ['tasks', 'settings'];
@@ -42,7 +43,8 @@ async function copy(text: string) {
 }
 
 /** The setup page's one bar (agentHead): back to Harness Studio; the name on the first line, its
- *  agent harness, model and Harness ID on the second; Tasks · Settings; and Set up the app. */
+ *  agent harness, model and Harness ID on the second; Tasks · Settings; and the setup's two actions,
+ *  Deploy to Cloud (DeployCloud.tsx) and Set up the app. */
 // A tab chosen with the keyboard keeps the keyboard on it. The page changes its address for the new tab and
 // draws the bar again, often as a new tree, so the focus tabKeys gave the new tab was lost to the page body
 // (audit, 10-21): the bar that draws next puts it back on the selected tab.
@@ -91,8 +93,10 @@ export function AgentHead({ r, tab, onTab, onSetUpApp, dirty }: {
         {tb('settings', <>Settings{dirty ? <i className="dirty-dot" role="img" aria-label="Unsaved changes" /> : null}</>)}
       </div>
       <div className="ag-right">
-        {/* the design's one action. On a phone it folds to its icon (its words stay its name and
-            tooltip), so the setup's name keeps the row */}
+        {/* the setup's two actions: where it runs (Deploy to Cloud), and connecting your app to it
+            (Set up the app, the primary one). On a phone each folds to its icon (its words stay its
+            name and tooltip), so the setup's name keeps the row */}
+        <DeployCloud id={r.h.id} name={r.h.name} />
         {act('Set up the app', PLUG_IC, onSetUpApp, true)}
       </div>
     </header>

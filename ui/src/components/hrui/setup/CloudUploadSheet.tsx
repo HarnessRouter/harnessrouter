@@ -1,12 +1,13 @@
 'use client';
-// Upload to cloud (a setup's Settings, its row under the layers): this setup copied to a workspace on
-// HarnessRouter Cloud, one way. This instance stays the source: an upload creates the cloud copy, and
-// each later one replaces it. Where it goes is one of the cloud workspaces this instance keeps a key
-// for (the workspace settings' Cloud upload lists them); one can be added here by pasting a key from
-// that workspace. The key is kept on this instance and never read back. What is said of the last
-// upload (when, and whether the setup changed since) is the server's own status.
+// Deploy to another workspace (Deploy to Cloud's menu, DeployCloud.tsx): this setup copied to a
+// workspace on HarnessRouter Cloud other than the one its one-click deploy goes to, one way. This
+// instance stays the source: a deploy creates the cloud copy, and each later one replaces it. Where it
+// goes is one of the cloud workspaces this instance keeps a key for (the workspace settings' Cloud
+// upload lists them); one can be added here by pasting a key from that workspace. The key is kept on
+// this instance and never read back. What is said of the last deploy (when, and whether the setup
+// changed since) is the server's own status.
 import { useEffect, useRef, useState } from 'react';
-import { addTarget, listTargets, statusOne, uploadOne, type CloudStatus, type CloudTarget } from '@/lib/cloud-upload';
+import { addTarget, listTargets, uploadOne, type CloudStatus, type CloudTarget } from '@/lib/cloud-upload';
 import { ago } from '../setups';
 import { Sheet, SheetTop } from '../Sheet';
 import { toast } from '../toast';
@@ -18,19 +19,7 @@ const ADD = '__add__';
 export function cloudLine(s: CloudStatus | null): string {
   if (!s || !s.uploaded) return '';
   const when = s.uploaded_at ? ago(s.uploaded_at > 1e12 ? s.uploaded_at : s.uploaded_at * 1000) : '';
-  return s.changed ? `Changed since its upload${when ? ` ${when}` : ''}` : `Uploaded${when ? ` ${when}` : ''}`;
-}
-
-/** The setup's cloud status, read once per setup (null while read, or when it could not be). */
-export function useCloudStatus(id: string, n = 0): CloudStatus | null {
-  const [s, setS] = useState<CloudStatus | null>(null);
-  useEffect(() => {
-    let alive = true;
-    setS(null);
-    statusOne(id).then((x) => { if (alive) setS(x); }).catch(() => { /* the row says nothing of it */ });
-    return () => { alive = false; };
-  }, [id, n]);
-  return s;
+  return s.changed ? `Changed since its deploy${when ? ` ${when}` : ''}` : `Deployed${when ? ` ${when}` : ''}`;
 }
 
 export function CloudUploadSheet({ id, name, status, onClose, onDone }: {
@@ -73,18 +62,18 @@ export function CloudUploadSheet({ id, name, status, onClose, onDone }: {
     setBusy(true);
     try {
       const r = await uploadOne(id, choice);
-      if (!r.ok) { toast(plain(new Error(r.error || ''), 'The setup could not be uploaded. Try again.')); return; }
-      toast(r.action === 'create' ? `${name} is in the cloud workspace.` : `${name}’s cloud copy is replaced.`);
+      if (!r.ok) { toast(plain(new Error(r.error || ''), `${name} could not be deployed. Try again.`)); return; }
+      toast(r.action === 'create' ? `${name} is deployed to that workspace.` : `${name}’s copy in that workspace is replaced.`);
       onDone();
       onClose();
-    } catch (e) { toast(plain(e, 'The setup could not be uploaded. Try again.')); }
+    } catch (e) { toast(plain(e, `${name} could not be deployed. Try again.`)); }
     finally { setBusy(false); }
   }
 
   const line = cloudLine(status);
   return (
     <Sheet onClose={onClose} labelledBy="cuh" className="small-sheet" busy={busy}>
-      <SheetTop id="cuh" title="Upload to cloud" sub={`Copies ${name} to a workspace on HarnessRouter Cloud. This instance stays the source: uploading again replaces the copy.`} onClose={onClose} />
+      <SheetTop id="cuh" title="Deploy to another workspace" sub={`Deploys ${name} to a workspace on HarnessRouter Cloud. This instance stays the source: deploying again replaces the copy.`} onClose={onClose} />
       {line ? <p className="set-help">{line}.</p> : null}
       {targets === null ? (
         failed
@@ -114,7 +103,7 @@ export function CloudUploadSheet({ id, name, status, onClose, onDone }: {
       <div className="sheet-actions">
         <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
         <button type="button" className="btn primary" disabled={busy || adding || !choice || targets === null} onClick={() => void upload()}>
-          {busy && !adding ? 'Uploading…' : status?.uploaded ? 'Replace the copy' : 'Upload'}
+          {busy && !adding ? 'Deploying…' : 'Deploy'}
         </button>
       </div>
     </Sheet>
