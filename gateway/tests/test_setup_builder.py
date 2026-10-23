@@ -467,8 +467,11 @@ def test_each_model_is_reached_the_way_a_hermes_turn_reaches_it(monkeypatch):
     assert w["model"] == gw._integration_models(integrations[0]).get("gpt-5.4") and w["canonical"] == "gpt-5.4"
     w = asyncio.run(gw._setup_build_model_wire(ORG_A, "gpt-6-sol"))
     assert w["url"] == "https://res.openai.azure.com/openai/v1/chat/completions" and w["headers"] == {"api-key": "az-not-real"}
-    # Anthropic's own API is not chat completions: the builder skips it, as the hosted builder does
-    assert asyncio.run(gw._setup_build_model_wire(ORG_A, "claude-sonnet-4.6")) is None
+    # Anthropic's own key, on its OpenAI-compatible surface: an instance with only that key builds too
+    w = asyncio.run(gw._setup_build_model_wire(ORG_A, "claude-sonnet-4.6"))
+    assert w["url"] == "https://api.anthropic.com/v1/chat/completions" and w["headers"] == {"authorization": "Bearer ak-not-real"}
+    assert w["model"] == gw._integration_models(integrations[2]).get("claude-sonnet-4.6")
+    assert gw._setup_build_wire("bedrock", {"api_key": "b"}, "m", "m") is None
     assert gw._setup_build_wire("custom", integrations[3]["config"], "m1", "m1")["url"] == "https://llm.example/v3/chat/completions"
     assert gw._setup_build_wire("custom", {**integrations[3]["config"], "full_url": "1"}, "m1", "m1")["url"] == "https://llm.example/v3"
     assert gw._setup_build_wire("custom", {**integrations[3]["config"], "api_format": "anthropic"}, "m1", "m1") is None

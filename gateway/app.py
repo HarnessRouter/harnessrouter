@@ -20190,12 +20190,14 @@ async def _setup_builtin_skills(org: str) -> dict:
 
 def _setup_build_wire(vendor: str, cfg: dict, model_id: str, canonical: str) -> dict | None:
     """Where one connection answers chat completions, and the header its key goes in (the relay's own
-    rules: an Azure resource under /openai/v1 with `api-key`, anything else a bearer). None for a
-    connection that does not speak that shape (Anthropic's and Bedrock's own APIs, Qoder's runtime, a
-    custom endpoint in another format) or signs in by federation."""
+    rules: an Azure resource under /openai/v1 with `api-key`, anything else a bearer). Anthropic's own
+    key is reached on its OpenAI-compatible surface, the same base: a required configure_harness call
+    answered 200 with the call on claude-sonnet-4-6, a bearer key (measured 2026-10-23), so an
+    instance with only an Anthropic key builds too. None for a connection that does not speak that
+    shape (Bedrock, Qoder's runtime, a custom endpoint in another format) or signs in by federation."""
     vendor = str(vendor or "").strip().lower()
     key = str(cfg.get("api_key") or "").strip()
-    if not key or _entra_conn(cfg) or vendor in ("anthropic", "bedrock", "qoder"):
+    if not key or _entra_conn(cfg) or vendor in ("bedrock", "qoder"):
         return None
     if vendor == "custom" and str(cfg.get("api_format") or "openai").strip().lower() != "openai":
         return None
