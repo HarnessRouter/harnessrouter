@@ -1023,3 +1023,12 @@
 #hrui .tk-d .tp-head .th-row{display:flex;align-items:center;gap:16px}
 #hrui .tk-d .tp-head .th-row>.tp-t{flex:1;min-width:0}
 #hrui .tk-d .tp-head .th-row>.tk-acts{margin-left:auto}
+
+/* Deploy to Cloud (setup/DeployCloud.tsx): the page bar's second action, beside Set up the app. Its menu
+   (In Cloud) hangs under it, right aligned, as the task filter's does (.rng-pop); Update Cloud carries a
+   dot; on a phone it folds to its icon like the bar's other action (.ag-act) */
+#hrui .dc-w{position:relative;display:inline-flex;flex:none}
+#hrui .dc-b{position:relative}
+#hrui .dc-b.on>svg{color:var(--accent)}
+#hrui .dc-dot{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg)}
+#hrui .dc-pop{min-width:232px;white-space:nowrap}

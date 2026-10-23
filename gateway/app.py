@@ -6113,12 +6113,9 @@ class ConnectBody(BaseModel):
     instance: str = ""
 
 
-@app.post("/v1/admin/connect")
-async def admin_connect_start(body: ConnectBody, request: Request) -> dict:
-    """Open a key hand-off with the hosted service: the console opens the returned url in a new
-    tab and polls the code here; the secret never leaves this gateway."""
-    await _require_integrations_admin(request)
-    instance = (body.instance or "").strip() or (request.headers.get("host") or "this instance")
+async def _connect_open(instance: str, purpose: str = "") -> dict:
+    """Open a key hand-off with the hosted service and keep its secret here: {code, url, expires_in}.
+    `purpose` marks a hand-off a route other than Bring your own key reads (Deploy to Cloud)."""
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.post(HR_HOSTED_CONNECT_URL, json={"instance": instance})
@@ -6135,8 +6132,36 @@ async def admin_connect_start(body: ConnectBody, request: Request) -> dict:
         if now - v["at"] > 3600:
             _CONNECTS.pop(k, None)
     _connects_sweep()
-    _CONNECTS[code] = {"secret": secret, "at": now}
+    _CONNECTS[code] = {"secret": secret, "at": now, **({"purpose": purpose} if purpose else {})}
     return {"code": code, "url": str(j["url"]), "expires_in": j.get("expires_in")}
+
+
+@app.post("/v1/admin/connect")
+async def admin_connect_start(body: ConnectBody, request: Request) -> dict:
+    """Open a key hand-off with the hosted service: the console opens the returned url in a new
+    tab and polls the code here; the secret never leaves this gateway."""
+    await _require_integrations_admin(request)
+    instance = (body.instance or "").strip() or (request.headers.get("host") or "this instance")
+    return await _connect_open(instance)
+
+
+async def _connect_fetch(code: str, entry: dict) -> dict | None:
+    """One read of an open hand-off from the hosted service: None while the person is still on its
+    page, the hosted answer once the key is ready. Raises 410 when the code expired or was used."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get(f"{HR_HOSTED_CONNECT_URL}/{code}", headers={"X-Connect-Secret": entry["secret"]})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"HarnessRouter could not be reached: {type(e).__name__}")
+    j = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if r.status_code == 202:
+        return None
+    if r.status_code == 410:
+        _CONNECTS.pop(code, None)
+        raise HTTPException(410, "That key hand-off expired or was already used. Get a key again.")
+    if r.status_code >= 400:
+        raise HTTPException(502, f"HarnessRouter answered HTTP {r.status_code} on the key hand-off.")
+    return j if isinstance(j, dict) else {}
 
 
 @app.get("/v1/admin/connect/{code}")
@@ -6147,25 +6172,15 @@ async def admin_connect_poll(code: str, request: Request):
     await _require_integrations_admin(request)
     _connects_sweep()
     entry = _CONNECTS.get(code)
-    if not entry:
+    if not entry or entry.get("purpose"):        # none, or another route's (Deploy to Cloud)
         raise HTTPException(410, "That key hand-off is not open. Get a key again.")
     if entry.get("ready"):
         # The hosted side hands the key over once; this side answers every poll after that with the
         # same body until the code expires, so a slow or dropped answer costs nothing.
         return entry["ready"]
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as c:
-            r = await c.get(f"{HR_HOSTED_CONNECT_URL}/{code}", headers={"X-Connect-Secret": entry["secret"]})
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"HarnessRouter could not be reached: {type(e).__name__}")
-    j = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-    if r.status_code == 202:
+    j = await _connect_fetch(code, entry)
+    if j is None:
         return JSONResponse({"status": "pending"}, status_code=202)
-    if r.status_code == 410:
-        _CONNECTS.pop(code, None)
-        raise HTTPException(410, "That key hand-off expired or was already used. Get a key again.")
-    if r.status_code >= 400:
-        raise HTTPException(502, f"HarnessRouter answered HTTP {r.status_code} on the key hand-off.")
     key = str(j.get("api_key") or "")
     endpoint = str(j.get("endpoint") or HR_HOSTED_PROVIDER_BASE)
     models_url = str(j.get("models_url") or HR_HOSTED_MODELS_URL)
@@ -21400,6 +21415,60 @@ async def cloud_targets_add(body: CloudTargetBody, request: Request) -> dict:
     return _cloud_target_public(t)
 
 
+_DEPLOY = "deploy"
+
+
+@app.post("/v1/cloud-upload/connect", include_in_schema=False)
+async def cloud_connect_start(body: ConnectBody, request: Request) -> dict:
+    """Deploy to Cloud, the first time: open the HarnessRouter Cloud sign-in hand-off. The person
+    signs in (or up) on the page `url` names, the hosted side mints a key in their workspace, and
+    the next poll (cloud_connect_poll) stores it here as the destination of every deploy. No key is
+    pasted and none reaches the browser."""
+    await _require_integrations_admin(request)
+    instance = (body.instance or "").strip() or (request.headers.get("host") or "this instance")
+    return await _connect_open(instance, purpose=_DEPLOY)
+
+
+@app.get("/v1/cloud-upload/connect/{code}", include_in_schema=False)
+async def cloud_connect_poll(code: str, request: Request):
+    """One poll of a Deploy to Cloud hand-off: 202 while the person is still on the hosted page;
+    200 with the stored destination (its public view, never the key) once the key has landed, and
+    on every poll after that until the code expires; 410 when the code is not one of these."""
+    await _require_integrations_admin(request)
+    _connects_sweep()
+    entry = _CONNECTS.get(code)
+    if not entry or entry.get("purpose") != _DEPLOY:
+        raise HTTPException(410, "That sign-in is not open any more. Deploy again to start a new one.")
+    if entry.get("target"):
+        return {"status": "ready", "target": entry["target"]}
+    j = await _connect_fetch(code, entry)
+    if j is None:
+        return JSONResponse({"status": "pending"}, status_code=202)
+    key = str(j.get("api_key") or "")
+    if not key:
+        raise HTTPException(502, "HarnessRouter Cloud answered without a key. Deploy again.")
+    # where the key works: the API the hand-off names (its model endpoint is <base>/v1/provider)
+    endpoint = str(j.get("endpoint") or "").rstrip("/")
+    base = endpoint[: -len("/v1/provider")] if endpoint.endswith("/v1/provider") else _CLOUD_UPLOAD_DEFAULT_BASE
+    me = await _cloud_me(base, key)
+    t = {"base_url": base, "api_key": key, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
+         "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or "",
+         "member": me.get("member") or ""}
+    doc = await _cloud_targets()
+    doc["targets"][_cloud_tkey(t)] = t
+    doc["last"] = _cloud_tkey(t)
+    await _cloud_targets_save(doc)
+    entry["target"] = _cloud_target_public(t)
+    return {"status": "ready", "target": entry["target"]}
+
+
+def _cloud_open_url(target: dict | None, remote_id: str) -> str:
+    """Where a deployed copy opens in HarnessRouter Cloud's console: its setup page, when the
+    destination is HarnessRouter Cloud itself ('' for another address, whose console is unknown)."""
+    base = str((target or {}).get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE).rstrip("/")
+    return f"{HR_HOSTED_CONSOLE}/studio/{remote_id}" if remote_id and base == HR_HOSTED_BASE else ""
+
+
 @app.post("/v1/cloud-upload/targets/test")
 async def cloud_targets_test(body: CloudTargetBody, request: Request) -> dict:
     """Where would this key land. Nothing is stored."""
@@ -21485,7 +21554,9 @@ async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody 
     await _cloud_remember_last(target)
     if not res.get("ok"):
         raise HTTPException(400 if res.get("action") == "skip" else 502, res.get("error") or "upload failed")
-    return {**res, "status": _cloud_status(hid, records, None, target) | {"changed": False}}
+    return {**res, "open_url": _cloud_open_url(target, str(res.get("remote_id") or "")),
+            "target_name": _cloud_label(target),
+            "status": _cloud_status(hid, records, None, target) | {"changed": False}}
 
 
 @app.get("/v1/harnesses/{hid}/upload", include_in_schema=False)
@@ -21500,9 +21571,11 @@ async def cloud_upload_status(hid: str, request: Request) -> dict:
         return {"uploaded": False}
     v = await _vertex_get(hid)
     fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
-    rec = max(per.values(), key=lambda r: r.get("uploaded_at") or 0)
+    tkey, rec = max(per.items(), key=lambda kv: kv[1].get("uploaded_at") or 0)
+    target = (await _cloud_targets())["targets"].get(tkey)
     return {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
-            "changed": bool(fp) and rec.get("fingerprint") != fp}
+            "changed": bool(fp) and rec.get("fingerprint") != fp,
+            "open_url": _cloud_open_url(target, str(rec.get("remote_id") or "")) if target else ""}
 
 
 @app.get("/v1/cloud-upload/status")

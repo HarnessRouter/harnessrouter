@@ -2,7 +2,7 @@
 // A setup's plugins, skills and tools as a person sees them (Richard, 10-18): every place reads
 // setupParts.ts and says which list it shows: the Capabilities tabs list everything, built-ins
 // included; the Agent stack and the layers line beside it count only what a person added. Then what
-// Settings shows when a read fails (no fallbacks), the Plugins tab's switches, and Upload to cloud.
+// Settings shows when a read fails (no fallbacks), the Plugins tab's switches, and that it ends with Delete setup.
 import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { BaseInfo, CustomHarness, HarnessPlugin, Plug } from '@/lib/harness';
@@ -302,21 +302,12 @@ describe('the Plugins tab: the workspace’s connected plugins, a switch each', 
   });
 });
 
-describe('Upload to cloud', () => {
-  test('its row says what the server says of the cloud copy, and opens its sheet', async () => {
-    cloudLib.statusOne.mockResolvedValueOnce({ uploaded: true, uploaded_at: Date.now() - 3 * 60_000, changed: true });
-    cloudLib.listTargets.mockResolvedValue({ targets: [{ id: 't1', label: 'Acme · Production', revoked: false }], last: 't1' });
+describe('Deploy to Cloud lives in the page bar, not here', () => {
+  test('the settings end with Delete setup alone', async () => {
     await settings(setup(), 'harness');
-    const row = el.querySelector('.lg-rows .ly-n.lg-up') as HTMLButtonElement;
-    expect(row.querySelector('small')?.textContent).toBe('Changed since its upload 3 min ago');
-    await act(async () => { row.click(); });
-    await flush();
-    expect(el.querySelector('[data-sheet] #cloudTo')).not.toBeNull();
-    expect(button('Replace the copy')).toBeTruthy();
-  });
-  test('never uploaded: it says what it does', async () => {
-    await settings(setup(), 'harness');
-    expect(el.querySelector('.lg-rows .ly-n.lg-up small')?.textContent).toBe('Copy this setup to a HarnessRouter Cloud workspace');
+    expect(el.querySelector('.lg-rows .ly-n.lg-up')).toBeNull();
+    expect([...el.querySelectorAll('.lg-rows .lg-dz .ly-n')].map((b) => b.textContent)).toEqual(['Delete setup']);
+    expect(el.textContent).not.toContain('Upload to cloud');
   });
 });
 
