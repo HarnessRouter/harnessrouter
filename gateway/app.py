@@ -10949,8 +10949,15 @@ async def get_session_share(sid: str, request: Request) -> dict:
     return _share_out(str(v.get("shared") or "") == "1", str(v.get("share_token") or ""))
 
 
+_SHARE_UNREADABLE = "This shared Task could not be loaded just now. Try again in a moment."
+
+
 async def _share_sid(token: str) -> str | None:
-    """Resolve a share token to its session id — only while sharing is enabled."""
+    """Resolve a share token to its session id — only while sharing is enabled.
+
+    None means "no such live share", and the callers turn that into 404. A store that could not
+    answer is NOT that: it raises, so the link-holder is told to retry rather than shown the one
+    answer a recipient reads as permanent."""
     tok = re.sub(r"[^A-Za-z0-9]", "", token or "")
     if not tok:
         return None
@@ -10961,9 +10968,17 @@ async def _share_sid(token: str) -> str | None:
     if hit and time.time() - hit[0] < _SHARE_TTL:
         sid = hit[1]
     else:
-        rows = await BACKING.graph.find("HarnessSession", {"share_token": tok, "shared": "1"})
+        # `find_strict`, because `find` answers a read it could not perform with [] — which here
+        # is indistinguishable from "no such token", and would then be negative-cached for
+        # _SHARE_TTL. A live share link would 404 for ten seconds past the store's recovery.
+        try:
+            rows = await BACKING.graph.find_strict("HarnessSession", {"share_token": tok, "shared": "1"})
+        except Exception as e:  # noqa: BLE001
+            print(f"[share] the share index could not be read token={tok[:8]}…: {type(e).__name__}",
+                  flush=True)
+            raise uhp_error(503, "server_error", _SHARE_UNREADABLE) from e
         sid = str(rows[0].get("id") or "") if rows else ""
-        _SHARE_TOKEN_CACHE[tok] = (time.time(), sid)
+        _SHARE_TOKEN_CACHE[tok] = (time.time(), sid)   # a real miss is cacheable; a failure never got here
     if not sid:
         return None
     # A token lookup is not an authorization grant: another replica may have revoked the
