@@ -96,11 +96,13 @@ const ZIP_MAX_FILES = 200;
 
 /** One answer's files as one zip: the task's own archive of exactly these file ids (the gateway's
  *  GET /v1/sessions/{sid}/files/archive?files=…, folders kept inside), read through the console's
- *  harness proxy with the sign-in, the same way a single file is. Null below two files. */
+ *  harness proxy with the sign-in, the same way a single file is. Only files the server holds have
+ *  one: a recorded run's files come from /demos (they carry their own url), so none is offered
+ *  there. Null below two files. */
 export function archiveOf(files: RespFile[]): { url: string; count: number } | null {
   const shown = files.filter((f) => !isInternalOutput(f.filename));
   const sid = shown[0]?.container_id || '';   // a file's container id IS its task's session id
-  if (!sid || shown.some((f) => !f.file_id || f.container_id !== sid)) return null;
+  if (!sid || shown.some((f) => f.url || !f.file_id || f.container_id !== sid)) return null;
   const ids = [...new Set(shown.map((f) => f.file_id))];
   if (ids.length < 2 || ids.length > ZIP_MAX_FILES) return null;
   return {

@@ -19,7 +19,7 @@ import { emitFeedTurn } from '@/lib/feed-turns';
 import { track } from '@/lib/analytics';
 import { oobById } from '@/lib/harness';
 import { fillStep } from '@/lib/tool-steps';
-import { withText, withReasoning, withStep, withResult, createConversationStore } from 'reifyui';
+import { withText, withReasoning, withStep, withResult, createConversationStore, createResponsesDispatcher } from 'reifyui';
 import { newTurn, reduceTurn, finish, type Turn } from 'reifyui/agent-chat';
 
 // The failure sentence is its own block, marked, and it stays LAST. It reaches a message on two
@@ -71,7 +71,9 @@ export interface TraceCard {
 export interface ChatTarget { name: string; backend: string | null; model?: string; baseId?: string;
   /** The runtime this harness runs on and the model its settings default to (the footer names both). */
   runtime?: string; defaultModel?: string }
-export interface UserMsg { role: 'user'; text: string; attachments?: { name: string; dataUri?: string }[] }
+/** `imported`: part of an earlier turn brought with the task's first request (a recorded run carried
+ *  into a task of your own, start/fork.ts), never the agent's own. */
+export interface UserMsg { role: 'user'; text: string; attachments?: { name: string; dataUri?: string }[]; imported?: true }
 export interface ToolStep { name: string; args: string; result?: string; callId?: string;
   /** the tool said this call failed (the record's is_error); absent when it worked */
   isError?: true }
@@ -87,6 +89,8 @@ export interface AsstMsg { role: 'assistant'; blocks: Block[]; files: RespFile[]
   incompleteDetail?: string;
   /** Seconds this turn took, when the gateway kept it. */
   elapsed?: number;
+  /** an earlier turn brought with the task's first request (see UserMsg) */
+  imported?: true;
   /** The turn's clock: the same events folded by reifyui's reduceTurn as they arrived, so a view can
    *  say when each call started and answered. Only a turn this browser watched live has one; a turn
    *  read from the record has none and shows no durations, never guessed ones. */
@@ -730,7 +734,10 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
    * it (false). The answer keeps streaming after that: `busy` holds until it lands. A view that
    * waited for the whole stream here held its composer text and its title for a minute or more.
    */
-  async function send(rawText: string, attach: { name: string; dataUri: string }[] = []): Promise<boolean> {
+  /** `opts.input`: the request's whole input, when the caller builds it (a recorded demo's fork,
+   *  start/fork.ts: the recorded turn as earlier messages, then this message); the thread shows the
+   *  text and attachments as usual. */
+  async function send(rawText: string, attach: { name: string; dataUri: string }[] = [], opts: { input?: unknown[] } = {}): Promise<boolean> {
     const text = (rawText || '').trim();
     // `busy` is React state, so three clicks landing in one tick all read it as false and all
     // three stream into the same assistant message: the server runs the turn once, but the
@@ -743,7 +750,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     const sent = attach;
     // OpenAI Responses input: a string, or a user MESSAGE whose content is text + file parts.
     // (The gateway parses {role,content:[…]}, a bare content-part array reads as empty input.)
-    const input_payload: string | unknown[] = sent.length
+    const input_payload: string | unknown[] = opts.input ? opts.input : sent.length
       ? [{ role: 'user', content: [
           ...(text ? [{ type: 'input_text', text }] : []),
           ...sent.map((f) => ({ type: 'input_file', filename: f.name, file_data: f.dataUri })),
@@ -901,10 +908,58 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     }).catch(() => setStopping(false));
   }
 
+  /** A recorded run played into this conversation as if it streamed now (start/replay.ts): the
+   *  request, then each recorded event at its own offset from it, folded by the same handlers a live
+   *  turn's stream goes through, so it reads the same. Nothing is sent: no task is made and nothing
+   *  is spent. The run's own response and task are not taken (they belong to the recording), and
+   *  each file it made is shown as `fileOf` maps it (the recording's own copy; null leaves it out).
+   *  Ends at its terminal event, or at `endAt` ms when the recording has none. Answers a cancel. */
+  function replay(text: string, events: { t: number; ev: Record<string, unknown> }[], fileOf: (f: RespFile) => RespFile | null, endAt = 0): () => void {
+    if (busy || sendingRef.current) return () => {};
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    let over = false;
+    const t0 = Date.now();
+    setBusy(true);
+    onSendStart?.();
+    setMsgs((m) => [...m, { role: 'user', text }, { role: 'assistant', blocks: [], files: [], status: 'running', clock: newTurn({ startedAt: t0 }) }]);
+    const end = (status: AsstMsg['status']) => {
+      if (over) return;
+      over = true;
+      updateLast((a) => { if (a.status === 'running') a.status = status; if (a.clock && a.clock.status === 'running') a.clock = finish(a.clock, status === 'done' ? 'completed' : status, Date.now()); });
+      setBusy(false);
+    };
+    const d = createResponsesDispatcher({
+      onReasoningDelta: (x: string) => updateLast((a) => { a.blocks = addReasoning(a.blocks, x); }),
+      onToolCall: (name: string, args: string, callId: string) => updateLast((a) => { a.blocks = addStep(a.blocks, { name, args, callId }); }),
+      onToolResult: (callId: string, output: string) => updateLast((a) => { a.blocks = addResult(a.blocks, callId, output); }),
+      onTextDelta: (x: string) => updateLast((a) => { a.blocks = addText(a.blocks, x); }),
+      onFile: (f: RespFile) => { const g = fileOf(f); if (g) updateLast((a) => { a.files = withFile(a.files, g); }); },
+      onError: (msg: string) => updateLast((a) => { a.blocks = withError(a.blocks, msg); }),
+      onDone: (status: string) => end(status === 'completed' ? 'done' : (['failed', 'cancelled', 'incomplete'].includes(status) ? status as AsstMsg['status'] : 'failed')),
+    });
+    // the events due at the same moment fold together, in their order (one render for them)
+    const at = new Map<number, Record<string, unknown>[]>();
+    for (const { t, ev } of events) { const k = Math.max(0, Math.round(t)); at.set(k, [...(at.get(k) || []), ev]); }
+    let last = 0;
+    for (const [t, evs] of [...at.entries()].sort((a, b) => a[0] - b[0])) {
+      last = Math.max(last, t);
+      timers.push(setTimeout(() => {
+        if (over) return;
+        for (const ev of evs) {
+          if (over) return;
+          updateLast((a) => { a.clock = reduceTurn(a.clock || newTurn(), ev as { type: string }, Date.now()); });
+          d.dispatch(ev as Parameters<typeof d.dispatch>[0]);
+        }
+      }, t));
+    }
+    timers.push(setTimeout(() => end('done'), Math.max(endAt, last) + 400));
+    return () => { timers.forEach(clearTimeout); if (!over) end('cancelled'); };
+  }
+
   return { msgs, busy, loading, stopping, prevId, firstTurn,
            /** the task's record could not be read on open; `reload` reads it again */
            loadFailed, reload: () => setLoadTry((n) => n + 1),
 
            liveSessionId: sessionId ?? sidRef.current, convKey,
-           send, stop, setMsgs, updateLast };
+           send, stop, replay, setMsgs, updateLast };
 }

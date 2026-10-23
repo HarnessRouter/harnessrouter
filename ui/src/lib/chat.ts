@@ -16,7 +16,9 @@ import { createResponsesDispatcher, readSSEStream } from 'reifyui';
 const BASE = '/api/harness';
 
 /** A file a turn produced, served from the turn's container. */
-export interface RespFile { container_id: string; file_id: string; filename: string }
+/** A file a turn produced. `url`: served as it is (a recorded run's own copy, start/replay.ts) rather
+ *  than from the turn's container. */
+export interface RespFile { container_id: string; file_id: string; filename: string; url?: string }
 
 export interface StreamHandlers {
   onCreated?(responseId: string): void;
@@ -65,6 +67,7 @@ export function fileToDataUri(mediaType: string, base64: string): string {
 
 /** Download URL for a turn-produced container file (served by the BFF -> gateway). */
 export function containerFileUrl(f: RespFile): string {
+  if (f.url) return f.url;
   return `${BASE}/v1/containers/${encodeURIComponent(f.container_id)}/files/${encodeURIComponent(f.file_id)}/content`;
 }
 

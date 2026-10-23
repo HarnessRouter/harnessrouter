@@ -62,3 +62,24 @@ export function takeFirstTask(id: string): string {
   return t;
 }
 
+
+// A setup saved from a demo's recorded run (start/replay.ts) has no first task to run: its first task
+// is that recording, which plays as its page opens, once, in proportion, as if it ran now. Kept in the
+// tab like the first task, for the page load that opens the setup; taking it forgets it, so the page
+// opened again shows the recorded task whole, at once, as it does when opened from the list.
+const PLAY = 'hr.play:';
+const plays = new Set<string>();
+export function setFirstReplay(id: string): void {
+  if (!id) return;
+  plays.add(id);
+  try { tabStore()?.setItem(PLAY + id, '1'); } catch { /* this page's note still has it */ }
+}
+/** This setup's recorded first task is to play now (true once): taking it forgets it. */
+export function takeFirstReplay(id: string): boolean {
+  if (!id) return false;
+  let on = plays.has(id);
+  if (!on) { try { on = tabStore()?.getItem(PLAY + id) === '1'; } catch { on = false; } }
+  plays.delete(id);
+  try { tabStore()?.removeItem(PLAY + id); } catch { /* forgotten in this page */ }
+  return on;
+}

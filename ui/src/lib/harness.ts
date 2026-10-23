@@ -61,6 +61,9 @@ export interface CustomHarness {
   // skipped from the package on every save; a saved plugin round-trips as {name, enabled, blob}
   // plus those derived fields, and a freshly picked one carries its `files` until it is saved.
   plugins?: HarnessPlugin[];
+  // Where it came from, as whatever made it said at create ("demo:<n>@<ms>": the recorded demo run
+  // Start saved it from, start/replay.ts). Sent only on create; the server never changes it after.
+  source?: string;
   createdAt: number;
 }
 
@@ -376,6 +379,8 @@ let _basesInflight: Promise<Record<string, BaseInfo>> | null = null;
  *  bases document. null until it lands: the settings page shows nothing rather than a guess. */
 export interface RuntimeDefaults { maxStep: number; timeoutSeconds: number }
 let _runtimeDefaults: RuntimeDefaults | null = null;
+// the bases document as the server answered it, for what it says beyond the bases (its capabilities)
+let _basesDoc: Record<string, unknown> | null = null;
 
 async function fetchBases(): Promise<Record<string, BaseInfo>> {
   if (_bases) return _bases;
@@ -397,6 +402,7 @@ async function fetchBases(): Promise<Record<string, BaseInfo>> {
           if (rd && Number(rd.maxStep) > 0 && Number(rd.timeoutSeconds) > 0) {
             _runtimeDefaults = { maxStep: Number(rd.maxStep), timeoutSeconds: Number(rd.timeoutSeconds) };
           }
+          _basesDoc = doc as Record<string, unknown>;
           _bases = map;
           return map;
         } catch {
@@ -412,6 +418,12 @@ async function fetchBases(): Promise<Record<string, BaseInfo>> {
 /** The server-described bases for a caller that is not a component (once per tab; {} when it could not
  *  be read, which offers no harness: the caller says it could not read them). */
 export const loadBases = fetchBases;
+
+/** The bases document as the server answered it (once per tab), or null when it could not be read. */
+export async function basesDoc(): Promise<Record<string, unknown> | null> {
+  await fetchBases();
+  return _basesDoc;
+}
 
 /** The server's runtime defaults, once the bases document has landed. */
 export function useRuntimeDefaults(): RuntimeDefaults | null {
@@ -537,7 +549,8 @@ export async function readCustom(id: string): Promise<CustomHarness | null> {
 }
 
 export async function createCustom(input: Partial<CustomHarness> & { name: string; base: string }): Promise<CustomHarness> {
-  return gw<CustomHarness>('POST', '/v1/harnesses', harnessBody(input));
+  // where it came from goes with the create alone: an update never changes it (the server keeps it)
+  return gw<CustomHarness>('POST', '/v1/harnesses', { ...harnessBody(input), ...(input.source ? { source: input.source } : {}) });
 }
 
 export async function saveCustom(c: CustomHarness): Promise<CustomHarness> {
