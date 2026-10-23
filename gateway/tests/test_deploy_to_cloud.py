@@ -129,12 +129,21 @@ def test_a_deploy_hand_off_and_a_key_hand_off_are_never_each_others(api, cloud):
     assert api.get("/v1/cloud-upload/connect/nope").status_code == 410
 
 
-def test_a_key_that_opens_no_workspace_is_refused_and_nothing_is_stored(api, cloud):
+def test_the_sign_in_key_of_the_default_workspace_lands_there_while_a_pasted_one_is_still_refused(api, cloud):
+    """Cloud's sign-in mints its key for the organization's Default Workspace (workspace "" with
+    workspace_default), and Cloud's /v1/me answers no workspace for it (2026-10-23). What it creates
+    is unstamped, which is the Default Workspace's: that is the destination, by that name. A key
+    pasted by hand keeps the rule: no workspace, refused."""
     code = api.post("/v1/cloud-upload/connect", json={}).json()["code"]
     cloud.sign_in(code, key="sk-hr-nows")
     r = api.get(f"/v1/cloud-upload/connect/{code}")
-    assert r.status_code == 400 and "workspace" in r.text
-    assert api.get("/v1/cloud-upload/targets").json()["targets"] == []
+    assert r.status_code == 200, r.text
+    assert r.json()["target"]["label"] == "Default Workspace (richard)"
+    hid = _harness(api)
+    assert api.post(f"/v1/harnesses/{hid}/upload").status_code == 200
+    assert hid in cloud.harnesses
+    pasted = api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-nows", "base_url": HOSTED})
+    assert pasted.status_code == 400 and "workspace" in pasted.text
 
 
 def test_the_deploy_and_the_status_say_where_the_copy_opens_in_cloud(api, cloud):

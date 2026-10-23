@@ -106,6 +106,7 @@ const RUNTIME = /(router\.(push|replace)|location\.(assign|replace))\(\s*(?![`'"
 const RUNTIME_ALLOWED: Entry[] = [
   ['app/(app)/studio/[id]/page.tsx', 'router.replace(pgHref(', 'the setup’s own address (the open task)'],
   ['app/(app)/studio/[id]/page.tsx', "router.replace(t === 'tasks' ? pgHref(testSid)", 'the setup’s own address (its tab)'],
+  ['components/hrui/setup/DeployCloud.tsx', 'if (tab) tab.location.href = s.url;', 'Deploy to Cloud’s sign-in, in the new tab it opened: this page stays where it is'],
 ];
 
 describe('Harness Studio is never where a create lands', () => {

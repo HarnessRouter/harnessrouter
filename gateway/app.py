@@ -21202,8 +21202,12 @@ async def _cloud_base_refused(base: str) -> str | None:
     return await _internal_target(u.hostname, u.port or 443)
 
 
-async def _cloud_me(base_url: str, api_key: str) -> dict:
-    """Resolve a key to where an upload lands. Raises HTTPException with the hosted side's words."""
+async def _cloud_me(base_url: str, api_key: str, *, default_workspace: bool = False) -> dict:
+    """Resolve a key to where an upload lands. Raises HTTPException with the hosted side's words.
+    `default_workspace`: the key is one HarnessRouter Cloud's sign-in minted for the organization's
+    Default Workspace (its get-key page mints with workspace "" and workspace_default), which its
+    /v1/me answers with no workspace; what such a key creates is unstamped, and unstamped is the
+    Default Workspace's, so that is where the copy lands and what it is called here."""
     refused = await _cloud_base_refused(base_url)
     if refused:
         raise HTTPException(400, f"that address cannot be used: {refused}")
@@ -21219,6 +21223,8 @@ async def _cloud_me(base_url: str, api_key: str) -> dict:
     me = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     if not isinstance(me, dict) or not me.get("org"):
         raise HTTPException(502, "cloud answered without an org")
+    if not me.get("workspace") and default_workspace:
+        me = {**me, "workspace": f"{me['org']}__hr_default", "workspace_name": me.get("workspace_name") or "Default Workspace"}
     if not me.get("workspace"):
         raise HTTPException(400, "this key is not bound to a workspace; mint one inside the workspace")
     return me
@@ -21450,7 +21456,7 @@ async def cloud_connect_poll(code: str, request: Request):
     # where the key works: the API the hand-off names (its model endpoint is <base>/v1/provider)
     endpoint = str(j.get("endpoint") or "").rstrip("/")
     base = endpoint[: -len("/v1/provider")] if endpoint.endswith("/v1/provider") else _CLOUD_UPLOAD_DEFAULT_BASE
-    me = await _cloud_me(base, key)
+    me = await _cloud_me(base, key, default_workspace=True)
     t = {"base_url": base, "api_key": key, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
          "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or "",
          "member": me.get("member") or ""}
