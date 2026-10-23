@@ -24,7 +24,9 @@ jest.mock('./Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode 
 jest.mock('./toast', () => ({ toast: jest.fn() }));
 jest.mock('./start/art', () => ({ nwArt: () => '' }));
 jest.mock('./start/open', () => ({ openNewSetup: jest.fn() }));
-jest.mock('./start/seed', () => ({ seedSetup: jest.fn(), setFirstTask: jest.fn() }));
+jest.mock('./start/seed', () => ({ seedSetup: jest.fn(), setFirstTask: jest.fn(), setFirstReplay: jest.fn() }));
+// these demos have no recorded run: they run live (a recorded one: NewSetup.demo.test.tsx)
+jest.mock('./start/replay', () => ({ loadRecording: async () => null, recordedMark: () => '', templateOf: () => null }));
 jest.mock('./start/demos', () => ({
   DEMOS: [{ from: 'Contract', to: 'risk review', short: 'Contract review', base: 'hermes', model: 'claude-sonnet', instr: 'Review this contract clause and list each risk.' }],
   baseName: (id: string) => (id === 'hermes' ? 'Hermes' : 'Claude Code'), defaultBase: () => 'claude-code',

@@ -19,7 +19,7 @@ jest.mock('./Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode 
 jest.mock('./toast', () => ({ toast: jest.fn() }));
 jest.mock('./start/art', () => ({ nwArt: () => '' }));
 jest.mock('./start/open', () => ({ openNewSetup: jest.fn() }));
-jest.mock('./start/seed', () => ({ seedSetup: jest.fn(), setFirstTask: jest.fn() }));
+jest.mock('./start/seed', () => ({ seedSetup: jest.fn(), setFirstTask: jest.fn(), setFirstReplay: jest.fn() }));
 jest.mock('./start/demos', () => ({
   DEMOS: [], baseName: (id: string) => (id === 'qoder' ? 'Qoder Cloud Agent' : 'Claude Code'), defaultBase: () => 'claude-code',
   defaultModelOf: () => 'claude-sonnet', demoPick: () => ({ base: 'claude-code', model: 'claude-sonnet' }), runnableModels: () => ['claude-sonnet'],

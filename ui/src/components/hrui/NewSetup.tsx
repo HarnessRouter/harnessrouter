@@ -14,8 +14,16 @@
 // answered handed to it (start/seed.ts), so it draws without a loading step. The sentence is also the
 // setup's first task: sending it here is asking for it to run (Richard 10-22: the flow went on to an
 // empty task and left the person wondering what to do), so the page runs it as it opens, on the model
-// chosen here, and the person lands on it running with its trace (setup/Playground.tsx). A save that
-// fails says so here, with the sentence kept, and saves nothing.
+// chosen here, and the person lands on it running (setup/Playground.tsx). A save that fails says so
+// here, with the sentence kept, and saves nothing.
+//
+// An unchanged demo on the harness and model its first request was recorded on (start/replay.ts) is
+// saved from that recording's template instead (its instructions and skills; the hosted image tools
+// it ran with are not added, start/replay.ts SKIPPED_PLUGINS), with `source` naming the recording,
+// and nothing is handed over to run: its first task is the recorded run, played back as its page
+// opens, which sends nothing and spends nothing. A demo with no recording, one on another pair, or a
+// sentence the person changed runs live as above. Recordings that cannot be read are said here, with
+// the sentence kept, and nothing is saved: a demo is never saved to run live in their place.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { createCustom, listCustom, offeredOob, oobById, oobDefaultModel, useBasesRead, useModelCatalogRead } from '@/lib/harness';
@@ -26,7 +34,8 @@ import { SkLine } from './Skel';
 import { toast } from './toast';
 import { nwArt } from './start/art';
 import { openNewSetup } from './start/open';
-import { seedSetup, setFirstTask } from './start/seed';
+import { seedSetup, setFirstReplay, setFirstTask } from './start/seed';
+import { loadRecording, recordedMark, templateOf } from './start/replay';
 import { DEMOS, baseName, defaultBase, defaultModelOf, demoPick, runnableModels } from './start/demos';
 import { Handoff } from './start/Handoff';
 import { nameFromJob, tooShort, uniqName } from './start/names';
@@ -41,6 +50,7 @@ const LOCK = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke=
 const NW_SAMPLES = ['Answer support emails: look up the order, then draft a reply in our tone.', 'Review a contract and flag the risky clauses.', 'Turn a product brief into a studio product image.'];
 const SENTENCE = 'Write it as a sentence, e.g. Answer support emails in our tone.';
 const SAVE_FAILED = 'The setup could not be saved just now. Try again.';
+const RECORDING_FAILED = 'The recorded demo run could not be read just now. Try again.';
 
 /** Reads like a change to the person's own code: say once where that belongs, without blocking. */
 function codeAsk(t: string): boolean {
@@ -178,16 +188,30 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
     if (demoNow == null && tooShort(j)) { setErr(SENTENCE); ta.current?.focus(); return; }
     if (!ready) return;
     setPick(null); setBusy(true); setErr(''); gone.current = false;
+    // an unchanged demo's recorded first run, when it ran on the pair chosen here (else it runs live)
+    let run: Awaited<ReturnType<typeof loadRecording>> = null;
+    try { run = demoNow != null ? await loadRecording(demoNow) : null; }
+    catch {
+      if (gone.current) return;
+      setErr(RECORDING_FAILED); setBusy(false);
+      ta.current?.focus();
+      return;
+    }
+    const tpl = demoNow != null && run && run.base === h && run.model === m ? templateOf(demoNow, run) : null;
     try {
       // a name no other setup of the workspace has; a list that cannot be read keeps the name as it is
       const taken = await listCustom().then((l) => l.map((x) => x.name), () => [] as string[]);
       const name = uniqName(demoNow != null ? DEMOS[demoNow].short : nameFromJob(j), taken);
-      const rec = await createCustom({ name, base: h, baseLabel: hName, defaultModel: m, systemPrompt: j });
+      const rec = await createCustom(tpl && run
+        ? { name, base: tpl.base, baseLabel: hName, defaultModel: tpl.model, systemPrompt: tpl.instructions, skills: tpl.skills, source: recordedMark(run) }
+        : { name, base: h, baseLabel: hName, defaultModel: m, systemPrompt: j });
       if (!rec?.id) throw new Error('no id');
       // its page draws from the record the save answered with
       seedSetup(rec.id, { h: rec });
-      // what the person asked for runs as its first task as its page opens
-      setFirstTask(rec.id, j);
+      // a demo saved from its recording plays it as its first task; anything else runs what the
+      // person asked for as its first task as its page opens
+      if (tpl) setFirstReplay(rec.id);
+      else setFirstTask(rec.id, j);
       openNewSetup(router, { id: rec.id });
     } catch {
       if (gone.current) return;

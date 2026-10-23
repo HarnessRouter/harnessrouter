@@ -20,6 +20,11 @@
 // Every task has Delete on its row (Richard 10-18): a trash button at the row's right edge on hover or
 // keyboard focus (on a touch screen, on the open task's row), asking first (the design's Delete task
 // sheet), and not while it runs. The filter shows All or Failed.
+//
+// A setup saved from a demo's recorded run (start/replay.ts) has that run as its first task: the oldest
+// row, always there, "Recorded" with when the setup was made, blue while it plays. It is no task of
+// the server's, so it has no Delete; one that could not be read is said at the list's end, with Try
+// again, never left out without a word.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getSession } from '@/lib/auth';
 import { harnessFetch } from '@/lib/hfetch';
@@ -302,7 +307,11 @@ const DOT: Record<string, string> = { running: ' run', failed: ' bad', done: ' o
 
 // ── the column ───────────────────────────────────────────────────────────────────────────────────
 
-export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = isNew, onOpen, onNew, onGone }: {
+/** The setup's recorded first task, as its row shows it: its title (the recorded request), when the
+ *  setup was made (ms), whether it is the one open, whether it is playing, and opening it. */
+export interface RecordedRow { title: string; at: number; on: boolean; running?: boolean; onOpen?: () => void }
+
+export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = isNew, recorded = null, recordedRetry, onOpen, onNew, onGone }: {
   setupName: string;
   list: TaskList;
   f: TaskFilter;
@@ -313,6 +322,11 @@ export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = i
   isNew: boolean;
   /** a new task is open, sent or not (a sent one is its list's running row until it has its task) */
   newOpen?: boolean;
+  /** the setup's recorded first task (start/replay.ts), read from the setup's own record: no task of
+   *  the server's, the oldest row, always there */
+  recorded?: RecordedRow | null;
+  /** the setup's recorded first task could not be read: Try again reads it again */
+  recordedRetry?: () => void;
   onOpen: (sid: string, card: TraceCard | null) => void;
   onNew: () => void;
   /** a task deleted from its row */
@@ -409,9 +423,14 @@ export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = i
     </div>
   );
 
+  // the recorded first task: the oldest row, once the list reaches its end, under the same filters
+  // (it did not fail; its search is its title)
+  const since = rangeMs(f.range) ? Date.now() - rangeMs(f.range) : 0;
+  const rec = recorded && f.view === 'all' && (!since || recorded.at >= since) && (!needle || recorded.title.toLowerCase().includes(needle)) ? recorded : null;
+  const atEnd = !list.failed && shown.length <= listed.length && (!list.more || complete);
   const loading = !list.ready && !list.all.length;
-  const none = list.ready && !list.failed && !list.all.length && !list.pending.length;
-  const empty = list.ready && !shown.length && !pend.length;
+  const none = list.ready && !list.failed && !list.all.length && !list.pending.length && !recorded && !recordedRetry;
+  const empty = list.ready && !shown.length && !pend.length && !rec && !recordedRetry;
   // one quiet line on top when what the list shows may be behind: a read again failed, or live
   // updates are down (a list that was never read says so at its end instead)
   const behind = list.failed ? null
@@ -466,6 +485,19 @@ export function TaskList({ setupName, list, f, setF, current, isNew, newOpen = i
             </div>
           );
         })}
+        {rec && list.ready && atEnd ? (
+          <div className="tk-rw" role="listitem">
+            <button type="button" className={`tk-r${rec.on ? ' on' : ''}`} aria-current={rec.on ? 'true' : undefined} onClick={rec.onOpen}>
+              {/* blue while it plays, as a live run's dot is while it runs */}
+              <span className={`dot${rec.running ? ' run' : ' ok'}`} aria-hidden="true" />
+              <span className="tk-rt"><b>{rec.title}</b><small>Recorded{rec.at ? ` · ${ago(rec.at)}` : ''}{rec.running ? <span className="sr"> · Running</span> : null}</small></span>
+            </button>
+          </div>
+        ) : null}
+        {recordedRetry && list.ready && atEnd ? (
+          <div className="tk-empty" role="alert">The recorded first task could not be read.
+            <button type="button" className="link-q inl" onClick={recordedRetry}>Try again</button></div>
+        ) : null}
         {shown.length > listed.length ? (
           <button type="button" className="tk-more" onClick={() => setShownN((n) => n + PER)}>
             Show more · {(shown.length - listed.length).toLocaleString('en-US')} left

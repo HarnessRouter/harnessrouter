@@ -133,6 +133,24 @@ export function NewTaskHead({ onBack }: { onBack: () => void }) {
   );
 }
 
+/** A setup's recorded first task's bar (start/replay.ts): back to the list on a phone, its title,
+ *  Recorded (it is a recording of a real run, not a task of the server's), and Running while it plays.
+ *  It has nothing to stop or share. */
+export function RecordedHead({ title, running, onBack }: { title: string; running: boolean; onBack: () => void }) {
+  return (
+    <div className="task-head tp-head">
+      <div className="th-row">
+        <button type="button" className="tk-back" aria-label="All tasks" onClick={onBack}>{BACK_IC}</button>
+        <h2 className="tp-t" title={title}>{title}</h2>
+        <div className="tk-acts">
+          <span className="chip demo-chip">Recorded</span>
+          {running ? <span className="tk-running" role="status"><span className="dot run" aria-hidden="true" />Running</span> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** The open task's one bar over the reading column (taskPane): back to the list on a phone, its
  *  title, the Browser control when the setup includes the browser plugin
  *  (setup/BrowserSlot), and Stop task while it runs (the feed's word first, as its row's dot), else

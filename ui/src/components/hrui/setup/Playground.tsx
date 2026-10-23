@@ -14,6 +14,13 @@
 // actions (Richard 10-18): copy the reply as Markdown, copy its ID, and copy a request your own app can
 // send to carry on the conversation from that reply. The conversation scrolls in its own column, the
 // composer pinned at its foot.
+//
+// A setup saved from a demo's recorded run (start/replay.ts) has that run as its first task: it plays
+// here through the same handlers a live turn goes through, sends nothing and spends nothing, says
+// Recorded on its reply with the time it took when it ran, and is read, not continued. Under it, where
+// the server takes earlier messages as a new task's history (start/fork.ts), the box takes a message
+// that goes on as a task of your own; anywhere else a bar says it is a recorded task, with Follow up
+// (a new task of yours, run live). It is never also sent as a live first task.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { isInternalOutput, useConversationTurn, useHarnessBus, type AsstMsg, type ChatTarget } from '@/lib/conversation';
 import { replyMarkdown } from './replyMd';
@@ -24,7 +31,9 @@ import { toast } from '../toast';
 import { Skel, SkLine, SkThread } from '../Skel';
 import type { SetupRow } from '../setups';
 import { API_BASE } from '../start/prompts';
-import { peekFirstTask, takeFirstTask } from '../start/seed';
+import { peekFirstTask, takeFirstReplay, takeFirstTask } from '../start/seed';
+import { recordedFile, replaySpeed, type RecordedRun } from '../start/replay';
+import { forkFiles, forkInput, forkOffered, importedFirst, inputHistory, noteFork } from '../start/fork';
 import { AgentConversation, AgentComposer } from 'reifyui/agent-chat';
 import { AgentTurns, harnessMark } from './AgentTurns';
 import { FileCards, filesOf, type OpenFile } from './TurnFiles';
@@ -55,7 +64,7 @@ function readFile(f: File): Promise<Attach> {
 }
 
 /** One test: the composer, then its thread once sent. A new test mounts a fresh one. */
-function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, resume, onSeen, onPreview, previewKey, onLive, taskTitle }: {
+function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, resume, onSeen, onPreview, previewKey, onLive, taskTitle, recording, onFollowUp, onReplay }: {
   r: SetupRow; model: string; defaultModel: string; headerValues: Record<string, string>;
   /** the open task's title, as its bar shows it (a reply's Download all names its zip after it) */
   taskTitle?: string;
@@ -71,6 +80,12 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
   onSeen: (models: string[], resumed: boolean) => void;
   /** the bricks this test's turn is working through now (null when none runs), for the Agent stack */
   onLive?: (working: string[] | null) => void;
+  /** the setup's recorded first task (start/replay.ts): played back here, never sent */
+  recording?: RecordedRun | null;
+  /** a recorded task's Follow up: a new task of yours, run live */
+  onFollowUp?: () => void;
+  /** a recorded run is playing here (true) or has ended (false): its row and head show it running */
+  onReplay?: (playing: boolean) => void;
 }) {
   const oob = oobById(r.h.base);
   const [sid, setSid] = useState<string | null>(resume);
@@ -105,6 +120,22 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
   const [input, setInput] = useState('');
   const [att, setAtt] = useState<Attach | null>(null);
   const ta = useRef<HTMLTextAreaElement | null>(null);
+  // this conversation is a recorded run, played back (whole at once, or in proportion as it ran): it
+  // is read, not continued
+  const [replayed, setReplayed] = useState(false);
+  const [whole, setWhole] = useState(false);
+  // written to, a recorded run goes on as a task of your own (start/fork.ts): from then on it is live
+  const [forked, setForked] = useState(false);
+  const forking = useRef(false);
+  // offered only where the server says it takes input history, and no fork here read back half
+  const [offerFork, setOfferFork] = useState(false);
+  useEffect(() => {
+    if (!recording) return;
+    let alive = true;
+    void inputHistory().then((ok) => { if (alive) setOfferFork(ok && forkOffered()); });
+    return () => { alive = false; };
+  }, [recording]);
+  const recorded = replayed && !forked;
   const target: ChatTarget = { name: r.h.name, backend: oob?.backend ?? null, model, baseId: oob?.id, runtime: oob?.name, defaultModel };
   const conv = useConversationTurn({
     harnessId: r.h.id, sessionId: resume, target, onRan,
@@ -116,11 +147,13 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
   // While a test runs, the harness's live feed is open too: the test's own stream renders its turn,
   // and if that stream drops (a network blink, a restart) the feed carries the rest of it live
   // instead of the turn standing still until the record settles it.
-  useHarnessBus(conv.busy ? r.h.id : '');
+  // (a recorded run reaches no server: nothing to hear)
+  useHarnessBus(conv.busy && !recorded ? r.h.id : '');
   // The Agent stack beside the test follows its turn: the layers the current event works through,
   // told to the page only when they change (the stream's deltas leave them as they are).
   const lastAsst = [...conv.msgs].reverse().find((m): m is AsstMsg => m.role === 'assistant');
-  const working = conv.busy ? workingNow(lastAsst, conv.stopping) : null;
+  // (a recorded run drawn whole at once is not running: it is drawn as it ended)
+  const working = conv.busy && !(recorded && whole) ? workingNow(lastAsst, conv.stopping) : null;
   const workSig = working ? working.join(' ') : '';
   const liveRef = useRef(onLive);
   liveRef.current = onLive;
@@ -140,7 +173,13 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
     void read(0);
     return () => { alive = false; if (t) clearTimeout(t); };
   }, [conv.busy, sid, conv.liveSessionId]);
-  const started = conv.msgs.length > 0 || !!resume;
+  const started = conv.msgs.length > 0 || !!resume || !!recording;
+  // a recorded run plays as a live one runs: the page's row and head say it is running until it ends
+  const playing = recorded && conv.busy && !whole;
+  const replayRef = useRef(onReplay);
+  replayRef.current = onReplay;
+  useEffect(() => { replayRef.current?.(playing); }, [playing]);
+  useEffect(() => () => replayRef.current?.(false), []);
   // a task opened from the list shows its latest turn, as a chat does: the conversation's own
   // scroller goes to its end once the record has drawn
   const chatRef = useRef<HTMLDivElement | null>(null);
@@ -164,18 +203,72 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
   // what they asked to see run), once, on the model chosen there, as soon as that model is known to run.
   // One no provider serves now leaves it in the box instead, to send once another model is chosen.
   const avail = modelAvailability(target.backend, model);
+  // A recorded first task is never also sent live: it has no first task to run.
   useEffect(() => {
-    if (resume || conv.msgs.length || conv.busy || conv.loadFailed || avail === 'unknown' || !peekFirstTask(r.h.id)) return;
+    if (recording || resume || conv.msgs.length || conv.busy || conv.loadFailed || avail === 'unknown' || !peekFirstTask(r.h.id)) return;
     const text = takeFirstTask(r.h.id);
     if (avail === 'no') setInput(text);
     else sendNow(text, []);
     // sendNow is this render's; the hand-off happens once, when the conditions above first hold
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resume, conv.msgs.length, conv.busy, conv.loadFailed, avail, r.h.id]);
+  // A setup's recorded first run, played back here: it reaches no server and takes nothing. In order
+  // and in proportion, at most REPLAY_MAX_MS long, when New setup has just saved it (start/seed.ts
+  // takeFirstReplay); opened from the list, or again, whole at once.
+  const autoPlayed = useRef(false);
+  const play = (all: boolean) => {
+    if (!recording) return;
+    autoPlayed.current = true;
+    setReplayed(true); setWhole(all); setInput('');
+    const speed = all ? 0 : 1 / replaySpeed(recording);
+    conv.replay(recording.request, recording.events.map((e) => ({ t: e.t * speed, ev: e.ev })), (f) => recordedFile(recording, f), recording.durMs * speed);
+  };
+  useEffect(() => {
+    if (!recording || autoPlayed.current) return;
+    play(!takeFirstReplay(r.h.id));
+    // play is this render's; a recording plays once, as the task opens
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recording, r.h.id]);
   // a task whose record could not be read takes no message: it would go on from an unknown point
   const canSend = !conv.busy && !conv.loadFailed && (input.trim() || att) && modelAvailability(target.backend, model) !== 'no';
+  // the recorded run, finished and offered as a conversation like any other (start/fork.ts): the first
+  // message written under it starts a task of yours carrying the recording as its earlier messages
+  const forkable = recorded && !!recording && offerFork;
+  const fork = async () => {
+    const text = input.trim();
+    if (!text || !recording || forking.current) return;
+    forking.current = true;
+    const answer = conv.msgs.filter((x): x is AsstMsg => x.role === 'assistant')
+      .map((a) => a.blocks.filter((b) => b.kind === 'text' && !b.error).map((b) => (b.kind === 'text' ? b.text : '')).join('\n\n')).join('\n\n');
+    // the run's own files go with its request (the imported turn); a file the person attached goes
+    // with their message, as always
+    const own = att ? [{ name: att.name, dataUri: att.dataUri }] : [];
+    // the run's files that cannot be read (after their own retries) stop the fork: nothing is sent
+    // without them, and the message stays in the box
+    let runFiles: Awaited<ReturnType<typeof forkFiles>>;
+    try { runFiles = await forkFiles(recording); }
+    catch { forking.current = false; toast('The recorded files could not be read just now. Try again.'); return; }
+    const m = model;
+    setForked(true);
+    // from here the recorded run is this task's imported first turn: quoted, never the agent's own
+    conv.setMsgs((ms) => ms.map((x) => ({ ...x, imported: true as const })));
+    const took = await conv.send(text, own, { input: forkInput(recording, answer, text, runFiles, own) });
+    forking.current = false;
+    if (!took) { setForked(false); conv.setMsgs((ms) => ms.map(({ imported: _i, ...x }) => x)); return; }
+    setTurnModels([recording.model, m]);
+  };
+  // a fork's first turn, read back once it has ended: kept whole (the recording imported as its first
+  // turn), or not, which keeps the recorded task read only in this browser from then on
+  const forkRead = useRef(false);
+  useEffect(() => {
+    const live = sid || conv.liveSessionId;
+    if (!forked || conv.busy || !live || forkRead.current) return;
+    forkRead.current = true;
+    loadSessionTurns(live).then(({ turns }) => noteFork(importedFirst(turns))).catch(() => { /* asked again on the next fork */ });
+  }, [forked, conv.busy, sid, conv.liveSessionId]);
   const send = () => {
     if (!canSend) return;
+    if (forkable) { void fork(); return; }
     // a file alone goes as it is: no words are put in the person's mouth
     sendNow(input.trim(), att ? [{ name: att.name, dataUri: att.dataUri }] : []);
   };
@@ -198,16 +291,21 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
     try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Text selected. Press Cmd or Ctrl + C.'); }
   };
 
-  // the composer (leanComposer): the box, attach, the model in its bar, send
-  const composer = (ph: string) => (
-    <AgentComposer value={input} onChange={setInput} onSend={send} onStop={() => conv.stop()}
+  // the composer (leanComposer): the box, attach, the model in its bar, send. A recorded run where this
+  // server cannot continue one has a bar in its place: what it is, and Follow up (a task of yours)
+  const composer = (ph: string) => (recorded && !offerFork ? (
+    <div className="readonly"><span>Recorded task</span>
+      {onFollowUp ? <button type="button" className="btn small" onClick={onFollowUp}>Follow up</button> : null}
+    </div>
+  ) : (
+    <AgentComposer value={input} onChange={setInput} onSend={send} onStop={playing ? undefined : () => conv.stop()}
       running={conv.busy} stopping={conv.stopping} sendDisabled={!canSend}
       placeholder={ph} runningPlaceholder="Working on it. Write your next message here."
       ariaLabel={ph.replace(/…$/, '')} inputId="input" inputRef={ta}
       attachments={att ? [{ name: att.name, src: att.dataUri }] : []} onRemoveAttachment={() => setAtt(null)}
       onAttachFiles={(fl) => void pick(fl[0])} accept={ACCEPT} left={pgOpts()}
       labels={{ send: 'Run task' }} />
-  );
+  ));
   const { mark, motion } = harnessMark(r.h.base);
   const asked = conv.msgs.filter((m) => m.role === 'user').length;
   // what this task made, for the links a reply makes to its own files (TaskThread Md)
@@ -226,14 +324,19 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
     // how long it took: the turn's own clock when this page watched it, else what the record kept. A
     // turn that did not finish says so in its own outcome line above (stopped, incomplete, failed)
     const c = m.clock;
-    const took = c && c.startedAt != null && c.endedAt != null ? c.endedAt - c.startedAt : m.elapsed != null ? m.elapsed * 1000 : null;
+    const ms = c && c.startedAt != null && c.endedAt != null ? c.endedAt - c.startedAt : m.elapsed != null ? m.elapsed * 1000 : null;
+    // a recorded run says the time it took when it ran, however fast it is played
+    const rec0 = replayed && t === 0 && !!recording;
+    const took = rec0 && recording ? recording.durMs : ms;
     const end = m.status === 'done' ? (took != null && took >= 0 ? `Done in ${sec(took)}` : 'Done') : '';
     const rid = turnIds[t] || '';
     const bits: React.ReactNode[] = [];
+    if (rec0) bits.push(<span key="rec" className="replay-tag">Recorded</span>);
     if (note) bits.push(<span key="m">{r.baseName} · <span className="mono">{note}</span></span>);
     if (end) bits.push(<span key="e">{end}</span>);
     // its actions, after the words, once it has finished: the reply itself as Markdown (the one most
-    // people want, first), its ID, and a request that carries on from it
+    // people want, first), its ID, and a request that carries on from it (not on a recorded run,
+    // which no server holds)
     const acts: React.ReactNode[] = [];
     const asMd = m.status !== 'running' ? replyMarkdown(m.blocks, m.files.filter((f) => !isInternalOutput(f.filename))) : '';
     if (asMd) {
@@ -243,7 +346,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
     if (rid) {
       acts.push(<button key="r" type="button" className="icon-btn xs" aria-label="Copy response ID"
         title="Copy response ID" onClick={() => void copyRid(rid)}>{HASH}</button>);
-      if (m.status !== 'running') {
+      if (!rec0 && m.status !== 'running') {
         acts.push(<button key="c" type="button" className="icon-btn xs" aria-label="Copy a request that continues this conversation"
           title="Copy a request that continues from here" onClick={() => void copyNext(t, rid)}>{CODE}</button>);
       }
@@ -297,10 +400,16 @@ export interface Slot {
   key: string;
   /** a past test to continue (its session), or null for a new one */
   resume: string | null;
+  /** the setup's recorded first task (start/replay.ts): played back, read only */
+  recorded?: RecordedRun | null;
 }
 
-export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = null, onLive, taskTitle }: {
+export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = null, onLive, taskTitle, onFollowUp, onReplay }: {
   r: SetupRow; onRan: () => void;
+  /** a recorded first task's Follow up: a new task, run live */
+  onFollowUp?: () => void;
+  /** the recorded first task is playing (true) or has ended (false) */
+  onReplay?: (playing: boolean) => void;
   /** the open task's title, as its bar shows it */
   taskTitle?: string;
   /** the task shown: a past one to continue, or a new one */
@@ -441,7 +550,8 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
     <>
       <Test key={slot.key} r={r} model={model} defaultModel={defaultModel} headerValues={hv} onRan={onRan}
         onBorn={(sid) => { onBorn(sid); onRan(); }} pgOpts={pgOpts}
-        resume={slot.resume} onSeen={onSeen} onPreview={onPreview} previewKey={previewKey} onLive={onLive} taskTitle={taskTitle} />
+        resume={slot.resume} onSeen={onSeen} onPreview={onPreview} previewKey={previewKey} onLive={onLive} taskTitle={taskTitle}
+        recording={slot.recorded || null} onFollowUp={onFollowUp} onReplay={onReplay} />
       {modelPop}
       {headersPop}
     </>

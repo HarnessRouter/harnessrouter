@@ -590,9 +590,11 @@
 #hrui .ws-rail.ws-rail-x{background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line)}
 #hrui .ws-row.ws-fail small{color:var(--accent)}
 @media (max-width:520px){#hrui .ws-people .team-row .role{flex:0 1 auto;max-width:42%;text-align:right}}
-/* a recorded first task's head while it plays (start/RecordedTrace.tsx RecordedHead): running, as a live
-   task is, with nothing to stop or share */
+/* a recorded first task's head (setup/TaskDetail.tsx RecordedHead): Recorded, and running while it
+   plays, as a live task is, with nothing to stop or share */
 #hrui .tk-running{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);white-space:nowrap}
+#hrui .tp-head .tk-acts .demo-chip{flex:none;font-size:12px;padding:2px 9px}
+#hrui .tp-head .tk-acts .demo-chip+.tk-running{margin-left:10px}
 /* the Next card under a new setup's first task (start/NextBar, the design's .nx2; Richard 2026-10-19):
    your app (a brick still to build) and the setup (a built brick) at the two ends, the task going
    over and the result coming back between them, Set up the app under the wires. The design draws it

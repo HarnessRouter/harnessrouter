@@ -1,7 +1,11 @@
 // Start's three demo tasks (docs/uxuidesign/console-91: DEMOS / GUIDED / EX). A demo here is a
 // sentence of instructions and the harness and model the design pairs with it; picking one types the
 // sentence into Start's box, and Continue opens "Set up an agent harness" with it. Saving makes a real
-// setup in the workspace, like any other, which runs on this instance's own keys.
+// setup in the workspace, like any other, which runs on this instance's own keys. Saved unchanged, on
+// the harness and model it was recorded on, a demo whose first request has a recorded real run
+// (start/replay.ts) is saved from that run's template and plays the run back as its first task, which
+// sends nothing and spends nothing; a changed one, or one on another pair, runs live like any setup.
+// So each demo's pair is the one its recording ran on.
 import { modelAvailability, oobById, oobDefaultModel, oobModels, offeredOob, type BaseInfo, type OobHarness } from '@/lib/harness';
 
 export interface Demo {
@@ -17,7 +21,7 @@ export interface Demo {
 
 // The design's guided order: product image, contract, safety check.
 export const DEMOS: Demo[] = [
-  { from: 'Product brief', to: 'product image', short: 'Product images', base: 'hermes', model: 'gpt-6.1-sol',
+  { from: 'Product brief', to: 'product image', short: 'Product images', base: 'hermes', model: 'gpt-5.4',
     instr: 'Generate a product image for our store from a short brief: square, studio light, soft shadow, no text on the product.' },
   { from: 'Contract', to: 'risk review', short: 'Contract review', base: 'dsh', model: 'deepseek-v4-pro',
     instr: 'Review this SaaS contract clause from the customer side. List each risk with a severity, then say Sign, Negotiate or Reject.' },

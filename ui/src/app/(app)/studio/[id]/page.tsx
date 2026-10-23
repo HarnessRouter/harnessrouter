@@ -7,7 +7,10 @@
 // task of the setup takes follow-ups.
 //
 // The page opens on the newest task (a link to a task opens that one, and a setup with none opens on
-// New task). The open task is always one the list shows: filtering to Failed opens a failed one. On a
+// New task, or on its recorded first task when it was saved from a demo's recorded run: start/
+// replay.ts, played as the page opens right after the save, drawn whole after that; a recording that
+// could not be read is said, with Try again, never swapped for a live task). The open task is always
+// one the list shows: filtering to Failed opens a failed one. On a
 // phone the list and the open task take turns, with a back between. The address carries the tab
 // (?tab=settings), Settings' open layer (?layer=), Capabilities' tab (?cap=) and a task opened by its
 // link or sent from here (?test=); an older link to the Tasks tab (?tab=tasks&task=) opens that task
@@ -23,13 +26,14 @@ import { hasSettingsDraft, layerOf, useBrickNav, type CapTab, type LayerKey } fr
 import { SetUpApp } from '@/components/hrui/SetUpApp';
 import { Skel, SkLine, SkRows, SkThread } from '@/components/hrui/Skel';
 import { filterTasks, NO_FILTER, TaskList, useLinkedTask, useTaskList, type TaskFilter } from '@/components/hrui/setup/TaskRail';
-import { NewTaskHead, TaskHead } from '@/components/hrui/setup/TaskDetail';
+import { NewTaskHead, RecordedHead, TaskHead } from '@/components/hrui/setup/TaskDetail';
 import { FilesPanel, type OpenFile } from '@/components/hrui/setup/TurnFiles';
 import { PreviewGrip, usePreviewWidth } from '@/components/hrui/setup/PreviewGrip';
 import { BrowserControl, BrowserSlot, browserStepsOf, stepOf, useTaskBrowser } from '@/components/hrui/setup/BrowserSlot';
 import { TurnSteps, type TurnStepsOf } from '@/components/hrui/setup/AgentTurns';
 import { getPaneState, setPaneState, useConvState } from '@/lib/conversation';
 import { seededSetup } from '@/components/hrui/start/seed';
+import { useRecordedRunState } from '@/components/hrui/start/replay';
 import { toast } from '@/components/hrui/toast';
 
 const enc = encodeURIComponent;
@@ -41,6 +45,11 @@ export default function SetupPage() {
   const rawTab = params.get('tab');
   const tab: SetupTab = rawTab === 'settings' ? 'settings' : 'tasks';
   const { row, cards, missing, failed, reload } = useSetup(id);
+  // the demo run this setup was saved from, named on its own record (start/replay.ts): its first task,
+  // always the list's oldest row (undefined while the recordings are read; a read that failed is said
+  // below, never taken for "none")
+  const rec = useRecordedRunState(row ? row.h.source : undefined);
+  const recRun = rec.run;
   // the old Tasks tab's address (a task's link) and the old Playground's open here
   const linkTask = rawTab === 'tasks' ? params.get('task') : null;
   useEffect(() => {
@@ -111,14 +120,16 @@ export default function SetupPage() {
   // follows the address only; the page's own writes set testSid first
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, urlTest]);
-  // no task asked for: once the list is read, the newest one it shows (New task when it has none; a
-  // list that could not be read is not one with none)
+  // no task asked for: once the list is read, the newest one it shows (its recorded first task when it
+  // has no other, once that is read; New task when it has none; a list that could not be read is not
+  // one with none)
   useEffect(() => {
     if (slot || !list.ready || !row) return;
     const top = shown[0];
-    if (top) { setSlot({ key: top.session_id, resume: top.session_id }); setTestSid(top.session_id); }
-    else if (!list.all.length && !list.failed) setSlot({ key: 'n0', resume: null });
-  }, [slot, list.ready, list.failed, list.all.length, shown, row]);
+    if (top) { setSlot({ key: top.session_id, resume: top.session_id }); setTestSid(top.session_id); return; }
+    if (list.all.length || list.failed || recRun === undefined) return;
+    setSlot(recRun ? { key: 'rec', resume: null, recorded: recRun } : { key: 'n0', resume: null });
+  }, [slot, list.ready, list.failed, list.all.length, shown, row, recRun]);
   // the open task is always one the list shows: a filter that leaves it out opens its first task
   const fRef = useRef(f);
   useEffect(() => {
@@ -150,6 +161,18 @@ export default function SetupPage() {
   const [dirty, setDirty] = useState(() => hasSettingsDraft(id));
   // the bricks the open test's running turn is working through now (null when none runs)
   const [working, setWorking] = useState<string[] | null>(null);
+  // the recorded first task, while it is the one open (opened from its row, or as the page opened);
+  // running, as a live run is, while it plays
+  const [replaying, setReplaying] = useState(false);
+  const recOn = !!slot?.recorded && !testSid;
+  const recRunning = recOn && replaying;
+  const openRecorded = () => {
+    if (!recRun || recOn) return;
+    setPreview(null); setPicked(true);
+    setSlot({ key: `rec${Date.now()}`, resume: null, recorded: recRun }); setTestSid(null); router.replace(pgHref(null), { scroll: false });
+  };
+  // when the setup was made (its record's createdAt, seconds or ms): the recorded row's time
+  const madeAt = row ? (row.h.createdAt > 0 && row.h.createdAt < 1e12 ? row.h.createdAt * 1000 : row.h.createdAt) : 0;
   useBrickNav({ onLayer });
 
   if (failed && !row) {
@@ -238,13 +261,18 @@ export default function SetupPage() {
     <div className="tk-page" style={docked ? ({ '--pv-w': `${pv.width}px` } as CSSProperties) : undefined}>
       {head}
       <div ref={splitRef} className={`tk-split${docked ? ' previewing' : ' has-side'}${picked ? ' show-d' : ''}`}>
-        <TaskList setupName={row.h.name} list={list} f={f} setF={setF} current={testSid} isNew={isNew} newOpen={!!slot && !slot.resume}
+        <TaskList setupName={row.h.name} list={list} f={f} setF={setF} current={testSid} isNew={isNew && !recOn} newOpen={!!slot && !slot.resume && !recOn}
+          recorded={recRun ? { title: recRun.request, at: madeAt, on: recOn, running: recRunning, onOpen: openRecorded } : null}
+          recordedRetry={rec.failed ? rec.retry : undefined}
           onOpen={openTest} onNew={() => newTest()} onGone={gone} />
         <div className="tk-d">
           {!slot ? (
             list.ready ? (list.failed && !list.all.length ? (
               <div className="tk-none" role="alert">The tasks could not be read just now.{' '}
                 <button type="button" className="link-q inl" onClick={list.refresh}>Try again</button></div>
+            ) : rec.failed ? (
+              <div className="tk-none" role="alert">This setup’s recorded first task could not be read just now.{' '}
+                <button type="button" className="link-q inl" onClick={rec.retry}>Try again</button></div>
             ) : (
               <div className="tk-none"><b>No tasks match.</b></div>
             )) : (
@@ -257,6 +285,8 @@ export default function SetupPage() {
                   browser={hasBrowser ? <BrowserControl shown={browserShown} live={tb.live} onToggle={toggleBrowser} /> : undefined}
                   onBack={() => setPicked(false)}
                   onStopped={() => { setTimeout(() => { list.refresh(); reload(); }, 1500); }} />
+              ) : recOn && slot.recorded ? (
+                <RecordedHead title={slot.recorded.request} running={recRunning} onBack={() => setPicked(false)} />
               ) : <NewTaskHead onBack={() => setPicked(false)} />}
               {linkFailed ? (
                 <div className="tk-none" role="alert">This task could not be read just now.{' '}
@@ -265,7 +295,7 @@ export default function SetupPage() {
               <div className="convo" hidden={linkFailed}>
                 <Playground r={row} onRan={() => { setNudge((n) => n + 1); reload(); }}
                   onPreview={(files, key) => setPreview({ files, key })} previewKey={preview?.key || null}
-                  slot={slot} onBorn={bornTest} onLive={setWorking}
+                  slot={slot} onBorn={bornTest} onLive={setWorking} onFollowUp={() => newTest()} onReplay={setReplaying}
                   taskTitle={barCard?.title?.trim() || undefined} />
               </div>
             </>
