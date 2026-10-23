@@ -150,6 +150,21 @@ def test_relay_drops_empty_id_and_name_only():
 def test_relay_leaves_non_data_lines_alone():
     assert dsh_driver._rewrite_sse_line(b"data: [DONE]") == b"data: [DONE]"
     assert dsh_driver._rewrite_sse_line(b"") == b""
+    assert dsh_driver._rewrite_sse_line(b"event: delta") == b"event: delta"
+    assert dsh_driver._rewrite_sse_line(b"data:[DONE]") == b"data:[DONE]"
+
+
+def test_relay_rewrites_a_data_line_with_no_space_after_the_colon():
+    """The space after an SSE field's colon is optional, so `data:{...}` is a conformant
+    delta and its empty id/name must be stripped exactly as the spaced form's are."""
+    cont = (b'{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function",'
+            b'"function":{"name":"","arguments":"{\\"command\\""}}]},"finish_reason":null,"index":0}]}')
+    spaced = dsh_driver._rewrite_sse_line(b"data: " + cont)
+    tight = dsh_driver._rewrite_sse_line(b"data:" + cont)
+    assert tight == spaced
+    tc = json.loads(tight[6:])["choices"][0]["delta"]["tool_calls"][0]
+    assert "id" not in tc and "name" not in tc["function"]
+    assert tc["function"]["arguments"] == '{"command"'
 
 
 # ── builder ─────────────────────────────────────────────────────────────────────────

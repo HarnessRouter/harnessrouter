@@ -54,11 +54,20 @@ UPSTREAM_KEY = ""
 
 
 def _rewrite_sse_line(line: bytes) -> bytes:
-    """Drop empty-string id/name from tool_call deltas in one `data:` SSE line."""
-    if not line.startswith(b"data: {"):
+    """Drop empty-string id/name from tool_call deltas in one `data:` SSE line.
+
+    The space after the field's colon is OPTIONAL in the SSE spec, so a provider that writes
+    `data:{...}` is conformant and its deltas must be rewritten too — welding the prefix to
+    `data: {` turned this whole function into a pass-through against such an upstream, which is
+    exactly the UNKNOWN_TOOL failure it exists to prevent. Every other SSE reader in this tree
+    tests `data:`; so does this one, with the JSON-object check kept but separate."""
+    if not line.startswith(b"data:"):
+        return line
+    payload = line[5:].removeprefix(b" ")
+    if not payload.startswith(b"{"):
         return line
     try:
-        obj = json.loads(line[6:])
+        obj = json.loads(payload)
         for ch in obj.get("choices") or []:
             for tc in (ch.get("delta") or {}).get("tool_calls") or []:
                 if tc.get("id") == "":
