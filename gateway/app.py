@@ -56,6 +56,8 @@ from public_artifacts import public_artifact_headers
 import browser_plane         # the browser surface: a cloud browser over CDP behind the browser plug
 import sql_plane             # the read-only SQL data plane (gate, row cap, introspection)
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
+import setup_compose         # New setup: the rules every built configuration is held to
+import setup_builder         # New setup: the built-in builder, saving into the person's workspace
 
 POOL_ENDPOINT = os.environ.get("POOL_MGMT_ENDPOINT", "").rstrip("/")
 VAULT_URL = os.environ.get("VAULT_URL", "").rstrip("/")
@@ -20094,7 +20096,12 @@ async def _pub_org_member(request: Request) -> tuple[str, str]:
 
 @app.post("/v1/harnesses")
 async def create_harness_public(body: HarnessBody, request: Request) -> dict:
-    p = await _principal(request)
+    return await _harness_create_as(await _principal(request), body)
+
+
+async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None) -> dict:
+    """The public create, for the caller `p`: every check it makes, then the record. `hid` is the id
+    New setup's builder derives from its build's key (setup_builder.setup_id), else a new one."""
     org, member = p.get("org", ""), p.get("member", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
@@ -20103,7 +20110,7 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)
     body.plugins = await _plugins_prepare(body, org)
-    hid = _rid("chrn")
+    hid = hid or _rid("chrn")
     now = str(int(time.time() * 1000))
     props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
              **_harness_props(body), **_harness_source_prop(body),
@@ -20112,6 +20119,439 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     if await _plugs_ensure_required(org, hid):
         return _harness_out(await _vertex_get(hid) or {"id": hid, **props})
     return _harness_out({"id": hid, **props})
+
+
+# ── New setup: the builder (setup_builder holds the harness, its checks and the build's record) ────
+# The hosted service's routes and their parts, ported: what the person may choose (_setup_bases),
+# what the builder reads (_setup_build_inventory), the models it runs on (_setup_build_wires), and the
+# save (_setup_build_save). Its apps catalog, its request check and its own model accounts are not
+# here (setup_builder's module note).
+class SetupBuildBody(BaseModel):
+    job: str = ""
+    base: str = setup_compose.AUTO
+    model: str = setup_compose.AUTO
+    workspace: str = ""
+    key: str = ""
+
+
+# A base Auto never picks although it takes skills: qoder runs on its own remote runtime, which mounts
+# no environment and reads none of this instance's keys.
+_SETUP_NOT_AUTO = frozenset({"qoder"})
+_SETUP_MEDIA_DECL = {"name": "media", "id": "mcp.media"}
+
+
+async def _setup_person(request: Request) -> dict:
+    """A person at the console, as themselves: what New setup's routes serve. An API key is refused."""
+    p = await _principal(request)
+    if not p.get("org"):
+        raise HTTPException(401, "no organization in session")
+    if p.get("via") == "api_key" or p.get("calibration"):
+        raise HTTPException(403, "This runs from the console, signed in as yourself.")
+    return p
+
+
+async def _setup_bases(org: str) -> dict:
+    """The agent harnesses this organization may choose now, read the way the console's pickers read
+    them: each offered base with the models it can run (/v1/bases' view), its default, whether it
+    takes skills and whether Auto may pick it."""
+    bases: dict = {}
+    views: dict[str, list[str]] = {}
+    for bid, b in _BASE_CATALOG.items():
+        if b.get("status") != "ready":
+            continue
+        backend = b["backend"]
+        if backend not in views:
+            view = await _harness_models_view({}, backend, await _servable_models(org, backend))
+            views[backend] = [str(m["id"]) for m in view["models"] if m.get("available")]
+        runs = views[backend]
+        if not runs:
+            continue
+        d = str((_MODEL_CATALOG.get(backend) or {}).get("default") or "")
+        takes = bool(b.get("skills", True))
+        bases[bid] = {"name": b["label"], "default": d if d in runs else runs[0], "models": list(runs), "skills": takes,
+                      "auto": takes and bid not in _SETUP_NOT_AUTO}
+    return bases
+
+
+async def _setup_builtin_skills(org: str) -> dict:
+    """The built-in skills a turn of this organization would mount: on by default and usable here
+    (the image skill only where a turn would be handed an image model: _image_auth's rule)."""
+    del org
+    image_ok = (SANDBOX_TRUST == "owner" or HR_BROKER_IMAGES) and bool(await _effective_image_model_map())
+    skills: dict = {}
+    for n, m in sorted(_builtin_skills().items()):
+        if not m.get("default_enabled"):
+            continue                  # a skill a harness would have to switch on is not offered here
+        if n == _IMAGE_SKILL and not image_ok:
+            continue
+        skills[n] = {"name": str(m.get("title") or n), "about": str(m.get("description") or "")[:240]}
+    return skills
+
+
+def _setup_build_wire(vendor: str, cfg: dict, model_id: str, canonical: str) -> dict | None:
+    """Where one connection answers chat completions, and the header its key goes in (the relay's own
+    rules: an Azure resource under /openai/v1 with `api-key`, anything else a bearer). None for a
+    connection that does not speak that shape (Anthropic's and Bedrock's own APIs, Qoder's runtime, a
+    custom endpoint in another format) or signs in by federation."""
+    vendor = str(vendor or "").strip().lower()
+    key = str(cfg.get("api_key") or "").strip()
+    if not key or _entra_conn(cfg) or vendor in ("anthropic", "bedrock", "qoder"):
+        return None
+    if vendor == "custom" and str(cfg.get("api_format") or "openai").strip().lower() != "openai":
+        return None
+    base = _provider_base_url(vendor, str(cfg.get("base_url") or "") or _PROVIDER_BASE.get(vendor, ""))
+    if not base:
+        return None
+    full = vendor == "custom" and str(cfg.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
+    header = {"api-key": key} if vendor in ("azure", "azure-foundry") else {"authorization": f"Bearer {key}"}
+    return {"url": base if full else f"{base}/chat/completions", "headers": header,
+            "model": model_id or canonical, "canonical": canonical, "route": vendor}
+
+
+async def _setup_build_model_wire(org: str, canonical: str) -> dict | None:
+    """The builder's connection for one model, found the way a Hermes turn finds it: the model's
+    integration first, then the policy chain's connections that serve it."""
+    integrations = await _integrations_doc()
+    mm = await _effective_model_map()
+    integ = _integration_driving(integrations, setup_builder.BASE, canonical, mm.get(canonical) or mm.get(canonical.lower()))
+    if integ:
+        models = _integration_models(integ)
+        w = _setup_build_wire(str(integ.get("provider") or ""), integ.get("config") or {},
+                              models.get(canonical) or models.get(canonical.lower()) or "", canonical)
+        if w:
+            return w
+    for name in await _resolve_chain(org, setup_builder.BASE, None):
+        conn, _tenant = await _get_connection(org, name)
+        if not conn or not _conn_serves(conn, canonical) or _chain_refusal(conn, setup_builder.BASE):
+            continue
+        vendor = str(conn.get("provider") or "")
+        w = _setup_build_wire(vendor, conn, _provider_model_id(vendor.lower(), canonical) or canonical, canonical)
+        if w:
+            return w
+    return None
+
+
+async def _setup_build_wires(org: str) -> list[dict]:
+    """The builder's connections, best model first (setup_builder.builder_models): the models the
+    Hermes harness runs here now, each with the connection a turn of it would take."""
+    backend = (_BASE_CATALOG.get(setup_builder.BASE) or {}).get("backend") or setup_builder.BASE
+    cat = _MODEL_CATALOG.get(backend) or {}
+    view = await _harness_models_view({}, backend, await _servable_models(org, backend))
+    runs = [str(m["id"]) for m in view["models"] if m.get("available")]
+    known = {m for c in _MODEL_CATALOG.values() for m in (c.get("models") or [])} | set(runs)
+    out: list[dict] = []
+    for canonical in setup_builder.builder_models(str(cat.get("default") or ""), runs, known):
+        w = await _setup_build_model_wire(org, canonical)
+        if w:
+            out.append(w)
+        if len(out) >= setup_builder.MAX_WIRES:
+            break
+    return out
+
+
+def _setup_build_plugin(t: str) -> dict:
+    """A connected plugin as the builder reads it: its tools, each with what it does."""
+    label = plugs_plane.TYPES.get(t, t)
+    tools = [{"name": str(x.get("name") or ""), "risk": str(x.get("risk") or ""),
+              "description": str(x.get("description") or "")[:200]} for x in plugs_plane.tools_of(t)][:40]
+    names = [x["name"] for x in tools]
+    about = ("Tools: " + ", ".join(names[:12]) + (f" and {len(names) - 12} more" if len(names) > 12 else "")) if names else label
+    return {"name": label, "about": about, "tools": tools}
+
+
+def _setup_build_skill_md(files) -> str:
+    md = next((f for f in files or [] if isinstance(f, dict) and str(f.get("path") or "").lower() == "skill.md"), None)
+    return str((md or {}).get("content") or "")[:1500]
+
+
+def _setup_skill_about(sk: dict) -> str:
+    """A skill's description, from its SKILL.md's frontmatter when it is inline ('' when it is not)."""
+    files = sk.get("files") if isinstance(sk.get("files"), list) else None
+    md = _setup_build_skill_md(files) if files else str(sk.get("content") or "")
+    m = re.search(r"^description:\s*(.+)$", md, re.MULTILINE)
+    return m.group(1).strip().strip("\"'")[:240] if m else ""
+
+
+def _setup_build_mcp_id(url: str) -> str:
+    """One id per address (trailing slashes and case ignored, as Add-ons › Tools lists them)."""
+    return "mcp:" + hashlib.sha256(url.strip().rstrip("/").lower().encode()).hexdigest()[:12]
+
+
+async def _setup_build_inventory(p: dict, bases, ctx: dict) -> dict:
+    """What the builder reads and chooses from: the person's current workspace as they may see it,
+    for this organization and workspace only: the agent harnesses and models this instance runs now,
+    the built-in skills a turn mounts, the connected plugins with their tools and the media tools, the
+    skills and MCP servers the workspace's setups have (Add-ons › Skills and Tools: a skill or a server
+    lives in a setup, and a new setup gets its own copy), its environments with a built version, and
+    the plugins a person could connect and has not. A part that cannot be read now is named in
+    `unread`, never read as empty: nothing is asked to be connected where it may already be."""
+    org = str(p["org"])
+    own, wsd = str(p.get("workspace") or ""), bool(p.get("workspace_default"))
+    plug_ws = own or ("" if PLUGS_REGISTRY_URL else _WORKSPACE_DEFAULT_ID)
+    builtin = _builtin_skills()
+
+    async def plugs_part():
+        types = [t for t in plugs_plane.TYPES if t not in plugs_plane._ALIAS]
+        found = await asyncio.gather(*(_plug_lookup(org, plug_ws, t) for t in types))
+        if any(status == "unavailable" for status, _rec in found):
+            raise RuntimeError("registry")
+        plugins = {t: _setup_build_plugin(t) for t, (status, _rec) in zip(types, found) if status == "connected"}
+        connect = {t: {"name": plugs_plane.TYPES[t]} for t, (status, _rec) in zip(types, found)
+                   if status == "missing" and t in setup_compose.CONNECTABLE}
+        return plugins, connect
+
+    async def setups_part():
+        rows = [r for r in await _vg_list_by_org("Harness", org)
+                if str(r.get("deleted")) not in ("1", "true", "True")
+                and _workspace_keep(str(r.get("workspace") or ""), own, wsd) and _scope_keeps(p, r.get("workspace"))]
+        rows.sort(key=lambda r: int(str(r.get("updated_at") or r.get("created_at") or 0) or 0), reverse=True)
+        skills, servers = {}, {}
+        ctx["skills"], ctx["mcp"] = {}, {}
+        for r in rows:
+            h = _harness_out(r)
+            for sk in h.get("skills") or []:
+                if not isinstance(sk, dict) or str(sk.get("enabled")) in ("False", "false", "0"):
+                    continue
+                name = str(sk.get("name") or sk.get("id") or "").strip()
+                if not name or not (sk.get("files") or sk.get("content") or sk.get("blob")):
+                    continue                             # a switch on a built-in, not a skill of its own
+                iid = f"skill:{name}"
+                if iid in skills:
+                    continue
+                skills[iid] = {"name": name, "about": _setup_skill_about(sk), "library": True}
+                ctx["skills"][iid] = sk
+            for e in h.get("mcpServers") or []:
+                url = str(e.get("url") or "")
+                if not url or str(e.get("id") or "") == _PLUGS_ENTRY["id"] or _hosted_mcp_path(url):
+                    continue                             # the servers this gateway hosts are attached by their own routes
+                iid = _setup_build_mcp_id(url)
+                if iid in servers:
+                    continue
+                host = urllib.parse.urlparse(url).hostname or ""
+                servers[iid] = {"name": str(e.get("name") or host or url)[:60],
+                                "about": f"Served at {host}." if host else ""}
+                ctx["mcp"][iid] = e
+        return skills, servers
+
+    async def env_part():
+        rows = [r for r in await _vg_list_by_org("Environment", org) if str(r.get("deleted") or "0") != "1"]
+        if own:
+            rows = [r for r in rows if _workspace_keep(str(r.get("workspace") or ""), own, wsd)]
+        out: dict = {}
+        for r in rows:
+            if not str(r.get("active_version") or "").isdigit() or not _scope_keeps(p, r.get("workspace")):
+                continue                             # nothing built yet: a task could not read it
+            e = _environment_out(r)
+            pk = [str(x.get("name") or x.get("spec") or "") if isinstance(x, dict) else str(x) for x in e.get("packages") or []][:12]
+            out[str(e["id"])] = {"name": str(e["name"] or e["slug"]), "about": str(e.get("description") or "")[:240],
+                                 "packages": [x for x in pk if x]}
+        return out
+
+    async def media_part():
+        return bool(_own_origins()) and bool(await _media_providers())
+
+    async def bounded(coro):
+        return await asyncio.wait_for(coro, setup_builder.INVENTORY_S - 2)
+
+    cat = await bases()
+    got = await asyncio.gather(bounded(plugs_part()), bounded(setups_part()), bounded(env_part()),
+                               bounded(media_part()), bounded(_setup_builtin_skills(org)), return_exceptions=True)
+    (plugs_r, setups_r, env_r, media_r, builtin_r) = got
+    unread: list[str] = []
+    for part, r in (("plugins", plugs_r), ("skills and MCP servers", setups_r), ("environments", env_r)):
+        if isinstance(r, BaseException):
+            unread.append(part)
+            print(f"[setup-build] org={org} {part} unread: {type(r).__name__}", flush=True)
+    plugins, connect = plugs_r if not isinstance(plugs_r, BaseException) else ({}, {})
+    if media_r is True:
+        plugins[setup_compose.MEDIA_ID] = dict(setup_compose.MEDIA)
+    skills = {} if isinstance(builtin_r, BaseException) else {
+        k: {**v, "instructions": _setup_build_skill_md((builtin.get(k) or {}).get("files"))} for k, v in builtin_r.items()}
+    ws_skills, servers = setups_r if not isinstance(setups_r, BaseException) else ({}, {})
+    return {"bases": cat["bases"], "default_base": cat["default_base"], "skills": {**skills, **ws_skills},
+            "plugins": plugins, "apps": {}, "mcp": servers,
+            "environments": env_r if isinstance(env_r, dict) else {}, "connect": connect,
+            "apps_findable": False, "unread": unread}
+
+
+async def _setup_build_skill_text(ctx: dict, item_id: str) -> str:
+    """A workspace skill's own instructions (its SKILL.md), for the builder that asked to read it."""
+    sk = (ctx.get("skills") or {}).get(item_id)
+    return _setup_build_skill_md(await _skill_bundle_files(sk)) if sk else ""
+
+
+async def _setup_build_exists(org: str, hid: str) -> bool:
+    """Whether the setup a build made under `hid` exists."""
+    v = await _vertex_get(hid)
+    return bool(v) and str(v.get("org") or "") == org and str(v.get("deleted")) not in ("1", "true", "True")
+
+
+async def _setup_build_skill_copy(sk: dict) -> dict:
+    """A workspace skill as a new setup's own copy: its files whole (a bundle set aside in the blob
+    store is read back, so the copy never shares the original's), switched on."""
+    name = str(sk.get("name") or sk.get("id") or "")
+    files = await _skill_bundle_files(sk)
+    if not files:
+        raise RuntimeError("the skill's files could not be read")
+    return (await _skills_prepare([{"name": name, "enabled": True, "files": files}]))[0]
+
+
+async def _setup_build_server_copy(org: str, e: dict) -> dict:
+    """An MCP server as a new setup's own copy (Add-ons › Tools' Add to setups): an id of its own, a
+    stored token copied under that id (only its reference is kept), a header reference as it is."""
+    nid = "mcp." + uuid.uuid4().hex[:8]
+    out = {k: v for k, v in e.items() if k not in ("id", "auth")}
+    out.update(id=nid, enabled=True)
+    auth = str(e.get("auth") or "")
+    if auth.startswith("vault:"):
+        token = await _resolve_mcp_auth(org, auth)
+        if not token:
+            raise RuntimeError("the server's token could not be read")
+        out["auth"] = (await _mcp_secret_store(org, nid, token))["ref"]
+    elif auth:
+        out["auth"] = auth
+    return out
+
+
+async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
+    """The built setup saved into the person's current workspace, under their own reach there, the way
+    the ordinary routes save each part: the setup record (_harness_create_as, every check of the public
+    create) with its copies of the workspace's skills and servers, then its media tools and its
+    plugins. A setup already made under this id is not made again. {"name", "attached"}: each part by
+    its id, "on", or "off" when it did not attach (the setup is saved). Raises when the setup itself
+    could not be made."""
+    org = str(p["org"])
+    ws = str(p.get("workspace") or "")
+    attached: dict = {}
+    v = await _vertex_get(hid)
+    if v:
+        if str(v.get("org") or "") != org or str(v.get("deleted")) in ("1", "true", "True"):
+            raise RuntimeError("the setup id is taken")
+        name = str(v.get("name") or cfg["name"])
+    else:
+        rows = await _vg_list_by_org("Harness", org)
+        names = [str(r.get("name") or "") for r in rows if str(r.get("deleted")) not in ("1", "true", "True")
+                 and _workspace_keep(str(r.get("workspace") or ""), ws, bool(p.get("workspace_default")))]
+        name = setup_builder.uniq_name(cfg["name"], names)
+        env = (cfg.get("environment") or {}).get("id") or None
+        skills, servers, taken = [], [], set()
+        for x in cfg["skills"]:
+            sk = (ctx.get("skills") or {}).get(x["id"])
+            if sk is None:
+                continue                                 # a built-in: mounted on every task, nothing to copy
+            try:
+                skills.append(await _setup_build_skill_copy(sk))
+                attached[x["id"]] = "on"
+            except Exception as e:  # noqa: BLE001
+                attached[x["id"]] = "off"
+                print(f"[setup-build] {hid}: a skill not copied: {type(e).__name__}", flush=True)
+        for x in cfg["mcpServers"]:
+            e = (ctx.get("mcp") or {}).get(x["id"])
+            nm = _mcp_name(str((e or {}).get("name") or "mcp"))
+            if e is None or nm in taken:
+                attached[x["id"]] = "off"
+                continue
+            try:
+                servers.append(await _setup_build_server_copy(org, e))
+                taken.add(nm)
+                attached[x["id"]] = "on"
+            except Exception as err:  # noqa: BLE001
+                attached[x["id"]] = "off"
+                print(f"[setup-build] {hid}: a server not copied: {type(err).__name__}", flush=True)
+        await _harness_create_as(p, HarnessBody(name=name, base=cfg["base"], default_model=cfg["model"],
+                                                system_prompt=cfg["instructions"], environment=env,
+                                                skills=skills or None, mcp_servers=servers or None), hid=hid)
+    if any(x["id"] == setup_compose.MEDIA_ID for x in cfg["plugins"]):
+        try:
+            await _hosted_media_attach(org, hid, await _harness_in_reach(p, hid), dict(_SETUP_MEDIA_DECL))
+            attached[setup_compose.MEDIA_ID] = "on"
+        except Exception as e:  # noqa: BLE001
+            attached[setup_compose.MEDIA_ID] = "off"
+            print(f"[setup-build] {hid}: media tools not attached: {type(e).__name__}", flush=True)
+    plugs = [x["id"] for x in cfg["plugins"] if x["id"] != setup_compose.MEDIA_ID]
+    need_plugs = [x["id"] for x in cfg["connectionsNeeded"] if x.get("kind") == "plugin"]
+    # what the job needs and the workspace has not connected is bound too: it works once connected
+    types = list(dict.fromkeys(plugs + need_plugs))
+    if types:
+        try:
+            await _plugs_attach(org, hid, await _harness_in_reach(p, hid), _plugs_types_ok(types), None)
+            state = "on"
+        except Exception as e:  # noqa: BLE001
+            state = "off"
+            print(f"[setup-build] {hid}: plugins not attached: {type(e).__name__}", flush=True)
+        attached.update({x: state for x in plugs})
+    # a built-in skill is mounted on every task of a base that takes skills: nothing to attach
+    attached.update({x["id"]: "on" for x in cfg["skills"] if x["id"] not in (ctx.get("skills") or {})})
+    return {"name": name, "attached": attached}
+
+
+def _setup_build_member(p: dict) -> str:
+    """Whose builds these are: the person signed in."""
+    raw = str(p.get("member") or "")
+    if not raw:
+        raise HTTPException(401, "Sign in again to set up.")
+    return raw
+
+
+@app.post("/v1/harnesses/builds", include_in_schema=False)
+async def setup_build_start(body: SetupBuildBody, request: Request) -> dict:
+    """Build a new setup from what it should do for its users: the built-in builder (setup_builder)
+    writes its configuration from the person's current workspace, on one of this instance's own
+    models, and the server saves it there. Answers at once with the build's record (building); the
+    page may leave and read it again by its key (GET /v1/harnesses/builds/{key}). The same key never
+    starts a second build."""
+    p = await _setup_person(request)
+    org = str(p["org"])
+    who = _setup_build_member(p)
+    own = str(p.get("workspace") or "")
+    asked = str(body.workspace or "").strip()
+    if asked and own and asked != own:
+        raise uhp_error(409, "workspace_mismatch", "This page is on another workspace now. Reload it and try again.", "workspace")
+    cached: dict = {}
+
+    async def bases() -> dict:
+        if "b" not in cached:
+            cached["b"] = {"bases": await _setup_bases(org), "default_base": "hermes"}
+        return cached["b"]
+
+    ctx: dict = {}
+    parts = {"inventory": lambda: _setup_build_inventory(p, bases, ctx),
+             "skill_text": lambda iid: _setup_build_skill_text(ctx, iid),
+             "find": lambda q: asyncio.sleep(0, result=[]),
+             "conn": lambda: _setup_build_wires(org), "client": _client(),
+             "save": lambda cfg, hid: _setup_build_save(p, cfg, hid, ctx),
+             "exists": lambda hid: _setup_build_exists(org, hid)}
+    try:
+        return await setup_builder.start(org, who, body.key, body.job, body.base, body.model, bases=bases, run_parts=parts)
+    except setup_builder.BadKey:
+        raise HTTPException(400, "A build needs a key of its own: 8 to 80 letters, digits, underscores or hyphens.") from None
+    except setup_builder.JobEmpty:
+        raise HTTPException(400, "Say what it should do first.") from None
+    except setup_builder.JobTooLong:
+        raise HTTPException(413, f"Keep it under {setup_builder.JOB_MAX:,} characters.") from None
+    except setup_builder.NotOffered as e:
+        raise HTTPException(400, "That agent harness isn’t offered here." if e.what == "base"
+                            else "That model doesn’t run on this agent harness here.") from None
+    except setup_builder.NoBuilder:
+        raise HTTPException(400, setup_builder.R_NO_MODEL) from None
+    except setup_builder.Unrecorded:
+        raise HTTPException(503, "The setup couldn’t be started just now. Try again.") from None
+
+
+@app.get("/v1/harnesses/builds/{key}", include_in_schema=False)
+async def setup_build_status(key: str, request: Request, after: str = "") -> dict:
+    """A build of this person's, by the key it was started with: building (reading, writing, saving),
+    saved with its setup's id, or failed with the reason. 404 when they have none under that key.
+    With `after` (where the page last saw it, "building.reading"), the answer waits for the build's
+    next change, up to HR_SETUP_BUILD_WAIT_S: this server has no push to a page, so a page holds this
+    read instead of asking on a timer."""
+    p = await _setup_person(request)
+    org = str(p["org"])
+    rec = await setup_builder.follow(org, _setup_build_member(p), key, after,
+                                     exists=lambda hid: _setup_build_exists(org, hid))
+    if rec is None:
+        raise uhp_error(404, "build_not_found", "No setup is being built under that key.", "key")
+    return rec
 
 
 @app.get("/v1/kits")
