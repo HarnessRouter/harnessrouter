@@ -11456,6 +11456,9 @@ def _agentzero_to_claude(obj: dict, state: dict) -> list[dict]:
                     {"type": "result", "subtype": "success", "is_error": False, "result": final,
                      "usage": {}}]
         state["_a0_error"] = str(p.get("error") or "")
+        # the failure whole, frames included (#546): the record keeps the one line above, the
+        # trace's error_detail gets this in place of a stderr tail this base never writes to
+        state["diagnostic"] = str(p.get("diagnostic") or "")
         # usage is {} on purpose: the relay stamps it (_relay_usage), as for every backend whose
         # own record carries none — Agent Zero's LLMResult usage never leaves the process.
         return [{"type": "result", "subtype": "error", "is_error": True,
@@ -11987,7 +11990,10 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         # The harness's own account of the failure, kept whole (#504): the exception and the stack
         # frames it printed, and the tool that failed. rec["error"] stays one line for a person —
         # the spec forbids a stack trace in a message — and this rides the trace's result event.
-        detail = _failure_detail(str(rec.get("backend") or ""), rec["events"], tail)
+        # a driver that handles the exception in-process hands its diagnostic over in the state (an
+        # agentzero turn, #546); every other base printed it, and it is in the output's tail
+        detail = _failure_detail(str(rec.get("backend") or ""), rec["events"],
+                                 str(state.get("diagnostic") or "") or tail)
         rec["error_detail"] = detail
         made = result_ev is None
         if made:
