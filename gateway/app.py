@@ -11163,8 +11163,8 @@ async def _share_sid(token: str) -> str | None:
         try:
             rows = await BACKING.graph.find_strict("HarnessSession", {"share_token": tok, "shared": "1"})
         except Exception as e:  # noqa: BLE001
-            print(f"[share] the share index could not be read token={tok[:8]}…: {type(e).__name__}",
-                  flush=True)
+            # the class only: a share token is the link's secret, and no part of it goes to a log
+            print(f"[share] the share index could not be read: {type(e).__name__}", flush=True)
             raise uhp_error(503, "server_error", _SHARE_UNREADABLE) from e
         sid = str(rows[0].get("id") or "") if rows else ""
         _SHARE_TOKEN_CACHE[tok] = (time.time(), sid)   # a real miss is cacheable; a failure never got here
