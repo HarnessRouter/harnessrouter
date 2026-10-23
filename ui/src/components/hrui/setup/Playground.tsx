@@ -36,6 +36,7 @@ import type { SetupRow } from '../setups';
 import { API_BASE } from '../start/prompts';
 import type { FirstTest } from '../start/check';
 import { Assembly, RecordCard, withRecord } from '../start/Assembly';
+import { NextBar } from '../start/NextBar';
 import { noteFirstSid, retryBuild, useBuildOf } from '../start/build';
 import { recordedFile, replaySpeed, type RecordedRun } from '../start/replay';
 import { forkFiles, forkInput, forkOffered, importedFirst, inputHistory, noteFork } from '../start/fork';
@@ -69,7 +70,7 @@ function readFile(f: File): Promise<Attach> {
 }
 
 /** One test: the composer, then its thread once sent. A new test mounts a fresh one. */
-function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, first, resume, onSeen, onPreview, previewKey, onLive, taskTitle, top, hold, recording, instant, onFollowUp, onReplay }: {
+function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, first, resume, onSeen, onPreview, previewKey, onLive, taskTitle, top, hold, recording, instant, onFollowUp, onReplay, setupFirst }: {
   r: SetupRow; model: string; defaultModel: string; headerValues: Record<string, string>;
   /** the open task's title, as its bar shows it (a reply's Download all names its zip after it) */
   taskTitle?: string;
@@ -101,6 +102,9 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   onFollowUp?: () => void;
   /** a recorded run is playing here (true) or has ended (false): its row and head show it running */
   onReplay?: (playing: boolean) => void;
+  /** this is the setup's first task (its recorded first run, or the first test New setup handed over in
+   *  this tab, reopened): once it has finished, it ends in the Next bar */
+  setupFirst?: boolean;
 }) {
   const oob = oobById(r.h.base);
   const [sid, setSid] = useState<string | null>(resume);
@@ -325,6 +329,12 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   // says so (the design's m.req)
   const firstMsg = conv.msgs.find((m) => m.role === 'user');
   const example = replayed || (!!first?.setup && !!first.input.trim() && firstMsg?.role === 'user' && firstMsg.text.trim() === first.input.trim());
+  // the setup's first test, once it has run: the design's Next bar (bsNext) ends its thread. The hosted
+  // console also takes it away once a task has come from an app; this edition's task cards do not say
+  // where a task came from (a task sent with an API key carries the member who made the key, as one sent
+  // here does), so it ends the first test only, which is where the hosted console shows it before an
+  // app has connected
+  const next = (!!first?.setup || !!setupFirst) && !conv.busy && conv.msgs.some((m) => m.role === 'assistant' && m.status !== 'running');
   // what this task made, for the links a reply makes to its own files (TaskThread Md)
   const produced = useMemo(() => conv.msgs.flatMap((m) => (m.role === 'assistant' ? m.files.map((f) => f.filename) : [])), [conv.msgs]);
   const liveSid = sid || conv.liveSessionId || undefined;
@@ -399,6 +409,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
               userLabel={example ? (t: number) => (t === 0 ? <span className="from">Example task from your app</span> : null) : undefined}
               files={(m) => (m.status === 'running' ? null : <FileCards files={m.files || []} active={previewKey} onOpen={(k) => onPreview(filesOf(conv.msgs), k)} zipName={taskTitle || r.h.name} />)}
               actions={foot} />
+            {next ? <NextBar id={r.h.id} name={r.h.name} /> : null}
           </div>
         </AgentConversation>
       )}
@@ -597,7 +608,8 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
         onBorn={(sid) => { if (handed && !live?.recording) noteFirstSid(r.h.id, sid); onBorn(sid); onRan(); }} pgOpts={pgOpts} first={first}
         resume={slot.resume} onSeen={onSeen} onPreview={onPreview} previewKey={previewKey} onLive={onLive} taskTitle={taskTitle}
         top={top} hold={hold} recording={slot.recorded || (handed ? handedRec : null)} instant={!!slot.recorded}
-        onFollowUp={onFollowUp} onReplay={onReplay} />
+        onFollowUp={onFollowUp} onReplay={onReplay}
+        setupFirst={!!slot.recorded || (!!slot.resume && !!b && b.firstSid === slot.resume)} />
       {modelPop}
       {headersPop}
     </>

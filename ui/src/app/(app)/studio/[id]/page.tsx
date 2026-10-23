@@ -194,7 +194,7 @@ export default function SetupPage() {
   };
   // when the setup was made (its record's createdAt, seconds or ms): the recorded row's time
   const madeAt = row ? (row.h.createdAt > 0 && row.h.createdAt < 1e12 ? row.h.createdAt * 1000 : row.h.createdAt) : 0;
-  useBrickNav({ onLayer });
+  useBrickNav({ onLayer, onSetUpApp });
 
   if (failed && !row) {
     return (

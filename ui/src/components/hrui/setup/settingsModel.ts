@@ -9,6 +9,7 @@
 import { useEffect, useRef } from 'react';
 import { instructionFileLabel, type CustomHarness, type McpServer } from '@/lib/harness';
 import { isServiceEntry } from './setupParts';
+import { SET_UP_APP_EVENT } from '../start/NextBar';
 
 export type LayerKey = 'instructions' | 'harness' | 'caps' | 'runtime';
 /** The layers in the order the rail and the narrow chips list them, top first (Richard, 2026-10-18):
@@ -122,8 +123,9 @@ export function brickLayer(tw: string): LayerKey | null {
 }
 
 /** A click on a brick or part of the setup page's Agent stack opens the layer of Settings it is (a
- *  part, its own tab of Capabilities, even one the setup has none of yet). */
-export function useBrickNav(o: { onLayer: (k: LayerKey, cap?: CapTab) => void }) {
+ *  part, its own tab of Capabilities, even one the setup has none of yet). The first test's Next bar
+ *  (start/NextBar) asks for the app's setup: Set up the app. */
+export function useBrickNav(o: { onLayer: (k: LayerKey, cap?: CapTab) => void; onSetUpApp?: () => void }) {
   const ref = useRef(o);
   ref.current = o;
   useEffect(() => {
@@ -134,7 +136,9 @@ export function useBrickNav(o: { onLayer: (k: LayerKey, cap?: CapTab) => void })
       const k = brickLayer(tw);
       if (k) ref.current.onLayer(k, capOf(tw));
     };
+    const setUpApp = () => ref.current.onSetUpApp?.();
     document.addEventListener('click', click);
-    return () => document.removeEventListener('click', click);
+    window.addEventListener(SET_UP_APP_EVENT, setUpApp);
+    return () => { document.removeEventListener('click', click); window.removeEventListener(SET_UP_APP_EVENT, setUpApp); };
   }, []);
 }
