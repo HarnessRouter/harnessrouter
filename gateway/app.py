@@ -2273,7 +2273,8 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     "0 prior" at this turn's finalize, silently resetting the running total on every new turn."""
     _pm = await _prior_manifest(tr.get("prefix") or "")          # the one read of the prior card
     prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "", _pm)
-    title, chosen = _card_title(_pm, user_text, sid)
+    # a task started with earlier turns is named after its first message, which is its first imported one
+    title, chosen = _card_title(_pm, tr.get("title_text") or user_text, sid)
     await _index_manifest(tr["prefix"], {
         "session_id": sid, "org_id": org, "tenant": org,
         "member_id": tr.get("member") or member or "",
@@ -2513,7 +2514,7 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
     # The prior card, read once: it holds the title the person chose (kept below), the session's
     # cost so far (added to below) and the scope fields the index keys need.
     _pm = await _prior_manifest(tr["prefix"])
-    title, chosen = _card_title(_pm, prompt, sid)
+    title, chosen = _card_title(_pm, tr.get("title_text") or prompt, sid)
     manifest = {
         "session_id": sid, "org_id": tr.get("org"), "tenant": tr.get("org"),
         "billing_org": tr.get("billing_org") or tr.get("org"),
@@ -4728,6 +4729,11 @@ UHP_CAPABILITIES = {
     "idempotency": True,
     "plugins": True,
     "environments": True,
+    # Tasks §2.1: a request that starts a task may bring its earlier turns as user and assistant
+    # messages before the last user message; they are the agent's history and the task's first turns,
+    # marked imported (_input_history). The console offers a recorded task's fork only where this is
+    # true (GET /v1/bases repeats it).
+    "input_history": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 
@@ -4880,6 +4886,7 @@ async def readyz(response: Response) -> dict:
     checks["turns_reads"] = dict(_turns_reads.counts)   # conversation reads that failed; turns taken from their session
     checks["identity"] = {"mode": HR_IDENTITY_MODE, **_identity_obs.counts}   # LIVE-B rollout visibility
     checks["credit"] = {"mode": HR_CREDIT_GATE, **_credit_obs.counts}   # HR-INF-023 admission-gate rollout
+    checks["input_history_over_cap"] = _input_history_over_cap["n"]   # new tasks over the import caps: read as one turn
     checks["build"] = HR_BUILD_SHA   # deploy fingerprint: bind a live instance to its source revision
     if not ok:
         response.status_code = 503
@@ -6825,6 +6832,128 @@ def _parse_input(inp) -> tuple[str, list[dict], list[dict]]:
                 parts.append({"type": "input_image", "image_url": p.get("image_url"), "file_id": p.get("file_id")})
         items_norm.append({"role": role, "content": parts})
     return "\n\n".join(t for t in texts if t).strip(), files, items_norm
+
+
+# ── a new task's earlier turns (Tasks §2.1, capability input_history) ───────────────────────────
+# A task may start from a conversation held elsewhere: the console continues a recorded demo task as
+# the person's own by sending the recording's request and answer as earlier messages, then the new
+# message (Richard, 2026-10-19 for the hosted service, 2026-10-22 here). On a request that starts a
+# task (no previous_response_id and no session named), the user and assistant messages before the
+# LAST user message are that conversation: the agent reads them as the conversation so far, on every
+# base, the way a follow-up on a base that cannot resume does (_history_prompt); the task keeps them
+# as its first turns, marked imported (completed, no model call, no usage, never metered); and only
+# the last user message is the turn's own. Instructions (system, developer) apply to the turn as
+# before, and a continuation's input is read exactly as it always was.
+#
+# Bounded, because the agent receives them inside its prompt and the prompt reaches every base's CLI
+# as one argument, which Linux caps at 128 KiB (MAX_ARG_STRLEN): 24,000 characters are at most 96 KB
+# of UTF-8. Over either cap nothing is imported and the request is read exactly as it was before
+# this existed, every user message joined into the one turn: no request an API caller sent before is
+# refused for it now. Counted on /readyz (input_history_over_cap) and logged with counts alone, never
+# the text.
+_IMPORT_MAX_MESSAGES = 20
+_IMPORT_MAX_CHARS = 24_000
+_input_history_over_cap = {"n": 0}
+# what nobody reads and a terminal may act on: C0 and C1 controls (not the tab or the line break), DEL,
+# lone surrogates (no UTF-8 for them, so no argument either) and the direction overrides; listings'
+# hidden set, less the joiners an emoji or a script needs
+_IMPORT_HIDDEN = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\ud800-\udfff]")
+
+
+def _import_text(raw) -> str:
+    """One earlier message's text as the agent and the thread read it: line ends as \\n, cleaned."""
+    s = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    return _IMPORT_HIDDEN.sub("", s).strip()
+
+
+def _message_role(it) -> str:
+    """An input item's role when it is a message, else "" (a function call, a tool's output)."""
+    if not isinstance(it, dict) or it.get("type") not in (None, "message"):
+        return ""
+    return str(it.get("role") or "user")
+
+
+def _input_history_as_before(inp, org: str, cap: str, earlier: int) -> tuple[list[dict], object]:
+    """Over a cap: nothing imported, the input read whole as before; counted and logged (counts only)."""
+    _input_history_over_cap["n"] += 1
+    print(f"[input-history] over the {cap} cap org={org or '-'} earlier_messages={earlier}: "
+          f"read as one turn, nothing imported", flush=True)
+    return [], inp
+
+
+def _input_history(inp, org: str = "") -> tuple[list[dict], object]:
+    """→ (earlier turns, the rest of the input) of a request that starts a task. Each earlier turn is
+    {"user", "assistant", "files"}: a user message, the assistant messages that followed it, and the
+    user message's input_file/input_image parts. ([], inp) when there are none: a string, a single
+    user message, or nothing before the last user message but instructions; and over a cap, when the
+    request is read as before (_input_history_as_before)."""
+    if not isinstance(inp, list):
+        return [], inp
+    roles = [_message_role(it) for it in inp]
+    last = max((i for i, r in enumerate(roles) if r == "user"), default=0)
+    earlier = [i for i in range(last) if roles[i] in ("user", "assistant")]
+    if not earlier:
+        return [], inp
+    if len(earlier) > _IMPORT_MAX_MESSAGES:
+        return _input_history_as_before(inp, org, "messages", len(earlier))
+    turns: list[dict] = []
+    chars = 0
+    for i in earlier:
+        content = inp[i].get("content")
+        texts = [content] if isinstance(content, str) else []
+        files: list[dict] = []
+        for p in content if isinstance(content, list) else []:
+            if not isinstance(p, dict):
+                continue
+            if p.get("type") in ("input_text", "output_text", "text"):
+                texts.append(str(p.get("text") or ""))
+            elif p.get("type") in ("input_file", "input_image") and roles[i] == "user":
+                files.append(p)
+        text = _import_text("\n\n".join(t for t in texts if isinstance(t, str) and t))
+        chars += len(text)
+        if chars > _IMPORT_MAX_CHARS:
+            return _input_history_as_before(inp, org, "characters", len(earlier))
+        if roles[i] == "user" or not turns:
+            turns.append({"user": "", "assistant": "", "files": []})
+        if roles[i] == "user":
+            turns[-1].update(user=text, files=files)
+        else:
+            turns[-1]["assistant"] = "\n\n".join(x for x in (turns[-1]["assistant"], text) if x)
+    keep = set(earlier)
+    return turns, [it for i, it in enumerate(inp) if i not in keep]
+
+
+async def _imported_turns_put(turns: list[dict], *, sid: str, org: str, member: str, backend: str,
+                              before: float, store: bool) -> list[str]:
+    """A new task's earlier turns (_input_history, each with its `input` items) as its first response
+    records, oldest first, each a millisecond apart and before `before` (the turn's own created_at),
+    so the thread sorts them ahead of it. Completed, no model, no usage: nothing ran, so nothing is
+    metered. A record that cannot be written fails the request before its turn runs, rather than leave
+    a task whose thread lacks what its agent was told."""
+    rids = [_rid("resp") for _ in turns]
+    sem = asyncio.Semaphore(8)
+
+    async def one(i: int, t: dict) -> None:
+        rid, at = rids[i], before - (len(turns) - i) * 0.001
+        said = t.get("assistant") or ""
+        stored = {"id": rid, "object": "response", "created_at": int(at), "status": "completed", "error": None,
+                  "served_model": None, "reasoning": None, "incomplete_details": None,
+                  "previous_response_id": None, "model": "", "store": store,
+                  "output": ([{"id": "msg_" + rid.removeprefix("resp_"), "type": "message", "status": "completed",
+                               "role": "assistant", "content": [{"type": "output_text", "text": said, "annotations": []}]}]
+                             if said else []),
+                  "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                  "metadata": {"session_id": sid, "imported": True},
+                  "_session_id": sid, "_org": org, "_member": member, "_input": t.get("input") or [],
+                  "_backend": backend, "_imported": True}
+        async with sem:
+            if not await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB):
+                raise uhp_error(502, "store_write_failed", "The conversation could not be saved. Try again in a moment.")
+            await _vg_upsert("HarnessResponse", rid, {"org": org, "session_id": sid, "previous_response_id": "",
+                                                      "status": "completed", "created_at": str(at),
+                                                      "store": "1" if store else "0"}, raise_on_fail=True)
+    await asyncio.gather(*(one(i, t) for i, t in enumerate(turns)))
+    return rids
 
 
 def _route_backend(model: str | None, explicit: str | None) -> str:
@@ -10106,8 +10235,25 @@ async def create_response(body: CreateResponseBody, request: Request):
                               "send them on the request (in the Playground, set values via the gear "
                               "icon in the preview pane).")
 
-    prompt, files_in, input_items = _parse_input(body.input)
+    # A request that starts a task may bring its earlier turns (Tasks §2.1): split off here, before
+    # anything is allocated. Over the caps, and on a continuation (a previous response, or a session
+    # named), the input is read exactly as before.
+    history: list[dict] = []
+    live_input = body.input
+    if not body.previous_response_id and not str(meta.get("session_id") or "").strip():
+        history, live_input = _input_history(body.input, org)
+    prompt, files_in, input_items = _parse_input(live_input)
     user_text = prompt   # the raw user message (before instructions / file-note prepends) for the trace
+    for _t in history:
+        # each earlier user message as its turn record keeps it (no file bytes), and its files with
+        # this turn's: they reach the working directory the same way and under the same limits
+        _, _t_files, _t["input"] = _parse_input([{"role": "user", "content": [
+            {"type": "input_text", "text": _t["user"]}, *_t.pop("files", [])]}])
+        files_in = _t_files + files_in
+    if history:
+        # the conversation so far, read by the agent on every base, all of it (the caps bound it)
+        prompt = _history_prompt(history, prompt, max_turns=_IMPORT_MAX_MESSAGES, clip=_IMPORT_MAX_CHARS,
+                                 max_bytes=_IMPORT_MAX_CHARS + 20 * _IMPORT_MAX_MESSAGES)
     # uploads referenced by file_id (POST /v1/files) become inline bytes, this org's only
     await _resolve_uploads(files_in, org)
     files_in = [{"filename": f["filename"], "content_b64": f["content_b64"]}
@@ -10182,6 +10328,11 @@ async def create_response(body: CreateResponseBody, request: Request):
     try:
         # remember this turn's response id on the trace + session so a loaded session can resume
         _session_trace.setdefault(sid, {}).update(last_response_id=resp_id)
+        # The card's title this turn: a task started with earlier turns is named after its first
+        # message, its first imported one; any other turn as always (_card_title).
+        _session_trace[sid].pop("title_text", None)
+        if history:
+            _session_trace[sid]["title_text"] = next((t["user"] for t in history if t["user"]), "")
         # Reserved fields, named on the response rather than dropped in silence (tasks.md 1.4).
         _ignored = _ignored_request_fields(body)
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
@@ -10205,6 +10356,19 @@ async def create_response(body: CreateResponseBody, request: Request):
                       **{"_" + k: v for k, v in trace_ctx.items()}}
             await _resp_put(resp_id, stored, org, sid, body.previous_response_id, status, created_at, body.store)
 
+        if history:
+            # the task's first turns, the conversation it was started with, written before this
+            # turn's own record: the thread reads whole from its first read, and a write that fails
+            # refuses the turn here (the guard below releases what it holds)
+            try:
+                await _imported_turns_put(history, sid=sid, org=org, member=member, backend=backend,
+                                          before=created_at, store=body.store)
+            except Exception:
+                # nothing ran and nothing will: the task ends failed now, not running until the sweep
+                with contextlib.suppress(Exception):
+                    await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed",
+                                               "running_response_id": "", "heartbeat": str(time.time())})
+                raise
         # Persist the turn as 'running' NOW so GET /v1/sessions/{sid}/turns surfaces the in-flight
         # turn to any fetch (fresh panel, refresh, different replica, restart). Best-effort: even
         # if it fails, execution proceeds and a terminal record is persisted at the end.
@@ -10718,6 +10882,9 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
                       "created_at": _unix_s(rec.get("created_at") or born.get(rid)),
                       "completed_at": (None if str(rec.get("status") or "") in _TURN_LIVE
                                        else _unix_s(rec.get("_completed_at"))),
+                      # a turn the task was started with (Tasks §2.1): nothing ran, nothing was spent
+                      "imported": bool(rec.get("_imported")),
+                      **({"cost_usd": 0.0} if rec.get("_imported") else {}),
                       "_model": rec.get("model") or "",
                       "_since_ms": _turn_since_ms(rec, for_result=False)})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
@@ -11053,7 +11220,8 @@ async def list_input_items(response_id: str, request: Request, limit: int = 20, 
     if order == "desc":
         data.reverse()
     data = data[:limit]
-    return {"object": "list", "data": data, "first_id": None, "last_id": None, "has_more": False}
+    return {"object": "list", "data": data, "first_id": None, "last_id": None, "has_more": False,
+            **({"imported": True} if rec.get("_imported") else {})}     # a turn the task was started with
 
 
 @app.post("/v1/responses/{response_id}/cancel")
@@ -11565,20 +11733,22 @@ _HISTORY_CLIP = 4000          # per message; a pasted novel is context, not a tr
 _HISTORY_MAX_BYTES = 16000    # whole block; beyond this the oldest turns fall off first
 
 
-def _history_prompt(turns: list[dict], new_prompt: str) -> str:
-    """The runner prompt for a follow-up on a backend that cannot resume.
+def _history_prompt(turns: list[dict], new_prompt: str, *, max_turns: int = _HISTORY_MAX_TURNS,
+                    clip: int = _HISTORY_CLIP, max_bytes: int = _HISTORY_MAX_BYTES) -> str:
+    """The runner prompt for a follow-up on a backend that cannot resume, and for a new task that
+    brought its earlier turns (_input_history, which passes its own caps so that all of it is read).
 
     Most recent turns win: the block is built newest-first against the byte budget, then emitted
     oldest-first so the model reads it in order. Empty history returns the prompt unchanged."""
     rows: list[str] = []
     used = 0
-    for t in reversed(turns[-_HISTORY_MAX_TURNS:]):
-        u = (t.get("user") or "").strip()[:_HISTORY_CLIP]
-        a = (t.get("assistant") or "").strip()[:_HISTORY_CLIP]
+    for t in reversed(turns[-max_turns:]):
+        u = (t.get("user") or "").strip()[:clip]
+        a = (t.get("assistant") or "").strip()[:clip]
         piece = (f"user: {u}\n" if u else "") + (f"assistant: {a}\n" if a else "")
         if not piece:
             continue
-        if used + len(piece) > _HISTORY_MAX_BYTES:
+        if used + len(piece) > max_bytes:
             break
         rows.append(piece)
         used += len(piece)
@@ -21451,7 +21621,9 @@ async def list_bases(request: Request) -> dict:
     # The limits a turn gets when neither the request nor the harness sets one, so the console can
     # show the number that will apply rather than a placeholder of its own.
     return {"bases": out,
-            "runtimeDefaults": {"maxStep": DEFAULT_MAX_STEP, "timeoutSeconds": DEFAULT_TIMEOUT_S}}
+            "runtimeDefaults": {"maxStep": DEFAULT_MAX_STEP, "timeoutSeconds": DEFAULT_TIMEOUT_S},
+            # what every base here takes, from the protocol's own list (GET /v1/uhp), so the two agree
+            "capabilities": {"input_history": bool(UHP_CAPABILITIES.get("input_history"))}}
 
 
 @app.get("/v1/models")
