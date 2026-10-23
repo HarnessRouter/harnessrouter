@@ -31,7 +31,13 @@ let root: Root;
 let el: HTMLElement;
 let state: ReturnType<typeof useRecordedRunState>;
 let legacy: RecordedRun | null | undefined;
-function Probe({ source }: { source: string | undefined }) { state = useRecordedRunState(source); legacy = useRecordedRun(source); return null; }
+// every render's answer, with the source it was for
+let seen: { source: string | undefined; run: RecordedRun | null | undefined }[] = [];
+function Probe({ source }: { source: string | undefined }) {
+  state = useRecordedRunState(source); legacy = useRecordedRun(source);
+  seen.push({ source, run: state.run });
+  return null;
+}
 
 beforeEach(() => {
   jest.useFakeTimers();
@@ -82,16 +88,23 @@ it('a setup saved from no recording is null at once', async () => {
 
 it('a source that arrives after the page opened is being read, never taken for the last one\'s answer', async () => {
   // the setup's record is read after its page has opened: no source first, then its own
+  seen = [];
   await act(async () => { root.render(<Probe source={undefined} />); });
   expect(state.run).toBeNull();
   await act(async () => { root.render(<Probe source={recordedMark(RUN)} />); });
-  // the render the source arrives in already says "being read", so nothing opens New task meanwhile
-  expect(state.run).toBeUndefined();
   await passTime(0);
   expect(state.run).toBe(RUN);
-  // a run no longer kept (re-recorded since) is none
+  // every render with the source said "being read" until its own read answered: none said "none",
+  // which would have opened New task in the recorded task's place
+  const forMark = seen.filter((x) => x.source === recordedMark(RUN)).map((x) => x.run);
+  expect(forMark[0]).toBeUndefined();
+  expect(forMark).not.toContain(null);
+  // a run no longer kept (re-recorded since) is none, once its own read says so
+  seen = [];
   await act(async () => { root.render(<Probe source="demo:0@1" />); });
-  expect(state.run).toBeUndefined();
   await passTime(0);
   expect(state.run).toBeNull();
+  const forGone = seen.filter((x) => x.source === 'demo:0@1').map((x) => x.run);
+  expect(forGone[0]).toBeUndefined();
+  expect(forGone).not.toContain(RUN);
 });
