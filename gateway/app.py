@@ -18507,6 +18507,10 @@ _PLUGINS_SCHEMA = {
                              "blob": {"type": "string", "description": "the installed package's handle, as read back"}}}}
 
 
+# The longest provenance a harness keeps (HarnessBody.source); a longer one is refused, never cut.
+HARNESS_SOURCE_MAX = 200
+
+
 class HarnessBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     name: str
@@ -18530,6 +18534,11 @@ class HarnessBody(BaseModel):
     # (docs/dual-loop.md in the System One Harness repository, Appendix B).
     calibrates: str | None = _either("calibrates")
     environment: str | None = None   # the environment (henv_) this harness's tasks read at /env/<slug>; UHP Environments
+    # Where the harness came from, set by whatever made it (the console's Start: "demo:<n>@<ms>", the
+    # recorded demo run it was saved from, whose task list then shows that run). Kept as it was given
+    # at create and never changed by an update: a PUT that carries it (a harness read and sent back)
+    # or leaves it out keeps the stored value (_harness_source_prop).
+    source: str | None = Field(default=None, max_length=HARNESS_SOURCE_MAX)
 
     @model_validator(mode="before")
     @classmethod
@@ -18610,7 +18619,10 @@ def _harness_out(v: dict) -> dict:
             "reasoningEffort": _reasoning_level(v.get("reasoning_effort")),
             "calibrates": str(v.get("calibrates") or ""),
             "environment": str(v.get("environment") or ""),
-            "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created}
+            "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created,
+            # where it came from (HarnessBody.source), when whatever made it said; a harness made
+            # without one has no key, so "said nothing" and "said this" never read alike
+            **({"source": str(v["source"])} if v.get("source") else {})}
 
 
 async def _vg_list_by_org(label: str, org: str) -> list[dict]:
@@ -18628,6 +18640,14 @@ async def _vg_list_by_org_strict(label: str, org: str) -> list[dict]:
     if not rows:
         rows = await BACKING.graph.find_strict(label, {"org": org})
     return rows
+
+
+def _harness_source_prop(body: HarnessBody) -> dict:
+    """The provenance a create stores (HarnessBody.source), or nothing. Only the create routes write
+    it: _harness_props leaves it out, so an update, a coalescing write of the props it is given,
+    keeps the stored value whatever its body says."""
+    src = str(body.source or "").strip()
+    return {"source": src} if src else {}
 
 
 def _harness_props(body: HarnessBody) -> dict:
@@ -19803,7 +19823,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     body.plugins = await _plugins_prepare(body, org)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
-    props = {"org": org, "member": member, "workspace": workspace, **_harness_props(body),
+    props = {"org": org, "member": member, "workspace": workspace, **_harness_props(body), **_harness_source_prop(body),
              "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Harness", hid, props)
     if await _plugs_ensure_required(org, hid):
@@ -20086,7 +20106,7 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
     props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
-             **_harness_props(body),
+             **_harness_props(body), **_harness_source_prop(body),
              "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Harness", hid, props)
     if await _plugs_ensure_required(org, hid):

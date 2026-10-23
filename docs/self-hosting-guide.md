@@ -1081,7 +1081,9 @@ also removes the hosted tools behind it. Read the harness first, then send back 
 `system_prompt`, `default_model`, `mcp_servers`, `skills`, `disabled_tools`, `additional_headers`,
 `max_step`, `timeout_seconds` and `reasoning_effort` (the write body uses these snake_case names; the record you read
 uses camelCase) with the new package appended to `plugins`. Installed plugins round-trip as
-`{name, enabled, blob}`, so send those back unchanged and add the new one beside them.
+`{name, enabled, blob}`, so send those back unchanged and add the new one beside them. A harness's
+`source` (where it came from, as its create said, for example the demo run the console's Start saved
+it from) is not part of that configuration: it is kept as created, whatever a PUT sends.
 
 The record you read back carries what the server derived from the package (`manifest`,
 `mcpServers`, `skills`, and `skipped` for anything it could not load) and a `blob` handle that
