@@ -20509,9 +20509,15 @@ async def _setup_build_inventory(p: dict, bases, ctx: dict) -> dict:
         rows = [r for r in await _vg_list_by_org("Environment", org) if str(r.get("deleted") or "0") != "1"]
         if own:
             rows = [r for r in rows if _workspace_keep(str(r.get("workspace") or ""), own, wsd)]
+        rows = [r for r in rows if _scope_keeps(p, r.get("workspace"))]
+        # read the way a task reads it (_environment_for_turn): brought up to date with what the runner
+        # holds, so one whose built version the runner no longer has is not offered. The record alone
+        # still named a version the runner had lost (an instance on a copied volume, 2026-10-23), and the
+        # first test of the setup the builder made failed with "no built version yet"
+        rows = await asyncio.gather(*(_environment_refresh(r) for r in rows))
         out: dict = {}
         for r in rows:
-            if not str(r.get("active_version") or "").isdigit() or not _scope_keeps(p, r.get("workspace")):
+            if not str(r.get("active_version") or "").isdigit():
                 continue                             # nothing built yet: a task could not read it
             e = _environment_out(r)
             pk = [str(x.get("name") or x.get("spec") or "") if isinstance(x, dict) else str(x) for x in e.get("packages") or []][:12]

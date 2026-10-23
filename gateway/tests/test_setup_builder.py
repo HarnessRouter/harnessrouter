@@ -123,7 +123,7 @@ def env(monkeypatch):
     chat = FakeChat()
     store: dict[str, dict] = {r["id"]: dict(r) for r in _setup_rows()}
     vault: dict[tuple[str, str], str] = {(gw._org_tenant(ORG_A), "harness-mcp-mcp-crm00001"): "crm-token-not-real"}
-    rec: dict[str, list] = {"plugs_attach": [], "media": [], "offered": [], "lookups": [], "wires": []}
+    rec: dict = {"plugs_attach": [], "media": [], "offered": [], "lookups": [], "wires": [], "runner_envs": {}}
 
     async def principal(_request):
         return dict(who["p"])
@@ -187,6 +187,12 @@ def env(monkeypatch):
     monkeypatch.setattr(gw, "_vg_upsert", upsert)
     monkeypatch.setattr(gw, "_require_offered_model", offered)
     monkeypatch.setattr(gw, "_environment_check_ref", env_ref)
+
+    # the runner's word on each environment, as a task reads it (_environment_refresh): its record as
+    # kept unless a test says the runner holds something else
+    async def env_refresh(v):
+        return {**v, **rec["runner_envs"].get(str(v.get("id") or ""), {})}
+    monkeypatch.setattr(gw, "_environment_refresh", env_refresh)
     monkeypatch.setattr(gw, "_hosted_media_attach", media_attach)
     monkeypatch.setattr(gw, "_plugs_attach", plugs_attach)
     monkeypatch.setattr(gw, "_media_providers", media_providers)
@@ -267,6 +273,16 @@ def test_the_builder_runs_on_the_instances_own_model_reading_this_workspace_only
     assert props["base"]["enum"] == ["hermes", "dsh"]                            # never one Auto may not pick
     assert props["connections_needed"]["items"]["enum"] == ["browser", "insforge", "vercel"]
     assert "apps" not in props and "apps_needed" not in props
+
+
+def test_an_environment_the_runner_no_longer_holds_a_built_version_of_is_not_offered(env):
+    # its record still names version 1, but the runner holds none (a copied volume, 2026-10-23): a task
+    # would fail with "no built version yet", so the builder is never shown it
+    env["runner_envs"]["henv_a"] = {"active_version": "", "status": "empty"}
+    assert start(env).status_code == 200
+    assert settled(env)["status"] == "saved"
+    ws = first_message(env["chat"].calls[0])["workspace"]
+    assert "environments" not in ws
 
 
 def test_a_job_is_saved_into_the_workspace_with_its_own_copies_of_the_skill_and_server(env):
