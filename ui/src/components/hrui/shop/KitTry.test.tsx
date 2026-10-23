@@ -1,8 +1,8 @@
 /** @jest-environment jsdom */
 // One kit's page. After a launch its header names what the launch says the setup runs on, the pairing
 // the person chose, never the suggestion in its place; with no such answer it names nothing. What this
-// organization can run, unread, is said in the launch sheet with Try again. The page is the kit's app
-// alone: a self-hosted console shows no trace beside it (the trace view is the hosted product's).
+// organization can run, unread, is said in the launch sheet with Try again. A trace that cannot be read
+// is said with Try again.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Kit } from './kits';
@@ -18,9 +18,16 @@ jest.mock('../toast', () => ({ toast: jest.fn() }));
 jest.mock('../setups', () => ({ rowOf: jest.fn() }));
 jest.mock('../SetUpApp', () => ({ SetUpApp: () => null }));
 jest.mock('../start/open', () => ({ openNewSetup: jest.fn() }));
+jest.mock('../trace/TraceView', () => ({
+  TraceView: ({ foot }: { foot?: React.ReactNode }) => <div className="trv-mock">{foot}</div>,
+  dkind: () => 'tool', ROLE: { tool: 'Tool' },
+  turnsOf: (rows: unknown[]) => (rows.length ? [rows] : []), turnSpan: () => ({ t0: null, t1: null }),
+}));
+jest.mock('./useKitRun', () => ({ useKitRun: jest.fn() }));
 jest.mock('./kits', () => ({ ...jest.requireActual('./kits'), fetchKits: jest.fn(), fetchKitBases: jest.fn(), launchKit: jest.fn() }));
 
 import { fetchKitBases, fetchKits, launchKit } from './kits';
+import { useKitRun, type KitRun } from './useKitRun';
 import { KitTryPage } from './KitTry';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -34,6 +41,7 @@ const KIT: Kit = {
   ],
 };
 const BASES = [{ id: 'codex', label: 'Codex', models: [{ id: 'gpt-b', available: true }] }];
+let run: KitRun;
 let root: Root;
 let el: HTMLElement;
 
@@ -47,6 +55,8 @@ async function click(label: string, scope: ParentNode = document) {
 async function open() { await act(async () => { root.render(<KitTryPage kitId="dashboard" />); }); await flush(); }
 
 beforeEach(() => {
+  run = { card: null, st: null, rows: null, failed: false, retry: jest.fn() };
+  (useKitRun as jest.Mock).mockImplementation(() => run);
   (fetchKits as jest.Mock).mockResolvedValue([KIT]);
   (fetchKitBases as jest.Mock).mockReset().mockResolvedValue(BASES);
   (launchKit as jest.Mock).mockReset().mockResolvedValue({ harnessId: 'h1', route: '/kits/dashboard', created: true, runningOn: { base: 'codex', model: 'gpt-b' } });
@@ -87,17 +97,33 @@ it('what can run, unread: the launch sheet says so with Try again, which reads i
   expect((document.getElementById('klBase') as HTMLSelectElement).value).toBe('codex');
 });
 
-it('a kit\'s page is its app: no trace, no tabs, and Make it yours under the app', async () => {
-  (fetchKits as jest.Mock).mockResolvedValue([{ ...KIT, launched: true, harnessId: 'h1', runningOn: { base: 'codex', model: 'gpt-b' } }]);
+it('a trace that could not be read says so with Try again', async () => {
+  run = { ...run, card: { session_id: 's1', status: 'completed', created_at: 1 } as KitRun['card'], st: 'done', failed: true };
   await open();
-  expect(document.querySelector('.kt')?.classList.contains('kt-solo')).toBe(true);
-  expect(document.querySelector('[role="tablist"], .kt-play, .kt-live')).toBeNull();
-  expect(document.body.textContent).not.toMatch(/trace/i);
-  expect(document.querySelector('.kt-app .kt-next-m')?.textContent).toContain('Make it yours');
+  const line = document.querySelector('.kt-pb [role="alert"]');
+  expect(line?.textContent).toBe('The trace could not be read just now. Try again');
+  await click('Try again', document.querySelector('.kt-pb')!);
+  expect(run.retry).toHaveBeenCalledTimes(1);
+  // rows on screen and a later read failing: the rows stay, and the line says they may be behind
+  run = { ...run, rows: [{ i: 0, kind: 'tool', label: 'search' }] as KitRun['rows'] };
+  await open();
+  expect(document.querySelector('.trv-mock [role="alert"]')?.textContent).toBe('The trace could not be read just now. Try again');
 });
 
-it('names no plan, no price and no paused feed', async () => {
+it('names no plan, no price and no paused feed: the trace is whole on this instance', async () => {
+  run = { ...run, card: { session_id: 's1', status: 'completed', created_at: 1 } as KitRun['card'], st: 'done', rows: [{ i: 0, kind: 'tool', label: 'search' }] as KitRun['rows'] };
   await open();
   expect(document.body.textContent).not.toMatch(/your plan|See plans|Live updates paused/i);
   expect(document.querySelector('a[href^="/billing"]')).toBeNull();
+});
+
+it('App and Trace are tabs that move with the arrow keys, only the open one in the Tab order', async () => {
+  await open();
+  const tabs = () => Array.from(document.querySelectorAll('.kt-tabs [role="tab"]')) as HTMLElement[];
+  expect(tabs().map((t) => t.tabIndex)).toEqual([0, -1]);
+  tabs()[0].focus();
+  await act(async () => { tabs()[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); });
+  expect(document.querySelector('.kt-tabs [aria-selected="true"]')?.textContent).toBe('Trace');
+  expect(document.querySelector('.kt')?.getAttribute('data-tab')).toBe('play');
+  expect(document.activeElement?.textContent).toBe('Trace');
 });

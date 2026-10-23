@@ -1015,9 +1015,9 @@
    the row's height comes out fractional, so it holds a pixel more than it shows, and focusing a tab scrolls the row that
    pixel to show the tab's last half-pixel (staging check, 10-21) */
 @media (max-width:520px){#hrui .lw-n .tabs.inline{padding-top:5px;padding-left:4px;margin-top:-5px;margin-left:-4px}}
-/* A kit's page on a self-hosted console is its app alone (shop/KitTry.tsx kt-solo): no trace pane beside
-   it, the trace view being the hosted product's, so the app takes the whole width and "Make it yours"
-   sits under it at every width. */
-#hrui .kt-solo .kt-body{grid-template-columns:minmax(0,1fr)}
-#hrui .kt-solo .kt-next-m{display:block;margin-top:12px}
-#hrui .kt-solo .kt-next-m .kt-next{margin:0}
+/* The task bar has no Conversation | Trace switch on a self-hosted console, so its three-column grid
+   (title · switch · actions) left Share, or Stop task while a task runs, against the title. The title
+   takes the row and the actions sit at the reading column's right edge (Richard 10-22). */
+#hrui .tk-d .tp-head .th-row{display:flex;align-items:center;gap:16px}
+#hrui .tk-d .tp-head .th-row>.tp-t{flex:1;min-width:0}
+#hrui .tk-d .tp-head .th-row>.tk-acts{margin-left:auto}
