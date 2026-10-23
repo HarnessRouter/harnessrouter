@@ -47,3 +47,31 @@ test('a conversation with no turns still says so plainly', async () => {
   expect(el.textContent).toContain('No conversation content.');
   expect(el.querySelector('[role="alert"]')).toBeNull();
 });
+
+// Same rule, the artifacts read four lines above the turns read: a failed read is said, never drawn
+// as a Task that produced nothing (the gateway answers 500 when the workspace tarball is truncated).
+const alertWith = (text: string) => Array.from(el.querySelectorAll('[role="alert"]')).find((n) => n.textContent?.includes(text));
+
+test('artifacts that could not be read say so, and are never drawn as a Task with none', async () => {
+  global.fetch = jest.fn((url: string) => (String(url).endsWith('/meta') ? json(200, { title: 'Pet Food' })
+    : String(url).endsWith('/files') ? json(500, { detail: 'boom' })
+    : json(200, { turns: [{ id: 'resp_1', user: 'Pet food', assistant: 'Done.' }] }))) as unknown as typeof fetch;
+  el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
+  await act(async () => { root.render(<SharePage />); });
+  await flush();
+  expect(alertWith('The artifacts could not be loaded just now.')).toBeTruthy();
+  expect(el.textContent).not.toContain('No artifacts in this Task.');
+  expect(el.textContent).not.toContain('0 files');
+});
+
+test('a Task with no artifacts still says so plainly', async () => {
+  global.fetch = jest.fn((url: string) => (String(url).endsWith('/meta') ? json(200, { title: 'Pet Food' })
+    : String(url).endsWith('/files') ? json(200, { files: [] })
+    : json(200, { turns: [{ id: 'resp_1', user: 'Pet food', assistant: 'Done.' }] }))) as unknown as typeof fetch;
+  el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
+  await act(async () => { root.render(<SharePage />); });
+  await flush();
+  expect(el.textContent).toContain('No artifacts in this Task.');
+  expect(el.textContent).toContain('0 files');
+  expect(alertWith('The artifacts could not be loaded just now.')).toBeUndefined();
+});

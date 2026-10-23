@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { agentMd } from '@/lib/agentmd';
-import { CodeBlock } from '@/components/ApiReference';
+import { CodeBlock } from '@/components/CodeBlock';
 
 
 const MD_COMPONENTS = {
@@ -44,7 +44,7 @@ export default function AgentsPage() {
             agent get the HarnessRouter Skill, through its plugin manager or by loading the Skill files directly, and follow
             it: the Skill carries the whole integration. The agent builds the feature into your product: your app&apos;s UI
             and server routes at build time, a configured HarnessRouter agent for the end-user tasks at runtime, then tests
-            the whole thing through your app. Start from <Link href="/quickstart">Quickstart</Link> for the four steps.</p>
+            the whole thing through your app. <Link href="/start">Start</Link> walks you through it with your coding agent.</p>
         </div>
         <div className="hr-doc-actions">
           <button className="hr-btn" onClick={copy}>{copied ? 'Copied ✓' : 'Copy'}</button>

@@ -1,0 +1,61 @@
+/* The task's browser in the preview's place (BrowserSlot.tsx). The card is the old console's own
+   (BrowserPane, hr.css .wbx-browser-*), drawn inside .hrui-legacy so the design's reset leaves it be,
+   in the design's colours. Richard's rules for it stand: one card, every action in its top row, motion
+   only inside the screen, the card gone when the browser closes. From 1280 px it floats in the right
+   column, an invisible one in the conversation's own ground, centred, the preview's handle on the
+   column's edge; under that it is the preview's drawer from the right; on a phone a sheet from the
+   bottom, full width. `#hrui .page` and `#hrui .tk-bhost` outrank the generated rules (hrui.css) and
+   the console's own (hrui-console.css), whichever loads last. */
+
+/* the card in the console's colours: its blue is the design's accent, its ground the page's */
+#hrui .tk-bhost.hrui-legacy{
+  --brand:var(--accent); --brand-hover:var(--accent-hover); --brand-50:var(--accent-soft); --brand-soft:var(--accent-soft);
+  --ink:var(--fg); --ink-2:var(--fg);
+  color:var(--fg); background:transparent; font-family:var(--sans); font-size:14px; line-height:1.45;
+}
+#hrui .tk-bhost .wbx-browser-card{--surface:var(--bg)}
+#hrui .tk-bhost .wbx-browser-card.is-full{z-index:90}
+
+/* docked: the stack's column, without its hairline (the card is the edge), the card centred in it */
+#hrui .page .tk-split>.tk-preview.tk-bslot{border-left:0;overflow:visible;background:var(--bg)}
+#hrui .page .tk-bslot>.tk-bhost.hrui-legacy{flex:1;min-height:0;display:flex;flex-direction:column;padding:16px 16px 16px 12px;overflow:auto}
+#hrui .tk-bhost>.wbx-browser-card.is-docked{flex:none;align-self:stretch;margin:auto 0;max-height:100%}
+
+/* a past step's record, in the screen's place once its browser has closed */
+#hrui .tk-bhost .wbx-browser-record{flex:1 1 auto;min-height:0;overflow:auto;border-radius:0 0 16px 16px}
+#hrui .tk-brec{display:flex;flex-direction:column;gap:12px;padding:14px 16px 16px}
+#hrui .tk-brec-note{margin:0;font-size:12.5px;color:var(--muted)}
+#hrui .tk-brec-shot{display:block;width:100%;height:auto;border-radius:10px;border:1px solid var(--line);background:var(--surface-2)}
+#hrui .tk-brec-shot.is-loading{aspect-ratio:16/10;animation:tk-bpulse 1.4s ease-in-out infinite}
+@keyframes tk-bpulse{50%{opacity:.55}}
+#hrui .tk-brec-t{margin:0;font-size:14px;font-weight:600;line-height:1.35;color:var(--fg);overflow-wrap:anywhere}
+#hrui .tk-brec-sec{display:flex;flex-direction:column;gap:6px;min-width:0}
+#hrui .tk-brec-sec h4{margin:0;font-size:12px;font-weight:600;color:var(--faint)}
+#hrui .tk-brec-sec pre{margin:0;padding:10px 12px;max-height:280px;overflow:auto;border-radius:10px;background:var(--surface-2);color:var(--fg);
+  font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+#hrui .tk-brec-sec.is-failed pre{color:var(--bad);background:var(--bad-soft)}
+#hrui .tk-brec-none{margin:0;font-size:13px;color:var(--muted)}
+
+/* under 1280 px: the preview's drawer from the right, over a scrim */
+#hrui .tk-bscrim{position:fixed;inset:0;z-index:60;background:var(--scrim)}
+#hrui .tk-bdrawer.tk-bhost.hrui-legacy{position:fixed;top:0;right:0;bottom:0;z-index:61;width:min(680px,100vw);display:flex;flex-direction:column;
+  padding:max(16px,env(safe-area-inset-top,0px)) 16px max(16px,env(safe-area-inset-bottom,0px));overflow:auto;background:var(--bg);
+  box-shadow:-16px 0 40px rgba(15,23,42,.22);outline:0;animation:tk-bdrawer-in .18s ease-out}
+@keyframes tk-bdrawer-in{from{transform:translateX(24px);opacity:.6}to{transform:none;opacity:1}}
+@keyframes tk-bsheet-in{from{transform:translateY(32px);opacity:.6}to{transform:none;opacity:1}}
+/* a phone: a sheet from the bottom, the full width, as tall as the card needs */
+@media (max-width:560px){
+  #hrui .tk-bdrawer.tk-bhost.hrui-legacy{top:auto;left:0;width:auto;max-height:92dvh;padding:8px 8px max(8px,env(safe-area-inset-bottom,0px));
+    border-radius:18px 18px 0 0;box-shadow:0 -12px 36px rgba(15,23,42,.24);animation-name:tk-bsheet-in}
+  #hrui .tk-bdrawer>.wbx-browser-card.is-docked{margin:0}
+}
+
+/* the task bar's Browser control (the bar's own icon button, lit while the card shows): its dot while
+   a browser is open, still (the motion stays inside the screen) */
+#hrui .tk-bdot{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);pointer-events:none}
+#hrui .tk-bdot.is-user{background:var(--ok)}
+
+@media (prefers-reduced-motion:reduce){
+  #hrui .tk-bdrawer.tk-bhost.hrui-legacy{animation:none}
+  #hrui .tk-brec-shot.is-loading{animation:none}
+}

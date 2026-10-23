@@ -84,6 +84,14 @@
 .tr-row:hover, .tr-row.hot { background: var(--surface-2); }
 .tr-row.active { background: var(--brand-50); border-left-color: var(--brand); }
 .tr-row.sub { padding-left: 40px; }
+/* the trace read limit: veiled rows hold their content but show it blurred; limited rows are the
+   gateway's indicators of a step's kind, with nothing behind them to open */
+/* no tracing on the workspace: from the third row on the whole row is veiled, pill and clock
+   included, and so are the gaps, the subagent boundaries and the strip's segments */
+.tr-row.is-veiled { filter: blur(var(--veil, 5px)); user-select: none; pointer-events: none; cursor: default; }
+.tr-row.is-veiled:hover { background: transparent; }
+.tr-idle.is-veiled, .tr-sub-boundary.is-veiled { filter: blur(4px); user-select: none; pointer-events: none; }
+.tr-seg.is-veiled, .tr-seg-idle.is-veiled { filter: blur(2.5px); pointer-events: none; }
 .tr-badge { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; min-width: 46px; font-size: 11px; font-weight: 600;
   padding: 2px 9px; border-radius: 999px; line-height: 1.5; letter-spacing: .01em; }
 .tr-row-main { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 9px; overflow: hidden; white-space: nowrap; }
@@ -178,3 +186,6 @@
 .tr-skel-rowline { display: flex; align-items: center; gap: 12px; padding: 9px 22px; }
 .tr-skel-badge { height: 18px; width: 46px; border-radius: 999px; flex: 0 0 auto; }
 .tr-skel-line { height: 12px; }
+.tr-flowrun { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; font-size: 12.5px; font-weight: 500; color: var(--brand, #285AFF); text-decoration: none; }
+.tr-flowrun:hover { text-decoration: underline; }
+
