@@ -24,7 +24,7 @@ jest.mock('./Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode 
 jest.mock('./toast', () => ({ toast: jest.fn() }));
 jest.mock('./start/art', () => ({ nwArt: () => '' }));
 jest.mock('./start/open', () => ({ openNewSetup: jest.fn() }));
-jest.mock('./start/seed', () => ({ seedSetup: jest.fn() }));
+jest.mock('./start/seed', () => ({ seedSetup: jest.fn(), setFirstTask: jest.fn() }));
 jest.mock('./start/demos', () => ({
   DEMOS: [{ from: 'Contract', to: 'risk review', short: 'Contract review', base: 'hermes', model: 'claude-sonnet', instr: 'Review this contract clause and list each risk.' }],
   baseName: (id: string) => (id === 'hermes' ? 'Hermes' : 'Claude Code'), defaultBase: () => 'claude-code',
@@ -35,7 +35,7 @@ jest.mock('./start/Handoff', () => ({ Handoff: () => null }));
 
 import { createCustom, listCustom } from '@/lib/harness';
 import { openNewSetup } from './start/open';
-import { seedSetup } from './start/seed';
+import { seedSetup, setFirstTask } from './start/seed';
 import { NewSetup } from './NewSetup';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -57,11 +57,11 @@ beforeEach(() => {
   mockRun.models = ['claude-sonnet'];
   create.mockReset(); list.mockReset();
   list.mockResolvedValue([{ id: 'h0', name: 'Answer support emails' }]);
-  (openNewSetup as jest.Mock).mockClear(); (seedSetup as jest.Mock).mockClear();
+  (openNewSetup as jest.Mock).mockClear(); (seedSetup as jest.Mock).mockClear(); (setFirstTask as jest.Mock).mockClear();
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
-test('Save makes the setup at once: named from its sentence, kept apart, the sentence its instructions; then its page opens', async () => {
+test('Save makes the setup at once: named from its sentence, kept apart, the sentence its instructions and its first task; then its page opens', async () => {
   create.mockResolvedValue({ id: 'chrn_new', name: 'Answer support emails 2' });
   await open({ job: 'Answer support emails: look up the order, then draft a reply.' });
   expect(save().disabled).toBe(false);
@@ -73,6 +73,8 @@ test('Save makes the setup at once: named from its sentence, kept apart, the sen
     systemPrompt: 'Answer support emails: look up the order, then draft a reply.',
   });
   expect(seedSetup).toHaveBeenCalledWith('chrn_new', { h: { id: 'chrn_new', name: 'Answer support emails 2' } });
+  // what the person sent runs as the setup's first task as its page opens (Richard 10-22)
+  expect(setFirstTask).toHaveBeenCalledWith('chrn_new', 'Answer support emails: look up the order, then draft a reply.');
   expect((openNewSetup as jest.Mock).mock.calls[0][1]).toEqual({ id: 'chrn_new' });
 });
 
@@ -100,6 +102,7 @@ test('a save that fails says so, opens nothing, and can be sent again', async ()
   await flush();
   expect(line()).toBe('The setup could not be saved just now. Try again.');
   expect(openNewSetup).not.toHaveBeenCalled();
+  expect(setFirstTask).not.toHaveBeenCalled();     // nothing to run: nothing was made
   expect(save().disabled).toBe(false);
   create.mockResolvedValueOnce({ id: 'chrn_2', name: 'Review a contract and flag' });
   await act(async () => { save().click(); });

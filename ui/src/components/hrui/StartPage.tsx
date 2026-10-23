@@ -133,7 +133,7 @@ export function StartPage() {
             onClick={(e) => { if (!(e.target as HTMLElement).closest('button, a')) focusAsk(); }}>
             <Pic kind="hr" play={play} />
             <h2 className="sg-tt" id="sgMainT">Start in HarnessRouter</h2>
-            <p className="sg-d"><span className="sg-d1">Choose an agent harness and model, run a task, and see the full trace.</span> <span className="sg-d2">Then your coding agent connects it to your app.</span></p>
+            <p className="sg-d"><span className="sg-d1">Choose an agent harness and model, and run a task.</span> <span className="sg-d2">Then your coding agent connects it to your app.</span></p>
             <div className="sg-ex">
               <span className="sg-exl">Pick a demo task</span>
               <div className="td-list">

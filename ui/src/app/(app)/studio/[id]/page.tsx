@@ -23,14 +23,13 @@ import { hasSettingsDraft, layerOf, useBrickNav, type CapTab, type LayerKey } fr
 import { SetUpApp } from '@/components/hrui/SetUpApp';
 import { Skel, SkLine, SkRows, SkThread } from '@/components/hrui/Skel';
 import { filterTasks, NO_FILTER, TaskList, useLinkedTask, useTaskList, type TaskFilter } from '@/components/hrui/setup/TaskRail';
-import { NewTaskHead, TaskHead, TaskTraceView, type DetailTab } from '@/components/hrui/setup/TaskDetail';
+import { NewTaskHead, TaskHead } from '@/components/hrui/setup/TaskDetail';
 import { FilesPanel, type OpenFile } from '@/components/hrui/setup/TurnFiles';
 import { PreviewGrip, usePreviewWidth } from '@/components/hrui/setup/PreviewGrip';
 import { BrowserControl, BrowserSlot, browserStepsOf, stepOf, useTaskBrowser } from '@/components/hrui/setup/BrowserSlot';
 import { TurnSteps, type TurnStepsOf } from '@/components/hrui/setup/AgentTurns';
 import { getPaneState, setPaneState, useConvState } from '@/lib/conversation';
 import { seededSetup } from '@/components/hrui/start/seed';
-import { TraceDetailHost } from '@/components/hrui/trace/TraceView';
 import { toast } from '@/components/hrui/toast';
 
 const enc = encodeURIComponent;
@@ -55,7 +54,6 @@ export default function SetupPage() {
     return t ? { key: t, resume: t } : null;
   });
   const [testSid, setTestSid] = useState<string | null>(() => params.get('test') || linkTask);
-  const [view, setView] = useState<DetailTab>('conversation');
   // on a phone: the open task shows instead of the list (picked from it, New task, or a link)
   const [picked, setPicked] = useState(() => !!(params.get('test') || linkTask));
   // when the task shown was opened: a new test's own entry in the list is one sent after it
@@ -88,13 +86,13 @@ export default function SetupPage() {
 
   const pgHref = (sid: string | null) => `/studio/${enc(id)}${sid ? `?test=${enc(sid)}` : ''}`;
   const openTest = (sid: string, card?: TraceCard | null) => {
-    setPreview(null); setView('conversation'); setPicked(true);
+    setPreview(null); setPicked(true);
     if (card) list.add(card);
     if (sid === testSid && slot) return;
     setSlot({ key: sid, resume: sid }); setTestSid(sid); router.replace(pgHref(sid), { scroll: false });
   };
   const newTest = () => {
-    setPreview(null); setView('conversation'); setPicked(true);
+    setPreview(null); setPicked(true);
     setSlot({ key: `n${Date.now()}`, resume: null }); setTestSid(null);
     router.replace(pgHref(null), { scroll: false });
     requestAnimationFrame(() => document.getElementById('input')?.focus());
@@ -109,7 +107,7 @@ export default function SetupPage() {
   const urlTest = params.get('test');
   useEffect(() => {
     if (tab !== 'tasks' || !urlTest || urlTest === testSid) return;
-    setSlot({ key: urlTest, resume: urlTest }); setTestSid(urlTest); setView('conversation'); setPicked(true);
+    setSlot({ key: urlTest, resume: urlTest }); setTestSid(urlTest); setPicked(true);
   // follows the address only; the page's own writes set testSid first
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, urlTest]);
@@ -127,7 +125,7 @@ export default function SetupPage() {
     if (fRef.current === f) return;
     fRef.current = f;
     if (!slot?.resume || !testSid || shown.some((c) => c.session_id === testSid)) return;
-    setPreview(null); setView('conversation');
+    setPreview(null);
     const top = shown[0];
     if (top) { setSlot({ key: top.session_id, resume: top.session_id }); setTestSid(top.session_id); router.replace(pgHref(top.session_id), { scroll: false }); }
     else { setSlot(null); setTestSid(null); router.replace(pgHref(null), { scroll: false }); }
@@ -152,9 +150,6 @@ export default function SetupPage() {
   const [dirty, setDirty] = useState(() => hasSettingsDraft(id));
   // the bricks the open test's running turn is working through now (null when none runs)
   const [working, setWorking] = useState<string[] | null>(null);
-  // where a trace step's detail opens when the trace is too narrow to hold it beside its events: the
-  // right column's place (trace/TraceView TraceDetailHost, hrui-console.css .tk-trv-host)
-  const [trvHost, setTrvHost] = useState<HTMLDivElement | null>(null);
   useBrickNav({ onLayer });
 
   if (failed && !row) {
@@ -223,7 +218,6 @@ export default function SetupPage() {
     const next = shown.find((c) => c.session_id !== sid);
     if (next) openTest(next.session_id, next); else newTest();
   };
-  const tracingOn = view === 'trace' && !!openCard;
   const docked = (!!preview || browserShown) && !narrow;
   // a browser step in the conversation opens the browser card, as a file card opens its file
   const turnSteps: TurnStepsOf = (turn) => ({
@@ -259,19 +253,16 @@ export default function SetupPage() {
           ) : (
             <>
               {barCard ? (
-                <TaskHead card={barCard} tab={tracingOn ? 'trace' : 'conversation'} onTab={setView}
+                <TaskHead card={barCard}
                   browser={hasBrowser ? <BrowserControl shown={browserShown} live={tb.live} onToggle={toggleBrowser} /> : undefined}
                   onBack={() => setPicked(false)}
                   onStopped={() => { setTimeout(() => { list.refresh(); reload(); }, 1500); }} />
               ) : <NewTaskHead onBack={() => setPicked(false)} />}
-              <TraceDetailHost.Provider value={trvHost}>
-                {tracingOn && openCard ? <div className="scroll"><TaskTraceView key={openCard.session_id} card={openCard} /></div> : null}
-              </TraceDetailHost.Provider>
               {linkFailed ? (
                 <div className="tk-none" role="alert">This task could not be read just now.{' '}
                   <button type="button" className="link-q inl" onClick={linked.retry}>Try again</button></div>
               ) : null}
-              <div className="convo" hidden={tracingOn || linkFailed}>
+              <div className="convo" hidden={linkFailed}>
                 <Playground r={row} onRan={() => { setNudge((n) => n + 1); reload(); }}
                   onPreview={(files, key) => setPreview({ files, key })} previewKey={preview?.key || null}
                   slot={slot} onBorn={bornTest} onLive={setWorking}
@@ -296,7 +287,6 @@ export default function SetupPage() {
             <BrowserSlot harnessId={id} sid={testSid} tb={tb} overlay={false} />
           </>
         ) : stack()}
-        <div className="tk-trv-host" ref={setTrvHost} />
       </div>
       {preview && narrow ? (
         <FilesPanel files={preview.files} active={preview.key} onSelect={(key) => setPreview((p) => (p ? { ...p, key } : p))} onClose={() => setPreview(null)} overlay />

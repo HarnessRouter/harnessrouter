@@ -1,9 +1,9 @@
 /** @jest-environment jsdom */
 // The open task draws what was read and nothing in place of a read that failed (Richard 10-19: no
-// fallback): its trace is always the trace (no lock, no receipt), its last error picked when it failed,
-// and the delete confirmation says when whether the task has a public link could not be checked (never
-// reads as "not shared").
-import { act, useState } from 'react';
+// fallback): the delete confirmation says when whether the task has a public link could not be checked
+// (never reads as "not shared"). A self-hosted console shows a task as its conversation: the trace view
+// is the hosted product's (Richard 10-22), so the bar offers no Trace and nothing here names one.
+import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { TraceCard } from '@/lib/revamp-data';
 
@@ -18,12 +18,9 @@ jest.mock('../Sheet', () => ({
 }));
 jest.mock('../toast', () => ({ toast: jest.fn() }));
 jest.mock('./parts', () => ({ BACK_IC: null }));
-jest.mock('./TaskTrace', () => ({
-  TraceBody: ({ st, openError }: { st: string; openError: boolean }) => <div data-trace-body="1">{st}:{openError ? 'error' : 'none'}</div>,
-}));
 
 import { harnessFetch } from '@/lib/hfetch';
-import { DeleteTask, TaskHead, TaskTraceView, type DetailTab } from './TaskDetail';
+import { DeleteTask, TaskHead } from './TaskDetail';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -39,14 +36,6 @@ async function show(node: React.ReactNode) {
 }
 afterEach(() => { act(() => root.unmount()); el.remove(); jest.clearAllMocks(); });
 
-test('a task’s trace is its trace: no lock and nothing read before it; a failed task opens on its error', async () => {
-  await show(<TaskTraceView card={CARD} />);
-  expect(el.textContent).toBe('done:none');
-  act(() => root.unmount()); el.remove();
-  await show(<TaskTraceView card={{ ...CARD, status: 'failed' } as TraceCard} />);
-  expect(el.textContent).toBe('failed:error');
-});
-
 test('delete: a share read that failed is said; a shared task says its link stops working', async () => {
   (harnessFetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({}) });
   await show(<DeleteTask card={CARD} onClose={() => {}} onGone={() => {}} />);
@@ -58,18 +47,17 @@ test('delete: a share read that failed is said; a shared task says its link stop
   expect(el.textContent).not.toContain('could not be checked');
 });
 
-test('a task’s Conversation and Trace tabs move with the arrow keys, only the open one in the Tab order', async () => {
+test('the task bar offers no trace: its title and its actions, no tabs', async () => {
   (harnessFetch as jest.Mock).mockResolvedValue({ ok: false });
-  function Head() {
-    const [tab, setTab] = useState<DetailTab>('conversation');
-    return <TaskHead card={CARD} tab={tab} onTab={setTab} onStopped={() => {}} onBack={() => {}} />;
-  }
-  await show(<Head />);
-  const tabs = () => Array.from(el.querySelectorAll('.tp-tabs [role="tab"]')) as HTMLElement[];
-  expect(tabs().map((t) => t.tabIndex)).toEqual([0, -1]);
-  tabs()[0].focus();
-  await act(async () => { tabs()[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); });
-  expect(el.querySelector('.tp-tabs [aria-selected="true"]')?.textContent).toBe('Trace');
-  expect(document.activeElement?.textContent).toBe('Trace');
-  expect(tabs().map((t) => t.tabIndex)).toEqual([-1, 0]);
+  await show(<TaskHead card={CARD} onStopped={() => {}} onBack={() => {}} />);
+  expect(el.textContent).toContain('Draft a reply');
+  expect(el.querySelector('[role="tablist"], [role="tab"]')).toBeNull();
+  expect(el.textContent).not.toMatch(/trace/i);
+});
+
+test('deleting a task names what goes with it, and no trace', async () => {
+  (harnessFetch as jest.Mock).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ enabled: false, token: '' }) });
+  await show(<DeleteTask card={CARD} onClose={() => {}} onGone={() => {}} />);
+  expect(el.textContent).toContain('is removed with its conversation and files.');
+  expect(el.textContent).not.toMatch(/trace/i);
 });

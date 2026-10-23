@@ -29,8 +29,8 @@ export const LAYERS = [
 ] as const;
 type Bk = [string, number, number, number, number, number, number];
 const BK: Bk[] = [['b-sandbox', 0, 0, 6, 4, 0, 1], ['b-orch', 0, 4, 6, 6, 0, 1],
-  ['b-fill', 0, 0, 4, 4, 1, 1.25], ['b-errors', 4, 0, 6, 2, 1, 1.25], ['b-files', 4, 2, 6, 4, 1, 1.25], ['b-sessions', 0, 4, 2, 6, 1, 1.25], ['b-stream', 2, 4, 4, 6, 1, 1.25], ['b-trace', 4, 4, 6, 6, 1, 1.25]];
-export const SUBS: [string, string, string][] = [['b-sandbox', 'Sandbox', 'Sandbox'], ['b-orch', 'Orchestration', 'Orchestration'], ['b-sessions', 'Sessions', 'Sessions'], ['b-stream', 'Streaming', 'Streaming'], ['b-trace', 'Trace', 'Trace'], ['b-files', 'Files', 'Files & artifacts'], ['b-errors', 'Errors', 'Cancellation & errors']];
+  ['b-fill', 0, 0, 4, 4, 1, 1.25], ['b-errors', 4, 0, 6, 2, 1, 1.25], ['b-files', 4, 2, 6, 4, 1, 1.25], ['b-sessions', 0, 4, 2, 6, 1, 1.25], ['b-stream', 2, 4, 6, 6, 1, 1.25]];
+export const SUBS: [string, string, string][] = [['b-sandbox', 'Sandbox', 'Sandbox'], ['b-orch', 'Orchestration', 'Orchestration'], ['b-sessions', 'Sessions', 'Sessions'], ['b-stream', 'Streaming', 'Streaming'], ['b-files', 'Files', 'Files & artifacts'], ['b-errors', 'Errors', 'Cancellation & errors']];
 export const PARTS: [keyof Tower['parts'], string][] = [['plugin', 'Plugin'], ['skill', 'Skill'], ['mcp', 'Tool'], ['env', 'Environment']];
 const PART_AT: Record<string, [number, number]> = { plugin: [0, 0], skill: [4, 0], mcp: [0, 4], env: [4, 4] };
 const FAM: Record<string, string> = { 'b-runtime': 'harness', model: 'model', task: 'task', backend: 'backend', skill: 'skill', plugin: 'plugin', mcp: 'mcp', env: 'tool' };
@@ -181,7 +181,7 @@ export function towerOf(f: SetupFacts): Tower {
   b.skill = f.parts.skill > 0; b.plugin = f.parts.plugin > 0; b.mcp = f.parts.mcp > 0; b.env = f.parts.env > 0;
   const run: Record<string, boolean> = {};
   if (f.running) {
-    ['b-runtime', 'model', 'task', 'backend', 'b-sandbox', 'b-orch', 'b-sessions', 'b-stream', 'b-trace'].forEach((k) => { run[k] = true; });
+    ['b-runtime', 'model', 'task', 'backend', 'b-sandbox', 'b-orch', 'b-sessions', 'b-stream'].forEach((k) => { run[k] = true; });
     if (f.parts.skill) run.skill = true; if (f.parts.plugin) run.plugin = true; if (f.parts.env) run.env = true;
   }
   const st: States = {};

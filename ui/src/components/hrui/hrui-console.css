@@ -349,6 +349,7 @@
 #hrui .pg-opts.in-bar .nw-pk>span{font-size:12px;color:var(--faint)}
 #hrui .nw-pop.pg-hdr.pg-hdr-fly{position:fixed;flex-basis:auto;max-width:none;overflow:auto;padding:8px 14px 12px;border:1px solid var(--line);box-shadow:0 20px 44px -18px rgba(20,30,60,.38),0 2px 6px rgba(0,0,0,.06)}
 /* a produced file open: its preview takes the stack's column, wider than the stack */
+#hrui .tk-split{position:relative}
 #hrui .tk-split.previewing{grid-template-columns:300px minmax(0,1fr) min(620px,46vw)}
 #hrui .tk-split>.tk-preview{min-width:0;min-height:0;overflow:hidden;border-left:1px solid var(--line);display:flex;flex-direction:column}
 #hrui .tk-preview>*{flex:1;min-height:0}
@@ -556,16 +557,6 @@
   #hrui .tk-page .ag-bar>.ag-tabs{grid-column:3}
   #hrui .tk-page .ag-bar>.ag-right{grid-column:4/6;padding-right:20px}
 }
-/* A trace step's detail where the trace is too narrow to hold it beside its events (trace/TraceView,
-   TraceDetailHost): in the right column's place, over the Agent stack or the preview, its top on the
-   56 px line the task's bar and the stack's head share. Where that column is folded or lies over the
-   work (under 1280 px), a 420 px drawer at the work's right edge; on a phone, the whole task. */
-#hrui .tk-split{position:relative}
-#hrui .tk-trv-host{position:absolute;top:0;right:0;bottom:0;width:var(--tk-pane,min(420px,100%));z-index:7;pointer-events:none}
-#hrui .tk-trv-host:empty{display:none}
-#hrui .tk-trv-host>.trv-over{pointer-events:auto;padding:0 24px 24px;border-left:1px solid var(--line);box-shadow:-12px 0 32px -12px rgba(20,30,60,.25)}
-#hrui .tk-trv-host>.trv-over .dr-top{top:0;height:56px;margin:0 -24px 14px;padding:0 16px 0 24px;border-bottom:1px solid var(--line)}
-@media (max-width:860px){#hrui .tk-trv-host>.trv-over{padding:0 16px 24px}#hrui .tk-trv-host>.trv-over .dr-top{margin:0 -16px 14px;padding:0 8px 0 16px}}
 /* the Agent stack's status line (setup/parts.tsx StackPanel): it floats over the top of the
    illustration's room, which is kept for two lines once, fixed, so "Running now", "Saving · your
    setup" or "Idle", on one line or two, never moves the illustration (Richard, 2026-10-19) */
@@ -1024,3 +1015,9 @@
    the row's height comes out fractional, so it holds a pixel more than it shows, and focusing a tab scrolls the row that
    pixel to show the tab's last half-pixel (staging check, 10-21) */
 @media (max-width:520px){#hrui .lw-n .tabs.inline{padding-top:5px;padding-left:4px;margin-top:-5px;margin-left:-4px}}
+/* A kit's page on a self-hosted console is its app alone (shop/KitTry.tsx kt-solo): no trace pane beside
+   it, the trace view being the hosted product's, so the app takes the whole width and "Make it yours"
+   sits under it at every width. */
+#hrui .kt-solo .kt-body{grid-template-columns:minmax(0,1fr)}
+#hrui .kt-solo .kt-next-m{display:block;margin-top:12px}
+#hrui .kt-solo .kt-next-m .kt-next{margin:0}

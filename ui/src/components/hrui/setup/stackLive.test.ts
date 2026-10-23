@@ -30,7 +30,7 @@ describe('workingNow', () => {
     expect(workingNow(run([], { status: 'done' }))).toBeNull();
   });
   it('starts on the session, the orchestration, the harness, the instructions and the model', () => {
-    expect(workingNow(run([]))).toEqual(['b-orch', 'b-runtime', 'b-sessions', 'b-trace', 'backend', 'model', 'task']);
+    expect(workingNow(run([]))).toEqual(['b-orch', 'b-runtime', 'b-sessions', 'backend', 'model', 'task']);
   });
   it('lights the model while it thinks, and Streaming while it writes', () => {
     expect(workingNow(run([{ kind: 'tools', reasoning: 'Looking', steps: [] }]))).toContain('model');
@@ -60,7 +60,7 @@ describe('workingNow', () => {
 
 describe('liveTower', () => {
   it('runs only the bricks the turn works through, and only where the setup has them', () => {
-    const t = liveTower(towerOf(facts({ parts: { skill: 0, plugin: 1, mcp: 0, env: 0 } })), ['b-runtime', 'backend', 'b-sessions', 'b-orch', 'b-trace', 'plugin', 'skill']);
+    const t = liveTower(towerOf(facts({ parts: { skill: 0, plugin: 1, mcp: 0, env: 0 } })), ['b-runtime', 'backend', 'b-sessions', 'b-orch', 'plugin', 'skill']);
     expect(t.st.plugin).toBe('run');
     expect(t.st.skill).toBe('empty');
     expect(t.st.model).toBe('built');
@@ -74,9 +74,10 @@ describe('liveTower', () => {
     expect(t.st['b-sandbox']).toBe('built');
     expect(runningNames(t, true)).toEqual(['Agent harness', 'Model', 'HarnessRouter', 'Streaming']);
   });
-  it('lights Trace while the turn is recorded (every task keeps its trace)', () => {
-    const t = liveTower(towerOf(facts()), ['b-runtime', 'backend', 'b-trace']);
-    expect(t.st['b-trace']).toBe('run');
+  it('has no Trace brick: a self-hosted console shows no trace (the hosted product\'s)', () => {
+    const t = liveTower(towerOf(facts()), ['b-runtime', 'backend']);
+    expect(t.st['b-trace']).toBeUndefined();
+    expect(workingNow(run([]))).not.toContain('b-trace');
   });
   it('counts a first test as the instructions it follows', () => {
     const t = liveTower(towerOf(facts({ instructions: false, tested: false })), ['b-runtime', 'backend', 'model', 'task']);

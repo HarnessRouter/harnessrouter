@@ -37,7 +37,7 @@ export function workingNow(m: AsstMsg | null | undefined, stopping = false): str
   if (!ls) return null;
   // the turn's run: its session, the orchestration that drives it, the harness, and the trace
   // recording each event
-  const on = new Set<string>(['b-runtime', 'backend', 'b-sessions', 'b-orch', 'b-trace']);
+  const on = new Set<string>(['b-runtime', 'backend', 'b-sessions', 'b-orch']);
   // until the model has answered with anything (text or a call), it is reading its instructions
   if (!t.items.some((x) => x.kind === 'text' || x.kind === 'tool')) on.add('task');
   if (ls.phase === 'starting' || ls.phase === 'thinking') on.add('model');
@@ -66,13 +66,13 @@ export function liveTower(t: Tower, working: string[]): Tower {
 
 /** The "Running now" line: the layers at work, bottom first (the design's runNames). With `detail`
  *  (a live turn, read event by event) it goes on to the parts of HarnessRouter and the optional parts
- *  the current event is using; Sessions, Orchestration and Trace run for the whole turn, so the line
+ *  the current event is using; Sessions and Orchestration run for the whole turn, so the line
  *  names HarnessRouter for them. */
 export function runningNames(t: Tower, detail = false): string[] {
   const st = t.st;
   const layers = LAYERS.filter((L) => st[L.key] === 'run').map((L) => L.name as string);
   if (!detail) return layers;
-  const always = new Set(['b-sessions', 'b-orch', 'b-trace']);
+  const always = new Set(['b-sessions', 'b-orch']);
   return [
     ...layers,
     ...SUBS.filter(([k]) => st[k] === 'run' && !always.has(k)).map(([, n]) => n),

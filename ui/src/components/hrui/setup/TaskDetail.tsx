@@ -1,7 +1,7 @@
 'use client';
 // The task open on a setup's Tasks tab (docs/uxuidesign/console-91: taskPane, newPane, delTaskHtml,
-// shareTaskHtml, stopTask): the one bar over the reading column (its title, Conversation or Trace,
-// Stop task or Share), and its trace. Delete task is on the task's row in the list (Richard 10-18),
+// shareTaskHtml, stopTask): the one bar over the reading column (its title, Stop task or Share). A
+// self-hosted console shows a task as its conversation; the trace view is the hosted product's. Delete task is on the task's row in the list (Richard 10-18),
 // asking here (DeleteTask). Everything shown is read from the task itself: its card and its trace.
 import { useEffect, useRef, useState } from 'react';
 import { harnessFetch } from '@/lib/hfetch';
@@ -11,14 +11,9 @@ import type { TraceCard } from '@/lib/revamp-data';
 import { feedTurnOf, useFeedTurns } from '@/lib/conversation';
 import { ConfirmSheet, Sheet, SheetTop } from '../Sheet';
 import { toast } from '../toast';
-import { tabKeys } from '../tabKeys';
-import { cutWords, liveStateOf, preview, stateOf } from './fmt';
+import { cutWords, liveStateOf, preview } from './fmt';
 import { BACK_IC } from './parts';
-import { TraceBody } from './TaskTrace';
 
-export type DetailTab = 'conversation' | 'trace';
-/** a task's tabs, in order (the arrow keys move through them) */
-const DETAIL_TABS: readonly DetailTab[] = ['conversation', 'trace'];
 
 const LINK = <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1" /><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1" /></svg>;
 const CHECK = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6} aria-hidden="true"><path d="M5 12l5 5L20 7" /></svg>;
@@ -121,7 +116,7 @@ export function DeleteTask({ card, onClose, onGone }: { card: TraceCard; onClose
   };
   return (
     <ConfirmSheet id="dt" title="Delete task" confirmLabel="Delete task" focusConfirm busy={busy}
-      body={<><b>{cutWords(titleOf(card), 60)}</b> is removed with its conversation, files and trace.{shared === true ? ' Its public link stops working.' : shared === 'unknown' ? ' Whether it has a public link could not be checked.' : ''} This can’t be undone.</>}
+      body={<><b>{cutWords(titleOf(card), 60)}</b> is removed with its conversation and files.{shared === true ? ' Its public link stops working.' : shared === 'unknown' ? ' Whether it has a public link could not be checked.' : ''} This can’t be undone.</>}
       onConfirm={() => void del()} onClose={onClose} />
   );
 }
@@ -139,13 +134,13 @@ export function NewTaskHead({ onBack }: { onBack: () => void }) {
 }
 
 /** The open task's one bar over the reading column (taskPane): back to the list on a phone, its
- *  title, Conversation or Trace, the Browser control when the setup includes the browser plugin
+ *  title, the Browser control when the setup includes the browser plugin
  *  (setup/BrowserSlot), and Stop task while it runs (the feed's word first, as its row's dot), else
  *  Share. Who sent it is on its message and what it took follows each reply. A test sent a
- *  moment ago that has no task yet (no session id) shows its title alone: its tabs and actions come
+ *  moment ago that has no task yet (no session id) shows its title alone: its actions come
  *  once it has one (never drawn disabled before). */
-export function TaskHead({ card, tab, onTab, onStopped, onBack, browser }: {
-  card: TraceCard; tab: DetailTab; onTab: (t: DetailTab) => void;
+export function TaskHead({ card, onStopped, onBack, browser }: {
+  card: TraceCard;
   onStopped: (sid: string) => void; onBack: () => void;
   /** the Browser control, when the setup includes the browser plugin */
   browser?: React.ReactNode;
@@ -178,19 +173,11 @@ export function TaskHead({ card, tab, onTab, onStopped, onBack, browser }: {
     else if (!v.status) { toast('The task could not be stopped. Try again.'); setStopping(false); return; }
     onStopped(sid);
   };
-  const tb = (k: DetailTab, label: React.ReactNode) => (
-    <button type="button" role="tab" aria-selected={tab === k} tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => onTab(k)}>{label}</button>
-  );
   return (
     <div className="task-head tp-head">
       <div className="th-row">
         <button type="button" className="tk-back" aria-label="All tasks" onClick={onBack}>{BACK_IC}</button>
         <h2 className="tp-t" title={title}>{title}</h2>
-        {sid ? (
-          <div className="tabs tp-tabs" role="tablist" aria-label="Show" onKeyDown={(e) => tabKeys(e, DETAIL_TABS, tab, onTab)}>
-            {tb('conversation', 'Conversation')}{tb('trace', 'Trace')}
-          </div>
-        ) : null}
         <div className="tk-acts">
           {sid ? browser : null}
           {!sid ? null : running ? (
@@ -206,8 +193,3 @@ export function TaskHead({ card, tab, onTab, onStopped, onBack, browser }: {
   );
 }
 
-/** The open task's trace (TaskTrace TraceBody), its last error picked when the task failed. */
-export function TaskTraceView({ card }: { card: TraceCard }) {
-  const st = stateOf(card);
-  return <TraceBody card={card} st={st} openError={st === 'failed'} />;
-}

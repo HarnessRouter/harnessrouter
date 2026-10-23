@@ -52,7 +52,7 @@ export function auMark(n: number): string {
 }
 
 // the welcome picture's HarnessRouter parts: [key, x0, y0, x1, y1, tier], back to front
-const OB_PARTS: [string, number, number, number, number, number][] = [['b-sandbox', 0, 0, 6, 3, 0], ['b-orch', 0, 3, 6, 6, 0], ['b-files', 3, 0, 6, 3, 1], ['b-sessions', 0, 3, 3, 6, 1], ['b-stream', 3, 3, 6, 6, 1], ['b-errors', 3, 0, 6, 3, 2], ['b-trace', 0, 3, 6, 6, 2]];
+const OB_PARTS: [string, number, number, number, number, number][] = [['b-sandbox', 0, 0, 6, 3, 0], ['b-orch', 0, 3, 6, 6, 0], ['b-files', 3, 0, 6, 3, 1], ['b-sessions', 0, 3, 3, 6, 1], ['b-stream', 3, 3, 6, 6, 1], ['b-errors', 3, 0, 6, 3, 2]];
 
 /** The welcome picture: a complete app as one stack. Your app on top, HarnessRouter's parts in the
  *  middle (each named on its brick, from the parts list), the agent harnesses at the bottom; a

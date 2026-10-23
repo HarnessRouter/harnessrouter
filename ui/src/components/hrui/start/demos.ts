@@ -17,7 +17,7 @@ export interface Demo {
 
 // The design's guided order: product image, contract, safety check.
 export const DEMOS: Demo[] = [
-  { from: 'Product brief', to: 'product image', short: 'Product images', base: 'hermes', model: 'gpt-5.4',
+  { from: 'Product brief', to: 'product image', short: 'Product images', base: 'hermes', model: 'gpt-6.1-sol',
     instr: 'Generate a product image for our store from a short brief: square, studio light, soft shadow, no text on the product.' },
   { from: 'Contract', to: 'risk review', short: 'Contract review', base: 'dsh', model: 'deepseek-v4-pro',
     instr: 'Review this SaaS contract clause from the customer side. List each risk with a severity, then say Sign, Negotiate or Reject.' },

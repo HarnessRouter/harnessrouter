@@ -11,8 +11,11 @@
 //     shows when one of this instance's keys can run it on the chosen harness.
 //
 // The sheet closes and the setup's page opens on its Tasks (start/open.ts), with the record the save
-// answered handed to it (start/seed.ts), so it draws without a loading step. Nothing runs until the
-// person sends a task there. A save that fails says so here, with the sentence kept, and saves nothing.
+// answered handed to it (start/seed.ts), so it draws without a loading step. The sentence is also the
+// setup's first task: sending it here is asking for it to run (Richard 10-22: the flow went on to an
+// empty task and left the person wondering what to do), so the page runs it as it opens, on the model
+// chosen here, and the person lands on it running with its trace (setup/Playground.tsx). A save that
+// fails says so here, with the sentence kept, and saves nothing.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { createCustom, listCustom, offeredOob, oobById, oobDefaultModel, useBasesRead, useModelCatalogRead } from '@/lib/harness';
@@ -23,7 +26,7 @@ import { SkLine } from './Skel';
 import { toast } from './toast';
 import { nwArt } from './start/art';
 import { openNewSetup } from './start/open';
-import { seedSetup } from './start/seed';
+import { seedSetup, setFirstTask } from './start/seed';
 import { DEMOS, baseName, defaultBase, defaultModelOf, demoPick, runnableModels } from './start/demos';
 import { Handoff } from './start/Handoff';
 import { nameFromJob, tooShort, uniqName } from './start/names';
@@ -183,6 +186,8 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
       if (!rec?.id) throw new Error('no id');
       // its page draws from the record the save answered with
       seedSetup(rec.id, { h: rec });
+      // what the person asked for runs as its first task as its page opens
+      setFirstTask(rec.id, j);
       openNewSetup(router, { id: rec.id });
     } catch {
       if (gone.current) return;

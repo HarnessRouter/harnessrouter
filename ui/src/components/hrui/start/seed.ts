@@ -14,7 +14,7 @@ const MADE = 'hr.made:';
 /** How long after its create a setup made here is waited for, rather than called missing. */
 const MADE_WAIT = 10 * 60_000;
 const made = new Map<string, number>();
-const tabStore = (): Pick<Storage, 'getItem' | 'setItem'> | null => { try { return globalThis.sessionStorage ?? null; } catch { return null; } };
+const tabStore = (): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null => { try { return globalThis.sessionStorage ?? null; } catch { return null; } };
 
 /** This tab has just made this setup (every create path says so as it opens the setup, start/open.ts). */
 export function markMade(id: string, now = Date.now()): void {
@@ -36,3 +36,29 @@ export function madeHere(id: string, now = Date.now()): boolean {
   if (!at) { try { at = Number(tabStore()?.getItem(MADE + id) || 0); } catch { at = 0; } }
   return at > 0 && now - at < MADE_WAIT;
 }
+
+// The task a setup was made with (New setup: the sentence the person sent there), for its page to run
+// once as it opens. Kept in the tab too, so the page load that opens the setup still finds it; taking
+// it forgets it, so a reload, a second tab or a return to the page never runs it again.
+const FIRST = 'hr.first:';
+const firsts = new Map<string, string>();
+export function setFirstTask(id: string, text: string): void {
+  if (!id || !text.trim()) return;
+  firsts.set(id, text);
+  try { tabStore()?.setItem(FIRST + id, text); } catch { /* this page's note still has it */ }
+}
+/** The first task waiting for this setup, without taking it ('' when none). */
+export function peekFirstTask(id: string): string {
+  if (!id) return '';
+  let t = firsts.get(id) || '';
+  if (!t) { try { t = tabStore()?.getItem(FIRST + id) || ''; } catch { t = ''; } }
+  return t;
+}
+/** The first task waiting for this setup, taken: it is handed over once. */
+export function takeFirstTask(id: string): string {
+  const t = peekFirstTask(id);
+  firsts.delete(id);
+  try { tabStore()?.removeItem(FIRST + id); } catch { /* forgotten in this page */ }
+  return t;
+}
+

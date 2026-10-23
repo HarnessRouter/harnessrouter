@@ -24,6 +24,7 @@ import { toast } from '../toast';
 import { Skel, SkLine, SkThread } from '../Skel';
 import type { SetupRow } from '../setups';
 import { API_BASE } from '../start/prompts';
+import { peekFirstTask, takeFirstTask } from '../start/seed';
 import { AgentConversation, AgentComposer } from 'reifyui/agent-chat';
 import { AgentTurns, harnessMark } from './AgentTurns';
 import { FileCards, filesOf, type OpenFile } from './TurnFiles';
@@ -159,6 +160,18 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, res
       setTurnModels((xs) => [...xs, m]);
     });
   };
+  // THE TASK THE SETUP WAS MADE WITH runs as its page opens (New setup: the sentence the person sent is
+  // what they asked to see run), once, on the model chosen there, as soon as that model is known to run.
+  // One no provider serves now leaves it in the box instead, to send once another model is chosen.
+  const avail = modelAvailability(target.backend, model);
+  useEffect(() => {
+    if (resume || conv.msgs.length || conv.busy || conv.loadFailed || avail === 'unknown' || !peekFirstTask(r.h.id)) return;
+    const text = takeFirstTask(r.h.id);
+    if (avail === 'no') setInput(text);
+    else sendNow(text, []);
+    // sendNow is this render's; the hand-off happens once, when the conditions above first hold
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resume, conv.msgs.length, conv.busy, conv.loadFailed, avail, r.h.id]);
   // a task whose record could not be read takes no message: it would go on from an unknown point
   const canSend = !conv.busy && !conv.loadFailed && (input.trim() || att) && modelAvailability(target.backend, model) !== 'no';
   const send = () => {
