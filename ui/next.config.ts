@@ -23,7 +23,8 @@ const nextConfig: NextConfig = {
   // V1C02-007: baseline browser security headers on every response — clickjacking defense
   // (frame-ancestors 'none' + X-Frame-Options DENY), HSTS, MIME-sniff off, tight referrer,
   // and a locked-down permissions policy. The console renders no third-party iframes and is
-  // never meant to be embedded, so 'none' is safe and has no functional regression.
+  // never meant to be embedded, so 'none' is safe and has no functional regression. The one frame
+  // it draws is its own: a kit's app inside the Shop's try page, from this same origin.
   async headers() {
     const baseline = [
       { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
@@ -35,7 +36,7 @@ const nextConfig: NextConfig = {
       {
         // Public artifact proxies set their own stricter CSP and referrer policy. Next's
         // configured headers can overwrite route response headers, so exclude them here.
-        source: "/((?!api/share/|[^/]+/[^/]+/workspace/).*)",
+        source: "/((?!api/share/|kits/|[^/]+/[^/]+/workspace/).*)",
         headers: [
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
@@ -49,6 +50,18 @@ const nextConfig: NextConfig = {
           ...baseline.filter(({ key }) => key !== "Referrer-Policy"),
         ],
       })),
+      {
+        // A kit's own app, shown inside its Shop try page: framed by the console itself and by
+        // nothing else. Safe only because /kits/* serves the first-party kit apps built into the
+        // image (HR_KITS_DIR). If the Shop ever serves a third party's kit app, it moves to a
+        // sandboxed frame on another origin first, never this one.
+        source: "/kits/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
+          ...baseline,
+        ],
+      },
     ];
   },
   webpack: (config) => {

@@ -1,0 +1,1025 @@
+/* What the console needs around the design's own stylesheet (hrui.css, generated): the frame fills
+   the window, links read like the design's buttons, and a page not yet redesigned scrolls in the
+   frame with its old look (.hrui-legacy, which the design's rules and reset skip). */
+#hrui{position:fixed;inset:0;overflow:hidden}
+#hrui a:where(:not(.hrui-legacy *)){color:inherit;text-decoration:none}
+#hrui .rail-logo img.hr-mark{display:block;width:24px;height:24px;margin:0}
+#hrui .me-star:where(:not(.hrui-legacy *)){display:inline-flex;align-items:center;gap:4px}
+#hrui .me-star svg{width:13px;height:13px}
+/* the account menu never runs off the window (Shell sets its height to the room it has); under the
+   address, one row for the current organization (OrgSwitch.tsx): its badge, its name and a chevron,
+   which opens the organizations as a compact list anchored under it (above it in a short window),
+   a filter on top once there are more than six; on a phone the list is a bottom sheet */
+#hrui .me-pop{overflow-y:auto;overscroll-behavior:contain}
+#hrui .me-row.me-orgcur{gap:10px;padding:7px 10px}
+#hrui .me-orgcur .ws-badge,#hrui .org-opt .ws-badge{border-radius:7px}
+#hrui .me-orgcur .org-opt-n{font-weight:600}
+#hrui .org-opt-n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .me-row.me-orgcur svg.org-chev{width:16px;height:16px;flex:none;color:var(--muted);transition:transform .15s}
+#hrui .me-orgcur.open{background:var(--surface)}
+#hrui .me-orgcur.open svg.org-chev{transform:rotate(180deg)}
+#hrui .me-orgcur.solo{cursor:default}
+#hrui .me-orgcur.solo:hover{background:none}
+#hrui .org-dd{position:fixed;z-index:2;display:flex;flex-direction:column;min-height:0;background:var(--bg);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:4px;overflow:hidden}
+#hrui .org-list{display:flex;flex-direction:column;min-height:0;flex:1}
+#hrui .org-q{margin:2px 2px 6px;flex:none;height:34px;font-size:13px}
+#hrui .org-opts{list-style:none;margin:0;padding:0;overflow-y:auto;max-height:264px;min-height:0;outline:none}
+#hrui .org-dd .org-opts{max-height:none;flex:1}
+#hrui .org-opt{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:8px;font-size:14px;cursor:pointer}
+#hrui .org-opt.act{background:var(--surface)}
+#hrui .org-opts:focus-visible .org-opt.act,#hrui .org-q:focus-visible~.org-opts .org-opt.act{box-shadow:inset 0 0 0 1.5px var(--accent)}
+#hrui .org-opt.here .org-opt-n{font-weight:600}
+#hrui .org-opt[aria-disabled="true"]{cursor:progress}
+#hrui .org-opt[aria-disabled="true"]:not(:has(.org-busy)){opacity:.6}
+#hrui .org-opt .chk{display:grid;place-items:center;flex:none;color:var(--accent)}
+#hrui .org-opt .chk svg{width:16px;height:16px;color:var(--accent)}
+#hrui .org-busy{flex:none;font-size:12px;color:var(--muted)}
+#hrui .org-none{margin:6px 8px;font-size:13px;color:var(--muted)}
+#hrui .org-sheet .org-opts{max-height:min(60dvh,420px)}
+#hrui .org-sheet .org-opt{padding:10px 8px;font-size:15px}
+#hrui .me-err{margin:2px 10px 4px;font-size:12px;line-height:1.4;color:var(--bad)}
+/* the rail's account button is the person's own avatar (Avatar.tsx MyPic): their picture or photo,
+   else their initials in white on their colour; it fills the round button, and on a phone it is
+   the More tab's small disc */
+#hrui .rail-me .me-av.av{width:100%;height:100%;font-size:12px;color:#fff;box-shadow:none;overflow:hidden}
+#hrui .rail-me .me-av.av.pic{background:var(--bg)}
+/* the person's photo is scaled whole into the circle, not cropped to fill it: a portrait photo filled
+   the 32 px disc with just the face (Richard, 2026-10-19: "按比例把它这个 Avatar 缩到这个圆里面去") */
+#hrui .rail-me .me-av.av.pic img{object-fit:contain}
+/* a photo disc keeps its edge, a 1px line ring over the photo, so a photo on a white background still
+   reads as an avatar on the white rail and bar (the button's own ring is under the photo) */
+#hrui .av.pic{position:relative}
+#hrui .av.pic::after{content:"";position:absolute;inset:0;border-radius:50%;box-shadow:inset 0 0 0 1px var(--line);pointer-events:none}
+/* the phone bar's More tab is the same box as the other tabs (Richard, 2026-10-19: "把这个 more 给它 fix
+   一下"). The desktop rule that spaces the account button from the Letter (.rail-letter+.rail-me, 8px)
+   matched on a phone too, where the Letter is hidden, and pushed the tab 3px down; the avatar was 20px
+   against the icons' 18px, so its label sat lower still. Now: no margin, the tabs' padding and gap, the
+   avatar the icons' 18px box, so the label shares their baseline; the unread dot sits on the avatar's
+   top right, not on the tab's far edge. */
+@media (max-width:700px){
+  #hrui .rail .rail-me,#hrui .rail .rail-letter+.rail-me{margin:0;padding:7px 0;gap:3px}
+  #hrui .rail .rail-me .me-av.av{width:18px;height:18px;flex:none;font-size:8px;letter-spacing:-.02em;color:#fff}
+  #hrui .rail .rail-me.dot::after{top:5px;right:auto;left:calc(50% + 3px)}
+}
+#hrui .hrui-legacy{flex:1;min-height:0;overflow:auto;background:#fff;color:#111}
+#hrui .hrui-deficit{position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:40;display:flex;gap:12px;align-items:center;background:var(--warn-soft);color:var(--warn);border-radius:999px;padding:8px 16px;font-size:13px}
+#hrui .hrui-deficit a{font-weight:600;text-decoration:underline}
+/* a current component embedded in a redesigned page (until the design's own replaces it) */
+#hrui .hrui-legacy.hrui-embed{flex:none;overflow:visible;background:transparent;margin-top:20px}
+/* Shop (ShopPage.tsx): a card never widens its column, whatever a kit is called */
+#hrui .kgrid>.kc{min-width:0}
+/* a card's agent harness and model: the model takes the next line whole where both do not fit on one
+   ("claude-sonnet-5.5" was cut at 1024; audit, 10-21), and ends in "…" only when it is wider than the card */
+#hrui .kc-meta{flex-wrap:wrap;row-gap:2px}
+#hrui .kc-meta .kc-m{min-width:0;max-width:100%;white-space:nowrap}
+/* Shop, a kit's page (shop/KitTry.tsx): the kit's own app fills the design's frame; while it is not
+   open the frame holds one short state in the page's colours. Narrow, the page scrolls as one, so the
+   app gets a height of its own. */
+#hrui .kt-frame>.kt-appframe{display:block;width:100%;height:100%;min-height:0;border:0;background:#fff}
+#hrui .kt-frame.kt-off{background:var(--bg);display:flex;flex-direction:column}
+#hrui .kt-frame.kt-off>.kt-idle{flex:1;height:auto;padding:40px 24px}
+#hrui .kt-frame .kt-idle .kc-ic{position:static;flex:none;width:44px;height:44px;border-radius:12px;display:grid;place-items:center;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
+#hrui .kt-frame .kt-idle .kc-ic svg{width:22px;height:22px}
+#hrui .kt-frame .kt-idle p{max-width:320px}
+#hrui .kt-url .kt-path{overflow:hidden;text-overflow:ellipsis}
+#hrui a.kt-url:hover{color:var(--fg)}
+#hrui .kt-bar .link-q{white-space:nowrap}
+@media (max-width:1100px){#hrui .kt-frame>.kt-appframe{flex:none;height:max(480px,calc(100dvh - 240px))}}
+@media (max-width:860px){#hrui .kt-frame.kt-off{min-height:340px}}
+/* Shop, setting a kit up (shop/LaunchSheet.tsx) */
+#hrui .kl-l{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+#hrui .kl-warn{margin:0 0 10px}
+#hrui .kl-help{margin:0 0 8px}
+#hrui .kl-eng{margin-bottom:8px}
+#hrui .kl-test{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+#hrui .kl-test .set-help{margin:0}
+#hrui .kl-test .kl-ok{color:var(--ok)}
+#hrui .kl-test .kl-bad{color:var(--bad)}
+#hrui .kl-sheet .ship-opt{width:100%}
+#hrui .kl-sheet .ship-opt:disabled{opacity:.55;cursor:not-allowed}
+#hrui .kl-sheet .sheet-actions .kl-alt{margin:0 auto 0 0}
+/* the workspace sheets (WorkspaceSheets.tsx): an invitation with no role to pick keeps the address
+   and Invite on one line; a long name or address wraps inside its row on a phone */
+#hrui .invite.inv-one .keyrow input{grid-column:auto}
+#hrui .team-row .grow b,#hrui .team-row .grow small{overflow-wrap:anywhere}
+/* skeletons (Skel.tsx): the design's shimmer line (.pl-sk) laid out in the shape of what loads */
+#hrui .hrui-skel{display:block}
+#hrui .hrui-skel .pl-sk{display:block;max-width:100%}
+#hrui .hrui-skel-card{pointer-events:none}
+#hrui .hrui-skel-card .card-tower{display:flex;align-items:center;justify-content:center}
+#hrui .hrui-skel-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}
+#hrui .hrui-skel-rows{display:flex;flex-direction:column}
+#hrui .hrui-skel-row{display:flex;align-items:center;gap:14px;padding:14px 8px;border-bottom:1px solid var(--line)}
+#hrui .hrui-skel-row .pl-sk{flex:none}
+#hrui .hrui-skel-grow{flex:1;min-width:0}
+#hrui .hrui-skel-grow .pl-sk{flex:initial}
+#hrui .hrui-skel-head{margin-bottom:28px}
+/* a setup whose tasks are not read yet: a pill-shaped line where its status goes, a line for its last task */
+#hrui .pill-sk{display:inline-flex;align-items:center;vertical-align:middle;max-width:100%}
+#hrui .pill-sk .pl-sk,#hrui .card-conn .pl-sk{display:inline-block;max-width:100%;vertical-align:middle}
+/* a setup's name on its Studio card shows whole, running to a second line (broken after a space or a hyphen)
+   beside its status, and ends in "…" only past that ("Return policy answers 2" was cut at 1440; audit, 10-21) */
+#hrui .card-h{align-items:flex-start}
+#hrui .card-h b{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+/* its agent harness and model under the name: the model takes the next line whole where both do not fit on one,
+   and the line ends in "…" only past its second ("Claude Code · claude-sonnet-5.5" was cut at 1024; audit, 10-21) */
+#hrui .card-sub:where(:not(.hrui-legacy *)){white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+#hrui .card-sub .card-m{white-space:nowrap}
+#hrui .hrui-skel-figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:18px}
+#hrui .hrui-skel-thread{padding:8px 0}
+@media (prefers-reduced-motion: reduce){#hrui .pl-sk{animation:none}}
+/* BYOK (console-79 byok, on the routing document as it is): a provider's keys listed under its row,
+   the form's sign-in choice and Microsoft Entra fields, and which key serves each model */
+#hrui .pv-keys{grid-column:2/4;display:flex;flex-direction:column;border-top:1px solid var(--line)}
+#hrui .pv-key{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
+#hrui .pv-key:last-child{border-bottom:0;padding-bottom:0}
+#hrui .pv-key .pv-k{flex:1 1 260px;min-width:0;color:var(--ok);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+#hrui .pv-key .pv-k b{color:var(--fg);font-weight:600}
+#hrui .pv-key .pv-k .mono,#hrui .pv-key .pv-serves{color:var(--muted)}
+#hrui .pv-key .pv-act{margin-left:auto}
+#hrui .pv-how{margin:0 0 12px}
+#hrui .pv-opts{display:grid;gap:12px;margin-top:10px;max-width:560px}
+#hrui .pv-entra{display:grid;gap:14px;max-width:640px}
+#hrui .pv-entra .set-f .seg{margin-top:2px}
+#hrui .pv-fed{background:var(--surface);border-radius:12px;padding:12px 14px;display:grid;gap:10px}
+#hrui .pv-fed .set-help{margin:0}
+#hrui .pv-fed .cost dd{min-width:0;text-align:right;overflow-wrap:anywhere}
+#hrui .pv-fed .cost code{font-size:12px}
+#hrui .pv-routes{padding:12px 20px;display:grid;gap:10px}
+#hrui .pv-routes .set-help{margin:0}
+#hrui .pv-route{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,280px);gap:12px;align-items:center;padding:8px 20px;border-top:1px solid var(--line);font-size:13px}
+#hrui .pv-route .mono{overflow-wrap:anywhere}
+@media (max-width:520px){
+  #hrui .pv-keys{grid-column:1/-1}
+  #hrui .pv-key .pv-act{margin-left:0}
+  #hrui .pv-route{grid-template-columns:minmax(0,1fr)}
+  #hrui .pv-fed .cost div{flex-direction:column;gap:2px}#hrui .pv-fed .cost dd{text-align:left}
+}
+/* a skeleton standing in for cards inside the card grid takes no box of its own */
+#hrui .hrui-skel.hrui-skel-contents{display:contents}
+/* a sheet's refusal in the server's words, under the field or above the actions (ShipSheet, LiveSheet) */
+#hrui .set-help.say-bad{color:var(--bad)}
+/* the ship sheet's product option when the setup is not live: say why, keep it legible */
+#hrui .ship-opt:disabled{opacity:.6;cursor:not-allowed}
+/* team cards: a site link on the left of the actions, the kicker's own line */
+#hrui .kc-act .kc-site{max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* the organization's people (OrgPeople.tsx, OrganizationPage.tsx): a set picture fills its avatar; a
+   pending invitation's Resend and Cancel sit together; removing a person asks in place, under its row */
+#hrui .av.pic{background:var(--surface-2);overflow:hidden}
+#hrui .av.pic img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block}
+#hrui .team-acts{display:flex;gap:14px;flex:none}
+#hrui .team-row .link-q{flex:none}
+/* each person's name and address stay on one line, cut where they run out; the role keeps its width */
+#hrui .team-row .grow b,#hrui .team-row .grow small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .team-row .role{flex:none}
+#hrui .team-row .team-you{margin-left:8px;font-size:12px;font-weight:500;color:var(--muted);background:var(--surface-2);border-radius:999px;padding:1px 8px;vertical-align:1px}
+/* People and settings (WorkspaceSheets.tsx, WsSettings.tsx): the people's heading carries its action
+   on the right; the settings are compact rows, a label column and the field or state beside it, one
+   Save under the profile; Microsoft sign-in and telemetry receivers say their state and open their
+   manager under the row. On a phone each label sits over its field. */
+#hrui .ins-h.org-ph{display:flex;align-items:center;justify-content:space-between;gap:12px}
+#hrui .ins-h.org-ph .link-q{font-size:13px}
+#hrui .ins-h.ws-set-h{margin:22px 0 6px}
+#hrui .set-form{display:flex;flex-direction:column;gap:8px}
+#hrui .set-row{display:flex;align-items:center;gap:12px;min-height:40px}
+#hrui .set-l{flex:0 0 112px;font-size:13px;color:var(--muted)}
+#hrui .set-row .keyname{flex:1 1 auto;min-width:0;padding:8px 11px}
+#hrui .set-v{flex:1;min-width:0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .set-row>.link-q{flex:none}
+#hrui .set-act{display:flex;justify-content:flex-end}
+#hrui .set-item{border-top:1px solid var(--line);margin-top:10px;padding-top:4px}
+#hrui .set-item+.set-item{margin-top:0}
+#hrui .set-more{margin:2px 0 12px}
+/* a manager under its row (WsMicrosoft.tsx, WsReceivers.tsx): the same rows, a small heading per
+   group, one-line hints, a confirm in place, receivers as a name and its host beside a status pill */
+#hrui .set-mgr{display:flex;flex-direction:column;gap:6px;padding:8px 12px 10px;border-radius:12px;background:var(--surface)}
+#hrui .set-mgr .keyname{background:var(--bg)}
+#hrui .set-sub{margin:10px 0 0;font-size:12px;font-weight:500;color:var(--faint)}
+#hrui .set-mgr>.set-sub:first-child{margin-top:2px}
+#hrui .set-hint{margin:0;font-size:12px;line-height:1.45;color:var(--muted)}
+#hrui .set-hint.bad,#hrui .set-err{color:var(--bad)}
+#hrui .set-err{margin:2px 0 0;font-size:13px}
+#hrui .set-code{flex:1;min-width:0;font-family:var(--mono);font-size:12px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .set-l.set-l-wide{flex:1 1 auto}
+#hrui .set-row.set-top{align-items:flex-start}
+#hrui .set-row.set-top>.set-l{padding-top:9px}
+#hrui .set-row .btn.small{flex:none}
+#hrui .set-act{gap:8px;flex-wrap:wrap}
+#hrui .set-act.set-act-l{justify-content:flex-start}
+#hrui .set-confirm{border:1px solid var(--line);border-radius:10px;background:var(--bg);padding:10px 12px}
+#hrui .set-confirm p{margin:0 0 8px;font-size:13px;line-height:1.45}
+#hrui .set-confirm .keyname{width:100%;margin:0 0 8px}
+#hrui .set-confirm-act{display:flex;justify-content:flex-end;gap:8px}
+#hrui .rcv+.rcv{border-top:1px solid var(--line);padding-top:6px}
+#hrui .rcv-n{flex:1;min-width:0}
+#hrui .rcv-n b{display:block;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .rcv-n small{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .rcv .pill{flex:none;font-size:12px}
+#hrui .rcv-acts{display:flex;flex-wrap:wrap;gap:4px 14px;margin:-2px 0 4px}
+#hrui .rcv-form{border-top:1px solid var(--line);padding-top:4px;margin-top:4px}
+#hrui .rcv-creds{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+#hrui .rcv-hdr{display:flex;gap:6px}
+#hrui .rcv-hdr .keyname{flex:1 1 0;min-width:0}
+#hrui .rcv-links{display:flex;flex-wrap:wrap;gap:4px 14px}
+#hrui .rcv-picks{display:flex;flex-wrap:wrap;gap:6px 16px}
+#hrui .rcv-picks.col{flex-direction:column;gap:6px;padding-top:9px}
+#hrui .rcv-picks .chk-row{font-size:13px}
+#hrui .rcv-chips{flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-top:6px}
+#hrui .rcv-chip{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:var(--bg)}
+#hrui .rcv-chip.on{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+#hrui .rcv-all{font-size:12px;color:var(--faint)}
+@media (max-width:520px){#hrui .set-mgr .set-row:has(input,select,code,.rcv-creds,.rcv-chips){flex-wrap:wrap;gap:4px 8px}#hrui .set-mgr .set-row:has(input,select,code,.rcv-creds,.rcv-chips)>.set-l{flex:0 0 100%;padding-top:0}#hrui .rcv-picks.col{padding-top:0}}
+@media (max-width:520px){#hrui .set-form .set-row{flex-direction:column;align-items:stretch;gap:4px;min-height:0}#hrui .set-form .set-l{flex:none}#hrui .set-l{flex-basis:auto}#hrui .set-item .set-l{flex:0 0 auto;max-width:45%}}
+#hrui .team-confirm{padding:2px 0 14px;border-bottom:1px solid var(--line)}
+#hrui .team-confirm .del-p{margin:6px 0 0}
+#hrui .team-confirm .del-act{margin-top:12px}
+#hrui .org-people .hrui-skel{margin:4px 0 14px}
+#hrui .org-wrap{max-width:760px}
+#hrui .org-sec{margin-top:26px}
+#hrui .org-sec h2.ins-h{margin:0 0 8px}
+#hrui .org-me{display:flex;gap:16px;align-items:flex-start}
+#hrui .org-me-x{flex:1;min-width:0}
+#hrui .org-me-x .keyrow{flex-wrap:nowrap}
+#hrui .org-me-x .keyname{flex:1 1 auto;min-width:0}
+/* the Account page: one column as wide as a form wants, its sections divided by a line (AccountSettings.tsx) */
+#hrui .acct{max-width:640px}
+#hrui .acct-sec{margin-top:32px;padding-top:24px;border-top:1px solid var(--line)}
+#hrui .acct-pw{display:grid;gap:10px;max-width:420px}
+#hrui .acct-pw .fine{margin:0}
+#hrui .acct-msg{color:var(--muted)}
+#hrui .acct-msg.bad{color:var(--bad)}
+#hrui .acct-ms:empty{display:none}
+#hrui .del-sheet .set-in{margin:4px 0 12px}
+@media (max-width:520px){#hrui .org-me{gap:12px}#hrui .org-me .av{width:48px!important;height:48px!important;font-size:18px!important}#hrui .team-acts{gap:10px}}
+/* API Keys and Extensions draw a narrower column (880 px) than the other pages (1180 px). The design
+   capped the column's children and left them at its left edge, so the content sat 110 px left of
+   the area's centre; the column itself is narrowed instead (880 + its 40 px sides), and centres. */
+#hrui .list-wrap.lw-n{max-width:960px}
+/* the team's letter (LetterPage.tsx): while it loads, its column in the shape of the letter; if it
+   does not load, one line and Try again in the middle of the area */
+#hrui .letter-skel{width:100%;max-width:660px;margin:0 auto;padding:clamp(28px,6.4vh,72px) 16px 72px;display:flex;flex-direction:column}
+#hrui .letter-off{flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);padding:24px 16px;text-align:center}
+#hrui .letter-off p{margin:0}
+/* Usage, by task (UsagePage.tsx): the task with its setup and model as a muted second line, when it
+   ended on one line, the cost lines this window has values for (bd0 to bd3), then the total. Narrower
+   than a desktop the cost lines go first and Task, Ended and Total stay; on a phone Ended keeps its
+   day only. */
+#hrui .us-tt.bd0{grid-template-columns:minmax(0,1fr) 124px 84px}
+#hrui .us-tt.bd1{grid-template-columns:minmax(0,1fr) 124px 84px 84px}
+#hrui .us-tt.bd2{grid-template-columns:minmax(0,1fr) 124px 84px 84px 84px}
+#hrui .us-tt.bd3{grid-template-columns:minmax(0,1fr) 124px 84px 84px 84px 84px}
+#hrui .us-tt .c-end{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .us-tt .us-nmx{flex:1 1 auto;min-width:0}
+#hrui .us-tt .us-nm small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:900px){
+  #hrui .us-tt .c-bd{display:none}
+  #hrui .us-tt.bd0,#hrui .us-tt.bd1,#hrui .us-tt.bd2,#hrui .us-tt.bd3{grid-template-columns:minmax(0,1fr) 124px 84px}
+}
+@media (max-width:560px){
+  #hrui .us-tt .c-end-t{display:none}
+  #hrui .us-tt.bd0,#hrui .us-tt.bd1,#hrui .us-tt.bd2,#hrui .us-tt.bd3{grid-template-columns:minmax(0,1fr) 56px 72px}
+}
+/* Plans (BillingPage.tsx, on Billing and in Choose a plan): every card's rows line up across the
+   row of cards, so the prices sit level (Richard: "let these prices vertically aligned"). Each card is
+   seven rows of the plans grid (the brick, name and badge, who it is for, price, what it includes,
+   the rate line, the button), taken as a subgrid: a row is as tall as its tallest card. Where the
+   cards stack (560 px and narrower) the design's own one-card layout stays. */
+@media (min-width:561px){
+  #hrui .bp-plans>.bp-plan{display:grid;grid-row:span 7;grid-template-rows:subgrid;row-gap:0;align-content:start}
+  #hrui .bp-plans>.bp-plan>.bp-pn{align-self:start}
+  #hrui .bp-plans>.bp-plan>.bp-for{align-self:start}
+  #hrui .bp-plans>.bp-plan>.bp-price{align-self:end}
+  #hrui .bp-plans>.bp-plan>.bp-inc{align-self:start}
+  #hrui .bp-plans>.bp-plan>.bp-inc:empty{margin:0}
+  #hrui .bp-plans>.bp-plan>.btn{align-self:end;margin-top:0}
+}
+/* the full comparison where its four plan columns do not fit (a phone): one plan at a time, picked by its
+   name, each row a feature and its value (BillingPage.tsx .bp-cmp1). The design's four-column table (640px
+   at least) ran 284px past a 390 screen (audit, 10-21); from 640px of room it is the table again */
+#hrui .bp-cmpbox{container:bpcmp / inline-size}
+#hrui .bp-cmp1{display:none}
+@container bpcmp (max-width:639px){
+  #hrui .bp-cmpbox>.bp-cmp-wrap{display:none}
+  #hrui .bp-cmp1{display:block;margin-top:10px}
+}
+#hrui .seg.bp-cmp1-pick{display:flex;width:100%}
+#hrui .seg.bp-cmp1-pick button{flex:1 1 0;min-width:0;padding:6px 4px;white-space:normal;text-align:center;line-height:1.25}
+#hrui .bp-cmp1 .bp-cmp{min-width:0}
+#hrui .bp-cmp1 .bp-cmp th[scope="row"]{width:42%}
+#hrui .bp-cmp1 .bp-cmp td{overflow-wrap:anywhere}
+/* Bring your own key: a provider's own mark on white (a dark mark stays readable in dark mode) */
+#hrui .pv-ic.pv-logo{background:#fff;padding:7px}
+#hrui .pv-ic.pv-logo img{display:block;width:100%;height:100%;object-fit:contain}
+/* Usage: a row's name sits level with the other columns (the design aligned it to the top of its
+   picture, half a row above them; Richard 10-18). */
+#hrui .us-nm{align-items:center}
+/* a setup's, a task's or a workspace's name in Usage's rows shows whole on up to two lines, "…" only past
+   them ("Chat check aider gpt-5.5" was cut at 390; audit, 10-21) */
+#hrui .us-nm b{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+#hrui .us-nm b .link-q{white-space:normal;overflow:visible}
+/* Billing's payments: the amounts sit right, label and figures, so their digits line up, with room before the
+   date that follows */
+#hrui .bp-pay .num{text-align:right;padding-right:24px}
+/* A setup's page (studio/[id], console-91): one bar, then the work, every column under a 56 px bar on
+   one hairline (the design's .ag-bar, .tk-split, .set-split rules). What they need around our own
+   parts: the open task's conversation (reifyui's, its composer pinned at its foot) in the design's
+   720 px reading column, the model in the composer's bar, a file's preview in the stack's column. */
+#hrui .tk-d>.convo[hidden]{display:none}
+#hrui .tk-d>.convo>.agent-chat{flex:1;min-height:0;width:100%;max-width:none;margin:0;display:flex;flex-direction:column}
+#hrui .tk-d .uac-convo.is-pane{flex:1;height:auto;min-height:0}
+#hrui .tk-d .uac-thread{width:100%;max-width:784px;margin:0 auto;padding:28px 32px 24px;box-sizing:border-box}
+#hrui .tk-d .uac-dock{width:100%;max-width:784px;margin:0 auto;padding:12px 32px 20px;box-sizing:border-box}
+#hrui .tk-d .pg-opening{width:100%;max-width:784px;margin:0 auto;padding:28px 32px;box-sizing:border-box}
+#hrui .tk-d .readonly .btn{flex:none}
+#hrui .tk-d>.hrui-skel .thread{padding:28px 32px}
+/* the task's bar: its title takes what the tabs and actions leave (the design's three columns keep
+   the tabs in the middle of the reading column) */
+#hrui .tp-head .tk-acts{min-width:0}
+#hrui .tp-tabs button svg{flex:none}
+/* a reply's one line after it (am-foot): quiet, its response ID in mono. It says how long a finished
+   reply took, so the conversation's own "Worked for" line steps aside here (a stopped, incomplete or
+   failed reply keeps its outcome line, which says why) */
+#hrui .tk-d .uac-outcome:not(.is-stopped):not(.is-incomplete):not(.is-failed){display:none}
+#hrui .tk-d .uac-actions .agent-meta{font-size:12px;color:var(--faint);gap:6px}
+#hrui .tk-d .uac-actions .agent-meta .link-q{font-size:12px}
+#hrui .tk-d .uac-actions .agent-meta .mono{font-size:12px}
+/* the model (and headers) in the composer's bar; the headers' values open over the page */
+#hrui .uac-composer-row>.pg-opts.in-bar{flex:0 1 auto;min-width:0;flex-wrap:nowrap;gap:2px}
+#hrui .pg-opts.in-bar .nw-pk{min-width:0}
+#hrui .pg-opts.in-bar .nw-pk>span{font-size:12px;color:var(--faint)}
+#hrui .nw-pop.pg-hdr.pg-hdr-fly{position:fixed;flex-basis:auto;max-width:none;overflow:auto;padding:8px 14px 12px;border:1px solid var(--line);box-shadow:0 20px 44px -18px rgba(20,30,60,.38),0 2px 6px rgba(0,0,0,.06)}
+/* a produced file open: its preview takes the stack's column, wider than the stack */
+#hrui .tk-split{position:relative}
+#hrui .tk-split.previewing{grid-template-columns:300px minmax(0,1fr) min(620px,46vw)}
+#hrui .tk-split>.tk-preview{min-width:0;min-height:0;overflow:hidden;border-left:1px solid var(--line);display:flex;flex-direction:column}
+#hrui .tk-preview>*{flex:1;min-height:0}
+/* the list: a row's state words in its second line */
+#hrui .tk-r .dot{flex:none}
+/* a task's row (TaskRail.tsx; Richard 10-18): Delete on the row, a trash button that shows on hover or
+   keyboard focus at the row's right edge, level with its second line and over the end of its text (a
+   fade on its left), so nothing in the row moves; red under the pointer. On a touch screen it stays on
+   the open task's row. */
+#hrui .tk-rw{position:relative;--rw:var(--bg)}
+#hrui .tk-rw:has(>.tk-r.on){--rw:var(--surface-2)}
+#hrui .tk-mb{position:absolute;right:6px;bottom:7px;width:26px;height:26px;display:grid;place-items:center;border-radius:8px;color:var(--muted);background:var(--rw);opacity:0;pointer-events:none}
+#hrui .tk-mb::before{content:"";position:absolute;top:0;bottom:0;right:100%;width:20px;background:linear-gradient(to right,transparent,var(--rw));pointer-events:none}
+#hrui .tk-mb svg{width:16px;height:16px}
+#hrui .tk-mb:hover{color:var(--fg);box-shadow:inset 0 0 0 26px color-mix(in srgb,var(--fg) 8%,transparent)}
+#hrui .tk-mb.tk-rdel:hover{color:var(--bad);box-shadow:inset 0 0 0 26px var(--bad-soft)}
+#hrui .tk-rw:has(:focus-visible)>.tk-mb,#hrui .tk-mb:focus{opacity:1;pointer-events:auto}
+@media (hover:hover){
+  #hrui .tk-rw:hover{--rw:var(--surface)}
+  #hrui .tk-rw:hover:has(>.tk-r.on){--rw:var(--surface-2)}
+  #hrui .tk-rw:hover>.tk-r:not(.on){background:var(--surface)}
+  #hrui .tk-rw:hover>.tk-mb{opacity:1;pointer-events:auto}
+}
+@media (hover:none){
+  #hrui .tk-rw:has(>.tk-r.on)>.tk-mb{opacity:1;pointer-events:auto}
+  #hrui .tk-mb::after{content:"";position:absolute;inset:-9px}
+}
+/* a phone: the list scrolls with the page (the design's), and an open task fills the window under no
+   bar of its own (the design hides the setup's bar), its conversation scrolling, its composer pinned */
+@media (max-width:860px){
+  #hrui .tk-page:has(.tk-split.show-d){overflow:hidden}
+  #hrui .tk-split.show-d{flex:1;min-height:0}
+  #hrui .tk-split.show-d>.tk-d{min-height:0}
+  #hrui .tk-split.show-d .tk-d>.convo{flex:1;min-height:0}
+  #hrui .tk-split.show-d .tk-d>.scroll{flex:1;min-height:0;overflow:auto}
+  #hrui .tk-d .uac-thread{padding:20px 16px 16px}
+  #hrui .tk-d .uac-dock{padding:8px 16px max(14px,env(safe-area-inset-bottom,0px))}
+  #hrui .tk-d .pg-opening{padding:20px 16px}
+  #hrui .tk-newp{padding:16px;align-items:flex-start}
+  #hrui .tk-newp .ac-hero{margin:0}
+  #hrui .tp-tabs button{padding:0 10px}
+}
+/* the bar's second line (harness · model · Harness ID) stays one line from 1024 px up: the Harness ID
+   gives way first, cut in its middle (its start, an ellipsis, its last six, then Copy), then the
+   model. The design hid the ID under 900 px for want of room; cut, it fits, so it stays. */
+#hrui .ag-bar .ag-l2 .ag-h{flex:none}
+/* the model never gives up width while the Harness ID can: shrinking it at all, even by hundredths of a pixel,
+   drew its "…" ("deepseek-v4.1-fla…" at 1440 and 1024, production re-check 10-21); "…" only past the whole line */
+#hrui .ag-bar .ag-l2 .ag-m{flex:0 0 auto;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis}
+#hrui .ag-bar .ag-l2 .sep{flex:none}
+#hrui .ag-bar .ag-l2 .ag-hid{display:inline-flex;flex:0 1000 auto;min-width:76px;margin-left:0}   /* the design's -4px
+   (under 900 px, from when only the copy icon showed) cut the ID's first letter */
+#hrui .ag-bar .ag-l2 .ag-hid .ag-id{display:inline-flex;flex:0 1 auto;min-width:0}
+#hrui .ag-bar .ag-l2 .ag-hid .icon-btn{flex:none}
+#hrui .ag-id-a{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .ag-id-b{flex:none}
+#hrui .ag-bar .ag-l2 .sep-id{display:inline}
+/* under 1024 px the bar stays one 56 px line, as the design draws it: the harness as its logo (its name stays for
+   screen readers and in the logo's tooltip; a harness with no logo keeps its name), the model whole, and the Harness
+   ID as its Copy button alone, the ID in the button's tooltip (the design hid the ID's text under 900 px; Richard: a
+   Harness ID is not for people to read). The model was cut at 768 and 390 in the production read-back (10-21); a bar
+   that grew to hold more rows moved the tabs' underline and shifted the page on load, so it doesn't grow.
+   After the base rules on purpose: a media query adds no specificity, so a later rule would win */
+@media (max-width:1023px){
+  #hrui .ag-bar .ag-l2.has-logo .ag-h{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  #hrui .ag-bar .ag-l2 .sep-id{display:none}
+  #hrui .ag-bar .ag-l2 .ag-hid{flex:none;min-width:0;margin-left:4px}
+  #hrui .ag-bar .ag-l2 .ag-hid .ag-id{display:none}
+  /* with the ID's text gone the model is the line's only give: whole wherever the line holds it, "…" only where it truly
+     can't (701 px, or a harness with no logo), and Copy always whole */
+  #hrui .ag-bar .ag-l2 .ag-m{flex:0 1 auto}
+}
+#hrui .ag-act>svg{display:none;flex:none}
+/* a phone: the setup's name takes the bar's first row (the one action keeps its place beside it);
+   the tabs take the second (the design's) */
+@media (max-width:700px){
+  #hrui .ag-bar>.ag-ident{flex:1 1 0}
+  #hrui .ag-bar .ag-ident .ag-l2{max-width:none}
+}
+/* a narrow phone: the action folds to its icon (its words stay its name and tooltip), the name runs
+   to two lines before it is cut, and its connection wraps under it when the two do not fit */
+@media (max-width:480px){
+  #hrui .ag-bar .ag-right .ag-act{width:34px;height:34px;padding:0;gap:0}
+  #hrui .ag-bar .ag-right .ag-act>svg{display:block}
+  #hrui .ag-bar .ag-right .ag-act>.ag-act-l{display:none}
+  #hrui .ag-bar .ag-ident .ag-l1{flex-wrap:wrap;row-gap:2px}
+  #hrui .ag-bar .ag-l1 .ag-name{max-width:100%;font-size:20px;line-height:1.2;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
+}
+/* the model list: a note on what a choice does, a model this test cannot take, and its skeleton */
+#hrui .pg-mpop .nw-opt.pg-no{opacity:.55;cursor:not-allowed}
+#hrui .pg-mpop .nw-opt.pg-no small{color:var(--warn)}
+#hrui .pg-mpop .pg-msk{padding:4px 0}
+/* Settings (SetupSettings.tsx). Delete setup is the settings' last row, with a layer row's anatomy
+   (.ly-n: its name alone, the same padding and corners), past a hairline and outside the layers'
+   list, its name red and a soft red behind it on hover. In the rail it sits right
+   under the layers, never pinned to the rail's foot; where the rail folds to chips (860 px and under)
+   that one is not drawn and the one at the foot of the open layer is, its words in line with the
+   fields above it. One is drawn at any width. */
+#hrui .set-split .lg-dz{display:flex;flex-direction:column;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+#hrui .set-split .lg-dz>.ly-n b{color:var(--bad)}
+#hrui .set-split .lg-dz>.ly-n:hover{background:var(--bad-soft)}
+#hrui .set-split .lg-col>.lg-dz{display:none}
+/* Upload to cloud: the row above Delete setup, in the layers' own ink */
+#hrui .set-split .lg-dz>.ly-n.lg-up b{color:var(--fg)}
+#hrui .set-split .lg-dz>.ly-n.lg-up:hover{background:var(--surface-2)}
+/* Upload to cloud's line (its status, or what it does) wraps in the column rather than running past it */
+#hrui .set-split .lg-dz>.ly-n.lg-up{min-width:0}
+#hrui .set-split .lg-dz>.ly-n.lg-up small{white-space:normal;overflow-wrap:anywhere}
+/* the rail lists the layers down to 861 px; the design's older 900 px rule would draw its chips too */
+@media (min-width:861px){#hrui .set-split .ly-chips{display:none}}
+@media (max-width:860px){
+  #hrui .set-split .lg-rows>.lg-dz{display:none}
+  #hrui .set-split .lg-col>.lg-dz{display:flex;margin-top:28px}
+  #hrui .set-split .lg-col>.lg-dz>.ly-n{margin:0 -8px}
+}
+/* a setup's Plugins tab (setup/PluginSwitches.tsx): the workspace's connected plugins in the design's
+   rows, three columns that line up as a table's (the mark, the words, the switch, each switch as wide
+   as the next). What a row offers (Reconnect, Connect, Manage) is a line of its own under its words, so
+   the switch column never moves. A switch saving pulses its knob; the others wait for it undimmed.
+   Connect another plugin is a quiet line under the list. Add plugin opened at Available stops that
+   section under its sticky search. */
+#hrui .pl-sw .tog{flex:none;width:68px;justify-content:flex-start}
+#hrui .pl-sw .cap-row .grow small{overflow-wrap:anywhere}
+#hrui .pl-sw-fix{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;line-height:1.35}
+#hrui .tog.wait i{animation:pulse 1s ease-in-out infinite}
+#hrui .pl-sw-saving .tog:disabled{opacity:1;cursor:progress}
+#hrui .set-help.pl-sw-note{margin:0 0 10px}
+#hrui .pl-sw-foot{margin:12px 2px 0;font-size:13px;line-height:1.5;color:var(--muted)}
+#hrui .pl-add .pl-sec{scroll-margin-top:72px}
+@media (prefers-reduced-motion:reduce){#hrui .tog.wait i{animation:none;opacity:.5}}
+/* Delete setup's sheet (settingsSheets.tsx DeleteSetupSheet) asks for the setup's name: the label is
+   one sentence that wraps, a long name broken where it must, never pushed out of the sheet */
+#hrui .del-l.nm{display:block;line-height:1.5}
+#hrui .del-l.nm b{font-weight:600;overflow-wrap:anywhere}
+/* the Agent harness layer is the agent harness and its model: beside it, both bricks stay solid while
+   the rest step back (the design's setSide keeps only the agent harness's for its own layer) */
+#hrui .set-split>.agent-side[data-focus="harness"]:has(.bk[data-tw="b-runtime"]) .iso-wrap .bk[data-tw="model"]{opacity:1}
+/* Extensions › Plugins › Apps: the apps sheet, each app by its own logo (a console sheet the design
+   does not draw yet) */
+#hrui .sheet.apps-sheet:where(:not(.hrui-legacy *)){width:min(640px,100%)}
+#hrui .apps-sheet .lib-t small.sub2:where(:not(.hrui-legacy *)){display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+#hrui .apps-sheet .brand-ic b:where(:not(.hrui-legacy *)){font-size:12px;line-height:1}
+/* Billing: the auto top-up pill ("20% extra") stays one line when the card head is narrow */
+#hrui .bp-pill{white-space:nowrap}
+/* New setup's agent harness list: a harness's name shows whole, on a second line where it must, and its Preview
+   badge stands apart beside it, in what is seen and in what is read out ("Qoder Cloud AgentPREVIEW" was cut
+   at 390; audit, 10-21) */
+#hrui .dd-o b.dd-hb{display:flex;align-items:center;gap:8px;white-space:normal;overflow:visible}
+#hrui .dd-hb .dd-hn{min-width:0;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+#hrui .dd-hb .h-pre{flex:none;margin-left:0}
+/* New setup: while its request is checked the picks show what was chosen and take no clicks */
+#hrui .nw-q .nw-pk:disabled{opacity:1;cursor:default}
+/* the new setup's first task (start/BuildPage, start/Assembly): the line that says it is being set up,
+   then the save card at the top of the conversation, arriving as the design's bsTop does */
+#hrui .bd-line{padding:2px 0 18px;font-size:14px}
+#hrui .bd-line .uac-working{min-height:20px}
+#hrui .bs-wrap .bs-save.building{animation:bsin .3s ease-out both}
+#hrui .bd-fail{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 16px;border-radius:14px;background:var(--surface);font-size:14px}
+@media (prefers-reduced-motion:reduce){#hrui .bs-wrap .bs-save.building{animation:none}}
+/* a service the saved setup needs and the person has not connected (start/Assembly NeedChip): Connect
+   sits beside its name, and the chip takes the whole row at every width: in a third of the card,
+   "Not connected" and the service's name were both cut to a few letters beside the button (audit, 10-21) */
+#hrui .bs-t .bs-act{flex:none;margin-left:auto;white-space:nowrap}
+#hrui .bs-save .bs-grid.bs-g3>.bs-need{grid-column:1/-1}
+/* HarnessRouter's included parts on the save card: as many columns as names that fit (at least 150px each),
+   and a long name wraps to a second line rather than ending in "…" ("Orchestration", "Cancellation &
+   errors" were cut at four to a row; audit, 10-21) */
+#hrui .bs-save .bs-board .bs-grid:not(.bs-g1):not(.bs-g3){grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+#hrui .bs-save .bs-board .bs-grid:not(.bs-g1):not(.bs-g3)>*{grid-column:auto}
+#hrui .bs-save .bs-board .bs-grid:not(.bs-g1):not(.bs-g3) .bs-x b{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+/* the setup's bar (setup/parts.tsx): the name's side and the action's side take equal shares, so Tasks
+   and Settings sit in the bar's middle whatever either side holds (Richard, 2026-10-19); a long name
+   ellipsizes inside its share. A phone keeps the design's wrap, with the tabs on their own row. */
+#hrui .ag-bar .ag-lft{display:flex;align-items:center;gap:10px;min-width:0;flex:0 1 auto}
+@media (min-width:701px){
+  #hrui .ag-bar:where(:not(.hrui-legacy *)){display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);column-gap:16px}
+  #hrui .tabs.inline.ag-tabs:where(:not(.hrui-legacy *)){margin:0;justify-self:center}
+  #hrui .ag-bar .ag-right:where(:not(.hrui-legacy *)){margin-left:0;justify-self:end}
+}
+/* The setup's page frame (studio/[id], start/BuildPage): the columns' widths are the page's, so the
+   split and the bar over it read the same ones, and Tasks · Settings sit over the middle column, on
+   the axis the open task's Conversation | Trace has (Richard, 2026-10-19). --tk-l is the task list
+   (or the layers' rail), --tk-r the right column: the Agent stack, its 52 px bar when folded, or a
+   file's preview at the width its handle gives it (--pv-w, set on the page by PreviewGrip's width).
+   Under 1280 px an open stack lies over the work and takes no column; at 860 px and under the page
+   is one column and the bar keeps the rule above (a phone's tabs keep their own row). --tk-pane is
+   the right column's width while it is a panel (the open stack, the preview), unset otherwise. */
+#hrui .tk-page{--tk-l:300px;--tk-r:0px}
+#hrui .tk-page:has(>.tk-split.has-side),#hrui .tk-page:has(>.set-split){--tk-r:400px;--tk-pane:400px}
+#hrui .side-off .tk-page:has(>.tk-split.has-side),#hrui .side-off .tk-page:has(>.set-split){--tk-r:52px;--tk-pane:initial}
+#hrui .tk-page:has(>.tk-split.previewing){--tk-r:var(--pv-w,min(620px,46vw));--tk-pane:var(--tk-r)}
+@media (max-width:1279px){
+  #hrui .tk-page{--tk-l:272px}
+  #hrui .tk-page:has(>.tk-split.has-side){--tk-r:0px;--tk-pane:initial}
+  #hrui .side-off .tk-page:has(>.tk-split.has-side),#hrui .tk-page:has(>.set-split){--tk-r:52px;--tk-pane:initial}
+}
+@media (min-width:861px){
+  /* the split's columns are the frame's (the class twice outranks every state's own rule) */
+  #hrui .page .tk-page>.tk-split.tk-split,#hrui .page .tk-page>.set-split.set-split{grid-template-columns:var(--tk-l) minmax(0,1fr) var(--tk-r)}
+  /* the bar: the list's width, the middle column's two halves around the tabs, the right column's
+     width. The name's side spans the list and the left half, the action's side the right half and
+     the right column, so the tabs sit in the middle column's middle whatever either side holds */
+  #hrui .tk-page .ag-bar{grid-template-columns:var(--tk-l) minmax(0,1fr) auto minmax(0,1fr) var(--tk-r);padding-left:0;padding-right:0}
+  #hrui .tk-page .ag-bar>.ag-lft{grid-column:1/3;padding-left:16px}
+  #hrui .tk-page .ag-bar>.ag-tabs{grid-column:3}
+  #hrui .tk-page .ag-bar>.ag-right{grid-column:4/6;padding-right:20px}
+}
+/* the Agent stack's status line (setup/parts.tsx StackPanel): it floats over the top of the
+   illustration's room, which is kept for two lines once, fixed, so "Running now", "Saving · your
+   setup" or "Idle", on one line or two, never moves the illustration (Richard, 2026-10-19) */
+#hrui .agent-side .stack-art{position:relative;padding-top:48px}
+#hrui .agent-side .stack-art>.now{position:absolute;top:2px;left:0;right:0;margin:0;min-height:0;align-items:flex-start;line-height:20px}
+#hrui .agent-side .stack-art>.now>.dot{flex:none;margin-top:7px}
+#hrui .agent-side .stack-art>.now>span:last-child{min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#hrui .agent-side .stack-art>.iso-wrap{margin-top:0}
+/* People and settings: the workspace's name beside its badge, with no line under it (Richard,
+   2026-10-19), so the two sit centred on one line */
+#hrui .ws-sheet-h{align-items:center;min-width:0}
+#hrui .ws-sheet-h h3{margin:0;min-width:0;overflow-wrap:anywhere}
+/* a workspace's own people (WsPeople.tsx, staging): the switch that
+   restricts it, on its own ruled row; "Who keeps access?" as a checked list that scrolls past a
+   handful; the picker (who on its own line, the role and Add under it: the sheet is 460 px at most);
+   a pill for You, Owner and AI teammate; the owner's "always has access" may wrap on a phone rather
+   than crush the name */
+#hrui .ws-people .ws-only{border-top:1px solid var(--line);margin-top:6px}
+#hrui .ws-people .ws-only .set-l{color:var(--fg);font-size:14px}
+#hrui .ws-keep{margin:4px 0 10px}
+#hrui .ws-keep-list{display:flex;flex-direction:column;gap:8px;max-height:232px;overflow-y:auto;overscroll-behavior:contain;margin:0 0 10px;padding:2px}
+#hrui .ws-keep-list .chk-row{min-width:0}
+#hrui .ws-keep-n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .team-tag{margin-left:8px;font-size:12px;font-weight:500;color:var(--muted);background:var(--surface-2);border-radius:999px;padding:1px 8px;vertical-align:1px;white-space:nowrap}
+#hrui .ws-add{margin:6px 0 4px}
+#hrui .ws-add-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+#hrui .ws-add-row select{flex:1 1 100%;min-width:0;padding:8px 11px}
+#hrui .ws-add-row .seg,#hrui .ws-add-row .btn{flex:none}
+#hrui .ws-add-row .btn{margin-left:auto}
+/* the switcher when the workspaces could not be read (Shell.tsx): no workspace's letter or colour */
+#hrui .ws-rail.ws-rail-x{background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line)}
+#hrui .ws-row.ws-fail small{color:var(--accent)}
+@media (max-width:520px){#hrui .ws-people .team-row .role{flex:0 1 auto;max-width:42%;text-align:right}}
+/* a recorded first task's head (setup/TaskDetail.tsx RecordedHead): Recorded, and running while it
+   plays, as a live task is, with nothing to stop or share */
+#hrui .tk-running{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);white-space:nowrap}
+#hrui .tp-head .tk-acts .demo-chip{flex:none;font-size:12px;padding:2px 9px}
+#hrui .tp-head .tk-acts .demo-chip+.tk-running{margin-left:10px}
+/* the Next card under a new setup's first task (start/NextBar, the design's .nx2; Richard 2026-10-19):
+   your app (a brick still to build) and the setup (a built brick) at the two ends, the task going
+   over and the result coming back between them, Set up the app under the wires. The design draws it
+   at 612 px, its width in a task with the Agent stack open. The card is its own container, so what
+   follows reads the card's width whatever panels are open: under 520 px Next takes its own line, the
+   bricks shrink to 64 px, the wires stay between the two ends and the button takes the full width
+   under them. Its bricks are pictures, not buttons: no pointer, no hover, and the next one does not
+   pulse (the design's .nx2 .iso .next) */
+#hrui .bs-next.nx2{position:relative;display:block;padding:18px 20px 20px;border-radius:18px;container-type:inline-size;container-name:nx}
+#hrui .nx2 .bs-nk{position:absolute;left:20px;top:16px;color:var(--muted);font-family:var(--sans);font-size:13px;font-weight:500;line-height:18px;letter-spacing:0;text-transform:none}
+#hrui .nx2 .nx-flow{display:grid;grid-template-columns:minmax(0,1fr) 150px minmax(0,1fr);align-items:stretch}
+#hrui .nx2 .nx-end{display:flex;flex-direction:column;align-items:center;text-align:center;min-width:0}
+#hrui .nx2 .nx-b{display:block;flex:none;overflow:visible;pointer-events:none}
+#hrui .nx2 .iso .next{animation:none}
+#hrui .nx2 .nx-end b{margin-top:8px;font-size:14px;font-weight:600;line-height:20px;max-width:100%;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+#hrui .nx2 .nx-end span{font-size:12px;color:var(--muted);line-height:17px;text-wrap:balance;max-width:200px}
+#hrui .nx2 .nx-mid{display:flex;flex-direction:column;align-items:center;justify-content:space-between;min-width:0}
+#hrui .nx2 .nx-wire{align-self:stretch;display:flex;flex-direction:column;gap:12px;margin-top:26px}
+#hrui .nx2 .nx-wire i{position:relative;display:block;height:12px}
+#hrui .nx2 .nx-wire i::before{content:"";position:absolute;left:0;right:0;top:50%;border-top:1.5px solid var(--b-line)}
+#hrui .nx2 .nx-wire i::after{content:"";position:absolute;top:50%;width:6px;height:6px;border-top:1.5px solid var(--b-line);border-right:1.5px solid var(--b-line)}
+#hrui .nx2 .nx-wire .go::after{right:1px;transform:translateY(-50%) rotate(45deg)}
+#hrui .nx2 .nx-wire .back::after{left:1px;transform:translateY(-50%) rotate(-135deg)}
+#hrui .nx2 .nx-wire em{position:absolute;left:50%;transform:translateX(-50%);font-style:normal;font-size:11px;line-height:12px;color:var(--faint);white-space:nowrap}
+#hrui .nx2 .nx-wire .go em{top:-15px}
+#hrui .nx2 .nx-wire .back em{top:15px}
+/* width:auto against the old bar's full-width button on a phone (hrui.css .bs-next .btn) */
+#hrui .nx2 .nx-mid .btn{width:auto;height:34px;padding:0 16px;font-size:14px;white-space:nowrap}
+@container nx (max-width:519px){
+  #hrui .nx2 .bs-nk{position:static;display:block;margin-bottom:12px}
+  #hrui .nx2 .nx-flow{grid-template-columns:minmax(0,1fr) 72px minmax(0,1fr);row-gap:18px}
+  #hrui .nx2 .nx-mid{display:contents}
+  #hrui .nx2 .nx-app{grid-area:1/1}
+  #hrui .nx2 .nx-wire{grid-area:1/2;align-self:start;gap:6px;margin-top:15px}
+  #hrui .nx2 .nx-setup{grid-area:1/3}
+  #hrui .nx2 .nx-mid .btn{grid-area:2/1/3/-1;width:100%}
+  #hrui .nx2 .nx-b{width:64px;height:47px}
+}
+/* an imported earlier turn (start/imported.tsx): quoted under its label, with no
+   agent mark, no "Done in" and no cost; never drawn as the agent's reply */
+#hrui .imp-turn{display:grid;gap:6px;margin:0 0 22px}
+#hrui .imp-k{font-size:12px;color:var(--muted)}
+#hrui .imp-q{margin:0;padding:12px 16px;border-left:3px solid var(--line);background:var(--surface);border-radius:0 12px 12px 0;font-size:14px;line-height:1.55;color:var(--fg);overflow-wrap:anywhere}
+#hrui .imp-req{white-space:pre-wrap;margin-bottom:10px}
+#hrui .imp-files{font-size:12px;color:var(--muted);margin-bottom:10px}
+#hrui .imp-ans>:first-child{margin-top:0}#hrui .imp-ans>:last-child{margin-bottom:0}
+/* a reply's Markdown table (agent-chat.scoped.css is generated from reifyui, so the console's rule lives here):
+   a column is never narrower than its longest word, nor than 4em. The reply's overflow-wrap:anywhere (for long
+   links) let auto layout squeeze a column to one letter ("Se / ve / rit / y"); a word longer than its column
+   still breaks, and a table wider than the reply scrolls. */
+#hrui .uac-md th, #hrui .uac-md td{min-width:4em;overflow-wrap:break-word;word-break:normal}
+/* every coding-agent sheet is Richard's "Set up a starter app" sheet (10-19: hand-sheet use-sheet, its steps
+   the hx list, start/Steps): Set up the app and the guides. The design's own rules the generated sheet
+   lacks, then what the console adds: a summary never runs past the step (a long key name ends in an
+   ellipsis), and a hint or live line that warns reads as one */
+#hrui .use-sheet .hand{margin-top:18px}
+#hrui .use-sheet .hx-sum .link-q{margin-left:4px}
+#hrui .hx-sum{max-width:100%;min-width:0}
+#hrui .copy-hint.warn,#hrui .hx-live.warn{color:var(--warn)}
+/* the copy block (start/PromptCopy; Richard, 10-18): Copy prompt stays on the right */
+#hrui .code-bar .btn{margin-left:auto}
+/* the key step (start/KeyStep): the name row, a name that cannot be used said under it, then the key once
+   in the warning box (its warning on a line of its own, the key and Copy key under it), then the key's
+   name and last four. On a phone the field and every button take the full width */
+#hrui .kb-why{margin:6px 0 0;font-size:13px;color:var(--bad)}
+#hrui .hx .kb-reveal b{flex:1 1 100%;font-weight:600}
+#hrui .hx .kb-reveal code{flex:1 1 240px;min-width:0}
+#hrui .hx .kb-reveal .btn{flex:none}
+#hrui .kb-done{background:var(--ok-soft);color:var(--ok)}
+#hrui .kb-n{min-width:0;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:520px){#hrui .hx .keyrow .keyname{flex-basis:100%}#hrui .hx .keyrow .btn,#hrui .hx .kb-reveal .btn,#hrui .hx-wait .btn{flex:1 1 100%;justify-content:center}}
+/* onboarding fields (auth/Wall.tsx): .ob-in was written for the flex rows (flex:1), but inside a plain
+   .ob-box it had no width, so a textarea fell back to the browser's 20-column default and sat at half the
+   box (Richard, 2026-10-19). Every field fills its box; the textarea is a real multi-line field. */
+#hrui .ob-box>.ob-in{width:100%;box-sizing:border-box}
+#hrui .ob-box>textarea.ob-in{height:auto;min-height:88px;padding:10px 12px;line-height:1.5;resize:vertical}
+/* Studio's list: a setup with a task running now carries the task list's blue running dot after its name
+   (the cards carry the design's own "Running" over the tower) */
+#hrui .agents-g .ag-run{margin-left:8px;vertical-align:middle}
+/* Studio's list on a phone: the design sizes the Status column by each row's own pill (auto), so the label and
+   the pills under it start at different places; one width for all of them, the design's own at 1000 px */
+@media (max-width:520px){#hrui .agents-g:where(:not(.hrui-legacy *)){grid-template-columns:minmax(0,1fr) 120px!important}}
+
+/* Set up the app (Richard's set-up-a-starter-app design, 10-19): a step that is not next yet keeps its
+   body at full strength, so the key row's Create reads as live from the start, as the design draws it.
+   The older guides' fade (hrui.css .hx-s.empty .hx-d) stays for the other sheets. */
+#hrui .use-sheet .hx-s.empty .hx-d{opacity:1}
+
+/* The Organizations system (console_103, Richard 2026-10-21): the organization page, its sheets, the workspace
+   menu's organization row and New organization. The design's own rules for that scope, taken from the
+   prototype where hrui.css lacks or differs from them (orgproto/cssdiff.mjs); two that would restyle every
+   page's fields (.set-in.bad, .set-f .lbl) are kept to these sheets. */
+#hrui .org-badge:where(:not(.hrui-legacy *)){background:var(--fg);color:var(--bg)}
+#hrui .og-title:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:12px;margin-bottom:4px}
+#hrui .og-title h1:where(:not(.hrui-legacy *)){margin:0!important}
+#hrui .og .og-plan:where(:not(.hrui-legacy *)){font-size:inherit;color:inherit}
+#hrui .og .og-plan:hover:where(:not(.hrui-legacy *)){color:var(--fg)}
+#hrui .og:where(:not(.hrui-legacy *)){--og-c:96px}
+#hrui .og-plate:where(:not(.hrui-legacy *)){overflow-x:auto;margin-top:4px}
+/* one grid for the plate (its columns set on .og-plate by OrganizationPage), each row a subgrid of it: a column starts
+   at the same place in every row whatever a row holds (Richard, 2026-10-21: rows didn't line up) */
+#hrui .og-plate:where(:not(.hrui-legacy *)){display:grid;align-content:start;column-gap:12px}
+#hrui .og-n5 .og-plate:where(:not(.hrui-legacy *)){column-gap:10px}
+#hrui .og-plate>.og-r:where(:not(.hrui-legacy *)){grid-column:1/-1;grid-template-columns:subgrid}
+#hrui .og-r:where(:not(.hrui-legacy *)){display:grid;align-items:center;column-gap:12px;min-height:64px;padding:0 8px;border-bottom:1px solid var(--line);width:100%;text-align:left}
+#hrui .og-empty .og-who:where(:not(.hrui-legacy *)){grid-column:1/-1}
+#hrui .og-hd:where(:not(.hrui-legacy *)){min-height:0;padding-bottom:10px;align-items:end;font-size:12px;color:var(--faint);font-weight:500}
+#hrui .og-who:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:12px;min-width:0}
+#hrui .og-who .av:where(:not(.hrui-legacy *)){width:32px;height:32px;font-size:12px;box-shadow:none}
+#hrui .og-nm:where(:not(.hrui-legacy *)){min-width:0}
+#hrui .og-nm b:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .og-nm small:where(:not(.hrui-legacy *)){display:block;font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .og-you:where(:not(.hrui-legacy *)){font-style:normal;font-size:12px;font-weight:500;color:var(--muted);background:var(--surface-2);border-radius:999px;padding:1px 8px}
+#hrui .og-role:where(:not(.hrui-legacy *)){display:inline-flex;align-items:center;gap:6px;font-size:14px;padding:6px 10px;margin-left:-10px;border-radius:9px;color:var(--fg)}
+#hrui button.og-role:hover:where(:not(.hrui-legacy *)),#hrui button.og-role[aria-expanded="true"]:where(:not(.hrui-legacy *)){background:var(--surface)}
+#hrui .og-role svg:where(:not(.hrui-legacy *)){color:var(--faint)}
+#hrui .og-role.ro:where(:not(.hrui-legacy *)){color:var(--muted)}
+#hrui .og-c:where(:not(.hrui-legacy *)){display:flex;justify-content:center}
+#hrui .og-ws:where(:not(.hrui-legacy *)){display:flex;flex-direction:column;align-items:center;gap:6px;max-width:var(--og-c);padding:6px 6px 0;border-radius:10px;font-size:12px;font-weight:500;color:var(--muted)}
+#hrui .og-ws>span:last-child:where(:not(.hrui-legacy *)){max-width:calc(var(--og-c) - 12px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .og-ws .ws-badge:where(:not(.hrui-legacy *)){border-radius:7px}
+#hrui .og-ws:hover:where(:not(.hrui-legacy *)){color:var(--fg)}
+#hrui .og-ws:hover .ws-badge:where(:not(.hrui-legacy *)){box-shadow:0 0 0 3px var(--surface-2)}
+#hrui .og-ws.foc:where(:not(.hrui-legacy *)){color:var(--fg)}
+#hrui .og-ws.foc .ws-badge:where(:not(.hrui-legacy *)){box-shadow:0 0 0 3px var(--accent-soft),0 0 0 4px var(--accent)}
+#hrui .og-s:where(:not(.hrui-legacy *)){display:grid;place-items:center;width:44px;height:44px;border-radius:12px}
+#hrui button.og-s.fixed:where(:not(.hrui-legacy *)){cursor:default}
+#hrui .og-act:where(:not(.hrui-legacy *)){display:flex;justify-content:flex-end;gap:14px}
+#hrui .og-x:hover:where(:not(.hrui-legacy *)){color:var(--bad)}
+#hrui .og-pend .og-nm b:where(:not(.hrui-legacy *)){font-weight:500;color:var(--muted)}
+#hrui .og-ghost:where(:not(.hrui-legacy *)){width:32px;height:32px;background:none!important;box-shadow:inset 0 0 0 1.5px var(--g-line)!important;color:var(--faint);font-weight:500;border-radius:50%}
+#hrui .og-empty:where(:not(.hrui-legacy *)){cursor:pointer;border-bottom:0}
+#hrui .og-empty:hover .og-nm b:where(:not(.hrui-legacy *)){color:var(--accent)}
+#hrui .og-empty .og-ghost:where(:not(.hrui-legacy *)){border:0;box-shadow:none!important;outline:1.5px dashed var(--accent);outline-offset:-1.5px;color:var(--accent)}
+#hrui .og-note:where(:not(.hrui-legacy *)){font-size:13px;color:var(--muted);margin:14px 8px 0;max-width:600px;text-wrap:pretty}
+#hrui .og-set:where(:not(.hrui-legacy *)){margin-top:48px;max-width:520px}
+#hrui .og-l:where(:not(.hrui-legacy *)){display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+#hrui .og-set .keyrow:where(:not(.hrui-legacy *)){display:flex;gap:10px}
+#hrui .og-set .set-in:where(:not(.hrui-legacy *)){flex:1}
+#hrui .iso.acc .inv .t:where(:not(.hrui-legacy *)),#hrui .iso.acc .inv .l:where(:not(.hrui-legacy *)),#hrui .iso.acc .inv .r:where(:not(.hrui-legacy *)){fill:var(--bg);stroke:var(--c);stroke-dasharray:2.6 2}
+#hrui .iso.acc .inv .r:where(:not(.hrui-legacy *)){fill:color-mix(in srgb,var(--c) 10%,var(--bg))}
+#hrui .iso.acc .inv .sd:where(:not(.hrui-legacy *)){fill:color-mix(in srgb,var(--c) 10%,var(--bg));stroke:var(--c)}
+#hrui .iso.acc .inv .su:where(:not(.hrui-legacy *)){fill:var(--bg);stroke:var(--c)}
+#hrui button.og-s:not(.fixed):hover .iso.acc .empty .t:where(:not(.hrui-legacy *)),#hrui button.og-s:not(.fixed):hover .iso.acc .empty .l:where(:not(.hrui-legacy *)),#hrui button.og-s:not(.fixed):hover .iso.acc .empty .su:where(:not(.hrui-legacy *)){fill:var(--surface)}
+#hrui button.og-s:not(.fixed):hover .iso.acc .empty polygon:where(:not(.hrui-legacy *)),#hrui button.og-s:not(.fixed):hover .iso.acc .empty ellipse:where(:not(.hrui-legacy *)),#hrui button.og-s:not(.fixed):hover .iso.acc .empty rect:where(:not(.hrui-legacy *)){stroke:var(--faint)}
+#hrui .og-row .ws-badge:where(:not(.hrui-legacy *)){border-radius:9px}
+#hrui .og-go:where(:not(.hrui-legacy *)){color:var(--faint);font-size:18px;line-height:1;padding-right:4px}
+#hrui .og-ro:where(:not(.hrui-legacy *)){align-items:flex-start}
+#hrui .og-ro small:where(:not(.hrui-legacy *)){max-width:220px;text-wrap:pretty}
+#hrui .og-ro.dis b:where(:not(.hrui-legacy *)){color:var(--faint)}
+#hrui .og-ro .chk:where(:not(.hrui-legacy *)){margin-top:2px}
+#hrui .me-row .og-n:where(:not(.hrui-legacy *)){max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .og.og-n5:where(:not(.hrui-legacy *)){--og-c:80px;--og-a:100px}
+#hrui .list-wrap.og-n5>.og-set:where(:not(.hrui-legacy *)){max-width:520px}
+#hrui .list-wrap.og-n5>.og-note:where(:not(.hrui-legacy *)){max-width:600px}
+#hrui .og-cnt:where(:not(.hrui-legacy *)){font-weight:400;color:var(--faint);margin-left:8px}
+#hrui .pop-list .ws-row small:where(:not(.hrui-legacy *)){white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .og-n5 .og-r:where(:not(.hrui-legacy *)){column-gap:10px}
+#hrui .list-wrap.og-n5>*:where(:not(.hrui-legacy *)){max-width:940px}
+#hrui .og:where(:not(.hrui-legacy *)){--og-a:112px}
+#hrui .og-bar:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:16px;margin:0 0 8px}
+#hrui .og-filter:where(:not(.hrui-legacy *)){display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 12px 0 14px;border-radius:999px;box-shadow:inset 0 0 0 1px var(--line);font-size:14px;font-weight:500}
+#hrui .og-filter:has(.ws-badge):where(:not(.hrui-legacy *)){padding-left:9px}
+#hrui .og-filter .ws-badge:where(:not(.hrui-legacy *)){border-radius:6px}
+#hrui .og-filter svg:where(:not(.hrui-legacy *)){color:var(--faint)}
+#hrui .og-filter:hover:where(:not(.hrui-legacy *)){background:var(--surface)}
+#hrui .og-strip:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:14px;min-width:0;max-width:100%;padding:7px 10px;margin-left:-10px;border-radius:10px;text-align:left;overflow:hidden}
+#hrui button.og-strip:hover:where(:not(.hrui-legacy *)){background:var(--surface)}
+#hrui .og-chip:where(:not(.hrui-legacy *)){display:inline-flex;align-items:center;gap:7px;font-size:14px;white-space:nowrap;min-width:0}
+#hrui .og-chip>span:where(:not(.hrui-legacy *)){overflow:hidden;text-overflow:ellipsis}
+#hrui .og-more:where(:not(.hrui-legacy *)){font-size:13px;color:var(--muted);white-space:nowrap}
+#hrui .og-all:where(:not(.hrui-legacy *)){font-size:14px;color:var(--muted)}
+#hrui .og-pend .og-chip:where(:not(.hrui-legacy *)){color:var(--muted)}
+#hrui .inv-q:where(:not(.hrui-legacy *)){margin:0 0 12px}
+#hrui .acc-grid:where(:not(.hrui-legacy *)){display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-height:min(420px,52vh);overflow:auto;padding:2px;margin:0 -2px}
+#hrui .acc-t:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;box-shadow:inset 0 0 0 1px var(--line);text-align:left;min-width:0}
+#hrui .acc-t.on:where(:not(.hrui-legacy *)){box-shadow:inset 0 0 0 1.5px var(--fg)}
+#hrui .acc-t:hover:where(:not(.hrui-legacy *)){background:var(--surface)}
+#hrui .acc-t>span:where(:not(.hrui-legacy *)){min-width:0}
+#hrui .acc-t b:where(:not(.hrui-legacy *)){display:block;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .acc-t small:where(:not(.hrui-legacy *)){display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .acc-t[hidden]:where(:not(.hrui-legacy *)),#hrui .inv-w[hidden]:where(:not(.hrui-legacy *)),#hrui .ws-row[hidden]:where(:not(.hrui-legacy *)){display:none}
+#hrui .acc-foot:where(:not(.hrui-legacy *)){margin-top:18px}
+#hrui .acc-foot .grow:where(:not(.hrui-legacy *)){flex:1;font-size:13px;color:var(--muted)}
+#hrui .pop-q:where(:not(.hrui-legacy *)){padding:4px 4px 6px}
+#hrui .pop-q .set-in:where(:not(.hrui-legacy *)){height:34px;padding:0 10px;font-size:13px}
+#hrui .pop-list:where(:not(.hrui-legacy *)){max-height:min(400px,56vh);overflow:auto}
+#hrui .inv-ws.many:where(:not(.hrui-legacy *)){max-height:180px;overflow:auto;padding:2px 2px 18px;margin:-2px;-webkit-mask-image:linear-gradient(#000 calc(100% - 26px),transparent);mask-image:linear-gradient(#000 calc(100% - 26px),transparent)}
+#hrui .og-bar:where(:not(.hrui-legacy *)){display:flex;align-items:flex-end;gap:14px;margin:0;border-bottom:1px solid var(--line)}
+#hrui .og-bar .og-tabs:where(:not(.hrui-legacy *)){border:0;margin:0}
+#hrui .og-bar .grow:where(:not(.hrui-legacy *)){flex:1}
+#hrui .og-r>[role=cell]:where(:not(.hrui-legacy *)),#hrui .og-r>.og-who:where(:not(.hrui-legacy *)){min-width:0}
+#hrui .og-r .og-who:where(:not(.hrui-legacy *)){max-width:100%}
+#hrui .ppl-r .ppl-x:where(:not(.hrui-legacy *)){margin-left:auto;flex:none;color:var(--faint)}
+#hrui .ppl-r .ppl-x:hover:where(:not(.hrui-legacy *)){color:var(--bad)}
+#hrui .who-none:where(:not(.hrui-legacy *)){font-size:14px;color:var(--muted);margin:0}
+#hrui .tm-add:where(:not(.hrui-legacy *)){position:relative;margin-top:10px}
+#hrui .tm-sug:where(:not(.hrui-legacy *)){margin-top:6px;background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:4px}
+#hrui .who-name:where(:not(.hrui-legacy *)){margin:20px 0 0}
+#hrui .who-name .set-in:where(:not(.hrui-legacy *)){max-width:360px}
+#hrui .who-name.last:where(:not(.hrui-legacy *)){margin-top:24px}
+#hrui .tm-s:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;text-align:left}
+#hrui .tm-s:hover:where(:not(.hrui-legacy *)),#hrui .tm-s:focus-visible:where(:not(.hrui-legacy *)){background:var(--surface)}
+#hrui .tm-s .av:where(:not(.hrui-legacy *)){width:28px;height:28px;font-size:11px;box-shadow:none}
+#hrui .tm-s b:where(:not(.hrui-legacy *)){display:block;font-size:14px;font-weight:600}
+#hrui .tm-s small:where(:not(.hrui-legacy *)){display:block;font-size:12px;color:var(--muted)}
+#hrui .tm-none:where(:not(.hrui-legacy *)){font-size:13px;color:var(--muted);margin:0;padding:8px 10px}
+#hrui .tm-gl:where(:not(.hrui-legacy *)){display:inline-grid;place-items:center;width:18px;height:18px;color:var(--muted)}
+#hrui .inv-w.on .tm-gl:where(:not(.hrui-legacy *)){color:var(--fg)}
+#hrui .og-bar .og-filter:where(:not(.hrui-legacy *)),#hrui .og-bar .og-find:where(:not(.hrui-legacy *)){margin-bottom:8px}
+#hrui .og-plate .og-hd:where(:not(.hrui-legacy *)){padding-top:14px}
+#hrui .og-find:where(:not(.hrui-legacy *)){display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 12px;border-radius:999px;box-shadow:inset 0 0 0 1px var(--line);color:var(--faint)}
+#hrui .og-find:focus-within:where(:not(.hrui-legacy *)){box-shadow:inset 0 0 0 1.5px var(--accent)}
+#hrui .og-find input:where(:not(.hrui-legacy *)){border:0;outline:0;background:none;font:inherit;font-size:14px;color:var(--fg);width:150px}
+#hrui .og-who:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:12px;min-width:0;text-align:left;border-radius:10px;padding:6px 8px;margin:0 -8px}
+#hrui button.og-who:hover:where(:not(.hrui-legacy *)){background:var(--surface)}
+#hrui button.og-who:hover b:where(:not(.hrui-legacy *)){text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line)}
+#hrui .og-find-none:where(:not(.hrui-legacy *)){font-size:14px;color:var(--muted);padding:18px 8px}
+#hrui .og-set:where(:not(.hrui-legacy *)){max-width:640px}
+#hrui .og-srow+.og-srow:where(:not(.hrui-legacy *)){margin-top:28px}
+#hrui .og-dir:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:16px;box-shadow:inset 0 0 0 1px var(--line)}
+#hrui .og-dir.off:where(:not(.hrui-legacy *)){background:var(--surface);box-shadow:none}
+#hrui .og-dt:where(:not(.hrui-legacy *)){flex:1;min-width:0}
+#hrui .og-dt b:where(:not(.hrui-legacy *)){display:block;font-size:14px;font-weight:600}
+#hrui .og-dt small:where(:not(.hrui-legacy *)){display:block;font-size:13px;color:var(--muted);margin-top:2px;text-wrap:pretty}
+#hrui .og-dic:where(:not(.hrui-legacy *)){display:inline-grid;place-items:center;width:32px;height:32px;border-radius:9px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line);flex:none}
+#hrui .og-dics:where(:not(.hrui-legacy *)){display:flex;flex:none}
+#hrui .og-dics .og-dic+.og-dic:where(:not(.hrui-legacy *)){margin-left:-6px}
+#hrui .tm-stack:where(:not(.hrui-legacy *)){display:inline-flex;flex:none;align-items:center;padding-left:10px}
+#hrui .tm-stack .av:where(:not(.hrui-legacy *)){width:28px;height:28px;font-size:11px;margin-left:-10px;box-shadow:0 0 0 2px var(--bg)}
+#hrui .og-who .tm-stack .av:where(:not(.hrui-legacy *)){width:28px;height:28px}
+#hrui .tm-stack.s18:where(:not(.hrui-legacy *)){padding-left:7px}
+#hrui .tm-stack.s18 .av:where(:not(.hrui-legacy *)){width:18px;height:18px;font-size:8px;margin-left:-7px;box-shadow:0 0 0 1.5px var(--bg)}
+#hrui .tm-stack.s36:where(:not(.hrui-legacy *)){padding-left:12px}
+#hrui .tm-stack.s36 .av:where(:not(.hrui-legacy *)){width:36px;height:36px;font-size:13px;margin-left:-12px}
+#hrui .tm-stack .og-ghost svg:where(:not(.hrui-legacy *)){width:14px;height:14px}
+#hrui .who-sheet:where(:not(.hrui-legacy *)){width:min(720px,100%)}
+#hrui .who-h:where(:not(.hrui-legacy *)){min-width:0;flex:1}
+#hrui .who-h h3:where(:not(.hrui-legacy *)){margin:0 0 4px}
+#hrui .who-sec:where(:not(.hrui-legacy *)){margin-top:22px}
+#hrui .who-l:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:10px;margin:0 0 10px;min-height:34px}
+#hrui .who-l b:where(:not(.hrui-legacy *)){font-size:13px;font-weight:600}
+#hrui .who-l>span:where(:not(.hrui-legacy *)){font-size:13px;color:var(--faint)}
+#hrui .who-q:where(:not(.hrui-legacy *)){margin-left:auto;width:220px;height:34px;padding:0 10px;font-size:13px}
+#hrui .acc-t.fixed:where(:not(.hrui-legacy *)){cursor:default}
+#hrui .acc-t.fixed:hover:where(:not(.hrui-legacy *)){background:none}
+#hrui .ppl-grid:where(:not(.hrui-legacy *)),#hrui .dir-gs:where(:not(.hrui-legacy *)){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;max-height:min(300px,40vh);overflow:auto;padding:2px;margin:0 -2px}
+#hrui .ppl-r:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:12px;text-align:left;min-width:0;box-shadow:inset 0 0 0 1px var(--line)}
+#hrui .ppl-r .av:where(:not(.hrui-legacy *)){width:28px;height:28px;font-size:11px;box-shadow:none}
+#hrui .ppl-r>span:not(.av):where(:not(.hrui-legacy *)){flex:1;min-width:0}
+#hrui .ppl-r b:where(:not(.hrui-legacy *)){display:block;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .ppl-r small:where(:not(.hrui-legacy *)){display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .ppl-ck:where(:not(.hrui-legacy *)){display:grid;place-items:center;width:20px;height:20px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--line);color:transparent;flex:none}
+#hrui .ppl-ck svg:where(:not(.hrui-legacy *)){width:12px;height:12px}
+#hrui .ppl-r.on:where(:not(.hrui-legacy *)){box-shadow:inset 0 0 0 1.5px var(--fg)}
+#hrui .ppl-r.on .ppl-ck:where(:not(.hrui-legacy *)){background:var(--fg);box-shadow:none;color:var(--bg)}
+#hrui .ppl-r:not([aria-disabled="true"]):hover:where(:not(.hrui-legacy *)){background:var(--surface)}
+#hrui .ppl-r[aria-disabled="true"]:where(:not(.hrui-legacy *)){cursor:default;box-shadow:inset 0 0 0 1px var(--line)}
+#hrui .ppl-r.pend b:where(:not(.hrui-legacy *)){font-weight:500;color:var(--muted)}
+#hrui .ppl-r[hidden]:where(:not(.hrui-legacy *)),#hrui .inv-sep[hidden]:where(:not(.hrui-legacy *)){display:none}
+#hrui .who-inv:where(:not(.hrui-legacy *)){display:flex;gap:10px;margin-top:10px}
+#hrui .who-inv .set-in:where(:not(.hrui-legacy *)){flex:1}
+#hrui .who-foot:where(:not(.hrui-legacy *)){margin-top:24px}
+#hrui .who-foot .grow:where(:not(.hrui-legacy *)){flex:1}
+#hrui .inv-w.tmc:where(:not(.hrui-legacy *)){padding-left:10px}
+#hrui .inv-w[aria-disabled="true"].tmc.on:where(:not(.hrui-legacy *)){box-shadow:inset 0 0 0 1.5px var(--fg);cursor:default}
+#hrui .inv-sep:where(:not(.hrui-legacy *)){flex-basis:100%;height:0}
+#hrui .dir-sheet:where(:not(.hrui-legacy *)){width:min(620px,100%)}
+#hrui .dir-ps:where(:not(.hrui-legacy *)){display:flex;flex-wrap:wrap;gap:8px}
+#hrui .dir-p:where(:not(.hrui-legacy *)){display:inline-flex;align-items:center;gap:10px;height:44px;padding:0 16px 0 6px;border-radius:999px;box-shadow:inset 0 0 0 1px var(--line);font-size:14px;font-weight:500}
+#hrui .dir-p .og-dic:where(:not(.hrui-legacy *)){width:32px;height:32px;border-radius:50%;box-shadow:none}
+#hrui .dir-p:hover:where(:not(.hrui-legacy *)){background:var(--surface)}
+#hrui .dir-sum:where(:not(.hrui-legacy *)){display:inline-flex;align-items:center;gap:6px}
+#hrui .dir-sum svg:where(:not(.hrui-legacy *)){width:14px;height:14px}
+#hrui .dir-gs:where(:not(.hrui-legacy *)){margin-bottom:12px}
+#hrui .dir-g .og-ghost svg:where(:not(.hrui-legacy *)){width:14px;height:14px}
+#hrui .dir-chg:where(:not(.hrui-legacy *)){font-size:13px;color:var(--muted);margin:12px 0 0;text-wrap:pretty}
+#hrui :is(.og,.who-sheet,.inv-sheet,.ws-set) .set-in.bad:where(:not(.hrui-legacy *)){border-color:var(--bad)!important;box-shadow:0 0 0 3px var(--bad-soft)}
+#hrui .og-chev:where(:not(.hrui-legacy *)){flex:none;color:var(--muted);display:grid;place-items:center;padding-right:4px}
+#hrui .og-chev svg:where(:not(.hrui-legacy *)){transition:transform .15s}
+#hrui .og-row[aria-expanded="true"] .og-chev svg:where(:not(.hrui-legacy *)){transform:rotate(180deg)}
+#hrui .og-new svg:where(:not(.hrui-legacy *)),#hrui .mv-plus svg:where(:not(.hrui-legacy *)){width:14px;height:14px}
+#hrui .og-new:where(:not(.hrui-legacy *)){gap:10px}
+#hrui .ws-mv:where(:not(.hrui-legacy *)){display:block;margin:2px 0 4px;font-size:13px;color:var(--muted)}
+#hrui .ws-mv:hover:where(:not(.hrui-legacy *)){color:var(--fg)}
+#hrui .mv-list:where(:not(.hrui-legacy *)){display:flex;flex-direction:column;gap:2px;border:1px solid var(--line);border-radius:14px;padding:4px}
+#hrui .mv-o[aria-disabled="true"]:where(:not(.hrui-legacy *)){opacity:.5;cursor:not-allowed}
+#hrui .mv-o.on:where(:not(.hrui-legacy *)){background:var(--accent-soft)}
+#hrui .mv-plus:where(:not(.hrui-legacy *)){background:var(--surface);color:var(--fg)}
+#hrui .ws-set .set-f .lbl:where(:not(.hrui-legacy *)){display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+#hrui .org-badge.pers:where(:not(.hrui-legacy *)){border-radius:50%;color:#fff;letter-spacing:0}
+#hrui .og-list:where(:not(.hrui-legacy *)){border-top:1px solid var(--line);margin-top:6px;padding-top:6px}
+#hrui .au-as:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;background:var(--surface);margin:0 0 16px}
+#hrui .au-as .av:where(:not(.hrui-legacy *)){width:32px;height:32px;font-size:12px;box-shadow:none}
+#hrui .au-as small:where(:not(.hrui-legacy *)){display:block;font-size:12px;color:var(--muted)}
+#hrui .au-as b:where(:not(.hrui-legacy *)){display:block;font-size:14px;font-weight:600}
+#hrui .inv-sheet .set-f:where(:not(.hrui-legacy *)){margin-bottom:18px}
+#hrui .ws-set .set-f:where(:not(.hrui-legacy *)){margin-bottom:14px}
+#hrui .inv-seg button:where(:not(.hrui-legacy *)){padding:6px 16px}
+#hrui .inv-ws:where(:not(.hrui-legacy *)){display:flex;flex-wrap:wrap;gap:8px}
+#hrui .inv-w:where(:not(.hrui-legacy *)){display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 14px 0 8px;border-radius:999px;font-size:14px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line);color:var(--muted)}
+#hrui .inv-w.on:where(:not(.hrui-legacy *)){color:var(--fg);box-shadow:inset 0 0 0 1.5px var(--fg)}
+#hrui .inv-w[aria-disabled="true"]:where(:not(.hrui-legacy *)){cursor:default;box-shadow:inset 0 0 0 1px var(--line)}
+#hrui .inv-w .iso.acc:where(:not(.hrui-legacy *)){margin:-2px 0}
+#hrui .inv-w:not(.on):not([aria-disabled="true"]):hover:where(:not(.hrui-legacy *)){color:var(--fg)}
+#hrui .inv-acts:where(:not(.hrui-legacy *)){justify-content:flex-end;margin-top:24px}
+#hrui .ao-sheet .inv-acts:where(:not(.hrui-legacy *)){margin-top:4px}
+#hrui .ws-ppl:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:12px;font-size:14px;color:var(--muted);margin:2px 0 20px;padding:12px 14px;background:var(--surface);border-radius:14px}
+#hrui .ws-ppl .avs:where(:not(.hrui-legacy *)){padding:0 0 0 8px}
+#hrui .ws-ppl .av:where(:not(.hrui-legacy *)){box-shadow:0 0 0 2px var(--surface)}
+#hrui .au-head .org-badge:where(:not(.hrui-legacy *)){border-radius:10px}
+#hrui .au-card .set-in.au-ro:where(:not(.hrui-legacy *)){background:var(--surface);color:var(--muted);border-color:var(--line)}
+/* Narrow widths (CLAUDE.md: every surface survives 1440/1024/768/390; console_103 has no rule for this
+   page, its plate only scrolls sideways): when the page is narrower than the plate needs for every
+   workspace column (OrganizationPage's plateNeeds, measured on the page itself) the workspaces fold into
+   each row's strip; under 560px a row stacks its name over its role, its workspaces and its actions, and
+   the head row goes. */
+/* A name and its "You" badge: the name gives way, the badge never does (Richard, 2026-10-21: "You" was cut). */
+#hrui .og-nm b .og-nt:where(:not(.hrui-legacy *)){min-width:0;overflow:hidden;text-overflow:ellipsis}
+#hrui .og-nm b .og-you:where(:not(.hrui-legacy *)){flex:none}
+/* A folded row's workspaces: whole chips only (StripChips drops one rather than cut a name), one chip cut
+   only when not even one fits. */
+#hrui .og-chips:where(:not(.hrui-legacy *)){display:flex;align-items:center;gap:14px;min-width:0;flex:1 1 auto;overflow:hidden}
+#hrui .og-chips .og-chip:where(:not(.hrui-legacy *)){flex:none}
+#hrui .og-chips .og-chip>span:where(:not(.hrui-legacy *)){overflow:visible}
+#hrui .og-chips.one .og-chip:where(:not(.hrui-legacy *)){flex:0 1 auto;min-width:0}
+#hrui .og-chips.one .og-chip>span:where(:not(.hrui-legacy *)){overflow:hidden;text-overflow:ellipsis}
+#hrui .og-chips .og-more:where(:not(.hrui-legacy *)){flex:none}
+/* The plate while it loads (PlateSkel): the tabs, then rows shaped like a person and their workspaces. */
+#hrui .og-sk-bar:where(:not(.hrui-legacy *)){display:flex;gap:28px;padding:14px 0 16px;border-bottom:1px solid var(--line)}
+#hrui .og-sk-r:where(:not(.hrui-legacy *)){display:grid;grid-template-columns:32px minmax(0,1fr) 72px auto;align-items:center;column-gap:12px;min-height:64px;padding:0 8px;border-bottom:1px solid var(--line)}
+#hrui .og-sk-nm:where(:not(.hrui-legacy *)){display:flex;flex-direction:column;gap:8px;min-width:0}
+#hrui .og-sk-c:where(:not(.hrui-legacy *)){display:flex;gap:calc(var(--og-c) - 28px);padding-right:calc(var(--og-a) - 28px)}
+@media (max-width:560px){
+#hrui .og .og-plate:where(:not(.hrui-legacy *)){display:block}
+#hrui .og .og-r:not(.og-empty):where(:not(.hrui-legacy *)){grid-template-columns:minmax(0,1fr) auto!important;row-gap:8px;padding:12px 8px}
+#hrui .og .og-r>[role="cell"]:first-child:where(:not(.hrui-legacy *)){grid-column:1/-1}
+#hrui .og .og-hd:where(:not(.hrui-legacy *)){display:none}
+#hrui .og .og-act:where(:not(.hrui-legacy *)){grid-column:1/-1;justify-content:flex-start}
+#hrui .og .og-bar:where(:not(.hrui-legacy *)){flex-wrap:wrap;row-gap:8px}
+#hrui .og .list-top .top-actions:where(:not(.hrui-legacy *)){width:100%}
+#hrui .og .og-sk-r:where(:not(.hrui-legacy *)){grid-template-columns:32px minmax(0,1fr)}
+/* stacked, the role keeps its width and the workspaces take the rest of the row, so a chip shows whole */
+#hrui .og .og-r:not(.og-empty):not(.og-hd):where(:not(.hrui-legacy *)){grid-template-columns:auto minmax(0,1fr)!important}
+#hrui .og .og-r>[role="cell"]:nth-child(3):where(:not(.hrui-legacy *)){display:flex;justify-content:flex-end;min-width:0}
+/* the company directory card wraps: its marks, then the words, then the button */
+#hrui .og-dir:where(:not(.hrui-legacy *)){flex-wrap:wrap;align-items:flex-start}
+#hrui .og-dir .og-dt:where(:not(.hrui-legacy *)){flex:1 1 100%}
+#hrui .og .og-sk-r>.pl-sk:nth-child(3):where(:not(.hrui-legacy *)),#hrui .og .og-sk-c:where(:not(.hrui-legacy *)){display:none}
+}
+
+/* The code editor (CodeEditor.tsx: CodeMirror in a hrui-legacy box, so #hrui's reset leaves its own
+   rules alone). It is as tall as its lines and fills the room under them, so a click below the text
+   still lands in it; its parent is the one scroll, up and down only: long lines wrap (Richard, 10-21).
+   It takes none of an old page's box (.hrui-legacy above: white, its own scroll): the theme's colors. */
+#hrui .hr-code.hrui-legacy{display:flex;flex-direction:column;flex:none;min-width:0;max-width:100%;overflow:visible;background:transparent;color:var(--fg)}
+#hrui .hr-code .cm-editor{flex:1 0 auto;min-width:0}
+#hrui .hr-code .cm-content,#hrui .hr-code .cm-content:focus-visible{outline:none}
+#hrui .hr-code-wait{flex:1 0 auto;min-height:120px}
+
+/* The skill editor's page: SKILL.md's header, then the editor, stacked in the one scroll. The
+   header's numbers sit in a column exactly as wide as the editor's (--cm-ln-ch, the widest number's
+   digits), with the same padding, so the numbers run on as one column. */
+#hrui .ske-pane .sk-code.ske-cm{display:flex;flex-direction:column;overflow-x:hidden;overflow-y:auto}
+#hrui .ske-code.ske-cm .ske-head{flex:none;grid-template-columns:calc(var(--cm-ln-ch,2) * 1ch + 26px) minmax(0,1fr)}
+#hrui .ske-code.ske-cm .ske-head .ske-hn{padding:0 10px 0 16px}
+#hrui .ske-code.ske-cm>.hr-code,#hrui .ske-code.ske-cm>.hr-code-wait{flex:1 0 auto}
+#hrui .ske-code.ske-cm.md .hr-code .cm-content{padding-top:6px}
+
+/* The environment sheet's Files tab (Richard, 10-21: fewer lines). The open file's pane is the one
+   scroll and the editor grows in it; the box keeps a quiet outline that turns to the accent only
+   while the editor itself has the caret; the file's name row is the one line between it and the
+   text; the sheet's foot has no rule of its own over the box. */
+#hrui .eo-view .eo-code{display:block;overflow-x:hidden;overflow-y:auto}
+#hrui .eo-view .eo-code>.hr-code,#hrui .eo-view .eo-code>.hr-code-wait{min-height:100%}
+#hrui .eo-sheet .eo-files:focus-within{border-color:var(--line);box-shadow:none}
+#hrui .eo-sheet .eo-files:has(.cm-editor.cm-focused){border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+#hrui .eo-sheet:has(.eo-body.eo-on-files) .eo-foot{border-top:0}
+/* a file that is not text, shown as itself: an image or a video fits the pane, a PDF fills it */
+#hrui .eo-show{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;background:var(--surface)}
+#hrui .eo-show img,#hrui .eo-show video{display:block;max-width:100%;max-height:100%;object-fit:contain;border-radius:8px}
+#hrui .eo-show audio{width:min(100%,420px)}
+#hrui .eo-show.is-pdf{padding:0;align-items:stretch}
+#hrui .eo-show iframe{display:block;flex:1;width:100%;min-height:320px;border:0}
+/* the Organization page's workspace columns (OrganizationPage, og-ws): a workspace's name wraps to two lines
+   under its badge instead of ending in "…" ("Default Workspace" was cut in its 96px column; audit, 10-21) */
+#hrui .og .og-ws>span:last-child{white-space:normal;text-align:center;line-height:1.25;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+/* Billing: the comparison toggle's caret sits in line with its words; the custom amount shows where the
+   keyboard is (its input draws no outline of its own); Usage: a chart column the keyboard is on shows a ring
+   (audit, 10-21) */
+#hrui .bp-caret{display:inline-flex;align-items:center;vertical-align:middle;margin-right:6px}
+#hrui .bp-in:focus-within{border-radius:6px;box-shadow:0 0 0 2px var(--accent)}
+#hrui .us-col:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+/* where the keyboard is, on fields that draw no outline of their own: the task composer and Arena's box, the
+   Start box, a list's search field and the code editor show the accent on their box (audit, 10-21: the
+   composer's border only darkened a shade, the others showed nothing) */
+#hrui .composer:focus-within,#hrui .st-ask-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),0 2px 12px rgba(0,0,0,.05)}
+#hrui .search:focus-within{box-shadow:0 0 0 2px var(--accent);border-radius:10px}
+#hrui .cm-editor.cm-focused{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+/* the setup's bar, two widths the audit measured (10-21). A phone: the tabs' own row is the row's width at most
+   (they were sized to 100% and started 44 px in, so every setup page scrolled 16 px sideways). From 701 px to
+   a laptop: the name keeps one line in the 56 px bar, whole in its tooltip where it is wider than its share (two
+   lines pushed the bar's second line under it). */
+@media (max-width:700px){
+  #hrui .ag-bar>.tabs.inline.ag-tabs{flex:1 1 100%;max-width:100%;min-width:0;margin-left:0;padding-left:4px;box-sizing:border-box}
+}
+@media (min-width:701px) and (max-width:1023px){
+  /* one line: the 56 px bar holds the name and the harness/model line, so a name that wrapped to two lines pushed that
+     line under the bar and its Copy under the task bar (header re-check, 10-21: "TLS check dsh" at 701). A name wider
+     than its share ends in "…", whole in its tooltip (the h1's title) */
+  #hrui .ag-bar .ag-l1 .ag-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;font-size:18px}
+}
+/* Start: the first way's card puts the cursor in the box above it when clicked (StartPage focusAsk), so it says it can
+   be clicked and lights on hover like the two beside it; its demo tasks keep their own buttons */
+#hrui .sg .tile.tile-demo.sg-main{cursor:pointer}
+#hrui .sg .tile.tile-demo.sg-main:hover{background:linear-gradient(180deg,var(--accent-soft),transparent 70%)}
+/* a tab row that scrolls sideways clips what is drawn outside it, so a focused tab's ring (2px, 2px off) was cut at the top
+   and the left on phones: the row gets 4px of room there, taken back by its margins, so nothing moves. The bottom keeps the
+   row's line, which the tabs' underlines sit on (the environments' row, which always scrolls: envs.css). The top has 5px:
+   the row's height comes out fractional, so it holds a pixel more than it shows, and focusing a tab scrolls the row that
+   pixel to show the tab's last half-pixel (staging check, 10-21) */
+@media (max-width:520px){#hrui .lw-n .tabs.inline{padding-top:5px;padding-left:4px;margin-top:-5px;margin-left:-4px}}
+/* The task bar has no Conversation | Trace switch on a self-hosted console, so its three-column grid
+   (title · switch · actions) left Share, or Stop task while a task runs, against the title. The title
+   takes the row and the actions sit at the reading column's right edge (Richard 10-22). */
+#hrui .tk-d .tp-head .th-row{display:flex;align-items:center;gap:16px}
+#hrui .tk-d .tp-head .th-row>.tp-t{flex:1;min-width:0}
+#hrui .tk-d .tp-head .th-row>.tk-acts{margin-left:auto}

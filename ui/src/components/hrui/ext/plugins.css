@@ -1,0 +1,74 @@
+/* Add-ons › Plugins (PluginsTab.tsx): what the design's plugins tab has no drawing for. One search
+   that stays under the page's head as it scrolls, the Connected section in the design's own rows, then
+   every plugin that can still be connected as a grid of tiles, 4 across on a wide screen, 3, 2, and on a
+   phone one per line as a compact row. Every rule under #hrui, in the design's tokens, so dark mode
+   follows. */
+#hrui .pl-q{position:sticky;top:0;z-index:3;display:flex;align-items:center;background:var(--bg);padding:10px 0 12px;margin:2px 0 0}
+#hrui .pl-q svg{position:absolute;left:12px;width:16px;height:16px;color:var(--faint);pointer-events:none}
+#hrui .pl-q .dd-q{padding:10px 12px 10px 36px;font-size:15px;border-radius:10px}
+#hrui .pl-q .dd-q::-webkit-search-cancel-button{cursor:pointer}
+#hrui .pl-sec{margin:20px 0 0}
+#hrui .pl-sec+.pl-sec{margin-top:34px}
+#hrui .pl-h{display:flex;align-items:baseline;gap:4px;font-size:15px;font-weight:600;letter-spacing:-.01em;margin:0 0 10px}
+#hrui .pl-h .count{font-size:13px}
+#hrui .pl-note{font-size:13px;line-height:1.5;color:var(--muted);margin:-2px 0 14px;max-width:640px}
+#hrui .pl-warn{color:var(--warn)!important}
+#hrui .pl-empty{padding:28px 8px}
+#hrui .pl-sec .lib-t>span:last-child{min-width:0}
+/* a mark: one that carries its own ground fills its square */
+#hrui .brand-ic.pl-b img{display:block;width:16px;height:16px}
+#hrui .brand-ic.pl-cover{overflow:hidden;padding:0}
+#hrui .brand-ic.pl-cover img{width:100%;height:100%;object-fit:cover}
+#hrui .pl-ic{flex:none;width:32px;height:32px;display:grid;place-items:center}
+#hrui .pl-ic .brand-ic{width:32px;height:32px;border-radius:9px}
+#hrui .pl-ic .brand-ic.pl-b img{width:18px;height:18px}
+#hrui .pl-ic .iso{display:block;width:30px}
+/* the grid */
+#hrui .pl-grid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+#hrui .pl-tile{display:flex;flex-direction:column;min-width:0;padding:14px 14px 12px;border:1px solid var(--line);border-radius:14px;background:var(--bg);transition:border-color .15s}
+#hrui .pl-tile:hover{border-color:var(--faint)}
+#hrui .pl-top{display:flex;align-items:center;gap:10px;min-width:0}
+#hrui .pl-top b{min-width:0;font-size:14px;font-weight:600;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+#hrui .pl-d{font-size:13px;line-height:1.45;color:var(--muted);margin:10px 0 12px;min-height:2.9em;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#hrui .pl-act{margin-top:auto;display:flex;justify-content:flex-end}
+@media (max-width:1199px){#hrui .pl-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:860px){
+  #hrui .pl-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+/* a phone: one per line, each a compact row (mark, name over its line, Connect) */
+@media (max-width:560px){
+  #hrui .pl-grid{grid-template-columns:minmax(0,1fr);gap:8px}
+  #hrui .pl-tile{display:grid;grid-template-columns:32px minmax(0,1fr) auto;grid-template-areas:"ic n act" "ic d act";column-gap:12px;row-gap:2px;align-items:center;padding:12px}
+  #hrui .pl-top{display:contents}
+  #hrui .pl-top>:first-child{grid-area:ic}
+  #hrui .pl-top>b{grid-area:n}
+  #hrui .pl-d{grid-area:d;margin:0;min-height:0;-webkit-line-clamp:1}
+  #hrui .pl-act{grid-area:act;margin:0}
+  #hrui .pl-q .dd-q{font-size:16px}
+}
+@media (prefers-reduced-motion:reduce){#hrui .pl-tile{transition:none}}
+/* a plugin's sheet (pluginParts.tsx PlugSheet): Microsoft's sign-in, each line beside its action, and
+   the line under it wrapping before the action does on a phone */
+#hrui .pl-signin .set-row{align-items:flex-start;gap:12px;font-size:14px;line-height:1.45}
+#hrui .pl-signin .set-row>span{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+#hrui .pl-signin .set-row>button{flex:none}
+#hrui .pl-signin .set-help b{font-weight:600;color:var(--fg)}
+@media (max-width:520px){#hrui .pl-signin .set-row{flex-wrap:wrap}}
+/* a setup's Add plugin (AddPluginSheet.tsx): the same search, Connected and grid in a wide sheet. The
+   search stays at the sheet's top as it scrolls; the grid takes as many columns as fit the sheet */
+#hrui .sheet.pl-add{width:min(1000px,100%);padding-top:0}
+#hrui .pl-add>.sheet-top{padding-top:26px}
+#hrui .pl-add .pl-q{margin:0 -26px;padding:10px 26px 12px}
+#hrui .pl-add .pl-q svg{left:38px}
+#hrui .pl-add .pl-sec{margin-top:14px}
+#hrui .pl-add .pl-sec+.pl-sec{margin-top:26px}
+#hrui .pl-grid.pl-grid-sheet{grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+#hrui .pl-add .cap-row .tog{min-width:98px;justify-content:flex-start;flex:none}
+#hrui .pl-add .cap-row .grow small{overflow-wrap:anywhere}
+#hrui .cap-row.pl-fresh{background:var(--accent-soft)}
+#hrui .pl-add-foot{margin-top:20px}
+/* a mark in a setup's rows (the design's 24 px brand tile) */
+#hrui .pl-capic .brand-ic{width:24px;height:24px;border-radius:7px}
+#hrui .pl-capic.off .brand-ic{filter:grayscale(1);opacity:.55}
+@media (max-width:600px){#hrui .pl-add .pl-q{padding:6px 26px 10px}#hrui .pl-add>.sheet-top{padding-top:22px}}
+@media (max-width:560px){#hrui .pl-grid.pl-grid-sheet{grid-template-columns:minmax(0,1fr)}#hrui .pl-add .cap-row .tog{min-width:0}}

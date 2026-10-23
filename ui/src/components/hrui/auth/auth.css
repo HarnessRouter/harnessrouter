@@ -1,0 +1,16 @@
+/* What the console adds around the design's own stylesheet (hrui.css, generated) for the sign-in
+   screens (auth/*.tsx): where the real pieces (a form, the logo) sit in the design's markup.
+   `#hrui .auth-layer` outranks the generated rules whichever stylesheet loads last. */
+
+/* the progress bricks sit in a wrapper of their own at the right of the card's head */
+#hrui .auth-layer .au-markw{display:flex;flex:none;line-height:0}
+#hrui .auth-layer .au-brand{color:inherit}
+/* the console's older stylesheet also has a .hr-logo (a tile), and the design's reset skips drawings */
+#hrui .auth-layer .au-brand .hr-logo{background:none;border-radius:0;place-items:initial;flex:none}
+#hrui .auth-layer form{display:block;margin:0}
+
+/* a link drawn as the design's wide button (Back to sign in) */
+#hrui .auth-layer a.btn.au-wide{display:flex;text-decoration:none}
+/* an error straight under the title (a link that did not work) keeps the title's distance */
+#hrui .auth-layer .au-card h1+.au-err{margin:10px 0 12px}
+#hrui .auth-layer .link-q:disabled{opacity:.4;cursor:default}

@@ -39,10 +39,14 @@ export default function SharePage() {
   // again, never drawn as a conversation with nothing in it
   const [turnsFailed, setTurnsFailed] = useState(false);
   const [turnsTry, setTurnsTry] = useState(0);
+  // the artifacts could not be read, same rule as the conversation above: said, never drawn as a
+  // Task that produced nothing (the gateway answers a 500 when the workspace tarball is truncated)
+  const [filesFailed, setFilesFailed] = useState(false);
 
   useEffect(() => {
     if (!token) return;
     let alive = true;
+    setFilesFailed(false);
     fetch(`/api/share/${encodeURIComponent(token)}/meta`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setMeta(d); })
@@ -50,7 +54,7 @@ export default function SharePage() {
     fetch(`/api/share/${encodeURIComponent(token)}/files`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setFiles(d.files || []); })
-      .catch(() => { if (alive) setFiles([]); });
+      .catch(() => { if (alive) { setFiles(null); setFilesFailed(true); } });
     return () => { alive = false; };
   }, [token]);
   useEffect(() => {
@@ -142,6 +146,7 @@ export default function SharePage() {
               <span className="wbx-filecard-open">Open</span>
             </div>
           ))}
+          {filesFailed && <p style={{ color: 'var(--muted)', fontSize: 13 }} role="alert">The artifacts could not be loaded just now.</p>}
           {files && files.length === 0 && <p style={{ color: 'var(--muted)', fontSize: 13 }}>No artifacts in this Task.</p>}
         </div>
         <p style={{ color: 'var(--faint)', fontSize: 12, marginTop: 14 }}>

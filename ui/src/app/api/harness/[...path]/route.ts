@@ -55,6 +55,18 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
   if (ct) headers['content-type'] = ct;
   const auth = req.headers.get('authorization');
   if (auth) headers['authorization'] = auth;
+  // A kit app (served at /kits/<id> on this origin) sends no workspace of its own: the active workspace
+  // comes from the cookie the console keeps beside its session (lib/workspace.tsx writeWorkspaceCookie),
+  // as the console's own calls carry it in a header. Without it a kit app listed every workspace's
+  // harnesses and ran the first of its kit, another workspace's (Super Mario ran one whose package the
+  // kit page had not checked). A request that names its workspace keeps it.
+  if (!req.headers.get('x-harness-workspace')) {
+    const [wsId, wsDefault] = (req.cookies.get('hr_workspace')?.value || '').split('|');
+    if (wsId && /^[A-Za-z0-9._-]{1,128}$/.test(wsId)) {
+      headers['x-harness-workspace'] = wsId;
+      if (wsDefault === '1') headers['x-harness-workspace-default'] = '1';
+    }
+  }
   // Internal trust path (LIVE-B closed): the key is attached ONLY alongside the caller's login
   // JWT, which the console now sends on EVERY /api/harness call via the harnessFetch wrapper. The
   // gateway (HR_IDENTITY_MODE=enforce) VERIFIES that JWT and derives org/member from its signed

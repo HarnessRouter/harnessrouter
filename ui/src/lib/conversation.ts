@@ -1,51 +1,34 @@
 'use client';
 // The conversation controller: the state machine behind every agent chat surface in the console.
 //
-// It lives here, NOT in a page, because two surfaces now drive it: Tasks (one conversation at a
-// time) and Arena (N conversations side by side, one shared composer fanning a message out to all
-// of them). The pieces below are deliberately MODULE-LEVEL singletons: the conversation store, the
-// bus-suppression set, the pending-card list and the turn telemetry. A second copy of any of them
-// would give a second surface its own store, and the realtime bus would silently stop updating it.
+// It lives here, NOT in a page, because a conversation outlives the view that shows it: a setup's
+// task list, its open task and its trace all read the same one, and a turn keeps streaming while
+// another task is open. The pieces below are deliberately MODULE-LEVEL singletons: the conversation
+// store, the bus-suppression set, the pending-card list and the turn telemetry. A second copy of any
+// of them would give a second view its own store, and the realtime bus would silently stop updating it.
 //
-// The split that makes sharing work: this module owns the turn lifecycle (send, stream, reconcile,
-// stop, settle) and owns NO composer state. `send(text, files)` takes what to send as arguments, so
-// one composer can drive one column or six.
+// This module owns the turn lifecycle (send, stream, reconcile, stop, settle) and owns NO composer
+// state: `send(text, files)` takes what to send as arguments.
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { streamResponse, subscribeHarnessEvents, loadSessionTurns, cancelSession,
-         type RespFile, type SessionTurn } from '@/lib/chat';
+         type BusMsg, type RespFile, type SessionTurn } from '@/lib/chat';
+import { subscribeWorkspaceFeed, type FeedFrame } from '@/lib/workspace-feed';
+import { readSettled } from '@/lib/settle';
 import { getCurrentWorkspaceRef } from '@/lib/workspace';
+import { emitFeedTurn } from '@/lib/feed-turns';
 import { track } from '@/lib/analytics';
-import { billing } from '@/app/(app)/billing/lib';
 import { oobById } from '@/lib/harness';
 import { fillStep } from '@/lib/tool-steps';
-import { withText, withReasoning, withStep, withResult } from 'reifyui';
-import { createConversationStore } from 'reifyui';
-
-/** Turn states the backend considers settled. One definition, used by every settle path. */
-export const TERMINAL_TURN = new Set(['done', 'completed', 'failed', 'error', 'cancelled', 'incomplete', 'timeout', 'max_turns']);
-
-/** A session card as the Recents/Arena lists see it (mirrors the gateway trace card). */
-export interface TraceCard {
-  session_id: string; title?: string; status?: string; finished_at?: number;
-  model?: string; event_count?: number; elapsed?: number; credits?: number;
-}
-
-export interface ChatTarget { name: string; backend: string | null; model?: string; baseId?: string;
-  /** The runtime this harness runs on and the model its settings default to (the footer names both). */
-  runtime?: string; defaultModel?: string }
-export interface UserMsg { role: 'user'; text: string; attachments?: { name: string; dataUri?: string }[] }
-export interface ToolStep { name: string; args: string; result?: string; callId?: string }
-// An assistant turn is an ORDERED list of blocks appended as events arrive, so tool activity is
-// interleaved with prose in real time (not all tools hoisted to the top).
-export type Block = { kind: 'text'; text: string; error?: true } | { kind: 'tools'; reasoning: string; steps: ToolStep[] };
+import { withText, withReasoning, withStep, withResult, createConversationStore, createResponsesDispatcher } from 'reifyui';
+import { newTurn, reduceTurn, finish, type Turn } from 'reifyui/agent-chat';
 
 // The failure sentence is its own block, marked, and it stays LAST. It reaches a message on two
 // paths, the turn's own stream and the settled read of the turns feed, and the second arrival must
 // not print it twice (seen as "Error: X Error: X" under a refused turn). And a turn's text and tool
 // steps can still arrive after the failed event (the trace chunk that carries them lands after
 // the status): appended blindly they glued onto the error line and the feed then wrote the error
-// again ("...from the provider20pt", a CheetahClaws turn on 2026-09-27), so every append below
-// goes in front of a trailing error block.
+// again ("...from the provider20pt", a CheetahClaws turn on OSS, 2026-09-27; the same store here),
+// so every append below goes in front of a trailing error block. Ported from OSS ec3c1b3.
 const isErrorBlock = (b: Block | undefined): boolean => !!b && b.kind === 'text' && b.error === true;
 function beforeError(blocks: Block[], apply: (rest: Block[]) => Block[]): Block[] {
   const last = blocks[blocks.length - 1];
@@ -63,15 +46,55 @@ function withError(blocks: Block[], msg: string): Block[] {
   if (blocks.some((b) => isErrorBlock(b) && b.kind === 'text' && b.text.trimEnd().endsWith('Error: ' + msg))) return blocks;
   return [...blocks, errorBlock(blocks, msg)];
 }
+
+
+/** Turn states the backend considers settled. One definition, used by every settle path. */
+export const TERMINAL_TURN = new Set(['done', 'completed', 'failed', 'error', 'cancelled', 'incomplete', 'timeout', 'max_turns']);
+/** A record's turn state as a message shows it. A live state (the gateway's _TURN_LIVE: running,
+ *  in_progress, queued, starting), or one this console does not know, is running: never drawn as
+ *  done, so a read never ends a turn the server has not ended. */
+export function turnStatus(status: unknown): AsstMsg['status'] {
+  const s = String(status || '');
+  if (s === 'failed' || s === 'error') return 'failed';
+  if (s === 'cancelled') return 'cancelled';
+  if (s === 'incomplete' || s === 'max_turns' || s === 'timeout') return 'incomplete';
+  if (s === 'done' || s === 'completed') return 'done';
+  return 'running';
+}
+
+/** A session card as a task list sees it (mirrors the gateway trace card). */
+export interface TraceCard {
+  session_id: string; title?: string; status?: string; finished_at?: number;
+  model?: string; event_count?: number; elapsed?: number;
+}
+
+export interface ChatTarget { name: string; backend: string | null; model?: string; baseId?: string;
+  /** The runtime this harness runs on and the model its settings default to (the footer names both). */
+  runtime?: string; defaultModel?: string }
+/** `imported`: part of an earlier turn brought with the task's first request (a recorded run carried
+ *  into a task of your own, start/fork.ts), never the agent's own. */
+export interface UserMsg { role: 'user'; text: string; attachments?: { name: string; dataUri?: string }[]; imported?: true }
+export interface ToolStep { name: string; args: string; result?: string; callId?: string;
+  /** the tool said this call failed (the record's is_error); absent when it worked */
+  isError?: true }
+// An assistant turn is an ORDERED list of blocks appended as events arrive, so tool activity is
+// interleaved with prose in real time (not all tools hoisted to the top).
+export type Block = { kind: 'text'; text: string; error?: true } | { kind: 'tools'; reasoning: string; steps: ToolStep[] };
 export interface AsstMsg { role: 'assistant'; blocks: Block[]; files: RespFile[]; status: 'running' | 'done' | 'failed' | 'cancelled' | 'incomplete';
   /** Why an incomplete turn is incomplete (max_steps | timeout | interrupted) — from the
    *  gateway's incomplete_details. Absent on records from before the field existed, which is
    *  why the badge itself must not assert a cause. */
   incompleteReason?: string;
-  /** The handoff a run ended on (a refusal or an escalation): reason, step, weakest, threshold, risk. */
-  handoff?: Record<string, unknown>;
-  /** Seconds this turn took and the credits it cost, when the gateway kept them. */
-  elapsed?: number; credits?: number }
+  /** the server's own sentence for a refusal, when it sent one (shown beside the reason) */
+  incompleteDetail?: string;
+  /** Seconds this turn took, when the gateway kept it. */
+  elapsed?: number;
+  /** an earlier turn brought with the task's first request (see UserMsg) */
+  imported?: true;
+  /** The turn's clock: the same events folded by reifyui's reduceTurn as they arrived, so a view can
+   *  say when each call started and answered. Only a turn this browser watched live has one; a turn
+   *  read from the record has none and shows no durations, never guessed ones. */
+  clock?: Turn }
 // AGENTS.md / CLAUDE.md are harness-internal instruction files the runner seeds into the workspace
 // (they surface installed skills to the agent). They are never user-facing outputs, so they must
 // never render as output file cards, including on older sessions that captured them before the
@@ -81,6 +104,32 @@ export const isInternalOutput = (name?: string) =>
   !!name && (_INTERNAL_OUT.has(name) || name.startsWith('.harness/') || name.includes('/.harness/'));
 export type Msg = UserMsg | AsstMsg;
 
+/** The server's turns, plus a local tail the server never recorded: a follow-up that was refused
+ *  or never started keeps its bubble and its state instead of being reconciled away. */
+export function keepUnrecordedTail(server: Msg[], local: Msg[]): Msg[] {
+  const users = (ms: Msg[]) => ms.filter((m) => m.role === 'user').length;
+  const n = users(server);
+  if (users(local) <= n) return server;
+  let seen = 0, cut = local.length;
+  for (let i = 0; i < local.length; i++) { if (local[i].role === 'user') { seen++; if (seen > n) { cut = i; break; } } }
+  const tail = local.slice(cut);
+  const lastA = [...tail].reverse().find((x) => x.role === 'assistant') as AsstMsg | undefined;
+  if (!lastA || lastA.status === 'running') return server;   // a live turn the server has not written yet: the caller decides
+  return [...server, ...tail];
+}
+
+/** The record's messages, keeping the clocks the live ones had (matched answer by answer): a turn
+ *  settled from its record after its stream dropped keeps the times it was seen working. */
+export function carryClocks(server: Msg[], local: Msg[]): Msg[] {
+  const clocks = local.filter((x): x is AsstMsg => x.role === 'assistant').map((a) => a.clock);
+  let i = 0;
+  return server.map((x) => {
+    if (x.role !== 'assistant') return x;
+    const c = clocks[i++];
+    return c ? { ...x, clock: c } : x;
+  });
+}
+
 export function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boolean } {
   const m: Msg[] = [];
   let running = false;
@@ -89,23 +138,21 @@ export function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boo
       m.push({ role: 'user', text: t.user,
         attachments: (t.user_files || []).map((f) => ({ name: f.name })) });
     }
-    const steps = (t.tools || []).map((x) => ({ name: x.name, args: x.arguments, result: x.result }));
+    // the gateway's turns name a tool's result `output` (its first 4,000 characters); `result` is the older name
+    const steps: ToolStep[] = (t.tools || []).map((x) => ({ name: x.name, args: x.arguments, result: x.result ?? x.output,
+      ...(x.is_error ? { isError: true as const } : {}) }));
     const blocks: Block[] = [];
     if (steps.length) blocks.push({ kind: 'tools', reasoning: '', steps });
     if (t.assistant) blocks.push({ kind: 'text', text: t.assistant });
     // a failed turn's reason, the line the live stream appended as its error event
     const why = (t as { error?: string }).error;
     if (why && (t.status === 'failed' || t.status === 'error')) blocks.push(errorBlock(blocks, why));
-    const st: AsstMsg['status'] = t.status === 'failed' || t.status === 'error' ? 'failed'
-      : t.status === 'cancelled' ? 'cancelled'
-      : (t.status === 'incomplete' || t.status === 'max_turns' || t.status === 'timeout') ? 'incomplete'
-        : (t.status === 'running' || t.status === 'starting' || t.status === 'in_progress') ? 'running' : 'done';
+    const st = turnStatus(t.status);
     if (st === 'running') running = true;
     m.push({ role: 'assistant', blocks, files: t.files || [], status: st,
       incompleteReason: (t as { incomplete_reason?: string }).incomplete_reason || undefined,
-      handoff: (t as { handoff?: Record<string, unknown> | null }).handoff || undefined,
-      elapsed: typeof t.elapsed === 'number' ? t.elapsed : undefined,
-      credits: typeof t.credits === 'number' ? t.credits : undefined });
+      incompleteDetail: (t as { incomplete_detail?: string }).incomplete_detail || undefined,
+      elapsed: typeof t.elapsed === 'number' ? t.elapsed : undefined });
   }
   return { msgs: m, running };
 }
@@ -172,9 +219,9 @@ export const _busSuppress = new Set<string>();
 // Wall-clock turn start, keyed by conv key then re-keyed to the real session id once allocated.
 // Absent means "not observed by this browser" — duration is then omitted, never guessed.
 const _turnStart = new Map<string, number>();
-// A turn settles on whichever path wins: the SSE terminal event, or the 4s reconcile poll.
-// Reporting only the fast path would systematically under-count failures, because dropped
-// terminal events are exactly what the poll exists to repair.
+// A turn settles on whichever path wins: the SSE terminal event, or the read of its record
+// (settleFromRecord). Reporting only the fast path would systematically under-count failures,
+// because dropped terminal events are exactly what that read exists to repair.
 const _finished = new Set<string>();
 export function trackTaskFinished(sid: string, turnIndex: number, props: Record<string, string | number | boolean | null | undefined>): void {
   const key = `${sid}#${turnIndex}`;
@@ -193,26 +240,44 @@ export function turnIndexOf(msgs: Msg[]): number {
 // Sessions with a turn currently in flight, maintained from the bus (authoritative, no trace-card
 // lag) so the Recents "working" dot is accurate the instant a turn starts/ends.
 export const _runningSids = new Set<string>();
-const _busFn: Record<string, { name: string; callId: string }> = {};
-/** Add a produced file to an answer, once. The same file can reach a tab twice: its own POST stream
- *  renders it as the citation arrives, and the broadcast bus can deliver that same event a moment
- *  after the stream ended and its suppression was lifted. The turn record holds one file, so the
- *  duplicate was a transcript-only ghost that a reload cleared (2026-09-07). A file is identified by
- *  its container and id, so re-adding the one already shown is a no-op. */
-function withFile(files: RespFile[], f: RespFile): RespFile[] {
-  const same = (x: RespFile) => (f.file_id ? x.file_id === f.file_id && x.container_id === f.container_id
-                                           : x.filename === f.filename);
-  return files.some(same) ? files : [...files, f];
+/** What the harness's feed last said of a session's turn: running or ended, that turn's response ID
+ *  when the feed named it, and when the feed said it. A task list draws its dots from this first: a
+ *  card read a moment before a start or an end still says the state before it. */
+export interface FeedTurn { on: boolean; rid: string; at: number }
+const _feedTurns = new Map<string, FeedTurn>();
+const _feedSubs = new Set<() => void>();
+let _feedVer = 0;
+function feedTurn(sid: string, rid: string, on: boolean, harness = ''): void {
+  if (!sid) return;
+  const was = _feedTurns.get(sid);
+  // an end names the turn it ends; without its ID it is the turn the feed saw start
+  const id = rid || (!on && was ? was.rid : '');
+  if (was && was.on === on && was.rid === id) return;      // every subscriber of the feed reports it
+  _feedTurns.set(sid, { on, rid: id, at: Date.now() });
+  if (on) _runningSids.add(sid); else _runningSids.delete(sid);
+  _feedVer += 1;
+  _feedSubs.forEach((f) => f());
+  emitFeedTurn(sid, harness, on);      // Studio reads that setup's row again (lib/feed-turns)
 }
-
-/** The reason and handoff a terminal response carries in incomplete_details, applied to the
- *  assistant message the same way msgsFromTurns applies them from history. The live paths used to
- *  keep only the status, so a handoff showed nothing until the conversation was reopened (#242). */
-function applyIncomplete(a: AsstMsg, response: unknown): void {
-  const inc = (response as { incomplete_details?: { reason?: string; handoff?: Record<string, unknown> | null } | null } | null | undefined)?.incomplete_details;
-  if (!inc) return;
-  a.incompleteReason = inc.reason || undefined;
-  a.handoff = inc.handoff || undefined;
+export function feedTurnOf(sid: string): FeedTurn | undefined { return sid ? _feedTurns.get(sid) : undefined; }
+/** The sessions the feed says are running now, each with when it said so. */
+export function feedRunning(): [string, number][] {
+  return [..._feedTurns].filter(([, t]) => t.on).map(([sid, t]) => [sid, t.at]);
+}
+/** Draws again on every turn start and end the feed reports (read them with feedTurnOf). */
+export function useFeedTurns(): number {
+  return useSyncExternalStore((f) => { _feedSubs.add(f); return () => { _feedSubs.delete(f); }; }, () => _feedVer, () => 0);
+}
+const _busFn: Record<string, { name: string; callId: string }> = {};
+// A produced file reaches a tab through TWO channels by design: the tab's own POST stream renders
+// the citation as it arrives (onFile), and the broadcast bus delivers the same event a moment after
+// the stream ends and _busSuppress is lifted. The bus drops history replays, but this frame is
+// live-forward and simply lands late, so both paths appended and one file rendered as two cards
+// while the record held one (2026-09-07). With two delivery channels, applying the same event twice
+// has to be a no-op: the answer's file list is a set keyed by file identity.
+function withFile(files: RespFile[], f: RespFile): RespFile[] {
+  const same = (x: RespFile) => (f.file_id ? x.file_id === f.file_id && x.container_id === f.container_id : x.filename === f.filename);
+  return files.some(same) ? files : [...files, f];
 }
 
 function busUpdateLast(sid: string, fn: (a: AsstMsg) => void) {
@@ -224,6 +289,12 @@ function busUpdateLast(sid: string, fn: (a: AsstMsg) => void) {
     return { msgs: out };
   });
 }
+// A turn's content from the feed goes to the answer still being drawn only. An answer already settled
+// holds its record's whole text: the feed is a second channel and can run behind the record (a feed
+// on another server tails the trace), and its tail written onto a settled answer printed it twice.
+function busAppend(sid: string, fn: (a: AsstMsg) => void) {
+  busUpdateLast(sid, (a) => { if (a.status === 'running') fn(a); });
+}
 function applyBusEvent(sid: string, responseId: string, ev: Record<string, unknown>, replay = false) {
   if (!sid) return;
   const t = ev.type as string;
@@ -233,8 +304,13 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
   // History catch-up frames are dropped: an in-flight turn's progress-so-far is loaded from the
   // authoritative durable trace via GET /v1/sessions/{sid}/turns (msgsFromTurns). Re-applying the
   // same events off the bus would double-render (append the same text/tools twice). The bus is the
-  // live-FORWARD channel only; the trace snapshot + the reconcile poll own history + repair.
+  // live-FORWARD channel only; the trace snapshot + the read of the record (settleFromRecord) own
+  // history + repair.
   if (replay) return;
+  // the clock first: every live-forward event, at the moment it arrived (a start opens a new one)
+  if (t !== 'harness.turn.started' && !t.startsWith('browser.')) {
+    busUpdateLast(sid, (a) => { if (a.status === 'running' || a.clock) a.clock = reduceTurn(a.clock || newTurn(), ev as { type: string }, Date.now()); });
+  }
   switch (t) {
     case 'harness.turn.started': {
       // Ignore a REPLAYED start of a turn we've already finished (its response_id is our last prevId):
@@ -246,25 +322,25 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
         const user = String((ev.user_text as string) || '');
         const add: Msg[] = [];
         if (user) add.push({ role: 'user', text: user });
-        add.push({ role: 'assistant', blocks: [], files: [], status: 'running' });
+        add.push({ role: 'assistant', blocks: [], files: [], status: 'running', clock: newTurn({ startedAt: Date.now() }) });
         return { msgs: [...s.msgs, ...add], busy: true, loaded: true };
       });
       break;
     }
     case 'response.reasoning_summary_text.delta':
-      busUpdateLast(sid, (a) => { a.blocks = addReasoning(a.blocks, ev.delta as string); }); break;
+      busAppend(sid, (a) => { a.blocks = addReasoning(a.blocks, ev.delta as string); }); break;
     case 'response.output_item.added': {
       const item = ev.item as Record<string, unknown>;
       if (item?.type === 'function_call') _busFn[`${sid}:${ev.output_index}`] = { name: item.name as string, callId: (item.call_id as string) || '' };
-      else if (item?.type === 'function_call_output') busUpdateLast(sid, (a) => { a.blocks = addResult(a.blocks, (item.call_id as string) || '', String(item.output ?? '')); });
+      else if (item?.type === 'function_call_output') busAppend(sid, (a) => { a.blocks = addResult(a.blocks, (item.call_id as string) || '', String(item.output ?? '')); });
       break;
     }
     case 'response.function_call_arguments.done': {
       const fn = _busFn[`${sid}:${ev.output_index}`] || { name: 'tool', callId: '' };
-      busUpdateLast(sid, (a) => { a.blocks = addStep(a.blocks, { name: fn.name, args: (ev.arguments as string) || '', callId: fn.callId }); }); break;
+      busAppend(sid, (a) => { a.blocks = addStep(a.blocks, { name: fn.name, args: (ev.arguments as string) || '', callId: fn.callId }); }); break;
     }
     case 'response.output_text.delta':
-      busUpdateLast(sid, (a) => { a.blocks = addText(a.blocks, ev.delta as string); }); break;
+      busAppend(sid, (a) => { a.blocks = addText(a.blocks, ev.delta as string); }); break;
     case 'response.output_text.annotation.added': {
       const a = ev.annotation as Record<string, unknown>;
       if (a?.type === 'container_file_citation') busUpdateLast(sid, (m) => { m.files = withFile(m.files, { container_id: a.container_id as string, file_id: a.file_id as string, filename: a.filename as string }); });
@@ -272,8 +348,14 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
     }
     case 'response.completed':
       busUpdateLast(sid, (a) => { a.status = 'done'; }); setConvState(sid, { busy: false, prevId: responseId, firstTurn: false }); break;
-    case 'response.incomplete':
-      busUpdateLast(sid, (a) => { a.status = 'incomplete'; applyIncomplete(a, ev.response); }); setConvState(sid, { busy: false, prevId: responseId, firstTurn: false }); break;
+    case 'response.incomplete': {
+      // the event carries why (max_steps | timeout | interrupted) and the server's sentence when it
+      // sent one; the stored record has the same fields, so a reload agrees with what the live turn
+      // showed
+      const inc = (ev.response as { incomplete_details?: { reason?: string; detail?: string } } | undefined)?.incomplete_details;
+      busUpdateLast(sid, (a) => { a.status = 'incomplete'; if (inc?.reason) a.incompleteReason = inc.reason; if (inc?.detail) a.incompleteDetail = inc.detail; });
+      setConvState(sid, { busy: false, prevId: responseId, firstTurn: false }); break;
+    }
     case 'response.failed': {
       // A user Stop arrives as response.failed with reason/status "cancelled", show it as
       // Cancelled, not Failed (the session card + turn record already say cancelled).
@@ -327,20 +409,79 @@ export function seedBrowserState(sid: string, info: { open: boolean; control?: s
                         ...(info.viewport && info.viewport.w > 0 ? { viewport: info.viewport } : {}) } };
   });
 }
+// ── settling a busy conversation from its record ────────────────────────────────────────────────
+// A turn's live text arrives on its own stream or the setup's live feed; its END must not depend on
+// either of them arriving. Each busy conversation on screen is listed here and reads its record once
+// (settleFromRecord) whenever something says the end may have passed unseen: the setup's live feed
+// came up again (whatever ended while it was down went to no one), the workspace watch (its task
+// cards read every few seconds while one runs: lib/workspace-feed) reported the end of its task, or
+// its own stream ended before the turn did.
+interface Settler { harness: string; sid: () => string | null; settle: (waits: readonly number[]) => void }
+const _settlers = new Set<Settler>();
+/** The re-reads of one settle, ms from its start: the record can trail the end it reports by seconds. */
+export const SETTLE_NOW = [0, 1000, 2000, 4000] as const;
+/** After the workspace watch's end frame: the setup's own feed first gets a beat to deliver the end. */
+export const SETTLE_AFTER_FEED = [1000, 2000, 4000] as const;
+const FEED_ENDS = new Set(['response.completed', 'response.failed', 'response.incomplete']);
+/** The open's read of a task's record: one quiet second try, and an end (lib/settle). */
+const LOAD_READ = { within: 30_000, firstTry: 20_000 };
+// Turns whose own stream ended before the turn did. The feed drew the rest, but what was said
+// between the stream's last byte and the feed taking over reached no one (the feed's copy was
+// suppressed for this tab meanwhile), so the settled read puts the record's whole answer in place.
+const _gapped = new Set<string>();
+let _wsFeedOff: (() => void) | null = null;
+function onWorkspaceFrame(f: FeedFrame): void {
+  if (!FEED_ENDS.has(f.type)) return;
+  _settlers.forEach((s) => { if (s.sid() === f.session_id) s.settle(SETTLE_AFTER_FEED); });
+}
+function addSettler(s: Settler): () => void {
+  _settlers.add(s);
+  // one listener for the page, on the tab's one workspace watch (lib/workspace-feed), while any waits
+  if (!_wsFeedOff) _wsFeedOff = subscribeWorkspaceFeed(onWorkspaceFrame);
+  return () => {
+    _settlers.delete(s);
+    if (!_settlers.size && _wsFeedOff) { _wsFeedOff(); _wsFeedOff = null; }
+  };
+}
+
+// ONE connection per setup in a tab, however many surfaces listen (a setup page's task list and its
+// conversation both do): two connections applied every delta of a turn drawn from the feed twice.
+interface Bus { stop: () => void; listeners: Set<{ current?: () => void }> }
+const _buses = new Map<string, Bus>();
+const TURN_EDGES = new Set(['harness.turn.started', 'response.completed', 'response.failed', 'response.incomplete']);
+function onBusMsg(harnessId: string, m: BusMsg): void {
+  const t = (m.event as Record<string, unknown>)?.type as string;
+  // track in-flight sessions (authoritative for the Recents dot) regardless of suppress/replay:
+  // a replayed start still tells us the session is live (its terminal event clears it).
+  if (t === 'harness.turn.started') feedTurn(m.session_id, m.response_id || '', true, harnessId);
+  else if (t === 'response.completed' || t === 'response.failed' || t === 'response.incomplete') feedTurn(m.session_id, m.response_id || '', false, harnessId);
+  applyBusEvent(m.session_id, m.response_id, m.event || {}, Boolean(m.replay));
+  if (TURN_EDGES.has(t)) _buses.get(harnessId)?.listeners.forEach((l) => { try { l.current?.(); } catch { /* one listener never stops the rest */ } });
+}
+function onBusState(harnessId: string, s: 'up' | 'down'): void {
+  if (s !== 'up') return;
+  // connected, or connected again: each busy conversation of this setup reads its record once
+  _settlers.forEach((x) => { if (x.harness === harnessId) x.settle([0]); });
+}
 export function useHarnessBus(harnessId: string, onActivity?: () => void) {
+  const cb = useRef(onActivity);
+  cb.current = onActivity;
   useEffect(() => {
     if (!harnessId) return;
-    const unsub = subscribeHarnessEvents(harnessId, (m) => {
-      const t = (m.event as Record<string, unknown>)?.type as string;
-      // track in-flight sessions (authoritative for the Recents dot) regardless of suppress/replay:
-      // a replayed start still tells us the session is live (its terminal event clears it).
-      if (t === 'harness.turn.started') _runningSids.add(m.session_id);
-      else if (t === 'response.completed' || t === 'response.failed' || t === 'response.incomplete') _runningSids.delete(m.session_id);
-      applyBusEvent(m.session_id, m.response_id, m.event || {}, Boolean(m.replay));
-      if (t === 'harness.turn.started' || t === 'response.completed' || t === 'response.failed' || t === 'response.incomplete') onActivity?.();
-    });
-    return unsub;
-  }, [harnessId]); // eslint-disable-line react-hooks/exhaustive-deps
+    let bus = _buses.get(harnessId);
+    if (!bus) {
+      const b: Bus = { stop: () => {}, listeners: new Set() };
+      _buses.set(harnessId, b);
+      b.stop = subscribeHarnessEvents(harnessId, (m) => onBusMsg(harnessId, m), (s) => onBusState(harnessId, s));
+      bus = b;
+    }
+    const mine = bus;
+    mine.listeners.add(cb);
+    return () => {
+      mine.listeners.delete(cb);
+      if (!mine.listeners.size && _buses.get(harnessId) === mine) { mine.stop(); _buses.delete(harnessId); }
+    };
+  }, [harnessId]);
 }
 
 
@@ -348,15 +489,17 @@ export function useHarnessBus(harnessId: string, onActivity?: () => void) {
 /**
  * One conversation's lifecycle: bind to the store, load history, run turns, settle them.
  *
- * Owns NO composer state on purpose. `send(text, files)` is given what to send, which is what lets
- * Tasks drive one of these from its own composer and Arena drive six from one shared composer.
+ * Owns NO composer state on purpose. `send(text, files)` is given what to send, so the composer that
+ * drives it keeps its own text.
  */
-export function useConversationTurn({ harnessId, sessionId, target, onRan, onSession, onSendStart, onMissing, extraHeaders }: {
+export function useConversationTurn({ harnessId, sessionId, target, onRan, onSession, onSendStart, onRefused, onMissing, extraHeaders }: {
   harnessId: string;
   sessionId: string | null;
   target: ChatTarget;
   onRan: () => void;
   onSession?: (sid: string) => void;
+  /** a first message the server refused or never took: the composer keeps it */
+  onRefused?: (text: string, files: { name: string; dataUri: string }[]) => void;
   /** the task no longer exists (its feed answers 404, it was deleted): the thread must let go of it */
   onMissing?: (sid: string) => void;
   /** Fired the instant a send is accepted, so a view can clear its composer. */
@@ -382,6 +525,13 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
   const setMsgs = (u: Msg[] | ((m: Msg[]) => Msg[])) =>
     setConvState(convKeyRef.current, (s) => ({ msgs: typeof u === 'function' ? (u as (m: Msg[]) => Msg[])(s.msgs) : u }));
   const setBusy = (b: boolean) => setConvState(convKeyRef.current, { busy: b });
+  // The send latch is released when the send's own stream ends (its finally). A turn can also
+  // settle off that stream, through the broadcast bus or the read of its record (settleFromRecord)
+  // finding the terminal status: busy then goes false and the composer re-enables while the latch stays set,
+  // and every later message is dropped at the guard, silently (OSS Playwright, 2026-09-07: a task
+  // took three turns and then none). Idle releases the latch; the double-click guard is unaffected
+  // because the clicks it collapses land before any render.
+  useEffect(() => { if (!busy) sendingRef.current = false; }, [busy]);
   const setPrevId = (id: string | null) => setConvState(convKeyRef.current, { prevId: id });
   const setFirstTurn = (b: boolean) => setConvState(convKeyRef.current, { firstTurn: b });
   const [loading, setLoading] = useState(false);
@@ -394,21 +544,15 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
   loadFailedRef.current = loadFailed;
   const [loadTry, setLoadTry] = useState(0);
   const loadSeq = useRef(0);
-  const [outOfCredits, setOutOfCredits] = useState<{ balance: number | null } | null>(null);
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  const onMissingRef = useRef(onMissing);
+  onMissingRef.current = onMissing;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   // Stop is one-shot: disabled the moment it is clicked so a slow cancel cannot be spammed.
   const [stopping, setStopping] = useState(false);
   useEffect(() => { setStopping(false); }, [busy]);
-  // The send latch (sendingRef) collapses clicks that land in the same tick, before `busy` has
-  // re-rendered; send()'s finally releases it. But that finally only runs when the POST stream
-  // ends, and a turn can settle without it: the terminal event arrives on the broadcast bus, or
-  // the reconciliation poll reads it from the server, while the stream itself stays open. The
-  // latch then outlives its turn, and every later message is dropped by a send() that returns at
-  // the guard, with the composer looking perfectly enabled and no request ever leaving the tab
-  // (measured 2026-09-07: a task took three turns, then silently took no more until a reload).
-  // The conversation going idle is proof the turn is over, so the latch is released there too.
-  // This cannot weaken the double-click guard: the clicks it collapses land before any render,
-  // so no effect runs between them, and by the time this one runs `busy` is already true.
-  useEffect(() => { if (!busy) sendingRef.current = false; }, [busy]);
 
   // The shape of a task, never its content. No prompt, no file name, no title.
   const taskFacts = () => ({
@@ -429,8 +573,8 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
   // shown done with its content even if the store was left stuck at busy:true (e.g. a terminal bus
   // event was dropped on a full queue / reconnect race), which previously stranded it at "Working…"
   // until a hard refresh. A genuinely in-flight turn keeps its live placeholder for the bus to stream.
-  // A read that fails (one quiet second try, then an end) writes nothing: an empty answer here would
-  // open the task empty, or wipe a live turn and end it.
+  // A read that fails (one quiet second try, then an end: lib/settle) writes nothing: an empty answer
+  // here would open the task empty, or wipe a live turn and end it.
   useEffect(() => {
     const seq = ++loadSeq.current;
     const current = () => seq === loadSeq.current;
@@ -440,21 +584,18 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     // Already loaded, idle, and has content → trust it (no refetch on every open).
     if (existing.loaded && !existing.busy && existing.msgs.length) { setLoading(false); return; }
     setLoading(true);
-    loadSessionTurns(sessionId).catch(() => new Promise((r) => setTimeout(r, 1500)).then(() => {
-      if (!current()) throw new Error('superseded');
-      return loadSessionTurns(sessionId);
-    })).then(({ turns, lastResponseId, missing }) => {
-      if (!current()) return;
+    readSettled((signal) => loadSessionTurns(sessionId, signal), LOAD_READ).then(({ turns, lastResponseId, missing }) => {
       if (missing) {
         // a deleted task: nothing to show and nothing to send to (a follow-up typed into one ran on
         // the deleted session and billed, 2026-09-07); the page lets go of it
-        setLoading(false); onMissing?.(sessionId); return;
+        if (current()) setLoading(false);
+        onMissing?.(sessionId); return;
       }
       const { msgs: m, running } = msgsFromTurns(turns);
       const cur = getConvState(convKey);
       if (!running) {
-        // Backend is terminal → authoritative. Show its content and clear any stale busy flag.
-        setConvState(convKey, { msgs: m, prevId: lastResponseId, firstTurn: false, loaded: true, busy: false });
+        // Backend is terminal → authoritative for what it holds; a refused or unsent tail stays.
+        setConvState(convKey, { msgs: keepUnrecordedTail(m, cur.msgs), prevId: lastResponseId, firstTurn: false, loaded: true, busy: false });
       } else if (!cur.msgs.length) {
         // In-flight with nothing local yet → load the turn's progress-so-far (the backend
         // reconstructs a running turn's partial output from its durable trace) and let the bus
@@ -464,7 +605,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
         // In-flight and we already hold live msgs (switched away/back mid-turn) → keep them.
         setConvState(convKey, { loaded: true });
       }
-      setLoading(false);
+      if (current()) setLoading(false);
     }).catch(() => {
       if (!current()) return;
       setLoading(false);
@@ -472,40 +613,67 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     });
   }, [convKey, sessionId, loadTry]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // RECONCILIATION: SSE (POST stream or bus) is best-effort delivery, a reconnect gap, a
-  // replica switch, or a dropped terminal event must NEVER strand the conversation at
-  // "Working…". While busy, poll the authoritative turn state; the moment the backend says
-  // the turn is over, rebuild from /turns and settle. This is the load-bearing guarantee;
-  // streaming is just the fast path on top of it.
+  /**
+   * ONE read of the record, settling the turn when the record says it has ended: the repair for a
+   * turn whose end no stream delivered (a dropped or stalled stream, a feed that was down, a
+   * terminal frame dropped on a full queue). 'running' and 'behind' (the record does not hold this
+   * turn yet) change nothing; 'skip': not this read's to settle (the send's own stream owns its
+   * turn, or the conversation moved to another task). Throws when the record cannot be read.
+   */
+  async function settleFromRecord(sid: string): Promise<'settled' | 'running' | 'behind' | 'skip'> {
+    const here = () => (sessionIdRef.current ?? sidRef.current) === sid;
+    if (sendingRef.current || !here()) return 'skip';     // the send's own stream owns its turn
+    const { turns, lastResponseId, missing } = await loadSessionTurns(sid);
+    if (!mounted.current || sendingRef.current || !here()) return 'skip';
+    if (missing) { onMissingRef.current?.(sid); return 'skip'; }
+    // only settle on the turn being waited for: while the server still lists one turn fewer than
+    // this thread holds, the new turn has no record yet (a slow accept), so this is not its end
+    if (!turns.length || turns.length < getConvState(convKeyRef.current).msgs.filter((x) => x.role === 'assistant').length) return 'behind';
+    const last = turns[turns.length - 1];
+    if (!TERMINAL_TURN.has(String(last.status || ''))) return 'running';
+    const { msgs: m } = msgsFromTurns(turns);
+    // The OTHER settle path. SSE is best-effort; a dropped terminal event lands here instead, and
+    // instrumenting only the fast path would bias the success rate — the one metric this event
+    // exists to measure — upward.
+    const lastAsst = [...m].reverse().find((x) => x.role === 'assistant') as AsstMsg | undefined;
+    trackTaskFinished(sid, turnIndexOf(m), {
+      ...factsRef.current(),
+      status: lastAsst?.status === 'done' ? 'completed' : (lastAsst?.status || 'failed'),
+      produced_files: !!lastAsst?.files?.length,
+      file_count: lastAsst?.files?.length ?? 0,
+    });
+    _busSuppress.delete(sid);
+    _gapped.delete(sid);                                   // the record's whole answer is in place now
+    setConvState(convKeyRef.current, (cur) => ({ msgs: keepUnrecordedTail(carryClocks(m, cur.msgs), cur.msgs), prevId: lastResponseId, firstTurn: false, loaded: true, busy: false }));
+    return 'settled';
+  }
+  const settleRef = useRef(settleFromRecord);
+  settleRef.current = settleFromRecord;
+  /** settleFromRecord at each of `waits` (ms from now) until one settles, while the turn is still
+   *  busy here; a failed read is the next one's to try. Then it is the feeds' again. */
+  function settleSoon(waits: readonly number[]): void {
+    const sid = sessionIdRef.current ?? sidRef.current;
+    if (!sid) return;
+    void (async () => {
+      let at = 0;
+      for (const w of waits) {
+        if (w > at) { await new Promise((r) => setTimeout(r, w - at)); at = w; }
+        if (!mounted.current || !getConvState(convKeyRef.current).busy) return;
+        try {
+          const r = await settleRef.current(sid);
+          if (r === 'settled' || r === 'skip') return;
+        } catch { /* the record could not be read: the next read, or the next word from a feed */ }
+      }
+    })();
+  }
+  const settleSoonRef = useRef(settleSoon);
+  settleSoonRef.current = settleSoon;
+  // While busy, this conversation is one the feeds settle (see _settlers): a reconnect of the
+  // setup's feed, or the workspace feed's end frame for its task, has it read its record.
   useEffect(() => {
     if (!busy) return;
-    const sid = sessionId ?? sidRef.current;
-    if (!sid) return;
-    let stop = false;
-    const iv = setInterval(async () => {
-      if (stop) return;
-      try {
-        const { turns, lastResponseId } = await loadSessionTurns(sid);
-        if (stop || !turns.length) return;
-        const last = turns[turns.length - 1];
-        if (!TERMINAL_TURN.has(String(last.status || ''))) return;
-        const { msgs: m } = msgsFromTurns(turns);
-        // The OTHER settle path. SSE is best-effort (see the comment above); a dropped terminal
-        // event lands here instead, and instrumenting only the fast path would bias the success
-        // rate — the one metric this event exists to measure — upward.
-        const lastAsst = [...m].reverse().find((x) => x.role === 'assistant') as AsstMsg | undefined;
-        trackTaskFinished(sid, turnIndexOf(m), {
-          ...factsRef.current(),
-          status: lastAsst?.status === 'done' ? 'completed' : (lastAsst?.status || 'failed'),
-          produced_files: !!lastAsst?.files?.length,
-          file_count: lastAsst?.files?.length ?? 0,
-        });
-        _busSuppress.delete(sid);
-        setConvState(convKeyRef.current, { msgs: m, prevId: lastResponseId, firstTurn: false, loaded: true, busy: false });
-      } catch { /* transient, next tick */ }
-    }, 4000);
-    return () => { stop = true; clearInterval(iv); };
-  }, [busy, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+    return addSettler({ harness: harnessId, sid: () => sessionIdRef.current ?? sidRef.current, settle: (w) => settleSoonRef.current(w) });
+  }, [busy, harnessId]);
 
   // The settled read. A turn that settled on the SSE path holds only what was streamed; what it
   // took and cost is written by the gateway at settle, a moment after the terminal event. One
@@ -529,14 +697,22 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
       try {
         const { turns } = await loadSessionTurns(sid);
         const t = turns[turns.length - 1];
-        if (t && (typeof t.elapsed === 'number' || typeof t.credits === 'number')) {
+        if (t && typeof t.elapsed === 'number') {
+          // a turn whose own stream ended before it did (_gapped): the record's whole answer, when the
+          // record holds just the turns this thread does (nothing unrecorded after it)
+          const whole = _gapped.has(sid) ? msgsFromTurns(turns).msgs : null;
+          _gapped.delete(sid);
           setConvState(convKeyRef.current, (st) => {
+            const answers = (ms: Msg[]) => ms.filter((x) => x.role === 'assistant').length;
+            if (whole && answers(whole) === answers(st.msgs)) return { msgs: carryClocks(whole, st.msgs) };
             const out = st.msgs.slice();
             for (let i = out.length - 1; i >= 0; i--) {
               if (out[i].role === 'assistant') {
-                out[i] = { ...(out[i] as AsstMsg),
-                  elapsed: typeof t.elapsed === 'number' ? t.elapsed : undefined,
-                  credits: typeof t.credits === 'number' ? t.credits : undefined };
+                // the record's files too: the stream's citations are one channel, and an answer whose
+                // stream missed them (a drop, a late collection) still shows every file it made
+                const a = out[i] as AsstMsg;
+                const files = (t.files || []).reduce((acc: RespFile[], f) => withFile(acc, f), a.files || []);
+                out[i] = { ...a, files, elapsed: typeof t.elapsed === 'number' ? t.elapsed : undefined };
                 break;
               }
             }
@@ -545,27 +721,36 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
           return;
         }
       } catch { /* transient; the retry below */ }
-      if (left > 0) setTimeout(() => void attempt(left - 1), 4000);
+      // Growing gaps, about 85s in all: the persist trails the terminal event by seconds when the
+      // settle collects produced files, and by much longer when the gateway is busy (an arena
+      // finishing six columns at once). Stops on the first read that carries the figures.
+      if (left > 0) setTimeout(() => void attempt(left - 1), Math.min(30000, Math.round(4000 * Math.pow(1.5, 6 - left))));
     };
-    // Up to four reads over ~15s: the persist can trail the terminal event by several seconds
-    // when the settle is collecting produced files.
-    const t0 = setTimeout(() => void attempt(3), 2500);
+    const t0 = setTimeout(() => void attempt(6), 2500);
     return () => { stop = true; clearTimeout(t0); };
-  }, [busy, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
-  async function send(rawText: string, attach: { name: string; dataUri: string }[] = []) {
+  }, [busy, sessionId, boundSid]); // eslint-disable-line react-hooks/exhaustive-deps
+  /**
+   * Resolves as soon as the server has taken the turn (true), or when it refused or never took
+   * it (false). The answer keeps streaming after that: `busy` holds until it lands. A view that
+   * waited for the whole stream here held its composer text and its title for a minute or more.
+   */
+  /** `opts.input`: the request's whole input, when the caller builds it (a recorded demo's fork,
+   *  start/fork.ts: the recorded turn as earlier messages, then this message); the thread shows the
+   *  text and attachments as usual. */
+  async function send(rawText: string, attach: { name: string; dataUri: string }[] = [], opts: { input?: unknown[] } = {}): Promise<boolean> {
     const text = (rawText || '').trim();
     // `busy` is React state, so three clicks landing in one tick all read it as false and all
     // three stream into the same assistant message: the server runs the turn once, but the
     // reader watches the answer arrive three times over. The latch is a ref because it has to
     // flip now, not at the next render.
-    if ((!text && attach.length === 0) || busy || sendingRef.current || !target.backend) return;
+    if ((!text && attach.length === 0) || busy || sendingRef.current || !target.backend) return false;
     // a task whose record could not be read: what this message would follow is not known (Try again)
-    if (loadFailedRef.current && sessionId) return;
+    if (loadFailedRef.current && sessionId) return false;
     sendingRef.current = true;
     const sent = attach;
     // OpenAI Responses input: a string, or a user MESSAGE whose content is text + file parts.
     // (The gateway parses {role,content:[…]}, a bare content-part array reads as empty input.)
-    const input_payload: string | unknown[] = sent.length
+    const input_payload: string | unknown[] = opts.input ? opts.input : sent.length
       ? [{ role: 'user', content: [
           ...(text ? [{ type: 'input_text', text }] : []),
           ...sent.map((f) => ({ type: 'input_file', filename: f.name, file_data: f.dataUri })),
@@ -576,7 +761,8 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     let reported = false;                       // task_started fires on the FIRST session id only
     setBusy(true);
     onSendStart?.();
-    setMsgs((m) => [...m, { role: 'user', text, attachments: sent.map((f) => ({ name: f.name, dataUri: f.dataUri })) }, { role: 'assistant', blocks: [], files: [], status: 'running' }]);
+    setMsgs((m) => [...m, { role: 'user', text, attachments: sent.map((f) => ({ name: f.name, dataUri: f.dataUri })) },
+      { role: 'assistant', blocks: [], files: [], status: 'running', clock: newTurn({ startedAt: Date.now() }) }]);
     // NEW task (no session yet): surface it in Recents IMMEDIATELY via an optimistic entry, the
     // durable card takes seconds (session allocation + first trace write). onRan() re-renders the
     // panel now; the entry swaps for the real card as soon as the server list carries this session.
@@ -589,6 +775,10 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     // other conversations still get it live from the bus.
     const knownSid = sessionId ?? sidRef.current;
     if (knownSid) _busSuppress.add(knownSid);
+    let started = false;                        // the server accepted the turn (its first event arrived)
+    let settle: (took: boolean) => void = () => {};
+    const accepted = new Promise<boolean>((r) => { settle = r; });
+    const run = async () => {
     try {
       const id = await streamResponse(
         // No `instructions`: the harness's configured Agent Instructions are written into the
@@ -598,8 +788,11 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
         // lost client-side (interrupted stream), instead of forking a new one.
         { input: input_payload, backend: target.backend, model: target.model || undefined, previousResponseId: prevId,
           sessionHint: knownSid, harnessId, harnessName: target.name, extraHeaders: extraHeaders?.() || {} },
-        { onCreated: (rid) => setPrevId(rid),
+        { onEvent: (ev) => updateLast((a) => { a.clock = reduceTurn(a.clock || newTurn(), ev as { type: string }, Date.now()); }),
+          onCreated: (rid) => { settle(true); setPrevId(rid); },
           onSession: (sid) => {
+            started = true;
+            settle(true);
             if (!reported && sid) {
               reported = true;
               _turnStart.set(sid, startedAt);
@@ -626,10 +819,15 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
           onFile: (f) => updateLast((a) => { a.files = withFile(a.files, f); }),
           onError: (msg) => updateLast((a) => { a.blocks = withError(a.blocks, msg); }),
           onDone: (status, response) => {
+            // why an incomplete turn stopped (max_steps | timeout | interrupted) and the server's
+            // sentence ride on the terminal event's response object, the same fields the stored
+            // record carries
+            const inc = (response as { incomplete_details?: { reason?: string; detail?: string } } | undefined)?.incomplete_details;
             updateLast((a) => {
               a.status = status === 'completed' ? 'done'
                 : (['failed', 'cancelled', 'incomplete'].includes(status) ? status as AsstMsg['status'] : 'failed');
-              applyIncomplete(a, response);
+              if (status === 'incomplete' && inc?.reason) a.incompleteReason = inc.reason;
+              if (status === 'incomplete' && inc?.detail) a.incompleteDetail = inc.detail;
             });
             const sk = sessionId ?? sidRef.current;
             const ms = getConvState(convKeyRef.current).msgs;
@@ -644,53 +842,54 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
       );
       if (id) setPrevId(id); setFirstTurn(false);
     } catch (e) {
-      // A throw here is a TRANSPORT failure (the POST stream dropped), never an agent failure, which
-      // arrives via onError + onDone('failed'). If the turn already reached a session it is STILL
-      // running server-side (a gateway redeploy rolling the SSE, a network blip), so painting it
-      // "failed" is a lie that strands the user. Leave it running and let the finally hand rendering
-      // to the auto-reconnecting broadcast bus. Only a start failure (no session yet) is a real error.
-      const sk = sessionId ?? sidRef.current;
-      if (!sk) {
-        // The loop broke before it started. Report the CLASS, never the message: the server's
-        // raw `detail` string is arbitrary text and must not leave the browser. The 402 credit
-        // wall and a gateway blip look identical to the user and completely different to the
-        // business, which is the whole point of the enum.
-        const st = (e as { status?: unknown })?.status;
+      // The server answered with a status (a refusal, a cap, an error), or the turn never started:
+      // the message stays on screen with what happened. Only a stream that dropped AFTER the turn
+      // started is left running for the auto-reconnecting bus, because the turn is still live
+      // server-side and painting it failed would strand the user. A refused follow-up used to be
+      // mistaken for a dropped stream, left "running", and then reconciled away by the server's
+      // turns, which never held it: the message vanished without a word.
+      const st = (e as { status?: unknown })?.status;
+      const code = String((e as { code?: unknown })?.code || '');
+      const answered = typeof st === 'number';
+      settle(false);
+      if (answered || !started) {
         track('task_blocked', {
-          reason: st === 402 ? 'out_of_credits' : st === 429 ? 'rate_limited'
-            : typeof st === 'number' ? 'other' : 'transport',
+          reason: code === 'one_at_a_time' || st === 429 ? 'rate_limited'
+            : answered ? 'other' : 'transport',
           ...taskFacts(),
         });
-        // Out of credits is a decision, not a defect: name it and hand over the door, instead of
-        // leaving a red line in the transcript the user cannot act on. The balance is fetched
-        // rather than assumed — a wrong number on a money dialog is worse than no number.
-        if (st === 402) {
-          setOutOfCredits({ balance: null });
-          billing.balance()
-            .then((b) => setOutOfCredits({ balance: Math.round(Number(b?.balance ?? 0)) }))
-            .catch(() => { /* keep the dialog, just without a figure */ });
-        }
         if (pendId) dropPending(pendId);
-        updateLast((a) => { a.blocks = withError(a.blocks, e instanceof Error ? e.message : String(e)); a.status = 'failed'; });
+        const detail = e instanceof Error ? e.message : String(e);
+        if (!(sessionId ?? sidRef.current)) onRefused?.(text, sent.map((f) => ({ name: f.name, dataUri: f.dataUri })));
+        updateLast((a) => { a.blocks = withText(a.blocks, answered ? `\n\nError: ${detail}` : '\n\nNot sent. Check your connection and try again.'); a.status = 'failed'; });
       }
     } finally {
       sendingRef.current = false;
       const sk = sessionId ?? sidRef.current;
-      // If the stream ended (returned or threw) but no terminal event set the assistant status, the
-      // turn is still live server-side (transport drop OR a clean drain-close mid-turn). Hand it to the
-      // broadcast bus, which auto-reconnects, by releasing suppression, and KEEP the working state so
-      // the indicator stands until the bus (or the on-focus reconcile) lands the true terminal status.
+      // If the stream ended (returned, threw, or went silent past its deadline) but no terminal event
+      // set the assistant status, the turn may still be live server-side (transport drop OR a clean
+      // drain-close mid-turn), or it ended and its end was lost with the stream. Hand it to the
+      // broadcast bus, which reconnects, by releasing suppression, KEEP the working state, and read
+      // the record now (and again at 1, 2 and 4 s while it has not caught up): an ended turn settles
+      // from it at once; a running one is the feeds' to end (their end frames, or a reconnect, read
+      // it again).
       const ms = getConvState(convKeyRef.current).msgs;
       const lastA = ms[ms.length - 1];
       const stillRunning = !!lastA && lastA.role === 'assistant' && (lastA as AsstMsg).status === 'running';
       if (sk && stillRunning) {
         _busSuppress.delete(sk);            // bus renders the remainder; keep busy=true (composer stays disabled)
+        _gapped.add(sk);
+        settleSoon(SETTLE_NOW);
       } else {
         if (sk) _busSuppress.delete(sk);
         setBusy(false);
       }
       onRan();
+      settle(started);
     }
+    };
+    void run();
+    return accepted;
   }
 
   /** Cancel the running turn, settling from the server verdict as well as the bus event. */
@@ -701,7 +900,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     void cancelSession(sid).then((r) => {
       const terminal = ['cancelled', 'failed', 'error', 'done', 'completed', 'incomplete', 'max_turns', 'timeout'];
       if (r.cancelled || terminal.includes(r.status)) {
-        updateLast((a) => { a.status = 'cancelled'; });
+        updateLast((a) => { a.status = 'cancelled'; if (a.clock && a.clock.status === 'running') a.clock = finish(a.clock, 'cancelled', Date.now()); });
         setBusy(false);
       } else {
         setStopping(false);   // cancel did not land, let the user retry
@@ -709,10 +908,58 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     }).catch(() => setStopping(false));
   }
 
-  return { msgs, busy, loading, stopping, prevId, firstTurn, outOfCredits,
+  /** A recorded run played into this conversation as if it streamed now (start/replay.ts): the
+   *  request, then each recorded event at its own offset from it, folded by the same handlers a live
+   *  turn's stream goes through, so it reads the same. Nothing is sent: no task is made and nothing
+   *  is spent. The run's own response and task are not taken (they belong to the recording), and
+   *  each file it made is shown as `fileOf` maps it (the recording's own copy; null leaves it out).
+   *  Ends at its terminal event, or at `endAt` ms when the recording has none. Answers a cancel. */
+  function replay(text: string, events: { t: number; ev: Record<string, unknown> }[], fileOf: (f: RespFile) => RespFile | null, endAt = 0): () => void {
+    if (busy || sendingRef.current) return () => {};
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    let over = false;
+    const t0 = Date.now();
+    setBusy(true);
+    onSendStart?.();
+    setMsgs((m) => [...m, { role: 'user', text }, { role: 'assistant', blocks: [], files: [], status: 'running', clock: newTurn({ startedAt: t0 }) }]);
+    const end = (status: AsstMsg['status']) => {
+      if (over) return;
+      over = true;
+      updateLast((a) => { if (a.status === 'running') a.status = status; if (a.clock && a.clock.status === 'running') a.clock = finish(a.clock, status === 'done' ? 'completed' : status, Date.now()); });
+      setBusy(false);
+    };
+    const d = createResponsesDispatcher({
+      onReasoningDelta: (x: string) => updateLast((a) => { a.blocks = addReasoning(a.blocks, x); }),
+      onToolCall: (name: string, args: string, callId: string) => updateLast((a) => { a.blocks = addStep(a.blocks, { name, args, callId }); }),
+      onToolResult: (callId: string, output: string) => updateLast((a) => { a.blocks = addResult(a.blocks, callId, output); }),
+      onTextDelta: (x: string) => updateLast((a) => { a.blocks = addText(a.blocks, x); }),
+      onFile: (f: RespFile) => { const g = fileOf(f); if (g) updateLast((a) => { a.files = withFile(a.files, g); }); },
+      onError: (msg: string) => updateLast((a) => { a.blocks = withError(a.blocks, msg); }),
+      onDone: (status: string) => end(status === 'completed' ? 'done' : (['failed', 'cancelled', 'incomplete'].includes(status) ? status as AsstMsg['status'] : 'failed')),
+    });
+    // the events due at the same moment fold together, in their order (one render for them)
+    const at = new Map<number, Record<string, unknown>[]>();
+    for (const { t, ev } of events) { const k = Math.max(0, Math.round(t)); at.set(k, [...(at.get(k) || []), ev]); }
+    let last = 0;
+    for (const [t, evs] of [...at.entries()].sort((a, b) => a[0] - b[0])) {
+      last = Math.max(last, t);
+      timers.push(setTimeout(() => {
+        if (over) return;
+        for (const ev of evs) {
+          if (over) return;
+          updateLast((a) => { a.clock = reduceTurn(a.clock || newTurn(), ev as { type: string }, Date.now()); });
+          d.dispatch(ev as Parameters<typeof d.dispatch>[0]);
+        }
+      }, t));
+    }
+    timers.push(setTimeout(() => end('done'), Math.max(endAt, last) + 400));
+    return () => { timers.forEach(clearTimeout); if (!over) end('cancelled'); };
+  }
+
+  return { msgs, busy, loading, stopping, prevId, firstTurn,
            /** the task's record could not be read on open; `reload` reads it again */
            loadFailed, reload: () => setLoadTry((n) => n + 1),
-           clearOutOfCredits: () => setOutOfCredits(null),
+
            liveSessionId: sessionId ?? sidRef.current, convKey,
-           send, stop, setMsgs, updateLast };
+           send, stop, replay, setMsgs, updateLast };
 }

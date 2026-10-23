@@ -351,3 +351,44 @@ def test_an_update_cannot_change_the_base(api):
     assert api.get(f"/v1/harnesses/{h['id']}").json()["base"] == "claude-code"
     r = api.put(f"/v1/harnesses/{h['id']}", json={"name": "Renamed", "base": "claude-code"})
     assert r.status_code == 200 and r.json()["name"] == "Renamed"
+
+
+def test_a_kit_harness_whose_stored_package_is_gone_gets_it_back_before_the_turn(api, tmp_path, monkeypatch):
+    """A kit Harness's package ships in the image. With its stored copy gone (a restored volume, a copied
+    graph), the turn ran with the package "not offered" and so with no environment: Super Mario's System
+    One base played its built-in order desk instead of the game. The turn now puts the kit's own package
+    back from the image first, as opening the kit's page would, and offers it. A package that is not the
+    kit's own has no copy to put back, and is still not offered."""
+    import asyncio
+    kid = "demo-kit-restored"
+    plug = tmp_path / kid / "plugin"
+    (plug / "bin").mkdir(parents=True)
+    (plug / "plugin.json").write_text(json.dumps({"$schema": MANIFEST_SCHEMA, "name": "demo-env",
+                                                   "version": "0.4.0", "description": "An environment."}))
+    (plug / "mcp.json").write_text(json.dumps({"mcpServers": {"game": {"type": "stdio", "command": "./bin/game-env"}}}))
+    (plug / "bin" / "game-env").write_text("#!/bin/sh\necho game\n")
+    monkeypatch.setattr(app, "_KITS_DIR", str(tmp_path))
+    monkeypatch.setattr(app, "_kits", lambda: {kid: {
+        "id": kid, "title": "Game", "app": {"route": "/kits/game"},
+        "harness": {"name": "Game", "plugin": "plugin", "recommended": [{"base": "claude-code", "model": "claude-opus-5"}]}}})
+    hid = api.post(f"/v1/kits/{kid}/launch", json={}).json()["harnessId"]
+    v = asyncio.run(app._vertex_get(hid))
+    (pe,) = app._plugins_of(v)
+    key = app._plugin_blob_key(ORG, str(pe["blob"]))
+    assert asyncio.run(app._blob_get(key, kb=app.BLOB_KB)), "the launch stored the package"
+    asyncio.run(app.BACKING.blob.delete(app.BLOB_KB, key))            # the stored copy is gone
+    assert asyncio.run(app._plugin_files_of(pe, ORG)) == []
+
+    *_, plugins = asyncio.run(app._harness_plugins(hid, ORG, hv=v, sid="sess1"))
+    (got,) = plugins
+    assert got["name"] == "demo-env"
+    assert sorted(f["path"] for f in got["files"]) == ["bin/game-env", "mcp.json", "plugin.json"]
+    # and it is stored again: the next turn reads it as any other
+    v2 = asyncio.run(app._vertex_get(hid))
+    (pe2,) = app._plugins_of(v2)
+    assert asyncio.run(app._plugin_files_of(pe2, ORG)), "the package is stored again"
+
+    # a Harness that runs no kit has no copy to put back: its missing package is still not offered
+    asyncio.run(app.BACKING.blob.delete(app.BLOB_KB, app._plugin_blob_key(ORG, str(pe2["blob"]))))
+    *_, none = asyncio.run(app._harness_plugins(hid, ORG, hv={**v2, "kit": ""}, sid="sess1"))
+    assert none == []
