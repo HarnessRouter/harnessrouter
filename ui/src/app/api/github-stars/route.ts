@@ -24,7 +24,7 @@ export async function GET() {
     cached = { stars, at: Date.now() };
     return NextResponse.json({ stars, repo: REPO });
   } catch (e) {
-    if (cached) return NextResponse.json({ stars: cached.stars, repo: REPO, stale: true });
+    // no number once the count is older than its ten minutes: a remembered count is not served as current
     return NextResponse.json({ detail: e instanceof Error ? e.message : 'unavailable' }, { status: 502 });
   }
 }

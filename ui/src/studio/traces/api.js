@@ -32,15 +32,19 @@ export const tracesApi = {
     // 30 MB long-horizon trace ships as a few hundred KB and renders instantly. Full event content
     // is fetched lazily (fullEvents) only when the user opens an event. Clipped events carry
     // _clipped:true; structure is identical so flatten() rows align positionally with the full load.
+    let why = 'unreachable';
     try {
       const res = await harnessFetch(`/api/harness/v1/traces/${enc(sid)}/all?compact=1`);
       if (res.ok) return parseNdjson(await res.text());
-    } catch { /* fall through to per-chunk for older gateways */ }
-    const ns = chunks && chunks.length ? chunks.map((_, i) => i) : [0];
+      why = String(res.status);
+    } catch { /* the chunks one by one, when the manifest named them */ }
+    // Every chunk the manifest names, or nothing: a trace with a chunk missing is never shown as
+    // whole, and one that could not be read at all throws instead of reading as "no events".
+    if (!chunks || !chunks.length) throw new Error(`traces ${why} /all`);
     const out = [];
-    for (const i of ns) {
+    for (let i = 0; i < chunks.length; i++) {
       const res = await harnessFetch(`/api/harness/v1/traces/${enc(sid)}/events?chunk=${i}`);
-      if (!res.ok) break;
+      if (!res.ok) throw new Error(`traces ${res.status} chunk ${i}`);
       out.push(...parseNdjson(await res.text()));
     }
     return out;

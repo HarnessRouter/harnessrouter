@@ -14,6 +14,7 @@ os.environ.setdefault("HR_BACKING", "local")
 import app as gw  # noqa: E402
 
 RUNNER = pathlib.Path(__file__).resolve().parents[2] / "runner" / "environments.py"
+CONSOLE = pathlib.Path(__file__).resolve().parents[2] / "ui" / "src" / "components" / "hrui" / "ext" / "envModel.ts"
 
 
 def test_the_gateway_reads_a_spec_by_the_runners_own_pattern():
@@ -27,3 +28,12 @@ def test_an_apt_version_with_its_epoch_is_a_spec_at_the_gateway():
         assert gw._ENV_SPEC_RE.match(spec), spec
     for bad in ("rm -rf /", "a;b", "x=12345:1.0", "x=1:2:3"):
         assert not gw._ENV_SPEC_RE.match(bad), bad
+
+
+def test_the_console_refuses_where_it_is_typed_by_the_same_pattern():
+    """The environment sheet refuses a spec as it is typed (envModel.ts specProblem), so a console copy that
+    drifted would refuse, before the service is ever asked, a spec the service and the build take: the
+    epoch the package check recommends was exactly that."""
+    console_pattern = re.search(r"^const SPEC_RE = /(.*)/;$", CONSOLE.read_text(), re.M).group(1)
+    assert console_pattern == gw._ENV_SPEC_RE.pattern
+

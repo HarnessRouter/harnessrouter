@@ -1,21 +1,32 @@
 'use client';
-// Sign-in for a self-hosted instance: one operator, one password.
-//
-// Deliberately not the hosted sign-in form. That one registers accounts, picks an organisation,
-// resets passwords by email and offers Google — every one of those needs a service this box does
-// not have. Reusing it would mean disabling four flows and explaining the remnants.
-import { useState } from 'react';
+// Sign-in for this instance: one operator, one username and password (POST /api/selfhost/login), on
+// the redesign's sign-in card (hrui/auth/AuthFrame). No accounts, no sign-up, no reset by email and no
+// third-party sign-in: each needs a service this box does not have. The username and password are
+// changed from Profile once signed in.
+import { useRef, useState, type FormEvent } from 'react';
 import { safeNext } from '@/lib/safe-next';
+import { AuthFrame, Field, LooseErr } from '@/components/hrui/auth/AuthFrame';
 
-export function SelfHostLogin({ next }: { next: string }) {
+/** A full navigation, not a client route change: the middleware has to see the new cookie, and every
+ *  page under it was rendered as unauthenticated. */
+const assignTo = (href: string) => window.location.assign(href);
+
+export function SelfHostLogin({ next, go = assignTo }: { next: string; go?: (href: string) => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [err, setErr] = useState('');
+  const [fe, setFe] = useState<{ at: 'user' | 'pass'; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const userRef = useRef<HTMLInputElement>(null);
+  const passRef = useRef<HTMLInputElement>(null);
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: FormEvent) {
     e.preventDefault();
-    setBusy(true); setErr('');
+    if (busy) return;
+    setErr(''); setFe(null);
+    if (!username.trim()) { setFe({ at: 'user', msg: 'Enter your username.' }); userRef.current?.focus(); return; }
+    if (!password) { setFe({ at: 'pass', msg: 'Enter your password.' }); passRef.current?.focus(); return; }
+    setBusy(true);
     try {
       const r = await fetch('/api/selfhost/login', {
         method: 'POST',
@@ -23,50 +34,32 @@ export function SelfHostLogin({ next }: { next: string }) {
         body: JSON.stringify({ username, password }),
       });
       if (!r.ok) {
-        setErr((await r.json().catch(() => null))?.detail || 'Incorrect username or password.');
+        const d = await r.json().catch(() => null);
+        setErr(typeof d?.detail === 'string' && d.detail ? d.detail : 'Incorrect username or password.');
+        setBusy(false);
         return;
       }
-      // A full navigation, not a client route change: the middleware has to see the new cookie,
-      // and every page under it was rendered as unauthenticated.
       // Only a path on this site: `next` is whatever the link said (GHSA-59mq-hx4p-fw48).
-      window.location.assign(safeNext(next));
+      go(safeNext(next));
     } catch {
       setErr('Could not reach this instance.');
-    } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="sh-login">
-      <form className="sh-login-card" onSubmit={submit}>
-        {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset, no layout shift */}
-        <img className="sh-login-mark" src="/brand/hr-horizontal-duo-light.png" alt="HarnessRouter" />
-        <p className="sh-login-sub">Sign in to this instance.</p>
-
-        {err ? <div className="notice error" role="alert">{err}</div> : null}
-
-        <div className="field">
-          <label htmlFor="sh-user">Username</label>
-          <input id="sh-user" value={username} autoFocus autoComplete="username"
-                 onChange={(e) => setUsername(e.target.value)} />
-        </div>
-        <div className="field">
-          <label htmlFor="sh-pass">Password</label>
-          <input id="sh-pass" type="password" value={password} autoComplete="current-password"
-                 onChange={(e) => setPassword(e.target.value)} />
-        </div>
-
-        <button className="button primary sh-login-go" type="submit"
-                disabled={busy || !username || !password}>
-          {busy ? 'Signing in…' : 'Sign in'}
-        </button>
-
-        <p className="sh-login-hint">
-          First sign-in uses <code>HR_AUTH_USER</code> and <code>HR_AUTH_PASSWORD</code> from the
-          container. You can change them from your profile once you are in.
-        </p>
+    <AuthFrame n={3}>
+      <h1>Sign in</h1>
+      <p className="au-sub">Sign in to this instance.</p>
+      <form onSubmit={submit} noValidate>
+        <Field id="sh-user" name="username" label="Username" ac="username" value={username} autoFocus inputRef={userRef}
+          err={fe?.at === 'user' ? fe.msg : ''} onChange={(v) => { if (fe?.at === 'user') setFe(null); setUsername(v); }} />
+        <Field id="sh-pass" name="password" label="Password" type="password" ac="current-password" value={password} inputRef={passRef}
+          err={fe?.at === 'pass' ? fe.msg : ''} onChange={(v) => { if (fe?.at === 'pass') setFe(null); setPassword(v); }} />
+        <LooseErr err={err} />
+        <button type="submit" className="btn primary au-wide" id="auGo" disabled={busy} aria-busy={busy || undefined}>{busy ? 'Signing in' : 'Sign in'}</button>
       </form>
-    </div>
+      <p className="au-hint">The first sign-in uses <code>HR_AUTH_USER</code> and <code>HR_AUTH_PASSWORD</code> from the container. Change them from Profile once you are in.</p>
+    </AuthFrame>
   );
 }

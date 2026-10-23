@@ -15,7 +15,6 @@ jest.mock('@/lib/chat', () => ({
 }));
 jest.mock('@/lib/workspace', () => ({ getCurrentWorkspaceRef: () => null }));
 jest.mock('@/lib/analytics', () => ({ track: jest.fn() }));
-jest.mock('@/app/(app)/billing/lib', () => ({ billing: { refresh: jest.fn(), get: () => null } }));
 jest.mock('@/lib/harness', () => ({ oobById: () => null }));
 jest.mock('@/lib/tool-steps', () => ({ fillStep: (s: unknown) => s }));
 jest.mock('reifyui', () => {

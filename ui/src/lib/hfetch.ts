@@ -12,13 +12,21 @@
 // layout guard owns the redirect.
 import { getSession, handleAuthExpired } from '@/lib/auth';
 
+const DEFAULT_TIMEOUT_MS = 30000;
+
 export async function harnessFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const token = getSession()?.token;
   const headers: Record<string, string> = {
     ...(token ? { authorization: `Bearer ${token}` } : {}),
     ...(init.headers as Record<string, string> | undefined),
   };
-  const res = await fetch(path, { cache: 'no-store', ...init, headers });
+  // No request waits forever: a service that stops answering turns into a failed request the page
+  // can show, not a page that stays blank. Streams and long polls pass their own `signal`.
+  const ctl = init.signal ? null : new AbortController();
+  const timer = ctl ? setTimeout(() => ctl.abort(), DEFAULT_TIMEOUT_MS) : null;
+  let res: Response;
+  try { res = await fetch(path, { cache: 'no-store', ...init, headers, signal: init.signal ?? ctl?.signal }); }
+  finally { if (timer) clearTimeout(timer); }
   if (res.status === 401 && token) handleAuthExpired();
   return res;
 }

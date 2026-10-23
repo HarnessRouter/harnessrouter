@@ -23,7 +23,9 @@ from server import _agent_doc_path  # noqa: E402
 
 UI = pathlib.Path(__file__).resolve().parents[2] / "ui" / "src"
 HARNESS_TS = UI / "lib" / "harness.ts"
-SETTINGS_TSX = UI / "components" / "HarnessSettings.tsx"
+# The settings page names the box through settingsModel.mdName, which is instructionFileLabel; the page
+# itself (SetupSettings.tsx) carries no file name of its own.
+SETTINGS = [UI / "components" / "hrui" / "setup" / "settingsModel.ts", UI / "components" / "hrui" / "setup" / "SetupSettings.tsx"]
 
 # The bases that read no workspace file: systemone's instructions travel in the job, qoder's with the
 # hosted session it drives, so there is no file to name and the page says so instead of inventing one.
@@ -56,9 +58,11 @@ def test_every_label_is_the_file_the_runner_writes():
 
 def test_the_page_does_not_carry_a_second_copy_of_the_list():
     # Two lists meant two places to edit and only one of them got edited, which is how this drifted.
-    src = SETTINGS_TSX.read_text()
-    assert "instructionFileLabel(" in src
-    assert "AGENTS.md" not in src and "CLAUDE.md" not in src
+    model, page = (p.read_text() for p in SETTINGS)
+    assert "instructionFileLabel(" in model
+    assert "mdName(" in page
+    for src in (model, page):
+        assert "AGENTS.md" not in src and "CLAUDE.md" not in src
 
 
 def test_the_bases_this_batch_added_are_covered():

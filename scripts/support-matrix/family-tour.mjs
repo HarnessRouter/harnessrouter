@@ -89,12 +89,21 @@ const api = (method, path, body) => page.evaluate(async ({ method, path, body, H
 
 await page.goto(BASE + '/login', { waitUntil: 'load' });
 await page.fill('#sh-user', USER); await page.fill('#sh-pass', PASS);
-await page.waitForSelector('button.sh-login-go:not([disabled])'); await page.click('button.sh-login-go');
+await page.waitForSelector('button[type=submit]:not([disabled])'); await page.click('button[type=submit]');
 await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 30000 });
 
 let sid = SID;
-await page.goto(`${BASE}/harnesses?h=${encodeURIComponent(HARNESS)}${sid ? '&sid=' + sid : ''}`, { waitUntil: 'load' });
-await page.waitForSelector('textarea.wbx-composer-input', { timeout: 30000 });
+// Tasks run on a setup (Studio): SETUP names one, else one of this base with nothing of its own is made for
+// the tour (the base as it comes) and kept, since the tour's session lives in it.
+const hid = process.env.SETUP || (await api('POST', '/v1/harnesses', { name: `tour ${HARNESS} ${Date.now()}`, base: HARNESS })).j?.id;
+if (!hid) throw new Error(`no setup of ${HARNESS} could be made`);
+log(`SETUP ${hid}`);
+await page.goto(`${BASE}/studio/${encodeURIComponent(hid)}${sid ? '?test=' + sid : ''}`, { waitUntil: 'load' });
+await page.waitForSelector('textarea#input', { timeout: 30000 });
+if (!sid) {
+  // a new task: New task until the composer is the new task's ("Send ...")
+  for (let i = 0; i < 10 && !/^Send /.test((await page.getAttribute('textarea#input', 'aria-label')) || ''); i++) { await page.click('button.tk-newb').catch(() => undefined); await page.waitForTimeout(800); }
+}
 
 /** The last turn's server record, once it has settled. */
 // `done` is the live record's word for a turn that has just finished and may still be half-written (the
@@ -109,30 +118,31 @@ async function settle(sidNow, turnsBefore, timeoutS = TURN_CAP_S) {
     await page.waitForTimeout(3000);
   }
   // over the cap: stop it, then read what it had done
-  const stop = page.locator('button.wbx-stop, button:has-text("Stop")').first();
+  const stop = page.locator('button.tk-stop, button.uac-send.is-stop').first();
   if (await stop.count()) await stop.click().catch(() => undefined);
   else { const { rid } = await lastTurn(sidNow); if (rid) await api('POST', `/v1/responses/${rid}/cancel`, {}); }
   for (let i = 0; i < 30; i++) { const { last } = await lastTurn(sidNow); if (last && !RUNNING.includes(last.status)) break; await page.waitForTimeout(2000); }
-  await page.locator('textarea.wbx-composer-input:not([disabled])').waitFor({ timeout: 60000 }).catch(() => undefined);
+  await page.locator('textarea#input:not([disabled])').waitFor({ timeout: 60000 }).catch(() => undefined);
   const { turns, last } = await lastTurn(sidNow);
   return { last, count: turns.length, seconds: timeoutS, timedOut: true };
 }
 async function chooseModel(model) {
-  await page.locator('button.ar2-chip[aria-haspopup="listbox"]').first().click();
-  const opt = page.locator('button.wbx-model-opt', { hasText: new RegExp('^' + model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s|$)') }).first();
+  await page.locator('button.nw-pk').first().click();
+  await page.fill('.pg-mpop .dd-q', model).catch(() => undefined);
+  const opt = page.locator('.pg-mpop [role=option]').filter({ has: page.locator('b.mono', { hasText: new RegExp('^' + model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$') }) }).first();
   // a model the picker does not offer at all (not mapped on this instance) is "not offered", the
   // same as a disabled one; the tour goes on and keeps what it has measured
   try { await opt.waitFor({ timeout: 10000 }); } catch { await page.keyboard.press('Escape'); return false; }
-  const disabled = await opt.isDisabled();
+  const disabled = (await opt.getAttribute('aria-disabled')) === 'true';
   if (disabled) { await page.keyboard.press('Escape'); return false; }
   await opt.click();
   return true;
 }
 async function sendTurn(text) {
   const turnsBefore = sid ? ((await api('GET', `/v1/sessions/${sid}/turns`)).j?.turns || []).length : 0;
-  await page.fill('textarea.wbx-composer-input', text);
-  await page.locator('button.wbx-send').click();
-  if (!sid) { await page.waitForURL((u) => u.searchParams.get('sid'), { timeout: 30000 }); sid = new URL(page.url()).searchParams.get('sid'); }
+  await page.fill('textarea#input', text);
+  await page.locator('button.uac-send:not(.is-stop)').click();
+  if (!sid) { await page.waitForURL((u) => u.searchParams.get('test'), { timeout: 30000 }); sid = new URL(page.url()).searchParams.get('test'); }
   return settle(sid, turnsBefore);
 }
 

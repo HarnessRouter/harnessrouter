@@ -1,0 +1,280 @@
+/* Extensions › Environments (EnvsTab.tsx, EnvSheet.tsx): what the design's envs tab has no drawing for.
+   The list as a table that sheds columns as the window narrows (Files and Packages fold into the line
+   under the name at 1024px and below; on a phone the state and the actions drop under the name), the
+   empty state's three steps, the New environment sheet, and the environment's own sheet: a wide sheet
+   whose head, tabs and foot stay put while the tab between them scrolls, full screen on a phone. Every
+   rule under #hrui, in the design's tokens, so dark mode follows; each outranks the generated rule it
+   adjusts (hrui.css wraps its own in :where, so an id and two classes win). */
+
+/* ── the list ───────────────────────────────────────────────────────────────────────────────────── */
+#hrui .eo-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px 20px;flex-wrap:wrap;margin:0 0 4px}
+#hrui .eo-top .lib-lead{flex:1 1 320px;margin-bottom:14px}
+#hrui .eo-top>.btn{flex:none}
+/* ONE grid for the table (.eo-plate), the head, the rows' box and every row a subgrid of it: a column starts at
+   the same place in every row and under its label, and the actions column is as wide as its widest row, never
+   sized per row. Files (a count and a size) sits right, label and figures, so Packages starts a little further
+   from it. On a phone the rows stack. */
+#hrui .rows-head.eo-head,#hrui .rows .row.eo-row{gap:14px}
+@media (min-width:561px){
+  #hrui .eo-plate{display:grid;grid-template-columns:minmax(0,1fr) 96px minmax(110px,160px) 150px max-content;column-gap:14px}
+  #hrui .eo-plate>.rows-head,#hrui .eo-plate>.rows,#hrui .eo-plate>.rows>.row{grid-column:1/-1;display:grid;grid-template-columns:subgrid;column-gap:14px}
+}
+#hrui .eo-head .eo-c-files,#hrui .eo-row .eo-c-files{text-align:right}
+#hrui .eo-head .eo-c-pk,#hrui .eo-row .eo-c-pk{padding-left:10px}
+#hrui .rows .row.eo-row{align-items:center}
+#hrui .eo-row .t.lib-t{white-space:normal;overflow:visible}
+#hrui .eo-row-t{min-width:0;display:block}
+#hrui .eo-row-t small.sub2{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:2px 0 0}
+#hrui .eo-name{font:inherit;font-weight:600;color:var(--fg);padding:0;text-align:left;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .eo-name:hover{text-decoration:underline}
+#hrui .eo-row .eo-c-files,#hrui .eo-row .eo-c-pk{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .eo-row .eo-c-pk{font-size:12px}
+#hrui .eo-row .eo-c-files small,#hrui .eo-c-st small{display:block;font-size:12px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .eo-c-st{min-width:0}
+#hrui .eo-c-st .pill .dot,#hrui .eo-sheet .pill .dot,#hrui .eo-run .pill .dot{width:6px;height:6px}
+#hrui .eo-narrow{display:none}
+@media (max-width:1024px){
+  #hrui .eo-plate{grid-template-columns:minmax(0,1fr) 150px max-content}
+  #hrui .eo-head .eo-c-files,#hrui .eo-head .eo-c-pk,#hrui .eo-row .eo-c-files,#hrui .eo-row .eo-c-pk{display:none}
+  #hrui .eo-narrow{display:inline}
+}
+@media (max-width:560px){
+  #hrui .rows-head.eo-head{display:none}
+  #hrui .rows .row.eo-row{grid-template-columns:minmax(0,1fr) auto;row-gap:10px}
+  #hrui .eo-row .lib-t{grid-column:1/-1}
+  #hrui .eo-row .eo-c-st{padding-left:42px;display:flex;align-items:center;gap:8px;min-width:0}
+  #hrui .eo-row .eo-c-st small{margin:0}
+  #hrui .eo-row .lib-act{justify-content:flex-end;padding-left:0}
+  #hrui .eo-row-t small.sub2{white-space:normal;overflow-wrap:anywhere}
+}
+
+/* the empty list: you add, built once, every task */
+#hrui .eo-landing{margin:8px 0 0}
+#hrui .eo-flow{list-style:none;margin:0;padding:18px 20px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface);counter-reset:none}
+#hrui .eo-flow li{position:relative;min-width:0;display:flex;flex-direction:column;gap:4px}
+#hrui .eo-flow li+li::before{content:"";position:absolute;left:-12px;top:6px;width:6px;height:6px;border-top:1.5px solid var(--faint);border-right:1.5px solid var(--faint);transform:rotate(45deg)}
+#hrui .eo-k{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+#hrui .eo-flow b{font-size:14px;font-weight:600}
+#hrui .eo-flow small{font-size:13px;line-height:1.5;color:var(--muted)}
+#hrui .eo-flow code{font-family:var(--mono);font-size:12px;background:var(--bg);padding:1px 5px;border-radius:4px}
+#hrui .eo-landing-act{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:16px 0 0}
+#hrui .eo-landing-act .set-help{margin:0}
+@media (max-width:700px){#hrui .eo-flow{grid-template-columns:minmax(0,1fr)}#hrui .eo-flow li+li::before{display:none}}
+
+/* ── shared bits ────────────────────────────────────────────────────────────────────────────────── */
+#hrui .eo-msg{margin:0 0 10px;font-size:13px;line-height:1.45;color:var(--muted);overflow-wrap:anywhere}
+#hrui .eo-msg:empty{display:none}
+#hrui .eo-msg.bad{color:var(--bad)}
+#hrui .eo-msg.warn{color:var(--warn)}
+#hrui .eo-l{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+#hrui .set-f label .muted,#hrui .eo-more summary .muted{font-weight:400;color:var(--faint);margin-left:4px}
+#hrui .eo-dim{font-size:12px;color:var(--faint);white-space:nowrap}
+#hrui .eo-none{margin:0;padding:24px 8px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5}
+#hrui .eo-none.left{text-align:left;padding:14px 4px}
+#hrui .eo-none.bad{color:var(--bad)}
+#hrui .eo-none code{font-family:var(--mono);font-size:12px;background:var(--surface);padding:1px 5px;border-radius:4px}
+#hrui .set-in.bad,#hrui .btn.line.bad{border-color:var(--bad)!important;box-shadow:0 0 0 3px var(--bad-soft)}
+#hrui .eo-two{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:0 12px}
+#hrui .eo-two .set-f{margin:0 0 6px}
+#hrui .eo-span{grid-column:1/-1;margin:0 0 14px}
+#hrui .eo-pick{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0 0 14px}
+#hrui .eo-pick .set-help{margin:0;min-width:0;overflow-wrap:anywhere}
+#hrui .eo-pick .btn svg{width:16px;height:16px}
+#hrui .eo-gap{margin:0 0 14px}
+#hrui .eo-held{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--warn);margin-left:6px;vertical-align:middle}
+#hrui .eo-ib{flex:none;display:grid;place-items:center;width:28px;height:28px;border-radius:7px;color:var(--faint)}
+#hrui .eo-ib:hover{background:var(--surface-2);color:var(--fg)}
+#hrui .eo-ib svg{width:14px;height:14px}
+@media (max-width:560px){#hrui .eo-two{grid-template-columns:minmax(0,1fr)}}
+
+/* ── New environment ────────────────────────────────────────────────────────────────────────────── */
+#hrui .sheet.small-sheet.eo-new{width:min(600px,100%)}
+#hrui .eo-new .set-f{margin:0 0 14px}
+#hrui .eo-src{display:grid;grid-template-columns:repeat(4,auto);justify-content:start}
+#hrui .eo-more{margin:0 0 12px;border-top:1px solid var(--line);padding-top:10px}
+#hrui .eo-more summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--muted);padding:2px 0 8px}
+#hrui .eo-more[open] summary{color:var(--fg)}
+#hrui .eo-new-act{border-top:1px solid var(--line);padding-top:14px}
+#hrui .eo-state{flex:1 1 200px;min-width:0;margin-right:auto;font-size:13px;line-height:1.4;color:var(--muted);overflow-wrap:anywhere}
+#hrui .eo-state.bad{color:var(--bad)}
+#hrui .eo-state:empty{flex-basis:0}
+@media (max-width:560px){#hrui .eo-src{grid-template-columns:repeat(2,minmax(0,1fr));width:100%}#hrui .eo-src button{white-space:nowrap}}
+
+/* ── the environment's sheet ────────────────────────────────────────────────────────────────────── */
+#hrui .sheet.eo-sheet{width:min(1000px,calc(100vw - 48px));max-width:none;height:min(840px,calc(100dvh - 32px));display:flex;flex-direction:column;overflow:hidden;padding:22px 24px 16px}
+#hrui .eo-sheet .sheet-top{flex:none}
+#hrui .eo-sheet .sheet-top h3{overflow-wrap:anywhere}
+#hrui .eo-sheet .sheet-top .sub{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:2px 0 12px}
+#hrui .eo-sub{font-size:13px;color:var(--muted);min-width:0;overflow-wrap:anywhere}
+#hrui .tabs.inline.eo-tabs{flex:none;margin:-5px 0 14px -4px;padding:5px 0 0 4px;gap:24px;overflow-x:auto;scrollbar-width:none}   /* room for a focused tab's ring, which the scrolling row clips (hrui-console.css) */
+#hrui .tabs.inline.eo-tabs::-webkit-scrollbar{display:none}
+#hrui .eo-tabs button{flex:none;white-space:nowrap}
+#hrui .eo-body{flex:1;min-height:0;overflow:auto;margin:0 -6px;padding:2px 6px 10px}
+#hrui .eo-body.eo-on-files{display:flex;flex-direction:column;overflow:hidden}
+#hrui .eo-foot{flex:none;margin-top:0;padding-top:12px;border-top:1px solid var(--line);flex-wrap:wrap}
+#hrui .eo-del{flex:none}
+#hrui .eo-ask{flex:none;margin:8px 0 0}
+#hrui .eo-sheet .mcp-ask .del-go{white-space:nowrap}
+@media (max-width:600px){
+  #hrui .scrim .sheet.eo-sheet,#hrui .scrim .sheet.eo-full{width:100%;max-width:none;height:100dvh;max-height:100dvh;border-radius:0;padding:16px 16px calc(12px + env(safe-area-inset-bottom,0px))}
+  #hrui .scrim .sheet.eo-full{display:flex;flex-direction:column}
+  #hrui .eo-full .eo-new-act{margin-top:auto}
+  #hrui .tabs.inline.eo-tabs{gap:18px}
+  #hrui .eo-foot .btn{flex:1 1 auto}
+  #hrui .eo-foot .eo-state{flex-basis:100%;order:-1}
+}
+
+/* Files: the toolbar, the import panel, then the tree beside the open file */
+#hrui .eo-files-pane{display:flex;flex-direction:column;min-height:0;flex:1}
+#hrui .eo-bar{flex:none;display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;margin:0 0 10px}
+#hrui .eo-find{position:relative;flex:1 1 200px;min-width:0;display:flex;align-items:center}
+#hrui .eo-find svg{position:absolute;left:10px;width:15px;height:15px;color:var(--faint);pointer-events:none}
+#hrui .eo-find input{width:100%;border:1px solid var(--line);border-radius:9px;padding:7px 10px 7px 32px;font-size:13px;background:var(--bg)}
+#hrui .eo-find input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+#hrui .eo-tools{display:flex;align-items:center;gap:2px;flex-wrap:wrap}
+#hrui .eo-tool{display:inline-flex;align-items:center;gap:6px;padding:7px 9px;border-radius:8px;font-size:13px;font-weight:500;color:var(--fg);white-space:nowrap}
+#hrui .eo-tool:hover{background:var(--surface)}
+#hrui .eo-tool:disabled{opacity:.5;cursor:default}
+#hrui .eo-tool svg{width:16px;height:16px;color:var(--muted)}
+@media (max-width:900px){#hrui .eo-tool span{display:none}#hrui .eo-tool:last-child span{display:inline}}
+#hrui .eo-imp{flex:none;display:flex;flex-direction:column;gap:12px;padding:14px;margin:0 0 10px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+#hrui .eo-imp .seg{align-self:flex-start;background:var(--bg)}
+#hrui .eo-imp .eo-two .set-f,#hrui .eo-imp .eo-pick{margin:0}
+#hrui .eo-imp .eo-span{margin:0}
+#hrui .eo-check{display:flex;align-items:flex-start;gap:10px;font-size:14px;cursor:pointer}
+#hrui .eo-check input{margin-top:3px;accent-color:var(--accent)}
+#hrui .eo-check b{display:block;font-weight:600}
+#hrui .eo-check small{display:block;font-size:13px;color:var(--muted)}
+#hrui .eo-imp-act{display:flex;justify-content:flex-end;gap:8px}
+#hrui .eo-new{flex:none;display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+#hrui .eo-new .set-in{flex:1 1 200px;min-width:0;width:auto}
+#hrui .eo-at{font-size:12px;color:var(--faint);overflow-wrap:anywhere}
+#hrui .eo-files-pane>.mcp-ask{flex:none;margin:0 0 10px}
+#hrui .eo-files-pane>.eo-msg{flex:none}
+#hrui .eo-files{flex:1;min-height:260px;display:grid;grid-template-columns:minmax(200px,30%) minmax(0,1fr);border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--bg)}
+#hrui .eo-tree-pane{min-width:0;min-height:0;overflow:auto;padding:6px;border-right:1px solid var(--line);background:var(--surface)}
+#hrui .eo-tree,#hrui .eo-tree ul{list-style:none;margin:0;padding:0}
+#hrui .eo-node{display:flex;align-items:center;min-height:30px;border-radius:8px}
+#hrui .eo-node:hover{background:var(--surface-2)}
+#hrui .eo-node.on{background:var(--bg);box-shadow:inset 0 0 0 1px var(--line)}
+#hrui .eo-item{flex:1;min-width:0;display:flex;align-items:center;gap:5px;padding:5px 6px 5px 4px;border-radius:8px;font-family:var(--mono);font-size:12.5px;line-height:1.4;color:var(--muted);text-align:left}
+#hrui .eo-node.on .eo-item{color:var(--fg)}
+#hrui .eo-item:focus-visible{outline-offset:-2px}
+#hrui .eo-chev{flex:none;width:14px;height:14px;display:grid;place-items:center;color:var(--faint)}
+#hrui .eo-chev svg{width:12px;height:12px;transition:transform .15s}
+#hrui .eo-chev.open svg{transform:rotate(90deg)}
+#hrui .eo-ic{flex:none;display:grid;place-items:center;color:var(--faint)}
+#hrui .eo-ic svg{width:15px;height:15px}
+/* a file's name in the tree shows whole on up to two lines (broken after a hyphen or a dot, or inside one long
+   word), "…" only past them ("qa-e2e-1021-readme.md" was cut at 768; audit, 10-21) */
+#hrui .eo-fn{min-width:0;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+#hrui .eo-n{flex:none;margin-left:auto;padding-left:6px;font-family:var(--sans);font-size:11px;color:var(--faint)}
+#hrui .eo-node .eo-ib{width:26px;height:26px;margin-right:2px;opacity:0;transition:opacity .12s}
+#hrui .eo-node:hover .eo-ib,#hrui .eo-node:focus-within .eo-ib,#hrui .eo-node.on .eo-ib{opacity:1}
+@media (hover:none){#hrui .eo-node .eo-ib{opacity:1}}
+@media (prefers-reduced-motion:reduce){#hrui .eo-chev svg,#hrui .eo-node .eo-ib{transition:none}}
+#hrui .eo-view{min-width:0;min-height:0;display:flex;flex-direction:column}
+#hrui .eo-view-head{flex:none;display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);min-width:0}
+#hrui .eo-view-head code{flex:0 1 auto;min-width:0;font-family:var(--mono);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .eo-view-head .link-q{margin-left:auto;white-space:nowrap}
+#hrui .eo-view>.eo-none{margin:auto 0}
+#hrui .eo-view-sk{padding:16px}
+#hrui .eo-code{flex:1;min-height:0;display:grid;grid-template-columns:auto minmax(0,1fr)}
+#hrui .eo-ln{margin:0;padding:12px 10px 12px 14px;min-width:42px;text-align:right;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--faint);overflow:hidden;user-select:none;white-space:pre}
+#hrui .eo-code textarea{display:block;width:100%;height:100%;border:0;resize:none;outline:none;padding:12px 14px 12px 6px;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--fg);background:transparent;white-space:pre;overflow:auto;tab-size:2}
+#hrui .eo-files:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+#hrui .eo-start{flex:none;padding:22px;border:1px dashed var(--line);border-radius:14px;text-align:center}
+#hrui .eo-start h4{margin:0 0 6px;font-size:16px;font-weight:600}
+#hrui .eo-start p{margin:0 auto 16px;max-width:52ch;font-size:13px;line-height:1.5;color:var(--muted)}
+#hrui .eo-choices{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;text-align:left}
+#hrui .eo-choice{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--bg);min-width:0}
+#hrui .eo-choice:hover{border-color:var(--accent)}
+#hrui .eo-choice svg{width:20px;height:20px;color:var(--accent);margin-bottom:4px}
+#hrui .eo-choice b{font-size:14px;font-weight:600}
+#hrui .eo-choice small{font-size:12px;line-height:1.45;color:var(--muted)}
+#hrui .eo-or{display:block;margin-top:12px;font-size:12px;color:var(--faint)}
+@media (max-width:900px){#hrui .eo-choices{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){
+  #hrui .eo-files{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(120px,38%) minmax(0,1fr)}
+  #hrui .eo-tree-pane{border-right:0;border-bottom:1px solid var(--line)}
+}
+@media (max-width:420px){#hrui .eo-choices{grid-template-columns:minmax(0,1fr)}#hrui .eo-start{padding:16px}}
+
+/* Packages */
+#hrui .eo-pk-bar{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;margin:0 0 12px}
+#hrui .eo-pk-bar .seg button{font-family:var(--mono)}
+#hrui .eo-pk-bar .seg button:disabled{opacity:.45;cursor:not-allowed}
+#hrui .eo-c{font-family:var(--sans);font-size:11px;color:var(--faint);margin-left:2px}
+#hrui .eo-rt{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);white-space:nowrap}
+#hrui .eo-rt select.set-in{width:auto;min-width:110px;-webkit-appearance:none;appearance:none;padding-right:28px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23919199' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;background-size:12px}
+#hrui .eo-add{display:flex;gap:8px;max-width:520px;margin:0 0 6px}
+#hrui .eo-add .set-in{flex:1;min-width:0}
+#hrui .eo-add .btn{flex:none}
+#hrui .eo-pkgs{list-style:none;margin:6px 0 0;padding:0;border-top:1px solid var(--line)}
+#hrui .eo-pkg{display:grid;grid-template-columns:minmax(0,1fr) auto 28px;align-items:center;gap:12px;padding:8px 4px 8px 8px;border-bottom:1px solid var(--line)}
+#hrui .eo-pkg-n{font-family:var(--mono);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .eo-pkg-v{display:flex;align-items:baseline;gap:8px;font-size:13px;color:var(--muted);justify-content:flex-end;flex-wrap:wrap;text-align:right}
+#hrui .eo-pkg-v em{font-style:normal;font-size:12px;color:var(--warn);background:var(--warn-soft);border-radius:999px;padding:1px 8px;white-space:nowrap}
+#hrui .eo-all{margin:18px 0 0}
+#hrui .eo-all summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)}
+#hrui .eo-all summary .count{font-weight:500;color:var(--faint);margin-left:4px}
+#hrui .eo-all ul{list-style:none;margin:8px 0 0;padding:0;max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+#hrui .eo-all li{display:flex;justify-content:space-between;gap:12px;padding:6px 10px;border-top:1px solid var(--line);font-size:12.5px}
+#hrui .eo-all li:first-child{border-top:0}
+#hrui .eo-all code{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .eo-all li .mono{color:var(--muted);flex:none}
+@media (max-width:520px){#hrui .eo-pkg{grid-template-columns:minmax(0,1fr) 28px;row-gap:2px}#hrui .eo-pkg-v{grid-row:2;justify-content:flex-start;text-align:left}#hrui .eo-pkg .eo-ib{grid-row:1/3;grid-column:2}}
+
+/* Builds: the build shown (live while it runs), then every version */
+#hrui .eo-run{border:1px solid var(--line);border-radius:14px;padding:14px;margin:0 0 18px}
+#hrui .eo-run.is-failed{border-color:var(--bad-soft);box-shadow:inset 3px 0 0 var(--bad)}
+#hrui .eo-run-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px}
+#hrui .eo-run-head b{font-size:15px;font-weight:600}
+#hrui .eo-run-head .link-q{margin-left:auto}
+#hrui .eo-run-line{margin:6px 0 10px;font-size:13px;line-height:1.5;color:var(--muted);overflow-wrap:anywhere}
+#hrui .eo-run-line.bad{color:var(--bad)}
+#hrui .eo-run-line.bad b{color:var(--bad)}
+#hrui .eo-term{margin:0;padding:12px 14px;min-height:120px;max-height:340px;overflow:auto;background:#0f1320;color:#e6e9f2;border-radius:10px;font-family:var(--mono);font-size:12.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+#hrui .eo-term .cmd{color:#9ecbff}
+#hrui .eo-term:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#hrui .eo-cursor{display:inline-block;width:8px;height:14px;vertical-align:-2px;background:#e6e9f2;animation:eo-blink 1s steps(1) infinite}
+@keyframes eo-blink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){#hrui .eo-cursor{animation:none}}
+#hrui .eo-h{margin:0 0 8px;font-size:14px;font-weight:600}
+/* Versions: the head sits outside the list, so every column is one fixed width or a share of the room, never sized by
+   a row's own content; the actions keep 170px at every width and wrap inside it */
+#hrui .eo-v{display:grid;grid-template-columns:minmax(120px,1.2fr) 96px minmax(110px,1fr) 80px 80px 96px 170px;gap:12px;align-items:center;padding:9px 8px;font-size:13px}
+#hrui .eo-vh{padding:4px 8px 6px;font-size:12px;color:var(--faint)}
+#hrui .eo-vt{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+#hrui .eo-vt .eo-v{border-bottom:1px solid var(--line)}
+#hrui .eo-vt .eo-v.shown{background:var(--surface)}
+#hrui .eo-c-ver{min-width:0;display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
+#hrui .eo-c-ver b{font-weight:600;white-space:nowrap}
+#hrui .eo-inuse{font-size:11px;padding:1px 8px;color:var(--ok);border-color:var(--ok-soft);background:var(--ok-soft)}
+#hrui .eo-c-sub{display:none;flex-basis:100%;font-size:12px;color:var(--faint)}
+#hrui .eo-v .eo-c-start,#hrui .eo-v .eo-c-took,#hrui .eo-v .eo-c-files,#hrui .eo-v .eo-c-pk{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .eo-vh span{color:var(--faint)!important}
+#hrui .eo-c-act{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}
+#hrui .eo-c-act .link-q[aria-pressed="true"]{color:var(--fg);font-weight:600}
+#hrui .eo-v-err{grid-column:1/-1;font-size:12px;color:var(--bad);margin:-2px 0 0;overflow-wrap:anywhere}
+@media (max-width:1024px){
+  #hrui .eo-v{grid-template-columns:minmax(120px,1.2fr) 96px minmax(110px,1fr) 80px 170px}
+  #hrui .eo-v .eo-c-files,#hrui .eo-v .eo-c-pk{display:none}
+}
+@media (max-width:768px){
+  #hrui .eo-v{grid-template-columns:minmax(0,1fr) 90px 170px}
+  #hrui .eo-v .eo-c-start,#hrui .eo-v .eo-c-took{display:none}
+  #hrui .eo-c-sub{display:block}
+}
+@media (max-width:520px){
+  #hrui .eo-vh{display:none}
+  #hrui .eo-v{grid-template-columns:minmax(0,1fr) auto;row-gap:8px}
+  #hrui .eo-v .eo-c-act{grid-column:1/-1;justify-content:flex-start}
+}
+
+/* Details */
+#hrui .eo-details{max-width:640px}
+#hrui .eo-details .set-f{margin:0 0 18px}
+#hrui .eo-details .set-ro code{font-family:var(--mono);font-size:13px;overflow-wrap:anywhere}
+#hrui .eo-users{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px 16px}
+#hrui .eo-users .link-q.inl{font-size:14px}

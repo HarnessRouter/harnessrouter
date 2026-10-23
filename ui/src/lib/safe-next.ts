@@ -1,4 +1,4 @@
-// Where a sign-in may send the browser next: a path on this site, or the default.
+// Where a sign-in may send the browser next: a path on this site, or the default (Start).
 //
 // The value comes from the address bar (`/login?next=...`), so anyone can write it into a link and
 // hand it to someone about to sign in. Sent to another site, that person lands there straight after
@@ -13,7 +13,7 @@
 // The middleware only ever writes a plain path here, so nothing it sends is refused.
 const SITE = 'https://site.invalid';
 
-export function safeNext(raw: string | null | undefined, fallback = '/harnesses'): string {
+export function safeNext(raw: string | null | undefined, fallback = '/start'): string {
   const v = String(raw ?? '');
   if (!v.startsWith('/') || v.startsWith('//')) return fallback;
   if (/[\\\u0000-\u001f\u007f]/.test(v)) return fallback;

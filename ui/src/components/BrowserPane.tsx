@@ -7,9 +7,12 @@
 //
 // The live URL is a credential (whoever holds it controls the browser): it is read through the
 // session's own route, kept in component state, and never written anywhere else.
+//
+// Once the browser has closed, a host can show what one of its steps recorded in the screen's place
+// (`closedView`: the redesigned task view opens a past browser step there, a screenshot or the step's
+// own details) instead of the empty state; never a stream that has stopped.
 'use client';
 import React, { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { harnessFetch } from '@/lib/hfetch';
 import { authHeaders } from '@/lib/chat';
 import { getPaneState, setPaneState, type BrowserState, type PaneMode } from '@/lib/conversation';
@@ -89,10 +92,12 @@ function GhostCursor({ point, viewport, tool, at, host }: {
   );
 }
 
-export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, onResizeStart }: {
+export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, onResizeStart, closedView }: {
   harnessId: string; sessionId: string; live: BrowserState | undefined; busy: boolean; mode: PaneMode; onClose: () => void;
   /** docked: dragging the card's left edge resizes its column (the conversation takes the rest) */
   onResizeStart?: (e: React.MouseEvent) => void;
+  /** while no browser is open: a past step's record in the screen's place (its status line and body) */
+  closedView?: { status: string; body: React.ReactNode } | null;
 }) {
   const [info, setInfo] = useState<BrowserInfo | null>(null);
   const [pending, setPending] = useState(false);
@@ -140,13 +145,13 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, o
   };
   const setMode = (m: PaneMode) => setPaneState(harnessId, { mode: m });
 
-  const status = !open ? 'Not open'
+  const status = !open ? (closedView ? closedView.status : 'Not open')
     : control === 'user' ? (held ? 'You have the browser. The agent is waiting.' : 'You have the browser.')
     : acting ? (live?.lastTool ? `The agent is browsing (${live.lastTool})` : 'The agent is browsing')
     : 'The agent has the browser';
 
   const card = (
-    <div className={'wbx-browser-card is-' + mode + (open ? (control === 'user' ? ' is-user' : ' is-agent') : ' is-empty') + (acting ? ' is-acting' : '')}
+    <div className={'wbx-browser-card is-' + mode + (open ? (control === 'user' ? ' is-user' : ' is-agent') : closedView ? ' is-record' : ' is-empty') + (acting ? ' is-acting' : '')}
          role="region" aria-label="Browser">
       {mode === 'docked' && onResizeStart && (
         <div className="wbx-browser-grip" onMouseDown={onResizeStart} title="Drag to resize" aria-hidden="true" />
@@ -172,7 +177,9 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, o
           <Icon d={ICONS.close} />
         </button>
       </div>
-      {!open ? (
+      {!open && closedView ? (
+        <div className="wbx-browser-record">{closedView.body}</div>
+      ) : !open ? (
         <div className="wbx-browser-empty">
           <div className="wbx-browser-empty-art" aria-hidden="true">
             <svg viewBox="0 0 220 150" width="220" height="150" fill="none">
@@ -186,8 +193,7 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, o
               <path d="M148 98l14 30 5-11 11-5z" className="art-cursor" />
             </svg>
           </div>
-          <p className="wbx-browser-empty-title">Nothing to watch yet</p>
-          <p>When the agent opens a page for this task it streams here, live. Watch it work, take it over from the row above or with a click on the screen, and hand it back when you are done.</p>
+          <p className="wbx-browser-empty-title">When the agent opens a page, it shows here.</p>
         </div>
       ) : (
         <div className={'wbx-browser-stream' + (mode === 'docked' ? '' : ' is-fit')}>
@@ -218,6 +224,8 @@ export function BrowserPane({ harnessId, sessionId, live, busy, mode, onClose, o
       )}
     </div>
   );
-  if (mode === 'docked') return card;
-  return typeof document === 'undefined' ? null : createPortal(card, document.body);
+  // One place in the tree whatever the mode: full screen is a class on the same card (position:
+  // fixed), never a portal. Moving the card re-mounts its iframe and the vendor's live view
+  // reconnects, three seconds of dark screen on every switch (measured on hosted, 2026-09-27).
+  return card;
 }

@@ -1,0 +1,54 @@
+/* The MCP server sheet (McpSheet.tsx): what the design's mcpHtml has no drawing for. The test's row
+   and its answer, the server's tools (scrolling past about eight), the header references offered,
+   the setups it goes to, and Remove asked in the sheet. Every rule under #hrui, in the design's
+   tokens, so dark mode follows. */
+#hrui .mcp-x{width:min(600px,100%)}
+#hrui .mcp-x .mcp-kind{font-weight:500;font-size:12px;margin-left:6px;padding:1px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent)}
+#hrui .mcp-x .set-help{margin:6px 0 0}
+#hrui .mcp-x .set-help code{font-size:12px}
+#hrui .mcp-x .mcp-warn{color:var(--warn)}
+#hrui .mcp-hdrs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+#hrui .mcp-hdr{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--muted);cursor:pointer}
+#hrui .mcp-hdr:hover{border-color:var(--accent);color:var(--accent)}
+#hrui .mcp-hdr code{font-size:12px}
+#hrui .mcp-test{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:2px 0 10px}
+#hrui .mcp-test .btn{flex:none}
+#hrui .mcp-st{margin:0!important;min-width:0;flex:1 1 220px;overflow-wrap:anywhere}
+#hrui .mcp-st.ok{color:var(--ok)}
+#hrui .mcp-st.ok b{color:var(--fg);font-weight:600}
+#hrui .mcp-st.bad{color:var(--bad)}
+#hrui .mcp-st-note{color:var(--muted)}
+#hrui .mcp-tools{list-style:none;margin:0 0 14px;padding:0;border:1px solid var(--line);border-radius:12px;max-height:340px;overflow:auto}
+#hrui .mcp-tool{display:flex;flex-direction:column;gap:2px;padding:9px 12px;border-top:1px solid var(--line);min-width:0}
+#hrui .mcp-tool:first-child{border-top:0}
+#hrui .mcp-tool b{font-size:13px;font-weight:600;overflow-wrap:anywhere}
+#hrui .mcp-tool small{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .hrui-skel.mcp-tools{display:block}
+#hrui .mcp-to-l{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+#hrui .mcp-to .pick-list{max-height:248px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:4px}
+#hrui .mcp-to .pick-list.bad{border-color:var(--bad)}
+#hrui .mcp-opt{gap:10px}
+#hrui .mcp-opt .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .mcp-opt .grow small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .mcp-opt .h-logo{flex:none;width:18px;height:18px;margin:0}
+/* Add to setups (ext/AddToSheet): the same rows, a row's note (why it cannot, or what to know) wraps */
+#hrui .at-list .mcp-opt .grow,#hrui .at-list .mcp-opt .grow small{white-space:normal;overflow-wrap:anywhere}
+#hrui .at-list .mcp-opt{align-items:flex-start}
+#hrui .at-list .mcp-opt .mcp-box,#hrui .at-list .mcp-opt .h-logo{margin-top:1px}
+#hrui .at-list .mcp-opt:disabled{cursor:default}
+#hrui .at-list .mcp-opt:disabled:not(.on){opacity:.6}
+#hrui .mcp-box{flex:none;width:18px;height:18px;border-radius:5px;border:1.5px solid var(--line);display:grid;place-items:center;color:#fff;background:var(--bg)}
+#hrui .mcp-opt.on .mcp-box{background:var(--accent);border-color:var(--accent)}
+#hrui .mcp-ask{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;margin:6px 0 0;padding:12px 14px;border-radius:12px;background:var(--bad-soft,var(--surface));font-size:14px}
+#hrui .mcp-ask>span:first-child{flex:1 1 240px;min-width:0}
+#hrui .mcp-ask-b{display:flex;gap:8px;margin-left:auto}
+#hrui .mcp-act{flex-wrap:wrap;align-items:center}
+#hrui .mcp-act .mcp-rm{margin-right:auto}
+#hrui .mcp-say{margin:0!important;flex:1 1 160px;min-width:0;text-align:right}
+#hrui .mcp-say.bad{color:var(--bad)}
+#hrui .mcp-say:empty{flex:1 1 0}
+@media (max-width:520px){
+  #hrui .mcp-say{flex-basis:100%;text-align:left;order:-1}
+  #hrui .mcp-say:empty{display:none}
+  #hrui .mcp-tools{max-height:260px}
+}
