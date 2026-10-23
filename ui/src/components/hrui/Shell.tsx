@@ -139,6 +139,12 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
       wsPop.current.style.left = narrow ? '8px' : `${r.right + 8}px`;
       wsPop.current.style.top = narrow ? `${r.bottom + 6}px` : `${r.top}px`;
     }
+    if (wsOpen && wsPop.current) {
+      // never past the window's foot: the workspaces scroll inside it, its two actions stay in reach
+      // (an organization with many workspaces could not reach New workspace, 2026-10-23)
+      const top = wsPop.current.getBoundingClientRect().top;
+      wsPop.current.style.maxHeight = `${Math.max(160, window.innerHeight - top - 8)}px`;
+    }
     if (meOpen && mePop.current && meBtn.current) {
       const r = meBtn.current.getBoundingClientRect();
       const st = mePop.current.style;
@@ -206,14 +212,18 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
             </button>
           ) : waiting ? (
             <Skel label="Loading workspaces"><SkRows n={2} /></Skel>
-          ) : workspaces.map((w) => (
-            <button key={w.id || 'default'} type="button" className="ws-row" role="menuitem"
-              onClick={() => { setWsOpen(false); if (w.id !== current.id) { setCurrent(w.id); window.location.assign('/studio'); } else go('/studio'); }}>
-              <WsBadge name={w.name} size={30} />
-              <span className="grow"><b>{w.name}</b>{w.description ? <small>{w.description}</small> : null}</span>
-              {w.id === current.id ? <span className="chk">{Ic.check}</span> : null}
-            </button>
-          ))}
+          ) : (
+            <div className="ws-list">
+              {workspaces.map((w) => (
+                <button key={w.id || 'default'} type="button" className="ws-row" role="menuitem"
+                  onClick={() => { setWsOpen(false); if (w.id !== current.id) { setCurrent(w.id); window.location.assign('/studio'); } else go('/studio'); }}>
+                  <WsBadge name={w.name} size={30} />
+                  <span className="grow"><b>{w.name}</b>{w.description ? <small>{w.description}</small> : null}</span>
+                  {w.id === current.id ? <span className="chk">{Ic.check}</span> : null}
+                </button>
+              ))}
+            </div>
+          )}
           {!known ? null : (<>
             <hr />
             <button type="button" className="ws-row plain" role="menuitem" onClick={() => openSheet('people')}>Workspace settings</button>

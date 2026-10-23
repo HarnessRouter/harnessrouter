@@ -1032,3 +1032,9 @@
 #hrui .dc-b.on>svg{color:var(--accent)}
 #hrui .dc-dot{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg)}
 #hrui .dc-pop{min-width:232px;white-space:nowrap}
+
+/* the workspace menu never runs off the window (Shell sets its height to the room it has): its
+   workspaces scroll inside it, and Workspace settings and New workspace stay at its foot */
+#hrui .ws-pop:not(.me-pop){display:flex;flex-direction:column;overscroll-behavior:contain}
+#hrui .ws-pop .ws-list{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow-y:auto}
+#hrui .ws-pop:not(.me-pop)>hr,#hrui .ws-pop:not(.me-pop)>.ws-row.plain{flex:none}
