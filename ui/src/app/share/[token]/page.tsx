@@ -34,7 +34,11 @@ export default function SharePage() {
   const [meta, setMeta] = useState<ShareMeta | null>(null);
   const [turns, setTurns] = useState<ShareTurn[] | null>(null);
   const [files, setFiles] = useState<ShareFile[] | null>(null);
+  // the link is gone (the server says 404: revoked, or never shared), or it could not be read just
+  // now (any other answer, or none): only the first may say the link is dead (#573)
   const [gone, setGone] = useState(false);
+  const [metaFailed, setMetaFailed] = useState(false);
+  const [metaTry, setMetaTry] = useState(0);
   // the conversation could not be read (the service answered an error): said, with a way to read
   // again, never drawn as a conversation with nothing in it
   const [turnsFailed, setTurnsFailed] = useState(false);
@@ -47,16 +51,17 @@ export default function SharePage() {
     if (!token) return;
     let alive = true;
     setFilesFailed(false);
+    setMetaFailed(false);
     fetch(`/api/share/${encodeURIComponent(token)}/meta`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setMeta(d); })
-      .catch(() => { if (alive) setGone(true); });
+      .catch((e: Error) => { if (alive) { if (e.message === '404') setGone(true); else setMetaFailed(true); } });
     fetch(`/api/share/${encodeURIComponent(token)}/files`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setFiles(d.files || []); })
       .catch(() => { if (alive) { setFiles(null); setFilesFailed(true); } });
     return () => { alive = false; };
-  }, [token]);
+  }, [token, metaTry]);
   useEffect(() => {
     if (!token) return;
     let alive = true;
@@ -76,6 +81,18 @@ export default function SharePage() {
       return `/${encodeURIComponent(meta.harness_id)}/${encodeURIComponent(meta.session_id)}/workspace/${enc}`;
     return `/api/share/${encodeURIComponent(token)}/f/${enc}`;
   }, [token, meta]);
+
+  if (metaFailed && !meta) {
+    return (
+      <main style={{ marginLeft: 0, height: '100vh', overflowY: 'auto' }}>
+        <div className="page" style={{ maxWidth: 720 }}>
+          <div className="page-header" role="alert"><div><h1>This shared Task could not be loaded just now</h1>
+            <p>Try again in a moment.</p>
+            <button type="button" className="hr-btn" onClick={() => { setMetaTry((n) => n + 1); setTurnsTry((n) => n + 1); }}>Try again</button></div></div>
+        </div>
+      </main>
+    );
+  }
 
   if (gone) {
     return (

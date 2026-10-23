@@ -75,3 +75,34 @@ test('a Task with no artifacts still says so plainly', async () => {
   expect(el.textContent).toContain('0 files');
   expect(alertWith('The artifacts could not be loaded just now.')).toBeUndefined();
 });
+
+// #573: the link could not be read just now (503) is not a link that is gone (404). Only a 404 may say
+// the link was revoked or never existed; anything else says to try again, and Try again reads it again.
+test('a share the server could not read just now says so with Try again, never that the link is gone', async () => {
+  let metaAnswer = 503;
+  global.fetch = jest.fn((url: string) => (String(url).endsWith('/meta')
+    ? (metaAnswer === 503 ? json(503, { error: { type: 'server_error' } }) : json(200, { title: 'Pet Food' }))
+    : String(url).endsWith('/files') ? json(200, { files: [] })
+    : json(200, { turns: [{ id: 'resp_1', user: 'Pet food', assistant: 'Done.' }] }))) as unknown as typeof fetch;
+  el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
+  await act(async () => { root.render(<SharePage />); });
+  await flush();
+  expect(el.textContent).toContain('This shared Task could not be loaded just now');
+  expect(el.textContent).not.toContain('unavailable');
+  expect(el.textContent).not.toContain('revoked');
+  metaAnswer = 200;
+  await act(async () => { (Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Try again') as HTMLButtonElement).click(); });
+  await flush();
+  expect(el.textContent).toContain('Pet Food');
+  expect(el.textContent).toContain('Done.');
+});
+
+test('a link the server says is gone (404) says it is unavailable', async () => {
+  global.fetch = jest.fn((url: string) => (String(url).endsWith('/meta') ? json(404, { detail: 'share not found' })
+    : json(404, { detail: 'share not found' }))) as unknown as typeof fetch;
+  el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
+  await act(async () => { root.render(<SharePage />); });
+  await flush();
+  expect(el.textContent).toContain('This shared Task is unavailable');
+  expect(el.textContent).not.toContain('could not be loaded just now');
+});
