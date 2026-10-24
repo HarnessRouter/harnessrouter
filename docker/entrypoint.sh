@@ -34,6 +34,13 @@ mkdir -p "$DATA_DIR"
 # when the volume is empty — so an image-time mkdir is invisible on every existing install.
 export HARNESS_WORKSPACE="${HARNESS_WORKSPACE:-$DATA_DIR/workspaces}"
 mkdir -p "$HARNESS_WORKSPACE"
+# Which checkpoint each workspace holds, on the volume beside them: in /tmp a restart forgot it, and
+# the next turn restored the last checkpoint over a workspace that had survived (#505). Beside the
+# workspace root, not in it: the idle-workspace reaper treats every directory there as a session.
+# The runner's own (root), like the markers it writes.
+export HR_WS_MARKER_DIR="${HR_WS_MARKER_DIR:-$DATA_DIR/ws-markers}"
+mkdir -p "$HR_WS_MARKER_DIR"
+chmod 700 "$HR_WS_MARKER_DIR"
 
 # The write-wall, in file modes. Idempotent and non-recursive, so it costs nothing on a volume
 # that already has it and repairs one that predates it. Session directories themselves are owned

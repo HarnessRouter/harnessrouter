@@ -60,15 +60,23 @@ async function freshPage() {
   }
   await sleep(1500); await dismissWelcome();
 }
-const pill = () => page.evaluate(() => document.querySelector('.hx-pill')?.textContent?.trim().toLowerCase() || '');
-const transcript = () => page.evaluate(() => (document.querySelector('.wbx-conv-msgs')?.innerText || '').replace(/\s+/g, ' '));
-const files = () => page.evaluate(() => [...document.querySelectorAll('.wbx-filecard-name')].map((x) => x.textContent.trim()));
+// the console's own word for the open task's last turn (the turn's data-status: running, done, failed, ...)
+const pill = () => page.evaluate(() => [...document.querySelectorAll('article.uac-turn')].pop()?.getAttribute('data-status') || '');
+const transcript = () => page.evaluate(() => (document.querySelector('.uac-thread')?.innerText || '').replace(/\s+/g, ' '));
+const files = () => page.evaluate(() => [...document.querySelectorAll('.uic-filecard-name')].map((x) => x.textContent.trim()));
 // a modal that took over the page mid-turn (an in-app alert); the first-visit welcome is dismissed at login
+// A new task on setup `hid`: its page, then New task until the composer is the new task's ("Send ...").
+async function openNewTask(hid) {
+  await page.goto(`${BASE}/studio/${hid}`, { waitUntil: 'domcontentloaded' }); await sleep(3000);
+  const fresh = () => page.evaluate(() => /^Send /.test(document.querySelector('textarea#input')?.getAttribute('aria-label') || ''));
+  for (let i = 0; i < 10 && !(await fresh()); i++) { await page.click('button.tk-newb').catch(() => {}); await sleep(800); }
+}
 const door = () => page.evaluate(() => document.querySelector('[role=dialog]:not(.welcome-overlay)')?.innerText?.replace(/\s+/g, ' ').trim() || '');
 const dismissWelcome = async () => { for (let i = 0; i < 4 && (await page.locator('.welcome-overlay').count()); i++) { await page.locator('.welcome-overlay .welcome-wide-close').click().catch(() => {}); await sleep(600); } };
 const TERMINAL = new Set(['done', 'completed', 'failed', 'error', 'cancelled', 'incomplete', 'max_turns', 'timeout']);
 const LIVE = new Set(['running', 'starting', 'in_progress', 'queued']);
-const sidOf = () => new URL(page.url()).searchParams.get('sid') || '';
+// the open task's session id is the page's ?test= (/studio/<setup>?test=<session>)
+const sidOf = () => new URL(page.url()).searchParams.get('test') || '';
 // the server's own record, read through the console's proxy (same cookie). The session detail is
 // the cheap read (vertex plus card) and is what the wait polls; the turns feed rebuilds a live turn
 // from its trace chunks on every read, so it is read only once the turn has settled.
@@ -82,14 +90,14 @@ async function turn(text, { maxS = 420, expectFiles = false } = {}) {
   const mark = text.slice(0, 60);
   // the composer refuses a message while the previous turn's stream is still open (its Send is
   // disabled): wait for it to take input again, or the message is dropped on the floor
-  const ready = () => page.evaluate(() => { const b = document.querySelector('.wbx-composer .wbx-send, .wbx-composer .uic-send'); const ta = document.querySelector('.wbx-composer textarea'); return !!ta && !ta.disabled && !!b && !b.disabled; });
+  const ready = () => page.evaluate(() => { const b = document.querySelector('button.uac-send'); const ta = document.querySelector('textarea#input'); return !!ta && !ta.disabled && !!b && !b.disabled && !b.classList.contains('is-stop'); });
   const sid0 = sidOf(); const n0 = sid0 ? ((await turnsOf(sid0)) || []).length : 0;
   const before = await transcript(); const sentAt = () => transcript().then((t) => t.lastIndexOf(mark));
   // send, and see the message land in the transcript (the console shows it at once); a message a
   // re-render swallowed (a model pick rebuilds the composer) is typed and sent once more
   let shown = false;
   for (let attempt = 0; attempt < 2 && !shown; attempt++) {
-    await page.fill('.wbx-composer textarea, textarea', text);
+    await page.fill('textarea#input', text);
     let canSend = await ready(); for (let i = 0; i < 90 && !canSend; i++) { await sleep(1000); canSend = await ready(); }
     if (!canSend) return { ok: false, s: secs(), tail: '', why: 'the composer stayed busy for 90 s after the previous turn settled' };
     await page.keyboard.press('Enter');
@@ -109,7 +117,7 @@ async function turn(text, { maxS = 420, expectFiles = false } = {}) {
   for (let i = 0; i < 10; i++) { turns = await turnsOf(sid); last = turns && turns.length > n0 && String((turns[turns.length - 1] || {}).user || '').trim() === text.trim() ? turns[turns.length - 1] : null; const stored = !!(last && TERMINAL.has(String(last.status)) && (last.assistant || last.error || last.incomplete_reason || (last.files || []).length)); if (stored && (!expectFiles || (last.files || []).length)) break; await sleep(3000); }
   // then let the console render what the server stored
   const head = String(last?.assistant || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-  for (let i = 0; i < 12; i++) { const t = await transcript(); const from = t.lastIndexOf(mark); if (!/Working…/.test(t.slice(from)) && (!head || t.slice(from).includes(head))) break; await sleep(1500); }
+  for (let i = 0; i < 12; i++) { const t = await transcript(); const from = t.lastIndexOf(mark); if ((await pill()) !== 'running' && (!head || t.slice(from).includes(head))) break; await sleep(1500); }
   await sleep(1500);
   const t = await transcript(); const from = t.lastIndexOf(mark); const tail = t.slice(from >= 0 ? from : before.length).trim().slice(-400);
   const status = String(last?.status || (turns && turns.length > n0 ? st : 'none'));
@@ -137,13 +145,17 @@ try {
   }
   await sleep(1500); await dismissWelcome();
   for (const h of process.env.HARNESSES.split(',')) {
-    await page.goto(`${BASE}/harnesses?h=${h}`, { waitUntil: 'domcontentloaded' }); await sleep(3500); await dismissWelcome();
-    for (let i = 0; i < 10 && !(await page.locator('.wbx-conv-main.is-hero').count()); i++) { await page.click('button:has-text("New task")').catch(() => {}); await sleep(800); }
+    // Tasks run on a setup (Studio): one of this base with nothing of its own (no instructions, tools or
+    // plugins), which is the base as it comes, made for the column and deleted after it.
+    const hid = await page.evaluate(async (base) => { const r = await fetch('/api/harness/v1/harnesses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: `matrix ${base} ${Date.now()}`, base }) }); return r.ok ? (await r.json()).id : ''; }, h).catch(() => '');
+    if (!hid) { log(`HARNESS ${h} could not be made into a setup`); continue; }
+    await openNewTask(hid);
     // the menu starts from the console's placeholder list and takes the gateway's catalog when it
     // lands: the catalog says how many models this harness serves, so wait until the menu has them
     const backend = h === 'claude-code' ? 'claude' : h;
     const served = await page.evaluate(async (b) => { const r = await fetch('/api/harness/v1/models'); const j = await r.json(); return ((((j || {}).backends || {})[b] || {}).models || []).length; }, backend).catch(() => 0);
-    const readMenu = () => page.evaluate(() => [...document.querySelectorAll('.wbx-model-opt')].map((o) => ({ id: o.querySelector('span')?.textContent.trim(), ok: !o.disabled })));
+    // the model picker's options: a model id in its own mono label (the first row, "Setup default", has none)
+    const readMenu = () => page.evaluate(() => [...document.querySelectorAll('.pg-mpop [role=option]')].filter((o) => o.querySelector('b.mono')).map((o) => ({ id: o.querySelector('b.mono').textContent.trim(), ok: o.getAttribute('aria-disabled') !== 'true' })));
     // The option is matched ANCHORED, the way family-tour.mjs does it. `hasText: id` is a substring
     // and `.first()` takes the earliest hit, so an id contained in an earlier, longer one was never
     // reachable: on grok's catalog (2026-09-29) `claude-opus-5` clicked `claude-opus-5.5` and
@@ -151,13 +163,14 @@ try {
     // rec.substituted filters on `t.model === m` every turn was filtered out and the row reported no
     // substitution at all — the one finding this suite exists to catch, rendered clean.
     const pickModel = async (id) => {
-      await page.click('.ar2-chip'); await sleep(500);
-      const opt = page.locator('.wbx-model-opt', { hasText: new RegExp('^' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s|$)') }).first();
+      await page.click('button.nw-pk'); await sleep(500);
+      await page.fill('.pg-mpop .dd-q', id); await sleep(300);
+      const opt = page.locator('.pg-mpop [role=option]').filter({ has: page.locator('b.mono', { hasText: new RegExp('^' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$') }) }).first();
       await opt.click(); await sleep(300);
     };
-    await page.click('.ar2-chip'); await sleep(600);
+    await page.click('button.nw-pk'); await sleep(600);
     let models = await readMenu();
-    for (let i = 0; i < 40 && models.length < served; i++) { await page.keyboard.press('Escape'); await sleep(1500); await page.click('.ar2-chip'); await sleep(400); models = await readMenu(); }
+    for (let i = 0; i < 40 && models.length < served; i++) { await page.keyboard.press('Escape'); await sleep(1500); await page.click('button.nw-pk'); await sleep(400); models = await readMenu(); }
     if (models.length < served) log(`MENU ${h} shows ${models.length} of ${served} served models after 60 s`);
     await page.keyboard.press('Escape'); await sleep(300);
     // MODELS pins which PAIRS run (a re-run of the missing ones); the switch scenario still needs another
@@ -169,7 +182,7 @@ try {
     const enabled = runnableAll.filter((id) => !process.env.MODELS || process.env.MODELS.split(',').includes(id));
     log(`HARNESS ${h} models ${models.length} runnable ${enabled.length}: ${enabled.join(',')}`);
     // a QUEUE, so a pair whose page crashed can be put back after a fresh page is built
-    const enabledQueue = [...enabled]; const retried = new Set();
+    const enabledQueue = [...enabled]; const retried = new Set(); let keptAny = false;
     while (enabledQueue.length) {
       const m = enabledQueue.shift();
       const res = load(); const k = key(h, m);
@@ -179,10 +192,9 @@ try {
       // pair still looked errored and a reader (me, 2026-10-10) scored 32 of them as not measured.
       const rec = { provider: PROVIDER, harness: h, model: m, at: new Date().toISOString() };
       try {
-        await page.goto(`${BASE}/harnesses?h=${h}`, { waitUntil: 'domcontentloaded' }); await sleep(3000);
-        for (let i = 0; i < 10 && !(await page.locator('.wbx-conv-main.is-hero').count()); i++) { await page.click('button:has-text("New task")').catch(() => {}); await sleep(800); }
+        await openNewTask(hid);
         await pickModel(m);
-        rec.first = expectWord(await turn(`Reply with exactly: M1-${m}`), `M1-${m}`); rec.sid = new URL(page.url()).searchParams.get('sid') || '';
+        rec.first = expectWord(await turn(`Reply with exactly: M1-${m}`), `M1-${m}`); rec.sid = sidOf();
         log(`FIRST ${k} ${rec.first.ok ? 'ok' : 'FAIL'} ${rec.first.s}s ${rec.first.why}`);
         if (rec.first.ok) {
           rec.followup = expectWord(await turn(`Reply with exactly: M2-${m}`), `M2-${m}`);
@@ -340,8 +352,11 @@ try {
         if (failed) { rec.kept = rec.sid; rec.deleted = 0; }
         else rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
       }
+      if (rec.kept || rec.error) keptAny = true;
       const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} turns=${(rec.connections || []).join('+') || '?'}${(rec.foreign || []).length ? ' FOREIGN=' + rec.foreign.join('+') : ''}${(rec.served || []).length ? ' served=' + rec.served.join('+') : ''}${(rec.substituted || []).length ? ' SUBSTITUTED=' + rec.substituted.join('+') : ''}${rec.kept ? ' KEPT=' + rec.kept : ' deleted=' + (rec.deleted || '?')}`);
     }
+    // the column's setup goes with it, unless a pair kept its session for a look afterwards
+    if (!keptAny) await page.evaluate(async (id) => { await fetch(`/api/harness/v1/harnesses/${id}`, { method: 'DELETE' }); }, hid).catch(() => {});
   }
 } catch (e) { log(`FATAL ${String(e).slice(0, 300)}`); }
 await b.close(); log(`WORKER_DONE ${process.env.HARNESSES}`);

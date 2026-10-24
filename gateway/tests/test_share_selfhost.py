@@ -118,3 +118,66 @@ def test_deleting_the_session_takes_its_share_with_it(api, monkeypatch):
     assert api.get(url + "/turns").status_code == 404, (
         "the turns behind the view are rebuilt from response records deletion does not remove — "
         "the resolver is the only gate, so it must refuse")
+
+
+def test_a_transient_index_failure_does_not_404_the_link_or_poison_the_cache(api, monkeypatch):
+    """`find` answers a read it could not perform with [], which the resolver could not tell from
+    "no such token" — so it negative-cached the miss for _SHARE_TTL seconds. A live share link
+    404'd through a blip and KEPT 404ing for ten seconds after the store came back."""
+    sid = "hsessshare" + os.urandom(4).hex()
+    _session(sid)
+    url = api.post(f"/v1/sessions/{sid}/share").json()["url"]
+    assert api.get(url + "/meta").status_code == 200
+    gw._SHARE_TOKEN_CACHE.clear()
+
+    real = gw.BACKING.graph.find_strict
+    broken = {"on": True}
+
+    async def flaky(label, eq=None, neq=None):
+        if broken["on"]:
+            raise RuntimeError("index unreachable")
+        return await real(label, eq, neq)
+    monkeypatch.setattr(gw.BACKING.graph, "find_strict", flaky)
+
+    r = api.get(url + "/meta")
+    assert r.status_code == 503, "a read that failed must not be reported as a share that is gone"
+
+    broken["on"] = False
+    assert api.get(url + "/meta").status_code == 200, (
+        "the failure must not be negative-cached: the retry after recovery has to resolve")
+
+
+def test_a_failed_point_read_after_the_lookup_answers_503_and_keeps_the_cache(api, monkeypatch):
+    """The lookup found the token; the session read that follows it could not be performed. That
+    is a 503 too, never a 404: before, the exception surfaced as a 500, which the page could tell
+    from gone only by accident. The cached token stays, so the retry after recovery resolves."""
+    sid = "hsessshare" + os.urandom(4).hex()
+    _session(sid)
+    url = api.post(f"/v1/sessions/{sid}/share").json()["url"]
+    tok = url.rsplit("/share/", 1)[-1]
+    assert api.get(url + "/meta").status_code == 200
+
+    real = gw.BACKING.graph.get
+    broken = {"on": True}
+
+    async def flaky(vid, label=None):
+        if broken["on"] and vid == sid:
+            raise RuntimeError("store unreachable")
+        return await real(vid, label)
+    monkeypatch.setattr(gw.BACKING.graph, "get", flaky)
+
+    r = api.get(url + "/meta")
+    assert r.status_code == 503, "a session read that failed must not be reported as a share that is gone"
+    assert gw._SHARE_TOKEN_CACHE.get(tok, (0, ""))[1] == sid, "the cached token is left as it was"
+
+    broken["on"] = False
+    assert api.get(url + "/meta").status_code == 200
+
+
+def test_a_genuinely_unknown_token_is_still_404_and_still_cached(api):
+    """The distinction the fix turns on: an empty strict answer IS "no such token", stays a 404,
+    and stays cacheable — only a failed read is excluded from the cache."""
+    tok = "shr" + "0" * 32
+    assert api.get(f"/share/{tok}/meta").status_code == 404
+    assert gw._SHARE_TOKEN_CACHE.get(tok) is not None, "a real miss is still a cacheable answer"
+    assert gw._SHARE_TOKEN_CACHE[tok][1] == ""

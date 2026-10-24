@@ -1,9 +1,9 @@
 <h1 align="center">
-  <a href="https://harnessrouter.ai/open-source">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset=".github/images/logo-dark.png">
-      <img alt="HarnessRouter" src=".github/images/logo-light.png" width="280">
-    </picture>
+  <a href="https://harnessrouter.ai/open-source#gh-light-mode-only">
+    <img alt="HarnessRouter" src=".github/images/logo-light.png" width="280">
+  </a>
+  <a href="https://harnessrouter.ai/open-source#gh-dark-mode-only">
+    <img alt="HarnessRouter" src=".github/images/logo-dark.png" width="280">
   </a>
 <br>
 The unified interface for agent harnesses.
@@ -133,43 +133,39 @@ These credentials sign you into the Console. You do not need a HarnessRouter API
 
 ### 4. Connect a model provider
 
-Open **Bring Your Own Key** in the sidebar and press **Add Integration**. Choose a provider, give the integration a name, and add its API key. Its supported models become available in the Console.
+Open the account menu at the bottom of the rail and choose **Bring your own key**. Find your provider, press **Add key**, and paste its API key. Its supported models become available in the Console.
 
 This provider key authorizes model requests. It is separate from the HarnessRouter API key used for product integration below.
 
 <details>
 <summary>See the provider setup screen</summary>
 
-![Adding a model provider in HarnessRouter](docs/images/05-add-integration.png)
+![Adding an OpenAI key under Bring your own key](docs/images/console-add-key.png)
 
 </details>
 
-### 5. Run your first task
+<a id="5-run-your-first-task"></a>
 
-Open **Agent harnesses**, choose a supported harness, and select **New task**. Pick an available model and give the agent a concrete task. Follow live progress and open the files it produces in the same session.
+### 5. Set up your first agent
 
-![Hermes reviewing a fictional NDA and opening the redlined output](docs/images/harnessrouter-hermes-nda-redline-complete-run-readme.gif)
+Open **Start**, say what your agent should do for your users, and press **Continue**. In **Set up an agent harness**, leave the agent harness and model on **Auto** or choose them, then save. HarnessRouter builds the setup on one of your own models: it writes the agent's instructions, picks the harness, model, skills, plugins and tools the job needs, and leaves an example request in the box. Send it to run the first task.
 
-<sub>In the illustrative run above, Hermes reviews a fictional NDA and produces a redlined version, a clean copy, and a negotiation memo.</sub>
+![A setup HarnessRouter built from one sentence, with its example request waiting in the box](docs/images/console-setup-built.png)
+
+**Try an example first.** Under **Start in HarnessRouter**, pick one of the three example jobs. Its request plays back a recorded run, so you see a finished task without spending tokens. Write under it to carry on with your own model.
+
+![The product image example: a recorded run and the image it made](docs/images/console-example-run.png)
 
 <a id="configure-a-custom-harness"></a>
 
-### Configure a custom harness (optional)
+### Change a setup (optional)
 
-Built-in harnesses work without this step. Create a custom harness when you want reusable behavior tailored to your product.
-
-1. **Create.** Select **New harness** in **Agent harnesses**. In **Add harness**, set the **Name**, **Base harness**, and **Default model** together, then select **Create and configure**.
-2. **Customize.** In **Harness Settings**, add **Agent instructions**, configure **Tools** (use **Add MCP** for an optional MCP server), and add **Skills** as needed.
-3. **Save and test.** Select **Save Changes**, then **Run Task** to test the saved configuration.
-
-You can change the default model later in Settings, but the base harness cannot be changed after creation.
+Open the setup in **Studio** and choose **Settings** to change its model, instructions, skills, plugins, tools, environment and limits. Add plugins, skills, MCP servers and environments for the whole workspace under **Add-ons**. The agent harness is fixed once a setup is saved: make a new setup to use another.
 
 <details>
-<summary>Watch the configuration walkthrough · 48 seconds</summary>
+<summary>See New setup</summary>
 
-![Animated walkthrough of creating and configuring a custom harness, including instructions, tools, and skills.](docs/images/2026-09-10-harnessrouter-custom-harness-feedback-configuration-v5.gif)
-
-<sub>Configure DeepSeek Harness for customer-feedback analysis.</sub>
+![Set up an agent harness: one sentence, with the agent harness and model on Auto](docs/images/console-new-setup.png)
 
 </details>
 
@@ -189,7 +185,7 @@ Run product tasks with built-in or custom harnesses as pluggable agent backends.
 
 Once your harness runs successfully in the Console:
 
-1. Open **API Keys** in the Console sidebar of the same CE instance ([default local address](http://localhost:3000/keys)) and choose **Create API key**.
+1. Open **API Keys** in the Console rail of the same CE instance ([default local address](http://localhost:3000/keys)), name the key, and press **Create**.
 2. Store the secret shown once as `HARNESSROUTER_API_KEY` in your product backend. Never expose it in browser code. This CE-issued key is separate from your Console password and provider key.
 3. Call the API with the Harness ID shown in the Console and a model served by your connected provider.
 
@@ -208,6 +204,10 @@ curl --fail-with-body -sS "$HARNESSROUTER_BASE_URL/v1/responses" \
 ```
 
 The task and its transcript appear in the same workspace in the Console. Set `"stream": true` to receive server-sent events.
+
+**Join a caller's trace to the task.**
+
+Send the W3C Trace Context headers `traceparent` and `tracestate` on the request, and the task's model calls carry a child of that trace: the same trace id, a new span id and the sampled flag, so the provider's log and yours are one trace. A value that is not valid W3C syntax is dropped, never refused: a broken tracing header does not fail a task. `baggage` is never read and never leaves the instance.
 
 **Retry a task without running it twice.**
 
@@ -301,7 +301,7 @@ Power agentic features in your product with agent harnesses, including knowledge
 <details>
 <summary>Setup notes &amp; licensing</summary>
 
-**Start:** Open **Starter Kits** in the Console and select a harness and model supported by your connected providers.
+**Start:** Open **Shop** in the Console, pick a kit, and select a harness and model supported by your connected providers.
 
 **Dashboards:** use a reachable database and a read-only database account. Set `HR_SECRET_KEY` to encrypt stored connections, and review the sample-row setting before connecting.
 

@@ -56,6 +56,8 @@ from public_artifacts import public_artifact_headers
 import browser_plane         # the browser surface: a cloud browser over CDP behind the browser plug
 import sql_plane             # the read-only SQL data plane (gate, row cap, introspection)
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
+import setup_compose         # New setup: the rules every built configuration is held to
+import setup_builder         # New setup: the built-in builder, saving into the person's workspace
 
 POOL_ENDPOINT = os.environ.get("POOL_MGMT_ENDPOINT", "").rstrip("/")
 VAULT_URL = os.environ.get("VAULT_URL", "").rstrip("/")
@@ -210,16 +212,66 @@ def _run_credits(model: str, usage: dict, elapsed_s: float) -> float:
 
 
 # HR-INF-019: how long a draining replica waits for detached turns to finish before it settles the
-# stragglers 'failed' and lets the process exit. Must stay under ACA's terminationGracePeriodSeconds
-# (600s) so the settle writes land before SIGKILL.
+# stragglers 'failed', their error saying interrupted, and lets the process exit. Must stay under ACA's
+# terminationGracePeriodSeconds (600s) so the settle writes land before SIGKILL.
 _DRAIN_S = int(os.environ.get("HR_DRAIN_S", "570"))
 
 
-async def _settle_drained(persist, tr, emit) -> None:
-    """Settle a turn cancelled by shutdown drain: emit a terminal failure to the bus (so an open
-    Workbench stops showing 'running') and persist 'failed'. Best-effort; never raises."""
+_TERMINAL_EVENT = {"completed": "response.completed", "incomplete": "response.incomplete",
+                   "failed": "response.failed", "cancelled": "response.failed"}
+
+
+# A turn cut short settles `failed` within UHP 2026-10-19, with an error that says why: lifecycle §3
+# makes `incomplete` a budget stop and forbids it for anything else, and a failed task's error explains
+# it. Type and code harness_error (errors §2, the type of an error inside a failed response; §3.3, the
+# code that applies), and detail.reason, an additive key a client can tell the two ends by:
+# "interrupted" when the server itself cut the turn (the runner has no such turn after a restart, or
+# none was ever on record, or the gateway's shutdown drain), "timeout" past the hard cap. Reporting
+# the first as `incomplete` is the UEP #505 asks for, for a later version (CAT's ruling, 2026-10-21).
+# The words are the hosted service's own (e30941ea), so both servers say the same thing; they promise
+# nothing about files, since a hosted sandbox keeps only what its last checkpoint saved.
+_INTERRUPTED_MESSAGE = ("This task stopped before it finished because the service running it restarted. "
+                        "Start a new turn to continue.")
+_CAP_MESSAGE = "This task did not finish within its time limit. Start a new turn to continue."
+
+
+def _interrupted_error() -> dict:
+    return {"type": "harness_error", "code": "harness_error", "message": _INTERRUPTED_MESSAGE,
+            "detail": {"reason": "interrupted"}}
+
+
+def _cap_error() -> dict:
+    return {"type": "harness_error", "code": "harness_error", "message": _CAP_MESSAGE,
+            "detail": {"reason": "timeout"}}
+
+
+async def _settle_drained(persist, tr, emit, end: dict | None = None) -> None:
+    """Settle a turn cancelled by shutdown drain: emit a terminal event to the bus (so an open
+    Workbench stops showing 'running') and persist it. Best-effort; never raises.
+
+    'failed', with the interrupted error (_interrupted_error): nothing went wrong with the task, the
+    gateway stopped under it, and the error says so (server_error, so a client may retry it).
+
+    `end` is the turn's own end once _resp_execute returned it ({"status", "told"}): a drain that
+    cuts in after that, while its closing events or its record are being written, did not interrupt
+    anything. The turn's own end is written instead, and its terminal event is sent if the drain
+    cut the sending short, so a subscriber never stays on 'running'."""
+    if end and end.get("status"):
+        st = end["status"]
+        if not end.get("told"):
+            try:
+                await emit(tr._ev(_TERMINAL_EVENT.get(st, "response.completed"),
+                                  response=tr._response_obj(st)))
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            await persist(st)
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    err = _interrupted_error()
     try:
-        for ev in tr.fail("gateway draining for redeploy"):
+        for ev in tr.fail(err["message"], err):
             await emit(ev)
     except Exception:  # noqa: BLE001
         pass
@@ -364,6 +416,20 @@ def _load_reasoning():
 # How much a model thinks on a turn: a level on the request (`reasoning.effort`), else the harness's
 # (`reasoning_effort`), else nothing, which leaves every request exactly as it was before levels.
 reasoning = _load_reasoning()
+
+
+def _load_tracecontext():
+    """runner/tracecontext.py, by path, as _load_reasoning: the gateway checks the caller's trace
+    context with the rules the runner applies before a provider sees it."""
+    import importlib.util
+    path = pathlib.Path(__file__).resolve().parents[1] / "runner" / "tracecontext.py"
+    spec = importlib.util.spec_from_file_location("hr_tracecontext", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+tracecontext = _load_tracecontext()
 
 
 def _reasoning_level(value, where: str = "") -> str:
@@ -802,6 +868,17 @@ def _tenant_sem(t: str) -> asyncio.Semaphore:
     return _tenant_sems.setdefault(t or "_", asyncio.Semaphore(_conc_limit("tenant")))
 
 
+# Set once a turn's runner turn is on record (the vertex carries runner_turn_id): from then the poll
+# loop renews the heartbeat itself, and _turn_slot's own beat stops. One per session, while its slot is held.
+_RUNNER_TURN_ON: "dict[str, asyncio.Event]" = {}
+
+
+def _runner_turn_recorded(sid: str) -> None:
+    ev = _RUNNER_TURN_ON.get(sid)
+    if ev is not None:
+        ev.set()
+
+
 @contextlib.asynccontextmanager
 async def _turn_slot(org: str, sid: str):
     """Both concurrency gates, held for the turn, with the session's heartbeat kept fresh while the
@@ -813,14 +890,22 @@ async def _turn_slot(org: str, sid: str):
     read it as a dead turn and settled it, session and response, as failed; the turn then ran and
     its final write said completed. Measured 2026-10-12 on a 4-core instance with nine turns in
     flight: a background poller read `failed` (error null) four seconds in, for the 28 seconds the
-    turn waited, and `completed` at 55 s. The newborn trap of 0.23.2, one stage later."""
+    turn waited, and `completed` at 55 s. The newborn trap of 0.23.2, one stage later.
+
+    The beat goes on past the gates, through every phase before the runner turn is on record (the
+    lease, the workspace restore, plugins, the runner's /turn start and its retries): until then the
+    sweep has neither a runner turn to ask nor a heartbeat from the poll loop, and "no runner turn on
+    record" read a live turn restoring a large workspace as gone (CAT, 2026-10-21; restores past the
+    120 s stale window were measured on the hosted service). It stops when the poll loop takes over
+    (_runner_turn_recorded) or the slot is released."""
     beat_s = max(1, _RECONCILE_STALE_S // 4)
-    got = asyncio.Event()
+    on_record = asyncio.Event()
+    _RUNNER_TURN_ON[sid] = on_record
 
     async def beat():
         while True:
             try:
-                await asyncio.wait_for(got.wait(), timeout=beat_s)
+                await asyncio.wait_for(on_record.wait(), timeout=beat_s)
                 return
             except asyncio.TimeoutError:
                 pass
@@ -832,11 +917,12 @@ async def _turn_slot(org: str, sid: str):
     t = asyncio.create_task(beat())
     try:
         async with _global_sem(), _tenant_sem(org):
-            got.set()
             yield
     finally:
-        got.set()
+        on_record.set()
         t.cancel()
+        if _RUNNER_TURN_ON.get(sid) is on_record:
+            _RUNNER_TURN_ON.pop(sid, None)
 
 
 def _pool_is_local() -> bool:
@@ -2017,6 +2103,12 @@ async def _blob_get(file_id: str, kb: str = BLOB_KB) -> bytes | None:
     return await BACKING.blob.get(kb, file_id)
 
 
+async def _blob_get_or_raise(file_id: str, kb: str = BLOB_KB) -> bytes | None:
+    """`_blob_get`, except that a read that failed raises (backing.BlobUnavailable): None only when
+    the object is not there."""
+    return await BACKING.blob.get_or_raise(kb, file_id)
+
+
 async def _blob_put(file_id: str, data: bytes, kb: str = BLOB_KB) -> bool:
     return await BACKING.blob.put(kb, file_id, data)
 
@@ -2265,7 +2357,8 @@ async def _write_running_card(tr: dict, *, sid: str, org: str, member: str, harn
     "0 prior" at this turn's finalize, silently resetting the running total on every new turn."""
     _pm = await _prior_manifest(tr.get("prefix") or "")          # the one read of the prior card
     prior_credits, prior_usage = await _prior_session_totals(tr.get("prefix") or "", _pm)
-    title, chosen = _card_title(_pm, user_text, sid)
+    # a task started with earlier turns is named after its first message, which is its first imported one
+    title, chosen = _card_title(_pm, tr.get("title_text") or user_text, sid)
     await _index_manifest(tr["prefix"], {
         "session_id": sid, "org_id": org, "tenant": org,
         "member_id": tr.get("member") or member or "",
@@ -2505,7 +2598,7 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
     # The prior card, read once: it holds the title the person chose (kept below), the session's
     # cost so far (added to below) and the scope fields the index keys need.
     _pm = await _prior_manifest(tr["prefix"])
-    title, chosen = _card_title(_pm, prompt, sid)
+    title, chosen = _card_title(_pm, tr.get("title_text") or prompt, sid)
     manifest = {
         "session_id": sid, "org_id": tr.get("org"), "tenant": tr.get("org"),
         "billing_org": tr.get("billing_org") or tr.get("org"),
@@ -2794,20 +2887,65 @@ _SESSION_TERMINAL = {"done", "completed", "failed", "incomplete", "max_turns", "
 _RECONCILE_STALE_S = int(os.environ.get("HARNESS_RECONCILE_STALE_S", "120"))
 _RECONCILE_EVERY_S = int(os.environ.get("HARNESS_RECONCILE_EVERY_S", "60"))
 _GW_MAX_TURN_S = int(os.environ.get("HARNESS_MAX_TURN_S", "21600"))
+# The runner's own wall-clock ceiling for a turn (runner/server.py MAX_TURN_SECONDS, read from the same
+# environment on one container), and the time a turn may spend before the runner's clock starts: the
+# lease, placement and the workspace restore. The sweep and the response reconciler settle a turn as
+# timed out only past BOTH limits plus that margin, counted from the turn's start (turn_at, stamped at
+# accept). The gateway's clock starts first, so a cap equal to the runner's would settle a turn that is
+# still working, minutes inside the runner's own limit, as timed out for good (CAT, 2026-10-21).
+_RUNNER_MAX_TURN_S = int(os.environ.get("MAX_TURN_SECONDS", "21600"))
+_CAP_MARGIN_S = int(os.environ.get("HARNESS_CAP_MARGIN_S", "1800"))
 
 
-async def _trace_terminal_status(base: str) -> str | None:
+def _sweep_cap_s() -> int:
+    """Seconds from a turn's start after which nothing can still be working on it."""
+    return max(_GW_MAX_TURN_S, _RUNNER_MAX_TURN_S) + _CAP_MARGIN_S
+
+
+def _turn_since_ms(rec: dict | None, for_result: bool = True) -> int:
+    """The cutoff for reading only a turn's own trace chunks, as epoch millis; 0 when the record
+    is missing or never said.
+
+    The record carries its exact start (_created_ms, _resp_put) and that is the cutoff. Records
+    from before it have only created_at, in whole seconds, and the previous turn's last chunk can
+    land in the very second this turn starts: measured, turn 1's result at .072 and turn 2 created
+    later in that second, so a cutoff at the second's start read turn 1's result as turn 2's. For
+    those, a caller looking for the turn's RESULT (for_result) cuts at the next whole second; a
+    replay of the turn's output keeps the second's start, as it always has."""
+    r = rec or {}
+    try:
+        exact = int(r.get("_created_ms") or 0)
+        c = float(r.get("created_at") or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+    if exact > 0:
+        return exact
+    if c <= 0:
+        return 0
+    if c != int(c):
+        return int(c * 1000)
+    return (int(c) + 1) * 1000 if for_result else int(c) * 1000
+
+
+async def _trace_terminal_status(base: str, since_ms: int = 0) -> str | None:
     """'done'/'failed' if the trace has a terminal result event, else None (not finished yet).
 
     Walks chunks NEWEST-to-OLDEST until a result event is found (HR-INF-015): the old code
-    downloaded the whole transcript to find the last result; the semantics — the last result
-    event ANYWHERE settles a multi-turn orphan even when the final turn died result-less — are
-    preserved by walking back, almost always stopping at the first (newest) chunk. Bounded at 50
-    chunks so a pathological session can't regress to a full download."""
+    downloaded the whole transcript to find the last result; walking back almost always stops at
+    the first (newest) chunk. Bounded at 50 chunks so a pathological session can't regress to a
+    full download.
+
+    since_ms scopes it to THIS turn, as in _replay_output_from_trace: the events/ directory is one
+    stream shared by every turn of the session, so without it a follow-up that died result-less
+    was settled by the PREVIOUS turn's result. A runner restart under turn 2 settled turn 2
+    'completed' with no output (#505, measured: start.txt from turn 1, two of turn 2's four steps
+    on disk, and the API said completed). 0 keeps the whole-directory walk for a caller that
+    cannot name the turn's start."""
     if not base:
         return None
     listed = await _blob_list_all(f"{base}/events/", kb=TRACE_KB)
-    chunk_ids = sorted(it["file_id"] for it in listed if it.get("file_id"))
+    chunk_ids = sorted(it["file_id"] for it in listed
+                       if it.get("file_id") and (since_ms <= 0 or (_chunk_ms(it["file_id"]) or 0) >= since_ms))
     for cid in reversed(chunk_ids[-50:]):
         part = await _blob_get(cid, kb=TRACE_KB)
         if not part:
@@ -2945,7 +3083,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     # which is only when THIS replica adopted it. Needed at settle to scope the full-trace replay to
     # this turn's own chunks (pre- AND post-adoption), not prior turns sharing the same session trace.
     _orig_rec = await _resp_get(resp_id)
-    turn_since_ms = int(float((_orig_rec or {}).get("created_at") or 0) * 1000)
+    turn_since_ms = _turn_since_ms(_orig_rec, for_result=False)
     # Build trace state for _trace_flush (globally-unique time-ordered chunk keys → appending from a
     # new replica can't collide). Cursor starts at what's already durable, so we re-flush nothing.
     tr = {"prefix": base, "org": org, "billing_org": str(v.get("billing_org") or org),
@@ -3087,6 +3225,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         full_output = await _replay_output_from_trace(base, resp_id, model, since_ms=turn_since_ms)
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
                   "_member": member}
+        # the turn's start, not this adoption's (the translator's created_at is the adoption time)
+        stored["_created_ms"] = (_orig_rec or {}).get("_created_ms") or turn_since_ms or None
         if full_output:
             # the trace holds the runner's events, not the gateway's own closing paragraph on files
             # too large to attach (complete), so that paragraph is carried over onto the record
@@ -3127,18 +3267,56 @@ async def _reconcile_session(v: dict) -> bool:
     if not seen:
         return False                       # no time on record at all: an unknown age is past no cap
     age = time.time() - seen
-    if age < _RECONCILE_STALE_S:
+    # The hard cap runs from the TURN's start (turn_at, stamped at accept), never from the heartbeat:
+    # _turn_slot beats until the runner turn is on record, and a beat that goes on while a restore
+    # hangs must not keep the turn alive forever (CAT, 2026-10-21). Past the cap with no runner turn
+    # on record, a fresh beat is the slot's and not proof of progress, so it does not protect the
+    # turn. Once a runner turn exists the poll loop holds its own wall-clock cap.
+    try:
+        turn_at = float(v.get("turn_at") or 0)
+    except (TypeError, ValueError):
+        turn_at = 0.0
+    turn_age = time.time() - turn_at if turn_at > 0 else age
+    stuck = turn_at > 0 and turn_age > _sweep_cap_s() and not str(v.get("runner_turn_id") or "")
+    if age < _RECONCILE_STALE_S and not stuck:
         return False                       # fresh heartbeat (or a newborn turn) -> still being polled
     base = v.get("trace_blob")
-    status = await _trace_terminal_status(base)
+    rid_run = str(v.get("running_response_id") or "")
+    rec_run = None
+    if rid_run:
+        try:
+            rec_run = await _resp_get(rid_run)
+        except Exception:  # noqa: BLE001 — unscoped walk below, as before
+            rec_run = None
+    since = _turn_since_ms(rec_run)
+    if not since:
+        # no readable record for the running turn: its start stamped at accept (turn_at) still
+        # scopes the walk, which unscoped would settle it with the previous turn's result
+        try:
+            since = int(float(v.get("turn_at") or 0) * 1000)
+        except (TypeError, ValueError):
+            since = 0
+    status = await _trace_terminal_status(base, since)
+    end_reason = ""
     if status is None:
-        if age > _GW_MAX_TURN_S:
-            status = "failed"              # past the hard cap with no result -> interrupted
+        if turn_age > _sweep_cap_s():
+            status = "failed"              # past the hard cap, from the turn's start, with no result
+            end_reason = "timeout"
+            rt_cap = str(v.get("runner_turn_id") or "")
+            if rt_cap:
+                # nothing may keep working on a turn settled as timed out: stop the runner's turn too
+                try:
+                    await _sandbox(f"/turn/{rt_cap}/cancel", str(sid), "POST")
+                except Exception:  # noqa: BLE001 — gone already, or unreachable; the settle stands
+                    pass
         else:
             # First ask the RUNNER whether the recorded turn still exists. Turn records are
             # in-memory there, so a restart answers 404 — and a 404 means the process that owned
-            # this turn is gone and it can never finish. Settle it NOW as failed. Without this the
-            # single-container deployment showed "Working" for the full six-hour cap after any
+            # this turn is gone and it can never finish. Settle it NOW: failed, its error saying a
+            # restart cut it (#505, _interrupted_error), so a follow-up continues it. A runner turn
+            # never on record says the same: the turn never reached the runner, and the process that
+            # owned it stopped beating (_turn_slot beats until the runner turn is on record).
+            # Without this the single-container deployment showed "Working" for the full six-hour cap after any
             # restart: adoption below is gated on the control store, which self-hosted does not
             # have, so nothing else could ever settle the record. Seen live: a SIGKILLed container
             # left a finished-looking transcript pinned at "Working" for half an hour.
@@ -3153,13 +3331,15 @@ async def _reconcile_session(v: dict) -> bool:
                     probe_gone = False
             if probe_gone:
                 status = "failed"
+                end_reason = "interrupted"     # the runner has no such turn (404), or none was ever on record
+            gone = status == "failed"
             # Stale heartbeat but no terminal result yet: the owning replica likely died mid-turn
             # (deploy / scale-in / crash) while the turn keeps executing in its sandbox. ADOPT it —
             # resume harvesting its events to the trace + bus so viewers don't freeze. Run it
             # DETACHED (it polls for the rest of the turn); blocking here would stall the sweep for
             # every other session. The lease makes adoption single-flight, so a duplicate spawn on
             # the next sweep simply refuses at lease_admit. Tracked in _inflight so drain settles it.
-            if status == "failed":
+            if gone:
                 pass                        # provably gone — fall through and settle below
             elif sid not in _adopting:
                 _adopting.add(sid)
@@ -3173,19 +3353,17 @@ async def _reconcile_session(v: dict) -> bool:
                 _t = asyncio.create_task(_adopt_bg())
                 _inflight.add(_t)
                 _t.add_done_callback(_inflight.discard)
-            if status != "failed":
+            if not gone:
                 return False               # not settled yet; the detached adopter (or a later sweep) will
-    await _vertex_upsert(sid, {"status": status, "turn_status": status})
+    await _vertex_upsert(sid, {"status": status, "turn_status": status,
+                               **({"end_reason": end_reason} if end_reason else {})})
     # Settle the RESPONSE record in the same pass. The session vertex and the response blob are two
     # records of one fact; settling only the vertex left the turn list showing a live "Working…"
     # spinner on a turn whose process died — the exact confusion this sweep exists to remove — and
     # a background poller on GET /v1/responses/{id} was only healed if something happened to GET it.
-    rid_run = str(v.get("running_response_id") or "")
-    if rid_run:
+    if rec_run:                            # read above; _reconcile_response re-reads before it writes
         try:
-            rec_run = await _resp_get(rid_run)
-            if rec_run:
-                await _reconcile_response(rid_run, rec_run)
+            await _reconcile_response(rid_run, rec_run)
         except Exception:  # noqa: BLE001 — the vertex settle above already landed; a later GET heals
             pass
     if base:                               # reflect in the manifest so the Recents/Traces card updates
@@ -3247,12 +3425,22 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         return rec
     vs = str(v.get("status") or "")
     settled = None
-    if vs in ("done", "failed", "cancelled") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S:
+    capped = False                       # settled by this reconciler's own hard cap
+    # The sweep settled THIS response's turn and wrote why on the session (a restart lost it, or
+    # the hard cap): the session's word is final, whatever the heartbeat says.
+    proven = (v.get("end_reason") in ("interrupted", "timeout")
+              and rid == str(v.get("running_response_id") or ""))
+    if (vs in ("done", "failed", "cancelled", "incomplete") and time.time() - _hb_seconds(v) < _RECONCILE_STALE_S
+            and not proven):
         # The session is terminal but its owner heartbeated moments ago: the owner is finalizing
         # (collecting files, writing the checkpoint) and will write the full record itself,
         # output, usage and served model included. Only an orphan is settled from the session.
+        # A proven end is not an owner finalizing: the sweep settles a turn past the cap while its
+        # slot still beats (a restore that hangs, _turn_slot), and leaving the record to an owner
+        # that never writes kept it `running` for as long as the slot beat (found by the hosted
+        # port, 2026-10-21).
         return rec
-    if vs in ("done", "failed", "cancelled"):
+    if vs in ("done", "failed", "cancelled", "incomplete"):
         settled = _RESP_STATUS_MAP.get(vs)
         # "completed" is a claim about THIS response, not about the session. A record with no
         # output of its own (the finalize died before any content landed) settling as "completed"
@@ -3284,11 +3472,12 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
         # "never" calls every newborn a corpse. Staleness is measured from the last sign of life.
         hb = max(_hb_seconds(v), _born_seconds(rec), _born_seconds(v))
         if time.time() - hb >= _RECONCILE_STALE_S:      # owner stopped heartbeating → orphaned
-            ts = await _trace_terminal_status(v.get("trace_blob"))
+            ts = await _trace_terminal_status(v.get("trace_blob"), _turn_since_ms(rec))
             if ts:
                 settled = _RESP_STATUS_MAP.get(ts, "failed")
-            elif time.time() - hb > _GW_MAX_TURN_S:
-                settled = "failed"                       # past the hard cap with no result
+            elif time.time() - (_born_seconds(rec) or hb) > _sweep_cap_s():
+                settled = "failed"                       # past the hard cap, from the turn's start, with no result
+                capped = True
     if not settled or settled == str(rec.get("status") or ""):
         return rec
     # RE-READ before persisting: the owning replica may have written the FULL final record
@@ -3306,6 +3495,11 @@ async def _reconcile_response(rid: str, rec: dict) -> dict:
     except Exception:  # noqa: BLE001
         pass
     rec["status"] = settled
+    if settled == "failed" and vs == "failed" and proven:
+        # the sweep proved why (a restart lost the turn, or the hard cap) and wrote it on the session
+        rec["error"] = _interrupted_error() if v["end_reason"] == "interrupted" else _cap_error()
+    elif settled == "failed" and capped and not rec.get("error"):
+        rec["error"] = _cap_error()                # the reconciler's own hard cap: never a bare failed
     try:
         _resp_cache_forget(rid)
         await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
@@ -3379,7 +3573,7 @@ async def _drain_inflight() -> None:
     cover them and the old `except Exception` never caught the cancellation. Wait up to _DRAIN_S for
     in-flight turns to finish NATURALLY (checkpoint + metering happen on completion); then cancel any
     stragglers and await them HERE — while the loop is still alive — so each turn's CancelledError
-    handler settles it 'failed' (honest) instead of leaving a 6h phantom 'running'."""
+    handler settles it 'failed', its error saying interrupted (honest), instead of leaving a 6h phantom 'running'."""
     if not _inflight:
         return
     pending = list(_inflight)
@@ -3390,7 +3584,7 @@ async def _drain_inflight() -> None:
         pass
     still = [t for t in pending if not t.done()]
     if still:
-        print(f"[drain] {len(still)} turn(s) still running at deadline — settling failed", flush=True)
+        print(f"[drain] {len(still)} turn(s) still running at deadline — settling interrupted", flush=True)
         for t in still:
             t.cancel()
         # Await the cancellations so the CancelledError handlers' settle-writes complete before exit.
@@ -3762,6 +3956,11 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         if not pe["enabled"]:
             continue
         pfiles = await _plugin_files_of(pe, org)
+        if not pfiles:
+            # A KIT's package ships in the image, so a kit Harness whose stored copy is gone gets it back
+            # from there before the turn, as opening the kit's page would put it back. Without it the
+            # turn ran with no environment: Super Mario's System One played its built-in order desk.
+            pfiles = await _kit_package_restore(org, harness_id, v, pe["name"])
         if not pfiles:
             print(f"[plugins] '{pe['name']}' on {harness_id}: package missing from the blob store — not offered this turn", flush=True)
             continue
@@ -4271,6 +4470,32 @@ def _refusal_message(conn: dict | None, err: str) -> str:
     return f"Your {provider} {what} was refused: {err or 'the provider returned an error'}"
 
 
+def _failure_detail(rec: dict) -> dict:
+    """Which base ran the turn and which tool failed, for the error's detail (#504). The message
+    says the turn failed and why; this says WHICH harness and WHICH tool, so the debugging does
+    not stop at the router. The runner's account of the failure names the tool; the base is the
+    harness's own name for the family that ran it."""
+    detail: dict = {}
+    base = str(rec.get("base") or rec.get("backend") or "")
+    if base:
+        detail["base"] = base
+    tool = str((rec.get("error_detail") or {}).get("tool") or "")
+    if tool:
+        detail["tool"] = tool
+    return detail
+
+
+def _fail_events(tr: "_RespTranslator", rec: dict) -> list[dict]:
+    """A failed turn's closing events: the error the turn proved (rec["error"], the hard cap's),
+    else its reason in words — with the detail that names the base and the tool that failed."""
+    err = rec.get("error")
+    if not isinstance(err, dict):
+        err = {"type": "harness_error", "code": "turn_failed", "message": _turn_failure_message(rec)}
+        if (detail := _failure_detail(rec)):
+            err["detail"] = detail
+    return tr.fail(_turn_failure_message(rec), err)
+
+
 def _turn_failure_message(rec: dict) -> str:
     """What a failed turn says: the org's own key's refusal in plain words when that is why, else
     the last connection's reason in words. Never the tried list itself: its JSON, with our
@@ -4588,6 +4813,11 @@ UHP_CAPABILITIES = {
     "idempotency": True,
     "plugins": True,
     "environments": True,
+    # Tasks §2.1: a request that starts a task may bring its earlier turns as user and assistant
+    # messages before the last user message; they are the agent's history and the task's first turns,
+    # marked imported (_input_history). The console offers a recorded task's fork only where this is
+    # true (GET /v1/bases repeats it).
+    "input_history": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 
@@ -4737,8 +4967,10 @@ async def readyz(response: Response) -> dict:
     checks["redis"] = {"configured": bool(REDIS_URL), **_redis_ok}   # reported, not gating
     checks["bus_drops"] = dict(_bus_drops.counts)   # cumulative live-event drops (HR-INF-018 visibility)
     checks["billing_drops"] = dict(_billing_drops.counts)   # lost usage reports (HR-INF-023 visibility)
+    checks["turns_reads"] = dict(_turns_reads.counts)   # conversation reads that failed; turns taken from their session
     checks["identity"] = {"mode": HR_IDENTITY_MODE, **_identity_obs.counts}   # LIVE-B rollout visibility
     checks["credit"] = {"mode": HR_CREDIT_GATE, **_credit_obs.counts}   # HR-INF-023 admission-gate rollout
+    checks["input_history_over_cap"] = _input_history_over_cap["n"]   # new tasks over the import caps: read as one turn
     checks["build"] = HR_BUILD_SHA   # deploy fingerprint: bind a live instance to its source revision
     if not ok:
         response.status_code = 503
@@ -4883,7 +5115,7 @@ async def _card_settle(sid: str, m: dict) -> dict | None:
             hb = float(v.get("heartbeat") or 0)
         except Exception:  # noqa: BLE001
             hb = 0
-        if hb and time.time() - hb > _GW_MAX_TURN_S:
+        if hb and time.time() - hb > _sweep_cap_s():     # the sweep's cap, so card and record agree
             status = "failed"
     if not status or status == str(m.get("status") or ""):
         return None
@@ -5198,6 +5430,11 @@ async def get_trace_events(sid: str, request: Request, chunk: int = 0) -> Respon
     return Response(content=b, media_type="application/x-ndjson")
 
 
+# A chunk read that could not be answered is said (503 server_error, as the conversation's turns say
+# it since #540), never served as a transcript that happens to end early.
+_TRACE_UNREADABLE = "This transcript could not be loaded just now. Try again in a moment."
+
+
 @app.get("/v1/traces/{sid}/all")
 async def get_trace_all(sid: str, request: Request, compact: int = 0) -> Response:
     """ALL events for a session in ONE response.
@@ -5253,7 +5490,15 @@ async def get_trace_all(sid: str, request: Request, compact: int = 0) -> Respons
             except Exception:  # noqa: BLE001
                 n = 0
         chunk_ids = [f"{base}/events/{i:06d}.jsonl" for i in range(max(n, 1))]
-    parts = await asyncio.gather(*[_blob_get(cid, kb=TRACE_KB) for cid in chunk_ids])
+    # STRICT reads (#540's instrument): the cache below already refuses to store a join whose chunk
+    # read failed — the same failure must not be SERVED either, as a short 200. get_or_raise answers
+    # None only for a chunk that is not there (the synthesized fallback key above may name one, and
+    # that is still an empty transcript), and raises when a read could not be answered.
+    try:
+        parts = await asyncio.gather(*[_blob_get_or_raise(cid, kb=TRACE_KB) for cid in chunk_ids])
+    except backing.BlobUnavailable as e:
+        print(f"[trace] a trace chunk could not be read sid={sid}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error", _TRACE_UNREADABLE) from e
     body = b"".join(p for p in parts if p)
     if finalized and body and all(p is not None for p in parts):
         # Cache ONLY a provably-complete join (a transient chunk-get failure must never become a
@@ -5984,12 +6229,9 @@ class ConnectBody(BaseModel):
     instance: str = ""
 
 
-@app.post("/v1/admin/connect")
-async def admin_connect_start(body: ConnectBody, request: Request) -> dict:
-    """Open a key hand-off with the hosted service: the console opens the returned url in a new
-    tab and polls the code here; the secret never leaves this gateway."""
-    await _require_integrations_admin(request)
-    instance = (body.instance or "").strip() or (request.headers.get("host") or "this instance")
+async def _connect_open(instance: str, purpose: str = "") -> dict:
+    """Open a key hand-off with the hosted service and keep its secret here: {code, url, expires_in}.
+    `purpose` marks a hand-off a route other than Bring your own key reads (Deploy to Cloud)."""
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.post(HR_HOSTED_CONNECT_URL, json={"instance": instance})
@@ -6006,8 +6248,36 @@ async def admin_connect_start(body: ConnectBody, request: Request) -> dict:
         if now - v["at"] > 3600:
             _CONNECTS.pop(k, None)
     _connects_sweep()
-    _CONNECTS[code] = {"secret": secret, "at": now}
+    _CONNECTS[code] = {"secret": secret, "at": now, **({"purpose": purpose} if purpose else {})}
     return {"code": code, "url": str(j["url"]), "expires_in": j.get("expires_in")}
+
+
+@app.post("/v1/admin/connect")
+async def admin_connect_start(body: ConnectBody, request: Request) -> dict:
+    """Open a key hand-off with the hosted service: the console opens the returned url in a new
+    tab and polls the code here; the secret never leaves this gateway."""
+    await _require_integrations_admin(request)
+    instance = (body.instance or "").strip() or (request.headers.get("host") or "this instance")
+    return await _connect_open(instance)
+
+
+async def _connect_fetch(code: str, entry: dict) -> dict | None:
+    """One read of an open hand-off from the hosted service: None while the person is still on its
+    page, the hosted answer once the key is ready. Raises 410 when the code expired or was used."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get(f"{HR_HOSTED_CONNECT_URL}/{code}", headers={"X-Connect-Secret": entry["secret"]})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"HarnessRouter could not be reached: {type(e).__name__}")
+    j = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if r.status_code == 202:
+        return None
+    if r.status_code == 410:
+        _CONNECTS.pop(code, None)
+        raise HTTPException(410, "That key hand-off expired or was already used. Get a key again.")
+    if r.status_code >= 400:
+        raise HTTPException(502, f"HarnessRouter answered HTTP {r.status_code} on the key hand-off.")
+    return j if isinstance(j, dict) else {}
 
 
 @app.get("/v1/admin/connect/{code}")
@@ -6018,25 +6288,15 @@ async def admin_connect_poll(code: str, request: Request):
     await _require_integrations_admin(request)
     _connects_sweep()
     entry = _CONNECTS.get(code)
-    if not entry:
+    if not entry or entry.get("purpose"):        # none, or another route's (Deploy to Cloud)
         raise HTTPException(410, "That key hand-off is not open. Get a key again.")
     if entry.get("ready"):
         # The hosted side hands the key over once; this side answers every poll after that with the
         # same body until the code expires, so a slow or dropped answer costs nothing.
         return entry["ready"]
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as c:
-            r = await c.get(f"{HR_HOSTED_CONNECT_URL}/{code}", headers={"X-Connect-Secret": entry["secret"]})
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"HarnessRouter could not be reached: {type(e).__name__}")
-    j = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-    if r.status_code == 202:
+    j = await _connect_fetch(code, entry)
+    if j is None:
         return JSONResponse({"status": "pending"}, status_code=202)
-    if r.status_code == 410:
-        _CONNECTS.pop(code, None)
-        raise HTTPException(410, "That key hand-off expired or was already used. Get a key again.")
-    if r.status_code >= 400:
-        raise HTTPException(502, f"HarnessRouter answered HTTP {r.status_code} on the key hand-off.")
     key = str(j.get("api_key") or "")
     endpoint = str(j.get("endpoint") or HR_HOSTED_PROVIDER_BASE)
     models_url = str(j.get("models_url") or HR_HOSTED_MODELS_URL)
@@ -6132,8 +6392,19 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         # Persisting the derived list instead is what made this list go stale — and worse, a
         # model later retired from the table would live on forever in whatever was written here.
         table = _vendor_models(provider)
-        rows = [(str(m.get("canonical") or "").strip(), str(m.get("provider_id") or "").strip())
-                for m in (i.get("models") or [])]
+        # A row is {canonical, provider_id}; a bare id is that id with a blank wire id, which is the
+        # same model on the wire (below). Anything else is refused by name: it used to fail the whole
+        # save with a 500 (`'str' object has no attribute 'get'` for a list of ids).
+        rows = []
+        given = i.get("models")
+        if given is not None and not isinstance(given, list):
+            raise HTTPException(400, f"integration '{name}': models is a list")
+        for m in (given or []):
+            if isinstance(m, str):
+                m = {"canonical": m}
+            if not isinstance(m, dict):
+                raise HTTPException(400, f"integration '{name}': each model is an id or {{canonical, provider_id}}")
+            rows.append((str(m.get("canonical") or "").strip(), str(m.get("provider_id") or "").strip()))
         if provider == "custom":
             # No vendor table: the rows are the endpoint's model list, kept whole (see
             # _integration_models); a blank wire id is the canonical, written out so the stored
@@ -6331,7 +6602,9 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
                     content = "\n".join((x.get("text", "") if isinstance(x, dict) else str(x)) for x in content)
                 out.append(("tool_result", {"call_id": c.get("tool_use_id") or "",
                                             "output": str(content if content is not None else ""),
-                                            "is_error": bool(c.get("is_error"))}))
+                                            "is_error": bool(c.get("is_error")),
+                                            # the runner had no complete record of the output (codex)
+                                            "incomplete": bool(c.get("incomplete"))}))
     elif t == "result":
         out.append(("result", {"text": ev.get("result") or "", "usage": ev.get("usage"),
                                "is_error": bool(ev.get("is_error")),
@@ -6561,8 +6834,10 @@ class _RespTranslator:
             evs += self._close_cur()
             self.out_index += 1
             oid = _rid("fco")
+            # `incomplete`: the output may lack part of what the tool printed, and says so, never
+            # passed off as the whole of it
             item = {"id": oid, "type": "function_call_output", "call_id": payload["call_id"],
-                    "output": payload["output"], "status": "completed"}
+                    "output": payload["output"], "status": "incomplete" if payload.get("incomplete") else "completed"}
             evs.append(self._ev("response.output_item.added", output_index=self.out_index, item=item))
             evs.append(self._ev("response.output_item.done", output_index=self.out_index, item=item))
             self.output.append(item)
@@ -6628,15 +6903,15 @@ class _RespTranslator:
         evs.append(self._ev(ev_type, response=self._response_obj(status)))
         return evs
 
-    def fail(self, message: str) -> list[dict]:
+    def fail(self, message: str, error: dict | None = None) -> list[dict]:
         # The spec's Error object (schema.json §Error) requires `type` from the closed enum,
         # with `code` left for the SPECIFIC condition — emitting the type in `code` and no
         # `type` at all made every failed Response fail schema validation, which conformance
         # T-01/S-03/S-07 caught the first time a run actually failed (issue #7's suite, run
         # 2026-08-20). The error EVENT mirrors error.code, so the two never disagree.
-        self.error = {"type": "harness_error", "code": "turn_failed", "message": message}
+        self.error = error or {"type": "harness_error", "code": "turn_failed", "message": message}
         evs = self._close_cur()
-        evs.append(self._ev("error", code="turn_failed", message=message, param=None))
+        evs.append(self._ev("error", code=self.error["code"], message=self.error["message"], param=None))
         evs.append(self._ev("response.failed", response=self._response_obj("failed")))
         return evs
 
@@ -6692,6 +6967,128 @@ def _parse_input(inp) -> tuple[str, list[dict], list[dict]]:
                 parts.append({"type": "input_image", "image_url": p.get("image_url"), "file_id": p.get("file_id")})
         items_norm.append({"role": role, "content": parts})
     return "\n\n".join(t for t in texts if t).strip(), files, items_norm
+
+
+# ── a new task's earlier turns (Tasks §2.1, capability input_history) ───────────────────────────
+# A task may start from a conversation held elsewhere: the console continues a recorded demo task as
+# the person's own by sending the recording's request and answer as earlier messages, then the new
+# message (Richard, 2026-10-19 for the hosted service, 2026-10-22 here). On a request that starts a
+# task (no previous_response_id and no session named), the user and assistant messages before the
+# LAST user message are that conversation: the agent reads them as the conversation so far, on every
+# base, the way a follow-up on a base that cannot resume does (_history_prompt); the task keeps them
+# as its first turns, marked imported (completed, no model call, no usage, never metered); and only
+# the last user message is the turn's own. Instructions (system, developer) apply to the turn as
+# before, and a continuation's input is read exactly as it always was.
+#
+# Bounded, because the agent receives them inside its prompt and the prompt reaches every base's CLI
+# as one argument, which Linux caps at 128 KiB (MAX_ARG_STRLEN): 24,000 characters are at most 96 KB
+# of UTF-8. Over either cap nothing is imported and the request is read exactly as it was before
+# this existed, every user message joined into the one turn: no request an API caller sent before is
+# refused for it now. Counted on /readyz (input_history_over_cap) and logged with counts alone, never
+# the text.
+_IMPORT_MAX_MESSAGES = 20
+_IMPORT_MAX_CHARS = 24_000
+_input_history_over_cap = {"n": 0}
+# what nobody reads and a terminal may act on: C0 and C1 controls (not the tab or the line break), DEL,
+# lone surrogates (no UTF-8 for them, so no argument either) and the direction overrides; listings'
+# hidden set, less the joiners an emoji or a script needs
+_IMPORT_HIDDEN = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\ud800-\udfff]")
+
+
+def _import_text(raw) -> str:
+    """One earlier message's text as the agent and the thread read it: line ends as \\n, cleaned."""
+    s = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    return _IMPORT_HIDDEN.sub("", s).strip()
+
+
+def _message_role(it) -> str:
+    """An input item's role when it is a message, else "" (a function call, a tool's output)."""
+    if not isinstance(it, dict) or it.get("type") not in (None, "message"):
+        return ""
+    return str(it.get("role") or "user")
+
+
+def _input_history_as_before(inp, org: str, cap: str, earlier: int) -> tuple[list[dict], object]:
+    """Over a cap: nothing imported, the input read whole as before; counted and logged (counts only)."""
+    _input_history_over_cap["n"] += 1
+    print(f"[input-history] over the {cap} cap earlier_messages={earlier}: "
+          f"read as one turn, nothing imported", flush=True)
+    return [], inp
+
+
+def _input_history(inp, org: str = "") -> tuple[list[dict], object]:
+    """→ (earlier turns, the rest of the input) of a request that starts a task. Each earlier turn is
+    {"user", "assistant", "files"}: a user message, the assistant messages that followed it, and the
+    user message's input_file/input_image parts. ([], inp) when there are none: a string, a single
+    user message, or nothing before the last user message but instructions; and over a cap, when the
+    request is read as before (_input_history_as_before)."""
+    if not isinstance(inp, list):
+        return [], inp
+    roles = [_message_role(it) for it in inp]
+    last = max((i for i, r in enumerate(roles) if r == "user"), default=0)
+    earlier = [i for i in range(last) if roles[i] in ("user", "assistant")]
+    if not earlier:
+        return [], inp
+    if len(earlier) > _IMPORT_MAX_MESSAGES:
+        return _input_history_as_before(inp, org, "messages", len(earlier))
+    turns: list[dict] = []
+    chars = 0
+    for i in earlier:
+        content = inp[i].get("content")
+        texts = [content] if isinstance(content, str) else []
+        files: list[dict] = []
+        for p in content if isinstance(content, list) else []:
+            if not isinstance(p, dict):
+                continue
+            if p.get("type") in ("input_text", "output_text", "text"):
+                texts.append(str(p.get("text") or ""))
+            elif p.get("type") in ("input_file", "input_image") and roles[i] == "user":
+                files.append(p)
+        text = _import_text("\n\n".join(t for t in texts if isinstance(t, str) and t))
+        chars += len(text)
+        if chars > _IMPORT_MAX_CHARS:
+            return _input_history_as_before(inp, org, "characters", len(earlier))
+        if roles[i] == "user" or not turns:
+            turns.append({"user": "", "assistant": "", "files": []})
+        if roles[i] == "user":
+            turns[-1].update(user=text, files=files)
+        else:
+            turns[-1]["assistant"] = "\n\n".join(x for x in (turns[-1]["assistant"], text) if x)
+    keep = set(earlier)
+    return turns, [it for i, it in enumerate(inp) if i not in keep]
+
+
+async def _imported_turns_put(turns: list[dict], *, sid: str, org: str, member: str, backend: str,
+                              before: float, store: bool) -> list[str]:
+    """A new task's earlier turns (_input_history, each with its `input` items) as its first response
+    records, oldest first, each a millisecond apart and before `before` (the turn's own created_at),
+    so the thread sorts them ahead of it. Completed, no model, no usage: nothing ran, so nothing is
+    metered. A record that cannot be written fails the request before its turn runs, rather than leave
+    a task whose thread lacks what its agent was told."""
+    rids = [_rid("resp") for _ in turns]
+    sem = asyncio.Semaphore(8)
+
+    async def one(i: int, t: dict) -> None:
+        rid, at = rids[i], before - (len(turns) - i) * 0.001
+        said = t.get("assistant") or ""
+        stored = {"id": rid, "object": "response", "created_at": int(at), "status": "completed", "error": None,
+                  "served_model": None, "reasoning": None, "incomplete_details": None,
+                  "previous_response_id": None, "model": "", "store": store,
+                  "output": ([{"id": "msg_" + rid.removeprefix("resp_"), "type": "message", "status": "completed",
+                               "role": "assistant", "content": [{"type": "output_text", "text": said, "annotations": []}]}]
+                             if said else []),
+                  "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                  "metadata": {"session_id": sid, "imported": True},
+                  "_session_id": sid, "_org": org, "_member": member, "_input": t.get("input") or [],
+                  "_backend": backend, "_imported": True}
+        async with sem:
+            if not await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB):
+                raise uhp_error(502, "store_write_failed", "The conversation could not be saved. Try again in a moment.")
+            await _vg_upsert("HarnessResponse", rid, {"org": org, "session_id": sid, "previous_response_id": "",
+                                                      "status": "completed", "created_at": str(at),
+                                                      "store": "1" if store else "0"}, raise_on_fail=True)
+    await asyncio.gather(*(one(i, t) for i, t in enumerate(turns)))
+    return rids
 
 
 def _route_backend(model: str | None, explicit: str | None) -> str:
@@ -7379,7 +7776,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # it takes: low, medium, high, xhigh). List prices, no markup: sol $2 in / $10 out, cached
     # $0.20; luna $0.10 / $0.50, cached $0.01; astra $10 / $50, cached $1; all doubled above
     # 272k prompt tokens as the gpt-5.x line is.
-    "codex":  {"default": "gpt-5.4",
+    "codex":  {"default": "gpt-6.1-sol",
                "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           # Codex-optimized line (separate from the general one; 5.3-codex is
@@ -7396,7 +7793,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # names are shared with the codex/claude catalogs, so pricing/billing metrics stay identical
     # (2026-07-21: gpt-5.5 via azure-foundry + opus-4.8/haiku-4.5 via Bedrock probe-verified
     # through the hermes CLI).
-    "hermes": {"default": "gpt-5.4",
+    "hermes": {"default": "gpt-6.1-sol",
                "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                           "gpt-5.4", "gpt-5.4-mini", "gpt-5.2",
                           "gpt-5.3-codex",
@@ -7446,7 +7843,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # STILL UNPROBED ON THIS BACKEND: inheriting a serving path is not the same as a completed
     # turn, which is what the bar at the top of this table asks for. Probe before relying on any
     # single row here.
-    "opencode": {"default": "gpt-5.4",
+    "opencode": {"default": "gpt-6.1-sol",
                  "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                             "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                             "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
@@ -7480,7 +7877,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # claude-haiku-5.5 is NOT offered here: on 2026-10-07 aider passed the first four scenarios on it
     # and failed the recycle scenario in two of three runs (after a recycle it answered a word that
     # was never asked for), while every other base held the conversation. Re-measure before adding it.
-    "aider": {"default": "gpt-5.4",
+    "aider": {"default": "gpt-6.1-sol",
               "models": [
                   "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                   "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
@@ -7627,7 +8024,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # openai/gpt-6-sol, gpt-5.4, google/gemini-3.1-flash-lite and anthropic/claude-sonnet-4.6 each
     # arrived as `model` unchanged (Agent Zero's provider `other` hands litellm `openai/<id>`, and
     # litellm 1.88.1 takes off that one prefix and nothing else).
-    "agentzero": {"default": "gpt-5.4", "models": []},
+    "agentzero": {"default": "gpt-6.1-sol", "models": []},
     "qwen": {"default": "qwen3.7-max",
              "models": ["qwen3.7-max", "qwen3.8-max",
                         "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
@@ -7661,7 +8058,7 @@ _MODEL_CATALOG: dict[str, dict] = {
                           # the Gemini family beyond 3.6-flash, offered so the matrix can measure it here
                           "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3-flash-preview",
                           "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
-    "pi": {"default": "gpt-5.4",
+    "pi": {"default": "gpt-6.1-sol",
            "models": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
                       "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.3-codex",
                       "claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
@@ -7694,7 +8091,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # omp (Oh My Pi) is pi's lineage and speaks the OpenAI and Anthropic shapes through the same
     # loopback relay, so it reaches what pi reaches; the list is pi's, and the support matrix
     # measures each provider column with the served-model rule as judge (2026-09-07).
-    "omp": {"default": "gpt-5.4", "models": []},
+    "omp": {"default": "gpt-6.1-sol", "models": []},
     # goose reaches models the way cline and qwen do — one OpenAI chat/completions client pointed
     # at the loopback relay — so the serving PATHS here are the ones cline's rows already earned.
     #
@@ -7711,7 +8108,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # gpt-6-sol and gpt-6-luna joined on 2026-09-27 after cline's rows passed all five scenarios on
     # every connection of the gpt-6 columns (tokenrouter, openrouter, vercel, openai, azure-e2), the
     # bar this list has always used; goose's own rows follow in the matrix.
-    "goose": {"default": "gpt-5.4",
+    "goose": {"default": "gpt-6.1-sol",
               # THE SERVED MODEL COMES FROM THE RELAY, NOT THE CLI. goose reports none of its own: the served
               # model would have to ride its message metadata (metadata.inference.resolvedModel), and only
               # the databricks provider format populates that — crates/goose-providers/src/openai.rs, the
@@ -7754,7 +8151,7 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # aggregator ride chat/completions (_kilo_npm) and a direct Anthropic connection rides Messages, both through the relay. The wire itself was checked at a stub: kilo 7.8.1 sends the
 # id it is given verbatim (gpt-5.4, claude-sonnet-4.6, gemini-3.8-flash, deepseek-v4-flash), so any
 # substitution would be the provider's, and the relay's served model shows it.
-_MODEL_CATALOG["kilo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+_MODEL_CATALOG["kilo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models"])   # see its entry
 # This batch's bases, each starting from the list of the base whose WIRE REACH it shares. That is
 # the reach, not the offer: each then loses every model that did not run reliably on it in the
@@ -7762,7 +8159,7 @@ _MODEL_CATALOG["agentzero"]["models"] = list(_MODEL_CATALOG["openhands"]["models
 #
 # mimo is an opencode FORK that kept opencode's provider model — the config names an ai-sdk package
 # and a baseURL, so it reaches what opencode reaches, Responses ids included.
-_MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+_MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 # No gajae entry: Gajae-Code is not in this tree either. It was built and measured, and what
 # stops it is this product's own write-wall rather than a defect: gjc's native lock helper walks
 # from / down to the path it is locking and opens EVERY ancestor with
@@ -7805,7 +8202,15 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["o
 # NOT added here: this base could serve them and no turn has, and a list is not a place to guess.
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
            "vibe", "docker-agent", "fast-agent", "dcode"):
+    # gpt-5.4 by default: see _GPT_6_1_DEFAULT below
     _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
+# _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
+# on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
+# opencode, kilo, omp, goose, aider, agentzero and mimo. The rest keep gpt-5.4. cline, cheetahclaws, jcode, nanobot
+# and zeroclaw speak chat/completions, which OpenAI and Azure refuse for gpt-6.1-sol with the reasoning_effort
+# "none" those requests carry; openhands was refused the same way through TokenRouter; opensquilla is not offered
+# it. (TokenRouter serves gpt-6.1-sol from more than one upstream account, so a codex task's encrypted reasoning
+# does not reopen on a later turn there; OpenAI and Azure pass.)
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
@@ -8258,14 +8663,42 @@ async def _resp_put(rid: str, stored: dict, org: str, sid: str, prev: str | None
     if status not in _TURN_LIVE and "_completed_at" not in stored:
         # when the turn ended, for the turns feed's completed_at; stripped from the response object
         stored = {**stored, "_completed_at": time.time()}
-    try:
-        _resp_cache_forget(rid)
-        await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB)
-    except Exception:  # noqa: BLE001
-        pass
-    await _vg_upsert("HarnessResponse", rid, {"org": org, "session_id": sid,
-                     "previous_response_id": prev or "", "status": status,
-                     "created_at": str(created_at), "store": "1" if store else "0"})
+    if created_at and "_created_ms" not in stored:
+        # when the turn began, to the millisecond: created_at is whole seconds, too coarse to tell
+        # this turn's trace chunks from the previous turn's (_turn_since_ms)
+        stored = {**stored, "_created_ms": int(float(created_at) * 1000)}
+    # The record and its index entry, each tried twice: either one missing hides the turn from its
+    # conversation (the index finds it, the record is the turn), and both failures used to pass in
+    # silence. A failure still never fails the turn: it is counted on /readyz (turns_reads) and
+    # logged, and the conversation takes the session's current turn from the session itself
+    # (_session_turns_data). A blob put answers False for a write the store refused, as well as
+    # raising for one it never reached; both are a failed write.
+    body = json.dumps(stored, default=str).encode()
+    for attempt in (1, 2):
+        try:
+            _resp_cache_forget(rid)
+            if await _blob_put(f"responses/{rid}.json", body, kb=RESP_BLOB_KB):
+                break
+            err = "refused"
+        except Exception as e:  # noqa: BLE001
+            err = type(e).__name__
+        if attempt == 2:
+            _turns_reads.bump("record_write_failed")
+            print(f"[turns] the turn's record could not be written resp={rid}: {err}", flush=True)
+        else:
+            await asyncio.sleep(0.3)
+    idx = {"org": org, "session_id": sid, "previous_response_id": prev or "", "status": status,
+           "created_at": str(created_at), "store": "1" if store else "0"}
+    for attempt in (1, 2):
+        try:
+            await _vg_upsert("HarnessResponse", rid, idx, raise_on_fail=True)
+            break
+        except Exception as e:  # noqa: BLE001
+            if attempt == 2:
+                _turns_reads.bump("index_write_failed")
+                print(f"[turns] the turn's index entry could not be written resp={rid}: {type(e).__name__}", flush=True)
+            else:
+                await asyncio.sleep(0.3)
 
 
 # A response record is written while its turn runs and once more when it ends; after that it is
@@ -8282,12 +8715,15 @@ def _resp_cache_forget(rid: str) -> None:
     _RESP_CACHE.pop(rid, None)
 
 
-async def _resp_get(rid: str) -> dict | None:
+async def _resp_get(rid: str, *, strict: bool = False) -> dict | None:
+    """A turn's record, None when there is none. strict: a read that failed raises instead of
+    answering None, for a reader that must not show a failure as a missing turn."""
     hit = _RESP_CACHE.get(rid)
     if hit is not None:
         _RESP_CACHE.move_to_end(rid)
         return hit
-    b = await _blob_get(f"responses/{rid}.json", kb=RESP_BLOB_KB)
+    key = f"responses/{rid}.json"
+    b = await (_blob_get_or_raise(key, kb=RESP_BLOB_KB) if strict else _blob_get(key, kb=RESP_BLOB_KB))
     if not b:
         return None
     try:
@@ -8408,7 +8844,13 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
         items = (r.json() or {}).get("files") or []
     except Exception:  # noqa: BLE001
         return []
-    _produced_total[sid] = len([it for it in items if (it or {}).get("path")
+    # The same two filters the selection below applies, for the same reason: the total is a count of
+    # what the turn PRODUCED, so an internal name and an input file the caller attached are both out
+    # of it. Counting the attachments made a one-file turn carrying one input report a total of 2,
+    # and the console's banner read "Showing 1 of 2" with nothing else to show.
+    _produced_total[sid] = len([it for it in items
+                                if (it or {}).get("path")
+                                and _produced_rel(it["path"]) not in exclude
                                 and not _is_internal_output(_produced_rel(it["path"]))])
     out: list[dict] = []
     # The response carries at most RESP_MAX_FILES of them. Newest first when the runner says when
@@ -8553,6 +8995,25 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
     return sid, None
 
 
+async def _past_cap_stand_down(sid: str, translator: "_RespTranslator", rec: dict) -> bool:
+    """True when the turn is past the sweep's cap before it reached the runner, settled as such.
+
+    The sweep settles a turn past the cap as timed out while it still waits (_reconcile_session:
+    a slot that came late, a restore that hung, with _turn_slot beating), and a turn that went on to
+    start the agent would finish over that answer, and a terminal status is final. It ends as the
+    sweep said, with nothing run. Checked once, just before the agent would start, so the turn ends
+    the way any turn that fails before its agent runs does: its message and card written, the trace
+    finalized, so the task stays in the person's list. (A check before the turn is stamped running
+    returned before any of that, and a new task settled this way vanished from the list.) The clock
+    is the accept's, as the sweep's."""
+    if not translator.created_at or time.time() - float(translator.created_at) <= _sweep_cap_s():
+        return False
+    rec["status"] = "failed"
+    rec["error"] = _cap_error()
+    await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed", "end_reason": "timeout"})
+    return True
+
+
 async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, sid: str,
                         backend: str, chain: list[str], prompt: str, files_in: list[dict],
                         resume: str | None, emit, model_req: str = "", user_text: str = "",
@@ -8563,7 +9024,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         partial_messages: bool = False, probe: dict | None = None,
                         codex_appserver: bool = False,
                         hv: dict | None = None,
-                        environment: dict | None = None) -> tuple[str, list[dict], dict]:
+                        environment: dict | None = None,
+                        trace_ctx: dict | None = None) -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
     files → checkpoint + persist trace. Returns (status, produced_files, rec).
     model_req: the caller-selected model (honored over the connection default when provided)."""
@@ -8571,6 +9033,10 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
            "prompt": prompt, "user_text": user_text,   # raw user message — card titles use THIS,
            "model": model_req or translator.model, "tried": [], "status": "starting"}
     #        never the runtime prompt with its file-note/instructions prepends
+    # The base family that ran this turn (its own name for it, e.g. "claude-code"), for the error's
+    # detail: which base failed is half of what a debugger needs (#504). The backend is the
+    # fallback when the harness says no base of its own.
+    rec["base"] = str((hv or {}).get("base") or backend)
     tr = _session_trace.setdefault(sid, {"prefix": None, "org": org, "since": 0, "chunk": 0, "count": 0})
     if not tr.get("prefix"):
         tr["prefix"] = _prefix_from_vertex(sid, await _vertex_get(sid))
@@ -8612,7 +9078,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         except Exception:  # noqa: BLE001 — lease is best-effort; never block a turn on it
             pass
     await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
-                               "heartbeat": str(time.time()), "runner_turn_id": "",
+                               "heartbeat": str(time.time()), "runner_turn_id": "", "end_reason": "",
                                **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
     # Under the session's change lock: an app's PUT, delete, mkdir or move that passed its busy check
     # before this turn was stamped running finishes before the restore reads the workspace, and one
@@ -8690,7 +9156,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         if not seen and resume:
             try:
                 _turns = (await _session_turns_data(sid)).get("turns") or []
-                seen = [str(t.get("_model") or "") for t in _turns if t.get("_model")]
+                seen = [str(t.get("model") or "") for t in _turns if t.get("model")]
             except Exception:  # noqa: BLE001
                 seen = []
         rec["model_req"], rec["models_before"] = model_req, [m for m in seen if m != model_req]
@@ -8794,7 +9260,14 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 # does not depend on the model chosen to write with. See _vision_auth.
                 "vision_auth": vision_auth,
                 # codex streaming: run via the app-server protocol (item/agentMessage/delta)
-                "codex_appserver": bool(codex_appserver)}
+                "codex_appserver": bool(codex_appserver),
+                # The caller's W3C trace context (#473): the runner puts it in the CLI's
+                # environment and gives the model calls a child of it. Empty when the caller sent
+                # none, so a turn without a trace context sends none.
+                **(trace_ctx or {})}
+        if await _past_cap_stand_down(sid, translator, rec):
+            status = "failed"
+            break
         # Stop requested while we were resolving the connection / provisioning the previous
         # attempt? Honor it BEFORE launching a CLI process (from any replica, via the one signal).
         if await _turn_cancelled(sid, org, translator.resp_id):
@@ -8846,6 +9319,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         else:
             await _vertex_upsert(sid, {"status": "running", "turn_status": "running",
                                        "last_connection": name, "runner_turn_id": rt or ""})
+        _runner_turn_recorded(sid)          # the runner turn is on record; the poll loop beats from here
         # cursor = how far the durable trace has been written; fed_upto = how far events have been
         # fed to the translator and emitted. Events are asked for from fed_upto, so nothing comes
         # twice, and what is fed and not yet written waits in `pending`.
@@ -8899,6 +9373,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     break
                 continue
             held = bool(s.get("held"))
+            if s.get("error_detail"):
+                # The runner's own account of the failure (#504): the base that ran, the tool that
+                # failed, and the exception it printed. The base and the tool name the failure in
+                # the response's error.detail.
+                rec["error_detail"] = s["error_detail"]
             new = s.get("events") or []
             n_total = s.get("n_total", fed_upto)
             # Fed and emitted the moment they arrive. Asked for from fed_upto, so nothing comes twice.
@@ -9495,8 +9974,16 @@ async def storage_usage() -> dict:
     # Sum checkpoint_bytes per tenant. Done client-side (not a backend aggregate): props are
     # stored as strings, so a backend sum() may not coerce — this was already the fallback path
     # and is the only one that behaves identically across backings.
+    # The index read is strict: find swallows a failure into [] (backing.py: "the normal read paths
+    # swallow errors and return empty"), which here is indistinguishable from an org that stores
+    # nothing, so a store that could not answer billed every org zero for that day. An empty index
+    # still answers {} — that is a true total; a failed read is not a total at all.
+    try:
+        sessions = await BACKING.graph.find_strict("HarnessSession", neq={"status": "deleted"})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, "session index unreadable; storage usage is unknown, retry") from e
     by_org: dict[str, int] = {}
-    for v in await BACKING.graph.find("HarnessSession", neq={"status": "deleted"}):
+    for v in sessions:
         tenant = str(v.get("tenant") or "")
         if not tenant:
             continue
@@ -9665,6 +10152,15 @@ def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
     return [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
 
 
+def _trace_context(traceparent: str | None, tracestate: str | None) -> dict:
+    """The caller's W3C trace context (#473), as the runner's /turn takes it: the traceparent and,
+    only with one, the tracestate. runner/tracecontext.py holds the rules, one copy for both
+    services: a value that is not valid W3C syntax is dropped, never refused, since a broken tracing
+    header must not fail a turn; and only these two headers are read. `baggage` carries the
+    caller's own data to whoever reads it, and it never leaves the box."""
+    return tracecontext.parse(traceparent, tracestate)
+
+
 _IDEM_TERMINAL = {"completed", "failed", "incomplete", "cancelled", "error"}
 
 # The event name a terminal status gets on the wire. streaming.md §2.1 names all three; the
@@ -9727,6 +10223,17 @@ async def _idem_replay(resp_id: str, stream: bool):
         yield f"data: {json.dumps({'type': _IDEM_EVENT.get(st, 'response.failed'), 'sequence_number': 1, 'response': _public_response(rec)})}\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _want_partial(backend: str, meta: dict) -> bool:
+    """Token-level streaming (CT-127): opt in globally via env HARNESS_STREAM_PARTIAL=1, or per-request
+    via metadata.stream_partial (for testing). Claude uses --include-partial-messages; codex diffs
+    item.updated (self-healing → batch if it doesn't emit updates); grok (Grok Build 1.0.41) takes the
+    same --include-partial-messages and emits Claude Code's stream_event text deltas, which
+    _grok_to_claude passes through the claude normaliser. Default off = current batch behavior, so a
+    rollback is just flipping the env with no redeploy."""
+    return backend in ("claude", "codex", "grok") and (
+        os.environ.get("HARNESS_STREAM_PARTIAL", "0") == "1" or bool(meta.get("stream_partial")))
 
 
 @app.post("/v1/responses")
@@ -9854,12 +10361,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                or _route_backend(model_req or body.model, body.backend))
     # Server-side model permission (CT-124): a model this backend cannot serve is refused here.
     model_req = await _resolve_model_policy(model_req, hv, backend, org)
-    # Token-level streaming (CT-127): opt in globally via env HARNESS_STREAM_PARTIAL=1, or per-request
-    # via metadata.stream_partial (for testing). Claude uses --include-partial-messages; codex diffs
-    # item.updated (self-healing → batch if it doesn't emit updates). Default off = current batch
-    # behavior, so a rollback is just flipping the env with no redeploy.
-    want_partial = (backend in ("claude", "codex") and (
-        os.environ.get("HARNESS_STREAM_PARTIAL", "0") == "1" or bool(meta.get("stream_partial"))))
+    want_partial = _want_partial(backend, meta)
     # Codex streaming path: run the codex turn via the app-server protocol (the only codex mode that
     # streams assistant text). Flag-gated (env HARNESS_CODEX_APPSERVER or metadata.codex_appserver);
     # default off keeps codex on the stable `codex exec` path. Rollback = flip env, no redeploy.
@@ -9892,6 +10394,9 @@ async def create_response(body: CreateResponseBody, request: Request):
         _v = request.headers.get(_hn)
         if _v is not None:
             hdr_vals[_hn.lower()] = _v
+    # The caller's W3C trace context (#473): read once here, carried to the runner with the turn.
+    # `baggage` is never read — only these two headers may leave the box.
+    trace_ctx = _trace_context(request.headers.get("traceparent"), request.headers.get("tracestate"))
     # Fail fast, not deep in the tool: if an ENABLED MCP server references $headers.{name} and this
     # request didn't supply that header, the tool call would fail opaquely (bad auth at the MCP).
     # Reject up-front instead, naming exactly what's missing and where it's needed.
@@ -9911,8 +10416,25 @@ async def create_response(body: CreateResponseBody, request: Request):
                               "send them on the request (in the Playground, set values via the gear "
                               "icon in the preview pane).")
 
-    prompt, files_in, input_items = _parse_input(body.input)
+    # A request that starts a task may bring its earlier turns (Tasks §2.1): split off here, before
+    # anything is allocated. Over the caps, and on a continuation (a previous response, or a session
+    # named), the input is read exactly as before.
+    history: list[dict] = []
+    live_input = body.input
+    if not body.previous_response_id and not str(meta.get("session_id") or "").strip():
+        history, live_input = _input_history(body.input, org)
+    prompt, files_in, input_items = _parse_input(live_input)
     user_text = prompt   # the raw user message (before instructions / file-note prepends) for the trace
+    for _t in history:
+        # each earlier user message as its turn record keeps it (no file bytes), and its files with
+        # this turn's: they reach the working directory the same way and under the same limits
+        _, _t_files, _t["input"] = _parse_input([{"role": "user", "content": [
+            {"type": "input_text", "text": _t["user"]}, *_t.pop("files", [])]}])
+        files_in = _t_files + files_in
+    if history:
+        # the conversation so far, read by the agent on every base, all of it (the caps bound it)
+        prompt = _history_prompt(history, prompt, max_turns=_IMPORT_MAX_MESSAGES, clip=_IMPORT_MAX_CHARS,
+                                 max_bytes=_IMPORT_MAX_CHARS + 20 * _IMPORT_MAX_MESSAGES)
     # uploads referenced by file_id (POST /v1/files) become inline bytes, this org's only
     await _resolve_uploads(files_in, org)
     files_in = [{"filename": f["filename"], "content_b64": f["content_b64"]}
@@ -9974,7 +10496,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                    "running_response_id": resp_id, "runner_turn_id": "",
                                    "billing_org": billing_org, "heartbeat": str(time.time()),
-                                   "turn_at": str(time.time())})
+                                   "turn_at": str(time.time()), "end_reason": ""})
     except Exception as e:  # noqa: BLE001 — this write is load-bearing for cross-replica cancel: log it
         print(f"[cancel] accept-time running_response_id write failed sid={sid} resp={resp_id}: {str(e)[:120]}",
               flush=True)
@@ -9987,6 +10509,11 @@ async def create_response(body: CreateResponseBody, request: Request):
     try:
         # remember this turn's response id on the trace + session so a loaded session can resume
         _session_trace.setdefault(sid, {}).update(last_response_id=resp_id)
+        # The card's title this turn: a task started with earlier turns is named after its first
+        # message, its first imported one; any other turn as always (_card_title).
+        _session_trace[sid].pop("title_text", None)
+        if history:
+            _session_trace[sid]["title_text"] = next((t["user"] for t in history if t["user"]), "")
         # Reserved fields, named on the response rather than dropped in silence (tasks.md 1.4).
         _ignored = _ignored_request_fields(body)
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
@@ -10002,10 +10529,27 @@ async def create_response(body: CreateResponseBody, request: Request):
         async def persist(status: str) -> None:
             if status != "running":
                 await _browser_close(sid, "turn_end")     # the turn's browser, if it opened one
+            # The trace context is kept on the turn record under internal names: a leading
+            # underscore is dropped by _strip_internal, so the caller's trace id never reaches the
+            # response object the caller and the console read.
             stored = {**tr._response_obj(status), "_session_id": sid, "_org": org,
-                      "_member": member, "_input": input_items, "_backend": backend}
+                      "_member": member, "_input": input_items, "_backend": backend,
+                      **{"_" + k: v for k, v in trace_ctx.items()}}
             await _resp_put(resp_id, stored, org, sid, body.previous_response_id, status, created_at, body.store)
 
+        if history:
+            # the task's first turns, the conversation it was started with, written before this
+            # turn's own record: the thread reads whole from its first read, and a write that fails
+            # refuses the turn here (the guard below releases what it holds)
+            try:
+                await _imported_turns_put(history, sid=sid, org=org, member=member, backend=backend,
+                                          before=created_at, store=body.store)
+            except Exception:
+                # nothing ran and nothing will: the task ends failed now, not running until the sweep
+                with contextlib.suppress(Exception):
+                    await _vertex_upsert(sid, {"status": "failed", "turn_status": "failed",
+                                               "running_response_id": "", "heartbeat": str(time.time())})
+                raise
         # Persist the turn as 'running' NOW so GET /v1/sessions/{sid}/turns surfaces the in-flight
         # turn to any fetch (fresh panel, refresh, different replica, restart). Best-effort: even
         # if it fails, execution proceeds and a terminal record is persisted at the end.
@@ -10032,6 +10576,7 @@ async def create_response(body: CreateResponseBody, request: Request):
             _bus_publish(org, harness_id, member, sid, resp_id, ev)
 
         async def run_bg():
+            end = {"status": "", "told": False}   # the turn's own end, once _resp_execute returns it
             try:
                 async with _turn_slot(org, sid):
                     for ev in tr.start():
@@ -10041,18 +10586,21 @@ async def create_response(body: CreateResponseBody, request: Request):
                         prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit_bg,
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
-                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                        partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
+                        trace_ctx=trace_ctx)
+                    end["status"] = status
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
-                    for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
+                    for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
                         await bus_emit_bg(ev)
+                    end["told"] = True
                     await persist(status)
             except asyncio.CancelledError:
                 # HR-INF-019: the replica is draining (SIGTERM) and this detached turn didn't finish
-                # inside the drain window. Settle it HONESTLY ('failed') instead of leaving a 6h
-                # phantom 'running', then re-raise so the loop can shut down. Best-effort I/O — the
+                # inside the drain window. Settle it HONESTLY (failed, saying interrupted) instead of
+                # leaving a 6h phantom 'running', then re-raise so the loop can shut down. Best-effort I/O — the
                 # shutdown hook awaits us while the loop is still alive so these writes can land.
-                await _settle_drained(persist, tr, bus_emit_bg)
+                await _settle_drained(persist, tr, bus_emit_bg, end)
                 raise
             except Exception as e:  # noqa: BLE001
                 # Emit the terminal failure to the bus too (parity with streaming) so an open
@@ -10084,6 +10632,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 _bus_publish(org, harness_id, member, sid, resp_id, ev)  # broadcast to all subscribers
 
             async def run():
+                end = {"status": "", "told": False}   # as in run_bg
                 try:
                     async with _turn_slot(org, sid):
                         for ev in tr.start():
@@ -10092,14 +10641,17 @@ async def create_response(body: CreateResponseBody, request: Request):
                             tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
-                            timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                            timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
+                            trace_ctx=trace_ctx)
+                        end["status"] = status
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
-                        for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
+                        for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
                             await emit(ev)
+                        end["told"] = True
                         await persist(status)
                 except asyncio.CancelledError:
-                    await _settle_drained(persist, tr, emit)   # HR-INF-019 drain (see run_bg)
+                    await _settle_drained(persist, tr, emit, end)   # HR-INF-019 drain (see run_bg)
                     raise
                 except Exception as e:  # noqa: BLE001
                     for ev in tr.fail(str(e)[:300]):
@@ -10150,10 +10702,11 @@ async def create_response(body: CreateResponseBody, request: Request):
                 tr, org=org, member=member, sid=sid, backend=backend, chain=chain,
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
-                timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment)
+                timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
+                trace_ctx=trace_ctx)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
-            for ev in (tr.fail(_turn_failure_message(rec)) if status == "failed" else tr.complete(status, produced)):
+            for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
                 await bus_emit(ev)
             obj = tr._response_obj(status)
     except Exception as e:  # noqa: BLE001
@@ -10353,10 +10906,22 @@ async def harness_events(harness_id: str, request: Request):
                                       "Connection": "keep-alive"})
 
 
+_RESPONSE_UNREADABLE = "This response could not be read just now. Try again in a moment."
+
+
 @app.get("/v1/responses/{response_id}")
 async def get_response(response_id: str, request: Request):
     principal = await _principal(request)
-    rec = await _resp_get(response_id)
+    # strict: this route is the ONLY completion signal a background poller has (see
+    # `_reconcile_response`), so a record the store could not read must never be answered
+    # response_not_found — a permanent answer to a transient failure. 503 says "ask again";
+    # a record that is genuinely not there is still a 404.
+    try:
+        rec = await _resp_get(response_id, strict=True)
+    except backing.BlobUnavailable as e:
+        # the store could not answer; any other exception is a fault in this route and stays a 500
+        print(f"[responses] a record could not be read rid={response_id}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error", _RESPONSE_UNREADABLE) from e
     if not rec:
         raise uhp_error(404, "response_not_found", "No response with that id.", "response_id")
     # Object-level ownership (LIVE-B): one org must not read another's response. 404 (not 403)
@@ -10377,8 +10942,8 @@ async def session_turns(sid: str, request: Request, limit: int = 0) -> dict:
     oldest-first. Powers the Workbench 'open a recent session → see its chat history' flow.
     ?limit=N returns only the LAST N turns (HR-INF-015: bounds the per-open blob fan-out on
     long-horizon sessions; 0/absent = all, preserving existing callers)."""
-    await _owned_session(request, sid)   # LIVE-B: enforce org ownership before returning content
-    return await _session_turns_data(sid, limit=limit)
+    _org, v = await _owned_session(request, sid)   # LIVE-B: enforce org ownership before returning content
+    return await _session_turns_data(sid, limit=limit, strict=True, v=v)
 
 
 def _unix_s(ts) -> int | None:
@@ -10390,15 +10955,44 @@ def _unix_s(ts) -> int | None:
         return None
 
 
-async def _session_turns_data(sid: str, limit: int = 0) -> dict:
+# A session's turns come from the store's index (HarnessResponse by session_id) and each turn's
+# record. A read of either that failed used to be answered as no turn at all (find swallows its
+# error into [], a blob read its error into None), so a finished task could draw as a new, empty
+# one. For a reader (strict: the conversation and a shared link) it is now said, 503 server_error
+# (errors.md: retrying MAY succeed); for a follow-up's history it is counted and logged and the turn
+# goes on. And the session's own current turn (running_response_id) always shows, taken from the
+# session when the index does not hold it yet (its write may lag or have failed).
+_turns_reads = _OpsDrops("turns", 60, ("index_failed", "record_failed", "from_session",
+                                       "record_write_failed", "index_write_failed"))
+_TURNS_UNREADABLE = "This conversation could not be loaded just now. Try again in a moment."
+
+
+async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False, v: dict | None = None) -> dict:
     # find this session's response ids (HarnessResponse vertices carry session_id)
     ids: list[str] = []
     safe_sid = re.sub(r"[^A-Za-z0-9_-]", "", sid)
-    rows = await BACKING.graph.find("HarnessResponse", {"session_id": safe_sid})
+    try:
+        rows = await BACKING.graph.find_strict("HarnessResponse", {"session_id": safe_sid})
+    except Exception as e:  # noqa: BLE001
+        _turns_reads.bump("index_failed")
+        print(f"[turns] the turn index could not be read sid={safe_sid}: {type(e).__name__}", flush=True)
+        if strict:
+            raise uhp_error(503, "server_error", _TURNS_UNREADABLE) from e
+        rows = []
     rows.sort(key=lambda x: str(x.get("created_at") or ""))
     ids = [str(x.get("id")) for x in rows if x.get("id")]
     # each row's birth as the index holds it: a turn's time when its record carries none
     born = {str(x.get("id")): x.get("created_at") for x in rows if x.get("id")}
+    if v is None and strict:
+        v = await _vertex_get(sid) or {}
+    # The session's current turn when the index does not hold it. Counted only once its record shows:
+    # the id is stamped at accept, before the turn's first record write, so a queued turn has none yet.
+    from_session = str((v or {}).get("running_response_id") or "")
+    if from_session in ids:
+        from_session = ""
+    elif from_session:
+        ids.append(from_session)
+        born[from_session] = (v or {}).get("turn_at")
     if limit and limit > 0:
         ids = ids[-limit:]   # last N turns only — bounds blob fetches AND response size
     turns = []
@@ -10408,12 +11002,19 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
 
     async def _fetch(rid: str) -> dict | None:
         async with _sem:
-            return await _resp_get(rid)
+            return await _resp_get(rid, strict=strict)
 
-    recs = await asyncio.gather(*(_fetch(rid) for rid in ids))
+    try:
+        recs = await asyncio.gather(*(_fetch(rid) for rid in ids))
+    except Exception as e:  # noqa: BLE001 — only a strict read raises: a record that could not be read
+        _turns_reads.bump("record_failed")
+        print(f"[turns] a turn's record could not be read sid={safe_sid}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error", _TURNS_UNREADABLE) from e
     for rid, rec in zip(ids, recs):
         if not rec or rec.get("_deleted"):
             continue
+        if rid == from_session:
+            _turns_reads.bump("from_session")
         # user text + attached input files from the stored input items; assistant text +
         # tool calls + files from the output. Attachments hydrate the user bubble's file
         # chips after a refresh (the bytes live in the session workspace; the by-path
@@ -10449,6 +11050,9 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       # one banner for every cause. Absent on records from before the field.
                       # A failed turn's reason, the sentence its error event carried live.
                       "error": ((rec.get("error") or {}).get("message") or None) if isinstance(rec.get("error"), dict) else None,
+                      # and why, when the record knows (error.detail.reason: "interrupted", "timeout")
+                      "error_reason": ((((rec.get("error") or {}).get("detail") or {}).get("reason") or None)
+                                       if isinstance(rec.get("error"), dict) and isinstance(rec["error"].get("detail"), dict) else None),
                       "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
                                             or None),
                       "handoff": ((rec.get("incomplete_details") or {}).get("handoff") or None),
@@ -10459,7 +11063,11 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                       "created_at": _unix_s(rec.get("created_at") or born.get(rid)),
                       "completed_at": (None if str(rec.get("status") or "") in _TURN_LIVE
                                        else _unix_s(rec.get("_completed_at"))),
-                      "_model": rec.get("model") or "", "_created_at": rec.get("created_at") or 0})
+                      # a turn the task was started with (Tasks §2.1): nothing ran, nothing was spent
+                      "imported": bool(rec.get("_imported")),
+                      **({"cost_usd": 0.0} if rec.get("_imported") else {}),
+                      "_model": rec.get("model") or "",
+                      "_since_ms": _turn_since_ms(rec, for_result=False)})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
     # session vertex, so read it ONCE.
     last_running = bool(turns) and str(turns[-1].get("status") or "") in (
@@ -10472,6 +11080,11 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
         vst = str(v.get("turn_status") or v.get("status") or "")
         if vst in ("cancelled", "failed", "error", "done", "completed", "incomplete", "max_turns", "timeout"):
             turns[-1]["status"] = vst
+            if (vst == "failed" and not turns[-1].get("error") and v.get("end_reason") in ("interrupted", "timeout")
+                    and turns[-1]["id"] == str(v.get("running_response_id") or "")):
+                # the sweep's proof: a restart cut it, or the hard cap
+                turns[-1]["error"] = _INTERRUPTED_MESSAGE if v["end_reason"] == "interrupted" else _CAP_MESSAGE
+                turns[-1]["error_reason"] = v["end_reason"]
         # (2) Trace catch-up whenever the stored record has NO content yet — output[] is only
         # written by persist() at finalize, so this covers BOTH cases with one mechanism:
         #   • turn still running → show progress-so-far, the bus streams new events on top;
@@ -10486,14 +11099,14 @@ async def _session_turns_data(sid: str, limit: int = 0) -> dict:
                 # Scope replay to chunks THIS turn could have written — the events/ directory is one
                 # flat cross-turn stream, so without this cutoff a fresh open silently fuses the
                 # PRIOR turn's reply onto this one (see _replay_output_from_trace's since_ms doc).
-                since_ms = int(float(turns[-1].get("_created_at") or 0) * 1000)
+                since_ms = int(turns[-1].get("_since_ms") or 0)
                 out = await _replay_output_from_trace(
                     base, str(turns[-1]["id"]), str(turns[-1].get("_model") or ""), since_ms=since_ms)
                 asst, tools, files = _output_to_turn_fields(out)
                 turns[-1].update(assistant=asst, tools=tools, files=files)
     for _t in turns:
         _t.pop("_model", None)
-        _t.pop("_created_at", None)
+        _t.pop("_since_ms", None)
     return {"session_id": sid, "turns": turns, "last_response_id": ids[-1] if ids else None}
 
 
@@ -10691,8 +11304,15 @@ async def get_session_share(sid: str, request: Request) -> dict:
     return _share_out(str(v.get("shared") or "") == "1", str(v.get("share_token") or ""))
 
 
+_SHARE_UNREADABLE = "This shared Task could not be loaded just now. Try again in a moment."
+
+
 async def _share_sid(token: str) -> str | None:
-    """Resolve a share token to its session id — only while sharing is enabled."""
+    """Resolve a share token to its session id — only while sharing is enabled.
+
+    None means "no such live share", and the callers turn that into 404. A store that could not
+    answer is NOT that: it raises, so the link-holder is told to retry rather than shown the one
+    answer a recipient reads as permanent."""
     tok = re.sub(r"[^A-Za-z0-9]", "", token or "")
     if not tok:
         return None
@@ -10703,14 +11323,28 @@ async def _share_sid(token: str) -> str | None:
     if hit and time.time() - hit[0] < _SHARE_TTL:
         sid = hit[1]
     else:
-        rows = await BACKING.graph.find("HarnessSession", {"share_token": tok, "shared": "1"})
+        # `find_strict`, because `find` answers a read it could not perform with [] — which here
+        # is indistinguishable from "no such token", and would then be negative-cached for
+        # _SHARE_TTL. A live share link would 404 for ten seconds past the store's recovery.
+        try:
+            rows = await BACKING.graph.find_strict("HarnessSession", {"share_token": tok, "shared": "1"})
+        except Exception as e:  # noqa: BLE001
+            # the class only: a share token is the link's secret, and no part of it goes to a log
+            print(f"[share] the share index could not be read: {type(e).__name__}", flush=True)
+            raise uhp_error(503, "server_error", _SHARE_UNREADABLE) from e
         sid = str(rows[0].get("id") or "") if rows else ""
-        _SHARE_TOKEN_CACHE[tok] = (time.time(), sid)
+        _SHARE_TOKEN_CACHE[tok] = (time.time(), sid)   # a real miss is cacheable; a failure never got here
     if not sid:
         return None
     # A token lookup is not an authorization grant: another replica may have revoked the
     # share since this one populated its cache (or a graph index may lag the point read).
-    v = await _vertex_get(sid)
+    # The same rule as the lookup: a read that could not be performed is a 503, never the 404 a
+    # recipient reads as revoked, and it leaves the cached token as it was.
+    try:
+        v = await _vertex_get(sid)
+    except Exception as e:  # noqa: BLE001
+        print(f"[share] the shared session could not be read: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error", _SHARE_UNREADABLE) from e
     if (not v or str(v.get("shared") or "") != "1" or v.get("status") == "deleted"
             or str(v.get("share_token") or "") != tok):
         _SHARE_TOKEN_CACHE.pop(tok, None)
@@ -10752,7 +11386,7 @@ async def share_turns(token: str) -> dict:
     sid = await _share_sid(token)
     if not sid:
         raise HTTPException(404, "share not found")
-    return await _session_turns_data(sid)
+    return await _session_turns_data(sid, strict=True)
 
 
 @app.get("/share/{token}/files")
@@ -10788,7 +11422,8 @@ async def list_input_items(response_id: str, request: Request, limit: int = 20, 
     if order == "desc":
         data.reverse()
     data = data[:limit]
-    return {"object": "list", "data": data, "first_id": None, "last_id": None, "has_more": False}
+    return {"object": "list", "data": data, "first_id": None, "last_id": None, "has_more": False,
+            **({"imported": True} if rec.get("_imported") else {})}     # a turn the task was started with
 
 
 @app.post("/v1/responses/{response_id}/cancel")
@@ -11300,20 +11935,22 @@ _HISTORY_CLIP = 4000          # per message; a pasted novel is context, not a tr
 _HISTORY_MAX_BYTES = 16000    # whole block; beyond this the oldest turns fall off first
 
 
-def _history_prompt(turns: list[dict], new_prompt: str) -> str:
-    """The runner prompt for a follow-up on a backend that cannot resume.
+def _history_prompt(turns: list[dict], new_prompt: str, *, max_turns: int = _HISTORY_MAX_TURNS,
+                    clip: int = _HISTORY_CLIP, max_bytes: int = _HISTORY_MAX_BYTES) -> str:
+    """The runner prompt for a follow-up on a backend that cannot resume, and for a new task that
+    brought its earlier turns (_input_history, which passes its own caps so that all of it is read).
 
     Most recent turns win: the block is built newest-first against the byte budget, then emitted
     oldest-first so the model reads it in order. Empty history returns the prompt unchanged."""
     rows: list[str] = []
     used = 0
-    for t in reversed(turns[-_HISTORY_MAX_TURNS:]):
-        u = (t.get("user") or "").strip()[:_HISTORY_CLIP]
-        a = (t.get("assistant") or "").strip()[:_HISTORY_CLIP]
+    for t in reversed(turns[-max_turns:]):
+        u = (t.get("user") or "").strip()[:clip]
+        a = (t.get("assistant") or "").strip()[:clip]
         piece = (f"user: {u}\n" if u else "") + (f"assistant: {a}\n" if a else "")
         if not piece:
             continue
-        if used + len(piece) > _HISTORY_MAX_BYTES:
+        if used + len(piece) > max_bytes:
             break
         rows.append(piece)
         used += len(piece)
@@ -11527,21 +12164,33 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                     data, _media, fname = got
                     _add_bytes(fname, data)
                 if missing:
-                    raise HTTPException(404, f"{len(missing)} of {len(want_ids)} files are no longer available: "
-                                             + ", ".join(missing[:5]) + (", …" if len(missing) > 5 else ""))
+                    raise uhp_error(404, "file_not_found",
+                                    f"{len(missing)} of {len(want_ids)} files are no longer available: "
+                                    + ", ".join(missing[:5]) + (", …" if len(missing) > 5 else ""))
             elif changed:
                 blob = await _blob_get(f"sessions/{sid}/changed.json", kb=RESP_BLOB_KB)
                 try:
                     items = ((json.loads(blob) or {}).get("files") or []) if blob else []
                 except Exception:  # noqa: BLE001
                     items = []
+                # "All" means all here too: the changed set is a named list of files, so one of
+                # them that cannot be read is refused with the names, not dropped from a zip
+                # handed over as if it held the whole turn's output.
+                gone: list[str] = []
+                asked = 0
                 for it in items[:200]:
                     fid, path = it.get("file_id"), it.get("path")
                     if not (fid and path):
                         continue
+                    asked += 1
                     got = await _container_file_bytes(sid, fid)
-                    if got:
-                        _add_bytes(path, got[0])
+                    if got is None:
+                        gone.append(path)
+                        continue
+                    _add_bytes(path, got[0])
+                if gone:
+                    raise uhp_error(404, "file_not_found", f"{len(gone)} of {asked} files are no longer available: "
+                                    + ", ".join(gone[:5]) + (", …" if len(gone) > 5 else ""))
             else:
                 tf = await _workspace_tar(sid)
                 if tf is None:
@@ -11582,7 +12231,8 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                 nput += _n
                 total += _tot
         if not nput:
-            raise HTTPException(404, "no files to archive")
+            # the protocol's own code for a file that is not there (errors.md §3.1), not the generic one
+            raise uhp_error(404, "file_not_found", "There are no files to put in an archive.")
     except BaseException:
         try:
             os.unlink(zpath)
@@ -11695,10 +12345,12 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
         if ok:
             _ws_changed(sid)
     if not ok:
-        # The only ways to get here are a path that tried to leave the workspace and a storage
-        # failure. Both are the caller's problem to see, not something to swallow.
+        # A path that tried to leave the workspace, one of the agent's own files (the runner refuses
+        # those as it does for delete, mkdir and move), or a storage failure. All are the caller's
+        # problem to see, not something to swallow, and the answer names both path rules.
         raise uhp_error(400, "write_failed",
-                        "Could not write that path. It must be inside the session workspace.")
+                        "Could not write that path. It must be inside the session workspace, and not "
+                        "one of the agent's own files.")
     return {"session_id": sid, "path": path, "bytes": len(data), "written": True}
 
 
@@ -12044,6 +12696,28 @@ async def list_keys(org: str, request: Request) -> dict:
     if _key_scope(p):     # a key held to a workspace sees that workspace's keys
         keys = [k for k in keys if _scope_keeps(p, k["workspace"])]
     return {"keys": keys}
+
+
+class KeyPatch(BaseModel):
+    """The parts of a key a person may edit. Only the name: the secret never changes in place
+    (rotate = a new key, then revoke the old one), and the scope is fixed at creation."""
+    name: str | None = None
+
+
+@app.patch("/v1/orgs/{org}/keys/{kid}")
+async def rename_key(org: str, kid: str, body: KeyPatch, request: Request) -> dict:
+    """A key's new name. The console's Rename has sent this since the keys page shipped, and the
+    route was the hosted service's alone, so every rename on a self-hosted box answered 405."""
+    p = await _owned_org(request, org)
+    kv = await _vertex_get(kid)
+    if not kv or str(kv.get("org") or "") != org or kv.get("kind") != "harness_api_key" \
+            or not _scope_keeps(p, kv.get("workspace")):
+        raise HTTPException(404, "key not found")
+    name = (body.name or "").strip()[:120]
+    if not name:
+        raise HTTPException(422, "name is required")
+    await _vg_upsert("HarnessApiKey", kid, {"name": name}, raise_on_fail=True)
+    return {"id": kid, "name": name}
 
 
 @app.delete("/v1/orgs/{org}/keys/{kid}")
@@ -13935,7 +14609,16 @@ def _media_scene_key(sid: str) -> str:
 
 
 async def _media_scene_read(sid: str) -> dict:
-    raw = await _blob_get(_media_scene_key(sid), kb=BLOB_KB)
+    """The session's canvas, a new one when there is none.
+
+    The read RAISES when the store could not answer, and that is the whole point: this is the read
+    half of `_media_scene_touch`, a read-modify-write. A failure answered as an empty scene is not
+    a blank canvas on screen for one turn — the next landing render reads nothing, mutates nothing
+    and WRITES THAT BACK, so every element the person had is gone and the revision says the
+    document is newer than the one that held them. An absent scene is still a new scene: that is a
+    session whose canvas has not been started, and the only thing to answer there.
+    """
+    raw = await _blob_get_or_raise(_media_scene_key(sid), kb=BLOB_KB)
     if not raw:
         return media_plane.new_scene()
     try:
@@ -15532,7 +16215,7 @@ async def _media_export_run(job: dict, plan: list[dict], audio_plan: list[dict],
             data = await _blob_get(_media_blob(sid, a["media_id"], str(meta.get("ext") or "wav")),
                                    kb=BLOB_KB)
             if not data:
-                continue
+                raise media_plane.ExportRefused(f"Sound {j + 1} is no longer readable.")
             path = os.path.join(tmp, f"track{j}.{meta.get('ext') or 'wav'}")
             pathlib.Path(path).write_bytes(data)
             tracks.append({"path": path, "start_s": a["start_s"], "gain_db": a["gain_db"]})
@@ -15715,10 +16398,17 @@ class SceneWrite(BaseModel):
     scene: dict
 
 
+_MEDIA_SCENE_UNREADABLE = "This canvas could not be read just now. Try again."
+
+
 @app.get("/v1/harnesses/{hid}/servers/{eid}/sessions/{sid}/scene", include_in_schema=False)
 async def get_media_scene(hid: str, eid: str, sid: str, request: Request) -> dict:
     await _media_route(hid, sid, eid, request)
-    scene = await _media_scene_read(sid)
+    try:
+        scene = await _media_scene_read(sid)
+    except backing.BlobUnavailable as e:
+        # Said, rather than drawn as a blank canvas the person then edits on top of.
+        raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
     return {"rev": int(float((scene.get("meta") or {}).get("rev") or 0)), "scene": scene}
 
 
@@ -15740,7 +16430,13 @@ async def put_media_scene(hid: str, eid: str, sid: str, body: SceneWrite,
                         "saving.")
     want = request.headers.get("if-match") or ""
     async with _media_scene_lock(sid):
-        cur = await _media_scene_read(sid)
+        try:
+            cur = await _media_scene_read(sid)
+        except backing.BlobUnavailable as e:
+            # This write is a read-modify-write too: the revision check and the media-element
+            # check are both against `cur`, so a failed read here would accept the body as if the
+            # canvas were empty.
+            raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
         rev = int(float((cur.get("meta") or {}).get("rev") or 0))
         if want and want.strip('"') != str(rev):
             raise uhp_error(412, "scene_moved",
@@ -15811,6 +16507,9 @@ async def post_media_export(hid: str, eid: str, sid: str, request: Request) -> d
         job = await _media_export_start(hid, sid, org, str(entry.get("id") or eid), "")
     except media_plane.MediaError as e:
         raise uhp_error(400, "export_refused", str(e)) from e
+    except backing.BlobUnavailable as e:
+        # the export plans from the canvas: one that could not be read is said, as the scene routes say it
+        raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
     return {"job_id": job["id"], "shots": job.get("shots"),
             "total_seconds": job.get("planned_seconds"), "status": job["status"]}
 
@@ -15875,7 +16574,11 @@ async def post_media_import(hid: str, eid: str, sid: str, request: Request) -> d
             scene["elements"] = els
             return el["id"]
 
-        _rev, element_id = await _media_scene_touch(sid, mutate)
+        try:
+            _rev, element_id = await _media_scene_touch(sid, mutate)
+        except backing.BlobUnavailable as e:
+            # stored but not placed: the canvas could not be read, so it is not written over either
+            raise uhp_error(503, "server_error", _MEDIA_SCENE_UNREADABLE) from e
 
     return {"media_id": rec["media_id"], "kind": rec["kind"], "mime": rec["mime"],
             "bytes": rec["bytes"], "width": rec["width"], "height": rec["height"],
@@ -18268,6 +18971,10 @@ _PLUGINS_SCHEMA = {
                              "blob": {"type": "string", "description": "the installed package's handle, as read back"}}}}
 
 
+# The longest provenance a harness keeps (HarnessBody.source); a longer one is refused, never cut.
+HARNESS_SOURCE_MAX = 200
+
+
 class HarnessBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     name: str
@@ -18291,6 +18998,11 @@ class HarnessBody(BaseModel):
     # (docs/dual-loop.md in the System One Harness repository, Appendix B).
     calibrates: str | None = _either("calibrates")
     environment: str | None = None   # the environment (henv_) this harness's tasks read at /env/<slug>; UHP Environments
+    # Where the harness came from, set by whatever made it (the console's Start: "demo:<n>@<ms>", the
+    # recorded demo run it was saved from, whose task list then shows that run). Kept as it was given
+    # at create and never changed by an update: a PUT that carries it (a harness read and sent back)
+    # or leaves it out keeps the stored value (_harness_source_prop).
+    source: str | None = Field(default=None, max_length=HARNESS_SOURCE_MAX)
 
     @model_validator(mode="before")
     @classmethod
@@ -18371,11 +19083,35 @@ def _harness_out(v: dict) -> dict:
             "reasoningEffort": _reasoning_level(v.get("reasoning_effort")),
             "calibrates": str(v.get("calibrates") or ""),
             "environment": str(v.get("environment") or ""),
-            "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created}
+            "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created,
+            # where it came from (HarnessBody.source), when whatever made it said; a harness made
+            # without one has no key, so "said nothing" and "said this" never read alike
+            **({"source": str(v["source"])} if v.get("source") else {})}
 
 
 async def _vg_list_by_org(label: str, org: str) -> list[dict]:
     return await BACKING.graph.find(label, {"org": org})
+
+
+async def _vg_list_by_org_strict(label: str, org: str) -> list[dict]:
+    """`_vg_list_by_org`, except that an empty answer is established to be empty rather than taken
+    on trust. The plain read swallows a failed read and returns the same `[]` as "the organization
+    holds none" (backing.GraphStore.probe: "the normal read paths swallow errors and return
+    empty"), which a caller that provisions on an empty list must not act on. Only an empty answer
+    pays for the strict re-read, and only an empty answer needs it: `find_strict` either answers
+    with every row of the label or raises."""
+    rows = await _vg_list_by_org(label, org)
+    if not rows:
+        rows = await BACKING.graph.find_strict(label, {"org": org})
+    return rows
+
+
+def _harness_source_prop(body: HarnessBody) -> dict:
+    """The provenance a create stores (HarnessBody.source), or nothing. Only the create routes write
+    it: _harness_props leaves it out, so an update, a coalescing write of the props it is given,
+    keeps the stored value whatever its body says."""
+    src = str(body.source or "").strip()
+    return {"source": src} if src else {}
 
 
 def _harness_props(body: HarnessBody) -> dict:
@@ -18506,7 +19242,10 @@ class EnvironmentBody(BaseModel):
     runtime: dict | None = None    # {"python": "3.12"}: the interpreter a build makes the venv with
 
 
-_ENV_SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)[A-Za-z0-9._*+^~<>-]{0,60})?$")
+# One declared package: the runner's own pattern (runner/environments.py _SPEC_RE), so a spec the runner
+# builds is never refused here first; an apt version may carry its epoch ("7:4.4.2-0ubuntu0.22.04.1").
+# gateway/tests/test_env_spec_parity.py holds the two equal.
+_ENV_SPEC_RE = re.compile(r"^@?[A-Za-z0-9][A-Za-z0-9._/+-]{0,99}(?:(?:==|>=|<=|~=|!=|@|=)(?:[0-9]{1,4}:)?[A-Za-z0-9._*+^~<>-]{0,60})?$")
 _ENV_MANAGERS = ("pip", "npm", "apt")
 
 
@@ -19548,7 +20287,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     body.plugins = await _plugins_prepare(body, org)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
-    props = {"org": org, "member": member, "workspace": workspace, **_harness_props(body),
+    props = {"org": org, "member": member, "workspace": workspace, **_harness_props(body), **_harness_source_prop(body),
              "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Harness", hid, props)
     if await _plugs_ensure_required(org, hid):
@@ -19709,8 +20448,17 @@ def _workspace_out(v: dict) -> dict:
 
 
 async def _workspace_rows(org: str) -> list[dict]:
-    rows = [v for v in await _vg_list_by_org("Workspace", org)
-            if str(v.get("deleted") or "0") != "1"]
+    """The organization's workspaces, or a 503 when they could not be read. Every caller acts on the
+    answer: the list backfills the default when it is missing (an upsert, so over a renamed default it
+    put back "Default Workspace"), create picks a free id from it (so it could take an existing one's and
+    write over it), and rename looks the workspace up in it. A failed read taken as "none" did each."""
+    try:
+        found = await _vg_list_by_org_strict("Workspace", org)
+    except Exception as e:  # noqa: BLE001 — the strict read raises only when the store could not answer
+        print(f"[workspaces] the workspace list could not be read org={org}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error",
+                        "Your workspaces could not be read just now. Try again in a moment.") from e
+    rows = [v for v in found if str(v.get("deleted") or "0") != "1"]
     rows.sort(key=lambda v: (str(v.get("ws_id")) != _WORKSPACE_DEFAULT_ID,
                              str(v.get("created_at") or "")))
     return rows
@@ -19810,7 +20558,12 @@ async def _pub_org_member(request: Request) -> tuple[str, str]:
 
 @app.post("/v1/harnesses")
 async def create_harness_public(body: HarnessBody, request: Request) -> dict:
-    p = await _principal(request)
+    return await _harness_create_as(await _principal(request), body)
+
+
+async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None) -> dict:
+    """The public create, for the caller `p`: every check it makes, then the record. `hid` is the id
+    New setup's builder derives from its build's key (setup_builder.setup_id), else a new one."""
     org, member = p.get("org", ""), p.get("member", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
@@ -19819,15 +20572,456 @@ async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment)
     body.plugins = await _plugins_prepare(body, org)
-    hid = _rid("chrn")
+    hid = hid or _rid("chrn")
     now = str(int(time.time() * 1000))
     props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
-             **_harness_props(body),
+             **_harness_props(body), **_harness_source_prop(body),
              "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
     await _vg_upsert("Harness", hid, props)
     if await _plugs_ensure_required(org, hid):
         return _harness_out(await _vertex_get(hid) or {"id": hid, **props})
     return _harness_out({"id": hid, **props})
+
+
+# ── New setup: the builder (setup_builder holds the harness, its checks and the build's record) ────
+# The hosted service's routes and their parts, ported: what the person may choose (_setup_bases),
+# what the builder reads (_setup_build_inventory), the models it runs on (_setup_build_wires), and the
+# save (_setup_build_save). Its apps catalog, its request check and its own model accounts are not
+# here (setup_builder's module note).
+class SetupBuildBody(BaseModel):
+    job: str = ""
+    base: str = setup_compose.AUTO
+    model: str = setup_compose.AUTO
+    workspace: str = ""
+    key: str = ""
+
+
+# A base Auto never picks although it takes skills: qoder runs on its own remote runtime, which mounts
+# no environment and reads none of this instance's keys.
+_SETUP_NOT_AUTO = frozenset({"qoder"})
+_SETUP_MEDIA_DECL = {"name": "media", "id": "mcp.media"}
+
+
+async def _setup_person(request: Request) -> dict:
+    """A person at the console, as themselves: what New setup's routes serve. An API key is refused."""
+    p = await _principal(request)
+    if not p.get("org"):
+        raise HTTPException(401, "no organization in session")
+    if p.get("via") == "api_key" or p.get("calibration"):
+        raise HTTPException(403, "This runs from the console, signed in as yourself.")
+    return p
+
+
+async def _setup_bases(org: str) -> dict:
+    """The agent harnesses this organization may choose now, read the way the console's pickers read
+    them: each offered base with the models it can run (/v1/bases' view), its default, whether it
+    takes skills and whether Auto may pick it."""
+    bases: dict = {}
+    views: dict[str, list[str]] = {}
+    for bid, b in _BASE_CATALOG.items():
+        if b.get("status") != "ready":
+            continue
+        backend = b["backend"]
+        if backend not in views:
+            view = await _harness_models_view({}, backend, await _servable_models(org, backend))
+            views[backend] = [str(m["id"]) for m in view["models"] if m.get("available")]
+        runs = views[backend]
+        if not runs:
+            continue
+        d = str((_MODEL_CATALOG.get(backend) or {}).get("default") or "")
+        takes = bool(b.get("skills", True))
+        bases[bid] = {"name": b["label"], "default": d if d in runs else runs[0], "models": list(runs), "skills": takes,
+                      "auto": takes and bid not in _SETUP_NOT_AUTO}
+    return bases
+
+
+async def _setup_builtin_skills(org: str) -> dict:
+    """The built-in skills a turn of this organization would mount: on by default and usable here
+    (the image skill only where a turn would be handed an image model: _image_auth's rule)."""
+    del org
+    image_ok = (SANDBOX_TRUST == "owner" or HR_BROKER_IMAGES) and bool(await _effective_image_model_map())
+    skills: dict = {}
+    for n, m in sorted(_builtin_skills().items()):
+        if not m.get("default_enabled"):
+            continue                  # a skill a harness would have to switch on is not offered here
+        if n == _IMAGE_SKILL and not image_ok:
+            continue
+        skills[n] = {"name": str(m.get("title") or n), "about": str(m.get("description") or "")[:240]}
+    return skills
+
+
+def _setup_build_wire(vendor: str, cfg: dict, model_id: str, canonical: str) -> dict | None:
+    """Where one connection answers chat completions, and the header its key goes in (the relay's own
+    rules: an Azure resource under /openai/v1 with `api-key`, anything else a bearer). Anthropic's own
+    key is reached on its OpenAI-compatible surface, the same base: a required configure_harness call
+    answered 200 with the call on claude-sonnet-4-6, a bearer key (measured 2026-10-23), so an
+    instance with only an Anthropic key builds too. None for a connection that does not speak that
+    shape (Bedrock, Qoder's runtime, a custom endpoint in another format) or signs in by federation."""
+    vendor = str(vendor or "").strip().lower()
+    key = str(cfg.get("api_key") or "").strip()
+    if not key or _entra_conn(cfg) or vendor in ("bedrock", "qoder"):
+        return None
+    if vendor == "custom" and str(cfg.get("api_format") or "openai").strip().lower() != "openai":
+        return None
+    base = _provider_base_url(vendor, str(cfg.get("base_url") or "") or _PROVIDER_BASE.get(vendor, ""))
+    if not base:
+        return None
+    full = vendor == "custom" and str(cfg.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
+    header = {"api-key": key} if vendor in ("azure", "azure-foundry") else {"authorization": f"Bearer {key}"}
+    return {"url": base if full else f"{base}/chat/completions", "headers": header,
+            "model": model_id or canonical, "canonical": canonical, "route": vendor}
+
+
+async def _setup_build_model_wire(org: str, canonical: str) -> dict | None:
+    """The builder's connection for one model, found the way a Hermes turn finds it: the model's
+    integration first, then the policy chain's connections that serve it."""
+    integrations = await _integrations_doc()
+    mm = await _effective_model_map()
+    integ = _integration_driving(integrations, setup_builder.BASE, canonical, mm.get(canonical) or mm.get(canonical.lower()))
+    if integ:
+        models = _integration_models(integ)
+        w = _setup_build_wire(str(integ.get("provider") or ""), integ.get("config") or {},
+                              models.get(canonical) or models.get(canonical.lower()) or "", canonical)
+        if w:
+            return w
+    for name in await _resolve_chain(org, setup_builder.BASE, None):
+        conn, _tenant = await _get_connection(org, name)
+        if not conn or not _conn_serves(conn, canonical) or _chain_refusal(conn, setup_builder.BASE):
+            continue
+        vendor = str(conn.get("provider") or "")
+        w = _setup_build_wire(vendor, conn, _provider_model_id(vendor.lower(), canonical) or canonical, canonical)
+        if w:
+            return w
+    return None
+
+
+async def _setup_build_wires(org: str) -> list[dict]:
+    """The builder's connections, best model first (setup_builder.builder_models): the models the
+    Hermes harness runs here now, each with the connection a turn of it would take."""
+    backend = (_BASE_CATALOG.get(setup_builder.BASE) or {}).get("backend") or setup_builder.BASE
+    cat = _MODEL_CATALOG.get(backend) or {}
+    view = await _harness_models_view({}, backend, await _servable_models(org, backend))
+    runs = [str(m["id"]) for m in view["models"] if m.get("available")]
+    known = {m for c in _MODEL_CATALOG.values() for m in (c.get("models") or [])} | set(runs)
+    out: list[dict] = []
+    for canonical in setup_builder.builder_models(str(cat.get("default") or ""), runs, known):
+        w = await _setup_build_model_wire(org, canonical)
+        if w:
+            out.append(w)
+        if len(out) >= setup_builder.MAX_WIRES:
+            break
+    return out
+
+
+def _setup_build_plugin(t: str) -> dict:
+    """A connected plugin as the builder reads it: its tools, each with what it does."""
+    label = plugs_plane.TYPES.get(t, t)
+    tools = [{"name": str(x.get("name") or ""), "risk": str(x.get("risk") or ""),
+              "description": str(x.get("description") or "")[:200]} for x in plugs_plane.tools_of(t)][:40]
+    names = [x["name"] for x in tools]
+    about = ("Tools: " + ", ".join(names[:12]) + (f" and {len(names) - 12} more" if len(names) > 12 else "")) if names else label
+    return {"name": label, "about": about, "tools": tools}
+
+
+def _setup_build_skill_md(files) -> str:
+    md = next((f for f in files or [] if isinstance(f, dict) and str(f.get("path") or "").lower() == "skill.md"), None)
+    return str((md or {}).get("content") or "")[:1500]
+
+
+def _setup_skill_about(sk: dict) -> str:
+    """A skill's description, from its SKILL.md's frontmatter when it is inline ('' when it is not)."""
+    files = sk.get("files") if isinstance(sk.get("files"), list) else None
+    md = _setup_build_skill_md(files) if files else str(sk.get("content") or "")
+    m = re.search(r"^description:\s*(.+)$", md, re.MULTILINE)
+    return m.group(1).strip().strip("\"'")[:240] if m else ""
+
+
+def _setup_build_mcp_id(url: str) -> str:
+    """One id per address (trailing slashes and case ignored, as Add-ons › Tools lists them)."""
+    return "mcp:" + hashlib.sha256(url.strip().rstrip("/").lower().encode()).hexdigest()[:12]
+
+
+async def _setup_build_inventory(p: dict, bases, ctx: dict) -> dict:
+    """What the builder reads and chooses from: the person's current workspace as they may see it,
+    for this organization and workspace only: the agent harnesses and models this instance runs now,
+    the built-in skills a turn mounts, the connected plugins with their tools and the media tools, the
+    skills and MCP servers the workspace's setups have (Add-ons › Skills and Tools: a skill or a server
+    lives in a setup, and a new setup gets its own copy), its environments with a built version, and
+    the plugins a person could connect and has not. A part that cannot be read now is named in
+    `unread`, never read as empty: nothing is asked to be connected where it may already be."""
+    org = str(p["org"])
+    own, wsd = str(p.get("workspace") or ""), bool(p.get("workspace_default"))
+    plug_ws = own or ("" if PLUGS_REGISTRY_URL else _WORKSPACE_DEFAULT_ID)
+    builtin = _builtin_skills()
+
+    async def plugs_part():
+        types = [t for t in plugs_plane.TYPES if t not in plugs_plane._ALIAS]
+        found = await asyncio.gather(*(_plug_lookup(org, plug_ws, t) for t in types))
+        if any(status == "unavailable" for status, _rec in found):
+            raise RuntimeError("registry")
+        plugins = {t: _setup_build_plugin(t) for t, (status, _rec) in zip(types, found) if status == "connected"}
+        connect = {t: {"name": plugs_plane.TYPES[t]} for t, (status, _rec) in zip(types, found)
+                   if status == "missing" and t in setup_compose.CONNECTABLE}
+        return plugins, connect
+
+    async def setups_part():
+        rows = [r for r in await _vg_list_by_org("Harness", org)
+                if str(r.get("deleted")) not in ("1", "true", "True")
+                and _workspace_keep(str(r.get("workspace") or ""), own, wsd) and _scope_keeps(p, r.get("workspace"))]
+        rows.sort(key=lambda r: int(str(r.get("updated_at") or r.get("created_at") or 0) or 0), reverse=True)
+        skills, servers = {}, {}
+        ctx["skills"], ctx["mcp"] = {}, {}
+        for r in rows:
+            h = _harness_out(r)
+            for sk in h.get("skills") or []:
+                if not isinstance(sk, dict) or str(sk.get("enabled")) in ("False", "false", "0"):
+                    continue
+                name = str(sk.get("name") or sk.get("id") or "").strip()
+                if not name or not (sk.get("files") or sk.get("content") or sk.get("blob")):
+                    continue                             # a switch on a built-in, not a skill of its own
+                iid = f"skill:{name}"
+                if iid in skills:
+                    continue
+                skills[iid] = {"name": name, "about": _setup_skill_about(sk), "library": True}
+                ctx["skills"][iid] = sk
+            for e in h.get("mcpServers") or []:
+                url = str(e.get("url") or "")
+                if not url or str(e.get("id") or "") == _PLUGS_ENTRY["id"] or _hosted_mcp_path(url):
+                    continue                             # the servers this gateway hosts are attached by their own routes
+                iid = _setup_build_mcp_id(url)
+                if iid in servers:
+                    continue
+                host = urllib.parse.urlparse(url).hostname or ""
+                servers[iid] = {"name": str(e.get("name") or host or url)[:60],
+                                "about": f"Served at {host}." if host else ""}
+                ctx["mcp"][iid] = e
+        return skills, servers
+
+    async def env_part():
+        rows = [r for r in await _vg_list_by_org("Environment", org) if str(r.get("deleted") or "0") != "1"]
+        if own:
+            rows = [r for r in rows if _workspace_keep(str(r.get("workspace") or ""), own, wsd)]
+        rows = [r for r in rows if _scope_keeps(p, r.get("workspace"))]
+        # read the way a task reads it (_environment_for_turn): brought up to date with what the runner
+        # holds, so one whose built version the runner no longer has is not offered. The record alone
+        # still named a version the runner had lost (an instance on a copied volume, 2026-10-23), and the
+        # first test of the setup the builder made failed with "no built version yet"
+        rows = await asyncio.gather(*(_environment_refresh(r) for r in rows))
+        out: dict = {}
+        for r in rows:
+            if not str(r.get("active_version") or "").isdigit():
+                continue                             # nothing built yet: a task could not read it
+            e = _environment_out(r)
+            pk = [str(x.get("name") or x.get("spec") or "") if isinstance(x, dict) else str(x) for x in e.get("packages") or []][:12]
+            out[str(e["id"])] = {"name": str(e["name"] or e["slug"]), "about": str(e.get("description") or "")[:240],
+                                 "packages": [x for x in pk if x]}
+        return out
+
+    async def media_part():
+        return bool(_own_origins()) and bool(await _media_providers())
+
+    async def bounded(coro):
+        return await asyncio.wait_for(coro, setup_builder.INVENTORY_S - 2)
+
+    cat = await bases()
+    got = await asyncio.gather(bounded(plugs_part()), bounded(setups_part()), bounded(env_part()),
+                               bounded(media_part()), bounded(_setup_builtin_skills(org)), return_exceptions=True)
+    (plugs_r, setups_r, env_r, media_r, builtin_r) = got
+    unread: list[str] = []
+    for part, r in (("plugins", plugs_r), ("skills and MCP servers", setups_r), ("environments", env_r)):
+        if isinstance(r, BaseException):
+            unread.append(part)
+            print(f"[setup-build] org={org} {part} unread: {type(r).__name__}", flush=True)
+    plugins, connect = plugs_r if not isinstance(plugs_r, BaseException) else ({}, {})
+    if media_r is True:
+        plugins[setup_compose.MEDIA_ID] = dict(setup_compose.MEDIA)
+    skills = {} if isinstance(builtin_r, BaseException) else {
+        k: {**v, "instructions": _setup_build_skill_md((builtin.get(k) or {}).get("files"))} for k, v in builtin_r.items()}
+    ws_skills, servers = setups_r if not isinstance(setups_r, BaseException) else ({}, {})
+    return {"bases": cat["bases"], "default_base": cat["default_base"], "skills": {**skills, **ws_skills},
+            "plugins": plugins, "apps": {}, "mcp": servers,
+            "environments": env_r if isinstance(env_r, dict) else {}, "connect": connect,
+            "apps_findable": False, "unread": unread}
+
+
+async def _setup_build_skill_text(ctx: dict, item_id: str) -> str:
+    """A workspace skill's own instructions (its SKILL.md), for the builder that asked to read it."""
+    sk = (ctx.get("skills") or {}).get(item_id)
+    return _setup_build_skill_md(await _skill_bundle_files(sk)) if sk else ""
+
+
+async def _setup_build_exists(org: str, hid: str) -> bool:
+    """Whether the setup a build made under `hid` exists."""
+    v = await _vertex_get(hid)
+    return bool(v) and str(v.get("org") or "") == org and str(v.get("deleted")) not in ("1", "true", "True")
+
+
+async def _setup_build_skill_copy(sk: dict) -> dict:
+    """A workspace skill as a new setup's own copy: its files whole (a bundle set aside in the blob
+    store is read back, so the copy never shares the original's), switched on."""
+    name = str(sk.get("name") or sk.get("id") or "")
+    files = await _skill_bundle_files(sk)
+    if not files:
+        raise RuntimeError("the skill's files could not be read")
+    return (await _skills_prepare([{"name": name, "enabled": True, "files": files}]))[0]
+
+
+async def _setup_build_server_copy(org: str, e: dict) -> dict:
+    """An MCP server as a new setup's own copy (Add-ons › Tools' Add to setups): an id of its own, a
+    stored token copied under that id (only its reference is kept), a header reference as it is."""
+    nid = "mcp." + uuid.uuid4().hex[:8]
+    out = {k: v for k, v in e.items() if k not in ("id", "auth")}
+    out.update(id=nid, enabled=True)
+    auth = str(e.get("auth") or "")
+    if auth.startswith("vault:"):
+        token = await _resolve_mcp_auth(org, auth)
+        if not token:
+            raise RuntimeError("the server's token could not be read")
+        out["auth"] = (await _mcp_secret_store(org, nid, token))["ref"]
+    elif auth:
+        out["auth"] = auth
+    return out
+
+
+async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
+    """The built setup saved into the person's current workspace, under their own reach there, the way
+    the ordinary routes save each part: the setup record (_harness_create_as, every check of the public
+    create) with its copies of the workspace's skills and servers, then its media tools and its
+    plugins. A setup already made under this id is not made again. {"name", "attached"}: each part by
+    its id, "on", or "off" when it did not attach (the setup is saved). Raises when the setup itself
+    could not be made."""
+    org = str(p["org"])
+    ws = str(p.get("workspace") or "")
+    attached: dict = {}
+    v = await _vertex_get(hid)
+    if v:
+        if str(v.get("org") or "") != org or str(v.get("deleted")) in ("1", "true", "True"):
+            raise RuntimeError("the setup id is taken")
+        name = str(v.get("name") or cfg["name"])
+    else:
+        rows = await _vg_list_by_org("Harness", org)
+        names = [str(r.get("name") or "") for r in rows if str(r.get("deleted")) not in ("1", "true", "True")
+                 and _workspace_keep(str(r.get("workspace") or ""), ws, bool(p.get("workspace_default")))]
+        name = setup_builder.uniq_name(cfg["name"], names)
+        env = (cfg.get("environment") or {}).get("id") or None
+        skills, servers, taken = [], [], set()
+        for x in cfg["skills"]:
+            sk = (ctx.get("skills") or {}).get(x["id"])
+            if sk is None:
+                continue                                 # a built-in: mounted on every task, nothing to copy
+            try:
+                skills.append(await _setup_build_skill_copy(sk))
+                attached[x["id"]] = "on"
+            except Exception as e:  # noqa: BLE001
+                attached[x["id"]] = "off"
+                print(f"[setup-build] {hid}: a skill not copied: {type(e).__name__}", flush=True)
+        for x in cfg["mcpServers"]:
+            e = (ctx.get("mcp") or {}).get(x["id"])
+            nm = _mcp_name(str((e or {}).get("name") or "mcp"))
+            if e is None or nm in taken:
+                attached[x["id"]] = "off"
+                continue
+            try:
+                servers.append(await _setup_build_server_copy(org, e))
+                taken.add(nm)
+                attached[x["id"]] = "on"
+            except Exception as err:  # noqa: BLE001
+                attached[x["id"]] = "off"
+                print(f"[setup-build] {hid}: a server not copied: {type(err).__name__}", flush=True)
+        await _harness_create_as(p, HarnessBody(name=name, base=cfg["base"], default_model=cfg["model"],
+                                                system_prompt=cfg["instructions"], environment=env,
+                                                skills=skills or None, mcp_servers=servers or None), hid=hid)
+    if any(x["id"] == setup_compose.MEDIA_ID for x in cfg["plugins"]):
+        try:
+            await _hosted_media_attach(org, hid, await _harness_in_reach(p, hid), dict(_SETUP_MEDIA_DECL))
+            attached[setup_compose.MEDIA_ID] = "on"
+        except Exception as e:  # noqa: BLE001
+            attached[setup_compose.MEDIA_ID] = "off"
+            print(f"[setup-build] {hid}: media tools not attached: {type(e).__name__}", flush=True)
+    plugs = [x["id"] for x in cfg["plugins"] if x["id"] != setup_compose.MEDIA_ID]
+    need_plugs = [x["id"] for x in cfg["connectionsNeeded"] if x.get("kind") == "plugin"]
+    # what the job needs and the workspace has not connected is bound too: it works once connected
+    types = list(dict.fromkeys(plugs + need_plugs))
+    if types:
+        try:
+            await _plugs_attach(org, hid, await _harness_in_reach(p, hid), _plugs_types_ok(types), None)
+            state = "on"
+        except Exception as e:  # noqa: BLE001
+            state = "off"
+            print(f"[setup-build] {hid}: plugins not attached: {type(e).__name__}", flush=True)
+        attached.update({x: state for x in plugs})
+    # a built-in skill is mounted on every task of a base that takes skills: nothing to attach
+    attached.update({x["id"]: "on" for x in cfg["skills"] if x["id"] not in (ctx.get("skills") or {})})
+    return {"name": name, "attached": attached}
+
+
+def _setup_build_member(p: dict) -> str:
+    """Whose builds these are: the person signed in."""
+    raw = str(p.get("member") or "")
+    if not raw:
+        raise HTTPException(401, "Sign in again to set up.")
+    return raw
+
+
+@app.post("/v1/harnesses/builds", include_in_schema=False)
+async def setup_build_start(body: SetupBuildBody, request: Request) -> dict:
+    """Build a new setup from what it should do for its users: the built-in builder (setup_builder)
+    writes its configuration from the person's current workspace, on one of this instance's own
+    models, and the server saves it there. Answers at once with the build's record (building); the
+    page may leave and read it again by its key (GET /v1/harnesses/builds/{key}). The same key never
+    starts a second build."""
+    p = await _setup_person(request)
+    org = str(p["org"])
+    who = _setup_build_member(p)
+    own = str(p.get("workspace") or "")
+    asked = str(body.workspace or "").strip()
+    if asked and own and asked != own:
+        raise uhp_error(409, "workspace_mismatch", "This page is on another workspace now. Reload it and try again.", "workspace")
+    cached: dict = {}
+
+    async def bases() -> dict:
+        if "b" not in cached:
+            cached["b"] = {"bases": await _setup_bases(org), "default_base": "hermes"}
+        return cached["b"]
+
+    ctx: dict = {}
+    parts = {"inventory": lambda: _setup_build_inventory(p, bases, ctx),
+             "skill_text": lambda iid: _setup_build_skill_text(ctx, iid),
+             "find": lambda q: asyncio.sleep(0, result=[]),
+             "conn": lambda: _setup_build_wires(org), "client": _client(),
+             "save": lambda cfg, hid: _setup_build_save(p, cfg, hid, ctx),
+             "exists": lambda hid: _setup_build_exists(org, hid)}
+    try:
+        return await setup_builder.start(org, who, body.key, body.job, body.base, body.model, bases=bases, run_parts=parts)
+    except setup_builder.BadKey:
+        raise HTTPException(400, "A build needs a key of its own: 8 to 80 letters, digits, underscores or hyphens.") from None
+    except setup_builder.JobEmpty:
+        raise HTTPException(400, "Say what it should do first.") from None
+    except setup_builder.JobTooLong:
+        raise HTTPException(413, f"Keep it under {setup_builder.JOB_MAX:,} characters.") from None
+    except setup_builder.NotOffered as e:
+        raise HTTPException(400, "That agent harness isn’t offered here." if e.what == "base"
+                            else "That model doesn’t run on this agent harness here.") from None
+    except setup_builder.NoBuilder:
+        raise HTTPException(400, setup_builder.R_NO_MODEL) from None
+    except setup_builder.Unrecorded:
+        raise HTTPException(503, "The setup couldn’t be started just now. Try again.") from None
+
+
+@app.get("/v1/harnesses/builds/{key}", include_in_schema=False)
+async def setup_build_status(key: str, request: Request, after: str = "") -> dict:
+    """A build of this person's, by the key it was started with: building (reading, writing, saving),
+    saved with its setup's id, or failed with the reason. 404 when they have none under that key.
+    With `after` (where the page last saw it, "building.reading"), the answer waits for the build's
+    next change, up to HR_SETUP_BUILD_WAIT_S: this server has no push to a page, so a page holds this
+    read instead of asking on a timer."""
+    p = await _setup_person(request)
+    org = str(p["org"])
+    rec = await setup_builder.follow(org, _setup_build_member(p), key, after,
+                                     exists=lambda hid: _setup_build_exists(org, hid))
+    if rec is None:
+        raise uhp_error(404, "build_not_found", "No setup is being built under that key.", "key")
+    return rec
 
 
 @app.get("/v1/kits")
@@ -19958,6 +21152,24 @@ async def _kit_plugin_ensure(org: str, hid: str, v: dict, kit_plugin: dict,
     return await _vertex_get(hid)
 
 
+async def _kit_package_restore(org: str, hid: str, v: dict, name: str) -> list:
+    """The files of a kit Harness's own package, put back from the kit in this image when its stored
+    copy is missing (a restored volume, a copied graph). [] for a Harness that runs no kit, or a
+    package that is not the kit's: only the kit's own package has a copy to put back."""
+    kit = _kits().get(str(v.get("kit") or ""))
+    kp = _kit_plugin(kit) if kit else None
+    if not kp or _plugin_read_package(kp["files"]).get("name") != name:
+        return []
+    reserved = tuple(str(d["name"]) for d in (_kit_launch_database(kit), _kit_launch_media(kit)) if d and d.get("name"))
+    try:
+        v2 = await _kit_plugin_ensure(org, hid, v, kp, reserved)
+    except Exception as e:  # noqa: BLE001 — the turn goes on and says the package is missing, as before
+        print(f"[kits] {v.get('kit')}: package {name} could not be put back on {hid}: {type(e).__name__}", flush=True)
+        return []
+    pe2 = next((e for e in _plugins_of(v2 or {}) if e["name"] == name), None)
+    return await _plugin_files_of(pe2, org) if pe2 else []
+
+
 @app.post("/v1/kits/{kit_id}/launch")
 async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | None = None) -> dict:
     """Provision this kit's Harness, or hand back the one that already exists.
@@ -19983,7 +21195,17 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     # Per workspace (see list_kits): launching in a second workspace makes that workspace its own
     # Harness rather than handing back the first workspace's, which its members could not see.
     ws, wsd = str(p.get("workspace") or ""), bool(p.get("workspace_default"))
-    existing = next((r for r in await _vg_list_by_org("Harness", org)
+    # Read strictly: this list is what makes launch idempotent, and a read that failed looks
+    # exactly like an organization with no Harnesses, so provisioning on it is how the second
+    # press leaves someone with two.
+    try:
+        rows = await _vg_list_by_org_strict("Harness", org)
+    except Exception as e:  # noqa: BLE001
+        print(f"[kits] {kit_id}: the harness list could not be read org={org}: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error",
+                        "Your Harnesses could not be read just now, so nothing was launched. "
+                        "Try again in a moment.") from e
+    existing = next((r for r in rows
                      if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"
                      and _workspace_keep(str(r.get("workspace") or ""), ws, wsd)),
                     None)
@@ -20258,7 +21480,10 @@ async def _cloud_base_refused(base: str) -> str | None:
 
 
 async def _cloud_me(base_url: str, api_key: str) -> dict:
-    """Resolve a key to where an upload lands. Raises HTTPException with the hosted side's words."""
+    """Resolve a key to where an upload lands, as HarnessRouter Cloud's /v1/me names it. Raises
+    HTTPException with the hosted side's words. A key Cloud's sign-in minted for the organization's
+    Default Workspace is answered with that workspace by Cloud itself (since 2026-10-23); a key it
+    answers with none is refused, however it came."""
     refused = await _cloud_base_refused(base_url)
     if refused:
         raise HTTPException(400, f"that address cannot be used: {refused}")
@@ -20363,45 +21588,44 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     per = records.setdefault("harnesses", {}).setdefault(hid, {})
     tkey = _cloud_tkey(target)
     rec = per.get(tkey)
+    # A copy is created with POST /v1/harnesses, which names its id, and replaced with PUT
+    # /v1/harnesses/{id} (UHP Harnesses §5.1, §5.2). PUT never creates: Cloud answers 404 for an id
+    # it holds no harness under, so a first deploy by PUT to a new id failed (found 2026-10-24).
+    # This destination's copy is the one its record names, so a
+    # second workspace, in the same org or another, gets its own; a copy deleted on Cloud since is
+    # created again.
     action = "replace" if rec else "create"
-    # The hosted id is the local id when that id is free, and a minted one when it is not. Hosted
-    # ids are global across orgs, and the hosted side answers 404 for an id owned by another org,
-    # deliberately indistinguishable from missing. That is a legitimate situation, not an error:
-    # the same local harness uploaded to a second org (a changed key, a shared instance, an id
-    # claimed by an earlier test) must land, so on that 404 the upload retries once under a fresh
-    # id and the record keeps the mapping. Stability holds per target: every later upload replaces
-    # the same hosted copy.
-    # This target's hosted id: its own record first; else the local id, but only when no OTHER
-    # target has claimed it (a second workspace in the SAME org would otherwise silently update
-    # the first workspace's copy rather than creating its own); else minted.
-    if rec:
-        remote_id = str(rec.get("remote_id") or hid)
-    elif per:
-        remote_id = "chrn" + uuid.uuid4().hex
-    else:
-        remote_id = hid
-    last_error = ""
-    for attempt in (remote_id, "chrn" + uuid.uuid4().hex):
-        try:
-            r = await _checked_http().put(f"{target['base_url']}/v1/harnesses/{attempt}", json=body,
-                                          headers={"authorization": f"Bearer {target['api_key']}"},
-                                          timeout=httpx.Timeout(60.0, connect=8.0))
-        except Exception as e:  # noqa: BLE001
-            return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
-        if r.status_code in (200, 201):
-            per[tkey] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
-                         "remote_id": attempt, "target": _cloud_label(target)}
-            return {"id": hid, "ok": True, "action": action, "name": body["name"], "remote_id": attempt}
-        detail = ""
-        try:
-            j = r.json()
-            detail = str((j.get("error") or {}).get("message") or j.get("detail") or "")
-        except Exception:  # noqa: BLE001
-            detail = r.text[:160]
-        last_error = f"cloud answered {r.status_code}: {detail}"[:300]
-        if r.status_code != 404:
-            break                       # only the taken-id case is worth a second attempt
-    return {"id": hid, "ok": False, "action": action, "error": last_error}
+    # a record an upload before remote ids were kept names none: its copy is at the local id
+    rid = str((rec or {}).get("remote_id") or hid)
+    hdr = {"authorization": f"Bearer {target['api_key']}"}
+    wait = httpx.Timeout(60.0, connect=8.0)
+    try:
+        r = None
+        if rec:
+            r = await _checked_http().put(f"{target['base_url']}/v1/harnesses/{rid}",
+                                          json=body, headers=hdr, timeout=wait)
+            if r.status_code == 404:
+                action, r = "create", None
+        if r is None:
+            r = await _checked_http().post(f"{target['base_url']}/v1/harnesses", json=body, headers=hdr, timeout=wait)
+    except Exception as e:  # noqa: BLE001
+        return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
+    try:
+        j = r.json()
+    except Exception:  # noqa: BLE001
+        j = {}
+    j = j if isinstance(j, dict) else {}
+    if r.status_code in (200, 201):
+        remote_id = rid if action == "replace" else str(j.get("id") or "")
+        if not remote_id:
+            return {"id": hid, "ok": False, "action": action, "error": "cloud answered without the copy's id"}
+        # the form it was sent in (plugins whole, or as their skills and servers): the status
+        # compares the setup now against that same form
+        per[tkey] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
+                     "remote_id": remote_id, "target": _cloud_label(target), "plugins_ok": plugins_ok}
+        return {"id": hid, "ok": True, "action": action, "name": body["name"], "remote_id": remote_id}
+    detail = str((j.get("error") or {}).get("message") or j.get("detail") or "") if j else r.text[:160]
+    return {"id": hid, "ok": False, "action": action, "error": f"cloud answered {r.status_code}: {detail}"[:300]}
 
 
 def _cloud_status(hid: str, records: dict, fp: str | None, target: dict) -> dict:
@@ -20468,6 +21692,60 @@ async def cloud_targets_add(body: CloudTargetBody, request: Request) -> dict:
     doc["last"] = _cloud_tkey(t)
     await _cloud_targets_save(doc)
     return _cloud_target_public(t)
+
+
+_DEPLOY = "deploy"
+
+
+@app.post("/v1/cloud-upload/connect", include_in_schema=False)
+async def cloud_connect_start(body: ConnectBody, request: Request) -> dict:
+    """Deploy to Cloud, the first time: open the HarnessRouter Cloud sign-in hand-off. The person
+    signs in (or up) on the page `url` names, the hosted side mints a key in their workspace, and
+    the next poll (cloud_connect_poll) stores it here as the destination of every deploy. No key is
+    pasted and none reaches the browser."""
+    await _require_integrations_admin(request)
+    instance = (body.instance or "").strip() or (request.headers.get("host") or "this instance")
+    return await _connect_open(instance, purpose=_DEPLOY)
+
+
+@app.get("/v1/cloud-upload/connect/{code}", include_in_schema=False)
+async def cloud_connect_poll(code: str, request: Request):
+    """One poll of a Deploy to Cloud hand-off: 202 while the person is still on the hosted page;
+    200 with the stored destination (its public view, never the key) once the key has landed, and
+    on every poll after that until the code expires; 410 when the code is not one of these."""
+    await _require_integrations_admin(request)
+    _connects_sweep()
+    entry = _CONNECTS.get(code)
+    if not entry or entry.get("purpose") != _DEPLOY:
+        raise HTTPException(410, "That sign-in is not open any more. Deploy again to start a new one.")
+    if entry.get("target"):
+        return {"status": "ready", "target": entry["target"]}
+    j = await _connect_fetch(code, entry)
+    if j is None:
+        return JSONResponse({"status": "pending"}, status_code=202)
+    key = str(j.get("api_key") or "")
+    if not key:
+        raise HTTPException(502, "HarnessRouter Cloud answered without a key. Deploy again.")
+    # where the key works: the API the hand-off names (its model endpoint is <base>/v1/provider)
+    endpoint = str(j.get("endpoint") or "").rstrip("/")
+    base = endpoint[: -len("/v1/provider")] if endpoint.endswith("/v1/provider") else _CLOUD_UPLOAD_DEFAULT_BASE
+    me = await _cloud_me(base, key)
+    t = {"base_url": base, "api_key": key, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
+         "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or "",
+         "member": me.get("member") or ""}
+    doc = await _cloud_targets()
+    doc["targets"][_cloud_tkey(t)] = t
+    doc["last"] = _cloud_tkey(t)
+    await _cloud_targets_save(doc)
+    entry["target"] = _cloud_target_public(t)
+    return {"status": "ready", "target": entry["target"]}
+
+
+def _cloud_open_url(target: dict | None, remote_id: str) -> str:
+    """Where a deployed copy opens in HarnessRouter Cloud's console: its setup page, when the
+    destination is HarnessRouter Cloud itself ('' for another address, whose console is unknown)."""
+    base = str((target or {}).get("base_url") or _CLOUD_UPLOAD_DEFAULT_BASE).rstrip("/")
+    return f"{HR_HOSTED_CONSOLE}/studio/{remote_id}" if remote_id and base == HR_HOSTED_BASE else ""
 
 
 @app.post("/v1/cloud-upload/targets/test")
@@ -20555,7 +21833,9 @@ async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody 
     await _cloud_remember_last(target)
     if not res.get("ok"):
         raise HTTPException(400 if res.get("action") == "skip" else 502, res.get("error") or "upload failed")
-    return {**res, "status": _cloud_status(hid, records, None, target) | {"changed": False}}
+    return {**res, "open_url": _cloud_open_url(target, str(res.get("remote_id") or "")),
+            "target_name": _cloud_label(target),
+            "status": _cloud_status(hid, records, None, target) | {"changed": False}}
 
 
 @app.get("/v1/harnesses/{hid}/upload", include_in_schema=False)
@@ -20569,10 +21849,14 @@ async def cloud_upload_status(hid: str, request: Request) -> dict:
     if not per:
         return {"uploaded": False}
     v = await _vertex_get(hid)
-    fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
-    rec = max(per.values(), key=lambda r: r.get("uploaded_at") or 0)
+    tkey, rec = max(per.items(), key=lambda kv: kv[1].get("uploaded_at") or 0)
+    # compared in the form it was sent in: a copy sent to a Cloud that takes plugins whole carries
+    # them as such, and read back the other way every deploy there looked changed at once (10-23)
+    fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v, bool(rec.get("plugins_ok")))) if v else None
+    target = (await _cloud_targets())["targets"].get(tkey)
     return {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
-            "changed": bool(fp) and rec.get("fingerprint") != fp}
+            "changed": bool(fp) and rec.get("fingerprint") != fp,
+            "open_url": _cloud_open_url(target, str(rec.get("remote_id") or "")) if target else ""}
 
 
 @app.get("/v1/cloud-upload/status")
@@ -20585,8 +21869,8 @@ async def cloud_upload_status_all(request: Request) -> dict:
         if not per:
             continue
         v = await _vertex_get(hid)
-        fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v)) if v else None
         rec = max(per.values(), key=lambda r: r.get("uploaded_at") or 0)
+        fp = _cloud_fingerprint(await _cloud_harness_body(p.get("org", ""), hid, v, bool(rec.get("plugins_ok")))) if v else None
         out[hid] = {"uploaded": True, "uploaded_at": rec.get("uploaded_at"), "target": rec.get("target"),
                     "changed": bool(fp) and rec.get("fingerprint") != fp}
     return {"harnesses": out}
@@ -20697,7 +21981,9 @@ async def list_bases(request: Request) -> dict:
     # The limits a turn gets when neither the request nor the harness sets one, so the console can
     # show the number that will apply rather than a placeholder of its own.
     return {"bases": out,
-            "runtimeDefaults": {"maxStep": DEFAULT_MAX_STEP, "timeoutSeconds": DEFAULT_TIMEOUT_S}}
+            "runtimeDefaults": {"maxStep": DEFAULT_MAX_STEP, "timeoutSeconds": DEFAULT_TIMEOUT_S},
+            # what every base here takes, from the protocol's own list (GET /v1/uhp), so the two agree
+            "capabilities": {"input_history": bool(UHP_CAPABILITIES.get("input_history"))}}
 
 
 @app.get("/v1/models")
@@ -20796,6 +22082,8 @@ async def publish_harness_plugin(hid: str, body: PluginPublishBody, request: Req
     hb = HarnessBody(name=str(v.get("name") or ""), base=str(v.get("base") or ""), plugins=[item] + kept)
     hb.plugins = await _plugins_prepare(hb, org, previous=previous)
     await _vg_upsert("Harness", hid, {"plugins": json.dumps(hb.plugins), "updated_at": str(int(time.time() * 1000))})
+    # AFTER the write, as in update_harness_public: this route installs a package too.
+    await _plugs_ensure_required(org, hid)
     out = _harness_out(await _vertex_get(hid) or {"id": hid})
     return {"id": hid, "published": name, "plugins": out["plugins"]}
 

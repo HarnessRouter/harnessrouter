@@ -4,12 +4,9 @@
 //
 //   BASE=https://<instance> HR_AUTH_USER=… HR_AUTH_PASSWORD=… node scripts/responsive-audit.mjs
 //
-// Run on 0.15.5 across twelve routes by fifteen widths: no page overflow anywhere and no element
-// wider than its box, apart from the known sidebar handle below. The sweep has been run here and
-// found this console clean; a later reader should not read the absence of findings as its absence.
-//
-// Known and not a finding: `aside.v2-side` reports 4px, which is its drag handle straddling the
-// sidebar edge on purpose so the border can be grabbed from either side. Anything else is real.
+// The routes are the redesigned console's (0.36.0): Start, Studio, Shop, Add-ons and its tabs, API Keys,
+// Bring your own key, Profile and the AGENTS.md page. ROUTES adds a setup's own pages
+// (/studio/<id>, /studio/<id>?tab=settings) where a setup is known.
 //
 // Every console surface at every width that matters, looking for content wider than the box that
 // holds it. An element counts as broken when its own scrollWidth exceeds its client width and its
@@ -17,7 +14,7 @@
 // A container that scrolls on purpose (auto/scroll) is not a finding.
 import { chromium } from 'playwright';
 const BASE = process.env.BASE;
-const ROUTES = (process.env.ROUTES || '/dashboard,/quickstart,/harnesses,/kits,/keys,/integrations,/account,/settings,/tasks,/agents,/profile,/overview').split(',');
+const ROUTES = (process.env.ROUTES || '/start,/studio,/shop,/extensions,/extensions?tab=skills,/extensions?tab=tools,/extensions?tab=envs,/keys,/byok,/profile,/agents').split(',');
 const WIDTHS = (process.env.WIDTHS || '1440,1280,1180,1140,1100,1024,980,900,860,820,768,700,600,480,390').split(',').map(Number);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const b = await chromium.launch(); const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } });
@@ -48,9 +45,6 @@ try {
           if (cs.display === 'none' || cs.visibility === 'hidden') continue;
           if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') continue;  // scrolls on purpose
           if (cs.textOverflow === 'ellipsis') continue;                        // clips on purpose
-          // the sidebar's drag handle straddles its own edge on purpose, 7px wide, 4px of it
-          // outside, so the border can be grabbed from either side
-          if (el.classList.contains('v2-resize')) continue;
           // inside something that scrolls: reachable, so not a finding
           let scroller = false;
           for (let a = el.parentElement; a; a = a.parentElement) {

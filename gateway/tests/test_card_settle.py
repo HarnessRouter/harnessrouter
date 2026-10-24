@@ -33,7 +33,7 @@ def test_a_live_turn_is_left_alone(monkeypatch):
 
 def test_a_dead_heartbeat_past_the_cap_reads_failed(monkeypatch):
     indexed = []
-    _wire(monkeypatch, {"status": "running", "turn_status": "running", "heartbeat": str(time.time() - gw._GW_MAX_TURN_S - 5)}, indexed)
+    _wire(monkeypatch, {"status": "running", "turn_status": "running", "heartbeat": str(time.time() - gw._sweep_cap_s() - 5)}, indexed)
     m = asyncio.run(gw._card_settle("sid", {"session_id": "sid", "status": "running"}))
     assert m["status"] == "failed" and indexed
 

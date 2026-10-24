@@ -16,9 +16,11 @@ def shared(monkeypatch):
     async def get(sid):
         return dict(state) if sid == state["id"] else None
 
-    async def find(label, props):
+    async def find(label, eq=None, neq=None):
         # Deliberately emulate an eventually consistent index: the point read must be
-        # authoritative even when the lookup still returns a revoked session.
+        # authoritative even when the lookup still returns a revoked session. Stubbed under
+        # both names because the share resolver reads strictly — a failed index read must not
+        # reach it as an empty answer — while `find` is the lenient wrapper over it.
         return [{"id": state["id"]}]
 
     async def upsert(sid, props):
@@ -37,7 +39,7 @@ def shared(monkeypatch):
     async def trace_base(sid):
         return None
 
-    async def turns(sid):
+    async def turns(sid, **kw):
         return {"turns": []}
 
     async def files(sid):
@@ -47,6 +49,7 @@ def shared(monkeypatch):
     monkeypatch.setattr(gw, "_vertex_get", get)
     monkeypatch.setattr(gw, "_vertex_upsert", upsert)
     monkeypatch.setattr(gw.BACKING.graph, "find", find)
+    monkeypatch.setattr(gw.BACKING.graph, "find_strict", find)
     monkeypatch.setattr(gw, "_principal", principal)
     monkeypatch.setattr(gw, "_container_file_bytes", file_bytes)
     monkeypatch.setattr(gw, "_trace_base", trace_base)

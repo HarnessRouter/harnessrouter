@@ -89,3 +89,286 @@ def test_a_refused_turn_leaves_the_session_as_it_found_it():
     assert admit < stamp, "the session must be stamped only after admission"
     refused = src.index('"a turn is already in progress for this session"')
     assert refused < stamp, "a refused turn returns before the stamp"
+
+
+class _Resp:
+    def __init__(self, code):
+        self.status_code = code
+
+
+def _sweep(monkeypatch, v, probe_code=404, rec=None, tts=None):
+    """Run the orphan sweep on a session vertex, the runner answering the turn probe with
+    probe_code; returns the vertex writes and the response record as it was persisted."""
+    import asyncio
+    vertex = dict(v)
+    writes: list = []
+    stored: dict = {}
+    async def _vup(sid, props):
+        writes.append(props)
+        vertex.update(props)
+    async def _vget(sid):
+        return dict(vertex)
+    async def _tts(blob, since_ms=0):
+        return None
+    async def _sandbox(path, sid, method, **k):
+        return _Resp(probe_code)
+    async def _resp_get(rid):
+        return dict(rec) if rec else None
+    async def _blob_get(*a, **k):
+        return None
+    async def _blob_put(key, data, **k):
+        import json
+        stored.update(json.loads(data))
+        return True
+    async def _vg_upsert(*a, **k):
+        return None
+    for name, fn in (("_vertex_upsert", _vup), ("_vertex_get", _vget), ("_trace_terminal_status", tts or _tts),
+                     ("_sandbox", _sandbox), ("_resp_get", _resp_get), ("_blob_get", _blob_get),
+                     ("_blob_put", _blob_put), ("_vg_upsert", _vg_upsert)):
+        monkeypatch.setattr(A, name, fn)
+    settled = asyncio.run(A._reconcile_session(v))
+    return settled, writes, stored
+
+
+def test_a_turn_the_runner_lost_to_a_restart_fails_saying_it_was_interrupted(monkeypatch):
+    """#505: the runner restarted under the turn, so it answers 404 for it. Within UHP 2026-10-19 the
+    turn is `failed` (lifecycle §3 keeps `incomplete` for budgets), and the error says a restart cut
+    it: harness_error (the type of an error inside a failed response, and the §3.3 code), with
+    detail.reason interrupted, in the same words as the hosted service."""
+    import time
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
+         "running_response_id": "resp_1", "heartbeat": str(time.time() - 600)}
+    rec = {"id": "resp_1", "status": "running", "_session_id": "hsess1", "output": []}
+    settled, writes, stored = _sweep(monkeypatch, v, 404, rec)
+    assert settled is True
+    assert writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "interrupted"}
+    assert stored["status"] == "failed" and not stored.get("incomplete_details")
+    assert stored["error"] == {"type": "harness_error", "code": "harness_error",
+                               "message": A._INTERRUPTED_MESSAGE, "detail": {"reason": "interrupted"}}
+
+
+def test_a_turn_with_no_runner_turn_on_record_fails_saying_it_was_interrupted(monkeypatch):
+    """No runner turn was ever on record: the turn never reached the runner, and the process that
+    owned it is gone. It is failed, and a failed task's error says why (lifecycle §3): interrupted,
+    as the hosted service names the same case."""
+    import time
+    v = {"id": "hsess1", "status": "running", "turn_status": "starting", "runner_turn_id": "",
+         "heartbeat": str(time.time() - 600)}
+    settled, writes, _ = _sweep(monkeypatch, v, 404)
+    assert settled is True and writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "interrupted"}
+
+
+def test_a_turn_past_the_hard_cap_fails_saying_it_ran_out_of_time(monkeypatch):
+    """Past the hard cap with no result: failed, never bare, with detail.reason timeout."""
+    import time
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
+         "running_response_id": "resp_1", "heartbeat": str(time.time() - A._sweep_cap_s() - 60),
+         "turn_at": str(time.time() - A._sweep_cap_s() - 60)}
+    rec = {"id": "resp_1", "status": "running", "_session_id": "hsess1", "output": [],
+           "created_at": int(time.time() - A._sweep_cap_s() - 60)}
+    settled, writes, stored = _sweep(monkeypatch, v, 200, rec)
+    assert settled is True and writes[0] == {"status": "failed", "turn_status": "failed", "end_reason": "timeout"}
+    assert stored["error"] == {"type": "harness_error", "code": "harness_error",
+                               "message": A._CAP_MESSAGE, "detail": {"reason": "timeout"}}
+
+
+def test_a_runner_that_still_holds_the_turn_is_not_settled(monkeypatch):
+    import time
+    monkeypatch.setattr(A, "_adopting", {"hsess1"})        # adoption already running: spawn nothing
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
+         "heartbeat": str(time.time() - 600)}
+    settled, writes, _ = _sweep(monkeypatch, v, 200)
+    assert settled is False and writes == []
+
+
+def test_a_new_turn_drops_the_last_turns_reason():
+    """The reason lives on the session, so the next turn's start clears it: a later orphan must
+    not inherit 'interrupted' from an earlier one."""
+    import inspect
+    src = inspect.getsource(A)
+    i = src.index('"heartbeat": str(time.time()), "runner_turn_id": "", "end_reason": ""')
+    assert '"turn_status": "starting"' in src[i - 200:i]
+    j = src.index('"running_response_id": resp_id, "runner_turn_id": "",')
+    assert '"end_reason": ""' in src[j:j + 250]
+
+
+def test_a_turn_the_gateway_drains_under_fails_saying_it_was_interrupted(monkeypatch):
+    import asyncio
+    tr = _tr()
+    emitted, persisted = [], []
+    async def _emit(ev):
+        emitted.append(ev)
+    async def _persist(status):
+        persisted.append((status, tr._response_obj(status)))
+    asyncio.run(A._settle_drained(_persist, tr, _emit))
+    assert emitted[-1]["type"] == "response.failed"
+    assert [e for e in emitted if e["type"] == "error"][0]["code"] == "harness_error"
+    assert persisted[0][0] == "failed"
+    assert persisted[0][1]["incomplete_details"] is None
+    assert persisted[0][1]["error"]["detail"] == {"reason": "interrupted"}
+    assert persisted[0][1]["error"]["type"] == "harness_error"
+
+
+def test_a_dead_follow_up_is_not_settled_by_the_turn_before_it(monkeypatch):
+    """The trace is one stream for the whole session. Turn 1 ended with a result; turn 2 died
+    under a restart with none. Read unscoped, turn 1's result settled turn 2 'completed' with
+    no output (#505, live). Scoped to turn 2's start it finds nothing, and the probe decides."""
+    import asyncio, json
+    chunks = {"t/events/1000-a-0-1.jsonl": json.dumps({"type": "result", "is_error": False}).encode(),
+              "t/events/5000-b-0-1.jsonl": json.dumps({"type": "tool_use", "name": "Bash"}).encode()}
+    async def _list(prefix, **k):
+        return [{"file_id": c} for c in chunks]
+    async def _get(cid, **k):
+        return chunks.get(cid)
+    monkeypatch.setattr(A, "_blob_list_all", _list)
+    monkeypatch.setattr(A, "_blob_get", _get)
+    assert asyncio.run(A._trace_terminal_status("t")) == "done"            # unscoped: turn 1's
+    assert asyncio.run(A._trace_terminal_status("t", 4000)) is None         # turn 2's own: none
+    assert A._turn_since_ms(None) == 0 and A._turn_since_ms({"created_at": 4.5}) == 4500
+
+
+def test_the_previous_turns_result_in_the_same_second_is_not_this_turns():
+    """created_at is whole seconds. Measured: turn 1's result chunk at 1792417802072, turn 2
+    created later in second 1792417802. The cutoff is the next second, so that chunk is not read."""
+    since = A._turn_since_ms({"created_at": 1792417802})
+    assert since > 1792417802072 and since == 1792417803000
+
+
+def test_the_sweep_reads_the_trace_from_the_running_turns_start(monkeypatch):
+    import time
+    seen = []
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
+         "running_response_id": "resp_2", "trace_blob": "org/inv_hsess1", "heartbeat": str(time.time() - 600)}
+    rec = {"id": "resp_2", "status": "running", "_session_id": "hsess1", "output": [], "created_at": 4}
+    async def _tts(blob, since_ms=0):
+        seen.append(since_ms)
+        return None
+    settled, writes, _ = _sweep(monkeypatch, v, 404, rec, tts=_tts)
+    assert seen[0] == 5000 and writes[0]["end_reason"] == "interrupted"
+
+
+def test_the_record_carries_its_start_to_the_millisecond(monkeypatch):
+    """created_at is whole seconds; _created_ms is the exact start, and the cutoff when present.
+    Both the result walk and the output replay then read exactly this turn's chunks."""
+    import asyncio, json
+    put = {}
+    async def _blob_put(key, data, **k):
+        put.update(json.loads(data)); return True
+    async def _vg_upsert(*a, **k):
+        return None
+    monkeypatch.setattr(A, "_blob_put", _blob_put)
+    monkeypatch.setattr(A, "_vg_upsert", _vg_upsert)
+    asyncio.run(A._resp_put("resp_1", {"id": "resp_1", "created_at": 1792417802}, "o", "s", None,
+                            "running", 1792417802.5, True))
+    assert put["_created_ms"] == 1792417802500
+    rec = {"created_at": 1792417802, "_created_ms": 1792417802500}
+    assert A._turn_since_ms(rec) == A._turn_since_ms(rec, for_result=False) == 1792417802500
+    old = {"created_at": 1792417802}                      # a record from before the field
+    assert A._turn_since_ms(old) == 1792417803000          # the result walk skips the shared second
+    assert A._turn_since_ms(old, for_result=False) == 1792417802000   # the replay keeps it, as before
+
+
+def test_the_reason_is_written_only_onto_the_turn_it_was_proved_for(monkeypatch):
+    """The session's end reason belongs to its running response. An older orphan of the same
+    session settled later must not be told it was interrupted."""
+    import asyncio, time
+    v = {"id": "hsess1", "status": "failed", "end_reason": "interrupted",
+         "running_response_id": "resp_2", "heartbeat": str(time.time() - 600)}
+    async def _vget(sid):
+        return dict(v)
+    async def _blob_get(*a, **k):
+        return None
+    async def _blob_put(*a, **k):
+        return True
+    async def _vg_upsert(*a, **k):
+        return None
+    for name, fn in (("_vertex_get", _vget), ("_blob_get", _blob_get), ("_blob_put", _blob_put),
+                     ("_vg_upsert", _vg_upsert)):
+        monkeypatch.setattr(A, name, fn)
+    old = asyncio.run(A._reconcile_response("resp_1", {"id": "resp_1", "status": "running",
+                                                       "_session_id": "hsess1", "output": []}))
+    assert old["status"] == "failed" and ((old.get("error") or {}).get("detail") or {}).get("reason") != "interrupted"
+    cur = asyncio.run(A._reconcile_response("resp_2", {"id": "resp_2", "status": "running",
+                                                       "_session_id": "hsess1", "output": []}))
+    assert cur["status"] == "failed" and cur["error"]["detail"] == {"reason": "interrupted"}
+
+
+def test_a_restart_never_reports_incomplete(monkeypatch):
+    """`incomplete` is a budget stop (lifecycle §3, UHP 2026-10-19). Neither restart path produces
+    it: the sweep's 404 and the shutdown drain both end `failed`."""
+    import asyncio, time
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
+         "running_response_id": "resp_1", "heartbeat": str(time.time() - 600)}
+    rec = {"id": "resp_1", "status": "running", "_session_id": "hsess1", "output": []}
+    _, writes, stored = _sweep(monkeypatch, v, 404, rec)
+    assert "incomplete" not in {writes[0]["status"], writes[0]["turn_status"], stored["status"]}
+    tr = _tr()
+    seen = []
+    async def _emit(ev):
+        seen.append(ev["type"])
+    async def _persist(status):
+        seen.append(status)
+    asyncio.run(A._settle_drained(_persist, tr, _emit))
+    assert "incomplete" not in seen and "response.incomplete" not in seen
+
+
+def test_a_drain_after_the_turn_ended_keeps_its_own_end():
+    """A drain that cuts in after _resp_execute returned must not overwrite a finished turn as
+    interrupted. If it cut the closing events short, the terminal event is still sent, so an open
+    Workbench does not stay on 'running'; if they were all sent, nothing is sent twice."""
+    import asyncio, inspect
+    for told, sent in ((False, ["response.completed"]), (True, [])):
+        tr = _tr()
+        emitted, persisted = [], []
+        async def _emit(ev):
+            emitted.append(ev["type"])
+        async def _persist(status):
+            persisted.append(status)
+        asyncio.run(A._settle_drained(_persist, tr, _emit, {"status": "completed", "told": told}))
+        assert emitted == sent and persisted == ["completed"] and tr.incomplete_reason == ""
+    src = inspect.getsource(A.create_response)
+    assert src.count("await _settle_drained(persist, tr, ") == 2
+    assert src.count(", end)") == 2, "both turn paths hand the drain the turn's own end"
+
+
+def test_a_running_turn_with_no_readable_record_is_scoped_by_its_turn_at(monkeypatch):
+    """No record to read the start from: the session's turn_at (stamped at accept) scopes the
+    walk, which unscoped would find the previous turn's result."""
+    import time
+    seen = []
+    async def _tts(blob, since_ms=0):
+        seen.append(since_ms)
+        return None
+    turn_at = round(time.time() - 600, 3)               # inside the hard cap, which runs from turn_at
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "runner_turn_id": "rt_1",
+         "running_response_id": "", "trace_blob": "org/inv_hsess1", "turn_at": str(turn_at),
+         "heartbeat": str(time.time() - 600)}
+    settled, writes, _ = _sweep(monkeypatch, v, 404, None, tts=_tts)
+    assert seen[0] == int(turn_at * 1000) and writes[0]["end_reason"] == "interrupted"
+
+
+def test_the_reconcilers_own_hard_cap_is_never_a_bare_failed(monkeypatch):
+    """A background poll's reconcile that settles a record past the hard cap gives it the timeout
+    error, so a failed task always says why (lifecycle §3)."""
+    import asyncio, time
+    long_ago = time.time() - A._sweep_cap_s() - 60
+    v = {"id": "hsess1", "status": "running", "turn_status": "running", "heartbeat": str(long_ago),
+         "created_at": str(long_ago), "running_response_id": "resp_1"}
+    async def _vget(sid):
+        return dict(v)
+    async def _tts(blob, since_ms=0):
+        return None
+    async def _blob_get(*a, **k):
+        return None
+    async def _blob_put(*a, **k):
+        return True
+    async def _vg_upsert(*a, **k):
+        return None
+    for name, fn in (("_vertex_get", _vget), ("_trace_terminal_status", _tts), ("_blob_get", _blob_get),
+                     ("_blob_put", _blob_put), ("_vg_upsert", _vg_upsert)):
+        monkeypatch.setattr(A, name, fn)
+    out = asyncio.run(A._reconcile_response("resp_1", {"id": "resp_1", "status": "running", "_session_id": "hsess1",
+                                                       "output": [], "created_at": int(long_ago)}))
+    assert out["status"] == "failed"
+    assert out["error"] == {"type": "harness_error", "code": "harness_error", "message": A._CAP_MESSAGE,
+                            "detail": {"reason": "timeout"}}

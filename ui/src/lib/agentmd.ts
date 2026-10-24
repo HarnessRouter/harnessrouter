@@ -47,7 +47,7 @@ HarnessRouter account. There is nothing to run or host: the product only needs a
 
 ## The words this guide and the Skill use
 
-- Workspace: a tenant inside the product's account. One per customer of the product, usually.
+- Workspace: a separate space inside the product's account, with its own harnesses, keys and spend. One per customer of the product, usually.
 - Harness: one configured agent inside a workspace. The product creates and updates it.
 - Task: one request given to a harness, from the first message to the final answer.
 - Session: the thread a task runs in. A follow-up message continues the same session.

@@ -84,6 +84,7 @@ from pydantic import BaseModel
 
 import environments   # the read-only project layer a turn may name (runner/environments.py)
 import reasoning      # how much a model thinks on a turn: levels and what sets them (runner/reasoning.py)
+import tracecontext   # the caller's W3C trace context: its checks and a child for the relay (#473)
 
 app = FastAPI(title="harness-runner")
 
@@ -179,6 +180,15 @@ def _reap_workspaces(keep: str = "") -> int:
             removed += 1
         except OSError:
             continue
+    # A marker whose folder went some other way (by hand, while the runner was down): markers live
+    # on the volume now, so nothing else would ever remove it.
+    try:
+        for m in os.scandir(_WS_MARKER_DIR):
+            name = m.name.removesuffix(".sha")
+            if m.name.endswith(".sha") and name != keep and not os.path.isdir(os.path.join(WORKSPACE_ROOT, name)):
+                _ws_marker_clear(name)
+    except OSError:
+        pass
     if removed:
         print(f"[reap] removed {removed} workspace(s) idle > {WS_TTL_HOURS}h", flush=True)
     return removed
@@ -700,7 +710,7 @@ def _turn_secrets(env: dict, names: list | None) -> list[str]:
 # gateway reads the transcript by) or a role, and erase its own transcript from the trace (reported
 # privately, GHSA-7pwj-vv9r-rh2m). The turn's own fields are kept by POSITION, not by name anywhere:
 # a tool's input is an arbitrary map, and a "type" inside it is the agent's content.
-_ANSWER_CONTENT = ("result", "error", "reason", "handoff", "events")
+_ANSWER_CONTENT = ("result", "error", "reason", "handoff", "events", "error_detail")
 _ANSWER_KEEP = {
     "event": frozenset({"type", "subtype", "session_id", "uuid", "parent_tool_use_id", "model", "usage", "modelUsage",
                         "stop_reason"}),
@@ -985,30 +995,30 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
 _GIT_ENV = {"GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@agentstudio.local",
             "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@agentstudio.local"}
 CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4.6")
-CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-5.4")
+CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-6.1-sol")
 # Hermes default (the gateway maps friendly names to provider ids before the /turn call).
-HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-5.4")
+HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-6.1-sol")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
-PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-5.4")
-OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-5.4")
-KILO_DEFAULT_MODEL = os.environ.get("KILO_DEFAULT_MODEL", "gpt-5.4")
+PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-6.1-sol")
+OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-6.1-sol")
+KILO_DEFAULT_MODEL = os.environ.get("KILO_DEFAULT_MODEL", "gpt-6.1-sol")
 QWEN_DEFAULT_MODEL = os.environ.get("QWEN_DEFAULT_MODEL", "qwen3.7-max")
 GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
 CLINE_DEFAULT_MODEL = os.environ.get("CLINE_DEFAULT_MODEL", "gpt-5.4")
 DSH_DEFAULT_MODEL = os.environ.get("DSH_DEFAULT_MODEL", "deepseek-v4-pro")
-OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-5.4")
-GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-5.4")
+OMP_DEFAULT_MODEL = os.environ.get("OMP_DEFAULT_MODEL", "gpt-6.1-sol")
+GOOSE_DEFAULT_MODEL = os.environ.get("GOOSE_DEFAULT_MODEL", "gpt-6.1-sol")
 KIMI_DEFAULT_MODEL = os.environ.get("KIMI_DEFAULT_MODEL", "kimi-k3")
 # MiniMax Code runs any OpenAI-compatible model; its vendor's own is the natural default.
 MINIMAX_DEFAULT_MODEL = os.environ.get("MINIMAX_DEFAULT_MODEL", "minimax-m3")
 GROK_DEFAULT_MODEL = os.environ.get("GROK_DEFAULT_MODEL", "grok-4.6")
-AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-5.4")
+AIDER_DEFAULT_MODEL = os.environ.get("AIDER_DEFAULT_MODEL", "gpt-6.1-sol")
 OPENHANDS_DEFAULT_MODEL = os.environ.get("OPENHANDS_DEFAULT_MODEL", "gpt-5.4")
 CHEETAHCLAWS_DEFAULT_MODEL = os.environ.get("CHEETAHCLAWS_DEFAULT_MODEL", "gpt-5.4")
-AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-5.4")
+AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-6.1-sol")
 # MiMo Code is an opencode fork (its repo root package.json is still literally "opencode"), so it
 # shares opencode's default for the same reason: multi-family through one connection.
-MIMO_DEFAULT_MODEL = os.environ.get("MIMO_DEFAULT_MODEL", "gpt-5.4")
+MIMO_DEFAULT_MODEL = os.environ.get("MIMO_DEFAULT_MODEL", "gpt-6.1-sol")
 JCODE_DEFAULT_MODEL = os.environ.get("JCODE_DEFAULT_MODEL", "gpt-5.4")
 OPENSQUILLA_DEFAULT_MODEL = os.environ.get("OPENSQUILLA_DEFAULT_MODEL", "gpt-5.4")
 NANOBOT_DEFAULT_MODEL = os.environ.get("NANOBOT_DEFAULT_MODEL", "gpt-5.4")
@@ -2434,17 +2444,154 @@ def _codex_item_kind(it: dict) -> str:
     return _CAMEL.sub(lambda m: "_" + m.group(1).lower(), str(it.get("type") or "")).lower()
 
 
-def _codex_tool_item(it: dict) -> list[dict]:
+# A command's output comes from codex's own record of what the model was given, never from the
+# command item's aggregatedOutput: codex drops a command's output printed before it opens the item
+# (openai/codex#28207, open since 0.139.0; reproduced on 0.154.0, 2026-10-24). For
+# `echo FIRST-LINE; sleep 3; echo LAST-LINE` the model got both lines, while the item's
+# outputDelta and aggregatedOutput carried only LAST-LINE, and the record kept only that. The
+# rollout file holds the same text the model saw, so reading it widens nothing.
+#
+# codex answers an exec_command or write_stdin call with a header (chunk id, wall time, whether the
+# process exited or is still running, token count), then "Output:" and the output. The header is
+# codex's own and is dropped; the output after it is kept exactly as the model saw it, codex's
+# truncation notice included. An answer of any other shape is kept whole.
+_CODEX_EXEC_HEAD = re.compile(r"\A((?:[A-Z][A-Za-z ]*: [^\n]*\n|Process (?:exited with code -?\d+|running with session ID \d+)\n)*)Output:\n")
+_CODEX_RUNNING = re.compile(r"^Process running with session ID (\d+)$", re.M)
+# How long a command's record may trail its item/completed: measured 1 ms ahead to 3 ms behind
+# (four commands, 2026-10-24); the bound is far past that, and costs nothing unless a record is
+# really missing.
+_CODEX_RECORD_WAIT_S = 5.0
+
+
+def _codex_exec_answer(text: str) -> tuple[str, str | None]:
+    """codex's answer to an exec_command or write_stdin call -> (the output in it, the session id
+    when it says the process is still running)."""
+    m = _CODEX_EXEC_HEAD.match(text)
+    if not m:
+        return text, None
+    running = _CODEX_RUNNING.search(m.group(1))
+    return text[m.end():], (running.group(1) if running else None)
+
+
+def _codex_output_text(out) -> str:
+    """A function_call_output's `output` as text: a string, or content parts carrying text."""
+    if isinstance(out, str):
+        return out
+    if isinstance(out, dict) and isinstance(out.get("content"), (str, list)):
+        out = out["content"]
+        if isinstance(out, str):
+            return out
+    if isinstance(out, list):
+        return "".join(str(p.get("text") or "") for p in out if isinstance(p, dict))
+    return json.dumps(out, default=str)
+
+
+class _CodexRollout:
+    """codex's own record of one thread, <CODEX_HOME>/sessions/**/rollout-*-<thread id>.jsonl: one
+    JSON line per item, among them every tool call the model made and the answer codex gave it.
+    Read from where the last read stopped, whole lines only (codex may be mid-line)."""
+
+    def __init__(self, cfg_dir: pathlib.Path, thread_id: str):
+        self.cfg_dir, self.thread_id = cfg_dir, thread_id
+        self.path: pathlib.Path | None = None
+        self.offset = 0
+        self.calls: list[tuple[str, str, dict]] = []    # (call_id, name, arguments), in the model's order
+        self.answers: dict[str, str] = {}               # call_id -> the answer's text
+
+    def read(self) -> None:
+        if self.path is None:
+            hits = sorted((self.cfg_dir / "sessions").rglob(f"rollout-*-{self.thread_id}.jsonl")) if self.thread_id else []
+            if not hits:
+                return
+            self.path = hits[-1]
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.offset)
+                data = f.read()
+        except OSError:
+            return
+        end = data.rfind(b"\n")
+        if end < 0:
+            return
+        self.offset += end + 1
+        for line in data[:end].splitlines():
+            try:
+                p = (json.loads(line) or {}).get("payload")
+            except (ValueError, AttributeError):
+                continue
+            if not isinstance(p, dict) or not p.get("call_id"):
+                continue
+            cid = str(p["call_id"])
+            if p.get("type") == "function_call":
+                try:
+                    args = json.loads(p.get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                self.calls.append((cid, str(p.get("name") or ""), args if isinstance(args, dict) else {}))
+            elif p.get("type") == "function_call_output":
+                self.answers[cid] = _codex_output_text(p.get("output"))
+
+    def command_output(self, call_id: str) -> tuple[str | None, bool]:
+        """What the model was given as the output of the command it started with `call_id`
+        -> (text, complete). The call's own answer, and while that says the process is still
+        running, each later write_stdin answer for the same session, until one no longer says so.
+        (None, False): no answer recorded for the call. (text, False): the session's answers stop
+        short of the process's end."""
+        first = self.answers.get(call_id)
+        if first is None:
+            return None, False
+        text, running = _codex_exec_answer(first)
+        if running is None:
+            return text, True
+        start = next((i for i, c in enumerate(self.calls) if c[0] == call_id), None)
+        if start is None:
+            return text, False
+        parts = [text]
+        for cid, name, args in self.calls[start + 1:]:
+            if name != "write_stdin" or str(args.get("session_id")) != running:
+                continue
+            answer = self.answers.get(cid)
+            if answer is None:
+                break
+            more, still = _codex_exec_answer(answer)
+            parts.append(more)
+            if still is None:
+                return "".join(parts), True
+        return "".join(parts), False
+
+
+def _codex_command_output(rollout: _CodexRollout | None, call_id: str,
+                          wait_s: float | None = None) -> tuple[str | None, bool]:
+    """The record's command output for `call_id`, read again until it is complete or `wait_s`
+    (default _CODEX_RECORD_WAIT_S) has passed: it may land a few ms after the item that announces
+    the command."""
+    if rollout is None:
+        return None, False
+    deadline = time.monotonic() + (_CODEX_RECORD_WAIT_S if wait_s is None else wait_s)
+    while True:
+        rollout.read()
+        text, complete = rollout.command_output(call_id)
+        if complete or time.monotonic() >= deadline:
+            return text, complete
+        time.sleep(0.02)
+
+
+def _codex_tool_item(it: dict, output: str | None = None, incomplete: bool = False) -> list[dict]:
     """A completed codex tool item (command/file/mcp) -> canonical tool_use + tool_result events.
     Shared by the exec normalizer and the app-server driver (the `item` shape is the same, the
     type spelling is not: see _codex_item_kind). A message or reasoning item is not a tool and
-    yields nothing here (its text streams as deltas)."""
+    yields nothing here (its text streams as deltas).
+
+    `output`: a command's output from codex's record (see _CodexRollout), in place of the item's
+    own. `incomplete`: no complete record was found, so the output may lack part of what the
+    command printed; the tool_result says so, and the response marks its item incomplete."""
     kind = _codex_item_kind(it)
     if kind in ("user_message", "agent_message", "reasoning"):
         return []
     if kind == "command_execution":
         tuid = it.get("id") or "cmd"
-        out = it.get("aggregated_output") or it.get("aggregatedOutput") or it.get("output") or ""
+        out = output if output is not None else (
+            it.get("aggregated_output") or it.get("aggregatedOutput") or it.get("output") or "")
         ec = it.get("exit_code", it.get("exitCode"))
         return [
             {"type": "assistant", "message": {"content": [
@@ -2452,7 +2599,8 @@ def _codex_tool_item(it: dict) -> list[dict]:
                  "input": {"command": it.get("command") or ""}}]}},
             {"type": "user", "message": {"content": [
                 {"type": "tool_result", "tool_use_id": tuid,
-                 "is_error": bool(ec not in (0, None)), "content": str(out)}]}},
+                 "is_error": bool(ec not in (0, None)), "content": str(out),
+                 **({"incomplete": True} if incomplete else {})}]}},
         ]
     if kind == "file_change":
         changes = it.get("changes") or []
@@ -2537,7 +2685,14 @@ def _codex_to_claude(obj: dict, state: dict) -> list[dict]:
                 return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": d}]}}] if d else []
             return [{"type": "assistant",
                      "message": {"content": [{"type": "thinking", "thinking": it.get("text") or ""}]}}]
-        return _codex_tool_item(it)   # command_execution / file_change / mcp_tool_call / other
+        if _codex_item_kind(it) == "command_execution":
+            # `codex exec` names its items item_0, item_1, ..., not by the call id codex's record
+            # keeps, so nothing ties this output to what the model was given, and it has the gap
+            # the app-server's has (openai/codex#28207): it may lack what the command printed first.
+            print(f"[codex] command {it.get('id') or 'cmd'}: exec mode has no record to read its output from; "
+                  "stored marked incomplete", flush=True)
+            return _codex_tool_item(it, incomplete=True)
+        return _codex_tool_item(it)   # file_change / mcp_tool_call / other
     if t == "turn.completed":
         return [{"type": "result", "subtype": "success", "is_error": False,
                  "result": state.get("final", ""),
@@ -3856,6 +4011,23 @@ _HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threadin
 # backend keeps its placeholder in. A context variable, so two turns being built at once never read
 # each other's.
 _TURN_THINKING: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_thinking", default=None)
+
+
+# The caller's W3C trace context (#473), for the turn being built: {"traceparent": ..., "tracestate":
+# ...}. The relay's routes are registered on the thread that runs /turn, so a context variable is
+# what carries the context from the request to the routes — the relay serves each call on a thread
+# of its own, where a context variable would not be visible.
+_TURN_TRACE: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_trace", default=None)
+
+
+def _route_trace_flag() -> dict:
+    """The turn's trace context, as a route flag. Every route of the turn carries it, so the relay
+    gives the provider request a child of the caller's span whichever way the route was made."""
+    trace = _TURN_TRACE.get() or {}
+    if not trace.get("traceparent"):
+        return {}
+    return {"traceparent": trace["traceparent"],
+            **({"tracestate": trace["tracestate"]} if trace.get("tracestate") else {})}
 
 
 def _turn_route(flags: dict) -> dict:
@@ -5313,10 +5485,35 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             return
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
         drop = {"host", "content-length", "authorization", "x-goog-api-key", "x-api-key", "connection",
-                "accept-encoding", "transfer-encoding"}
+                "accept-encoding", "transfer-encoding", "baggage"}
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
+        # The turn's trace context, as a child of it: the same trace id, a new span id (this hop is
+        # a span of its own), the sampled flag kept. The client's own header is replaced, not left
+        # beside it — two traceparents would leave the provider unable to say which span is which.
+        # A turn with no trace context sends none of its own, and the client's headers go upstream
+        # exactly as they did before: the relay changes nothing it was not asked to change.
+        #
+        # The turn's context is the trace's root here: the caller's trace id is never taken from
+        # the client. A CLI that read TRACEPARENT from its environment has already made a child of
+        # the caller's span, and the provider's request belongs under THAT span — so the CLI's own
+        # header is the parent when it carries the caller's trace id, and is ignored otherwise.
+        parent = str(flags.get("traceparent") or "")
+        inbound = next((v for k, v in headers.items() if k.lower() == "traceparent"), "")
+        if parent:
+            if tracecontext.trace_id(inbound) and tracecontext.trace_id(inbound) == tracecontext.trace_id(parent):
+                parent = inbound
+            child = tracecontext.child(parent)
+            if child:
+                for _k in [k for k in headers if k.lower() == "traceparent"]:
+                    del headers[_k]
+                headers["traceparent"] = child
+                state = str(flags.get("tracestate") or "")
+                for _k in [k for k in headers if k.lower() == "tracestate"]:
+                    del headers[_k]
+                if state:
+                    headers["tracestate"] = state
         if flags.get("passthrough"):
             self._passthrough(base, key, tail, headers, body)
             return
@@ -6066,7 +6263,8 @@ def _qoder_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key, _turn_route({"passthrough": True}))
+        _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key,
+                                        _turn_route({"passthrough": True, **_route_trace_flag()}))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -6078,7 +6276,8 @@ def _bedrock_anthropic_route(origin: str, api_key: str) -> tuple[str, str]:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = (origin, api_key, {"bedrock_anthropic": True})
+        _HERMES_RELAY["routes"][tok] = (origin, api_key,
+                                        {"bedrock_anthropic": True, **_route_trace_flag()})
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -6281,7 +6480,8 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
         tok = "hr-relay-" + uuid.uuid4().hex
         _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key,
                                         _turn_route({"google_native": True, "model": model,
-                                                     "native_model": native_model, **_turn_effort()}))
+                                                     "native_model": native_model, **_turn_effort(),
+                                                     **_route_trace_flag()}))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -6324,6 +6524,9 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
                  "tool_index_fill": bool(tool_index_fill),
                  **({"aux": True} if aux else _turn_effort())}
+        # The turn's trace context (#473), on every route of this turn: the relay reads it when it
+        # forwards, and the relay's own threads never see the turn's context variables.
+        flags.update(_route_trace_flag())
         _HERMES_RELAY["routes"][tok] = (upstream, api_key, flags if aux else _turn_route(flags))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
@@ -9492,7 +9695,7 @@ def _systemone_relay_route(provider: str, base_url: str, api_key: str) -> tuple[
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
         tok = "hr-relay-" + uuid.uuid4().hex
-        _HERMES_RELAY["routes"][tok] = (base, api_key, {})
+        _HERMES_RELAY["routes"][tok] = (base, api_key, dict(_route_trace_flag()))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
@@ -11563,6 +11766,9 @@ def _agentzero_to_claude(obj: dict, state: dict) -> list[dict]:
                     {"type": "result", "subtype": "success", "is_error": False, "result": final,
                      "usage": {}}]
         state["_a0_error"] = str(p.get("error") or "")
+        # the failure whole, frames included (#546): the record keeps the one line above, the
+        # trace's error_detail gets this in place of a stderr tail this base never writes to
+        state["diagnostic"] = str(p.get("diagnostic") or "")
         # usage is {} on purpose: the relay stamps it (_relay_usage), as for every backend whose
         # own record carries none — Agent Zero's LLMResult usage never leaves the process.
         return [{"type": "result", "subtype": "error", "is_error": True,
@@ -13289,14 +13495,18 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 continue
             for ev in normalize(obj, state):
                 _settle(ev)
-                with _turns_lock:
-                    rec["events"].append(ev)
-                _record_cli_session_id(rec, ev)
                 if ev.get("type") == "result":
+                    # The turn's own ending is HELD BACK until the process is done (#504): the
+                    # harness's account of its failure (the exception and the stack frames) rides
+                    # this event, and an event already handed to the gateway cannot carry it.
                     result_ev = ev
                     # Claude's stream-json carries the final assistant text on the result event;
                     # the codex normalizer already fills state['final'], so prefer that.
                     state["final"] = state.get("final") or ev.get("result") or ""
+                    continue
+                with _turns_lock:
+                    rec["events"].append(ev)
+                _record_cli_session_id(rec, ev)
                 if (step_cap and not state.get("_stop") and ev.get("type") == "assistant"
                         and _count_tool_calls(ev, state) > step_cap):
                     state["_stop"] = "max_turns"
@@ -13321,14 +13531,15 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     if eof is not None and result_ev is None:
         for ev in eof(state, rc):
             _settle(ev)
+            if ev.get("type") == "result":
+                result_ev = ev      # held back like the CLI's own (see the loop above)
+                state["final"] = state.get("final") or ev.get("result") or ""
+                continue
             with _turns_lock:
                 rec["events"].append(ev)
             # The SAME capture the streaming loop does, because a base whose stream carries nothing
             # emits its init HERE (see _record_cli_session_id for what it cost to learn that).
             _record_cli_session_id(rec, ev)
-            if ev.get("type") == "result":
-                result_ev = ev
-                state["final"] = state.get("final") or ev.get("result") or ""
     if result_ev is None and state.get("_stop") == "max_turns":
         # Stopped at its budget before the CLI said anything terminal (codex's turn.completed
         # never comes once it is killed): the turn's result is the budget's, with what its
@@ -13338,8 +13549,6 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         if _running_usage(state):
             result_ev["usage"] = _running_usage(state)   # the translator's count so far (pi, dsh)
         _settle(result_ev)
-        with _turns_lock:
-            rec["events"].append(result_ev)
     if (result_ev is not None and not result_ev.get("is_error")
             and _relay_last_finish(env) == "content_filter"):
         # The provider declined the last request (finish_reason content_filter, seen by the relay)
@@ -13362,8 +13571,10 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     # gateway/trace shows WHY it failed (throttling, model error, etc.) instead of an empty string.
     if rec["status"] in ("failed", "error", "timeout"):
         # FRAMES OUT FIRST, once, because everything below reads this tail: the refusal search, the
-        # reason, and the result event a failed turn shows as its answer.
-        tail = _without_traceback_frames("\n".join(errbuf[-30:]).strip())
+        # reason, and the result event a failed turn shows as its answer. The harness's own account
+        # (#504) keeps them: error_detail is read from raw_tail, frames and all.
+        raw_tail = "\n".join(errbuf[-30:]).strip()
+        tail = _without_traceback_frames(raw_tail)
         ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
         # A TRACEBACK FRAME IS NOT A REFUSAL, and the refusal wins over everything else below.
         # MEASURED end to end (2026-10-21): the
@@ -13389,10 +13600,32 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             # keeps for a provider's refusal.
             refusal = "the provider declined the request (finish_reason content_filter)"
         rec["error"] = _failure_reason(refusal, str(ev_err), tail, rc)
-        if result_ev is not None and not str(result_ev.get("result") or "").strip() and tail:
+        # The harness's own account of the failure, kept whole (#504): the exception and the stack
+        # frames it printed, and the tool that failed. rec["error"] stays one line for a person —
+        # the spec forbids a stack trace in a message — and this rides the trace's result event.
+        # a driver that handles the exception in-process hands its diagnostic over in the state (an
+        # agentzero turn, #546); every other base printed it, and it is in the output's tail
+        detail = _failure_detail(str(rec.get("backend") or ""), rec["events"],
+                                 str(state.get("diagnostic") or "") or raw_tail)
+        rec["error_detail"] = detail
+        made = result_ev is None
+        if made:
+            # The CLI died before it said anything terminal: the trace gets a result event of its
+            # own, so the failure is in the trace and not only in the record (#504). The reason
+            # rides as `error`, never as `result`: the gateway shows a result's text as the turn's
+            # answer when nothing was said before it, and the CLI said nothing.
+            result_ev = {"type": "result", "subtype": "error", "is_error": True,
+                         "result": "", "error": rec["error"]}
+            _settle(result_ev)
+        result_ev["error_detail"] = detail
+        if not made and not str(result_ev.get("result") or "").strip() and tail:
             # ...and the ANSWER a failed turn shows is this same filtered text: before the filter
             # it was `│  1585 │   │   │   exc`, the frame that happened to be 30 lines from the end.
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
+    if result_ev is not None:
+        # The turn's ending goes out last, with the failure's own account of itself on it (#504).
+        with _turns_lock:
+            rec["events"].append(result_ev)
     rec["done"] = True
 
 
@@ -13448,6 +13681,36 @@ def _without_traceback_frames(tail: str) -> str:
     kept = [ln for ln in tail.splitlines()
             if ln.strip() and ln.strip()[0] not in _FRAME_LEAD]
     return "\n".join(kept).strip()
+
+
+_DIAG_MAX = 4000   # the harness's own diagnostic (its exception and stack frames), capped
+
+
+def _failed_tool(events: list[dict]) -> str:
+    """The name of the tool whose result came back an error. Every normaliser emits the same
+    Claude-shaped blocks — a tool_use carries the name, the tool_result that follows carries
+    is_error — so this reads the same for every base; the LAST failed tool is the turn's."""
+    names: dict[str, str] = {}
+    failed = ""
+    for ev in events:
+        msg = ev.get("message")
+        blocks = msg.get("content") if isinstance(msg, dict) else None
+        for blk in blocks if isinstance(blocks, list) else []:
+            if not isinstance(blk, dict):
+                continue
+            if blk.get("type") == "tool_use":
+                names[str(blk.get("id") or "")] = str(blk.get("name") or "")
+            elif blk.get("type") == "tool_result" and blk.get("is_error"):
+                failed = names.get(str(blk.get("tool_use_id") or ""), "")
+    return failed
+
+
+def _failure_detail(base: str, events: list[dict], diagnostic: str) -> dict:
+    """What the harness itself said about the failure, kept whole (#504): the base that ran it,
+    the tool that failed, and the exception and stack frames it printed (capped). The one line
+    in rec["error"] is for a person — a message may not carry a stack trace (UHP errors §1) —
+    and this is what a debugger needs."""
+    return {"base": base, "tool": _failed_tool(events), "exception": diagnostic[:_DIAG_MAX]}
 
 
 # Codex app-server JSON-RPC driver — the ONLY codex mode that streams assistant text (via
@@ -13580,6 +13843,8 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
     usage: dict = {}
     turn_status = None
     thread_id = None
+    rollout: _CodexRollout | None = None
+    incomplete = 0      # commands whose output no complete record backed (logged one by one above)
     id_init = id_thread = id_turn = None
     try:
         id_init = send("initialize", {"clientInfo": {"name": "harness-runner", "title": "HarnessRouter", "version": "1"},
@@ -13613,6 +13878,8 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                     if thread_id:
                         append({"type": "system", "subtype": "init", "session_id": thread_id, "model": model})
                         rec["session_id"] = thread_id
+                        rollout = _CodexRollout(pathlib.Path(env.get("CODEX_HOME") or (pathlib.Path(env.get("HOME") or cwd) / ".codex")),
+                                                thread_id)
                     id_turn = send("turn/start", {"threadId": thread_id, "model": model,
                                    "approvalPolicy": _CODEX_APPROVAL, "input": [{"type": "text", "text": prompt}]})
                 continue
@@ -13637,7 +13904,17 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                     append({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": d}]}})
             elif method == "item/completed":
                 it = p.get("item") or {}
-                for ev in _codex_tool_item(it):     # messages and reasoning yield nothing: already streamed as deltas
+                evs = None
+                if _codex_item_kind(it) == "command_execution":
+                    # the output the model was given, from codex's record (see _CodexRollout)
+                    out, complete = _codex_command_output(rollout, str(it.get("id") or ""))
+                    if not complete:
+                        incomplete += 1
+                        print(f"[codex] command {it.get('id') or 'cmd'}: "
+                              f"{'no record of its output' if out is None else 'its output recorded only in part'} "
+                              f"within {_CODEX_RECORD_WAIT_S:g} s; stored marked incomplete", flush=True)
+                    evs = _codex_tool_item(it, output=out, incomplete=not complete)
+                for ev in evs if evs is not None else _codex_tool_item(it):     # messages and reasoning yield nothing: already streamed as deltas
                     append(ev)
                     # The step budget, as _run_turn_bg counts it for `codex exec` (#471): codex has no
                     # limit of its own, and this is the path the image runs codex on by default.
@@ -13683,6 +13960,8 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                 _kill_proc_tree(proc)                            # one turn per process — never reuse
         except Exception:  # noqa: BLE001
             pass
+    if incomplete:
+        print(f"[codex] turn {turn_id}: {incomplete} command output(s) stored marked incomplete", flush=True)
 
     # A turn that produced a final agent answer SUCCEEDED from the caller's view — even if codex then
     # fumbles the turn close. gpt-5.5 refusals are the sharp case: the model returns a clean final
@@ -13716,6 +13995,12 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
         ev["model"] = served
     _fill_relay_usage(ev, env)
     _stamp_thinking(ev, rec)
+    if not ok and not stopped:
+        # The app-server's own account of the failure, kept whole (#504): the exception and the
+        # stack frames it printed, and the tool that failed.
+        detail = _failure_detail(str(rec.get("backend") or ""), rec["events"], err_txt)
+        ev["error_detail"] = detail
+        rec["error_detail"] = detail
     append(ev)
     rec["result"] = state["final"]
     rec["status"] = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
@@ -14075,12 +14360,19 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
         ev["model"] = served
     _fill_relay_usage(ev, env)
     _stamp_thinking(ev, rec)
+    status = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
+              else "done" if ok else "failed")
+    if not ok and status in ("failed", "timeout"):
+        # hermes's own account of the failure, kept whole (#504): the exception and the stack
+        # frames it printed, and the tool that failed.
+        detail = _failure_detail(str(rec.get("backend") or ""), rec["events"], err_txt)
+        ev["error_detail"] = detail
+        rec["error_detail"] = detail
     append(ev)
     rec["exit_code"] = rc
     rec["result"] = final
-    rec["status"] = ("cancelled" if rec.get("cancelled") else "timeout" if rec.get("capped")
-                     else "done" if ok else "failed")
-    if not ok and rec["status"] in ("failed", "timeout"):
+    rec["status"] = status
+    if not ok and status in ("failed", "timeout"):
         rec["error"] = err_txt
     rec["done"] = True
 
@@ -14101,7 +14393,30 @@ def backends() -> dict:
 # sha256 of the checkpoint each session's workspace currently holds. PER SESSION, and outside
 # the workspace so it survives the wipe: one shared marker meant a second session's hydrate
 # answered the first session's "do you already have this checkpoint?" probe.
-_WS_MARKER_DIR = "/tmp/hr-ws"
+#
+# It has to live as long as the workspace does. Self-hosted keeps workspaces on the /data volume
+# so a restart doesn't discard work in flight, but the markers sat in /tmp, which a restart empties:
+# the next probe missed, the gateway restored the last end-of-turn checkpoint over the surviving
+# folder, and everything the interrupted turn had written was deleted, files and conversation
+# (#505). The entrypoint names the place on the volume (HR_WS_MARKER_DIR). Without it, a runner
+# that holds several sessions puts them beside its workspace root, as environments.py does with its
+# own root, so a runner started some other way keeps them as long as its workspaces too; a
+# per-session sandbox, or a runner that cannot write there, keeps /tmp.
+def _ws_marker_dir() -> str:
+    named = os.environ.get("HR_WS_MARKER_DIR")
+    if named:
+        return named
+    if _SANDBOX_PER_SESSION:
+        return "/tmp/hr-ws"
+    beside = os.path.join(os.path.dirname(WORKSPACE_ROOT.rstrip("/")) or "/", "ws-markers")
+    try:
+        os.makedirs(beside, mode=0o700, exist_ok=True)
+    except OSError:
+        return "/tmp/hr-ws"
+    return beside if os.access(beside, os.W_OK) else "/tmp/hr-ws"
+
+
+_WS_MARKER_DIR = _ws_marker_dir()
 
 
 def _ws_marker_path(identifier: str) -> pathlib.Path:
@@ -14201,6 +14516,9 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         # Warm-pool sandboxes are REUSED across sessions, so /workspace may hold a PRIOR session's
         # files (incl. another tenant's). Wipe it before restoring so this session starts from
         # exactly its own checkpoint (or empty) — multi-tenant isolation, not best-effort.
+        # The marker goes first: a restart in the middle of the wipe or the untar must not leave it
+        # vouching for a half-restored folder, now that it outlives a restart.
+        _ws_marker_clear(identifier)
         for child in ws_path.iterdir():
             try:
                 if child.is_dir() and not child.is_symlink():
@@ -14328,22 +14646,34 @@ def _produced_list(ws: str) -> list[dict]:
     _collected_init(ws)
     seen: dict[str, str] = {}
     if _git(ws, "rev-parse", "-q", "--verify", _COLLECTED_REF).returncode == 0:
-        d = _git(ws, "diff", "--name-status", _COLLECTED_REF)
-        for line in (d.stdout or "").splitlines():
-            parts = line.split("\t")
-            if len(parts) < 2:
-                continue
-            status, path = parts[0], parts[-1].strip().strip('"')
-            if _produced_keep(status, path):
+        # -z: git's NUL-separated output, which is never quoted or escaped. Without it git renders a
+        # non-ASCII path as \NNN octal escapes inside double quotes (core.quotepath only stops those),
+        # and a path holding a double quote, a backslash, a tab or a newline is quoted and escaped
+        # whatever the config: the name handed on was a spelling no file has, so it could not be
+        # stat'ed (mtime 0, size 0) and the gateway's GET /file 404'd while the ack advanced the cursor
+        # past it. Both readers below read -z so they cannot disagree.
+        d = _git(ws, "diff", "--name-status", "-z", _COLLECTED_REF)
+        toks = (d.stdout or "").split("\0")
+        i = 0
+        while i < len(toks) - 1:
+            status = toks[i]
+            if status[:1] in ("R", "C"):         # a rename or copy: the old path, then the new one
+                path, i = toks[i + 2] if i + 2 < len(toks) else "", i + 3
+            else:
+                path, i = toks[i + 1], i + 2
+            if path and _produced_keep(status, path):
                 seen[path] = status[:1]
-    p = _git(ws, "status", "--porcelain", "-uall")
-    for line in (p.stdout or "").splitlines():
-        if len(line) < 4:
+    p = _git(ws, "status", "--porcelain", "-z", "-uall")
+    toks = (p.stdout or "").split("\0")
+    i = 0
+    while i < len(toks):
+        entry = toks[i]
+        i += 1
+        if len(entry) < 4:
             continue
-        status, path = line[:2], line[3:]
-        if " -> " in path:                       # rename: take the new path
-            path = path.split(" -> ", 1)[1]
-        path = path.strip().strip('"')
+        status, path = entry[:2], entry[3:]
+        if "R" in status or "C" in status:       # -z gives the new path here and the old one next
+            i += 1
         if _produced_keep(status, path):
             seen.setdefault(path, status.strip() or "?")
     keep = set(_without_lo_profiles(list(seen)))
@@ -14513,6 +14843,7 @@ async def put_file(request: Request, path: str, identifier: str = "") -> dict:
             inside = _safe_join(vis, path)
             if inside is not None:
                 dest = inside
+    _refuse_protected(ws, dest)
     data = await request.body()
     pathlib.Path(ws).mkdir(parents=True, exist_ok=True)
     _isolate_session(ws)
@@ -14779,6 +15110,8 @@ class TurnReq(BaseModel):
     reasoning_effort: str | None = None    # how much the model thinks this turn: one of reasoning.LEVELS; unset = the model's default
     reasoning_route: str | None = None     # which measured provider the connection is (reasoning.ROUTES), from the gateway,
                                            # which knows it when the base here is a broker's; unset = read it off the base
+    traceparent: str | None = None          # the caller's W3C trace context (#473); unset = the turn has none
+    tracestate: str | None = None           # its vendor state for that trace; never `baggage`
 
 
 @app.post("/turn")
@@ -14878,6 +15211,15 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     turn_thinking = {"asked": effort if effort in reasoning.LEVELS else "", "applied": "", "routes": [],
                      "route": named if named in reasoning.ROUTES else ""}
     _TURN_THINKING.set(turn_thinking)
+    # The caller's W3C trace context (#473). The CLI's environment carries it, so a tool in the turn
+    # that speaks OpenTelemetry joins the caller's trace; the relay gives the model calls a child of
+    # it. Nothing is set when the turn carried no context.
+    turn_trace = tracecontext.parse(req.traceparent, req.tracestate)
+    _TURN_TRACE.set(turn_trace)
+    if turn_trace.get("traceparent"):
+        env["TRACEPARENT"] = turn_trace["traceparent"]
+    if turn_trace.get("tracestate"):
+        env["TRACESTATE"] = turn_trace["tracestate"]
     # Image generation. Deliberately NOT the OPENAI_* names: on a codex harness those already
     # point at the CHAT connection, which is often a different provider, and one env pair can
     # only carry one credential. The imagegen skill's wrapper reads these and passes them to the
@@ -15319,6 +15661,10 @@ def _turn_answer(turn_id: str, rec: dict, since: int, held: bool) -> dict:
            "error": rec.get("error"), "backend": rec["backend"], "model": rec["model"],
            "session_id": rec.get("session_id"), "reason": rec.get("reason") or "",
            "handoff": rec.get("handoff"),
+           # The harness's own account of a failure (#504): the base, the tool that failed and the
+           # exception and stack frames it printed. The gateway puts the base and the tool in the
+           # response's error.detail; the trace carries the rest.
+           "error_detail": rec.get("error_detail"),
            "events": evs, "n_total": n, "elapsed": round(time.time() - rec["started"], 1)}
     if held:
         out["held"] = True

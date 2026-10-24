@@ -5,7 +5,10 @@
 // drifted: the console advertised four built-in skills (docx, pdf, pptx, xlsx) that exist nowhere,
 // with Replace and Disable buttons next to them acting on nothing, while the agent actually had a
 // completely different set the CLI discovers for itself. The static table below now carries only
-// identity and presentation; every capability field is filled in from the server.
+// identity and presentation (and the model placeholders the gateway's tests hold to its catalog);
+// every capability field is filled in from the server.
+// Custom harnesses (setups) are persisted by the gateway (/v1/harnesses) through the console's own
+// proxy (/api/harness).
 import { useEffect, useState } from 'react';
 
 import { harnessFetch } from '@/lib/hfetch';
@@ -26,8 +29,7 @@ export interface OobHarness {
   skills: string[];        // built-in skills (read-only)
 }
 
-/** One entry in a Harness's tool list. Every entry, with no exceptions and no kinds: a database
- *  a kit connected is one of these and reads back exactly like a server somewhere else. */
+/** One entry in a Harness's tool list: a server somewhere else, addressed by URL. */
 export interface McpServer {
   id: string; name: string; enabled: boolean;
   url?: string; auth?: string; transport?: string;
@@ -46,9 +48,11 @@ export interface CustomHarness {
   // resolved back to files via getSkillFiles() when editing. Either shape is a REAL own skill.
   skills: { id: string; name: string; enabled: boolean; files?: { path: string; content?: string; content_b64?: string }[]; blob?: string }[];
   disabledTools?: string[];  // inherited/built-in tool names disabled for this harness
-  maxStep?: number | null;        // default agent step budget per turn (blank = 40)
-  timeoutSeconds?: number | null; // default per-turn wall-clock cap (blank = server default)
+  maxStep?: number | null;        // default agent step budget per turn (blank = the server's runtime default)
+  timeoutSeconds?: number | null; // default per-turn wall-clock cap (blank = the server's runtime default)
   reasoningEffort?: string;       // how much the model thinks on this harness's Tasks ('' = the model's default)
+  // The environment (henv_) every Task of this Harness reads at its mount path, read-only; '' for none.
+  environment?: string;
   additionalHeaders?: string[]; // declared header NAMES callers pass per request (app-level auth)
   // Variables every Task's shell and tools start with. A value is `$headers.X-Name` (a declared
   // request header), `vault:ref` (a stored secret) or a literal. Resolved by the service per turn.
@@ -57,8 +61,9 @@ export interface CustomHarness {
   // skipped from the package on every save; a saved plugin round-trips as {name, enabled, blob}
   // plus those derived fields, and a freshly picked one carries its `files` until it is saved.
   plugins?: HarnessPlugin[];
-  // The environment (henv_) every Task of this Harness reads at its mount path, read-only; '' for none.
-  environment?: string;
+  // Where it came from, as whatever made it said at create ("demo:<n>@<ms>": the recorded demo run
+  // Start saved it from, start/replay.ts). Sent only on create; the server never changes it after.
+  source?: string;
   createdAt: number;
 }
 
@@ -84,7 +89,7 @@ export type HarnessPlugin = {
 // never the first entry.
 export const OOB: OobHarness[] = [
   { id: 'codex', name: 'Codex', version: 'v1.0.1', backend: 'codex', status: 'ready',
-    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2'], defaultModel: 'gpt-5.4', moreModels: 0,
+    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are Codex, an autonomous software-engineering agent. You operate on a real git workspace with shell access, reading and editing files and running commands to complete the task, returning reviewable diffs and results.',
     tools: [], skills: [] },
   { id: 'claude-code', name: 'Claude Code', version: 'v1.0.1', backend: 'claude', status: 'ready',
@@ -93,12 +98,12 @@ export const OOB: OobHarness[] = [
     tools: [], skills: [] },
   { id: 'hermes', name: 'Hermes', version: 'v0.19.0', backend: 'hermes', status: 'ready',
     // Multi-family: Hermes runs any frontier model, the gpt + claude catalogs, default gpt-5.5.
-    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'hunyuan-3', 'minimax-m3', 'nemotron-3.5-lightning', 'nemotron-3-ultra', 'nemotron-3-super', 'ling-3.0-flash'], defaultModel: 'gpt-5.4', moreModels: 0,
+    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'hunyuan-3', 'minimax-m3', 'nemotron-3.5-lightning', 'nemotron-3-ultra', 'nemotron-3-super', 'ling-3.0-flash'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are Hermes, a self-improving autonomous agent. You work on a real project workspace with shell and file access, complete tasks end to end, and build a persistent memory and skill library from what you learn, getting more capable the longer you run.',
     tools: [], skills: [] },
   { id: 'pi', name: 'Pi', version: 'v0.84.2', backend: 'pi', status: 'ready',
     // Multi-family like Hermes: the gpt + claude catalogs (placeholder until /v1/models lands).
-    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
+    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are Pi, a minimal autonomous coding agent. You operate on a real git workspace, reading, writing and editing files and running bash to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'dsh', name: 'DeepSeek Harness', version: 'v0.1.0-rc.7', backend: 'dsh', status: 'ready',
@@ -109,14 +114,14 @@ export const OOB: OobHarness[] = [
   { id: 'opencode', name: 'OpenCode', version: 'v1.18.23', backend: 'opencode', status: 'ready',
     // Multi-family, matching the server catalogue: opencode reaches models through the same
     // relays as pi, with the ai-sdk package chosen per turn from the model family.
-    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
+    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are OpenCode, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'kilo', name: 'Kilo Code', version: 'v7.8.1', backend: 'kilo', status: 'ready',
     // Placeholder only: the gateway's catalog wins once fetched. Kilo CLI is an opencode fork with
     // opencode's provider layer, so it is offered opencode's set; one local E2E ran on it, no
     // matrix column yet (see _MODEL_CATALOG["kilo"]).
-    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
+    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are Kilo Code, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'qwen', name: 'Qwen Code', version: 'v0.22.1', backend: 'qwen', status: 'ready',
@@ -142,7 +147,7 @@ export const OOB: OobHarness[] = [
     tools: [], skills: [] },
   { id: 'omp', name: 'Oh My Pi', version: 'v18.1.13', backend: 'omp', status: 'ready',
     // pi's lineage, pi's reach: the placeholder is pi's list; the gateway's catalog wins once fetched
-    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
+    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are Oh My Pi (OMP), an autonomous coding agent. You operate on a real git workspace with shell, file access, LSP, web search, and subagents to complete engineering tasks end to end.',
     tools: [], skills: [] },
   { id: 'goose', name: 'goose', version: 'v1.50.0', backend: 'goose', status: 'ready',
@@ -151,7 +156,7 @@ export const OOB: OobHarness[] = [
     // column measured on 2026-09-12 across seven providers, substitution-checked with the served
     // model the relay reads off the provider's own answer. The last five are not yet measured;
     // see the gateway's _MODEL_CATALOG["goose"], which says which are which.
-    models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'hunyuan-3', 'minimax-m3', 'nemotron-3.5-lightning', 'nemotron-3-ultra', 'nemotron-3-super', 'ling-3.0-flash'], defaultModel: 'gpt-5.4', moreModels: 0,
+    models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-4-maverick', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'hunyuan-3', 'minimax-m3', 'nemotron-3.5-lightning', 'nemotron-3-ultra', 'nemotron-3-super', 'ling-3.0-flash'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are goose, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'kimi', name: 'Kimi Code CLI', version: 'v2.0.0', backend: 'kimi', status: 'ready',
@@ -172,7 +177,7 @@ export const OOB: OobHarness[] = [
     // Placeholder only: the gateway's catalog wins once fetched. Two columns ran on this backend
     // (vercel 52 ids, google 11); three of those ids were the Gemini 2.5 family, retired from the
     // catalog since (#196). _MODEL_CATALOG["aider"] carries what they measured.
-    models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
+    models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are Aider, an autonomous coding agent. You work on a real git workspace, editing files and proposing shell commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'openhands', name: 'OpenHands', version: 'v1.49.2', backend: 'openhands', status: 'ready',
@@ -201,7 +206,7 @@ export const OOB: OobHarness[] = [
     // Placeholder only: the gateway's catalog wins once fetched. openhands' list, because the relay
     // reach is the same (litellm's openai provider through the loopback relay). NOT yet measured on
     // this base: no support-matrix column has run; _MODEL_CATALOG["agentzero"] says so at the ids.
-    models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-5.4', moreModels: 0,
+    models: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'llama-3.3-70b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'mistral-medium-3.5', 'step-3.7-flash', 'hunyuan-4-preview', 'nemotron-3.5-lightning', 'nemotron-3-super'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are Agent Zero, an autonomous agent. You work on a real git workspace with a terminal and file tools, running commands and editing files to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'systemone', name: 'System One', version: 'v0.4.0', backend: 'systemone', status: 'ready',
@@ -225,7 +230,7 @@ export const OOB: OobHarness[] = [
   { id: 'mimo', name: 'MiMo Code', version: 'v0.1.15', backend: 'mimo', status: 'ready',
     // Placeholder only, like every list above: the gateway's catalog wins once fetched. MiMo Code is
     // an opencode fork and reaches what opencode reaches, so the list is opencode's.
-    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'step-3.7-flash', 'nemotron-3.5-lightning'], defaultModel: 'gpt-5.4', moreModels: 0,
+    models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-4.8', 'claude-sonnet-4.6', 'claude-haiku-5.5', 'claude-haiku-4.5', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-4.20', 'grok-build-0.1', 'muse-wonder-1.0', 'muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1', 'muse-glimmer-30b', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'kimi-k2.7-code', 'qwen3.8-max', 'qwen3.8-27b', 'qwen3.7-max', 'qwen3.7-plus', 'glm-5.3', 'glm-5.3-flash', 'step-3.7-flash', 'nemotron-3.5-lightning'], defaultModel: 'gpt-6.1-sol', moreModels: 0,
     systemPrompt: 'You are MiMo Code, an autonomous coding agent. You work on a real git workspace with shell and file access, reading and editing files and running commands to complete the task end to end.',
     tools: [], skills: [] },
   { id: 'jcode', name: 'jcode', version: 'v0.90.0', backend: 'jcode', status: 'ready',
@@ -272,54 +277,19 @@ export const OOB: OobHarness[] = [
     tools: [], skills: [] },
 ];
 
-export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
-
-// ── the instruction file each base actually reads ─────────────────────────────────────────────
-// The NAME of the file the runner writes for a base, which is the label the settings page puts on
-// the instructions box. It has to agree with runner/server.py's `_agent_doc_path`, and until
-// 2026-10-03 it did not: the page labelled qwen and gemini "AGENTS.md" while the runner wrote
-// QWEN.md and GEMINI.md, so a person edited a box named for a file their agent never read.
-// gateway/tests/test_instruction_file_label.py now holds this map to the runner's function, so the
-// next base that chooses its own name cannot drift the same way.
-//
-// systemone and qoder have no file at all: systemone reads no workspace and its instructions travel
-// in the job, and qoder's travel with the hosted session it drives, so the page calls the box
-// "Instructions".
-export const INSTRUCTION_FILE: Record<string, string> = {
-  qwen: 'QWEN.md',
-  gemini: 'GEMINI.md',
-  systemone: 'Instructions',
-  qoder: 'Instructions',
-};
-const AGENTS_MD_BASES = [
-  'codex', 'hermes', 'omp', 'pi', 'opencode', 'kilo', 'dsh', 'qwen', 'cline', 'goose', 'kimi',
-  'minimax', 'aider', 'openhands', 'grok', 'agentzero',
-  'mimo', 'jcode', 'opensquilla', 'nanobot', 'zeroclaw',
-  // this batch: vibe reads AGENTS.md only in a trusted folder (--trust), docker-agent through
-  // its own prompt-files lookup, and fast-agent has no convention at all — the file is passed as
-  // its instruction with -i.
-  'vibe', 'docker-agent', 'fast-agent',
-  // dcode reads the project's AGENTS.md through find_project_agent_md — but only when the
-  // workspace is a git PROJECT, which every session here is.
-  'dcode',
-];
-export function instructionFileLabel(baseId: string | null | undefined): string {
-  const id = baseId || '';
-  return INSTRUCTION_FILE[id] || (AGENTS_MD_BASES.includes(id) ? 'AGENTS.md' : 'CLAUDE.md');
+/** The built-in harnesses a person can pick: the ones the server's bases document lists. None until
+ *  it has been read (useBasesRead says whether it could be). */
+export function offeredOob(bases: Record<string, BaseInfo> | null): OobHarness[] {
+  return OOB.filter((o) => o.status === 'ready' && !!bases?.[o.id]);
 }
 
+export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
+
 // ── model catalog: the GATEWAY owns it, this file does not ────────────────────────────
-// The `models` / `defaultModel` fields above used to be the console's own copy of the
-// gateway's _MODEL_CATALOG. Two lists meant two places to edit, and only one of them got
-// edited: adding deepseek-v4-flash to the gateway left it invisible in every picker here,
-// and grok-4.5 has been wired in the TokenRouter integration all along without ever
-// appearing in the UI. A picker that disagrees with what the server will accept is worse
-// than a slow picker.
-//
-// So the catalog is fetched from GET /v1/models (same shape the gateway serves) and cached
-// for the tab. The literals above remain ONLY as the pre-fetch placeholder so first paint
-// isn't empty; once the fetch lands the server's list wins. Never add a model here — add it
-// to _MODEL_CATALOG in the gateway and it shows up everywhere.
+// The `models` / `defaultModel` fields above are the pre-fetch placeholder only (so first paint
+// isn't empty). The catalog is fetched from GET /v1/models and cached for the tab; once it lands
+// the server's list wins everywhere. Never add a model here: add it to _MODEL_CATALOG in the
+// gateway and it shows up everywhere (and the gateway's tests ask for it here too).
 export type ModelCatalog = Record<string, {
   default: string;
   models: string[];
@@ -364,20 +334,27 @@ export async function fetchModelCatalog(): Promise<ModelCatalog> {
   return _catalogInflight;
 }
 
-/** Models for a base harness — server catalog when loaded, placeholder literals until then. */
+/** Models for a base harness: the server catalog once loaded, the placeholder literals until then. */
 export const oobModels = (o: OobHarness | null | undefined): string[] => {
   if (!o) return [];
   const fromServer = o.backend ? _catalog?.[o.backend]?.models : undefined;
   return (fromServer && fromServer.length) ? fromServer : o.models;
 };
 
+/** The base's default model: the server catalog's once loaded, else the placeholder's. Never the
+ *  first entry of the list (2026-09-27: Oh My Pi opened on gpt-6-astra that way). */
+export const oobDefaultModel = (o: OobHarness | null | undefined): string => {
+  if (!o) return '';
+  const fromServer = o.backend ? _catalog?.[o.backend]?.default : '';
+  return fromServer || o.defaultModel || '';
+};
+
 /** Whether this backend can run this model, as three answers rather than two. "unknown" is the
  *  state before the server's catalog has arrived (or while every read of it has failed), and it
  *  is not "yes": the picker used to treat it that way, offering the placeholder list as runnable
  *  for the second or two before the catalog landed, and a model picked in that window was refused
- *  at the send ("no provider serves it") after it had been accepted. Measured 2026-09-08: a
- *  matrix worker read the picker in that window and was offered four models the platform's
- *  provider has no channel for. Unknown is shown as unknown, and nothing unknown can be sent. */
+ *  at the send ("no provider serves it") after it had been accepted. Unknown is shown as unknown,
+ *  and nothing unknown can be sent. */
 export type ModelAvailability = 'yes' | 'no' | 'unknown';
 export function modelAvailability(backend: string | null | undefined, id: string): ModelAvailability {
   const entry = backend ? _catalog?.[backend] : undefined;
@@ -391,12 +368,6 @@ export function availabilityNote(state: ModelAvailability): string {
 export function modelAvailable(backend: string | null | undefined, id: string): boolean {
   return modelAvailability(backend, id) === 'yes';
 }
-
-export const oobDefaultModel = (o: OobHarness | null | undefined): string => {
-  if (!o) return '';
-  const fromServer = o.backend ? _catalog?.[o.backend]?.default : '';
-  return fromServer || o.defaultModel || '';
-};
 
 export interface BaseTool { name: string; label: string; enforcement: 'hard' | 'instruction' }
 export interface BuiltinSkill { name: string; title: string; description: string; defaultEnabled: boolean; origin: string }
@@ -418,8 +389,8 @@ export interface BaseInfo {
    *  on older gateways, which is the same as true. */
   takesSkills?: boolean;
   /** false means a Task on this base cannot open an environment (Qoder Cloud Agent runs in its own
-   *  cloud, and the layer is mounted on this box only), so none is offered. Absent on older
-   *  gateways, which is the same as true. */
+   *  cloud, and the layer is mounted on this box's sandboxes only), so none is offered. Absent on
+   *  older gateways, which is the same as true. */
   takesEnvironments?: boolean;
 }
 
@@ -429,27 +400,50 @@ let _basesInflight: Promise<Record<string, BaseInfo>> | null = null;
  *  bases document. null until it lands: the settings page shows nothing rather than a guess. */
 export interface RuntimeDefaults { maxStep: number; timeoutSeconds: number }
 let _runtimeDefaults: RuntimeDefaults | null = null;
+// the bases document as the server answered it, for what it says beyond the bases (its capabilities)
+let _basesDoc: Record<string, unknown> | null = null;
 
 async function fetchBases(): Promise<Record<string, BaseInfo>> {
   if (_bases) return _bases;
   if (_basesInflight) return _basesInflight;
   _basesInflight = (async () => {
+    // a few tries of the same read, as the model catalog's: one failed read must not leave the page
+    // with no harness for the life of the tab
     try {
-      const r = await harnessFetch('/api/harness/v1/bases', { headers: gwHeaders(), cache: 'no-store' });
-      if (!r.ok) return {};
-      const doc = await r.json();
-      const map: Record<string, BaseInfo> = {};
-      for (const b of doc.bases || []) map[b.id] = b as BaseInfo;
-      const rd = doc.runtimeDefaults;
-      if (rd && Number(rd.maxStep) > 0 && Number(rd.timeoutSeconds) > 0) {
-        _runtimeDefaults = { maxStep: Number(rd.maxStep), timeoutSeconds: Number(rd.timeoutSeconds) };
+      for (const wait of [0, 1500, 3000]) {
+        if (wait) await new Promise((r) => setTimeout(r, wait));
+        try {
+          const r = await harnessFetch('/api/harness/v1/bases', { headers: gwHeaders(), cache: 'no-store' });
+          if (!r.ok) throw new Error(String(r.status));
+          const doc = await r.json();
+          if (!doc || typeof doc !== 'object' || !Array.isArray(doc.bases)) throw new Error('not the bases document');
+          const map: Record<string, BaseInfo> = {};
+          for (const b of doc.bases) map[b.id] = b as BaseInfo;
+          const rd = doc.runtimeDefaults;
+          if (rd && Number(rd.maxStep) > 0 && Number(rd.timeoutSeconds) > 0) {
+            _runtimeDefaults = { maxStep: Number(rd.maxStep), timeoutSeconds: Number(rd.timeoutSeconds) };
+          }
+          _basesDoc = doc as Record<string, unknown>;
+          _bases = map;
+          return map;
+        } catch {
+          // try again
+        }
       }
-      _bases = map;
-      return map;
-    } catch { return {}; }
-    finally { _basesInflight = null; }
+      return {};
+    } finally { _basesInflight = null; }
   })();
   return _basesInflight;
+}
+
+/** The server-described bases for a caller that is not a component (once per tab; {} when it could not
+ *  be read, which offers no harness: the caller says it could not read them). */
+export const loadBases = fetchBases;
+
+/** The bases document as the server answered it (once per tab), or null when it could not be read. */
+export async function basesDoc(): Promise<Record<string, unknown> | null> {
+  await fetchBases();
+  return _basesDoc;
 }
 
 /** The server's runtime defaults, once the bases document has landed. */
@@ -463,85 +457,76 @@ export function useRuntimeDefaults(): RuntimeDefaults | null {
   return d;
 }
 
-/** Server-described bases. null until loaded — a caller shows nothing rather than a guess. */
-export function useBases(): Record<string, BaseInfo> | null {
-  const [b, setB] = useState<Record<string, BaseInfo> | null>(_bases);
+/** A read the page waits on: its value once it has landed (null until then), whether the last
+ *  read failed, and `retry` to read it again. */
+export interface Read<T> { value: T | null; failed: boolean; retry: () => void }
+function useServerRead<T extends object>(get: () => Promise<T>, have: T | null): Read<T> {
+  const [value, setValue] = useState<T | null>(have);
+  const [failed, setFailed] = useState(false);
+  const [n, setN] = useState(0);
   useEffect(() => {
     let alive = true;
-    fetchBases().then((m) => { if (alive && Object.keys(m).length) setB(m); });
+    get().then((v) => {
+      if (!alive) return;
+      if (Object.keys(v).length) { setValue(v); setFailed(false); } else setFailed(true);
+    });
     return () => { alive = false; };
-  }, []);
-  return b;
+  // `n` is a Try again
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [n]);
+  return { value, failed: failed && !value, retry: () => { setFailed(false); setN((x) => x + 1); } };
 }
 
-/** Load the server catalog once per tab and re-render when it lands. Any surface that shows a
- *  model picker calls this; without it the placeholder literals would be what the user sees. */
-export function useModelCatalog(): ModelCatalog | null {
-  const [cat, setCat] = useState<ModelCatalog | null>(_catalog);
-  useEffect(() => {
-    let alive = true;
-    fetchModelCatalog().then((c) => { if (alive && Object.keys(c).length) setCat(c); });
-    return () => { alive = false; };
-  }, []);
-  return cat;
-}
+/** The server-described bases, null until loaded (a caller shows nothing rather than a guess). */
+export function useBasesRead(): Read<Record<string, BaseInfo>> { return useServerRead(fetchBases, _bases); }
+export function useBases(): Record<string, BaseInfo> | null { return useBasesRead().value; }
 
-// HarnessRouter business logic is VISUAL WORKFLOWS in the engine (the HarnessRouter
-// Space), not a bespoke backend. Every CRUD op runs hr.harness.* against HR's own
-// VectorGraph tenant via the engine run API; the JWT carries the principal.
-const ENGINE = '/api/engine';
-
-/** Shadow User vertex id (HR tenant), sanitized email; '@' can't be a vertex id. */
-function memberUid(email: string): string {
-  return 'usr.' + email.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.|\.$/g, '');
-}
-/** Shadow Account vertex id (HR tenant), HR-local; org_id kept as the link prop. */
-function orgUid(orgId: string): string {
-  return 'acct.' + orgId;
-}
+/** The server's model catalog, once per tab: every model picker reads it, and offers the
+ *  placeholders until it lands (`failed` once every try failed: the picker says so, with Try again). */
+export function useModelCatalogRead(): Read<ModelCatalog> { return useServerRead(fetchModelCatalog, _catalog); }
+export function useModelCatalog(): ModelCatalog | null { return useModelCatalogRead().value; }
 
 function principal() {
   const s = getSession();
-  const orgId = s?.orgId || '';
-  const org = (s?.orgs || []).find((o) => o.id === orgId);
-  return {
-    token: s?.token || '',
-    orgId,
-    orgName: (org?.name as string) || orgId,
-    member: s?.member?.email || s?.member?.id || '',
-    memberName: (s?.member?.name as string) || (s?.member?.display_name as string) || '',
-  };
+  return { orgId: s?.orgId || '', member: s?.member?.email || s?.member?.id || '' };
 }
 
 /** Gateway CRUD via the same-origin BFF (/api/harness injects the trust headers).
  *  All harness writes go through the gateway so config validation (skills need a
  *  SKILL.md) and large-bundle offloading apply no matter which surface saved. The
  *  gateway returns the camelCase CustomHarness shape directly. */
-function gwHeaders(): Record<string, string> {
+export function gwHeaders(): Record<string, string> {
   const p = principal();
   return { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member,
            ...workspaceHeaders() };
 }
 
-export async function gw<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** `signal`: a read with its own end (readSettled, lib/settle.ts) in place of harnessFetch's 30 s. */
+export async function gw<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const r = await harnessFetch(`/api/harness${path}`, {
-    method, headers: gwHeaders(), cache: 'no-store',
+    method, headers: gwHeaders(), cache: 'no-store', signal,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!r.ok) {
     let detail = `${r.status}`;
-    try { detail = (await r.json())?.detail || detail; } catch { /* keep the status */ }
-    throw new Error(String(detail));
+    try {
+      const d = await r.json() as { detail?: unknown; error?: { message?: unknown } } | null;
+      detail = String(d?.detail || d?.error?.message || detail);
+    } catch { /* keep the status */ }
+    throw new Error(detail);
   }
   return r.json() as Promise<T>;
 }
 
+/** The record as the gateway takes it. Only the fields a harness has: the gateway refuses any other
+ *  by name (a field it would not apply is never saved). */
 function harnessBody(input: Partial<CustomHarness> & { name: string; base: string }) {
   const base = oobById(input.base);
   return {
     name: input.name, base: input.base,
     base_label: input.baseLabel || base?.name || input.base,
-    default_model: input.defaultModel || oobDefaultModel(base) || '',
+    // what the person chose; '' when they chose none: the server runs it on the base's default
+    default_model: input.defaultModel || '',
     system_prompt: input.systemPrompt || '',
     mcp_servers: input.mcpServers || [],
     skills: input.skills || [],
@@ -556,14 +541,17 @@ function harnessBody(input: Partial<CustomHarness> & { name: string; base: strin
   };
 }
 
-export async function listCustom(): Promise<CustomHarness[]> {
+export async function listCustom(signal?: AbortSignal): Promise<CustomHarness[]> {
   if (!principal().orgId) return [];
   // Workspace scoping rides the request headers (gwHeaders); the query params make the
   // filter explicit for the gateway's list handler as well.
   const q = new URLSearchParams();
   appendWorkspaceQuery(q);
   const qs = q.toString();
-  return (await gw<{ harnesses: CustomHarness[] }>('GET', `/v1/harnesses${qs ? `?${qs}` : ''}`)).harnesses || [];
+  // an answer without the list is a failed read, never "no setups"
+  const d = await gw<{ harnesses?: CustomHarness[] }>('GET', `/v1/harnesses${qs ? `?${qs}` : ''}`, undefined, signal);
+  if (!d || !Array.isArray(d.harnesses)) throw new Error('Your setups could not be read just now.');
+  return d.harnesses;
 }
 
 export async function getCustom(id: string): Promise<CustomHarness | null> {
@@ -571,8 +559,19 @@ export async function getCustom(id: string): Promise<CustomHarness | null> {
   catch { return null; }
 }
 
+/** One setup by id for a page that must tell "not here" from "could not be read": null only when the
+ *  server answers 404 (not in this workspace, or gone); any other failure throws, so a moment of
+ *  downtime is never shown as a missing setup. */
+export async function readCustom(id: string): Promise<CustomHarness | null> {
+  const r = await harnessFetch(`/api/harness/v1/harnesses/${encodeURIComponent(id)}`, { headers: gwHeaders(), cache: 'no-store' });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json() as Promise<CustomHarness>;
+}
+
 export async function createCustom(input: Partial<CustomHarness> & { name: string; base: string }): Promise<CustomHarness> {
-  return gw<CustomHarness>('POST', '/v1/harnesses', harnessBody(input));
+  // where it came from goes with the create alone: an update never changes it (the server keeps it)
+  return gw<CustomHarness>('POST', '/v1/harnesses', { ...harnessBody(input), ...(input.source ? { source: input.source } : {}) });
 }
 
 export async function saveCustom(c: CustomHarness): Promise<CustomHarness> {
@@ -581,18 +580,16 @@ export async function saveCustom(c: CustomHarness): Promise<CustomHarness> {
   return gw<CustomHarness>('PUT', `/v1/harnesses/${encodeURIComponent(c.id)}`, harnessBody(c));
 }
 
-/** Delete a session for good: transcript, trace, and working folder. The space it held stops
- *  counting toward the org's agent memory at once. */
+/** Delete a session for good: transcript, trace, and working folder. */
 export async function deleteSession(sid: string): Promise<void> {
   await gw<{ deleted: boolean }>('DELETE', `/v1/sessions/${encodeURIComponent(sid)}`);
 }
 
+/** Delete a setup: it stops at once and is removed for good after 30 days; its tasks stay. */
 export async function deleteCustom(id: string): Promise<void> {
   await gw<{ deleted: boolean }>('DELETE', `/v1/harnesses/${encodeURIComponent(id)}`);
 }
 
-/** Full files of one skill on a harness, resolving the server-side blob offload, used to
- *  hydrate a folder skill for editing when the record only carries {name, enabled, blob}. */
 let _pluginSchemas: Promise<string[]> | null = null;
 /** The Agent Plugins manifest schemas this server installs, from its discovery document; empty
  *  when the server reports no plugin support (the Console then leaves the check to Save). */
@@ -605,7 +602,7 @@ export function pluginSchemas(): Promise<string[]> {
   return _pluginSchemas;
 }
 
-/** The complete package of one installed plugin, byte for byte (UHP Plugins §3.1). */
+/** The complete package of one installed plugin, byte for byte (UHP Plugins 3.1). */
 export async function getPluginFiles(harnessId: string, name: string):
   Promise<{ path: string; content?: string; content_b64?: string }[]> {
   const r = await gw<{ files: { path: string; content?: string; content_b64?: string }[] }>(
@@ -613,29 +610,13 @@ export async function getPluginFiles(harnessId: string, name: string):
   return r.files || [];
 }
 
-/** This Harness's own tools and Skills as an Agent Plugins package (UHP Plugins §5). Credentials
- *  are never in it; each omission is listed in `skipped`. */
-export async function exportPlugin(harnessId: string): Promise<HarnessPlugin> {
-  return gw<HarnessPlugin>('GET', `/v1/harnesses/${encodeURIComponent(harnessId)}/plugin`);
-}
-
+/** Full files of one skill on a harness, resolving the server-side blob offload, used to
+ *  hydrate a folder skill for editing when the record only carries {name, enabled, blob}. */
 export async function getSkillFiles(harnessId: string, skillId: string):
   Promise<{ path: string; content?: string; content_b64?: string }[]> {
   const r = await gw<{ files: { path: string; content?: string; content_b64?: string }[] }>(
     'GET', `/v1/harnesses/${encodeURIComponent(harnessId)}/skills/${encodeURIComponent(skillId)}/files`);
   return r.files || [];
-}
-
-export async function cloneCustom(id: string): Promise<CustomHarness | null> {
-  const c = await getCustom(id);
-  if (!c) return null;
-  return createCustom({ ...c, name: c.name + ' (copy)' });
-}
-
-export async function cloneFromOob(oobId: string): Promise<CustomHarness | null> {
-  const o = oobById(oobId);
-  if (!o) return null;
-  return createCustom({ name: o.name + ' (custom)', base: o.id, defaultModel: oobDefaultModel(o) });
 }
 
 /** Probe an MCP server (server-side handshake via the gateway) and return its tools. `auth` may
@@ -652,9 +633,21 @@ export async function testMcp(url: string, auth?: string): Promise<{ ok: boolean
   return r.json();
 }
 
-/** Probe a database before connecting it: the server opens it, lists what the account can see,
- *  and holds on to nothing. Same 200-either-way contract as testMcp — a refused password is an
- *  answer, not a failed request — and the same degrade when the request itself does not land. */
+/** Store an MCP bearer token securely and return a 'vault:<ref>' reference. The token never lands
+ *  on the harness record; only the reference is kept there. */
+export async function storeMcpSecret(serverId: string, token: string): Promise<string> {
+  const p = principal();
+  const r = await harnessFetch(`/api/harness/v1/orgs/${encodeURIComponent(p.orgId)}/mcp-secrets/${encodeURIComponent(serverId)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member },
+    body: JSON.stringify({ token }),
+    cache: 'no-store',
+  });
+  if (!r.ok) throw new Error(`mcp-secret store failed: ${r.status}`);
+  return (await r.json()).ref as string;
+}
+
+/** Try a database connection string the way a kit's launch will: engine, host, database, table count. */
 export async function testDatabase(engine: string, connectionString: string):
   Promise<{ ok: boolean; error?: string; host?: string; database?: string; tableCount?: number; tables?: string[] }> {
   const p = principal();
@@ -668,21 +661,43 @@ export async function testDatabase(engine: string, connectionString: string):
   return r.json();
 }
 
-/** Store an MCP bearer token in the vault and return a 'vault:<ref>' reference. The token never
- *  lands in the graph, only the ref is persisted on the harness config. */
-export async function storeMcpSecret(serverId: string, token: string): Promise<string> {
-  const p = principal();
-  const r = await harnessFetch(`/api/harness/v1/orgs/${encodeURIComponent(p.orgId)}/mcp-secrets/${encodeURIComponent(serverId)}`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json', 'x-harness-org': p.orgId, 'x-harness-member': p.member },
-    body: JSON.stringify({ token }),
-    cache: 'no-store',
-  });
-  if (!r.ok) throw new Error(`mcp-secret store failed: ${r.status}`);
-  return (await r.json()).ref as string;
+// ── the instruction file each base actually reads ─────────────────────────────────────────────
+// The NAME of the file the runner writes for a base, which is the label the settings page puts on
+// the instructions box. It has to agree with runner/server.py's `_agent_doc_path`, and until
+// 2026-10-03 it did not: the page labelled qwen and gemini "AGENTS.md" while the runner wrote
+// QWEN.md and GEMINI.md, so a person edited a box named for a file their agent never read.
+// gateway/tests/test_instruction_file_label.py now holds this map to the runner's function, so the
+// next base that chooses its own name cannot drift the same way.
+//
+// systemone and qoder have no file at all: systemone reads no workspace and its instructions travel
+// in the job, and qoder's travel with the hosted session it drives, so the page calls the box
+// "Instructions".
+export const INSTRUCTION_FILE: Record<string, string> = {
+  qwen: 'QWEN.md',
+  gemini: 'GEMINI.md',
+  systemone: 'Instructions',
+  qoder: 'Instructions',
+};
+const AGENTS_MD_BASES = [
+  'codex', 'hermes', 'omp', 'pi', 'opencode', 'kilo', 'dsh', 'qwen', 'cline', 'goose', 'kimi',
+  'minimax', 'aider', 'openhands', 'grok', 'agentzero',
+  'mimo', 'jcode', 'opensquilla', 'nanobot', 'zeroclaw',
+  // this batch: vibe reads AGENTS.md only in a trusted folder (--trust), docker-agent through
+  // its own prompt-files lookup, and fast-agent has no convention at all — the file is passed as
+  // its instruction with -i.
+  'vibe', 'docker-agent', 'fast-agent',
+  // dcode reads the project's AGENTS.md through find_project_agent_md — but only when the
+  // workspace is a git PROJECT, which every session here is.
+  'dcode',
+];
+export function instructionFileLabel(baseId: string | null | undefined): string {
+  const id = baseId || '';
+  return INSTRUCTION_FILE[id] || (AGENTS_MD_BASES.includes(id) ? 'AGENTS.md' : 'CLAUDE.md');
 }
 
 // ── plugins: services a workspace connects once, each Harness including the ones it needs ────
+// The workspace's catalog and a plugin's attachments are read through lib/plugs.ts (reads with a
+// signal); the calls that change a plugin, and a Harness's own binding, are here.
 export interface PlugPricing { unit: string; usd_per_unit: number; markup: number; source: string; vendor: string; billed_as: string; rounding: string; session_cap_minutes: number; session_estimate_usd: number }
 export interface Plug {
   type: string; label: string; source: 'platform' | 'local'; official: boolean;
@@ -694,10 +709,6 @@ export interface Plug {
 }
 export const PLUGS_ENTRY_ID = 'mcp.plugs';
 
-/** The plugin catalog for the current workspace, with each plugin's state here. */
-export function listPlugs(): Promise<{ workspace: string; plugs: Plug[] }> {
-  return gw<{ workspace: string; plugs: Plug[] }>('GET', '/v1/plugs');
-}
 /** Connect a plugin for the workspace, change its settings, or turn it off. */
 export function setPlug(type: string, body: { enabled: boolean; config?: Record<string, unknown>; secrets?: Record<string, string> }): Promise<Plug> {
   return gw<Plug>('PUT', `/v1/plugs/${encodeURIComponent(type)}`, body);
@@ -720,9 +731,6 @@ export function plugTools(type: string): Promise<{ type: string; label: string; 
 /** Remove a plugin from the workspace: the record and the credential it kept are deleted. */
 export function deletePlug(type: string): Promise<{ type: string; workspace: string; removed: boolean }> {
   return gw<{ type: string; workspace: string; removed: boolean }>('DELETE', `/v1/plugs/${encodeURIComponent(type)}`);
-}
-export function plugAttachments(type: string): Promise<{ harnesses: number; attached: number; harness_list: { id: string; name: string }[] }> {
-  return gw<{ harnesses: number; attached: number; harness_list: { id: string; name: string }[] }>('GET', `/v1/plugs/${encodeURIComponent(type)}/attachments`);
 }
 export interface HarnessPlugs { id: string; name: string; enabled: boolean; workspace: string; plugs: string[]; tools?: Record<string, string[]>; status: Record<string, string> }
 /** The plugins one Harness includes, or null when it includes none. */

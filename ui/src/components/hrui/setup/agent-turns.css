@@ -1,0 +1,58 @@
+/* reifyui/agent-chat in the console's own colours (the hrui tokens, light and dark), and the column
+   it lives in: the Playground's conversation reaches the bottom of the window, its composer docked
+   there for the whole task. */
+#hrui .uac-convo, #hrui .uac-turn, #hrui .uac-composer {
+  --uac-bg: var(--bg);
+  --uac-surface: var(--bg);
+  --uac-surface-2: var(--surface);
+  --uac-ink: var(--fg);
+  --uac-ink-2: var(--fg);
+  --uac-mute: var(--muted);
+  --uac-faint: var(--faint);
+  --uac-line: var(--line);
+  --uac-line-soft: var(--line);
+  --uac-brand: var(--accent);
+  --uac-user-bg: var(--surface);
+  --uac-font-md: 15px;
+  --uac-mono: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+#hrui .uac-md { font-size: 15px; }
+#hrui .uac-composer textarea { font-family: inherit; }
+#hrui .uac-composer { box-shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 12px 32px -22px rgba(0, 0, 0, .35); }
+
+/* the Playground: its column's own padding stops at the dock, which brings its own */
+#hrui .agent-main:has(.uac-convo.is-page) { padding-bottom: 0; }
+#hrui .agent-chat .uac-convo.is-page .uac-thread { padding-top: 4px; }
+#hrui .pg-turn-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+#hrui .pg-turn-meta .tr-link { font-size: 12.5px; }
+/* a reply's two actions at the end of its line (Playground.tsx): copy its ID, copy a request that
+   carries on from it. The console's small icon buttons, quiet until the pointer or focus is on one. */
+#hrui .pg-turn-meta .pg-acts { display: inline-flex; align-items: center; gap: 2px; }
+#hrui .pg-turn-meta .pg-acts .icon-btn { color: var(--faint); }
+#hrui .pg-turn-meta .pg-acts .icon-btn:hover,
+#hrui .pg-turn-meta .pg-acts .icon-btn:focus-visible { color: var(--fg); background: var(--surface); }
+
+/* a task's thread: the store drives it, the page's own scroller follows it */
+#hrui .tk-turns { display: flex; flex-direction: column; gap: 30px; }
+#hrui .uac-user .from { display: block; margin-bottom: 4px; font: 400 12px var(--mono); color: var(--faint); }
+
+/* the thread's own box (#threadInner) is a flex item of the conversation: full width, not shrunk to its text */
+#hrui .uac-thread > .thread-inner { width: 100%; align-self: stretch; }
+
+/* a turn's files: compact cards (the preview opens beside the conversation, never inline) */
+#hrui .pg-files { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 8px; align-self: stretch; }
+#hrui .pg-files .uic-filecard { padding: 8px 6px 8px 10px; gap: 8px; }
+/* the whole card opens the preview (it is a button, and says so on hover): the name gets the room */
+#hrui .pg-files .uic-filecard-open { display: none; }
+#hrui .pg-files .uic-filecard.is-clickable:hover { background: var(--surface); }
+#hrui .pg-files .uic-filecard-dl { width: 30px; height: 30px; }
+/* "Download all (n)" under two or more cards (TurnFiles.tsx): the console's small line button, quiet,
+   at the cards' left edge; while the zip is prepared its icon turns to a small spinner */
+#hrui button.pg-zipall { color: var(--muted); }
+#hrui button.pg-zipall:hover, #hrui button.pg-zipall:focus-visible, #hrui button.pg-zipall[aria-busy] { color: var(--fg); }
+#hrui button.pg-zipall[aria-busy] { cursor: progress; }
+#hrui .pg-zipall-spin { width: 13px; height: 13px; flex: none; border-radius: 50%; border: 2px solid var(--line);
+  border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { #hrui .pg-zipall-spin { animation-duration: 2.4s; } }
+#hrui .uic-skel { display: block; background: var(--surface-2); border-radius: 8px; }
+#hrui .uac-art { --uac-z-overlay: 60; }

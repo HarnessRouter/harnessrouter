@@ -34,25 +34,44 @@ export default function SharePage() {
   const [meta, setMeta] = useState<ShareMeta | null>(null);
   const [turns, setTurns] = useState<ShareTurn[] | null>(null);
   const [files, setFiles] = useState<ShareFile[] | null>(null);
+  // the link is gone (the server says 404: revoked, or never shared), or it could not be read just
+  // now (any other answer, or none): only the first may say the link is dead (#573)
   const [gone, setGone] = useState(false);
+  const [metaFailed, setMetaFailed] = useState(false);
+  const [metaTry, setMetaTry] = useState(0);
+  // the conversation could not be read (the service answered an error): said, with a way to read
+  // again, never drawn as a conversation with nothing in it
+  const [turnsFailed, setTurnsFailed] = useState(false);
+  const [turnsTry, setTurnsTry] = useState(0);
+  // the artifacts could not be read, same rule as the conversation above: said, never drawn as a
+  // Task that produced nothing (the gateway answers a 500 when the workspace tarball is truncated)
+  const [filesFailed, setFilesFailed] = useState(false);
 
   useEffect(() => {
     if (!token) return;
     let alive = true;
+    setFilesFailed(false);
+    setMetaFailed(false);
     fetch(`/api/share/${encodeURIComponent(token)}/meta`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setMeta(d); })
-      .catch(() => { if (alive) setGone(true); });
-    fetch(`/api/share/${encodeURIComponent(token)}/turns`, { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => { if (alive) setTurns(d.turns || []); })
-      .catch(() => { if (alive) setTurns([]); });
+      .catch((e: Error) => { if (alive) { if (e.message === '404') setGone(true); else setMetaFailed(true); } });
     fetch(`/api/share/${encodeURIComponent(token)}/files`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => { if (alive) setFiles(d.files || []); })
-      .catch(() => { if (alive) setFiles([]); });
+      .catch(() => { if (alive) { setFiles(null); setFilesFailed(true); } });
     return () => { alive = false; };
-  }, [token]);
+  }, [token, metaTry]);
+  useEffect(() => {
+    if (!token) return;
+    let alive = true;
+    setTurnsFailed(false);
+    fetch(`/api/share/${encodeURIComponent(token)}/turns`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => { if (alive) setTurns(Array.isArray(d?.turns) ? d.turns : []); })
+      .catch(() => { if (alive) { setTurns(null); setTurnsFailed(true); } });
+    return () => { alive = false; };
+  }, [token, turnsTry]);
 
   // Canonical artifact address: /{harness}/{session}/workspace/{path} (single cached
   // shared-flag check server-side). Token route stays as the fallback while meta loads.
@@ -62,6 +81,18 @@ export default function SharePage() {
       return `/${encodeURIComponent(meta.harness_id)}/${encodeURIComponent(meta.session_id)}/workspace/${enc}`;
     return `/api/share/${encodeURIComponent(token)}/f/${enc}`;
   }, [token, meta]);
+
+  if (metaFailed && !meta) {
+    return (
+      <main style={{ marginLeft: 0, height: '100vh', overflowY: 'auto' }}>
+        <div className="page" style={{ maxWidth: 720 }}>
+          <div className="page-header" role="alert"><div><h1>This shared Task could not be loaded just now</h1>
+            <p>Try again in a moment.</p>
+            <button type="button" className="hr-btn" onClick={() => { setMetaTry((n) => n + 1); setTurnsTry((n) => n + 1); }}>Try again</button></div></div>
+        </div>
+      </main>
+    );
+  }
 
   if (gone) {
     return (
@@ -94,7 +125,11 @@ export default function SharePage() {
         </div>
 
         <div className="share-conv">
-          {turns === null && <span className="sk" style={{ display: 'block', height: 120, borderRadius: 10 }} />}
+          {turns === null && !turnsFailed && <span className="sk" style={{ display: 'block', height: 120, borderRadius: 10 }} />}
+          {turnsFailed ? (
+            <div className="session-empty" role="alert">This conversation could not be loaded just now.{' '}
+              <button type="button" className="hr-btn" onClick={() => setTurnsTry((n) => n + 1)}>Try again</button></div>
+          ) : null}
           {turns?.map((t) => (
             <div key={t.id} className="share-turn">
               {t.user && <div className="share-user"><div className="share-user-bubble">{t.user}</div></div>}
@@ -128,6 +163,7 @@ export default function SharePage() {
               <span className="wbx-filecard-open">Open</span>
             </div>
           ))}
+          {filesFailed && <p style={{ color: 'var(--muted)', fontSize: 13 }} role="alert">The artifacts could not be loaded just now.</p>}
           {files && files.length === 0 && <p style={{ color: 'var(--muted)', fontSize: 13 }}>No artifacts in this Task.</p>}
         </div>
         <p style={{ color: 'var(--faint)', fontSize: 12, marginTop: 14 }}>

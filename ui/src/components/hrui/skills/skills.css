@@ -1,0 +1,98 @@
+/* The skill editor's folder (skills/SkillEditor.tsx), beside the design's own sheet styles
+   (hrui.css: sk-sheet, sk-f, sk-add, sk-code, sk-ln, fn). The design draws a skill's files as tabs;
+   a skill is a folder, so its files are a tree to the left of the editor, and SKILL.md's header
+   (its frontmatter) is shown read only above its body. The open file is one page that scrolls as
+   one: the header's lines wrap, and the body grows with what it holds, so nothing is pinned and no
+   scroll sits inside another (Richard, 2026-10-18).
+   Widths: from 701px the sheet is up to 900px wide with the tree and the editor side by side; at
+   700px and below (the design's phone rule for this sheet) the tree stacks above the editor and the
+   toolbar shows its icons only. Every rule here outranks the generated ones it adjusts. */
+
+@media (min-width:701px){#hrui .sheet.sk-sheet.ske-sheet{width:min(900px,calc(100vw - 48px))}}
+
+#hrui .ske{position:relative;border:1px solid var(--line);border-radius:14px;background:var(--surface);overflow:hidden}
+#hrui .ske:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+#hrui .ske.drop{border-color:var(--accent);border-style:dashed}
+#hrui .ske-drop{position:absolute;inset:0;display:grid;place-items:center;padding:16px;background:var(--accent-soft);opacity:.95;color:var(--accent);font-size:14px;font-weight:500;text-align:center;pointer-events:none}
+
+/* the toolbar: what the tree's folder gets */
+#hrui .ske-bar{display:flex;align-items:center;flex-wrap:wrap;gap:2px;padding:4px 6px 4px 14px;border-bottom:1px solid var(--line)}
+#hrui .ske-cap{margin-right:auto;font-size:13px;font-weight:600;color:var(--muted)}
+#hrui .ske-bar .sk-add{padding:7px 9px;border-radius:8px}
+#hrui .ske-bar .sk-add:hover{background:var(--surface-2)}
+#hrui .ske-bar .sk-add svg{width:16px;height:16px}
+
+#hrui .ske-body{display:grid;grid-template-columns:minmax(180px,32%) minmax(0,1fr);height:clamp(260px,44vh,340px)}
+
+/* the tree */
+#hrui .ske-files{position:relative;min-width:0;min-height:0;overflow:auto;padding:6px;border-right:1px solid var(--line)}
+#hrui .ske-tree,#hrui .ske-tree ul{list-style:none;margin:0;padding:0}
+#hrui .ske-row{display:flex;align-items:center;min-height:30px;border-radius:8px;padding-left:calc(var(--d,0) * 14px)}
+#hrui .ske-row:hover{background:var(--surface-2)}
+#hrui .ske-row.on{background:var(--bg);box-shadow:inset 0 0 0 1px var(--line)}
+#hrui .ske-item{flex:1;min-width:0;display:flex;align-items:center;gap:4px;padding:5px 6px 5px 4px;border-radius:8px;font-family:var(--mono);font-size:12.5px;line-height:1.4;color:var(--muted);text-align:left}
+#hrui .ske-row.on .ske-item{color:var(--fg)}
+#hrui .ske-row.at .ske-item,#hrui .ske-row.at .ske-item .ske-ic{color:var(--accent)}
+#hrui .ske-item:focus-visible,#hrui .ske-ib:focus-visible{outline-offset:-2px}
+#hrui .ske-item .fn{flex:0 1 auto}
+#hrui .ske-gap{flex:none;width:14px;height:14px;display:grid;place-items:center;color:var(--faint)}
+#hrui .ske-gap svg{transition:transform .15s}
+#hrui .ske-gap.open svg{transform:rotate(90deg)}
+#hrui .ske-ic{flex:none;display:grid;place-items:center;color:var(--faint)}
+#hrui .ske-tag{flex:none;margin-left:6px;font-family:var(--sans);font-size:11px;color:var(--faint)}
+#hrui .ske-acts{flex:none;display:flex;padding-right:2px;opacity:0;transition:opacity .12s}
+#hrui .ske-row:hover .ske-acts,#hrui .ske-row:focus-within .ske-acts,#hrui .ske-row.on .ske-acts{opacity:1}
+#hrui .ske-ib{display:grid;place-items:center;width:26px;height:26px;border-radius:6px;color:var(--faint)}
+#hrui .ske-ib:hover{background:var(--bg);color:var(--fg)}
+@media (prefers-reduced-motion:reduce){#hrui .ske-gap svg,#hrui .ske-acts{transition:none}}
+
+/* a path typed in the tree: New file, New folder, Rename */
+#hrui .ske-ren{flex:1;min-width:0;display:flex;align-items:center;gap:4px;padding:2px 4px}
+#hrui .ske-new{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;padding:4px 4px 8px 22px}
+#hrui .set-in.ske-in{flex:1;min-width:0;width:auto;padding:4px 8px;border-radius:7px;font-family:var(--mono);font-size:12.5px}
+#hrui .set-in.ske-in[aria-invalid="true"]{border-color:var(--bad)}
+#hrui .ske-err{margin:2px 6px 6px calc(var(--d,0) * 14px + 22px);font-size:12px;line-height:1.4;color:var(--bad)}
+#hrui .ske-hint{margin:4px 6px;font-size:12px;line-height:1.4;color:var(--faint)}
+#hrui .ske-new .ske-err,#hrui .ske-new .ske-hint{flex-basis:100%;margin:0 0 0 20px}
+
+/* a remove that asks first, in place */
+#hrui .ske-ask{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:2px 0 6px calc(var(--d,0) * 14px + 22px);padding:8px 10px;border-radius:8px;background:var(--bad-soft);font-size:12.5px;line-height:1.4;color:var(--fg);overflow-wrap:anywhere}
+#hrui .ske-ask-b{display:flex;gap:14px;margin-left:auto}
+#hrui .ske-skel{display:block}
+
+/* the editor: the open file's path, SKILL.md's header, the file */
+#hrui .ske-pane{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
+#hrui .ske-path{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 12px;padding:7px 14px;border-bottom:1px solid var(--line);font-size:12px}
+#hrui .ske-pth{min-width:0;font-family:var(--mono);color:var(--fg);overflow-wrap:anywhere}
+#hrui .ske-pnote{margin-left:auto;color:var(--faint)}
+/* the page: line numbers and text in two columns, the header's rows over the body's (a subgrid, so
+   its numbers sit in the body's own number column); it is the one scroll, up and down only */
+#hrui .ske-pane .sk-code{flex:1;height:auto;min-height:0;position:relative;overflow-x:hidden;overflow-y:auto;grid-template-rows:1fr}
+#hrui .ske-pane .sk-code.md{grid-template-rows:auto 1fr}
+#hrui .ske-code .ske-head{grid-column:1/-1;display:grid;grid-template-columns:subgrid;align-content:start;padding:14px 0 0;background:var(--surface);border-bottom:1px dashed var(--line);font-family:var(--mono);font-size:13px;line-height:1.6;cursor:default}
+#hrui .ske-head .ske-hn{padding:0 10px;text-align:right;color:var(--faint);user-select:none}
+#hrui .ske-head .ske-ht{min-width:0;padding:0 16px 0 6px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+#hrui .ske-head .ske-ht.ske-blank{color:var(--faint)}
+/* the body: as tall as its lines (the editor sets its height), at least the room left under the
+   header so a click below the text still lands in it; a long line scrolls sideways in the body */
+#hrui .ske-pane .sk-code textarea{height:auto;min-height:100%;overflow-x:auto;overflow-y:hidden}
+#hrui .ske-code.md .sk-ln,#hrui .ske-code.md textarea{padding-top:6px}
+#hrui .ske-bin{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:24px;text-align:center;font-size:13px;color:var(--muted)}
+#hrui .ske-bin p{margin:0}
+#hrui .ske-bin small{font-family:var(--mono);font-size:12px;color:var(--faint)}
+
+/* touch: actions always shown, rows and buttons a finger wide, fields that do not zoom the page */
+@media (hover:none){#hrui .ske-acts{opacity:1}}
+@media (pointer:coarse){
+  #hrui .ske-row{min-height:38px}
+  #hrui .ske-ib{width:34px;height:34px}
+  #hrui .set-in.ske-in{font-size:16px}
+}
+
+/* phone and narrow windows: the tree above the editor, the toolbar as icons */
+@media (max-width:700px){
+  #hrui .ske-body{grid-template-columns:minmax(0,1fr);height:auto}
+  #hrui .ske-files{max-height:200px;border-right:0;border-bottom:1px solid var(--line)}
+  #hrui .ske-pane .sk-code{flex:none;height:250px}
+  #hrui .ske-bar .sk-add{width:38px;height:38px;justify-content:center;padding:0}
+}

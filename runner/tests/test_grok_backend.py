@@ -106,6 +106,26 @@ def test_a_successful_turn_passes_through_with_the_answer_and_leaves_usage_to_th
     assert res["usage"] == {} and "modelUsage" not in res and "model" not in res
 
 
+def _delta(text):
+    # Captured from 1.0.41 with --include-partial-messages (a stub streaming three chunks).
+    return {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": text}}, "parent_tool_use_id": None,
+            "session_id": SID, "uuid": "d"}
+
+
+def test_partial_mode_streams_each_text_delta_and_does_not_repeat_the_whole_message():
+    chunks = ["The sky is blue. ", "Grass is green. ", "Snow is white."]
+    whole = "".join(chunks)
+    start = {"type": "stream_event", "event": {"type": "content_block_start", "index": 0,
+             "content_block": {"type": "text", "text": ""}}, "session_id": SID, "uuid": "s"}
+    stop = {"type": "stream_event", "event": {"type": "message_stop"}, "session_id": SID, "uuid": "e"}
+    message = {**TEXT, "message": {**TEXT["message"], "content": [{"type": "text", "text": whole}]}}
+    out, _ = _norm([INIT, start, *map(_delta, chunks), stop, message, {**OK, "result": whole}], partial=True)
+    texts = [c["text"] for e in out if e["type"] == "assistant" for c in e["message"]["content"]]
+    assert texts == chunks
+    assert out[-1]["type"] == "result" and out[-1]["result"] == whole and out[-1]["usage"] == {}
+
+
 def test_a_provider_failure_is_a_failed_turn_with_the_providers_sentence():
     out, _ = _norm([INIT, FAIL_401])
     res = out[-1]

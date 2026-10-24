@@ -60,7 +60,7 @@ def world(monkeypatch):
     async def vertex_get(vid):
         return dict(SESSIONS[vid]) if vid in SESSIONS else (dict(harnesses[vid]) if vid in harnesses else None)
 
-    async def resp_get(rid):
+    async def resp_get(rid, *, strict=False):
         return dict(RESPONSES[rid]) if rid in RESPONSES else None
 
     async def list_by_org(label, org):

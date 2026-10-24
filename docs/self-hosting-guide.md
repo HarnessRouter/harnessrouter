@@ -240,10 +240,11 @@ instance falls back to `HR_AUTH_USER` / `HR_AUTH_PASSWORD`.
 **Nothing runs until you do this.** There is no bundled model, no trial key, and no free tier
 hiding in the image.
 
-Open **Bring Your Own Key** in the sidebar (the Integrations page) and press **Add Integration**. It asks three things: a name, the provider,
-and that provider's API key. This key authorizes model requests; it is not a HarnessRouter API key.
+Open the account menu at the bottom of the rail and choose **Bring your own key**. Find the provider and press **Add key**:
+it asks for that provider's API key and an optional name. This key authorizes model requests; it is not
+a HarnessRouter API key.
 
-![Adding a provider on the Integrations page](images/05-add-integration.png)
+![Adding an OpenAI key under Bring your own key](images/console-add-key.png)
 
 Which models that provider serves is not your problem to configure: the product keeps that list and
 adds to it as providers ship models. Pick the provider, paste the key, and the models it covers
@@ -360,7 +361,7 @@ OpenAI-compatible endpoint of your own takes the same pair with a `base_url` add
 Not every provider fits every backend. A pairing that does not fit is refused before the runner
 is called, and the response's error names the connection and why (`a custom endpoint in the
 openai format cannot drive codex, which speaks the responses format`); a provider the runner
-itself refuses is answered at once with the runner's own sentence. The Integrations page only
+itself refuses is answered at once with the runner's own sentence. Bring your own key only
 offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
@@ -435,12 +436,14 @@ Forthcoming about it, which is what you get if you skip this step entirely:
 
 ### 6. Give it something to do
 
-**Agent harnesses → pick a harness → New task.** Every harness lists its own tasks; a fresh
-draft opens with the caret in the box. Choose a model on the chip under the message, and type.
-The turn streams back as it happens: every command the agent runs, every file it touches, and
-the answer at the end.
+**Start → say what it should do for your users → Continue.** New setup builds the setup on one of
+your models: it writes the agent's instructions, picks the agent harness and model when you leave
+them on Auto, adds the skills, plugins and tools the job needs, and leaves an example request in
+the box. Send it: the turn streams back as it happens, every command the agent runs, every file it
+touches, and the answer at the end. Each setup in **Studio** lists its own tasks; **New task**
+starts another.
 
-![A task: the request, the commands, the files it wrote, and the test result](images/task-run.png)
+![A first task: the example request, the answer, and the Next card that leads to your own app](images/console-first-task.png)
 
 That is the whole install. State is SQLite and files on one Docker volume. Deleting that volume
 deletes the instance's durable data. See [backups](#restarts-upgrades-and-backups) before moving it.
@@ -523,7 +526,7 @@ available in the [Starter Kits repository](https://github.com/HarnessRouter/star
 [separate licensing terms](https://github.com/HarnessRouter/starter-kit#licensing). More arrive over
 time; your instance lists the ones it has.
 
-![The Starter Kits page, before any kit has been launched](images/dashboard-1-starter-kits.png)
+![The Shop, with the starter kits and what each one runs on](images/console-shop.png)
 
 Launching asks one question: what to run it on.
 
@@ -998,6 +1001,7 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `HR_POOL_AUTH` | `none` | No cloud identity to present to a loopback runner. |
 | `HR_SANDBOX_TRUST` | `owner` | You own the box, the agent and the key, so the key is handed over directly rather than brokered. |
 | `HARNESS_WORKSPACE` | `/data/workspaces` | One directory per session, on the volume, so a restart doesn't discard work in flight. |
+| `HR_WS_MARKER_DIR` | `/data/ws-markers` | Which checkpoint each workspace holds, on the volume too. After a restart the next turn finds the workspace where the interrupted turn left it, instead of restoring the previous checkpoint over it. |
 | `HR_WORKSPACE_TTL_HOURS` | `72` | Idle session workspaces are removed after this. They rehydrate from their checkpoint, so this costs time, not work. `0` keeps them forever. |
 | `HR_RELAY_UPSTREAM_TIMEOUT_S` | `600` | How long one model call may go without sending anything before the task is told the provider did not answer. Several model APIs send nothing while a model thinks (OpenAI's Chat Completions sends nothing at all), so a shorter wait cuts long thinking off. Lower it only if you would rather end a stuck call sooner than wait out a long think. It was `180` in 0.31.0 only. |
 | `HR_ENTRA_AUTHORITY` | `https://login.microsoftonline.com` | Where an Azure connection that signs in with Microsoft Entra asks for its token. A sovereign cloud names its own. |
@@ -1036,8 +1040,8 @@ variables. It is a setup check, not a technical prerequisite for the API.
 
 ### Create a key on this CE instance for your backend
 
-1. Sign in to the Console of the CE instance your product will call, then open **API Keys** in the sidebar ([default local address](http://localhost:3000/keys)).
-2. Confirm the workspace containing the harness, then select **Create API key**. Give it a name and select **Create key**.
+1. Sign in to the Console of the CE instance your product will call, then open **API Keys** in the rail ([default local address](http://localhost:3000/keys)).
+2. Confirm the workspace containing the harness at the top of the rail, then name the key and select **Create**.
 3. Copy the secret shown once. Store it in your product backend's secret store or environment. The examples call this variable `HARNESSROUTER_API_KEY`.
 
 The key is scoped to the selected workspace and can be rotated or revoked on the same page.
@@ -1080,7 +1084,9 @@ also removes the hosted tools behind it. Read the harness first, then send back 
 `system_prompt`, `default_model`, `mcp_servers`, `skills`, `disabled_tools`, `additional_headers`,
 `max_step`, `timeout_seconds` and `reasoning_effort` (the write body uses these snake_case names; the record you read
 uses camelCase) with the new package appended to `plugins`. Installed plugins round-trip as
-`{name, enabled, blob}`, so send those back unchanged and add the new one beside them.
+`{name, enabled, blob}`, so send those back unchanged and add the new one beside them. A harness's
+`source` (where it came from, as its create said, for example the demo run the console's Start saved
+it from) is not part of that configuration: it is kept as created, whatever a PUT sends.
 
 The record you read back carries what the server derived from the package (`manifest`,
 `mcpServers`, `skills`, and `skipped` for anything it could not load) and a `blob` handle that

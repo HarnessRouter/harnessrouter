@@ -16,6 +16,12 @@ from .client import Client
 SCHEMA_RESOURCE = resources.files("uhp_conformance").joinpath(f"uhp-{UHP_VERSION}.schema.json")
 
 
+class ValidatorUnavailable(RuntimeError):
+    """The suite cannot validate anything: a broken installation (no jsonschema, or no schema file beside
+    the package). A RuntimeError, so a check that meets it reports ERROR as #203 ruled; its own name, so a
+    caller that degrades on it (the R-series' share mint) catches this and nothing else."""
+
+
 @dataclass
 class Context:
     client: Client
@@ -38,11 +44,11 @@ class Context:
         with thirty skips read as a partial server rather than a partial suite.
         """
         if jsonschema is None:
-            raise RuntimeError("jsonschema is not installed; the suite needs it to validate "
+            raise ValidatorUnavailable("jsonschema is not installed; the suite needs it to validate "
                                "responses (pip install jsonschema)")
         if self._schema is None:
             if not SCHEMA_RESOURCE.is_file():
-                raise RuntimeError(f"the UHP {UHP_VERSION} schema is missing from this installation "
+                raise ValidatorUnavailable(f"the UHP {UHP_VERSION} schema is missing from this installation "
                                    f"of uhp-conformance (expected {SCHEMA_RESOURCE}); reinstall the "
                                    "package")
             self._schema = json.loads(SCHEMA_RESOURCE.read_text(encoding="utf-8"))
