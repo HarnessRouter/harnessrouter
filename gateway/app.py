@@ -11176,7 +11176,13 @@ async def _share_sid(token: str) -> str | None:
         return None
     # A token lookup is not an authorization grant: another replica may have revoked the
     # share since this one populated its cache (or a graph index may lag the point read).
-    v = await _vertex_get(sid)
+    # The same rule as the lookup: a read that could not be performed is a 503, never the 404 a
+    # recipient reads as revoked, and it leaves the cached token as it was.
+    try:
+        v = await _vertex_get(sid)
+    except Exception as e:  # noqa: BLE001
+        print(f"[share] the shared session could not be read: {type(e).__name__}", flush=True)
+        raise uhp_error(503, "server_error", _SHARE_UNREADABLE) from e
     if (not v or str(v.get("shared") or "") != "1" or v.get("status") == "deleted"
             or str(v.get("share_token") or "") != tok):
         _SHARE_TOKEN_CACHE.pop(tok, None)
