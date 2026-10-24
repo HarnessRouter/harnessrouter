@@ -3,6 +3,7 @@ The hosted side is a mock at the HTTP boundary, which pins the contract this fea
 GET /v1/me resolves a key to org + workspace, PUT /v1/harnesses/{id} creates or replaces."""
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -33,12 +34,22 @@ class Cloud:
             return httpx.Response(401, json={"error": {"message": "invalid key"}})
         if req.url.path == "/v1/me":
             return httpx.Response(200, json=me)
+        # UHP Harnesses §5: POST creates and names the id; PUT replaces a harness of the key's
+        # workspace, and answers 404 for any other id (it never creates)
+        if req.url.path == "/v1/harnesses" and req.method == "POST":
+            body = json.loads(req.content)
+            hid = f"chrn_{len(self.calls):032x}"
+            self.harnesses[hid] = {**body, "org": me["org"], "workspace": me["workspace"]}
+            return httpx.Response(200, json={**body, "id": hid})
         if req.url.path.startswith("/v1/harnesses/") and req.method == "PUT":
             hid = req.url.path.rsplit("/", 1)[-1]
+            had = self.harnesses.get(hid)
+            # the hosted id pattern: anything else is no harness (404), by design
+            if not re.fullmatch(r"chrn_[0-9a-f]{32}", hid) or not had or (had["org"], had["workspace"]) != (me["org"], me["workspace"]):
+                return httpx.Response(404, json={"error": {"message": "No harness with that id."}})
             body = json.loads(req.content)
-            created = hid not in self.harnesses
             self.harnesses[hid] = {**body, "org": me["org"], "workspace": me["workspace"]}
-            return httpx.Response(201 if created else 200, json={"id": hid, **body})
+            return httpx.Response(200, json={**body, "id": hid})
         return httpx.Response(404, json={"error": {"message": "no route"}})
 
 
@@ -107,24 +118,26 @@ def test_stored_targets_keep_the_key_out_and_can_be_removed(api, cloud):
     assert left["targets"] == [] and left["last"] == ""
 
 
-def test_upload_creates_then_replaces_on_the_same_id(api, cloud):
+def test_upload_creates_the_copy_then_replaces_that_same_copy(api, cloud):
     api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
     hid = _harness(api)
     r = api.post(f"/v1/harnesses/{hid}/upload")
     assert r.status_code == 200, r.text
     assert r.json()["action"] == "create" and r.json()["ok"] is True
-    assert hid in cloud.harnesses                                    # same id on the hosted side
-    sent = cloud.harnesses[hid]
+    remote = r.json()["remote_id"]
+    assert ("POST", "/v1/harnesses") in cloud.calls                 # created as UHP creates, never by PUT
+    sent = cloud.harnesses[remote]
     assert sent["name"] == "Philz one-pager" and sent["base"] == "dsh" and sent["system_prompt"] == "Make decks."
     assert sent["source"] == "selfhost" and sent["workspace"] == "ws_r"   # landed in the key's workspace
     assert "api_key" not in json.dumps(sent)                         # nothing secret travels
     st = api.get(f"/v1/harnesses/{hid}/upload").json()
     assert st["uploaded"] is True and st["changed"] is False and st["target"] == "Research (richard)"
-    # edit locally: the chip says changed; upload again: replace, in place, same id
+    # edit locally: the chip says changed; upload again: replace, in place, the same copy
     api.put(f"/v1/harnesses/{hid}", json={"name": "Philz one-pager v2", "base": "dsh"})
     assert api.get(f"/v1/harnesses/{hid}/upload").json()["changed"] is True
     r = api.post(f"/v1/harnesses/{hid}/upload")
-    assert r.json()["action"] == "replace" and cloud.harnesses[hid]["name"] == "Philz one-pager v2"
+    assert r.json()["action"] == "replace" and r.json()["remote_id"] == remote
+    assert ("PUT", f"/v1/harnesses/{remote}") in cloud.calls and cloud.harnesses[remote]["name"] == "Philz one-pager v2"
     assert len(cloud.harnesses) == 1
     assert api.get(f"/v1/harnesses/{hid}/upload").json()["changed"] is False
 
@@ -134,8 +147,9 @@ def test_skills_travel_with_their_files_inlined(api, cloud):
     big = "x" * (gw._SKILL_INLINE_MAX + 100)                           # forces the local blob offload
     hid = _harness(api, skills=[{"name": "deck", "files": [{"path": "SKILL.md", "content": big}]}])
     assert "blob" in json.dumps(asyncio.run(gw._vertex_get(hid)).get("skills"))   # offloaded locally
-    assert api.post(f"/v1/harnesses/{hid}/upload").status_code == 200
-    sk = cloud.harnesses[hid]["skills"][0]
+    up = api.post(f"/v1/harnesses/{hid}/upload")
+    assert up.status_code == 200
+    sk = cloud.harnesses[up.json()["remote_id"]]["skills"][0]
     assert sk["name"] == "deck" and "blob" not in sk and sk["files"][0]["content"] == big
 
 
@@ -149,7 +163,7 @@ def test_batch_runs_every_row_and_skips_builtins(api, cloud):
     assert rows[b]["ok"] and rows[b]["action"] == "create"
     assert rows["codex"]["action"] == "skip" and rows["codex"]["error"] == "built-in"
     assert rows["chrn_" + "f" * 32]["action"] == "skip" and rows["chrn_" + "f" * 32]["error"] == "not found"
-    assert set(cloud.harnesses) == {a, b}
+    assert sorted(h["name"] for h in cloud.harnesses.values()) == ["A", "B"]
     st = api.get("/v1/cloud-upload/status").json()["harnesses"]
     assert st[a]["uploaded"] and st[b]["uploaded"]
 
@@ -160,7 +174,7 @@ def test_a_cloud_error_on_one_row_does_not_stop_the_others(api, cloud, monkeypat
     real = cloud.handle
 
     def flaky(req):
-        if req.method == "PUT" and req.url.path.endswith(a):
+        if req.method == "POST" and json.loads(req.content).get("name") == "A":
             return httpx.Response(500, json={"error": {"message": "hosted hiccup"}})
         return real(req)
     cloud.handle = flaky
@@ -170,33 +184,48 @@ def test_a_cloud_error_on_one_row_does_not_stop_the_others(api, cloud, monkeypat
     assert api.get(f"/v1/harnesses/{a}/upload").json()["uploaded"] is False   # a failed upload leaves no record
 
 
-def test_an_id_claimed_by_another_org_lands_under_a_minted_id(api, cloud):
-    """The same local harness uploaded to a second org is legitimate: hosted ids are global and
-    the hosted side answers 404 for a foreign-owned id, indistinguishable from missing. The
-    upload retries once under a fresh id and every later upload replaces that same hosted copy."""
+def test_a_copy_deleted_on_cloud_is_created_again(api, cloud):
+    """The copy a destination's record names may be deleted on Cloud since; its PUT answers 404, and
+    the deploy creates a new copy, which every later deploy replaces. Any other failure creates
+    nothing."""
     api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
-    hid = _harness(api, "Collision")
-    real = cloud.handle
-
-    def owned_elsewhere(req):
-        if req.method == "PUT" and req.url.path.endswith(hid):
-            return httpx.Response(404, json={"error": {"message": "No harness with that id."}})
-        return real(req)
-    cloud.handle = owned_elsewhere
+    hid = _harness(api, "Deleted there")
+    first = api.post(f"/v1/harnesses/{hid}/upload").json()["remote_id"]
+    del cloud.harnesses[first]
     r = api.post(f"/v1/harnesses/{hid}/upload")
     assert r.status_code == 200, r.text
-    remote = r.json()["remote_id"]
-    assert remote != hid and remote.startswith("chrn")
-    assert cloud.harnesses[remote]["name"] == "Collision"
-    assert api.get(f"/v1/harnesses/{hid}/upload").json()["uploaded"] is True
+    again = r.json()["remote_id"]
+    assert r.json()["action"] == "create" and again != first and cloud.harnesses[again]["name"] == "Deleted there"
     r2 = api.post(f"/v1/harnesses/{hid}/upload")
-    assert r2.json()["remote_id"] == remote and r2.json()["action"] == "replace"
-    assert len([k for k in cloud.harnesses if k.startswith("chrn")]) == 1
+    assert r2.json()["remote_id"] == again and r2.json()["action"] == "replace"
+    assert list(cloud.harnesses) == [again]
+    real = cloud.handle
 
     def flaky(req):
-        return httpx.Response(500, json={"error": {"message": "boom"}})
+        if req.method == "PUT":
+            return httpx.Response(500, json={"error": {"message": "boom"}})
+        return real(req)
     cloud.handle = flaky
-    assert api.post(f"/v1/harnesses/{hid}/upload").status_code == 502   # a non-404 mints nothing
+    assert api.post(f"/v1/harnesses/{hid}/upload").status_code == 502   # a non-404 creates nothing
+    assert list(cloud.harnesses) == [again]
+
+
+def test_a_record_from_before_remote_ids_replaces_the_copy_at_the_local_id(api, cloud):
+    """An upload before remote ids were kept recorded only the fingerprint: its copy is at the
+    harness's own id. The next deploy replaces that copy and creates nothing."""
+    api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
+    hid = _harness(api, "Older upload")
+    target = asyncio.run(gw._cloud_targets())["targets"][api.get("/v1/cloud-upload/targets").json()["last"]]
+    cloud.harnesses[hid] = {"name": "Older upload", "org": "org_e", "workspace": "ws_r"}
+    rec = asyncio.run(gw._cloud_records())
+    rec.setdefault("harnesses", {})[hid] = {gw._cloud_tkey(target): {"fingerprint": "old", "uploaded_at": 1, "target": "Research (richard)"}}
+    asyncio.run(gw.BACKING.secrets.put(gw.GLOBAL_TENANT, gw._CLOUD_UPLOAD_RECORDS_KEY, json.dumps(rec)))
+    r = api.post(f"/v1/harnesses/{hid}/upload")
+    assert r.status_code == 200, r.text
+    assert r.json()["action"] == "replace" and r.json()["remote_id"] == hid
+    assert list(cloud.harnesses) == [hid] and cloud.harnesses[hid]["system_prompt"] == "Make decks."
+    assert ("POST", "/v1/harnesses") not in cloud.calls
+    assert api.get(f"/v1/harnesses/{hid}/upload").json()["changed"] is False
 
 
 def test_the_same_harness_uploads_to_every_workspace_a_key_points_at(api, cloud):
@@ -208,20 +237,20 @@ def test_the_same_harness_uploads_to_every_workspace_a_key_points_at(api, cloud)
     api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
     hid = _harness(api, "Everywhere")
     r1 = api.post(f"/v1/harnesses/{hid}/upload").json()
-    assert r1["action"] == "create" and r1["remote_id"] == hid          # first target keeps the local id
+    assert r1["action"] == "create"
     # switch the key to another workspace of the same org: its own copy, its own id
     api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-ws2", "base_url": CLOUD})
     assert api.get(f"/v1/harnesses/{hid}/upload").json()["uploaded"] is True    # chip: most recent upload anywhere
     r2 = api.post(f"/v1/harnesses/{hid}/upload").json()
-    assert r2["action"] == "create" and r2["remote_id"] != hid
-    assert cloud.harnesses[hid]["workspace"] == "ws_r"
+    assert r2["action"] == "create" and r2["remote_id"] != r1["remote_id"]
+    assert cloud.harnesses[r1["remote_id"]]["workspace"] == "ws_r"
     assert cloud.harnesses[r2["remote_id"]]["workspace"] == "ws_2"
     st = api.get(f"/v1/harnesses/{hid}/upload").json()
     assert st["uploaded"] is True and st["target"] == "Second (richard)"
-    # back to the first workspace: its record is intact, replace goes to the original id
+    # back to the first workspace: its record is intact, replace goes to its own copy
     api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
     r3 = api.post(f"/v1/harnesses/{hid}/upload").json()
-    assert r3["action"] == "replace" and r3["remote_id"] == hid
+    assert r3["action"] == "replace" and r3["remote_id"] == r1["remote_id"]
 
 
 def test_a_target_stored_before_the_cloud_knew_its_name_heals_on_listing(api, cloud):
