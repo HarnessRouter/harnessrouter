@@ -2258,17 +2258,154 @@ def _codex_item_kind(it: dict) -> str:
     return _CAMEL.sub(lambda m: "_" + m.group(1).lower(), str(it.get("type") or "")).lower()
 
 
-def _codex_tool_item(it: dict) -> list[dict]:
+# A command's output comes from codex's own record of what the model was given, never from the
+# command item's aggregatedOutput: codex drops a command's output printed before it opens the item
+# (openai/codex#28207, open since 0.139.0; reproduced on 0.154.0, 2026-10-24). For
+# `echo FIRST-LINE; sleep 3; echo LAST-LINE` the model got both lines, while the item's
+# outputDelta and aggregatedOutput carried only LAST-LINE, and the record kept only that. The
+# rollout file holds the same text the model saw, so reading it widens nothing.
+#
+# codex answers an exec_command or write_stdin call with a header (chunk id, wall time, whether the
+# process exited or is still running, token count), then "Output:" and the output. The header is
+# codex's own and is dropped; the output after it is kept exactly as the model saw it, codex's
+# truncation notice included. An answer of any other shape is kept whole.
+_CODEX_EXEC_HEAD = re.compile(r"\A((?:[A-Z][A-Za-z ]*: [^\n]*\n|Process (?:exited with code -?\d+|running with session ID \d+)\n)*)Output:\n")
+_CODEX_RUNNING = re.compile(r"^Process running with session ID (\d+)$", re.M)
+# How long a command's record may trail its item/completed: measured 1 ms ahead to 3 ms behind
+# (four commands, 2026-10-24); the bound is far past that, and costs nothing unless a record is
+# really missing.
+_CODEX_RECORD_WAIT_S = 5.0
+
+
+def _codex_exec_answer(text: str) -> tuple[str, str | None]:
+    """codex's answer to an exec_command or write_stdin call -> (the output in it, the session id
+    when it says the process is still running)."""
+    m = _CODEX_EXEC_HEAD.match(text)
+    if not m:
+        return text, None
+    running = _CODEX_RUNNING.search(m.group(1))
+    return text[m.end():], (running.group(1) if running else None)
+
+
+def _codex_output_text(out) -> str:
+    """A function_call_output's `output` as text: a string, or content parts carrying text."""
+    if isinstance(out, str):
+        return out
+    if isinstance(out, dict) and isinstance(out.get("content"), (str, list)):
+        out = out["content"]
+        if isinstance(out, str):
+            return out
+    if isinstance(out, list):
+        return "".join(str(p.get("text") or "") for p in out if isinstance(p, dict))
+    return json.dumps(out, default=str)
+
+
+class _CodexRollout:
+    """codex's own record of one thread, <CODEX_HOME>/sessions/**/rollout-*-<thread id>.jsonl: one
+    JSON line per item, among them every tool call the model made and the answer codex gave it.
+    Read from where the last read stopped, whole lines only (codex may be mid-line)."""
+
+    def __init__(self, cfg_dir: pathlib.Path, thread_id: str):
+        self.cfg_dir, self.thread_id = cfg_dir, thread_id
+        self.path: pathlib.Path | None = None
+        self.offset = 0
+        self.calls: list[tuple[str, str, dict]] = []    # (call_id, name, arguments), in the model's order
+        self.answers: dict[str, str] = {}               # call_id -> the answer's text
+
+    def read(self) -> None:
+        if self.path is None:
+            hits = sorted((self.cfg_dir / "sessions").rglob(f"rollout-*-{self.thread_id}.jsonl")) if self.thread_id else []
+            if not hits:
+                return
+            self.path = hits[-1]
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.offset)
+                data = f.read()
+        except OSError:
+            return
+        end = data.rfind(b"\n")
+        if end < 0:
+            return
+        self.offset += end + 1
+        for line in data[:end].splitlines():
+            try:
+                p = (json.loads(line) or {}).get("payload")
+            except (ValueError, AttributeError):
+                continue
+            if not isinstance(p, dict) or not p.get("call_id"):
+                continue
+            cid = str(p["call_id"])
+            if p.get("type") == "function_call":
+                try:
+                    args = json.loads(p.get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                self.calls.append((cid, str(p.get("name") or ""), args if isinstance(args, dict) else {}))
+            elif p.get("type") == "function_call_output":
+                self.answers[cid] = _codex_output_text(p.get("output"))
+
+    def command_output(self, call_id: str) -> tuple[str | None, bool]:
+        """What the model was given as the output of the command it started with `call_id`
+        -> (text, complete). The call's own answer, and while that says the process is still
+        running, each later write_stdin answer for the same session, until one no longer says so.
+        (None, False): no answer recorded for the call. (text, False): the session's answers stop
+        short of the process's end."""
+        first = self.answers.get(call_id)
+        if first is None:
+            return None, False
+        text, running = _codex_exec_answer(first)
+        if running is None:
+            return text, True
+        start = next((i for i, c in enumerate(self.calls) if c[0] == call_id), None)
+        if start is None:
+            return text, False
+        parts = [text]
+        for cid, name, args in self.calls[start + 1:]:
+            if name != "write_stdin" or str(args.get("session_id")) != running:
+                continue
+            answer = self.answers.get(cid)
+            if answer is None:
+                break
+            more, still = _codex_exec_answer(answer)
+            parts.append(more)
+            if still is None:
+                return "".join(parts), True
+        return "".join(parts), False
+
+
+def _codex_command_output(rollout: _CodexRollout | None, call_id: str,
+                          wait_s: float | None = None) -> tuple[str | None, bool]:
+    """The record's command output for `call_id`, read again until it is complete or `wait_s`
+    (default _CODEX_RECORD_WAIT_S) has passed: it may land a few ms after the item that announces
+    the command."""
+    if rollout is None:
+        return None, False
+    deadline = time.monotonic() + (_CODEX_RECORD_WAIT_S if wait_s is None else wait_s)
+    while True:
+        rollout.read()
+        text, complete = rollout.command_output(call_id)
+        if complete or time.monotonic() >= deadline:
+            return text, complete
+        time.sleep(0.02)
+
+
+def _codex_tool_item(it: dict, output: str | None = None, incomplete: bool = False) -> list[dict]:
     """A completed codex tool item (command/file/mcp) -> canonical tool_use + tool_result events.
     Shared by the exec normalizer and the app-server driver (the `item` shape is the same, the
     type spelling is not: see _codex_item_kind). A message or reasoning item is not a tool and
-    yields nothing here (its text streams as deltas)."""
+    yields nothing here (its text streams as deltas).
+
+    `output`: a command's output from codex's record (see _CodexRollout), in place of the item's
+    own. `incomplete`: no complete record was found, so the output may lack part of what the
+    command printed; the tool_result says so, and the response marks its item incomplete."""
     kind = _codex_item_kind(it)
     if kind in ("user_message", "agent_message", "reasoning"):
         return []
     if kind == "command_execution":
         tuid = it.get("id") or "cmd"
-        out = it.get("aggregated_output") or it.get("aggregatedOutput") or it.get("output") or ""
+        out = output if output is not None else (
+            it.get("aggregated_output") or it.get("aggregatedOutput") or it.get("output") or "")
         ec = it.get("exit_code", it.get("exitCode"))
         return [
             {"type": "assistant", "message": {"content": [
@@ -2276,7 +2413,8 @@ def _codex_tool_item(it: dict) -> list[dict]:
                  "input": {"command": it.get("command") or ""}}]}},
             {"type": "user", "message": {"content": [
                 {"type": "tool_result", "tool_use_id": tuid,
-                 "is_error": bool(ec not in (0, None)), "content": str(out)}]}},
+                 "is_error": bool(ec not in (0, None)), "content": str(out),
+                 **({"incomplete": True} if incomplete else {})}]}},
         ]
     if kind == "file_change":
         changes = it.get("changes") or []
@@ -2361,7 +2499,14 @@ def _codex_to_claude(obj: dict, state: dict) -> list[dict]:
                 return [{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": d}]}}] if d else []
             return [{"type": "assistant",
                      "message": {"content": [{"type": "thinking", "thinking": it.get("text") or ""}]}}]
-        return _codex_tool_item(it)   # command_execution / file_change / mcp_tool_call / other
+        if _codex_item_kind(it) == "command_execution":
+            # `codex exec` names its items item_0, item_1, ..., not by the call id codex's record
+            # keeps, so nothing ties this output to what the model was given, and it has the gap
+            # the app-server's has (openai/codex#28207): it may lack what the command printed first.
+            print(f"[codex] command {it.get('id') or 'cmd'}: exec mode has no record to read its output from; "
+                  "stored marked incomplete", flush=True)
+            return _codex_tool_item(it, incomplete=True)
+        return _codex_tool_item(it)   # file_change / mcp_tool_call / other
     if t == "turn.completed":
         return [{"type": "result", "subtype": "success", "is_error": False,
                  "result": state.get("final", ""),
@@ -12198,6 +12343,8 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
     usage: dict = {}
     turn_status = None
     thread_id = None
+    rollout: _CodexRollout | None = None
+    incomplete = 0      # commands whose output no complete record backed (logged one by one above)
     id_init = id_thread = id_turn = None
     try:
         id_init = send("initialize", {"clientInfo": {"name": "harness-runner", "title": "HarnessRouter", "version": "1"},
@@ -12231,6 +12378,8 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                     if thread_id:
                         append({"type": "system", "subtype": "init", "session_id": thread_id, "model": model})
                         rec["session_id"] = thread_id
+                        rollout = _CodexRollout(pathlib.Path(env.get("CODEX_HOME") or (pathlib.Path(env.get("HOME") or cwd) / ".codex")),
+                                                thread_id)
                     id_turn = send("turn/start", {"threadId": thread_id, "model": model,
                                    "approvalPolicy": _CODEX_APPROVAL, "input": [{"type": "text", "text": prompt}]})
                 continue
@@ -12255,7 +12404,17 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                     append({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": d}]}})
             elif method == "item/completed":
                 it = p.get("item") or {}
-                for ev in _codex_tool_item(it):     # messages and reasoning yield nothing: already streamed as deltas
+                evs = None
+                if _codex_item_kind(it) == "command_execution":
+                    # the output the model was given, from codex's record (see _CodexRollout)
+                    out, complete = _codex_command_output(rollout, str(it.get("id") or ""))
+                    if not complete:
+                        incomplete += 1
+                        print(f"[codex] command {it.get('id') or 'cmd'}: "
+                              f"{'no record of its output' if out is None else 'its output recorded only in part'} "
+                              f"within {_CODEX_RECORD_WAIT_S:g} s; stored marked incomplete", flush=True)
+                    evs = _codex_tool_item(it, output=out, incomplete=not complete)
+                for ev in evs if evs is not None else _codex_tool_item(it):     # messages and reasoning yield nothing: already streamed as deltas
                     append(ev)
                     # The step budget, as _run_turn_bg counts it for `codex exec` (#471): codex has no
                     # limit of its own, and this is the path the image runs codex on by default.
@@ -12301,6 +12460,8 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
                 _kill_proc_tree(proc)                            # one turn per process — never reuse
         except Exception:  # noqa: BLE001
             pass
+    if incomplete:
+        print(f"[codex] turn {turn_id}: {incomplete} command output(s) stored marked incomplete", flush=True)
 
     # A turn that produced a final agent answer SUCCEEDED from the caller's view — even if codex then
     # fumbles the turn close. gpt-5.5 refusals are the sharp case: the model returns a clean final
