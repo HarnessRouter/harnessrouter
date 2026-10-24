@@ -101,6 +101,8 @@ describe('the editor', () => {
   const passTime = (ms: number) => act(async () => { await jest.advanceTimersByTimeAsync(ms); });
   /** the reads of an upload done (jsdom reads each file in a few ticks) */
   const settle = async () => { for (let i = 0; i < 6; i++) await passTime(20); };
+  /** Time passes in small steps until `ok` holds (at most 2 s of it): a wait on what the next line reads. */
+  const until = async (ok: () => boolean) => { for (let i = 0; i < 100 && !ok(); i++) await passTime(20); };
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -170,6 +172,8 @@ describe('the editor', () => {
     const bad = file('data.csv', 'a,b', READ_RETRY_MS.length + 1);  // fails every try of this upload, then reads
     await upload([file('notes.md', 'one'), bad]);
     await passTime(WAITS);
+    // the last try fails at the end of the waits, and its failure still has to reach the screen: wait for that
+    await until(() => !!document.querySelector('.ske-unread'));
     const line = document.querySelector('.ske-unread');
     expect(line?.getAttribute('role')).toBe('alert');
     expect(line?.textContent).toBe('data.csv could not be read. Nothing from that upload was added. Try again');

@@ -27,8 +27,8 @@ class CloudWithSignIn(Cloud):
         self.pairings: dict[str, dict] = {}
         # the key Cloud's sign-in mints (workspace "" with workspace_default): its /v1/me names the
         # organization's Default Workspace (Cloud, since 2026-10-23)
-        self.keys["sk-hr-default"] = {"org": "org_e", "org_name": "Epsilla", "workspace": "org_e__hr_default",
-                                      "workspace_name": "Default Workspace", "member": "richard"}
+        self.keys["sk-hr-default"] = {"org": "org_e", "org_name": "Example Co", "workspace": "org_e__hr_default",
+                                      "workspace_name": "Default Workspace", "member": "owner"}
 
     def handle(self, req: httpx.Request) -> httpx.Response:
         p = req.url.path
@@ -106,7 +106,7 @@ def test_the_first_deploy_signs_in_and_the_key_lands_here_never_in_the_browser(a
     r = api.get(f"/v1/cloud-upload/connect/{code}")
     assert r.status_code == 200, r.text
     t = r.json()["target"]
-    assert r.json()["status"] == "ready" and t["label"] == "Research (richard)" and t["base_url"] == HOSTED
+    assert r.json()["status"] == "ready" and t["label"] == "Research (owner)" and t["base_url"] == HOSTED
     assert "sk-hr-good" not in r.text
     lst = api.get("/v1/cloud-upload/targets").json()
     assert [x["id"] for x in lst["targets"]] == [t["id"]] and lst["last"] == t["id"]
@@ -143,7 +143,7 @@ def test_the_sign_in_key_lands_where_cloud_names_and_a_key_it_names_no_workspace
     cloud.sign_in(code, key="sk-hr-default")
     r = api.get(f"/v1/cloud-upload/connect/{code}")
     assert r.status_code == 200, r.text
-    assert r.json()["target"]["label"] == "Default Workspace (richard)"
+    assert r.json()["target"]["label"] == "Default Workspace (owner)"
     hid = _harness(api)
     up = api.post(f"/v1/harnesses/{hid}/upload")
     assert up.status_code == 200
@@ -154,7 +154,7 @@ def test_the_sign_in_key_lands_where_cloud_names_and_a_key_it_names_no_workspace
     assert r.status_code == 400 and "workspace" in r.text
     pasted = api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-nows", "base_url": HOSTED})
     assert pasted.status_code == 400 and "workspace" in pasted.text
-    assert [t["label"] for t in api.get("/v1/cloud-upload/targets").json()["targets"]] == ["Default Workspace (richard)"]
+    assert [t["label"] for t in api.get("/v1/cloud-upload/targets").json()["targets"]] == ["Default Workspace (owner)"]
 
 
 def test_the_deploy_and_the_status_say_where_the_copy_opens_in_cloud(api, cloud):
@@ -164,7 +164,7 @@ def test_the_deploy_and_the_status_say_where_the_copy_opens_in_cloud(api, cloud)
     hid = _harness(api)
     up = api.post(f"/v1/harnesses/{hid}/upload").json()
     assert up["open_url"] == f"https://app.harnessrouter.ai/studio/{up['remote_id']}"
-    assert up["target_name"] == "Research (richard)"
+    assert up["target_name"] == "Research (owner)"
     st = api.get(f"/v1/harnesses/{hid}/upload").json()
     assert st["uploaded"] is True and st["changed"] is False and st["open_url"] == up["open_url"]
     # changed here: the status says so, and keeps the link to the copy in Cloud

@@ -21,8 +21,8 @@ CLOUD = "https://cloud.test"
 class Cloud:
     """What the hosted gateway does, as far as this feature can see."""
     def __init__(self):
-        self.keys = {"sk-hr-good": {"org": "org_e", "org_name": "Epsilla", "workspace": "ws_r", "workspace_name": "Research", "member": "richard"},
-                     "sk-hr-nows": {"org": "org_e", "org_name": "Epsilla", "workspace": "", "workspace_name": "", "member": "richard"}}
+        self.keys = {"sk-hr-good": {"org": "org_e", "org_name": "Example Co", "workspace": "ws_r", "workspace_name": "Research", "member": "owner"},
+                     "sk-hr-nows": {"org": "org_e", "org_name": "Example Co", "workspace": "", "workspace_name": "", "member": "owner"}}
         self.harnesses: dict[str, dict] = {}
         self.calls: list[tuple[str, str]] = []
 
@@ -95,7 +95,7 @@ def test_test_resolves_the_key_to_a_label_without_saving_and_shows_no_ids(api, c
     r = api.post("/v1/cloud-upload/targets/test", json={"api_key": "sk-hr-good", "base_url": CLOUD})
     assert r.status_code == 200
     j = r.json()
-    assert j["label"] == "Research (richard)"
+    assert j["label"] == "Research (owner)"
     assert "org_e" not in json.dumps(j) and "ws_r" not in json.dumps(j)   # internal ids never shown
     assert api.get("/v1/cloud-upload/targets").json()["targets"] == []
 
@@ -110,7 +110,7 @@ def test_stored_targets_keep_the_key_out_and_can_be_removed(api, cloud):
     r = api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
     assert r.status_code == 200
     j = r.json()
-    assert j["label"] == "Research (richard)" and "sk-hr-good" not in json.dumps(j)
+    assert j["label"] == "Research (owner)" and "sk-hr-good" not in json.dumps(j)
     assert j["key_hint"].startswith("sk-hr-") and "…" in j["key_hint"]
     lst = api.get("/v1/cloud-upload/targets").json()
     assert len(lst["targets"]) == 1 and lst["last"] == j["id"]
@@ -131,7 +131,7 @@ def test_upload_creates_the_copy_then_replaces_that_same_copy(api, cloud):
     assert sent["source"] == "selfhost" and sent["workspace"] == "ws_r"   # landed in the key's workspace
     assert "api_key" not in json.dumps(sent)                         # nothing secret travels
     st = api.get(f"/v1/harnesses/{hid}/upload").json()
-    assert st["uploaded"] is True and st["changed"] is False and st["target"] == "Research (richard)"
+    assert st["uploaded"] is True and st["changed"] is False and st["target"] == "Research (owner)"
     # edit locally: the chip says changed; upload again: replace, in place, the same copy
     api.put(f"/v1/harnesses/{hid}", json={"name": "Philz one-pager v2", "base": "dsh"})
     assert api.get(f"/v1/harnesses/{hid}/upload").json()["changed"] is True
@@ -218,7 +218,7 @@ def test_a_record_from_before_remote_ids_replaces_the_copy_at_the_local_id(api, 
     target = asyncio.run(gw._cloud_targets())["targets"][api.get("/v1/cloud-upload/targets").json()["last"]]
     cloud.harnesses[hid] = {"name": "Older upload", "org": "org_e", "workspace": "ws_r"}
     rec = asyncio.run(gw._cloud_records())
-    rec.setdefault("harnesses", {})[hid] = {gw._cloud_tkey(target): {"fingerprint": "old", "uploaded_at": 1, "target": "Research (richard)"}}
+    rec.setdefault("harnesses", {})[hid] = {gw._cloud_tkey(target): {"fingerprint": "old", "uploaded_at": 1, "target": "Research (owner)"}}
     asyncio.run(gw.BACKING.secrets.put(gw.GLOBAL_TENANT, gw._CLOUD_UPLOAD_RECORDS_KEY, json.dumps(rec)))
     r = api.post(f"/v1/harnesses/{hid}/upload")
     assert r.status_code == 200, r.text
@@ -232,8 +232,8 @@ def test_the_same_harness_uploads_to_every_workspace_a_key_points_at(api, cloud)
     """It is just an upload: wherever there is a key, it lands. Each target keeps its own hosted
     copy and its own chip state; a second workspace in the SAME org gets its own copy rather
     than silently updating the first one's."""
-    cloud.keys["sk-hr-ws2"] = {"org": "org_e", "org_name": "Epsilla", "workspace": "ws_2",
-                               "workspace_name": "Second", "member": "richard"}
+    cloud.keys["sk-hr-ws2"] = {"org": "org_e", "org_name": "Example Co", "workspace": "ws_2",
+                               "workspace_name": "Second", "member": "owner"}
     api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
     hid = _harness(api, "Everywhere")
     r1 = api.post(f"/v1/harnesses/{hid}/upload").json()
@@ -246,7 +246,7 @@ def test_the_same_harness_uploads_to_every_workspace_a_key_points_at(api, cloud)
     assert cloud.harnesses[r1["remote_id"]]["workspace"] == "ws_r"
     assert cloud.harnesses[r2["remote_id"]]["workspace"] == "ws_2"
     st = api.get(f"/v1/harnesses/{hid}/upload").json()
-    assert st["uploaded"] is True and st["target"] == "Second (richard)"
+    assert st["uploaded"] is True and st["target"] == "Second (owner)"
     # back to the first workspace: its record is intact, replace goes to its own copy
     api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
     r3 = api.post(f"/v1/harnesses/{hid}/upload").json()
@@ -259,9 +259,9 @@ def test_a_target_stored_before_the_cloud_knew_its_name_heals_on_listing(api, cl
     cloud.keys["sk-hr-good"] = {**cloud.keys["sk-hr-good"], "workspace_name": "", "member": ""}
     api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
     assert api.get("/v1/cloud-upload/targets").json()["targets"][0]["label"] == "Cloud workspace"
-    cloud.keys["sk-hr-good"] = {**cloud.keys["sk-hr-good"], "workspace_name": "Test Workspace", "member": "richard"}
+    cloud.keys["sk-hr-good"] = {**cloud.keys["sk-hr-good"], "workspace_name": "Test Workspace", "member": "owner"}
     j = api.get("/v1/cloud-upload/targets").json()
-    assert j["targets"][0]["label"] == "Test Workspace (richard)"
+    assert j["targets"][0]["label"] == "Test Workspace (owner)"
     # healed persistently: no further /v1/me calls once complete
     n = len([c for c in cloud.calls if c[1] == "/v1/me"])
     api.get("/v1/cloud-upload/targets")
@@ -276,9 +276,9 @@ def test_a_revoked_key_is_named_not_hidden(api, cloud):
     dead = cloud.keys.pop("sk-hr-good")                      # revoke on the hosted side
     j = api.get("/v1/cloud-upload/targets").json()
     assert j["targets"][0]["revoked"] is True
-    cloud.keys["sk-hr-good"] = {**dead, "workspace_name": "Test Workspace", "member": "richard"}
+    cloud.keys["sk-hr-good"] = {**dead, "workspace_name": "Test Workspace", "member": "owner"}
     j = api.get("/v1/cloud-upload/targets").json()           # un-revoked: heals and clears the mark
-    assert j["targets"][0]["revoked"] is False and j["targets"][0]["label"] == "Test Workspace (richard)"
+    assert j["targets"][0]["revoked"] is False and j["targets"][0]["label"] == "Test Workspace (owner)"
 
 
 def test_discovery_reports_the_version_this_build_is(api, monkeypatch):
