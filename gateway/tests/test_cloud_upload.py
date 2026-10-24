@@ -210,6 +210,24 @@ def test_a_copy_deleted_on_cloud_is_created_again(api, cloud):
     assert list(cloud.harnesses) == [again]
 
 
+def test_a_record_from_before_remote_ids_replaces_the_copy_at_the_local_id(api, cloud):
+    """An upload before remote ids were kept recorded only the fingerprint: its copy is at the
+    harness's own id. The next deploy replaces that copy and creates nothing."""
+    api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
+    hid = _harness(api, "Older upload")
+    target = asyncio.run(gw._cloud_targets())["targets"][api.get("/v1/cloud-upload/targets").json()["last"]]
+    cloud.harnesses[hid] = {"name": "Older upload", "org": "org_e", "workspace": "ws_r"}
+    rec = asyncio.run(gw._cloud_records())
+    rec.setdefault("harnesses", {})[hid] = {gw._cloud_tkey(target): {"fingerprint": "old", "uploaded_at": 1, "target": "Research (richard)"}}
+    asyncio.run(gw.BACKING.secrets.put(gw.GLOBAL_TENANT, gw._CLOUD_UPLOAD_RECORDS_KEY, json.dumps(rec)))
+    r = api.post(f"/v1/harnesses/{hid}/upload")
+    assert r.status_code == 200, r.text
+    assert r.json()["action"] == "replace" and r.json()["remote_id"] == hid
+    assert list(cloud.harnesses) == [hid] and cloud.harnesses[hid]["system_prompt"] == "Make decks."
+    assert ("POST", "/v1/harnesses") not in cloud.calls
+    assert api.get(f"/v1/harnesses/{hid}/upload").json()["changed"] is False
+
+
 def test_the_same_harness_uploads_to_every_workspace_a_key_points_at(api, cloud):
     """It is just an upload: wherever there is a key, it lands. Each target keeps its own hosted
     copy and its own chip state; a second workspace in the SAME org gets its own copy rather
