@@ -25,6 +25,10 @@ class CloudWithSignIn(Cloud):
     def __init__(self):
         super().__init__()
         self.pairings: dict[str, dict] = {}
+        # the key Cloud's sign-in mints (workspace "" with workspace_default): its /v1/me names the
+        # organization's Default Workspace (Cloud, since 2026-10-23)
+        self.keys["sk-hr-default"] = {"org": "org_e", "org_name": "Epsilla", "workspace": "org_e__hr_default",
+                                      "workspace_name": "Default Workspace", "member": "richard"}
 
     def handle(self, req: httpx.Request) -> httpx.Response:
         p = req.url.path
@@ -113,7 +117,7 @@ def test_the_first_deploy_signs_in_and_the_key_lands_here_never_in_the_browser(a
     hid = _harness(api)
     up = api.post(f"/v1/harnesses/{hid}/upload")
     assert up.status_code == 200, up.text
-    assert cloud.harnesses[hid]["system_prompt"] == "Summarize the week's feedback by theme."
+    assert cloud.harnesses[up.json()["remote_id"]]["system_prompt"] == "Summarize the week's feedback by theme."
 
 
 def test_a_deploy_hand_off_and_a_key_hand_off_are_never_each_others(api, cloud):
@@ -129,21 +133,28 @@ def test_a_deploy_hand_off_and_a_key_hand_off_are_never_each_others(api, cloud):
     assert api.get("/v1/cloud-upload/connect/nope").status_code == 410
 
 
-def test_the_sign_in_key_of_the_default_workspace_lands_there_while_a_pasted_one_is_still_refused(api, cloud):
-    """Cloud's sign-in mints its key for the organization's Default Workspace (workspace "" with
-    workspace_default), and Cloud's /v1/me answers no workspace for it (2026-10-23). What it creates
-    is unstamped, which is the Default Workspace's: that is the destination, by that name. A key
-    pasted by hand keeps the rule: no workspace, refused."""
+def test_the_sign_in_key_lands_where_cloud_names_and_a_key_it_names_no_workspace_for_is_refused(api, cloud):
+    """Where a deploy lands is what Cloud's /v1/me names for the key, and nothing is assumed here.
+    Cloud's sign-in mints its key for the organization's Default Workspace, and Cloud names that
+    workspace for it. A key Cloud names no workspace for is refused, through the sign-in as when
+    pasted: before 2026-10-23 Cloud answered none for the sign-in's key, and this instance supplied
+    the Default Workspace itself; that stand-in is gone."""
     code = api.post("/v1/cloud-upload/connect", json={}).json()["code"]
-    cloud.sign_in(code, key="sk-hr-nows")
+    cloud.sign_in(code, key="sk-hr-default")
     r = api.get(f"/v1/cloud-upload/connect/{code}")
     assert r.status_code == 200, r.text
     assert r.json()["target"]["label"] == "Default Workspace (richard)"
     hid = _harness(api)
-    assert api.post(f"/v1/harnesses/{hid}/upload").status_code == 200
-    assert hid in cloud.harnesses
+    up = api.post(f"/v1/harnesses/{hid}/upload")
+    assert up.status_code == 200
+    assert cloud.harnesses[up.json()["remote_id"]]["workspace"] == "org_e__hr_default"
+    code = api.post("/v1/cloud-upload/connect", json={}).json()["code"]
+    cloud.sign_in(code, key="sk-hr-nows")
+    r = api.get(f"/v1/cloud-upload/connect/{code}")
+    assert r.status_code == 400 and "workspace" in r.text
     pasted = api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-nows", "base_url": HOSTED})
     assert pasted.status_code == 400 and "workspace" in pasted.text
+    assert [t["label"] for t in api.get("/v1/cloud-upload/targets").json()["targets"]] == ["Default Workspace (richard)"]
 
 
 def test_the_deploy_and_the_status_say_where_the_copy_opens_in_cloud(api, cloud):
@@ -185,8 +196,9 @@ def test_a_copy_sent_to_a_cloud_that_takes_plugins_whole_reads_current_until_it_
     cloud.sign_in(code)
     api.get(f"/v1/cloud-upload/connect/{code}")
     hid = _harness(api)
-    assert api.post(f"/v1/harnesses/{hid}/upload").status_code == 200
-    assert "plugins" in cloud.harnesses[hid]                           # sent with plugins whole
+    up = api.post(f"/v1/harnesses/{hid}/upload")
+    assert up.status_code == 200
+    assert "plugins" in cloud.harnesses[up.json()["remote_id"]]        # sent with plugins whole
     assert api.get(f"/v1/harnesses/{hid}/upload").json()["changed"] is False
     assert api.get("/v1/cloud-upload/status").json()["harnesses"][hid]["changed"] is False
     assert api.put(f"/v1/harnesses/{hid}", json={"name": "Weekly feedback summary", "base": "hermes",
