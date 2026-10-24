@@ -5890,8 +5890,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     pass          # the client hung up first; nothing left to tell
                 return
         ctype = resp.headers.get("content-type") or ""
-        # the bytes go through untouched; a Google answer's tool-call signatures are read as they pass
-        sigs = flags.setdefault("google_sigs", {}) if google else None
+        # the bytes go through untouched; a Google answer's tool-call signatures are read as they pass.
+        # On EVERY route, not only Google's host: an aggregator serving Gemini 3 (Vercel's gateway)
+        # streams the same extra_content.google.thought_signature, and a replay without it is not
+        # refused with the 400 that teaches this relay the need — it comes back as an answer with no
+        # content and finish_reason "error" (measured 2026-10-24: docker-agent, gemini-3.5-flash-lite,
+        # 8 of 12 artifact turns through Vercel). The first signature seen marks the route
+        # (`thought_signature`), and every later request on it gets them back.
+        sigs = flags.setdefault("google_sigs", {})
         if "text/event-stream" in ctype:
             self.send_response(resp.status)
             self.send_header("content-type", ctype)
@@ -6000,6 +6006,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     if sigs is not None:
                         for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
+                            flags["thought_signature"] = True
                 if out_lines is not None:
                     chunk = b"".join(out_lines)
                 _stream_fold(flags, call_usage, call_thinking, folded)   # on the route before the client has it
@@ -6067,7 +6074,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 except ValueError:
                     doc = None
                 if isinstance(doc, dict):
-                    sigs.update(_google_signatures_in(doc))
+                    found = _google_signatures_in(doc)
+                    sigs.update(found)
+                    if found:
+                        flags["thought_signature"] = True
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
