@@ -21343,12 +21343,14 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     # second workspace, in the same org or another, gets its own; a copy deleted on Cloud since is
     # created again.
     action = "replace" if rec else "create"
+    # a record an upload before remote ids were kept names none: its copy is at the local id
+    rid = str((rec or {}).get("remote_id") or hid)
     hdr = {"authorization": f"Bearer {target['api_key']}"}
     wait = httpx.Timeout(60.0, connect=8.0)
     try:
         r = None
         if rec:
-            r = await _checked_http().put(f"{target['base_url']}/v1/harnesses/{rec.get('remote_id') or ''}",
+            r = await _checked_http().put(f"{target['base_url']}/v1/harnesses/{rid}",
                                           json=body, headers=hdr, timeout=wait)
             if r.status_code == 404:
                 action, r = "create", None
@@ -21362,7 +21364,7 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
         j = {}
     j = j if isinstance(j, dict) else {}
     if r.status_code in (200, 201):
-        remote_id = str(rec["remote_id"]) if action == "replace" else str(j.get("id") or "")
+        remote_id = rid if action == "replace" else str(j.get("id") or "")
         if not remote_id:
             return {"id": hid, "ok": False, "action": action, "error": "cloud answered without the copy's id"}
         # the form it was sent in (plugins whole, or as their skills and servers): the status
