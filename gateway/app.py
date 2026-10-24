@@ -21221,12 +21221,11 @@ async def _cloud_base_refused(base: str) -> str | None:
     return await _internal_target(u.hostname, u.port or 443)
 
 
-async def _cloud_me(base_url: str, api_key: str, *, default_workspace: bool = False) -> dict:
-    """Resolve a key to where an upload lands. Raises HTTPException with the hosted side's words.
-    `default_workspace`: the key is one HarnessRouter Cloud's sign-in minted for the organization's
-    Default Workspace (its get-key page mints with workspace "" and workspace_default), which its
-    /v1/me answers with no workspace; what such a key creates is unstamped, and unstamped is the
-    Default Workspace's, so that is where the copy lands and what it is called here."""
+async def _cloud_me(base_url: str, api_key: str) -> dict:
+    """Resolve a key to where an upload lands, as HarnessRouter Cloud's /v1/me names it. Raises
+    HTTPException with the hosted side's words. A key Cloud's sign-in minted for the organization's
+    Default Workspace is answered with that workspace by Cloud itself (since 2026-10-23); a key it
+    answers with none is refused, however it came."""
     refused = await _cloud_base_refused(base_url)
     if refused:
         raise HTTPException(400, f"that address cannot be used: {refused}")
@@ -21242,8 +21241,6 @@ async def _cloud_me(base_url: str, api_key: str, *, default_workspace: bool = Fa
     me = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     if not isinstance(me, dict) or not me.get("org"):
         raise HTTPException(502, "cloud answered without an org")
-    if not me.get("workspace") and default_workspace:
-        me = {**me, "workspace": f"{me['org']}__hr_default", "workspace_name": me.get("workspace_name") or "Default Workspace"}
     if not me.get("workspace"):
         raise HTTPException(400, "this key is not bound to a workspace; mint one inside the workspace")
     return me
@@ -21333,47 +21330,42 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     per = records.setdefault("harnesses", {}).setdefault(hid, {})
     tkey = _cloud_tkey(target)
     rec = per.get(tkey)
+    # A copy is created with POST /v1/harnesses, which names its id, and replaced with PUT
+    # /v1/harnesses/{id} (UHP Harnesses §5.1, §5.2). PUT never creates: Cloud answers 404 for an id
+    # it holds no harness under, so a first deploy by PUT to a new id failed (found 2026-10-24).
+    # This destination's copy is the one its record names, so a
+    # second workspace, in the same org or another, gets its own; a copy deleted on Cloud since is
+    # created again.
     action = "replace" if rec else "create"
-    # The hosted id is the local id when that id is free, and a minted one when it is not. Hosted
-    # ids are global across orgs, and the hosted side answers 404 for an id owned by another org,
-    # deliberately indistinguishable from missing. That is a legitimate situation, not an error:
-    # the same local harness uploaded to a second org (a changed key, a shared instance, an id
-    # claimed by an earlier test) must land, so on that 404 the upload retries once under a fresh
-    # id and the record keeps the mapping. Stability holds per target: every later upload replaces
-    # the same hosted copy.
-    # This target's hosted id: its own record first; else the local id, but only when no OTHER
-    # target has claimed it (a second workspace in the SAME org would otherwise silently update
-    # the first workspace's copy rather than creating its own); else minted.
-    if rec:
-        remote_id = str(rec.get("remote_id") or hid)
-    elif per:
-        remote_id = "chrn" + uuid.uuid4().hex
-    else:
-        remote_id = hid
-    last_error = ""
-    for attempt in (remote_id, "chrn" + uuid.uuid4().hex):
-        try:
-            r = await _checked_http().put(f"{target['base_url']}/v1/harnesses/{attempt}", json=body,
-                                          headers={"authorization": f"Bearer {target['api_key']}"},
-                                          timeout=httpx.Timeout(60.0, connect=8.0))
-        except Exception as e:  # noqa: BLE001
-            return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
-        if r.status_code in (200, 201):
-            # the form it was sent in (plugins whole, or as their skills and servers): the status
-            # compares the setup now against that same form
-            per[tkey] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
-                         "remote_id": attempt, "target": _cloud_label(target), "plugins_ok": plugins_ok}
-            return {"id": hid, "ok": True, "action": action, "name": body["name"], "remote_id": attempt}
-        detail = ""
-        try:
-            j = r.json()
-            detail = str((j.get("error") or {}).get("message") or j.get("detail") or "")
-        except Exception:  # noqa: BLE001
-            detail = r.text[:160]
-        last_error = f"cloud answered {r.status_code}: {detail}"[:300]
-        if r.status_code != 404:
-            break                       # only the taken-id case is worth a second attempt
-    return {"id": hid, "ok": False, "action": action, "error": last_error}
+    hdr = {"authorization": f"Bearer {target['api_key']}"}
+    wait = httpx.Timeout(60.0, connect=8.0)
+    try:
+        r = None
+        if rec:
+            r = await _checked_http().put(f"{target['base_url']}/v1/harnesses/{rec.get('remote_id') or ''}",
+                                          json=body, headers=hdr, timeout=wait)
+            if r.status_code == 404:
+                action, r = "create", None
+        if r is None:
+            r = await _checked_http().post(f"{target['base_url']}/v1/harnesses", json=body, headers=hdr, timeout=wait)
+    except Exception as e:  # noqa: BLE001
+        return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
+    try:
+        j = r.json()
+    except Exception:  # noqa: BLE001
+        j = {}
+    j = j if isinstance(j, dict) else {}
+    if r.status_code in (200, 201):
+        remote_id = str(rec["remote_id"]) if action == "replace" else str(j.get("id") or "")
+        if not remote_id:
+            return {"id": hid, "ok": False, "action": action, "error": "cloud answered without the copy's id"}
+        # the form it was sent in (plugins whole, or as their skills and servers): the status
+        # compares the setup now against that same form
+        per[tkey] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
+                     "remote_id": remote_id, "target": _cloud_label(target), "plugins_ok": plugins_ok}
+        return {"id": hid, "ok": True, "action": action, "name": body["name"], "remote_id": remote_id}
+    detail = str((j.get("error") or {}).get("message") or j.get("detail") or "") if j else r.text[:160]
+    return {"id": hid, "ok": False, "action": action, "error": f"cloud answered {r.status_code}: {detail}"[:300]}
 
 
 def _cloud_status(hid: str, records: dict, fp: str | None, target: dict) -> dict:
@@ -21477,7 +21469,7 @@ async def cloud_connect_poll(code: str, request: Request):
     # where the key works: the API the hand-off names (its model endpoint is <base>/v1/provider)
     endpoint = str(j.get("endpoint") or "").rstrip("/")
     base = endpoint[: -len("/v1/provider")] if endpoint.endswith("/v1/provider") else _CLOUD_UPLOAD_DEFAULT_BASE
-    me = await _cloud_me(base, key, default_workspace=True)
+    me = await _cloud_me(base, key)
     t = {"base_url": base, "api_key": key, "org": me.get("org") or "", "org_name": me.get("org_name") or "",
          "workspace": me.get("workspace") or "", "workspace_name": me.get("workspace_name") or "",
          "member": me.get("member") or ""}
