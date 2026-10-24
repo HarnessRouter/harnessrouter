@@ -1,9 +1,9 @@
 <h1 align="center">
-  <a href="https://harnessrouter.ai/open-source">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset=".github/images/logo-dark.png">
-      <img alt="HarnessRouter" src=".github/images/logo-light.png" width="280">
-    </picture>
+  <a href="https://harnessrouter.ai/open-source#gh-light-mode-only">
+    <img alt="HarnessRouter" src=".github/images/logo-light.png" width="280">
+  </a>
+  <a href="https://harnessrouter.ai/open-source#gh-dark-mode-only">
+    <img alt="HarnessRouter" src=".github/images/logo-dark.png" width="280">
   </a>
 <br>
 The unified interface for agent harnesses.
