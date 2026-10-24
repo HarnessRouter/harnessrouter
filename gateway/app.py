@@ -18833,7 +18833,8 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("edit", "Edit"), ("skill", "Skill"), ("todo", "Todo"),
                   ("run_typescript", "Run TypeScript"),
                   ("search_tool_functions", "Tool Lookup"),
-                  ("unified_harness_scratchpad", "Scratchpad")],
+                  ("unified_harness_scratchpad", "Scratchpad"),
+                  ("wait", "Wait")],
         # "hard", measured at the door, and the MECHANISM is worth stating because it is not the
         # usual one: a disabled tool is still DECLARED to the model, and the call is refused
         # (`tool_denied`, nothing written) rather than the tool being withheld. The effect is

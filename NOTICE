@@ -56,24 +56,32 @@ run, by you, under their own licenses:
                               tagged source archive, with its Python dependencies from PyPI under
                               their own licenses)
   Docker Agent (docker-agent) Apache-2.0 (docker/docker-agent; the static binary from its GitHub
-                              releases, pinned by version and by a digest computed here — upstream
-                              publishes no checksums beside the assets). No mark of its own is
+                              releases, v1.152.0, pinned by version and by a digest computed here —
+                              upstream publishes no checksums beside the assets). No mark of its own is
                               redistributed: the console falls back to its generic glyph.
-  Mistral Vibe (vibe)         Apache-2.0 (mistralai/mistral-vibe; the wheel from PyPI, pinned by
-                              version and hash). The console's Vibe mark,
+  Mistral Vibe (vibe)         Apache-2.0 (mistralai/mistral-vibe; 3.0.2 from PyPI, with its whole
+                              dependency tree pinned by version and hash in docker/locks). The
+                              console's Vibe mark,
                               ui/public/logos/vibe.svg, is that project's own editor glyph
                               (distribution/zed/icons/mistral_vibe.svg), unchanged, under the same
                               license.
-  fast-agent (fast-agent)     Apache-2.0 (evalstate/fast-agent, PyPI fast-agent-mcp; the wheel
-                              from PyPI, pinned by version and hash, with its own NOTICE file as
-                              that license requires). No mark of its own is redistributed: its
+  fast-agent (fast-agent)     Apache-2.0 (evalstate/fast-agent, PyPI fast-agent-mcp; 0.10.47 from
+                              PyPI, with its whole dependency tree pinned by version and hash in
+                              docker/locks, and its own NOTICE file as that license requires). No mark of its own is redistributed: its
                               repository ships none, so the console falls back to its generic
                               glyph.
-  Deep Agents Code (dcode)    MIT (langchain-ai/deepagents, PyPI deepagents-code; the wheel from
-                              PyPI, pinned by version and hash, together with deepagents-acp
-                              (MIT) and agent-client-protocol, which its ACP server mode needs,
-                              and the deepagents SDK underneath them). No mark of its own is
-                              redistributed: the console falls back to its generic glyph.
+  Deep Agents Code (dcode)    MIT (langchain-ai/deepagents, PyPI deepagents-code; 0.2.1 from PyPI,
+                              together with deepagents-acp (MIT) and agent-client-protocol, which
+                              its ACP server mode needs, and the deepagents SDK underneath them,
+                              the whole tree pinned by version and hash in docker/locks). No mark
+                              of its own is redistributed: the console falls back to its generic
+                              glyph.
+  CPython 3.14 (for dcode)    PSF-2.0 (python.org; its LICENSE.txt ships in the installed tree),
+                              as python-build-standalone builds it (MPL-2.0 build scripts,
+                              astral-sh/python-build-standalone), release 20261021, CPython
+                              3.14.9, pinned by the sha256 that release publishes. Installed
+                              beside dcode's venv only, because deepagents-code 0.2 requires
+                              Python 3.14; the rest of the image keeps its own interpreter.
 
 Claude Code is distributed under Anthropic's terms and may not be redistributed inside a
 public image; hermes-agent's publisher declared no license before 0.19.0. Installing the

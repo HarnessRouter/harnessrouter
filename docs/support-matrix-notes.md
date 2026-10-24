@@ -4449,6 +4449,12 @@ an MCP child process spawned without a handshake.
 
 ## docker-agent: Docker's own runtime, where the config IS the harness (2026-10-16; measured through all five steps 2026-10-20)
 
+**Outbound, for a self-hoster:** docker-agent downloads a public model catalog from `models.dev`
+(`https://models.dev/api.json`) about once a day per session; it sends no keys or content, and works
+offline from a built-in copy if that address is blocked. Usage telemetry (`TELEMETRY_ENABLED=false`),
+self-update, tool auto-install and OpenTelemetry are all off in the driver; the catalog has no switch
+upstream, so it is disclosed here and in the self-hosting guide rather than worked around.
+
 Docker Agent v1.150.0, added as the twenty-ninth base and the first one whose whole turn — provider,
 model, instructions, toolsets, skills, MCP servers — comes from a YAML file this runner writes per
 turn. Measured against the pinned release binary, first through a recording proxy and then end to
@@ -5006,9 +5012,11 @@ The `plugs` server is how every base gets the browser tools, and it is injected 
   the streamable url and the bearer. The A/B that settles it, same config and transport, only the
   host changed: a public https url gave `mcp_init_started` / `mcp_init_finished` and 16 tools;
   `http://127.0.0.1:8080/...` gave **no mcp_init event at all** and 15 — its four built-in toolsets
-  — with nothing on stderr and nothing in the record. What inside it refuses is NOT established:
-  its binary's loopback strings are all about its own API server's bind address. The bridge does
-  not need that answer.
+  — with nothing on stderr and nothing in the record. What refuses it is its own HTTP client's
+  address guard, read off its source on review (2026-10-24, v1.150.0 and v1.152.0 alike):
+  `pkg/httpclient/ssrf.go` refuses to dial a non-public address and says so as a stdout `warning`
+  event ("refusing to dial non-public address 127.0.0.1"), which the normaliser drops; a toolset's
+  `allow_private_ips: true` is the documented opt-in. The bridge stands, and does not need it.
 - **fast-agent tried it and died.** Three runs, the same crash each time, no browser call in any of
   them: "MCP Server: 'plugs': Failed to initialize … Details: MCPError: Not Found", then
   "RuntimeError: Core not initialized, please call initialize() first". Bridged, it passed in 12 s.

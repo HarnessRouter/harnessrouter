@@ -663,7 +663,11 @@ _CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "
                         # zeroclaw reads ZEROCLAW_<section>__<key> as config overrides (the runner puts
                         # the relay key there), so a harness variable named so could move its endpoint
                         # or its excluded tools, or stop it from starting
-                        "ZEROCLAW_")
+                        "ZEROCLAW_",
+                        # vibe reads VIBE_<key> as config overrides (enable_telemetry among them), and a
+                        # visible MISTRAL_API_KEY makes it fetch the organization's settings from Mistral
+                        # with no switch to stop it
+                        "VIBE_", "MISTRAL_")
 _CALLER_ENV_RESERVED_NAMES = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "PWD", "TMPDIR",
                               "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
                               "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
@@ -915,6 +919,12 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       "./.harness/vibe/home/config.toml",
                       "./.harness/vibe/home/.env",
                       "./.harness/vibe/out",
+                      # fast-agent's fastagent.config.yaml and docker-agent's agent.yaml: rewritten
+                      # at the start of every turn, and each carries an MCP server's Authorization
+                      # header as written (the standing of vibe's config.toml above). Their session
+                      # stores beside them MUST travel, so the exclusion is the file.
+                      "./.harness/fast-agent/fastagent.config.yaml",
+                      "./.harness/docker-agent/agent.yaml",
                       # opensquilla stores provider keys in its profile .env and its onboarding
                       # writes api_key straight into config.toml. The driver passes the relay
                       # placeholder in the environment instead, but `opensquilla onboard` or
@@ -1905,11 +1915,13 @@ _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_brid
 #   https://<public probe>/mcp          -> mcp_init_started, mcp_init_finished, 16 tools
 #   http://127.0.0.1:8080/v1/mcp/plugs  -> NO mcp_init event at all, 15 tools (its four built-in
 #                                          toolsets), nothing on stderr, nothing in the record
-# So it does not attempt a loopback url. WHAT inside it refuses is NOT established — its binary's
-# loopback strings are all about its own API server's bind address, and nothing was logged — so
-# nothing here claims a guard by name the way nanobot's comment can. The bridge does not need that
-# answer: bridged, there is no url left to refuse, and its own remote client keeps handling public
-# servers, which the plugin matrix measured on both transports.
+# So it does not attempt a loopback url. What refuses it is its own HTTP client's address guard,
+# read off its source on review (2026-10-24, v1.150.0 and v1.152.0 alike): pkg/httpclient/ssrf.go
+# refuses to dial a non-public address and says so as a stdout `warning` event ("refusing to dial
+# non-public address 127.0.0.1") that _docker_agent_to_claude drops; a toolset's
+# `allow_private_ips: true` is the documented opt-in. The bridge does not need it: bridged, there is
+# no url left to refuse, and its own remote client keeps handling public servers, which the plugin
+# matrix measured on both transports.
 # fast-agent is the THIRD, and it fails the other way: it DOES try the loopback url and its MCP
 # startup dies, taking the turn with it — "MCP Server: 'plugs': Failed to initialize … Details:
 # MCPError: Not Found", then "RuntimeError: Core not initialized, please call initialize() first".
@@ -11848,7 +11860,14 @@ _VIBE_KEY_ENV = "HR_VIBE_RELAY_KEY"
 # Every tool the unified harness declares, read off the requests of a measured turn. The gateway's
 # catalog carries the same list; gateway/tests/test_vibe_tools.py holds the two equal.
 ALL_VIBE_TOOLS = ("search_tool_functions", "run_typescript", "read_file", "write_file", "edit",
-                  "bash", "skill", "todo", "unified_harness_scratchpad")
+                  "bash", "skill", "todo", "unified_harness_scratchpad",
+                  # 3.0.0: the agent waits for the next message or for background work to finish
+                  "wait")
+# 3.0.1 sends max_tokens on every request: the declared max_context_length minus the input minus a
+# 4096-token reserve, about 187,000 here, which providers refuse as an output cap. 2.26.1 sent none.
+# The relay takes it off, as it does for kimi and openhands, and max_context_length stays declared
+# for compaction's threshold.
+_VIBE_DROP_FIELDS = ("max_tokens",)
 
 
 def _vibe_home(cwd: str) -> pathlib.Path:
@@ -12037,6 +12056,12 @@ def _vibe_to_claude(obj: dict, state: dict) -> list[dict]:
         role = obj.get("role")
         text = "\n".join(b.get("text") or "" for b in (obj.get("content") or [])
                          if isinstance(b, dict) and b.get("type") == "text").strip()
+        outcome = obj.get("outcome") if isinstance(obj.get("outcome"), dict) else {}
+        if outcome.get("type") == "discarded":
+            # 3.0.0 streams a draft it then threw away (`outcome: {type: discarded, cause: retry |
+            # failure | steer | interrupt}`): an answer cut off at the output limit is discarded and
+            # asked again. It was never the answer, so it is neither shown nor kept as the final.
+            return out
         if role == "assistant" and text:
             state["final"] = text
             out.append({"type": "assistant", "message": {"content": [
@@ -12147,6 +12172,7 @@ def _build_vibe(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # streaming shape already defines, and the provider that needs it is decided by the
         # connection rather than by this builder.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key,
+                                                    drop_fields=_VIBE_DROP_FIELDS,
                                                     tool_index_fill=True)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home, out = _vibe_home(cwd), _vibe_out(cwd)
@@ -12777,7 +12803,7 @@ def _fast_agent_set_model(cwd: str, session_id: str, model: str) -> bool:
 
 
 def _fast_agent_config(cwd: str, tools_disabled: list[str] | None,
-                       mcp_servers: list[dict] | None) -> tuple[pathlib.Path, list[str]]:
+                       mcp_servers: list[dict] | None, base_url: str = "") -> tuple[pathlib.Path, list[str]]:
     """Write the fastagent.config.yaml this turn runs with, and name the servers it declares.
 
     Only three things are in it: the tool switches a harness's disabled set travels on, the MCP
@@ -12798,7 +12824,16 @@ def _fast_agent_config(cwd: str, tools_disabled: list[str] | None,
              "  show_chat: false",
              "  show_tools: false",
              "",
+             # Stated here, where a workspace's .env cannot reach: fast-agent reads a .env in the
+             # directory it runs in, so OTEL__ENABLED there sent the turn's traces to the endpoint it
+             # named, and GENERIC__BASE_URL there sent the model call around the relay (both
+             # measured on 0.10.47). The config file outranks that .env for both.
+             "otel:",
+             "  enabled: false",
+             "",
              ]
+    if base_url:
+        lines += ["generic:", f"  base_url: {q(base_url.rstrip('/'))}", ""]
     if "bash" not in disabled:
         # Only when the shell runtime is on at all: read_text_file and the edit tool are the
         # two the config withholds, and the shell itself is withheld by not passing -x (see
@@ -12954,7 +12989,7 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home = _fast_agent_home(cwd)
     home.mkdir(parents=True, exist_ok=True)
-    cfg, server_names = _fast_agent_config(cwd, tools_disabled, mcp_servers)
+    cfg, server_names = _fast_agent_config(cwd, tools_disabled, mcp_servers, base_url=auth.base_url or "")
     env["FAST_AGENT_HOME"] = str(home)
     env[_FA_BASE_ENV] = (auth.base_url or "").rstrip("/")
     env[_FA_KEY_ENV] = auth.api_key or ""
