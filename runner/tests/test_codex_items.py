@@ -32,3 +32,14 @@ def test_a_command_reads_its_camel_case_fields():
     use, res = evs[0]["message"]["content"][0], evs[1]["message"]["content"][0]
     assert use["name"] == "Bash" and use["input"] == {"command": "ls"}
     assert res["type"] == "tool_result" and res["is_error"] is False and res["content"] == "a\n"
+
+def test_error_and_warning_items_are_not_tools(capsys):
+    it: dict = {
+        "type": "error",
+        "id": "item_0",
+        "message": "Model metadata for `openai/gpt-6.1-sol` not found. Defaulting to fallback metadata",
+    }
+    assert _codex_tool_item(it) == []
+    captured = capsys.readouterr()
+    assert "Model metadata for `openai/gpt-6.1-sol` not found" in captured.out
+    
