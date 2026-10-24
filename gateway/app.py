@@ -6486,7 +6486,9 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
                     content = "\n".join((x.get("text", "") if isinstance(x, dict) else str(x)) for x in content)
                 out.append(("tool_result", {"call_id": c.get("tool_use_id") or "",
                                             "output": str(content if content is not None else ""),
-                                            "is_error": bool(c.get("is_error"))}))
+                                            "is_error": bool(c.get("is_error")),
+                                            # the runner had no complete record of the output (codex)
+                                            "incomplete": bool(c.get("incomplete"))}))
     elif t == "result":
         out.append(("result", {"text": ev.get("result") or "", "usage": ev.get("usage"),
                                "is_error": bool(ev.get("is_error")),
@@ -6716,8 +6718,10 @@ class _RespTranslator:
             evs += self._close_cur()
             self.out_index += 1
             oid = _rid("fco")
+            # `incomplete`: the output may lack part of what the tool printed, and says so, never
+            # passed off as the whole of it
             item = {"id": oid, "type": "function_call_output", "call_id": payload["call_id"],
-                    "output": payload["output"], "status": "completed"}
+                    "output": payload["output"], "status": "incomplete" if payload.get("incomplete") else "completed"}
             evs.append(self._ev("response.output_item.added", output_index=self.out_index, item=item))
             evs.append(self._ev("response.output_item.done", output_index=self.out_index, item=item))
             self.output.append(item)

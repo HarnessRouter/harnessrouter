@@ -149,9 +149,16 @@ def test_the_stop_result_reports_incomplete_at_the_gateway_layer():
 
 
 _FAKE_APPSERVER = '''
-import json, os, sys, time
+import json, os, pathlib, sys, time
 def out(o):
     print(json.dumps(o), flush=True)
+# codex's own record of the thread, which the runner reads a command's output from
+rollout = pathlib.Path(os.environ["CODEX_HOME"]) / "sessions" / "rollout-2026-10-24T00-00-00-th1.jsonl"
+rollout.parent.mkdir(parents=True, exist_ok=True)
+def record(call_id, output):
+    with open(rollout, "a") as f:
+        f.write(json.dumps({"type": "response_item", "payload": {"type": "function_call_output",
+                "call_id": call_id, "output": output}}) + "\\n")
 for line in sys.stdin:
     m = json.loads(line)
     meth, mid = m.get("method"), m.get("id")
@@ -165,6 +172,7 @@ for line in sys.stdin:
             # the model call that asked for the command is counted before the command runs
             out({"method": "thread/tokenUsage/updated", "params": {"tokenUsage": {"total": {
                 "inputTokens": 100 * (i + 1), "outputTokens": 10 * (i + 1)}}}})
+            record("c%d" % i, "ok")
             out({"method": "item/completed", "params": {"item": {
                 "type": "commandExecution", "id": "c%d" % i, "command": "echo %d" % i,
                 "aggregatedOutput": "ok", "exitCode": 0}}})
@@ -182,7 +190,8 @@ def _appserver_turn(tmp_path, calls: int, max_turns):
     fake = bindir / "codex"
     fake.write_text(f"#!{sys.executable}\n" + _FAKE_APPSERVER)
     fake.chmod(0o755)
-    env = {**os.environ, "PATH": f"{bindir}:{os.environ.get('PATH', '')}", "FAKE_CALLS": str(calls)}
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ.get('PATH', '')}", "FAKE_CALLS": str(calls),
+           "CODEX_HOME": str(tmp_path / "codex-home")}
     turn_id = "gen-appserver-" + uuid.uuid4().hex
     _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
                        "started": time.time(), "backend": "codex", "model": "m"}
