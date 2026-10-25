@@ -8490,6 +8490,17 @@ _CHANNEL_REFUSES: dict[tuple[str, str], frozenset[str]] = {
 # docker-agent passes with claude-fable-5, claude-opus-5.5 and claude-sonnet-5.5, and docker-agent
 # passes with it on OpenRouter and Vercel. The route decides, so the route does not offer it.
 _CHANNEL_REFUSES[("tokenrouter", "docker-agent")] |= {"claude-fable-5-1"}
+# dcode drives the Responses API (deepagents' built-in profile sets use_responses_api for every openai:*
+# model), and TokenRouter's /v1/responses does not reach every family it serves on chat completions:
+# every Claude id and five Gemini ids answered 500 "not implemented" or 502 "downstream path
+# /v1/responses is ...", and kimi-k3 500, on the first turn (2026-10-25, each id once, one connection).
+# gemini-3.1-pro-preview, gemini-3-flash-preview, grok, deepseek, qwen, glm, mistral, step and
+# nemotron ran there.
+_CHANNEL_REFUSES[("tokenrouter", "dcode")] = frozenset({
+    "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5",
+    "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
+    "kimi-k3"})
 
 
 def _channel_refuses(provider: str, backend: str, model: str) -> bool:

@@ -59,3 +59,12 @@ def test_tokenrouter_does_not_offer_claude_fable_5_1_to_docker_agent_alone():
     assert not gw._channel_refuses("openrouter", "docker-agent", "claude-fable-5-1")
     assert not gw._channel_refuses("tokenrouter", "docker-agent", "claude-fable-5")
     assert gw._channel_refuses("tokenrouter", "docker-agent", "gpt-6.1-sol")       # the earlier rule still holds
+
+
+def test_tokenrouter_s_responses_endpoint_does_not_serve_dcode_claude_or_these_geminis():
+    for m in ("claude-fable-5-1", "claude-sonnet-5.5", "claude-haiku-4.5", "gemini-3.5-flash", "kimi-k3"):
+        assert gw._channel_refuses("tokenrouter", "dcode", m), m
+    for m in ("gpt-6.1-sol", "gemini-3.1-pro-preview", "grok-4.6", "deepseek-v4-pro", "qwen3.8-max"):
+        assert not gw._channel_refuses("tokenrouter", "dcode", m), m
+    assert not gw._channel_refuses("openrouter", "dcode", "claude-fable-5-1")
+    assert not gw._channel_refuses("tokenrouter", "vibe", "claude-sonnet-5.5")
