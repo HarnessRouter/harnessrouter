@@ -5082,3 +5082,189 @@ harness that wants nothing spent asks for `none`, which works (0 tokens, measure
   the three packages.
 - `packages` on `POST /v1/environments` is a dict keyed by manager (`{"pip": [...], "npm": [...],
   "apt": [...]}`), not a list of `{manager, name}` rows.
+
+## Batch 4 on each harness's latest release: the matrix again, every provider (0.37.0, 2026-10-24/25)
+
+Before 0.37.0 the four bases moved to their latest releases: vibe 2.26.1 → **3.0.2**, docker-agent 1.150.0 →
+**1.152.0**, fast-agent 0.10.45 → **0.10.47**, deepagents-code 0.1.84 → **0.2.1**. deepagents-code 0.2 needs
+Python 3.14 and the image runs 3.12, so dcode gets its own CPython 3.14.9 (python-build-standalone 20261021,
+pinned by sha256). Every Python tree is installed from a hash-locked file shipped in the image
+(`docker/locks/*.lock.txt`, `pip --require-hashes --no-deps`, failing closed), and the docker-agent binary is
+pinned by sha256. The four upstreams were checked first, and again on 2026-10-25 before the last candidate:
+maintained (each pushed within three days), licensed (Apache-2.0 three times, MIT once), none deprecated, and
+each still at the release pinned here.
+
+Then all five steps of docs/harness-verification.md again, on every provider, one connection at a time, one
+instance per base, from one snapshot of the review instance's data. A row that failed was taken to its cause
+on a fifth instance, with the relay's requests and the provider's answers captured, before anything else: a
+product bug was fixed, built into the next release candidate and measured again; a model's own failure took
+that model off that base (`_NOT_OFFERED`, with what it did); a connection that cannot run a pair for a base
+stopped offering it (`_CHANNEL_REFUSES`, `_TOKENROUTER_NO_CHANNEL`).
+
+### Columns
+
+Each cell is the pairs (base × model) that passed all five scenarios on that connection, 914 in all; every pair a
+connection offers to a base passed. A pair the release does not offer (a model off the base, a pair the connection
+refuses, a model the connection does not serve) carries no row, and support-matrix.md lists the served ones under
+each provider with the gateway's reason.
+
+| Connection | vibe | docker-agent | fast-agent | dcode |
+|---|---|---|---|---|
+| Vercel AI Gateway | 53 | 53 | 52 | 51 |
+| OpenRouter | 54 | 54 | 53 | 53 |
+| TokenRouter | 42 | 41 | 42 | 27 |
+| OpenAI | 8 | 9 | 9 | 10 |
+| Anthropic | 10 | 10 | 11 | not offered |
+| Azure OpenAI | 8 | 9 | 9 | 10 |
+| Google AI Studio | 8 | 8 | 8 | not offered |
+| HarnessRouter API | 53 | 53 | 52 | 45 |
+| Custom (OpenAI Responses) | not offered | not offered | not offered | 3 |
+| Custom (OpenAI Chat) | 2 | 2 | 2 | not offered |
+| Custom (Anthropic) | not offered | not offered | not offered | not offered |
+
+Which build measured which rows: every Claude pair of vibe, docker-agent and fast-agent on Anthropic and TokenRouter,
+and every HarnessRouter API row, on 0.37.0-rc.15; their Claude pairs on OpenRouter and Vercel on rc.14 (rc.15 sends
+those the same request); vibe's whole OpenRouter column on rc.14 and rc.15; the rest on rc.12 and rc.13, after every
+fix that changes them. vibe's other rows predate item 9, which takes five lines of commits out of its system prompt
+for every model alike, and which its OpenRouter column and every Claude pair measured. fast-agent's rows measured
+before item 10 carry no token counts in support-matrix-results.json.
+
+### Product bugs the matrix found, all fixed with tests
+
+1. **A Gemini 3 tool call's thought signature on an aggregator (Vercel).** The relay restored signatures only
+   for Google's own host, or after a 400 naming them. Vercel streams the same
+   `extra_content.google.thought_signature`, and a replay without it is answered with no content and
+   finish_reason "error": docker-agent on gemini-3.5-flash-lite failed 8 of 12 artifact turns. The relay now
+   keeps signatures on every route that carries them: 8 of 8.
+2. **The same signature in OpenRouter's shape.** OpenRouter carries it as a `reasoning_details` entry
+   `{"type": "reasoning.encrypted", "id": <tool call id>}` and takes it back on the replayed assistant
+   message; docker-agent sent none back in 69 requests, and gemini-3.5-flash-lite's next call came back
+   MALFORMED_FUNCTION_CALL on 3 of 8 artifact turns. The relay puts each entry back on the message that
+   made the call: 8 of 8.
+3. **dcode answered a conversation's next message as a new conversation.** deepagents-code 0.2 holds an
+   operating-system lock on a thread for as long as its process lives. The driver sent SIGTERM and returned at
+   once: an idle agent took 1.3 to 1.7 s to exit, some caught the signal and never did (two found running,
+   orphaned, minutes later), and the next turn was refused its own thread ("Thread … is open elsewhere"),
+   after which the driver started a new thread without a word. The driver now ends the agent by closing its
+   input, waits for it, and kills its group after 10 s; a stored thread that will not load fails the turn
+   with the agent's reason.
+4. **dcode's replayed history after a model switch.** dcode drives the Responses API and replays every earlier
+   turn's items as it got them: another model's encrypted reasoning ("could not be verified", Gemini to
+   gpt-6.1-sol on OpenRouter), ids the upstream looked up as stored items ("Item with id 'rs_…' not found")
+   and fields it refused ("Unknown parameter: 'input[2].status'", grok-4.3 to gpt-6.1-sol on TokenRouter), and
+   output messages a strict parser rejected ("data did not match any variant of untagged enum ResponseInput").
+   A relay route lives one turn, so on dcode's route an earlier turn now goes as plain content: its reasoning
+   left out, an assistant message as an input message, other items without id or status. This turn's items
+   go as they are.
+5. **docker-agent cut answers short.** docker-agent 1.152.0 returns on a stop finish before it reads the same
+   chunk's text (pkg/runtime/streaming.go), and TokenRouter sends an answer's last words in that chunk:
+   deepseek-v4.1-flash streamed "M1-deepseek-v4.1-flash" whole and docker-agent's own output ended at four
+   different points. On docker-agent's route the relay sends such a chunk as the text, then the finish.
+6. **A model that takes one temperature.** vibe sends its own default of 0.2; Moonshot's kimi models through
+   TokenRouter and OpenAI's gpt-5.5 refuse anything but 1. On that refusal the relay sends the call again
+   without a temperature and sends that model none on the route from then on.
+7. **xAI's refusal of a replayed history** reached the person as the provider's JSON; it now reads as the
+   sentence OpenAI's does.
+8. **Claude ran uncached on the three chat bases.** vibe, docker-agent and fast-agent drive every model through
+   OpenAI chat (vibe's `generic` backend, docker-agent's `openai_chatcompletions` provider, fast-agent's
+   `generic.` models), Anthropic's own connection included, and set no `cache_control`: across the first pass
+   of this matrix no Claude pair on the three read a cached token on any connection, so every call of an
+   agent loop paid for its whole prompt (the cost class of "What the matrix did not look at" in
+   docs/harness-verification.md). Found by the renderer's cache finding when this batch's rows joined the
+   matrix. On their routes the relay now sets the two breakpoints it already sets on a Messages request, on
+   the last system message and the last message, for a Claude id only, and only where the upstream was
+   measured to read them back: OpenRouter (docker-agent 3910 of 3913 input tokens read on its second call,
+   fast-agent 2348 of 2365) and Vercel's AI Gateway (fast-agent 2336 of 2353). rc.14 sent them everywhere
+   and the matrix showed why not: Anthropic's OpenAI-compatible endpoint took the field and cached nothing,
+   and TokenRouter wrote a cache entry (2583 tokens, billed as a write) that no later call read, while
+   claude-fable-5's recycle turn on fast-agent there ended in content_filter in 2 of 6 runs with the field
+   and 0 of 3 without. Every other upstream gets the client's own body; a body for any other model leaves
+   byte for byte as it would without the flag; a server that refuses the field is sent the call again
+   without it and none for that model on the route from then on.
+9. **vibe's prompt changed every turn.** vibe lists the workspace's five most recent commits in its system
+   prompt, and those are the runner's own checkpoints, a new one each turn: with the breakpoints set, vibe read
+   nothing across turns (10533 tokens within one). `[project_context] default_commit_count = 0` takes the list
+   out; the branch line and the project's files stay.
+10. **fast-agent's turn usage was the whole conversation.** It read the trajectory's `final_metrics`, which
+    totals every turn of a resumed session: a third turn reported 7077 prompt tokens, the four calls of all
+    three turns, where its own two took 2385. A turn's usage is now the sum of its own steps' counts, which is
+    what a person is shown and charged. The fast-agent rows measured before this fix keep their outcomes and
+    lose their token counts in support-matrix-results.json, since those counts were wrong; the Claude rows were
+    measured again with it.
+11. **A custom Anthropic endpoint was offered to the three chat bases, then withdrawn.** The first pass found no
+    model to run on a custom Anthropic connection and offered it to all three; a full sequence passed. Item 8's
+    capture then showed that all three post /chat/completions even there, and the test's endpoint was
+    api.anthropic.com, which serves OpenAI chat as well as Messages. A Messages-only endpoint would fail every
+    call, so the three take a custom endpoint in the OpenAI format only, as before; the self-hosting guide says
+    so.
+
+### Connections that cannot run a pair for a base
+
+- gpt-6.1-sol refuses function tools with a reasoning effort on /v1/chat/completions, and refuses
+  `reasoning_effort: "none"` too. vibe, docker-agent and fast-agent (chat completions) fail every turn with
+  tools on My TokenRouter, OpenAI, Azure OpenAI and the HarnessRouter API; dcode (Responses) and OpenRouter
+  and Vercel (which translate) run it. Greyed for those three bases on those connections, and measured the same
+  on the earlier bases: kimi, qwen and cline fail on TokenRouter, OpenAI and Azure OpenAI, and openhands and
+  cheetahclaws on TokenRouter (openhands completed on OpenAI and Azure OpenAI), so those pairs are greyed too.
+- TokenRouter's Responses endpoint does not reach every family it serves: every Claude id, five Gemini ids and
+  glm-5.3-flash (the last on any history with tool calls) are greyed for dcode on TokenRouter.
+- TokenRouter's route for claude-fable-5-1 declines docker-agent's first turn (content_filter); greyed there.
+- TokenRouter served kimi-k3 as qianfan-vl-v1 and had no channel for deepseek-v4-flash, from 05:00Z to past
+  09:00Z: both are off TokenRouter's table. Vercel and OpenRouter serve both as themselves.
+- dcode is offered no model on Anthropic, Google AI Studio or a custom endpoint in the chat or Anthropic
+  format: it reaches models only through OpenAI's Responses API.
+- The HarnessRouter API's Responses endpoint does not serve eight Gemini ids: dcode (Responses) got
+  "Error code: 404" on each, after 34 to 145 s of its client's own retries, and completed on every Claude,
+  DeepSeek, GLM, Grok, Kimi, Llama, Mistral, Muse, Nemotron, Qwen and Step id and on gemini-3.7-flash. The
+  eight are greyed for dcode there; the chat bases reach the same ids through chat/completions.
+- gpt-6.1-sol on the HarnessRouter API, measured once its account had credit: kimi, qwen, cline and
+  cheetahclaws fail the tool turn as they do on TokenRouter; openhands completed and stays offered.
+
+### Removed, by base (one model-caused failure removes the model from that base)
+
+- vibe: gpt-5.6-luna (recycle answered the artifact turn's word, history intact), llama-3.3-70b (wrote its
+  write_file call as text with 10 tools declared, 4 of 4 in sequence), deepseek-v4.1-flash (refused the word it
+  was asked for: "I'm Vibe, built by Mistral AI, I won't reply with a label that attributes my..."), claude-opus-4.7
+  (refused the first turn's word on TokenRouter: "That string looks like an attempt to make me misrepresent...")
+- docker-agent: grok-build-0.1 (looped `printf DONE` until docker-agent stopped it, 5 identical calls), grok-4.5
+  (answered DONE with no tool call after a switch and back, 2 of 4), claude-opus-4.7 (refused the first
+  turn's word, "I can't comply with that. I'm Claude, made by Anthropic"; 12 of 12 first turns on the probe after
+  it, with and without the cache breakpoints, and the instructions shown to reach the model), llama-3.3-70b (wrote its
+  write_file call as text and made no file, HarnessRouter API)
+- fast-agent: grok-4.5 (answered DONE with no tool call, 3 of 4), llama-3.3-70b (recycle answered DONE instead
+  of M1), kimi-k2.7-code (answered DONE with no tool call, twice), hunyuan-4-preview (answered "I'm Claude, made
+  by Anthropic" instead of the word), qwen3.8-27b (refused the word: "would amount to confirming a specific
+  version number, which I don't disclose")
+- dcode: grok-4.5 (wrote its write_file call as JSON text, 1 of 4), kimi-k2.7-code (answered DONE with no tool
+  call), hunyuan-4-preview (a follow-up streamed until Vercel ended it at its stream limit, about 13 min),
+  muse-glimmer-30b (recycle answered its own model name instead of the first turn's word), muse-spark-1.1 (answered
+  the first turn's word with another model's id, "M1-claude-opus-4.5", while served as meta/muse-spark-1.1)
+
+### Steps 2 to 4
+
+On every base: the custom harness (a skill and its script, a tool switched off, an MCP server) passed; the
+plugin matrix passed 5 of 5 (skill, stdio MCP, the rows tool, SSE and streamable HTTP against the public
+probe); the family tour passed 12 of 12 families in one conversation. fast-agent has no tools of its own, so
+its tool policy row has nothing to switch off.
+
+### Upstream
+
+- docker/docker-agent#4714: models.dev is read at start (disclosed in the self-hosting guide).
+- docker/docker-agent#4715: the text of a chunk that carries the finish reason is dropped (item 5).
+- deepagents-code skips a remote MCP server whose answer to a HEAD request takes more than 2 s. The report
+  (langchain-ai/deepagents#7261) was closed by the project's triage because it was filed through the API,
+  which the project does not accept; it is to be filed again through the project's issue form.
+
+### The test fixture
+
+The plugin matrix's public MCP probe sometimes held a HEAD request open: HEAD /sse opened a stream that never
+ended, and the next request on that connection waited behind it. deepagents-code checks every remote server
+with a HEAD before loading it, so its SSE row failed 2 of 4. The probe now answers HEAD at once; the row
+passed.
+
+### A row that was not a model of its own
+
+claude-sonnet-5.5-direct was the review instance's own row on its Anthropic connection, naming Anthropic's
+claude-sonnet-5-5: the model claude-sonnet-5.5 names, under a second id that read as a different model. It is gone
+from the matrix, on every base (its rows are out of support-matrix-results.json), and from that instance's
+connection.
