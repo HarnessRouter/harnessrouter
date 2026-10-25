@@ -86,3 +86,10 @@ def test_the_older_chat_bases_are_not_offered_gpt_6_1_sol_where_it_refuses_their
     assert not gw._channel_refuses("openai", "openhands", "gpt-6.1-sol")         # litellm's Responses path
     assert not gw._channel_refuses("openrouter", "kimi", "gpt-6.1-sol")         # the aggregator translates
     assert not gw._channel_refuses("tokenrouter", "codex", "gpt-6.1-sol")
+
+
+def test_on_the_harnessrouter_api_the_four_that_fail_are_not_offered_it_and_openhands_is():
+    for b in ("kimi", "qwen", "cline", "cheetahclaws"):
+        assert gw._channel_refuses("harnessrouter", b, "gpt-6.1-sol"), b
+    assert not gw._channel_refuses("harnessrouter", "openhands", "gpt-6.1-sol")   # completed with a Shell call
+    assert not gw._channel_refuses("harnessrouter", "kimi", "gpt-6-sol")

@@ -8517,6 +8517,10 @@ for _p in ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure"):
         _CHANNEL_REFUSES[(_p, _b)] = _CHANNEL_REFUSES.get((_p, _b), frozenset()) | {"gpt-6.1-sol"}
 for _b in ("openhands", "cheetahclaws"):
     _CHANNEL_REFUSES[("tokenrouter", _b)] = _CHANNEL_REFUSES.get(("tokenrouter", _b), frozenset()) | {"gpt-6.1-sol"}
+# And on the HarnessRouter API, measured once it had credit (0.37.0-rc.15, one tool turn each): kimi, qwen,
+# cline and cheetahclaws fail the same way; openhands completed (DONE, a Shell call).
+for _b in ("kimi", "qwen", "cline", "cheetahclaws"):
+    _CHANNEL_REFUSES[("harnessrouter", _b)] = _CHANNEL_REFUSES.get(("harnessrouter", _b), frozenset()) | {"gpt-6.1-sol"}
 # TokenRouter's route for claude-fable-5-1 declines docker-agent's first turn before a word is written
 # (finish_reason content_filter, 3 of 3, 2026-10-25), while on the same route vibe passes with it and
 # docker-agent passes with claude-fable-5, claude-opus-5.5 and claude-sonnet-5.5, and docker-agent
