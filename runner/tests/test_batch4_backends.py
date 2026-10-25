@@ -18,6 +18,7 @@ Each test pins one thing that would otherwise fail SILENTLY:
 Pinned builds: mistral-vibe 2.26.1 · docker-agent v1.150.0 · fast-agent-mcp 0.10.45
 """
 import json
+import tomllib
 import pathlib
 import sys
 import tempfile
@@ -140,6 +141,16 @@ def test_the_defaults_that_would_cost_money_or_leak_are_off():
     for line in ("enable_telemetry = false", "enable_update_checks = false",
                  "enable_auto_update = false", "generate_titles = false"):
         assert line in cfg, line
+
+
+def test_the_system_prompt_names_no_recent_commits():
+    # the workspace's commits are the runner's checkpoints, new every turn: listed, they changed
+    # the prompt every turn and no prompt cache carried across turns
+    ws = _ws()
+    _build_vibe("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    cfg = tomllib.loads((_vibe_home(ws) / "config.toml").read_text())
+    assert cfg["project_context"]["default_commit_count"] == 0
+    assert cfg["active_model"] == "gpt-5.4" and cfg["enable_telemetry"] is False   # still one document
 
 
 def test_resume_is_passed_only_when_the_store_holds_the_conversation():
