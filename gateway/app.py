@@ -4450,7 +4450,11 @@ def _provider_refused(err: str) -> bool:
 # hands the next turn items its upstream cannot open. Measured on TokenRouter's gpt-5.4 route: a
 # same-model cold restore (opencode, hosted, 2026-09-08) and a switch of a gpt-5.4 thread into
 # gpt-6-astra (codex, the open source column, 2026-09-10), while every other id passed both ways.
-_HISTORY_REFUSED_RE = re.compile(r"encrypted content .{0,80}could not be (?:decrypted|verified)", re.I | re.S)
+# xAI says it its own way ("Could not decrypt the provided encrypted_content", through OpenRouter, a
+# dcode family tour switching into grok-4.5, 2026-10-25), and that sentence reached the person as the
+# provider's JSON until it was matched here too.
+_HISTORY_REFUSED_RE = re.compile(r"encrypted content .{0,80}could not be (?:decrypted|verified)"
+                                 r"|could not decrypt the provided encrypted_content", re.I | re.S)
 
 
 def _history_refusal(rec: dict, reason: str) -> str:
@@ -8318,6 +8322,33 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                     mix-up that took it off mimo, and failed its artifact on provider errors after
     #                     an outage had cleared (rc.2, rc.4, rc.5: no clean run).
     "zeroclaw": frozenset({"llama-3.3-70b", "grok-4.20", "nemotron-3-super", "qwen3.8-flash"}),
+    # The four batch-4 bases on their latest releases (vibe 3.0.2, docker-agent 1.152.0, fast-agent
+    # 0.10.47, deepagents-code 0.2.1), the full matrix on every provider (0.37.0-rc.1 to rc.7,
+    # 2026-10-24/25). Each failure below was the model's, with the request it was given captured or
+    # its record read, and a later pass does not erase it:
+    #   vibe          gpt-5.6-luna       answered the recycle check DONE, the artifact turn's word, with
+    #                                    the history intact (Vercel).
+    #                 llama-3.3-70b      wrote its write_file call as text with ten tools declared and made
+    #                                    no file: the matrix (OpenRouter) and 4 of 4 in sequence.
+    #   docker-agent  grok-build-0.1     ran `printf DONE` in the shell until docker-agent's own guard
+    #                                    stopped it (five identical calls): the matrix and 1 of 3 in sequence.
+    #                 grok-4.5           answered DONE with no tool call after a switch and back, 2 of 4 in
+    #                                    sequence; a follow-up on OpenRouter ended without an answer.
+    #   fast-agent    grok-4.5           answered DONE with no tool call, tools declared and history intact:
+    #                                    the matrix (Vercel) and 3 of 4 in sequence.
+    #                 llama-3.3-70b      answered the recycle check DONE, not its first word (OpenRouter).
+    #                 kimi-k2.7-code     answered the artifact turn DONE with no tool call, twice in the
+    #                                    matrix (Vercel, OpenRouter), tools and history intact.
+    #                 hunyuan-4-preview  answered its first turn "I'm Claude, made by Anthropic" instead of
+    #                                    the word it was asked for (OpenRouter).
+    #   dcode         grok-4.5           wrote its write_file call as JSON text, 1 of 4 in sequence.
+    #                 kimi-k2.7-code     answered the artifact turn DONE with no tool call (Vercel).
+    #                 hunyuan-4-preview  a follow-up streamed until Vercel ended it, about 13 minutes
+    #                                    (gateway_stream_timeout), after a 23 s first turn.
+    "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b"}),
+    "docker-agent": frozenset({"grok-build-0.1", "grok-4.5"}),
+    "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview"}),
+    "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview"}),
 }
 # Muse Wonder (muse-wonder-1.0), on every base that offers the Meta family, review instance
 # 0.34.0-rc.7 (2026-10-15): the five scenarios passed on all 21 through OpenRouter and through Vercel;
