@@ -5103,6 +5103,58 @@ def _with_encrypted_reasoning(body: bytes, held: dict) -> bytes:
     return json.dumps(doc).encode() if changed else body
 
 
+# A reasoning item's encrypted content opens only for the model, and the account, that produced it. A
+# Responses-API client that replays every earlier turn's reasoning items as it got them (dcode) sends,
+# after a model switch, reasoning another model minted, and the upstream refuses the whole request:
+# "The encrypted content for item rs_tmp_… could not be verified … invalid_encrypted_content", every
+# time dcode switched from gemini-4-argon to gpt-6.1-sol on OpenRouter (2026-10-25). A relay route
+# lives one turn, so it cannot tell which model minted an earlier turn's item; it knows the items THIS
+# turn minted, and replays those as they are (a tool loop within the turn needs them). An earlier
+# turn's item keeps its id and loses its encrypted content: the shape the codex rollout repair settled
+# on (_sanitize_codex_rollout), where the id keeps a stored response's message anchored and no blob
+# goes where it cannot be opened. With it the switch passed 3 of 3 from Gemini and 2 of 2 back on
+# OpenRouter, and 2 of 2 on an OpenAI connection, whose responses are stored. Only routes that ask for
+# it (`turn_reasoning_only`) are changed.
+def _reasoning_ids_in(doc) -> list[str]:
+    """Ids of the reasoning items one Responses event, or one whole response, carries."""
+    if not isinstance(doc, dict):
+        return []
+    items = [doc["item"]] if isinstance(doc.get("item"), dict) else []
+    for src in (doc, doc.get("response")):
+        if isinstance(src, dict) and isinstance(src.get("output"), list):
+            items += src["output"]
+    return [str(i["id"]) for i in items if isinstance(i, dict) and i.get("type") == "reasoning" and i.get("id")]
+
+
+def _reasoning_ids_in_line(line: bytes) -> list[str]:
+    """The same, read off one SSE `data:` line."""
+    if not line.startswith(b"data:") or b'"reasoning"' not in line:
+        return []
+    try:
+        return _reasoning_ids_in(json.loads(line[5:]))
+    except (ValueError, UnicodeDecodeError):
+        return []
+
+
+def _without_earlier_reasoning_blobs(body: bytes, minted: set) -> bytes:
+    """The Responses request with every reasoning item this turn did not mint stripped of its
+    encrypted content (the item and its id stay). Anything else is returned as it came."""
+    if b"encrypted_content" not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    items = doc.get("input") if isinstance(doc, dict) else None
+    changed = False
+    for it in items if isinstance(items, list) else []:
+        if (isinstance(it, dict) and it.get("type") == "reasoning" and str(it.get("id") or "") not in minted
+                and it.pop("encrypted_content", None) is not None):
+            it.setdefault("summary", [])
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
 def _drop_top_level_field(body: bytes, field: str) -> bytes:
     """The JSON request without one top-level field; anything else is returned as it came."""
     try:
@@ -5673,6 +5725,9 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             if fixed is not body:
                 body = fixed
                 headers["content-length"] = str(len(body))
+        if flags.get("turn_reasoning_only") and body is not None and self.path.split("?", 1)[0].endswith("/responses"):
+            body = _without_earlier_reasoning_blobs(body, flags.setdefault("reasoning_minted", set()))
+            headers["content-length"] = str(len(body))
         if flags.get("encrypted_reasoning") and body is not None and self.path.endswith("/chat/completions"):
             body = _with_encrypted_reasoning(body, flags["encrypted_reasoning"])
             headers["content-length"] = str(len(body))
@@ -6069,6 +6124,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         call_thinking = seen_thinking
                     for rd in _encrypted_reasoning_in_line(line):
                         flags.setdefault("encrypted_reasoning", {})[str(rd["id"])] = rd
+                    if flags.get("turn_reasoning_only"):
+                        flags.setdefault("reasoning_minted", set()).update(_reasoning_ids_in_line(line))
                     if sigs is not None:
                         for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
@@ -6134,6 +6191,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 data = _model_metadata_with_context_length(data)
             if flags.get("usage_no_nulls"):
                 data = _usage_without_nulls(data)
+            if flags.get("turn_reasoning_only") and b'"reasoning"' in data:
+                try:
+                    flags.setdefault("reasoning_minted", set()).update(_reasoning_ids_in(json.loads(data)))
+                except (ValueError, UnicodeDecodeError):
+                    pass
             if b"reasoning.encrypted" in data:
                 try:
                     for rd in _encrypted_reasoning_in(json.loads(data)):
@@ -6583,7 +6645,7 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                         stream_usage: bool = False, gemini_schemas: bool = False,
                         usage_no_nulls: bool = False, exact_base: bool = False,
                         aux: bool = False, plain_stream: bool = False,
-                        tool_index_fill: bool = False) -> tuple[str, str]:
+                        tool_index_fill: bool = False, turn_reasoning_only: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -6595,6 +6657,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls).
     `tool_index_fill` supplies the `index` a streamed tool call arrives without on Google's
     OpenAI-compatible surface, for a client that merges chunks by it (_tool_call_index_line).
+    `turn_reasoning_only` sends an earlier turn's reasoning items without their encrypted content,
+    for a Responses client that replays them across a model switch (_without_earlier_reasoning_blobs).
     `exact_base` joins the client's resource onto the connection's base as stored, for a client that
     was calling that base directly before it had a route (Codex, and hermes on Azure): the same URL,
     with the relay between. `aux` marks a route for a helper model (hermes's image questions): the
@@ -6616,7 +6680,7 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         flags = {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
-                 "tool_index_fill": bool(tool_index_fill),
+                 "tool_index_fill": bool(tool_index_fill), "turn_reasoning_only": bool(turn_reasoning_only),
                  **({"aux": True} if aux else _turn_effort())}
         # The turn's trace context (#473), on every route of this turn: the relay reads it when it
         # forwards, and the relay's own threads never see the turn's context variables.
@@ -12732,7 +12796,7 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     if not auth.base_url:
         raise HTTPException(400, f"dcode provider '{pr}' needs a base_url (none configured)")
     if auth.api_key:
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, turn_reasoning_only=True)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     _dcode_config(cwd)
     # langchain-openai's own variables, which is what `-M openai:<id>` resolves through. It posts
