@@ -5155,6 +5155,18 @@ def _without_earlier_reasoning_blobs(body: bytes, minted: set) -> bytes:
     return json.dumps(doc).encode() if changed else body
 
 
+# Moonshot's kimi models allow one temperature, 1 ("invalid temperature: only 1 is allowed for this
+# model", through TokenRouter, 2026-10-25), and a harness that sends its own default (vibe: 0.2) had
+# every turn on kimi-k2.7-code and kimi-k3 refused there. The temperature is the harness's, never the
+# person's, so a refusal of it is answered by sending none: the model's own default is the one it takes.
+_TEMPERATURE_REFUSED_RE = re.compile(rb"invalid temperature: only \d+(?:\.\d+)? is allowed", re.I)
+
+
+def _temperature_refused(data: bytes) -> bool:
+    """Whether a provider's 400 is a refusal of the request's temperature."""
+    return bool(_TEMPERATURE_REFUSED_RE.search(data or b""))
+
+
 def _drop_top_level_field(body: bytes, field: str) -> bytes:
     """The JSON request without one top-level field; anything else is returned as it came."""
     try:
@@ -5717,6 +5729,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = _set_reasoning_effort_none(body)
             if flags.get(f"drop_reasoning_effort:{_body_model}"):
                 body = _drop_top_level_field(body, "reasoning_effort")
+            if flags.get(f"drop_temperature:{_body_model}"):
+                body = _drop_top_level_field(body, "temperature")
             for field in flags.get("drop_fields", ()):
                 body = _drop_top_level_field(body, field)
             headers["content-length"] = str(len(body))
@@ -5802,6 +5816,16 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     headers["content-length"] = str(len(body))
                     continue
                 effort_back = False
+                warm = _drop_top_level_field(body, "temperature") if body is not None else None
+                if (attempt < 2 and e.code == 400 and _temperature_refused(data)
+                        and warm is not None and warm != body):
+                    # A model that takes one temperature only, refusing the harness's own default
+                    # (vibe sends 0.2): the call goes again at the model's default, and this model
+                    # is sent none on this route from now on.
+                    flags[f"drop_temperature:{_body_model}"] = True
+                    body = warm
+                    headers["content-length"] = str(len(body))
+                    continue
                 renamed = _rename_max_tokens(body) if body is not None else None
                 if (attempt < 2 and e.code == 400 and b"max_completion_tokens" in data
                         and renamed is not None and renamed != body):
