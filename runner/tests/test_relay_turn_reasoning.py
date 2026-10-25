@@ -49,7 +49,7 @@ def test_an_earlier_turn_is_plain_content_and_this_turn_is_as_it_was():
     out = json.loads(server._earlier_turns_as_content(_request(), {"rs_this_turn", "msg_this_turn"}))["input"]
     assert [i.get("type") for i in out] == ["message", "message", "function_call", "function_call_output",
                                             "reasoning", "message"]                       # the earlier reasoning left out
-    assert out[1] == {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "M1"}]}
+    assert out[1] == {"type": "message", "role": "assistant", "content": "M1"}       # the input-message form
     assert out[2] == {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{}"}
     assert out[4]["encrypted_content"] == "gAAAA-this" and out[5]["id"] == "msg_this_turn"   # this turn's, whole
     plain = b'{"model": "m", "input": [{"type": "message", "role": "user", "content": "hi"}]}'

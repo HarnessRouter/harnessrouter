@@ -5140,7 +5140,8 @@ def _output_item_ids_in_line(line: bytes) -> list[str]:
 
 def _earlier_turns_as_content(body: bytes, minted: set) -> bytes:
     """The Responses request with every item this turn did not mint replayed as plain content: a
-    reasoning item dropped, any other item without its id and status. Anything else as it came."""
+    reasoning item dropped, an assistant message as an input message with its text, any other item
+    without its id and status. Anything else as it came."""
     if b'"id"' not in body:
         return body
     try:
@@ -5157,6 +5158,15 @@ def _earlier_turns_as_content(body: bytes, minted: set) -> bytes:
             continue
         changed = True
         if it.get("type") == "reasoning":
+            continue
+        if it.get("type") == "message" and it.get("role") == "assistant" and isinstance(it.get("content"), list):
+            # An output message is valid input only with its id and status, which are what go; as
+            # plain content it is the input-message form, its text as one string. A strict
+            # Responses parser (TokenRouter's) refused the bare output form: "data did not match
+            # any variant of untagged enum ResponseInput" on dcode's recycle turn, glm-5.3-flash.
+            text = "".join(str(c.get("text") or "") for c in it["content"]
+                           if isinstance(c, dict) and c.get("type") in ("output_text", "text"))
+            out.append({"type": "message", "role": "assistant", "content": text})
             continue
         out.append({k: v for k, v in it.items() if k not in ("id", "status")})
     if not changed:
