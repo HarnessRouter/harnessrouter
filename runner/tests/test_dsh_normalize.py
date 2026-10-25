@@ -4,14 +4,16 @@ Every fixture below is verbatim from `deepseek-harness-sdk==0.1.0rc7` runs on 20
 relay and event shapes were re-verified against 0.1.2rc1 on 2026-09-08 (same envelope, same types):
 the bad-key run (error terminal), the TokenRouter tool run (tool/call + tool/result +
 usage + retry ladder), and the raw TokenRouter SSE whose empty-string id/name fields are
-the reason the driver's relay exists.
+the reason the dsh route on the runner's relay carries tool_call_deltas_no_empty.
 """
 import json
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import server as rs  # noqa: E402
 from server import _build_dsh, _dsh_to_claude, Auth  # noqa: E402
+from server import _tool_call_delta_without_empty_fields as _strip_empty  # noqa: E402
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import dsh_driver  # noqa: E402
 
@@ -132,26 +134,26 @@ def test_max_tokens_maps_to_max_turns_subtype():
     assert result["subtype"] == "error_max_turns" and result["result"] == "partial"
 
 
-# ── the relay rewrite: the exact TokenRouter delta shapes ───────────────────────────
+# ── the route's rewrite (tool_call_deltas_no_empty): the exact TokenRouter delta shapes ──
 def test_relay_drops_empty_id_and_name_only():
     first = (b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_617","type":"function",'
              b'"function":{"name":"bash","arguments":""}}]},"finish_reason":null,"index":0}]}')
     cont = (b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function",'
             b'"function":{"name":"","arguments":"{\\"command\\""}}]},"finish_reason":null,"index":0}]}')
-    out1 = json.loads(dsh_driver._rewrite_sse_line(first)[6:])
+    out1 = json.loads(_strip_empty(first)[6:])
     tc1 = out1["choices"][0]["delta"]["tool_calls"][0]
     assert tc1["id"] == "call_617" and tc1["function"]["name"] == "bash"
-    out2 = json.loads(dsh_driver._rewrite_sse_line(cont)[6:])
+    out2 = json.loads(_strip_empty(cont)[6:])
     tc2 = out2["choices"][0]["delta"]["tool_calls"][0]
     assert "id" not in tc2 and "name" not in tc2["function"]
     assert tc2["function"]["arguments"] == '{"command"'
 
 
 def test_relay_leaves_non_data_lines_alone():
-    assert dsh_driver._rewrite_sse_line(b"data: [DONE]") == b"data: [DONE]"
-    assert dsh_driver._rewrite_sse_line(b"") == b""
-    assert dsh_driver._rewrite_sse_line(b"event: delta") == b"event: delta"
-    assert dsh_driver._rewrite_sse_line(b"data:[DONE]") == b"data:[DONE]"
+    assert _strip_empty(b"data: [DONE]") == b"data: [DONE]"
+    assert _strip_empty(b"") == b""
+    assert _strip_empty(b"event: delta") == b"event: delta"
+    assert _strip_empty(b"data:[DONE]") == b"data:[DONE]"
 
 
 def test_relay_rewrites_a_data_line_with_no_space_after_the_colon():
@@ -159,8 +161,8 @@ def test_relay_rewrites_a_data_line_with_no_space_after_the_colon():
     delta and its empty id/name must be stripped exactly as the spaced form's are."""
     cont = (b'{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function",'
             b'"function":{"name":"","arguments":"{\\"command\\""}}]},"finish_reason":null,"index":0}]}')
-    spaced = dsh_driver._rewrite_sse_line(b"data: " + cont)
-    tight = dsh_driver._rewrite_sse_line(b"data:" + cont)
+    spaced = _strip_empty(b"data: " + cont)
+    tight = _strip_empty(b"data:" + cont)
     assert tight == spaced
     tc = json.loads(tight[6:])["choices"][0]["delta"]["tool_calls"][0]
     assert "id" not in tc and "name" not in tc["function"]
@@ -174,9 +176,12 @@ def test_build_dsh_stages_creds_out_of_argv(tmp_path):
                      "deepseek/deepseek-v4-pro", "do it", str(tmp_path), env,
                      resume_session_id="sid-9",
                      mcp_servers=[{"name": "wiki", "url": "https://mcp.example/mcp"}])
-    assert env["HR_DSH_BASE_URL"] == "https://tr.example/v1"
-    assert env["HR_DSH_API_KEY"] == "k-secret"
-    assert "k-secret" not in " ".join(cmd)   # the key travels in env, never argv (ps-visible)
+    assert "k-secret" not in " ".join(cmd)   # never argv (ps-visible)
+    # ...and never the driver's env either: the key stays on the runner relay's route (#382)
+    assert "k-secret" not in json.dumps(env)
+    base, key, flags = _route(env)
+    assert (base, key) == ("https://tr.example/v1", "k-secret")
+    assert flags["tool_call_deltas_no_empty"] is True
     job = json.loads(cmd[2])
     assert job["session_id"] == "sid-9"
     assert job["mcp_servers"][0]["url"] == "https://mcp.example/mcp"
@@ -199,13 +204,41 @@ def test_build_dsh_routes_by_family_not_provider(tmp_path):
 def test_build_dsh_native_anthropic_default_base(tmp_path):
     env = {"HOME": str(tmp_path)}
     _build_dsh("anthropic", Auth(api_key="k"), "claude-sonnet-4-6", "x", str(tmp_path), env)
-    assert env["HR_DSH_BASE_URL"] == "https://api.anthropic.com/v1"
+    assert _route(env)[0] == "https://api.anthropic.com/v1"
+
+
+def _route(env):
+    """The route _build_dsh registered on the runner's relay, by the placeholder it handed over."""
+    assert env["HR_DSH_RELAY_BASE"] == f"http://127.0.0.1:{rs._HERMES_RELAY['port']}/v1"
+    return rs._HERMES_RELAY["routes"][env["HR_DSH_RELAY_TOKEN"]]
+
+
+def test_build_dsh_hands_the_driver_a_route_and_nothing_else(tmp_path):
+    """The driver gets the relay's base and the route's placeholder: no key, no upstream, and no
+    thinking level or wait of its own to apply, since it has no relay to apply them in (#382)."""
+    env = {"HOME": str(tmp_path)}
+    _build_dsh("tokenrouter", Auth(api_key="k-secret", base_url="https://tr.example/v1"),
+               "deepseek/deepseek-v4-pro", "x", str(tmp_path), env)
+    assert {k for k in env if k.startswith("HR_DSH_")} == {"HR_DSH_RELAY_BASE", "HR_DSH_RELAY_TOKEN"}
+    assert "HR_RELAY_UPSTREAM_TIMEOUT_S" not in env
+    assert env["HR_DSH_RELAY_TOKEN"].startswith("hr-relay-")
+
+
+def test_build_dsh_joins_a_custom_base_exactly_as_it_was_stored(tmp_path):
+    """A custom OpenAI endpoint carries its own path, versioned or not; the relay must not add /v1
+    to it (the driver's relay joined onto it as-is, and so does this route: exact_base)."""
+    for stored in ("https://host.example/api/coding/v3", "https://host.example/api"):
+        env = {"HOME": str(tmp_path)}
+        _build_dsh("openai-api", Auth(api_key="k", base_url=stored, api_format="openai"),
+                   "deepseek-v4-pro", "x", str(tmp_path), env)
+        assert _route(env)[0] == stored
 
 
 def _patch(tmp_path, servers, llm=None, model="m"):
     import yaml
     home = tmp_path / "home"
-    out = pathlib.Path(dsh_driver._compose_patch(home, servers, llm=llm, relay_port=9999, model=model, cwd=str(tmp_path / "ws")))
+    out = pathlib.Path(dsh_driver._compose_patch(home, servers, llm=llm, relay_base="http://127.0.0.1:9999/v1",
+                                                 model=model, cwd=str(tmp_path / "ws")))
     return out.read_text(), yaml.safe_load(out.read_text())
 
 
@@ -256,18 +289,20 @@ def test_compose_patch_merges_the_route_into_the_stock_pi_ai_row(tmp_path):
 
 # ── reasoning_effort strip-and-retry (conformance T-01 against LLMTR, 2026-08-20) ──────────────
 # The deepseek-official adapter sends reasoning_effort unconditionally; aggregators serving
-# deepseek/* over the OpenAI shape refuse the whole request. The relay retries once without the
-# parameter and then strips it for the rest of the turn.
+# deepseek/* over the OpenAI shape refuse the whole request. The runner's relay sends it again
+# without the parameter and drops it for that model on the route (test_relay_dsh_route.py drives it).
 
-def test_drop_reasoning_effort_removes_only_that_key():
-    body = json.dumps({"model": "deepseek-v4-pro", "reasoning_effort": "high",
-                       "messages": [{"role": "user", "content": "hi"}]}).encode()
-    out = json.loads(dsh_driver._drop_reasoning_effort(body))
-    assert "reasoning_effort" not in out
-    assert out["model"] == "deepseek-v4-pro" and out["messages"][0]["content"] == "hi"
+def test_a_refusal_of_the_parameter_itself_is_recognised():
+    assert rs._reasoning_effort_unsupported(
+        b'{"error":{"message":"The \\"reasoning_effort\\" parameter is not supported by \\"deepseek/deepseek-v4-pro\\""}}')
+    assert rs._reasoning_effort_unsupported(
+        b'{"error":{"message":"Unsupported parameter: \'reasoning_effort\' is not supported with this model."}}')
 
 
-def test_drop_reasoning_effort_leaves_other_bodies_alone():
-    for body in (b"not json at all", b"[1,2,3]",
-                 json.dumps({"model": "m", "messages": []}).encode()):
-        assert dsh_driver._drop_reasoning_effort(body) == body
+def test_a_refusal_that_names_another_value_or_another_field_is_not():
+    # gpt-5.6 asks for 'none' instead (_set_reasoning_effort_none): the parameter stays
+    assert not rs._reasoning_effort_unsupported(
+        b"Function tools with reasoning_effort are not supported for gpt-5.6 in /v1/chat/completions. "
+        b"To use function tools, set reasoning_effort to 'none'.")
+    assert not rs._reasoning_effort_unsupported(b'{"error":{"message":"The \\"seed\\" parameter is not supported"}}')
+    assert not rs._reasoning_effort_unsupported(b"")
