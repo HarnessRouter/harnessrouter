@@ -25,6 +25,7 @@ import pathlib
 import sqlite3
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 os.environ.setdefault("HR_BACKING", "local")
@@ -280,7 +281,7 @@ def test_the_drivers_events_survive_the_passthrough():
 # The fixture agent answers the five methods dcode's server answers, so the parts that only exist
 # at run time — the load, the model the session has to be told about, the permission the agent asks
 # the client for, the replay a load sends before the prompt — are tested without a provider.
-def _drive(tmp_path, mode, resume="", model_spec="openai:gpt-5.4", prompt="do it", resume_known=False):
+def _drive(tmp_path, mode, resume="", model_spec="openai:gpt-5.4", prompt="do it", resume_known=False, driver_env=None):
     import subprocess
     agent = pathlib.Path(__file__).resolve().parent / "fixtures" / "batch4" / "fake_acp_agent.py"
     log = tmp_path / "asked.ndjson"
@@ -290,7 +291,7 @@ def _drive(tmp_path, mode, resume="", model_spec="openai:gpt-5.4", prompt="do it
     proc = subprocess.run([sys.executable, str(pathlib.Path(D.__file__)), json.dumps(job)],
                           cwd=str(tmp_path), text=True, capture_output=True,
                           stdin=subprocess.DEVNULL, timeout=120,
-                          env={**os.environ, "FAKE_ACP_MODE": mode, "FAKE_ACP_LOG": str(log)})
+                          env={**os.environ, "FAKE_ACP_MODE": mode, "FAKE_ACP_LOG": str(log), **(driver_env or {})})
     evs = [json.loads(l) for l in proc.stdout.splitlines() if l.strip().startswith("{")]
     asked = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
     return evs, asked, proc
@@ -477,19 +478,10 @@ def test_a_stored_thread_that_will_not_load_fails_the_turn_rather_than_starting_
     that began at the second message."""
     evs, asked, _ = _drive(tmp_path, "load_fails", resume="stored-thread", resume_known=True)
     methods = [a["method"] for a in asked]
-    assert methods.count("session/load") == 2, methods          # asked once more before giving up
-    assert "session/new" not in methods
+    assert methods.count("session/load") == 1 and "session/new" not in methods, methods
     res = evs[-1]
     assert res["subtype"] == "error" and res["is_error"] is True
     assert "could not be continued" in res["result"] and "resource_not_found" in res["result"]
-
-
-def test_a_stored_thread_that_loads_on_the_second_ask_continues(tmp_path):
-    evs, asked, _ = _drive(tmp_path, "load_fails_once", resume="fake-session-1", resume_known=True)
-    methods = [a["method"] for a in asked]
-    assert methods.count("session/load") == 2 and "session/new" not in methods
-    assert next(e for e in evs if e.get("subtype") == "init")["session_id"] == "fake-session-1"
-    assert evs[-1]["subtype"] == "success"
 
 
 def test_the_driver_is_told_whether_the_store_holds_the_thread(tmp_path):
@@ -505,3 +497,34 @@ def test_the_driver_is_told_whether_the_store_holds_the_thread(tmp_path):
     assert build()["resume_known"] is False                      # a store without that thread
     con.execute("INSERT INTO checkpoints VALUES ('t-1')"); con.commit(); con.close()
     assert build()["resume_known"] is True                       # the store holds it
+
+
+def _life(tmp_path):
+    return [json.loads(l) for l in (tmp_path / "asked.ndjson.life").read_text().splitlines() if l.strip()]
+
+
+def test_the_turn_ends_only_once_the_agent_has_exited(tmp_path):
+    """dcode keeps a lock on its thread for as long as its process lives, and the next turn of the
+    conversation is another process loading that thread. Measured 2026-10-25: the driver sent
+    SIGTERM and returned at once, and the turn after was refused its own thread ("Thread … is open
+    elsewhere"). The runner holds a turn's result until the driver exits, so the driver must not
+    exit before the agent."""
+    evs, _, proc = _drive(tmp_path, "slow_exit")
+    assert evs[-1]["subtype"] == "success", evs[-1]
+    assert {"exited": True} in _life(tmp_path)          # a second's shutdown, over before the driver returned
+
+
+def test_an_agent_that_will_not_exit_is_killed_and_the_turn_still_ends(tmp_path):
+    """Two agents caught SIGTERM and were still running minutes later (2026-10-25): one that has not
+    gone once its input ended is killed with its group, so neither it nor its lock outlives the turn."""
+    t0 = time.monotonic()
+    evs, _, proc = _drive(tmp_path, "no_exit", driver_env={"HR_DCODE_END_GRACE": "1"})
+    assert time.monotonic() - t0 < 30
+    assert evs[-1]["subtype"] == "success", evs[-1]
+    pid = _life(tmp_path)[0]["pid"]
+    try:
+        os.kill(pid, 0)
+        alive = True
+    except ProcessLookupError:
+        alive = False
+    assert not alive, f"agent {pid} outlived the turn"

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -48,6 +49,8 @@ import time
 # A client that never answers would hang the agent; a client that waits forever would hang the
 # turn. Both are bounded, under the runner's own wall-clock cap.
 _RPC_TIMEOUT = float(os.environ.get("HR_DCODE_RPC_TIMEOUT", "120"))
+# How long the agent has to exit once its input ends, before it is killed (see Acp.close).
+_END_GRACE = float(os.environ.get("HR_DCODE_END_GRACE", "10"))
 _PROMPT_TIMEOUT = float(os.environ.get("HR_DCODE_PROMPT_TIMEOUT", "7200"))
 
 
@@ -120,6 +123,34 @@ class Acp:
             for slot in self._pending.values():
                 slot[1] = {"error": {"code": -32000, "message": "the agent closed its stream"}}
                 slot[0].set()
+
+    def close(self) -> None:
+        """End the agent and WAIT until it has exited. dcode 0.2 keeps a lock on its thread for as
+        long as its process lives (deepagents_code/thread_ownership.py), and the next turn of the
+        conversation is another process loading that thread. MEASURED 2026-10-25, four matrix
+        columns at once: this driver sent SIGTERM and returned at once; an idle agent took 1.3 to
+        1.7 s to go, two caught the signal and were still running minutes later, orphaned, and the
+        turn after them was refused its own thread ("Thread … is open elsewhere"). End of input is
+        how an ACP client ends the agent (it exits 0 in about 1.6 s and releases the thread itself);
+        one that has not gone in _END_GRACE is killed with its group, and its lock goes with it.
+        The runner holds the turn's result until this process exits, so the next turn starts only
+        once the agent is gone."""
+        p = self.proc
+        if p.poll() is None:
+            try:
+                p.stdin.close()     # type: ignore[union-attr]  (a write racing it is dropped: _send)
+            except (OSError, ValueError):
+                pass
+            try:
+                p.wait(timeout=_END_GRACE)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        p.wait()
 
     def _read_err(self) -> None:
         for raw in self.proc.stderr:        # type: ignore[union-attr]
@@ -273,10 +304,7 @@ def main() -> int:
         tail = " / ".join(acp.errtail[-3:]) if with_tail else ""
         emit({"type": "result", "subtype": "error", "is_error": True,
               "result": (reason + (f": {tail}" if tail else ""))[:2000], "usage": {}})
-        try:
-            acp.proc.terminate()
-        except OSError:
-            pass
+        acp.close()
         return 0
 
     try:
@@ -297,18 +325,15 @@ def main() -> int:
             got = acp.call("session/load", {"cwd": cwd, "sessionId": resume, "mcpServers": []})
             if "error" in got and known:
                 # A thread the store HAS that will not load is never answered as a new
-                # conversation: measured 2026-10-25 (kimi-k2.7-code, Vercel, four matrix columns
-                # at once), turn 2 of a session ran on a NEW thread while the first one sat in the
-                # store with its 23 checkpoints, nothing said so, and the recycle check found a
-                # conversation that began at the second message. Asked once more, then the turn
-                # fails with the agent's own reason.
-                print(f"[dcode] session/load of a stored thread failed: {error_text(got['error'])}; asking once more",
-                      file=sys.stderr, flush=True)
-                time.sleep(1.0)
-                got = acp.call("session/load", {"cwd": cwd, "sessionId": resume, "mcpServers": []})
-                if "error" in got:
-                    return fail("the conversation could not be continued: its thread is stored but "
-                                f"the agent would not load it ({error_text(got['error'])})", with_tail=True)
+                # conversation: the turn fails with the agent's own reason. MEASURED 2026-10-25
+                # (kimi-k2.7-code, Vercel), before close() waited for the agent: turn 2 of a
+                # conversation ran on a NEW thread while the first sat in the store with its 23
+                # checkpoints, nothing said so, and the recycle check found a conversation that began
+                # at the second message. Once this said why (qwen3.7-plus, the same column), the
+                # agent's reason was its thread lock, still held by the process of the turn before:
+                # "Thread … is open elsewhere" (see Acp.close).
+                return fail("the conversation could not be continued: its thread is stored but "
+                            f"the agent would not load it ({error_text(got['error'])})", with_tail=True)
             if "error" not in got:
                 session_id = resume
         if not session_id:
@@ -384,10 +409,7 @@ def main() -> int:
           # usage is the relay's to stamp (_fill_relay_usage): ACP carries none.
           "result": answer if ok else (why + (f" after {int(time.time() - started)}s" if not ok else "")),
           "usage": {}})
-    try:
-        acp.proc.terminate()
-    except OSError:
-        pass
+    acp.close()
     return 0
 
 

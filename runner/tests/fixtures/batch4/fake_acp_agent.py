@@ -6,16 +6,23 @@ message chunk at all, which a provider really did), `ask_user` (the free-form in
 cannot carry, answered as deepagents' server answers it), `no_load` (an agent that does not
 advertise loadSession at all), `load_fails` (it does, and the session is gone), `bad_model` (the
 model this turn asks for is not in the session's list), `provider_401` (a refusal in `data.details`
-with a traceback on stderr at the same time), `refusal` (a stopReason that is not end_turn) or
-`permission` (one tool call that asks the client).
+with a traceback on stderr at the same time), `refusal` (a stopReason that is not end_turn),
+`permission` (one tool call that asks the client), `slow_exit` (takes a second to go once its input
+ends) or `no_exit` (catches SIGTERM and never goes). Its pid, and that it exited, are written to
+$FAKE_ACP_LOG.life.
 """
 import json
 import os
+import signal
 import sys
+import time
 
 MODE = os.environ.get("FAKE_ACP_MODE", "ok")
-LOADS = 0  # session/load calls so far: load_fails_once fails only the first
 LOG = open(os.environ["FAKE_ACP_LOG"], "w")
+LIFE = open(os.environ["FAKE_ACP_LOG"] + ".life", "w")
+LIFE.write(json.dumps({"pid": os.getpid()}) + "\n"); LIFE.flush()
+if MODE == "no_exit":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
 
 def send(obj):
@@ -50,8 +57,7 @@ for line in sys.stdin:
     elif method == "session/new":
         send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "fake-session-1"}})
     elif method == "session/load":
-        LOADS += 1
-        if MODE in ("no_load", "load_fails") or (MODE == "load_fails_once" and LOADS == 1):
+        if MODE in ("no_load", "load_fails"):
             send({"jsonrpc": "2.0", "id": mid,
                   "error": {"code": -32602, "message": "resource_not_found"}})
         else:
@@ -108,3 +114,11 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": stop}})
     elif mid is not None:
         send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "no"}})
+
+# input ended: the client is done with this agent
+if MODE == "no_exit":
+    while True:
+        time.sleep(1)
+if MODE == "slow_exit":
+    time.sleep(1.0)
+LIFE.write(json.dumps({"exited": True}) + "\n"); LIFE.flush()
