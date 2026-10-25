@@ -14,6 +14,7 @@ import os
 import sys
 
 MODE = os.environ.get("FAKE_ACP_MODE", "ok")
+LOADS = 0  # session/load calls so far: load_fails_once fails only the first
 LOG = open(os.environ["FAKE_ACP_LOG"], "w")
 
 
@@ -49,7 +50,8 @@ for line in sys.stdin:
     elif method == "session/new":
         send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "fake-session-1"}})
     elif method == "session/load":
-        if MODE in ("no_load", "load_fails"):
+        LOADS += 1
+        if MODE in ("no_load", "load_fails") or (MODE == "load_fails_once" and LOADS == 1):
             send({"jsonrpc": "2.0", "id": mid,
                   "error": {"code": -32602, "message": "resource_not_found"}})
         else:

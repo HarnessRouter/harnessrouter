@@ -289,13 +289,28 @@ def main() -> int:
         loadable = bool(((init.get("result") or {}).get("agentCapabilities")
                          or {}).get("loadSession"))
         session_id = ""
+        # `known`: the store this turn runs on holds the thread (the runner asked it). A thread the
+        # store does NOT have is not an error here: the turn runs as a new conversation and
+        # _resume_lost (which asked the same store before this ran) tells the user it was gone.
+        known = bool(job.get("resume_known"))
         if resume and loadable:
             got = acp.call("session/load", {"cwd": cwd, "sessionId": resume, "mcpServers": []})
+            if "error" in got and known:
+                # A thread the store HAS that will not load is never answered as a new
+                # conversation: measured 2026-10-25 (kimi-k2.7-code, Vercel, four matrix columns
+                # at once), turn 2 of a session ran on a NEW thread while the first one sat in the
+                # store with its 23 checkpoints, nothing said so, and the recycle check found a
+                # conversation that began at the second message. Asked once more, then the turn
+                # fails with the agent's own reason.
+                print(f"[dcode] session/load of a stored thread failed: {error_text(got['error'])}; asking once more",
+                      file=sys.stderr, flush=True)
+                time.sleep(1.0)
+                got = acp.call("session/load", {"cwd": cwd, "sessionId": resume, "mcpServers": []})
+                if "error" in got:
+                    return fail("the conversation could not be continued: its thread is stored but "
+                                f"the agent would not load it ({error_text(got['error'])})", with_tail=True)
             if "error" not in got:
                 session_id = resume
-            # A session the agent no longer has is NOT an error here: the turn runs as a new
-            # conversation and _resume_lost (which asked the store before this ran) is what tells
-            # the user the thread was gone.
         if not session_id:
             new = acp.call("session/new", {"cwd": cwd, "mcpServers": []})
             if "error" in new:

@@ -12716,9 +12716,12 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
            # The task rides the protocol, not the command line: ACP takes it in session/prompt.
            "prompt": prompt,
            "model": model, "model_spec": model_spec,
-           # Asked for, not assumed: the driver loads it and falls back to a new session, and
-           # _resume_lost (which asked the store before this ran) is what tells the user.
+           # Asked for, not assumed: a thread the store no longer has runs as a new session, and
+           # _resume_lost (which asked the store before this ran) is what tells the user. A thread
+           # the store DOES have (resume_known) must load, or the turn fails with the agent's own
+           # reason: it is never answered as a new conversation without a word.
            "resume": resume_session_id or "",
+           "resume_known": bool(resume_session_id) and _dcode_session_present(cwd, cmd, resume_session_id),
            # A cap of its own, under the runner's, so a turn that never answers is reported as the
            # limit rather than as an unexplained failure.
            "timeout": MAX_TURN_SECONDS}

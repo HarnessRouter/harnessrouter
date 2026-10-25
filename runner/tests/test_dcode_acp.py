@@ -31,6 +31,7 @@ os.environ.setdefault("HR_BACKING", "local")
 import dcode_driver as D  # noqa: E402
 from server import (ALL_DCODE_TOOLS, BACKENDS, DCODE_PROVIDERS, Auth, _build_dcode,  # noqa: E402
                     _claude_passthrough, _dcode_session_present, _dcode_state_db, _dcode_threads)
+import server as rs  # noqa: E402
 
 FIX = pathlib.Path(__file__).resolve().parent / "fixtures" / "batch4" / "dcode-six-tools.ndjson"
 # Every _build_dcode writes this CLI's config.toml under the cwd it is given (and an MCP config,
@@ -279,12 +280,12 @@ def test_the_drivers_events_survive_the_passthrough():
 # The fixture agent answers the five methods dcode's server answers, so the parts that only exist
 # at run time — the load, the model the session has to be told about, the permission the agent asks
 # the client for, the replay a load sends before the prompt — are tested without a provider.
-def _drive(tmp_path, mode, resume="", model_spec="openai:gpt-5.4", prompt="do it"):
+def _drive(tmp_path, mode, resume="", model_spec="openai:gpt-5.4", prompt="do it", resume_known=False):
     import subprocess
     agent = pathlib.Path(__file__).resolve().parent / "fixtures" / "batch4" / "fake_acp_agent.py"
     log = tmp_path / "asked.ndjson"
     job = {"argv": [sys.executable, str(agent)], "cwd": str(tmp_path), "prompt": prompt,
-           "model": "gpt-5.4", "model_spec": model_spec, "resume": resume, "timeout": 60,
+           "model": "gpt-5.4", "model_spec": model_spec, "resume": resume, "resume_known": resume_known, "timeout": 60,
            "env": {"FAKE_ACP_MODE": mode, "FAKE_ACP_LOG": str(log)}}
     proc = subprocess.run([sys.executable, str(pathlib.Path(D.__file__)), json.dumps(job)],
                           cwd=str(tmp_path), text=True, capture_output=True,
@@ -467,3 +468,40 @@ def test_a_provider_refusal_fails_the_turn_without_the_agents_traceback(tmp_path
     # and the gateway's own framing is not repeated here: it says "The turn failed: <reason>"
     # around whatever this hands up, and the family tour showed that twice over (2026-10-20).
     assert "turn failed" not in res["result"].lower(), res["result"]
+
+
+def test_a_stored_thread_that_will_not_load_fails_the_turn_rather_than_starting_over(tmp_path):
+    """The store HAS the thread (the runner asked it), and the agent refuses to load it: the turn is
+    never answered as a new conversation without a word. Measured 2026-10-25: turn 2 of a session
+    ran on a NEW thread while the first sat in the store, and the recycle check found a conversation
+    that began at the second message."""
+    evs, asked, _ = _drive(tmp_path, "load_fails", resume="stored-thread", resume_known=True)
+    methods = [a["method"] for a in asked]
+    assert methods.count("session/load") == 2, methods          # asked once more before giving up
+    assert "session/new" not in methods
+    res = evs[-1]
+    assert res["subtype"] == "error" and res["is_error"] is True
+    assert "could not be continued" in res["result"] and "resource_not_found" in res["result"]
+
+
+def test_a_stored_thread_that_loads_on_the_second_ask_continues(tmp_path):
+    evs, asked, _ = _drive(tmp_path, "load_fails_once", resume="fake-session-1", resume_known=True)
+    methods = [a["method"] for a in asked]
+    assert methods.count("session/load") == 2 and "session/new" not in methods
+    assert next(e for e in evs if e.get("subtype") == "init")["session_id"] == "fake-session-1"
+    assert evs[-1]["subtype"] == "success"
+
+
+def test_the_driver_is_told_whether_the_store_holds_the_thread(tmp_path):
+    """resume_known is the store's own answer, read off its checkpoints table, not an assumption."""
+    import sqlite3
+    ws = tmp_path / "ws"
+    (ws / ".harness" / "home").mkdir(parents=True)
+    build = lambda: json.loads(rs._build_dcode("openai-api", rs.Auth(base_url="https://up.example/v1", api_key=""),
+                                                "gpt-5.4", "hi", str(ws), {}, resume_session_id="t-1")[-1])
+    assert build()["resume_known"] is False                      # no store at all
+    db = rs._dcode_state_db(str(ws)); db.parent.mkdir(parents=True)
+    con = sqlite3.connect(db); con.execute("CREATE TABLE checkpoints (thread_id TEXT)"); con.commit()
+    assert build()["resume_known"] is False                      # a store without that thread
+    con.execute("INSERT INTO checkpoints VALUES ('t-1')"); con.commit(); con.close()
+    assert build()["resume_known"] is True                       # the store holds it
