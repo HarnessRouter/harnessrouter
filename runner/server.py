@@ -13282,10 +13282,14 @@ def _fast_agent_eof(state: dict, rc: int) -> list[dict]:
                 {"type": "tool_result", "tool_use_id": str(res.get("source_call_id") or "tool"),
                  "is_error": bool((res.get("extra") or {}).get("is_error")),
                  "content": str(res.get("content") or "")[:8000]}]}})
-    fm = doc.get("final_metrics") if isinstance(doc.get("final_metrics"), dict) else {}
-    usage = _norm_token_usage({"input_tokens": fm.get("total_prompt_tokens") or 0,
-                               "output_tokens": fm.get("total_completion_tokens") or 0,
-                               "cached_input_tokens": fm.get("total_cached_tokens") or 0})
+    # The usage is this turn's own steps, each of which carries its call's counts. final_metrics
+    # totals the whole trajectory, and a resumed session's trajectory holds every earlier turn:
+    # measured 2026-10-25, a third turn reported 7077 prompt tokens, the four calls of all three
+    # turns, where its own two calls took 2385.
+    own = [x["metrics"] for x in steps if x.get("source") == "agent" and isinstance(x.get("metrics"), dict)]
+    usage = _norm_token_usage({"input_tokens": sum(int(m.get("prompt_tokens") or 0) for m in own),
+                               "output_tokens": sum(int(m.get("completion_tokens") or 0) for m in own),
+                               "cached_input_tokens": sum(int(m.get("cached_tokens") or 0) for m in own)})
     ok = rc == 0 and bool(doc)
     # No trajectory at all means the CLI died before writing one; the run loop's stderr tail is the
     # reason, and an empty result lets it through rather than shadowing it.

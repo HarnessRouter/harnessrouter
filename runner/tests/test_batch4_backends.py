@@ -798,10 +798,34 @@ def test_the_session_id_and_the_usage_come_off_the_trajectory_too():
     assert init["subtype"] == "init" and init["session_id"] == "2610160220-7kil4q"
     res = evs[-1]
     assert res["subtype"] == "success" and res["is_error"] is False
-    # final_metrics, not a sum of our own: 4524 prompt / 715 completion / 0 cached
-    assert res["usage"]["input_tokens"] == 4524
-    assert res["usage"]["output_tokens"] == 715
+    # the turn's own step (1863 prompt / 18 completion), not final_metrics' 4524 / 715, which is
+    # every call of all three turns in this trajectory
+    assert res["usage"]["input_tokens"] == 1863
+    assert res["usage"]["output_tokens"] == 18
     assert "cache_read_tokens" not in res["usage"]
+
+
+def test_each_turns_usage_is_its_own_calls():
+    ws = _fa_ws()
+    got = [_fa_eof(ws, p)[0][-1]["usage"] for p in FA_PROMPTS]
+    assert [(u["input_tokens"], u["output_tokens"]) for u in got] == [(1863, 18), (909 + 947, 23 + 339), (805, 335)]
+    assert sum(u["input_tokens"] for u in got) == 4524           # together, the trajectory's own total
+
+
+def test_a_turns_cache_reads_are_its_own_and_its_input_is_the_fresh_part():
+    ws = _ws()
+    traj = _fast_agent_traj(ws)
+    traj.parent.mkdir(parents=True, exist_ok=True)
+    m = lambda p, c, r: {"prompt_tokens": p, "completion_tokens": c, "cached_tokens": r}
+    traj.write_text(json.dumps({"session_id": "s1", "steps": [
+        {"step_id": 1, "source": "user", "message": "one"},
+        {"step_id": 2, "source": "agent", "message": "M1", "metrics": m(2348, 5, 0)},
+        {"step_id": 3, "source": "user", "message": "two"},
+        {"step_id": 4, "source": "agent", "message": "", "metrics": m(2393, 80, 2359)},
+        {"step_id": 5, "source": "agent", "message": "DONE", "metrics": m(2592, 5, 2390)}],
+        "final_metrics": {"total_prompt_tokens": 7333, "total_completion_tokens": 90, "total_cached_tokens": 4749}}))
+    u = _fa_eof(ws, "two")[0][-1]["usage"]
+    assert (u["input_tokens"], u["output_tokens"], u["cache_read_tokens"]) == (2393 + 2592 - 4749, 85, 4749)
 
 
 def test_an_init_that_only_the_eof_emits_still_records_the_cli_session_id():
