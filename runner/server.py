@@ -6108,7 +6108,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # the Google column failed again with the identical error because the bytes still
                 # went through untouched.
                 out_lines = [] if (flags.get("usage_no_nulls") or flags.get("plain_stream")
-                                   or flags.get("tool_index_fill")) else None
+                                   or flags.get("tool_index_fill") or flags.get("split_finish_content")) else None
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
                     if out_lines is not None:
@@ -6144,7 +6144,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             call_usage.update(_usage_in_sse_line(pending.strip()))
             seen_thinking = _thinking_in_sse_line(pending.strip())
             _stream_fold(flags, call_usage, seen_thinking if seen_thinking is not None else call_thinking, folded)
-            if (flags.get("usage_no_nulls") or flags.get("plain_stream")) and pending:
+            if (flags.get("usage_no_nulls") or flags.get("plain_stream") or flags.get("split_finish_content")) and pending:
                 tail_bytes = _rewrite_stream_line(pending, flags, line_state)   # a last line with no newline after it
                 self.wfile.write(f"{len(tail_bytes):x}\r\n".encode() + tail_bytes + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
@@ -6590,6 +6590,8 @@ def _tool_call_index_line(line: bytes, state: dict) -> bytes:
 
 
 def _rewrite_stream_line(line: bytes, flags: dict, state: dict) -> bytes:
+    if flags.get("split_finish_content"):
+        line = _split_finish_content_line(line)
     if flags.get("usage_no_nulls"):
         line = _usage_without_nulls(line)
     if flags.get("tool_index_fill"):
@@ -6597,6 +6599,36 @@ def _rewrite_stream_line(line: bytes, flags: dict, state: dict) -> bytes:
     if flags.get("plain_stream"):
         line = _plain_trailer_line(line, state)
     return line
+
+
+def _split_finish_content_line(line: bytes) -> bytes:
+    """One SSE line whose choice carries text AND a finish reason, as two events: the text, then the
+    finish (with the usage). docker-agent 1.152.0 returns on a stop, length or refusal finish before
+    it reads the same chunk's text (pkg/runtime/streaming.go), and TokenRouter sends an answer's last
+    words in that chunk: MEASURED 2026-10-25, deepseek-v4.1-flash streamed "M", "1-deepseek-v4" and
+    ".1-flash" with finish_reason stop, and docker-agent's own output stopped at "M1-deepseek-v4"
+    (four answers cut at four different points, every one streamed whole). A chunk that also carries
+    tool calls is left as it is: docker-agent reads those before the finish, and splitting would
+    count them twice."""
+    if not line.startswith(b"data:") or b'"finish_reason"' not in line:
+        return line
+    try:
+        doc = json.loads(line[5:])
+    except (ValueError, UnicodeDecodeError):
+        return line
+    choices = doc.get("choices") if isinstance(doc, dict) else None
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        return line
+    ch = choices[0]
+    delta = ch.get("delta") if isinstance(ch.get("delta"), dict) else {}
+    if (not ch.get("finish_reason") or delta.get("tool_calls")
+            or not (delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning"))):
+        return line
+    text = {**doc, "choices": [{**ch, "finish_reason": None}]}
+    text.pop("usage", None)
+    finish = {**doc, "choices": [{**ch, "delta": {"role": delta["role"]} if delta.get("role") else {}}]}
+    return (b"data: " + json.dumps(text, separators=(",", ":")).encode() + b"\n\n"
+            + b"data: " + json.dumps(finish, separators=(",", ":")).encode())
 
 
 def _usage_without_nulls(line: bytes) -> bytes:
@@ -6645,7 +6677,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                         stream_usage: bool = False, gemini_schemas: bool = False,
                         usage_no_nulls: bool = False, exact_base: bool = False,
                         aux: bool = False, plain_stream: bool = False,
-                        tool_index_fill: bool = False, turn_reasoning_only: bool = False) -> tuple[str, str]:
+                        tool_index_fill: bool = False, turn_reasoning_only: bool = False,
+                        split_finish_content: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -6657,6 +6690,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls).
     `tool_index_fill` supplies the `index` a streamed tool call arrives without on Google's
     OpenAI-compatible surface, for a client that merges chunks by it (_tool_call_index_line).
+    `split_finish_content` streams a chunk's text and its finish as two events, for a client that
+    stops reading a chunk at its finish (_split_finish_content_line).
     `turn_reasoning_only` sends an earlier turn's reasoning items without their encrypted content,
     for a Responses client that replays them across a model switch (_without_earlier_reasoning_blobs).
     `exact_base` joins the client's resource onto the connection's base as stored, for a client that
@@ -6681,6 +6716,7 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
                  "tool_index_fill": bool(tool_index_fill), "turn_reasoning_only": bool(turn_reasoning_only),
+                 "split_finish_content": bool(split_finish_content),
                  **({"aux": True} if aux else _turn_effort())}
         # The turn's trace context (#473), on every route of this turn: the relay reads it when it
         # forwards, and the relay's own threads never see the turn's context variables.
@@ -12649,7 +12685,7 @@ def _build_docker_agent(provider: str, auth: Auth, model: str, prompt: str, cwd:
         # with no `items`, which Google's validator refuses, and the relay's repair is the same one
         # grok's route asks for (measured on this base, 2026-10-16).
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key,
-                                                    gemini_schemas=True)
+                                                    gemini_schemas=True, split_finish_content=True)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     cfg = _docker_agent_config(auth, model, cwd, mcp_servers, tools_disabled, max_turns)
     env[_DA_KEY_ENV] = auth.api_key or ""
