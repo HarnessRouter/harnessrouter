@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from server import _codex_item_kind, _codex_tool_item  # noqa: E402
+from server import _codex_item_kind, _codex_to_claude, _codex_tool_item  # noqa: E402
 
 
 def test_item_kinds_read_the_same_in_both_spellings():
@@ -32,3 +32,29 @@ def test_a_command_reads_its_camel_case_fields():
     use, res = evs[0]["message"]["content"][0], evs[1]["message"]["content"][0]
     assert use["name"] == "Bash" and use["input"] == {"command": "ls"}
     assert res["type"] == "tool_result" and res["is_error"] is False and res["content"] == "a\n"
+
+
+def test_codex_s_own_warning_is_logged_never_a_tool_call(capsys):
+    """`codex exec --json` sends its own warning as an error item (#579): on 0.36.3 the response
+    listed it as a function_call named "error" beside the model's real Bash call."""
+    it = {"type": "error", "id": "item_0",
+          "message": "Model metadata for `openai/gpt-6.1-sol` not found. Defaulting to fallback metadata"}
+    assert _codex_tool_item(it) == []
+    assert _codex_to_claude({"type": "item.completed", "item": it}, {}) == []
+    assert _codex_to_claude({"type": "item.completed", "item": it}, {"partial": True}) == []
+    assert "[codex] Model metadata for `openai/gpt-6.1-sol` not found" in capsys.readouterr().out
+
+
+def test_a_codex_failure_is_still_the_turn_s_error():
+    """Only codex's warnings are error ITEMS: in 0.154.0's exec processor every ErrorItem comes
+    from a warning, config warning, deprecation notice or model reroute, and each leaves the turn
+    running. A failure arrives as the top-level `error` event or as `turn.failed`, and it stays
+    the turn's error, with codex's message."""
+    warn = {"type": "item.completed", "item": {"type": "error", "id": "item_0", "message": "Model metadata not found"}}
+    failed = {"type": "turn.failed", "error": {"message": "stream disconnected before completion"}}
+    evs = _codex_to_claude(warn, {}) + _codex_to_claude(failed, {})
+    assert evs == [{"type": "result", "subtype": "error", "is_error": True,
+                    "result": "stream disconnected before completion"}]
+    top = _codex_to_claude({"type": "error", "message": "unexpected status 401 Unauthorized"}, {})
+    assert top == [{"type": "result", "subtype": "error", "is_error": True,
+                    "result": "unexpected status 401 Unauthorized"}]
