@@ -4,7 +4,7 @@ import pathlib
 import sys
 
 PROVIDERS = {"openai", "azure", "tokenrouter"}
-DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_MODEL = "gpt-6.1-sol"
 
 
 def build(provider, auth, model, prompt, cwd, env, *, relay, resume_session_id=None,

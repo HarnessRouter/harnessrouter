@@ -1087,18 +1087,24 @@ install_mimo() {
   fi
 }
 
-# Roder's release channel uses a mutable `latest` tag. Pin the bytes for both Linux targets,
-# so an upstream replacement fails closed rather than silently changing the measured harness.
+# Roder publishes checksums beside its Linux binaries, like jcode below.
 install_roder() {
   case "$(uname -m)" in
-    x86_64) rd_arch="x86_64"; rd_sha="8a5f07dd688dc96f2580c72b8f5f17b6160b0073fb6cfd8c7581025a37b0f064" ;;
-    aarch64|arm64) rd_arch="aarch64"; rd_sha="364da406fc3153843dea9eaea11d69226522d38bc606d7d015f9d64f56c287f4" ;;
+    x86_64) rd_arch="x86_64" ;;
+    aarch64|arm64) rd_arch="aarch64" ;;
     *) echo "unsupported architecture for Roder: $(uname -m)"; return 1 ;;
   esac
+  rd_base="https://github.com/RoderAI/roder/releases/download/latest"
+  rd_asset="roder-$rd_arch-unknown-linux-gnu"
   rd_tmp="$(mktemp -d)"
-  curl -fsSL "https://github.com/RoderAI/roder/releases/download/latest/roder-$rd_arch-unknown-linux-gnu" \
-    -o "$rd_tmp/roder" || { rm -rf "$rd_tmp"; return 1; }
-  echo "$rd_sha  $rd_tmp/roder" | sha256sum -c - || { rm -rf "$rd_tmp"; return 1; }
+  curl -fsSL "$rd_base/$rd_asset" -o "$rd_tmp/roder" || { rm -rf "$rd_tmp"; return 1; }
+  curl -fsSL "$rd_base/SHA256SUMS" -o "$rd_tmp/SHA256SUMS" || { rm -rf "$rd_tmp"; return 1; }
+  rd_want="$(awk -v asset="$rd_asset" '$2 == asset {print $1}' "$rd_tmp/SHA256SUMS")"
+  rd_have="$(sha256sum "$rd_tmp/roder" | awk '{print $1}')"
+  if [ -z "$rd_want" ] || [ "$rd_want" != "$rd_have" ]; then
+    echo "Roder: checksum mismatch for $rd_asset (want ${rd_want:-none}, have $rd_have)"
+    rm -rf "$rd_tmp"; return 1
+  fi
   mkdir -p "$TOOLS/bin"
   install -m 755 "$rd_tmp/roder" "$TOOLS/bin/roder" || { rm -rf "$rd_tmp"; return 1; }
   rm -rf "$rd_tmp"
@@ -1670,17 +1676,12 @@ install_backends() {
     echo "[harnessrouter] installing MiMo Code $MIMO_PIN (MIT)…"
     install_base mimo "MiMo Code" install_mimo || true
   fi
-  if wanted roder; then
-    case "$(uname -m)" in
-      x86_64) rd_expected="8a5f07dd688dc96f2580c72b8f5f17b6160b0073fb6cfd8c7581025a37b0f064" ;;
-      *) rd_expected="364da406fc3153843dea9eaea11d69226522d38bc606d7d015f9d64f56c287f4" ;;
-    esac
-    if [ "$(sha256sum "$TOOLS/bin/roder" 2>/dev/null | awk '{print $1}')" != "$rd_expected" ]; then
-      echo "[harnessrouter] installing Roder 0.3.18 (Apache-2.0, SHA256-pinned)…"
-      rm -f "$TOOLS/bin/roder"  # never advertise stale or unverified bytes after a failed update
-      try_install "Roder" install_roder || true
-    fi
+
+  if wanted roder && [ ! -x "$(backend_bin roder)" ]; then
+    echo "[harnessrouter] installing Roder (Apache-2.0)…"
+    try_install "Roder" install_roder || true
   fi
+
   if wanted jcode && ! current jcode "$(ident "$JCODE_PIN" "$JCODE_SHA")"; then
     echo "[harnessrouter] installing jcode $JCODE_PIN (MIT) — ~127 MB…"
     install_base jcode "jcode" install_jcode || true
