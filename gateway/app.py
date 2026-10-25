@@ -1674,7 +1674,8 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # remains readable (see _build_jcode).
     ("openai", "roder"): "openai", ("azure-foundry", "roder"): "azure",
     ("tokenrouter", "roder"): "tokenrouter", ("custom", "roder"): "tokenrouter",
-    ("harnessrouter", "roder"): "tokenrouter",
+    ("harnessrouter", "roder"): "tokenrouter", ("openrouter", "roder"): "tokenrouter",
+    ("vercel", "roder"): "tokenrouter", ("llmtr", "roder"): "tokenrouter",
     ("anthropic", "jcode"): "anthropic",       ("openai", "jcode"): "openai",
     ("azure-foundry", "jcode"): "azure",
     ("openrouter", "jcode"): "openai-api",
@@ -8202,7 +8203,9 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
 # only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
 # relay so its served model stays readable — see _build_jcode.)
-_MODEL_CATALOG["roder"] = {"default": "gpt-5.4", "models": ["gpt-5.4", "gpt-5.2"]}
+# Roder's Responses provider preserves model ids across families. Offer the maintained
+# cross-provider catalog; live verification results remain specific to Roder.
+_MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALOG["opencode"]["models"])}
 # vibe (mistral-vibe) is the same shape: its `generic` backend is an OpenAI chat/completions
 # client and every keyed turn rides the relay, so its wire reach is kimi's. MEASURED on it so far
 # (2026-10-14/15, an OpenAI-compatible gateway through a recording proxy): claude-haiku-5.5 and

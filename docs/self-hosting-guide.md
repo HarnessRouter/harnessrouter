@@ -1346,6 +1346,6 @@ licenses. Review them before enabling a backend.
 ### Roder
 
 Set `HR_BACKENDS=roder` for a Roder-only installation. Roder uses its native app-server
-and a Responses connection (OpenAI, Azure Foundry, TokenRouter, HarnessRouter, or a custom
+and a Responses connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter, or a custom
 endpoint with `api_format=responses`). See [Roder setup and verification](roder.md) for
-installation pinning, session state, tool policy, MCP, and qualification limits.
+installation, session state, tool policy, MCP, and qualification limits.

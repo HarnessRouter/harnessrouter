@@ -7,12 +7,13 @@ The process ends after `turn/completed`; thread history stays in the workspace.
 
 ## Connections
 
-Use an OpenAI, Azure Foundry, TokenRouter, HarnessRouter, or custom **Responses**
-connection. This adapter uses Roder's custom Responses provider `hr`, preserving
-the requested model id. It does not select Roder's Codex OAuth provider. The initial
-catalog contains `gpt-5.4` and `gpt-5.2`; it does not inherit another harness's
-verified model list. Anthropic Messages and Chat Completions custom endpoints are
-not offered by this adapter.
+Use an OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter,
+or custom **Responses** connection. This adapter uses Roder's custom Responses
+provider `hr`, preserving the requested model id. It does not select Roder's Codex OAuth provider. The catalog
+includes the current GPT, Claude, Gemini, Grok, DeepSeek, Kimi, Qwen, and other
+model families, with `gpt-6.1-sol` as the default. Availability depends on the
+selected connection; each provider serves its own subset. Anthropic Messages
+and Chat Completions custom endpoints are not offered by this adapter.
 
 Every provider call uses the existing loopback relay. Roder receives a relay
 placeholder in `HR_RODER_KEY`; the provider key stays in the runner. The relay
@@ -21,10 +22,9 @@ collects provider-reported model and usage independently of the CLI.
 ## Installation
 
 Include `roder` in `HR_BACKENDS` (it is included by default). The entrypoint installs
-the Linux binary from Roder's release channel. Both target SHA256 digests are pinned
-in `docker/entrypoint.sh`; a replaced upstream asset fails verification. Because
-upstream publishes binary assets under a mutable `latest` tag, a later release
-requires updating those digests. No auto-update runs inside a turn.
+the Linux binary from Roder's `latest` release when it is missing, then verifies
+it against the release's published `SHA256SUMS`, following the jcode installer
+pattern. Existing installations are reused. No auto-update runs inside a turn.
 
 `HR_RODER_BIN` can select an existing binary for development and process tests.
 
