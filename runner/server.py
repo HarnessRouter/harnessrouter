@@ -4106,6 +4106,79 @@ def _with_anthropic_cache(body: bytes) -> bytes:
     return json.dumps(doc).encode() if changed else body
 
 
+def _with_chat_cache(body: bytes) -> bytes:
+    """A chat/completions request for a Claude model with no cache_control of its own, with the two
+    breakpoints _with_anthropic_cache sets on a Messages request: the last system message and the
+    last message, each as a text part carrying cache_control. A client whose only model client is
+    OpenAI chat (vibe, docker-agent and fast-agent all drive Claude this way) sends none, and every
+    call of its agent loop paid for its whole prompt: no cache read in any Claude pair of the
+    0.37.0 matrix, on any connection. A request that already carries a breakpoint is the client's
+    own policy and goes through untouched; a model that is not Claude is left alone."""
+    if b"cache_control" in body or b"claude" not in body.lower():
+        return body
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        return body
+    if not isinstance(doc, dict) or "claude" not in str(doc.get("model") or "").lower():
+        return body
+    msgs = doc.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return body
+    mark = {"type": "ephemeral"}
+
+    def marked(m) -> bool:
+        if not isinstance(m, dict):
+            return False
+        content = m.get("content")
+        if isinstance(content, str) and content.strip():
+            m["content"] = [{"type": "text", "text": content, "cache_control": mark}]
+            return True
+        if isinstance(content, list) and content and isinstance(content[-1], dict) and content[-1].get("type") == "text":
+            content[-1]["cache_control"] = mark
+            return True
+        return False
+
+    changed = False
+    system = [i for i, m in enumerate(msgs) if isinstance(m, dict) and m.get("role") in ("system", "developer")]
+    if system and system[-1] != len(msgs) - 1:
+        changed = marked(msgs[system[-1]])
+    if isinstance(msgs[-1], dict) and msgs[-1].get("role") in ("user", "tool"):
+        changed = marked(msgs[-1]) or changed
+    return json.dumps(doc).encode() if changed else body
+
+
+def _cache_control_refused(data: bytes) -> bool:
+    """Whether a provider's 400 names cache_control: a strict OpenAI-compatible server that takes
+    no field it does not know."""
+    return b"cache_control" in (data or b"")
+
+
+def _without_chat_cache(body: bytes) -> bytes:
+    """The chat request without the breakpoints _with_chat_cache set: every cache_control taken off
+    the message parts, and a message left with one plain text part sent as that text again. Only
+    a body that carried none of its own is ever marked, so every one here is the relay's."""
+    try:
+        doc = json.loads(body or b"")
+    except (ValueError, UnicodeDecodeError):
+        return body
+    msgs = doc.get("messages") if isinstance(doc, dict) else None
+    if not isinstance(msgs, list):
+        return body
+    changed = False
+    for m in msgs:
+        content = m.get("content") if isinstance(m, dict) else None
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.pop("cache_control", None) is not None:
+                changed = True
+        if (len(content) == 1 and isinstance(content[0], dict) and set(content[0]) == {"type", "text"}
+                and content[0]["type"] == "text"):
+            m["content"] = content[0]["text"]
+    return json.dumps(doc).encode() if changed else body
+
+
 def _relay_origin(base_url: str) -> str:
     """The relay's origin (scheme://host:port) for a client that appends /v1/messages itself:
     goose's anthropic provider (ANTHROPIC_HOST), the Anthropic SDK hermes uses (ANTHROPIC_BASE_URL)
@@ -5723,6 +5796,10 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
             body = _with_free_form_objects(body)     # before the Gemini normaliser below, which has its own rules
+            if flags.get("chat_cache") and not flags.get(f"no_chat_cache:{_body_model}"):
+                # Before the repairs below, so a repair a provider asked for (a tool result as a
+                # string) still has the last word on the shape.
+                body = _with_chat_cache(body)
             if flags.get("stream_usage"):
                 body = _request_stream_usage(body)
             if flags.get("plain_stream"):
@@ -5839,6 +5916,17 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     headers["content-length"] = str(len(body))
                     continue
                 effort_back = False
+                bare = (_without_chat_cache(body) if body is not None and flags.get("chat_cache")
+                        and self.path.endswith("/chat/completions") else None)
+                if (attempt < 2 and e.code in (400, 422) and _cache_control_refused(data)
+                        and bare is not None and bare != body):
+                    # A server that takes no field it does not know refused the breakpoints the
+                    # relay set: the call goes again without them, and this model gets none on
+                    # this route from now on.
+                    flags[f"no_chat_cache:{_body_model}"] = True
+                    body = bare
+                    headers["content-length"] = str(len(body))
+                    continue
                 warm = _drop_top_level_field(body, "temperature") if body is not None else None
                 if (attempt < 2 and e.code == 400 and _temperature_refused(data)
                         and warm is not None and warm != body):
@@ -6725,7 +6813,7 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                         usage_no_nulls: bool = False, exact_base: bool = False,
                         aux: bool = False, plain_stream: bool = False,
                         tool_index_fill: bool = False, turn_reasoning_only: bool = False,
-                        split_finish_content: bool = False) -> tuple[str, str]:
+                        split_finish_content: bool = False, chat_cache: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -6741,6 +6829,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     stops reading a chunk at its finish (_split_finish_content_line).
     `turn_reasoning_only` replays an earlier turn's items as plain content, for a Responses client
     that replays them across a model switch (_earlier_turns_as_content).
+    `chat_cache` puts prompt cache breakpoints on a Claude chat request that carries none, for a
+    client that drives Claude only through OpenAI chat (_with_chat_cache).
     `exact_base` joins the client's resource onto the connection's base as stored, for a client that
     was calling that base directly before it had a route (Codex, and hermes on Azure): the same URL,
     with the relay between. `aux` marks a route for a helper model (hermes's image questions): the
@@ -6763,7 +6853,7 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
                  "tool_index_fill": bool(tool_index_fill), "turn_reasoning_only": bool(turn_reasoning_only),
-                 "split_finish_content": bool(split_finish_content),
+                 "split_finish_content": bool(split_finish_content), "chat_cache": bool(chat_cache),
                  **({"aux": True} if aux else _turn_effort())}
         # The turn's trace context (#473), on every route of this turn: the relay reads it when it
         # forwards, and the relay's own threads never see the turn's context variables.
@@ -12402,7 +12492,7 @@ def _build_vibe(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # connection rather than by this builder.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key,
                                                     drop_fields=_VIBE_DROP_FIELDS,
-                                                    tool_index_fill=True)
+                                                    tool_index_fill=True, chat_cache=True)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home, out = _vibe_home(cwd), _vibe_out(cwd)
     _vibe_config(auth, model, home, mcp_servers)
@@ -12732,7 +12822,8 @@ def _build_docker_agent(provider: str, auth: Auth, model: str, prompt: str, cwd:
         # with no `items`, which Google's validator refuses, and the relay's repair is the same one
         # grok's route asks for (measured on this base, 2026-10-16).
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key,
-                                                    gemini_schemas=True, split_finish_content=True)
+                                                    gemini_schemas=True, split_finish_content=True,
+                                                    chat_cache=True)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     cfg = _docker_agent_config(auth, model, cwd, mcp_servers, tools_disabled, max_turns)
     env[_DA_KEY_ENV] = auth.api_key or ""
@@ -13217,7 +13308,7 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
     if not auth.base_url:
         raise HTTPException(400, f"fast-agent provider '{pr}' needs a base_url (none configured)")
     if auth.api_key:
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, chat_cache=True)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home = _fast_agent_home(cwd)
     home.mkdir(parents=True, exist_ok=True)
