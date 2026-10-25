@@ -2402,6 +2402,12 @@ def _codex_tool_item(it: dict, output: str | None = None, incomplete: bool = Fal
     kind = _codex_item_kind(it)
     if kind in ("user_message", "agent_message", "reasoning"):
         return []
+    if kind == "error":
+        # codex's own message (`codex exec --json` sends a warning such as "Model metadata for
+        # `openai/gpt-6.1-sol` not found" as an error item): it goes to the runner log, never into
+        # the task's tool calls
+        print(f"[codex] {it.get('message') or json.dumps(it)}", flush=True)
+        return []
     if kind == "command_execution":
         tuid = it.get("id") or "cmd"
         out = output if output is not None else (
