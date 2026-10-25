@@ -7429,6 +7429,11 @@ _TOKENROUTER_NO_CHANNEL = {
     # TokenRouter's /v1/models on 2026-09-06 lists eight Gemini text models and not this one.
     "gemini-3.1-flash-lite",
     "gemini-4-argon",   # not on TokenRouter's /v1/models (2026-10-14): Google, OpenRouter and Vercel serve it
+    # 2026-10-25, every base, re-checked four hours apart: deepseek-v4-flash answered 503 "No available
+    # channel for model deepseek/deepseek-v4-flash under group default" from 05:00Z to past 09:00Z;
+    # moonshotai/kimi-k3 was answered by qianfan-vl-v1 (the answer's own model field) from 05:20Z to
+    # past 09:05Z, a different model under its name. Vercel and OpenRouter serve both as themselves.
+    "deepseek-v4-flash", "kimi-k3",
 }
 # Image models, kept OUT of _VENDOR_MODELS on purpose: those tables feed the chat model pickers
 # and the per-backend catalogs, and an image model offered as a chat model is a broken choice a
@@ -8332,6 +8337,9 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     # its record read, and a later pass does not erase it:
     #   vibe          gpt-5.6-luna       answered the recycle check DONE, the artifact turn's word, with
     #                                    the history intact (Vercel).
+    #                 deepseek-v4.1-flash refused its follow-up's word ("I'm Vibe, built by Mistral AI,
+    #                                    I won't reply with a label that attributes my...") after
+    #                                    answering the first turn's (TokenRouter).
     #                 llama-3.3-70b      wrote its write_file call as text with ten tools declared and made
     #                                    no file: the matrix (OpenRouter) and 4 of 4 in sequence.
     #   docker-agent  grok-build-0.1     ran `printf DONE` in the shell until docker-agent's own guard
@@ -8345,13 +8353,15 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    matrix (Vercel, OpenRouter), tools and history intact.
     #                 hunyuan-4-preview  answered its first turn "I'm Claude, made by Anthropic" instead of
     #                                    the word it was asked for (OpenRouter).
+    #                 qwen3.8-27b        refused its follow-up's word ("would amount to confirming a
+    #                                    specific version number, which I don't disclose") (HarnessRouter API).
     #   dcode         grok-4.5           wrote its write_file call as JSON text, 1 of 4 in sequence.
     #                 kimi-k2.7-code     answered the artifact turn DONE with no tool call (Vercel).
     #                 hunyuan-4-preview  a follow-up streamed until Vercel ended it, about 13 minutes
     #                                    (gateway_stream_timeout), after a 23 s first turn.
-    "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b"}),
+    "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash"}),
     "docker-agent": frozenset({"grok-build-0.1", "grok-4.5"}),
-    "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview"}),
+    "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b"}),
     "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview"}),
 }
 # Muse Wonder (muse-wonder-1.0), on every base that offers the Meta family, review instance
@@ -8497,14 +8507,13 @@ _CHANNEL_REFUSES[("tokenrouter", "docker-agent")] |= {"claude-fable-5-1"}
 # dcode drives the Responses API (deepagents' built-in profile sets use_responses_api for every openai:*
 # model), and TokenRouter's /v1/responses does not reach every family it serves on chat completions:
 # every Claude id and five Gemini ids answered 500 "not implemented" or 502 "downstream path
-# /v1/responses is ...", and kimi-k3 500, on the first turn (2026-10-25, each id once, one connection).
+# /v1/responses is ..." on the first turn (2026-10-25, each id once, one connection).
 # gemini-3.1-pro-preview, gemini-3-flash-preview, grok, deepseek, qwen, glm, mistral, step and
 # nemotron ran there.
 _CHANNEL_REFUSES[("tokenrouter", "dcode")] = frozenset({
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5",
     "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
-    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
-    "kimi-k3"})
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"})
 
 
 def _channel_refuses(provider: str, backend: str, model: str) -> bool:
