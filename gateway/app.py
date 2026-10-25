@@ -8485,6 +8485,11 @@ async def _vision_auth(sid: str, backend: str) -> dict | None:
 _CHAT_PASSTHROUGH = ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure", "harnessrouter")
 _CHANNEL_REFUSES: dict[tuple[str, str], frozenset[str]] = {
     (p, b): frozenset({"gpt-6.1-sol"}) for p in _CHAT_PASSTHROUGH for b in ("vibe", "docker-agent", "fast-agent")}
+# TokenRouter's route for claude-fable-5-1 declines docker-agent's first turn before a word is written
+# (finish_reason content_filter, 3 of 3, 2026-10-25), while on the same route vibe passes with it and
+# docker-agent passes with claude-fable-5, claude-opus-5.5 and claude-sonnet-5.5, and docker-agent
+# passes with it on OpenRouter and Vercel. The route decides, so the route does not offer it.
+_CHANNEL_REFUSES[("tokenrouter", "docker-agent")] |= {"claude-fable-5-1"}
 
 
 def _channel_refuses(provider: str, backend: str, model: str) -> bool:

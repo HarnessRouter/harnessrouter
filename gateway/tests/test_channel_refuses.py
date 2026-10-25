@@ -51,3 +51,11 @@ def test_the_picker_greys_it_on_that_connection_and_offers_it_where_it_runs(monk
     assert "gpt-6.1-sol" in asyncio.run(gw._servable_models("org1", "dcode"))
     holding({"provider": "vercel"})
     assert "gpt-6.1-sol" in asyncio.run(gw._servable_models("org1", "vibe"))
+
+
+def test_tokenrouter_does_not_offer_claude_fable_5_1_to_docker_agent_alone():
+    assert gw._channel_refuses("tokenrouter", "docker-agent", "claude-fable-5-1")
+    assert not gw._channel_refuses("tokenrouter", "vibe", "claude-fable-5-1")
+    assert not gw._channel_refuses("openrouter", "docker-agent", "claude-fable-5-1")
+    assert not gw._channel_refuses("tokenrouter", "docker-agent", "claude-fable-5")
+    assert gw._channel_refuses("tokenrouter", "docker-agent", "gpt-6.1-sol")       # the earlier rule still holds
