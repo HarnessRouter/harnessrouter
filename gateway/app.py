@@ -8538,6 +8538,12 @@ _CHANNEL_REFUSES[("tokenrouter", "dcode")] = frozenset({"glm-5.3-flash",
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5",
     "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"})
+# The HarnessRouter API's Responses route reaches every family dcode is offered but Gemini's: one first turn
+# per id on 0.37.0-rc.15, every Claude, DeepSeek, GLM, Grok, Kimi, Llama, Mistral, Muse, Nemotron, Qwen and
+# Step id completed, and eight Gemini ids answered "Error code: 404" (gemini-3.7-flash completed, and stays).
+_CHANNEL_REFUSES[("harnessrouter", "dcode")] = frozenset({
+    "gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
+    "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview"})
 
 
 def _channel_refuses(provider: str, backend: str, model: str) -> bool:

@@ -93,3 +93,12 @@ def test_on_the_harnessrouter_api_the_four_that_fail_are_not_offered_it_and_open
         assert gw._channel_refuses("harnessrouter", b, "gpt-6.1-sol"), b
     assert not gw._channel_refuses("harnessrouter", "openhands", "gpt-6.1-sol")   # completed with a Shell call
     assert not gw._channel_refuses("harnessrouter", "kimi", "gpt-6-sol")
+
+
+def test_dcode_on_the_harnessrouter_api_is_not_offered_the_gemini_ids_its_responses_route_answers_404():
+    for m in ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
+              "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview"):
+        assert gw._channel_refuses("harnessrouter", "dcode", m), m
+    for m in ("gemini-3.7-flash", "claude-sonnet-4.6", "claude-opus-5.5", "deepseek-v4-pro", "kimi-k3", "gpt-6.1-sol"):
+        assert not gw._channel_refuses("harnessrouter", "dcode", m), m
+    assert not gw._channel_refuses("harnessrouter", "vibe", "gemini-4-argon")   # chat bases take another route
