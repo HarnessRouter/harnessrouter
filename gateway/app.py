@@ -8509,8 +8509,10 @@ _CHANNEL_REFUSES[("tokenrouter", "docker-agent")] |= {"claude-fable-5-1"}
 # every Claude id and five Gemini ids answered 500 "not implemented" or 502 "downstream path
 # /v1/responses is ..." on the first turn (2026-10-25, each id once, one connection).
 # gemini-3.1-pro-preview, gemini-3-flash-preview, grok, deepseek, qwen, glm, mistral, step and
-# nemotron ran there.
-_CHANNEL_REFUSES[("tokenrouter", "dcode")] = frozenset({
+# nemotron ran there. glm-5.3-flash ran its first four scenarios there, then refused every turn whose
+# history carries tool calls ("data did not match any variant of untagged enum ResponseInput", three
+# of three), where glm-5.3 and qwen3.8-max took the same history.
+_CHANNEL_REFUSES[("tokenrouter", "dcode")] = frozenset({"glm-5.3-flash",
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5", "claude-sonnet-5.5",
     "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-4.5",
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"})
