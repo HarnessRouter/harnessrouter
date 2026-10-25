@@ -61,6 +61,8 @@ import shlex
 import shutil
 import signal
 import sys
+
+import roder_backend
 import socket
 import sqlite3
 import subprocess
@@ -835,6 +837,7 @@ _REBUILT_CACHES = (".harness/home/.omp/natives", ".harness/home/.codex/.tmp", ".
 # Persist conversation transcripts ($HOME -> .harness/home: ~/.claude/projects, ~/.codex/sessions)
 # so --resume survives sandbox recycling — but NEVER persist credentials inside them.
 CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
+                      "./.harness/roder/auth", "./.harness/roder/config.toml",
                       "./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.json",
                       "./.harness/claude/.credentials.json",
                       "./.harness/home/.claude/.credentials.json",
@@ -1138,6 +1141,7 @@ def _git_ensure(ws: str) -> None:
         ".harness/agentzero/base/usr/.env", ".harness/agentzero/base/usr/secrets.env",
         *_PER_TURN_CONFIG,
         # this batch — the same files CHECKPOINT_EXCLUDE drops from the tarball
+        ".harness/roder/auth/", ".harness/roder/config.toml",
         ".harness/home/.jcode/auth.json", ".harness/home/.jcode/credentials.json",
         ".harness/home/.config/jcode/",
         ".harness/opensquilla/.env", ".harness/opensquilla/secrets.toml",
@@ -1615,6 +1619,9 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # us here too — one directory, named in mimo.json.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
+    elif backend == "roder":
+        rootrels = [".harness/home/.codex/skills"]
+        entryroot = ".harness/home/.codex/skills"
     elif backend == "jcode":
         # ~/.jcode/skills/<name>/SKILL.md — jcode's GLOBAL skills root (tool/skill.rs names it
         # first), and $HOME is already <cwd>/.harness/home, so this is both inside a loader path
@@ -2186,7 +2193,7 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
                                    # fast-agent has no instruction-file convention at all: the
                                    # file the runner writes is passed as the agent's instruction
                                    # with -i, which is aider's arrangement, so the name is ours.
-                                   "fast-agent")
+                                   "fast-agent", "roder")
         else "CLAUDE.md")
 
 
@@ -13894,6 +13901,9 @@ BACKENDS = {
     # same relationship omp has to pi.
     "mimo": {"providers": sorted(MIMO_PROVIDERS), "default_model": MIMO_DEFAULT_MODEL,
              "normalize": _opencode_to_claude},
+    # Roder runs its native app-server through a separate one-turn driver.
+    "roder": {"providers": sorted(roder_backend.PROVIDERS), "default_model": roder_backend.DEFAULT_MODEL,
+              "normalize": roder_backend.normalize},
     # jcode's NDJSON is its OWN schema (src/cli/commands.rs emit_ndjson_event), including a `tokens`
     # event the turn has to ACCUMULATE because its own `done.usage` holds only the last request's.
     "jcode": {"providers": sorted(JCODE_PROVIDERS), "default_model": JCODE_DEFAULT_MODEL,
@@ -14133,7 +14143,7 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 # CLI's own. jcode is absent too — its counter in _jcode_to_claude predates this one and emits
 # jcode's own usage, so it stays.
 _GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "qwen", "gemini", "cline",
-                        "opencode", "mimo", "kilo", "qoder"}
+                        "opencode", "mimo", "kilo", "qoder", "roder"}
 
 
 def _record_cli_session_id(rec: dict, ev: dict) -> None:
@@ -16213,6 +16223,13 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_mimo(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=skills_dir, tools_disabled=req.tools_disabled)
+    elif backend == "roder":
+        model = model or roder_backend.DEFAULT_MODEL
+        cmd = roder_backend.build(req.provider, auth, model, req.prompt, cwd, env,
+                                  relay=_hermes_relay_route, resume_session_id=req.resume_session_id,
+                                  mcp_servers=[{**s, "auth": None, "headers": _mcp_headers(s)}
+                                               for s in (req.mcp_servers or [])],
+                                  tools_disabled=req.tools_disabled, thinking=_TURN_THINKING.get())
     elif backend == "jcode":
         model = model or JCODE_DEFAULT_MODEL
         cmd = _build_jcode(req.provider, auth, model, req.prompt, cwd, env,

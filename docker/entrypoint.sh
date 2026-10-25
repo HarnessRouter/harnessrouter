@@ -216,7 +216,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 # did not opt into is a row that fails on its first turn with no explanation. Disk is the
 # trade — jcode is a ~127 MB static Rust binary and the two Python bases bring their own venvs —
 # and an operator who wants them out sets HR_BACKENDS.
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode,roder}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -249,6 +249,7 @@ backend_bin() {
     # interpreter is what "installed" means here.
     qoder) echo "$TOOLS/qoder-venv/bin/python" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
+    roder)  echo "$TOOLS/bin/roder" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
@@ -1034,6 +1035,23 @@ install_mimo() {
   fi
 }
 
+# Roder's release channel uses a mutable `latest` tag. Pin the bytes for both Linux targets,
+# so an upstream replacement fails closed rather than silently changing the measured harness.
+install_roder() {
+  case "$(uname -m)" in
+    x86_64) rd_arch="x86_64"; rd_sha="8a5f07dd688dc96f2580c72b8f5f17b6160b0073fb6cfd8c7581025a37b0f064" ;;
+    aarch64|arm64) rd_arch="aarch64"; rd_sha="364da406fc3153843dea9eaea11d69226522d38bc606d7d015f9d64f56c287f4" ;;
+    *) echo "unsupported architecture for Roder: $(uname -m)"; return 1 ;;
+  esac
+  rd_tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/RoderAI/roder/releases/download/latest/roder-$rd_arch-unknown-linux-gnu" \
+    -o "$rd_tmp/roder" || { rm -rf "$rd_tmp"; return 1; }
+  echo "$rd_sha  $rd_tmp/roder" | sha256sum -c - || { rm -rf "$rd_tmp"; return 1; }
+  mkdir -p "$TOOLS/bin"
+  install -m 755 "$rd_tmp/roder" "$TOOLS/bin/roder" || { rm -rf "$rd_tmp"; return 1; }
+  rm -rf "$rd_tmp"
+}
+
 # jcode (MIT, 1jehuang/jcode) publishes one prebuilt archive per target with a SHA256SUMS file, so
 # it is fetched and compared the same way. v0.90.0 is the release _build_jcode and _jcode_to_claude
 # were measured against — the NDJSON event names, the per-request `tokens` accounting, the resume
@@ -1572,6 +1590,17 @@ install_backends() {
 
   JCODE_PIN="${HR_JCODE_VERSION:-0.90.0}"
   # `jcode --version` prints `jcode v<version> (<commit>)`; the version field is what is pinned.
+  if wanted roder; then
+    case "$(uname -m)" in
+      x86_64) rd_expected="8a5f07dd688dc96f2580c72b8f5f17b6160b0073fb6cfd8c7581025a37b0f064" ;;
+      *) rd_expected="364da406fc3153843dea9eaea11d69226522d38bc606d7d015f9d64f56c287f4" ;;
+    esac
+    if [ "$(sha256sum "$TOOLS/bin/roder" 2>/dev/null | awk '{print $1}')" != "$rd_expected" ]; then
+      echo "[harnessrouter] installing Roder 0.3.18 (Apache-2.0, SHA256-pinned)…"
+      rm -f "$TOOLS/bin/roder"  # never advertise stale or unverified bytes after a failed update
+      try_install "Roder" install_roder || true
+    fi
+  fi
   if wanted jcode && [ "$("$(backend_bin jcode)" --version 2>/dev/null | awk '{print $2}')" != "v$JCODE_PIN" ]; then
     echo "[harnessrouter] installing jcode $JCODE_PIN (MIT, version-pinned) — ~127 MB…"
     try_install "jcode" install_jcode || true
