@@ -5042,6 +5042,61 @@ def _google_with_signatures(body: bytes, sigs: dict) -> bytes:
     return json.dumps(doc).encode() if changed else body
 
 
+# OpenRouter carries a Gemini 3 tool call's thought signature in its own shape: a `reasoning_details`
+# entry {"type": "reasoning.encrypted", "data": …, "id": <the tool call's id>, "format":
+# "google-gemini-v1"} on the answer, which it takes back on the replayed assistant message.
+# OpenAI-shaped clients drop the field (docker-agent 1.152.0 sent none back in 69 requests), and
+# without it the model's next call in the turn came back MALFORMED_FUNCTION_CALL, finish_reason
+# "error": 3 of 8 artifact turns (docker-agent, gemini-3.5-flash-lite, OpenRouter, 2026-10-25). With
+# the entries put back, 8 of 8 and none. So, as with Google's own shape above, the relay keeps each
+# entry under its tool call's id as the answer passes, on every route, and returns it on the message
+# that made the call. An entry with no id belongs to no call and is not kept.
+def _encrypted_reasoning_in(doc) -> list[dict]:
+    """The reasoning.encrypted entries of one answer or stream chunk that name a tool call."""
+    out: list[dict] = []
+    for ch in (doc.get("choices") or []) if isinstance(doc, dict) else []:
+        part = (ch.get("delta") or ch.get("message")) if isinstance(ch, dict) else None
+        details = part.get("reasoning_details") if isinstance(part, dict) else None
+        for rd in details if isinstance(details, list) else []:
+            if isinstance(rd, dict) and rd.get("type") == "reasoning.encrypted" and rd.get("id"):
+                out.append(rd)
+    return out
+
+
+def _encrypted_reasoning_in_line(line: bytes) -> list[dict]:
+    """The same, read off one SSE `data:` line."""
+    if not line.startswith(b"data:") or b"reasoning.encrypted" not in line:
+        return []
+    try:
+        return _encrypted_reasoning_in(json.loads(line[5:]))
+    except (ValueError, UnicodeDecodeError):
+        return []
+
+
+def _with_encrypted_reasoning(body: bytes, held: dict) -> bytes:
+    """The request with each replayed assistant message that made a tool call carrying the encrypted
+    reasoning this relay saw for its calls. A message that already carries reasoning_details is left
+    as the client wrote it; a body without tool calls is untouched."""
+    if b"tool_calls" not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("messages"), list):
+        return body
+    changed = False
+    for msg in doc["messages"]:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant" or msg.get("reasoning_details"):
+            continue
+        got = [held[cid] for cid in (str(tc.get("id") or "") for tc in msg.get("tool_calls") or []
+                                     if isinstance(tc, dict)) if cid in held]
+        if got:
+            msg["reasoning_details"] = got
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
 def _drop_top_level_field(body: bytes, field: str) -> bytes:
     """The JSON request without one top-level field; anything else is returned as it came."""
     try:
@@ -5612,6 +5667,9 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             if fixed is not body:
                 body = fixed
                 headers["content-length"] = str(len(body))
+        if flags.get("encrypted_reasoning") and body is not None and self.path.endswith("/chat/completions"):
+            body = _with_encrypted_reasoning(body, flags["encrypted_reasoning"])
+            headers["content-length"] = str(len(body))
         google = _GOOGLE_HOST in base or bool(flags.get("thought_signature"))
         if google and body is not None and self.path.endswith("/chat/completions"):
             body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
@@ -6003,6 +6061,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     seen_thinking = _thinking_in_sse_line(line)
                     if seen_thinking is not None:
                         call_thinking = seen_thinking
+                    for rd in _encrypted_reasoning_in_line(line):
+                        flags.setdefault("encrypted_reasoning", {})[str(rd["id"])] = rd
                     if sigs is not None:
                         for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
@@ -6068,6 +6128,12 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 data = _model_metadata_with_context_length(data)
             if flags.get("usage_no_nulls"):
                 data = _usage_without_nulls(data)
+            if b"reasoning.encrypted" in data:
+                try:
+                    for rd in _encrypted_reasoning_in(json.loads(data)):
+                        flags.setdefault("encrypted_reasoning", {})[str(rd["id"])] = rd
+                except (ValueError, UnicodeDecodeError):
+                    pass
             if sigs is not None and b"thought_signature" in data:
                 try:
                     doc = json.loads(data)
