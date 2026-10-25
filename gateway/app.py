@@ -8501,6 +8501,16 @@ async def _vision_auth(sid: str, backend: str) -> dict | None:
 _CHAT_PASSTHROUGH = ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure", "harnessrouter")
 _CHANNEL_REFUSES: dict[tuple[str, str], frozenset[str]] = {
     (p, b): frozenset({"gpt-6.1-sol"}) for p in _CHAT_PASSTHROUGH for b in ("vibe", "docker-agent", "fast-agent")}
+# The older chat-completions bases, the same refusal, measured the same way (2026-10-25, one tool turn
+# each, 0.37.0-rc.13): kimi, qwen and cline fail on My TokenRouter, OpenAI and Azure OpenAI; openhands
+# and cheetahclaws on My TokenRouter (openhands reaches OpenAI and Azure through litellm's Responses
+# path and runs it there; cheetahclaws is not offered on those two). This is what the gateway comment
+# beside the catalog recorded on 2026-10-02 and left listed.
+for _p in ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure"):
+    for _b in ("kimi", "qwen", "cline"):
+        _CHANNEL_REFUSES[(_p, _b)] = _CHANNEL_REFUSES.get((_p, _b), frozenset()) | {"gpt-6.1-sol"}
+for _b in ("openhands", "cheetahclaws"):
+    _CHANNEL_REFUSES[("tokenrouter", _b)] = _CHANNEL_REFUSES.get(("tokenrouter", _b), frozenset()) | {"gpt-6.1-sol"}
 # TokenRouter's route for claude-fable-5-1 declines docker-agent's first turn before a word is written
 # (finish_reason content_filter, 3 of 3, 2026-10-25), while on the same route vibe passes with it and
 # docker-agent passes with claude-fable-5, claude-opus-5.5 and claude-sonnet-5.5, and docker-agent

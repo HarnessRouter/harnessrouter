@@ -75,3 +75,14 @@ def test_tokenrouter_lists_neither_model_it_cannot_serve_as_itself():
     for m in ("deepseek-v4-flash", "kimi-k3"):
         assert m in gw._TOKENROUTER_NO_CHANNEL and m not in gw._vendor_models("tokenrouter"), m
     assert "deepseek-v4.1-flash" in gw._vendor_models("tokenrouter")
+
+
+def test_the_older_chat_bases_are_not_offered_gpt_6_1_sol_where_it_refuses_their_tools():
+    for p in ("tokenrouter", "openai", "azure-foundry"):
+        for b in ("kimi", "qwen", "cline"):
+            assert gw._channel_refuses(p, b, "gpt-6.1-sol"), (p, b)
+    for b in ("openhands", "cheetahclaws"):
+        assert gw._channel_refuses("tokenrouter", b, "gpt-6.1-sol"), b
+    assert not gw._channel_refuses("openai", "openhands", "gpt-6.1-sol")         # litellm's Responses path
+    assert not gw._channel_refuses("openrouter", "kimi", "gpt-6.1-sol")         # the aggregator translates
+    assert not gw._channel_refuses("tokenrouter", "codex", "gpt-6.1-sol")
