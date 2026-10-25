@@ -11,7 +11,8 @@
 // task, or on its recorded first task when it was saved from a demo's recorded run, start/replay.ts,
 // drawn whole; a recording that could not be read is said, with Try again, never swapped for a live
 // task). The open task is always one the list shows: filtering to Failed opens a failed one. On a
-// phone the list and the open task take turns, with a back between. The address carries the tab
+// phone the list and the open task take turns, with a back between; a wider window narrowed to a
+// phone's width keeps the task it had open. The address carries the tab
 // (?tab=settings), Settings' open layer (?layer=), Capabilities' tab (?cap=) and a task opened by its
 // link or sent from here (?test=); an older link to the Tasks tab (?tab=tasks&task=) opens that task
 // here.
@@ -40,6 +41,8 @@ import { useRecordedRunState } from '@/components/hrui/start/replay';
 import { toast } from '@/components/hrui/toast';
 
 const enc = encodeURIComponent;
+// at and below this width the list and the open task take turns (hrui.css: the 860 px rules)
+const PHONE_MAX = 860;
 
 export default function SetupPage() {
   const { id } = useParams<{ id: string }>();
@@ -71,6 +74,18 @@ export default function SetupPage() {
   const [testSid, setTestSid] = useState<string | null>(() => params.get('test') || linkTask);
   // on a phone: the open task shows instead of the list (picked from it, New task, or a link)
   const [picked, setPicked] = useState(() => !!(params.get('test') || linkTask || first));
+  // a wide window shows the open task beside the list whether or not it was picked from it (the newest
+  // one, opened by itself; the one Settings went back to), so a window narrowed into the phone layout
+  // keeps that task instead of switching to the list. A window already that narrow as the page opens
+  // is a phone's, and starts on the list as before
+  const slotOpen = !!slot;
+  useEffect(() => {
+    if (!slotOpen) return;
+    const mq = window.matchMedia(`(max-width: ${PHONE_MAX}px)`);
+    const narrowed = () => { if (mq.matches) setPicked(true); };
+    mq.addEventListener('change', narrowed);
+    return () => mq.removeEventListener('change', narrowed);
+  }, [slotOpen]);
   // when the task shown was opened: a new test's own entry in the list is one sent after it
   const slotAt = useRef(0);
   useEffect(() => { slotAt.current = Date.now(); }, [slot?.key]);
