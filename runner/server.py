@@ -5103,56 +5103,66 @@ def _with_encrypted_reasoning(body: bytes, held: dict) -> bytes:
     return json.dumps(doc).encode() if changed else body
 
 
-# A reasoning item's encrypted content opens only for the model, and the account, that produced it. A
-# Responses-API client that replays every earlier turn's reasoning items as it got them (dcode) sends,
-# after a model switch, reasoning another model minted, and the upstream refuses the whole request:
-# "The encrypted content for item rs_tmp_… could not be verified … invalid_encrypted_content", every
-# time dcode switched from gemini-4-argon to gpt-6.1-sol on OpenRouter (2026-10-25). A relay route
-# lives one turn, so it cannot tell which model minted an earlier turn's item; it knows the items THIS
-# turn minted, and replays those as they are (a tool loop within the turn needs them). An earlier
-# turn's item keeps its id and loses its encrypted content: the shape the codex rollout repair settled
-# on (_sanitize_codex_rollout), where the id keeps a stored response's message anchored and no blob
-# goes where it cannot be opened. With it the switch passed 3 of 3 from Gemini and 2 of 2 back on
-# OpenRouter, and 2 of 2 on an OpenAI connection, whose responses are stored. Only routes that ask for
-# it (`turn_reasoning_only`) are changed.
-def _reasoning_ids_in(doc) -> list[str]:
-    """Ids of the reasoning items one Responses event, or one whole response, carries."""
+# A reasoning item's encrypted content opens only for the model, and the account, that produced it, and
+# an item's id is a reference the upstream resolves against the responses it stored. A Responses-API
+# client that replays every earlier turn's items as it got them (dcode) sends, after a model switch,
+# what another model minted, and the upstream refuses: "The encrypted content for item rs_tmp_… could
+# not be verified" (Gemini to gpt-6.1-sol on OpenRouter), "Unknown parameter: 'input[2].status'" and
+# "Item with id 'rs_…' not found" (grok-4.3 to gpt-6.1-sol on TokenRouter, where an id with no content
+# was looked up as a stored item), 2026-10-25. A relay route lives one turn, so it cannot tell which
+# model minted an earlier turn's item; it knows the items THIS turn minted, and replays those as they
+# are (a tool loop within the turn needs them). An earlier turn is replayed as plain content, the
+# shape the codex rollout repair settled on (_sanitize_codex_rollout): its reasoning items go (no other
+# model can read them), and its other items lose their id and status, keeping their content and
+# call_id, so nothing is resolved upstream and the tool calls still pair with their results. Only
+# routes that ask for it (`turn_reasoning_only`) are changed.
+def _output_item_ids_in(doc) -> list[str]:
+    """Ids of the output items (reasoning, message, function call) one Responses event, or one whole
+    response, carries."""
     if not isinstance(doc, dict):
         return []
     items = [doc["item"]] if isinstance(doc.get("item"), dict) else []
     for src in (doc, doc.get("response")):
         if isinstance(src, dict) and isinstance(src.get("output"), list):
             items += src["output"]
-    return [str(i["id"]) for i in items if isinstance(i, dict) and i.get("type") == "reasoning" and i.get("id")]
+    return [str(i["id"]) for i in items if isinstance(i, dict) and i.get("id")]
 
 
-def _reasoning_ids_in_line(line: bytes) -> list[str]:
+def _output_item_ids_in_line(line: bytes) -> list[str]:
     """The same, read off one SSE `data:` line."""
-    if not line.startswith(b"data:") or b'"reasoning"' not in line:
+    if not line.startswith(b"data:") or b'"id"' not in line or not (b'"item"' in line or b'"output"' in line):
         return []
     try:
-        return _reasoning_ids_in(json.loads(line[5:]))
+        return _output_item_ids_in(json.loads(line[5:]))
     except (ValueError, UnicodeDecodeError):
         return []
 
 
-def _without_earlier_reasoning_blobs(body: bytes, minted: set) -> bytes:
-    """The Responses request with every reasoning item this turn did not mint stripped of its
-    encrypted content (the item and its id stay). Anything else is returned as it came."""
-    if b"encrypted_content" not in body:
+def _earlier_turns_as_content(body: bytes, minted: set) -> bytes:
+    """The Responses request with every item this turn did not mint replayed as plain content: a
+    reasoning item dropped, any other item without its id and status. Anything else as it came."""
+    if b'"id"' not in body:
         return body
     try:
         doc = json.loads(body)
     except (ValueError, UnicodeDecodeError):
         return body
     items = doc.get("input") if isinstance(doc, dict) else None
-    changed = False
-    for it in items if isinstance(items, list) else []:
-        if (isinstance(it, dict) and it.get("type") == "reasoning" and str(it.get("id") or "") not in minted
-                and it.pop("encrypted_content", None) is not None):
-            it.setdefault("summary", [])
-            changed = True
-    return json.dumps(doc).encode() if changed else body
+    if not isinstance(items, list):
+        return body
+    out, changed = [], False
+    for it in items:
+        if not (isinstance(it, dict) and it.get("id") and str(it["id"]) not in minted):
+            out.append(it)
+            continue
+        changed = True
+        if it.get("type") == "reasoning":
+            continue
+        out.append({k: v for k, v in it.items() if k not in ("id", "status")})
+    if not changed:
+        return body
+    doc["input"] = out
+    return json.dumps(doc).encode()
 
 
 # Moonshot's kimi models allow one temperature, 1 ("invalid temperature: only 1 is allowed for this
@@ -5743,7 +5753,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = fixed
                 headers["content-length"] = str(len(body))
         if flags.get("turn_reasoning_only") and body is not None and self.path.split("?", 1)[0].endswith("/responses"):
-            body = _without_earlier_reasoning_blobs(body, flags.setdefault("reasoning_minted", set()))
+            body = _earlier_turns_as_content(body, flags.setdefault("items_minted", set()))
             headers["content-length"] = str(len(body))
         if flags.get("encrypted_reasoning") and body is not None and self.path.endswith("/chat/completions"):
             body = _with_encrypted_reasoning(body, flags["encrypted_reasoning"])
@@ -6152,7 +6162,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     for rd in _encrypted_reasoning_in_line(line):
                         flags.setdefault("encrypted_reasoning", {})[str(rd["id"])] = rd
                     if flags.get("turn_reasoning_only"):
-                        flags.setdefault("reasoning_minted", set()).update(_reasoning_ids_in_line(line))
+                        flags.setdefault("items_minted", set()).update(_output_item_ids_in_line(line))
                     if sigs is not None:
                         for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
@@ -6218,9 +6228,9 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 data = _model_metadata_with_context_length(data)
             if flags.get("usage_no_nulls"):
                 data = _usage_without_nulls(data)
-            if flags.get("turn_reasoning_only") and b'"reasoning"' in data:
+            if flags.get("turn_reasoning_only") and b'"output"' in data:
                 try:
-                    flags.setdefault("reasoning_minted", set()).update(_reasoning_ids_in(json.loads(data)))
+                    flags.setdefault("items_minted", set()).update(_output_item_ids_in(json.loads(data)))
                 except (ValueError, UnicodeDecodeError):
                     pass
             if b"reasoning.encrypted" in data:
@@ -6719,8 +6729,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     OpenAI-compatible surface, for a client that merges chunks by it (_tool_call_index_line).
     `split_finish_content` streams a chunk's text and its finish as two events, for a client that
     stops reading a chunk at its finish (_split_finish_content_line).
-    `turn_reasoning_only` sends an earlier turn's reasoning items without their encrypted content,
-    for a Responses client that replays them across a model switch (_without_earlier_reasoning_blobs).
+    `turn_reasoning_only` replays an earlier turn's items as plain content, for a Responses client
+    that replays them across a model switch (_earlier_turns_as_content).
     `exact_base` joins the client's resource onto the connection's base as stored, for a client that
     was calling that base directly before it had a route (Codex, and hermes on Azure): the same URL,
     with the relay between. `aux` marks a route for a helper model (hermes's image questions): the
