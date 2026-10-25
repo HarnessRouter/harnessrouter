@@ -5156,10 +5156,13 @@ def _without_earlier_reasoning_blobs(body: bytes, minted: set) -> bytes:
 
 
 # Moonshot's kimi models allow one temperature, 1 ("invalid temperature: only 1 is allowed for this
-# model", through TokenRouter, 2026-10-25), and a harness that sends its own default (vibe: 0.2) had
-# every turn on kimi-k2.7-code and kimi-k3 refused there. The temperature is the harness's, never the
+# model", through TokenRouter, 2026-10-25), and so does OpenAI's gpt-5.5 ("Unsupported value:
+# 'temperature' does not support 0.2 with this model. Only the default (1) value is supported.",
+# OpenAI direct, the same day): a harness that sends its own default (vibe: 0.2) had every turn on
+# those models refused. The temperature is the harness's, never the
 # person's, so a refusal of it is answered by sending none: the model's own default is the one it takes.
-_TEMPERATURE_REFUSED_RE = re.compile(rb"invalid temperature: only \d+(?:\.\d+)? is allowed", re.I)
+_TEMPERATURE_REFUSED_RE = re.compile(rb"invalid temperature: only \d+(?:\.\d+)? is allowed"
+                                     rb"|'temperature' does not support \S+ with this model", re.I)
 
 
 def _temperature_refused(data: bytes) -> bool:

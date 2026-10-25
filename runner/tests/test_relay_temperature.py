@@ -16,8 +16,14 @@ REFUSAL = (b'{"error":{"message":"invalid temperature: only 1 is allowed for thi
            b'"type":"invalid_request_error","param":"","code":"invalid_argument"}}')
 
 
+OPENAI_REFUSAL = (b'{"error": {"message": "Unsupported value: \'temperature\' does not support 0.2 with this model. '
+                  b'Only the default (1) value is supported.", "type": "invalid_request_error", '
+                  b'"param": "temperature", "code": "unsupported_value"}}')
+
+
 def test_the_refusal_is_recognised_and_nothing_else_is():
     assert server._temperature_refused(REFUSAL)
+    assert server._temperature_refused(OPENAI_REFUSAL)          # gpt-5.5, OpenAI direct
     assert not server._temperature_refused(b'{"error":{"message":"invalid tool schema"}}')
     assert not server._temperature_refused(b"")
 
