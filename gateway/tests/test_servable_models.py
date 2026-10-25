@@ -59,9 +59,11 @@ async def test_a_chain_restricts_to_what_that_vendor_actually_serves(monkeypatch
     _patch(monkeypatch, chain=["tr"], conn_provider="tokenrouter")
     got = await A._servable_models("org", "hermes")
     assert got is not None, "a chain must no longer mean 'offer everything'"
-    # the five with no channel are exactly what must not be offered
+    # the ids with no channel are exactly what must not be offered
     assert got.isdisjoint(A._TOKENROUTER_NO_CHANNEL)
-    assert "claude-sonnet-4.6" in got and "kimi-k3" in got
+    # kimi-k3 was this test's served example until TokenRouter served it as another model (2026-10-25)
+    # and it joined the table above; deepseek-v4.1-flash is served as itself
+    assert "claude-sonnet-4.6" in got and "deepseek-v4.1-flash" in got and "kimi-k3" not in got
 
 
 @pytest.mark.asyncio
