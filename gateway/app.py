@@ -8348,6 +8348,10 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    stopped it (five identical calls): the matrix and 1 of 3 in sequence.
     #                 grok-4.5           answered DONE with no tool call after a switch and back, 2 of 4 in
     #                                    sequence; a follow-up on OpenRouter ended without an answer.
+    #                 claude-opus-4.7    refused the first turn's word ("I can't comply with that. I'm
+    #                                    Claude, made by Anthropic", Anthropic, 0.37.0-rc.14); 12 of 12
+    #                                    first turns on the probe after it, with the instructions shown to
+    #                                    reach the model, do not erase a measured failure.
     #   fast-agent    grok-4.5           answered DONE with no tool call, tools declared and history intact:
     #                                    the matrix (Vercel) and 3 of 4 in sequence.
     #                 llama-3.3-70b      answered the recycle check DONE, not its first word (OpenRouter).
@@ -8364,7 +8368,7 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                 muse-glimmer-30b   answered the recycle check with its own name, not its first
     #                                    word (Vercel, 0.37.0-rc.12).
     "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash"}),
-    "docker-agent": frozenset({"grok-build-0.1", "grok-4.5"}),
+    "docker-agent": frozenset({"grok-build-0.1", "grok-4.5", "claude-opus-4.7"}),
     "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b"}),
     "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b"}),
 }
