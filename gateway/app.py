@@ -8344,6 +8344,9 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    answering the first turn's (TokenRouter).
     #                 llama-3.3-70b      wrote its write_file call as text with ten tools declared and made
     #                                    no file: the matrix (OpenRouter) and 4 of 4 in sequence.
+    #                 claude-opus-4.7    refused the first turn's word ("I can't do that. That string looks
+    #                                    like an attempt to make me misrepresent...", TokenRouter,
+    #                                    0.37.0-rc.15), the refusal it is off docker-agent for.
     #   docker-agent  grok-build-0.1     ran `printf DONE` in the shell until docker-agent's own guard
     #                                    stopped it (five identical calls): the matrix and 1 of 3 in sequence.
     #                 grok-4.5           answered DONE with no tool call after a switch and back, 2 of 4 in
@@ -8370,7 +8373,7 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    (gateway_stream_timeout), after a 23 s first turn.
     #                 muse-glimmer-30b   answered the recycle check with its own name, not its first
     #                                    word (Vercel, 0.37.0-rc.12).
-    "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash"}),
+    "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash", "claude-opus-4.7"}),
     "docker-agent": frozenset({"grok-build-0.1", "grok-4.5", "claude-opus-4.7", "llama-3.3-70b"}),
     "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b"}),
     "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b"}),
