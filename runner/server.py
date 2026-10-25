@@ -4106,6 +4106,18 @@ def _with_anthropic_cache(body: bytes) -> bytes:
     return json.dumps(doc).encode() if changed else body
 
 
+# The upstreams where a chat request's breakpoints were measured to be read back (0.37.0-rc.14, claude-sonnet-4.6,
+# a three-turn session per base): OpenRouter and Vercel's AI Gateway. Anthropic's OpenAI-compatible endpoint
+# took the field and cached nothing; TokenRouter wrote a cache entry (2583 tokens, billed as a write) that no
+# later call read, so there the field only costs. Every other upstream is sent the request as the client wrote it.
+_CHAT_CACHE_HOSTS = frozenset({"openrouter.ai", "ai-gateway.vercel.sh"})
+
+
+def _chat_cache_reads(base: str) -> bool:
+    """Whether this route's upstream reads back the breakpoints a chat request carries (_CHAT_CACHE_HOSTS)."""
+    return (urllib.parse.urlsplit(base or "").hostname or "").lower() in _CHAT_CACHE_HOSTS
+
+
 def _with_chat_cache(body: bytes) -> bytes:
     """A chat/completions request for a Claude model with no cache_control of its own, with the two
     breakpoints _with_anthropic_cache sets on a Messages request: the last system message and the
@@ -4113,7 +4125,8 @@ def _with_chat_cache(body: bytes) -> bytes:
     OpenAI chat (vibe, docker-agent and fast-agent all drive Claude this way) sends none, and every
     call of its agent loop paid for its whole prompt: no cache read in any Claude pair of the
     0.37.0 matrix, on any connection. A request that already carries a breakpoint is the client's
-    own policy and goes through untouched; a model that is not Claude is left alone."""
+    own policy and goes through untouched; a model that is not Claude is left alone; only an
+    upstream that reads them back gets them (_chat_cache_reads)."""
     if b"cache_control" in body or b"claude" not in body.lower():
         return body
     try:
@@ -5796,7 +5809,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
             body = _with_free_form_objects(body)     # before the Gemini normaliser below, which has its own rules
-            if flags.get("chat_cache") and not flags.get(f"no_chat_cache:{_body_model}"):
+            if (flags.get("chat_cache") and _chat_cache_reads(base)
+                    and not flags.get(f"no_chat_cache:{_body_model}")):
                 # Before the repairs below, so a repair a provider asked for (a tool result as a
                 # string) still has the last word on the shape.
                 body = _with_chat_cache(body)
@@ -6830,7 +6844,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     `turn_reasoning_only` replays an earlier turn's items as plain content, for a Responses client
     that replays them across a model switch (_earlier_turns_as_content).
     `chat_cache` puts prompt cache breakpoints on a Claude chat request that carries none, for a
-    client that drives Claude only through OpenAI chat (_with_chat_cache).
+    client that drives Claude only through OpenAI chat, where the upstream reads them back
+    (_with_chat_cache, _chat_cache_reads).
     `exact_base` joins the client's resource onto the connection's base as stored, for a client that
     was calling that base directly before it had a route (Codex, and hermes on Azure): the same URL,
     with the relay between. `aux` marks a route for a helper model (hermes's image questions): the

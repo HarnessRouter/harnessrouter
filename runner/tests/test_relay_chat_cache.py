@@ -106,18 +106,35 @@ def _forwarded(body: dict = None, **route) -> bytes:
     return got[0]
 
 
-def test_on_a_route_that_asks_the_provider_gets_the_breakpoints():
+def test_only_the_upstreams_measured_to_read_them_back_are_sent_them():
+    assert server._chat_cache_reads("https://openrouter.ai/api/v1")
+    assert server._chat_cache_reads("https://ai-gateway.vercel.sh/v1")
+    for base in ("https://api.anthropic.com/v1", "https://api.tokenrouter.com/v1", "https://api.openai.com/v1",
+                 "https://proxy.internal/openai/v1", "http://127.0.0.1:9/v1", ""):
+        assert not server._chat_cache_reads(base), base
+
+
+def test_on_a_route_that_asks_the_provider_gets_the_breakpoints(monkeypatch):
+    monkeypatch.setattr(server, "_CHAT_CACHE_HOSTS", frozenset({"127.0.0.1"}))   # the test upstream reads them
     assert _marks(json.loads(_forwarded(chat_cache=True))) == [(0, "system"), (3, "tool")]
     assert _marks(json.loads(_forwarded())) == []                            # every other route as before
 
 
-def test_a_model_that_is_not_claude_leaves_byte_for_byte_as_it_would_without_the_flag():
+def test_an_upstream_that_does_not_read_them_gets_the_clients_own_body():
+    # Anthropic's OpenAI-compatible endpoint cached nothing and TokenRouter wrote entries no call read
+    body = dict(LOOP, stream=False)
+    assert _forwarded(body, chat_cache=True) == _forwarded(body)
+
+
+def test_a_model_that_is_not_claude_leaves_byte_for_byte_as_it_would_without_the_flag(monkeypatch):
+    monkeypatch.setattr(server, "_CHAT_CACHE_HOSTS", frozenset({"127.0.0.1"}))
     for model in ("openai/gpt-5.4", "gemini-3.5-flash", "deepseek-v4.1-flash"):
         body = dict(LOOP, model=model, stream=False)
         assert _forwarded(body, chat_cache=True) == _forwarded(body), model
 
 
-def test_a_server_that_refuses_the_field_is_sent_none_for_that_model_from_then_on():
+def test_a_server_that_refuses_the_field_is_sent_none_for_that_model_from_then_on(monkeypatch):
+    monkeypatch.setattr(server, "_CHAT_CACHE_HOSTS", frozenset({"127.0.0.1"}))
     up, got = _upstream(refuse_marks=True)
     try:
         base, tok = server._hermes_relay_route(f"http://127.0.0.1:{up.server_address[1]}/v1", "sk-key",
