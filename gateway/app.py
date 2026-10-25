@@ -8359,10 +8359,12 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                 kimi-k2.7-code     answered the artifact turn DONE with no tool call (Vercel).
     #                 hunyuan-4-preview  a follow-up streamed until Vercel ended it, about 13 minutes
     #                                    (gateway_stream_timeout), after a 23 s first turn.
+    #                 muse-glimmer-30b   answered the recycle check with its own name, not its first
+    #                                    word (Vercel, 0.37.0-rc.12).
     "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash"}),
     "docker-agent": frozenset({"grok-build-0.1", "grok-4.5"}),
     "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b"}),
-    "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview"}),
+    "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b"}),
 }
 # Muse Wonder (muse-wonder-1.0), on every base that offers the Meta family, review instance
 # 0.34.0-rc.7 (2026-10-15): the five scenarios passed on all 21 through OpenRouter and through Vercel;
