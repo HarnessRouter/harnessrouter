@@ -43,3 +43,18 @@ def test_codex_s_own_warning_is_logged_never_a_tool_call(capsys):
     assert _codex_to_claude({"type": "item.completed", "item": it}, {}) == []
     assert _codex_to_claude({"type": "item.completed", "item": it}, {"partial": True}) == []
     assert "[codex] Model metadata for `openai/gpt-6.1-sol` not found" in capsys.readouterr().out
+
+
+def test_a_codex_failure_is_still_the_turn_s_error():
+    """Only codex's warnings are error ITEMS: in 0.154.0's exec processor every ErrorItem comes
+    from a warning, config warning, deprecation notice or model reroute, and each leaves the turn
+    running. A failure arrives as the top-level `error` event or as `turn.failed`, and it stays
+    the turn's error, with codex's message."""
+    warn = {"type": "item.completed", "item": {"type": "error", "id": "item_0", "message": "Model metadata not found"}}
+    failed = {"type": "turn.failed", "error": {"message": "stream disconnected before completion"}}
+    evs = _codex_to_claude(warn, {}) + _codex_to_claude(failed, {})
+    assert evs == [{"type": "result", "subtype": "error", "is_error": True,
+                    "result": "stream disconnected before completion"}]
+    top = _codex_to_claude({"type": "error", "message": "unexpected status 401 Unauthorized"}, {})
+    assert top == [{"type": "result", "subtype": "error", "is_error": True,
+                    "result": "unexpected status 401 Unauthorized"}]
