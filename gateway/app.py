@@ -5979,10 +5979,12 @@ def _provider_backends(provider: str) -> list[str]:
 # Responses endpoints. Listing a custom model as available on a backend whose protocol it can't
 # speak is a promise the router breaks at the first call, so these sets drive the picker's
 # grey-out.
-# vibe, docker-agent and fast-agent drive Anthropic's own API through the runner's anthropic provider,
-# and a custom Messages endpoint is the same provider with its own base: measured 2026-10-25, a full
-# sequence (first turn, follow-up, a switch, a file, a recycle) on claude-haiku-4.5 and
-# claude-sonnet-4.6 through a custom Anthropic connection passed on all three.
+# vibe, docker-agent and fast-agent reach Claude through OpenAI chat only (vibe's `generic` backend,
+# docker-agent's openai_chatcompletions provider, fast-agent's `generic.` models), Anthropic's own
+# connection included, where they post to its OpenAI-compatible /v1/chat/completions (captured,
+# 2026-10-25). A custom Anthropic endpoint is a Messages endpoint, so none of the three is in the
+# anthropic set: a sequence through one passed on all three only because that test's endpoint was
+# api.anthropic.com, which serves both.
 _CUSTOM_FORMAT_BACKENDS = {
     # qwen-code is a pure OPENAI_BASE_URL/OPENAI_API_KEY client (0.22.1, verified), so a custom
     # OpenAI endpoint drives it directly; it speaks nothing else, so it stays off the anthropic set.
@@ -6005,7 +6007,7 @@ _CUSTOM_FORMAT_BACKENDS = {
                "mimo", "jcode", "opensquilla", "nanobot", "zeroclaw",
                "vibe", "docker-agent", "fast-agent"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
-                  "mimo", "vibe", "docker-agent", "fast-agent"},
+                  "mimo"},
     # The OpenAI Responses API: what codex speaks, and — since this batch — dcode, whose
     # langchain-openai model posts to /v1/responses on every turn (measured through a recording
     # proxy and again through the runner's own relay). A custom integration declaring
