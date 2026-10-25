@@ -1923,11 +1923,15 @@ def _integration_driving(integrations: list[dict], backend: str, canonical: str,
     greyed, while the same ids ran when the map pointed at the Google integration)."""
     by_name = {str(i.get("name") or ""): i for i in integrations}
     first = by_name.get(mapped or "")
-    if first is not None and _integration_serves_backend(first, backend):
-        return first
     canon = (canonical or "").strip()
+
+    def drives(integ: dict) -> bool:
+        return (_integration_serves_backend(integ, backend)
+                and not _channel_refuses(str(integ.get("provider") or ""), backend, canon))
+    if first is not None and drives(first):
+        return first
     for integ in sorted(integrations, key=lambda i: str(i.get("name") or "")):
-        if integ is first or not _integration_serves_backend(integ, backend):
+        if integ is first or not drives(integ):
             continue
         models = _integration_models(integ)
         if canon in models or canon.lower() in models:
@@ -8434,6 +8438,29 @@ async def _vision_auth(sid: str, backend: str) -> dict | None:
     return None
 
 
+# A connection that passes /v1/chat/completions straight through to OpenAI cannot run gpt-6.1-sol for
+# a base that drives chat completions with function tools. OpenAI refuses the pair ("Function tools
+# with reasoning_effort are not supported for gpt-6.1-sol in /v1/chat/completions. To use function
+# tools, use /v1/responses or set reasoning_effort to 'none'"), and unlike gpt-6-sol and the gpt-5.6
+# line this id refuses 'none' too ("Supported values are: 'low', 'medium', 'high', and 'xhigh'"), so
+# the relay's retry with 'none' is refused as well. Aggregators that translate to the Responses API
+# upstream (OpenRouter, Vercel) serve it on every base. Measured 2026-10-25 with the provider's answer
+# captured, one connection at a time, an artifact prompt: vibe, docker-agent and fast-agent refused on
+# My TokenRouter, OpenAI, Azure OpenAI and the HarnessRouter API; dcode, which drives the Responses
+# API, ran it on all four. A pair listed here is not served by that connection for that base: the
+# picker greys it, and a turn passes the connection by as one that does not serve the model, so
+# neither offers a row that fails on send. Keyed by the provider in both vocabularies (the
+# integrations' and the runner-native names a chain connection may carry).
+_CHAT_PASSTHROUGH = ("tokenrouter", "openai", "openai-api", "azure-foundry", "azure", "harnessrouter")
+_CHANNEL_REFUSES: dict[tuple[str, str], frozenset[str]] = {
+    (p, b): frozenset({"gpt-6.1-sol"}) for p in _CHAT_PASSTHROUGH for b in ("vibe", "docker-agent", "fast-agent")}
+
+
+def _channel_refuses(provider: str, backend: str, model: str) -> bool:
+    """Whether a connection of `provider` refuses `model` for `backend` (_CHANNEL_REFUSES)."""
+    return (model or "").strip() in _CHANNEL_REFUSES.get((str(provider or "").lower(), backend), frozenset())
+
+
 def _conn_serves(conn: dict, friendly: str) -> bool:
     """Whether this connection's vendor actually serves the requested model.
 
@@ -8592,10 +8619,11 @@ async def _servable_models(org: str | None, backend: str) -> set[str] | None:
         # vibe was unaffected only because it happens to have a google row.
         if conn and _chain_refusal(conn, backend):
             continue
-        table = _vendor_models(str((conn or {}).get("provider") or "").lower())
+        provider = str((conn or {}).get("provider") or "").lower()
+        table = _vendor_models(provider)
         if not table:
             return None
-        servable |= set(table)
+        servable |= set(table) - _CHANNEL_REFUSES.get((provider, backend), frozenset())
     integ_list = list(integrations.values())
     for canonical, iname in (await _effective_model_map()).items():
         if _integration_driving(integ_list, backend, canonical, iname):
@@ -9182,7 +9210,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         # (validated against the integration's model list at save time) — the family heuristic
         # reads the RUNNER provider (e.g. openai-api for a TokenRouter aggregator) and would
         # wrongly reject non-gpt families, so it applies to chain connections only.
-        if pre is None and not _conn_serves(conn, model_req):
+        if pre is None and (not _conn_serves(conn, model_req)
+                            or _channel_refuses(str(conn.get("provider") or ""), backend, model_req)):
             # Multi-family backend (hermes): this connection's provider can't run the requested
             # model's family — skipping is the honest move (running it would silently substitute
             # the connection's default model).
