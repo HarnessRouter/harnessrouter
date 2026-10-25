@@ -8373,10 +8373,14 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    (gateway_stream_timeout), after a 23 s first turn.
     #                 muse-glimmer-30b   answered the recycle check with its own name, not its first
     #                                    word (Vercel, 0.37.0-rc.12).
+    #                 muse-spark-1.1     answered the first turn's word with another model's id
+    #                                    ("M1-claude-opus-4.5"), served as meta/muse-spark-1.1 (HarnessRouter
+    #                                    API, 0.37.0-rc.15); 4 of 4 first turns on the probe after it do not
+    #                                    erase a measured failure.
     "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash", "claude-opus-4.7"}),
     "docker-agent": frozenset({"grok-build-0.1", "grok-4.5", "claude-opus-4.7", "llama-3.3-70b"}),
     "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b"}),
-    "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b"}),
+    "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b", "muse-spark-1.1"}),
 }
 # Muse Wonder (muse-wonder-1.0), on every base that offers the Meta family, review instance
 # 0.34.0-rc.7 (2026-10-15): the five scenarios passed on all 21 through OpenRouter and through Vercel;
