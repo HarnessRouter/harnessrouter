@@ -7,8 +7,10 @@ cannot carry, answered as deepagents' server answers it), `no_load` (an agent th
 advertise loadSession at all), `load_fails` (it does, and the session is gone), `bad_model` (the
 model this turn asks for is not in the session's list), `provider_401` (a refusal in `data.details`
 with a traceback on stderr at the same time), `refusal` (a stopReason that is not end_turn),
-`permission` (one tool call that asks the client), `slow_exit` (takes a second to go once its input
-ends) or `no_exit` (catches SIGTERM and never goes). Its pid, and that it exited, are written to
+`permission` (one tool call that asks the client), `slow_prompt` (one chunk, two seconds, then the
+answer: what streaming is measured against), `terminal` (a shell call the CLIENT runs through
+terminal/create, as fast-agent's goes when the client offers a terminal), `slow_exit` (takes a
+second to go once its input ends) or `no_exit` (catches SIGTERM and never goes). Its pid, and that it exited, are written to
 $FAKE_ACP_LOG.life.
 """
 import json
@@ -38,6 +40,17 @@ def note(obj):
 def update(sid, upd):
     send({"jsonrpc": "2.0", "method": "session/update",
           "params": {"sessionId": sid, "update": upd}})
+
+
+def ask(rid, method, params):
+    """A request of the agent's own, answered by the client before anything else is read."""
+    send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+    for raw in sys.stdin:
+        reply = json.loads(raw)
+        if reply.get("id") == rid and reply.get("method") is None:
+            note({"asked_client": method, "reply": reply})
+            return reply
+    return {}
 
 
 for line in sys.stdin:
@@ -107,6 +120,25 @@ for line in sys.stdin:
                          "status": "completed",
                          "content": [{"type": "content",
                                       "content": {"type": "text", "text": "hi"}}]})
+        if MODE == "slow_prompt":
+            update(sid, {"sessionUpdate": "agent_message_chunk",
+                         "content": {"type": "text", "text": "FIRST "}})
+            time.sleep(2)
+        if MODE == "terminal":
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "execute",
+                         "kind": "execute", "status": "pending", "content": []})
+            update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "kind": "execute",
+                         "status": "in_progress", "rawInput": {"command": "echo T > t.txt; echo TERMINAL-OUT"}})
+            made = ask(9101, "terminal/create", {"sessionId": sid, "command": "/bin/sh",
+                                                 "args": ["-lc", "echo T > t.txt; echo TERMINAL-OUT"],
+                                                 "outputByteLimit": 16000})
+            tid = (made.get("result") or {}).get("terminalId")
+            ask(9102, "terminal/wait_for_exit", {"sessionId": sid, "terminalId": tid})
+            out = ask(9103, "terminal/output", {"sessionId": sid, "terminalId": tid})
+            ask(9104, "terminal/release", {"sessionId": sid, "terminalId": tid})
+            text = (out.get("result") or {}).get("output", "")
+            update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed",
+                         "content": [{"type": "content", "content": {"type": "text", "text": text}}]})
         if MODE != "silent_end_turn":
             update(sid, {"sessionUpdate": "agent_message_chunk",
                          "content": {"type": "text", "text": "THE NEW ANSWER"}})

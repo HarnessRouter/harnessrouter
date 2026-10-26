@@ -496,10 +496,6 @@ def _fast_agent_home(cwd: str) -> pathlib.Path:
     return pathlib.Path(cwd) / ".harness" / "fast-agent"
 
 
-def _fast_agent_traj(cwd: str) -> pathlib.Path:
-    return _fast_agent_home(cwd) / "turn.atif.json"
-
-
 def _fast_agent_session_file(cwd: str, session_id: str) -> pathlib.Path:
     return _fast_agent_home(cwd) / "sessions" / session_id / "session.json"
 
@@ -562,9 +558,9 @@ _SESSION_PRESENT = {
     # place it exists: the driver asks the agent to load it and the store is what knows it is
     # there.
     "dcode": _dcode_session_present,
-    # fast-agent: _build_fast_agent passes --resume only when the session's own file is in the
-    # store, so the argv is that lookup's conclusion.
-    "fast-agent": _argv_session_present,
+    # fast-agent: the driver asks the agent to load the session, and the session's own file in the
+    # store is what says it is there (the same lookup _build_fast_agent makes for resume_known).
+    "fast-agent": _fast_agent_session_present,
     # zeroclaw: the driver asks for `session/resume` on every turn that has an id and starts a new
     # session when the store says it is not there, so the store is asked here too.
     "zeroclaw": _zeroclaw_session_present,
@@ -13062,33 +13058,29 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
 
 
 # ── fast-agent (evalstate/fast-agent, PyPI fast-agent-mcp) ────────────────────────────────────
-# An MCP-first agent framework with a one-shot CLI: `fast-agent go -m "<task>" --quiet` prints the
-# answer, and `--trajectory-output` writes the whole turn as ATIF — a structured record with the
-# steps, each step's tool calls AND their results, each step's token metrics and the session id. So
-# this base's stream carries nothing and its EOF carries everything: _fast_agent_eof reads that file
-# (opensquilla's arrangement, where the CLI's own transcript is replayed at the end of the turn).
+# An MCP-first agent framework. It is driven over its own ACP server, `fast-agent-acp`, by
+# runner/fast_agent_driver.py, which streams each text chunk, tool call and result as it happens
+# (see that file for why, measured on 0.10.47). Until 0.37.1 it ran as `fast-agent go -m ... --quiet`
+# with the turn read back from its ATIF trajectory after the process exited, so a turn showed
+# "Thinking" and then every step at once.
 #
-# MEASURED on 0.10.45 (2026-10-16) against the Vercel AI Gateway through a recording proxy:
+# MEASURED on 0.10.45 (2026-10-16) against the Vercel AI Gateway through a recording proxy, and still
+# true on the ACP path:
 #   * `GENERIC_BASE_URL` + `GENERIC_API_KEY` with `--model generic.<id>` is its OpenAI-compatible
 #     client pointed at the relay (`llm_generic.py` reads exactly those two).
-#   * **It has no tools at all by default.** A first turn asked to write a file answered "I can't
-#     create files in this conversation because I have no file-system tool", and the request
-#     declared ZERO tools: its tools come from MCP servers. `-x` (`--shell`) turns on the local
-#     runtime, and with it a turn declares four — bash, process, read_text_file, edit_file — and
-#     the file was written. Every turn here passes it.
-#   * `--resume <session_id>` continues a conversation (measured with a question the workspace
-#     could not answer), and sessions live under `$FAST_AGENT_HOME/sessions/<id>/` — a directory
-#     whose default is `./.fast-agent`, i.e. inside the workspace the user collects, which is why
-#     FAST_AGENT_HOME is set per session.
-#   * A resumed session RESTORES ITS OWN MODEL: turn two with `--model generic.google/gemini-3-flash`
-#     asked the provider for the first turn's claude id. The model is in the session's own
-#     `session.json` (`continuation.agents.<name>.model` and `.model_spec`), so this builder writes
-#     this turn's model there before `--resume` reads it — the fourth base in this batch with that
-#     shape (checklist item 42), and the second where the door is the store.
+#   * **It has no tools at all by default.** `-x` (`--shell`) turns on its shell and file tools;
+#     `--no-shell` takes them all away, which is what switching bash off has always meant here.
+#   * Sessions live under `$FAST_AGENT_HOME/sessions/<id>/`, a directory whose default is
+#     `./.fast-agent`, i.e. inside the workspace the user collects, which is why the home is named.
+#   * A resumed session RESTORES ITS OWN MODEL: the model is in the session's own `session.json`
+#     (`continuation.agents.<name>.model` and `.model_spec`), so this builder writes this turn's
+#     model there before the session is loaded (_fast_agent_set_model); ACP has no switch for it.
 #   * Its MCP client takes stdio, sse AND streamable http with `headers`, so nothing is bridged.
 FAST_AGENT_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
-FAST_AGENT_BIN = os.environ.get("HR_FAST_AGENT_BIN",
-                                "/data/agent-tools/fast-agent-venv/bin/fast-agent")
+FAST_AGENT_ACP_BIN = os.environ.get("HR_FAST_AGENT_ACP_BIN",
+                                    "/data/agent-tools/fast-agent-venv/bin/fast-agent-acp")
+FAST_AGENT_PYTHON = os.environ.get("HR_FAST_AGENT_PYTHON", "/data/agent-tools/fast-agent-venv/bin/python")
+FAST_AGENT_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fast_agent_driver.py")
 FAST_AGENT_DEFAULT_MODEL = os.environ.get("FAST_AGENT_DEFAULT_MODEL", "gpt-5.4")
 # The agent's name inside the session store, which is also the key under
 # `continuation.agents` that carries the model. It is ours: `--name` sets it.
@@ -13106,9 +13098,10 @@ ALL_FAST_AGENT_TOOLS = ("bash", "read_text_file", "edit_file")
 
 
 def _fast_agent_set_model(cwd: str, session_id: str, model: str) -> bool:
-    """Point the session's stored model at THIS turn's model, before --resume reads it.
+    """Point the session's stored model at THIS turn's model, before the session is loaded.
 
-    MEASURED: without this a resumed turn asks the provider for the model the session started on,
+    MEASURED (with `go --resume`, and again over ACP's session/load on 0.10.47): without this a
+    resumed turn asks the provider for the model the session started on,
     and the harness's switch is dropped in silence — matrix rule 2 broken by the store. The file is
     plain JSON with no checksum of its own; only the two model fields change, the agent's history
     and its prompt are left exactly as they are, and it is written beside and renamed so a crash
@@ -13235,93 +13228,6 @@ def _fast_agent_config(cwd: str, tools_disabled: list[str] | None,
     return path, [name for name, _body in entries]
 
 
-def _fast_agent_to_claude(obj: dict, state: dict) -> list[dict]:
-    """Nothing comes off the stream: `--quiet` prints prose, and the turn's record is the ATIF file
-    the eof handler reads. A JSON line here would only be an answer that happens to be JSON."""
-    return []
-
-
-def _fast_agent_eof(state: dict, rc: int) -> list[dict]:
-    """The whole turn, out of the ATIF trajectory: the session id, the steps, the usage.
-
-    Each agent step's `message` is CUMULATIVE — a two-step turn reported "FAOK" and then
-    "FAOK\\n\\nDONE" — so a step that only extends the previous one contributes its new text and not
-    the whole of it again (docker-agent's delta lesson, in another spelling)."""
-    path = _fast_agent_traj(str(state.get("cwd") or ""))
-    try:
-        with path.open(encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except (OSError, ValueError):
-        doc = {}
-    evs: list[dict] = []
-    sid = str(doc.get("session_id") or "")
-    if sid:
-        evs.append({"type": "system", "subtype": "init", "session_id": sid,
-                    "model": state.get("model")})
-    # A resumed session's trajectory holds every turn of the conversation (measured: nine steps
-    # across three turns), and a turn's record must hold its own. The boundary is this turn's own
-    # prompt: everything up to and including the LAST user step carrying it belongs to the turns
-    # before. Without this, each reply arrived with every earlier reply glued in front of it.
-    steps = [x for x in (doc.get("steps") or []) if isinstance(x, dict)]
-    prompt = str(state.get("prompt") or "")
-    if prompt:
-        cut = max((i for i, x in enumerate(steps)
-                   if x.get("source") == "user" and str(x.get("message") or "") == prompt),
-                  default=-1)
-        steps = steps[cut + 1:]
-        # ...and STOP at the next user message. Trimming only the front is right for the file this
-        # turn just wrote (its own prompt is the last one in it) and wrong for any trajectory that
-        # also holds what came after — which is how its own captured fixture reads, and what a
-        # stale file would look like if the clear in _build_fast_agent ever failed. Two independent
-        # guards for one invariant: a turn's record is one turn.
-        nxt = next((i for i, x in enumerate(steps) if x.get("source") == "user"), None)
-        if nxt is not None:
-            steps = steps[:nxt]
-    seen_text = ""
-    for step in steps:
-        if step.get("source") != "agent":
-            continue
-        text = str(step.get("message") or "")
-        new = text[len(seen_text):] if text.startswith(seen_text) else text
-        if new.strip():
-            evs.append({"type": "assistant",
-                        "message": {"content": [{"type": "text", "text": new.strip()}]}})
-            state["final"] = (state.get("final", "") + "\n" + new.strip()).strip()
-        if text:
-            seen_text = text
-        for call in (step.get("tool_calls") or []):
-            if not isinstance(call, dict):
-                continue
-            args = call.get("arguments")
-            evs.append({"type": "assistant", "message": {"content": [
-                {"type": "tool_use", "id": str(call.get("tool_call_id") or "tool"),
-                 "name": str(call.get("function_name") or "tool"),
-                 "input": args if isinstance(args, dict) else {"arguments": args}}]}})
-        for res in ((step.get("observation") or {}).get("results") or []):
-            if not isinstance(res, dict):
-                continue
-            evs.append({"type": "user", "message": {"content": [
-                {"type": "tool_result", "tool_use_id": str(res.get("source_call_id") or "tool"),
-                 "is_error": bool((res.get("extra") or {}).get("is_error")),
-                 "content": str(res.get("content") or "")[:8000]}]}})
-    # The usage is this turn's own steps, each of which carries its call's counts. final_metrics
-    # totals the whole trajectory, and a resumed session's trajectory holds every earlier turn:
-    # measured 2026-10-25, a third turn reported 7077 prompt tokens, the four calls of all three
-    # turns, where its own two calls took 2385.
-    own = [x["metrics"] for x in steps if x.get("source") == "agent" and isinstance(x.get("metrics"), dict)]
-    usage = _norm_token_usage({"input_tokens": sum(int(m.get("prompt_tokens") or 0) for m in own),
-                               "output_tokens": sum(int(m.get("completion_tokens") or 0) for m in own),
-                               "cached_input_tokens": sum(int(m.get("cached_tokens") or 0) for m in own)})
-    ok = rc == 0 and bool(doc)
-    # No trajectory at all means the CLI died before writing one; the run loop's stderr tail is the
-    # reason, and an empty result lets it through rather than shadowing it.
-    return evs + [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
-                   "result": state.get("final", "") if ok else "", "usage": usage}]
-
-
-_fast_agent_to_claude.eof = _fast_agent_eof   # type: ignore[attr-defined]
-
-
 def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                       resume_session_id: str | None = None,
                       mcp_servers: list[dict] | None = None,
@@ -13342,66 +13248,53 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
     env["FAST_AGENT_HOME"] = str(home)
     env[_FA_BASE_ENV] = (auth.base_url or "").rstrip("/")
     env[_FA_KEY_ENV] = auth.api_key or ""
-    traj = _fast_agent_traj(cwd)
-    # Last turn's trajectory must not be able to answer for this one: the eof reads this file.
-    try:
-        traj.unlink()
-    except OSError:
-        pass
     disabled = {str(t) for t in (tools_disabled or ())}
     doc = _agent_doc_path(cwd, "fast-agent")
-    cmd = [FAST_AGENT_BIN, "go",
+    cmd = [FAST_AGENT_ACP_BIN,
            "--name", _FA_AGENT,
            # WITHOUT THIS the agent works in its own home: measured end to end, a turn asked to
-           # write e2e.txt wrote it into .harness/fast-agent/ (its `working_dir` in the trajectory's
-           # tool metadata), which this product excludes from the produced-files list — so the
-           # user's deliverable would simply not exist for them. The workspace root is the session
-           # directory, and the home stays under .harness/ because FAST_AGENT_HOME says so.
+           # write e2e.txt wrote it into .harness/fast-agent/, which this product excludes from the
+           # produced-files list, so the user's deliverable would simply not exist for them. The
+           # workspace root is the session directory (measured again over ACP: without it the shell
+           # ran in the home), and the home stays under .harness/.
            "--workspace", str(pathlib.Path(cwd).resolve()),
            # ...and the home NAMED, not left to the environment: with --workspace given the home
-           # resolved under it (`<cwd>/.fast-agent`) and FAST_AGENT_HOME was ignored, so the
-           # session store landed in the directory the user collects. The flag beats both.
+           # resolved under it (`<cwd>/.fast-agent`) and FAST_AGENT_HOME was ignored.
            "--home", str(home),
            "--model", f"generic.{model}",
            # The harness's workspace contract IS this agent's instruction: it has no
-           # instruction-file convention of its own, so the file the runner writes is named here
-           # (aider's arrangement).
+           # instruction-file convention of its own, so the file the runner writes is named here.
            "-i", str(doc),
-           "-m", prompt,
-           # the answer on stdout and nothing else; the record comes from the trajectory
-           "--quiet",
            "-c", str(cfg),
-           "--trajectory-output", str(traj),
-           "--trajectory-format", "atif"]
+           # Nobody is attached to answer a permission request; the sandbox is the boundary.
+           "--no-permissions"]
     if server_names:
-        # DECLARED IS NOT ENABLED on this entry point. `go` builds an ad-hoc agent, and its
-        # `--servers` is "a comma-separated list of server names to enable from config" (its own
-        # help), so a server this runner wrote into the config reaches the model only when the
-        # flag names it. MEASURED by the custom-harness dimension (2026-10-20): with the config
-        # valid and the flag missing, the turn ran, recorded ZERO tool calls, and the harness's
-        # own MCP server was never called — the model simply had nothing attached. The names come
-        # from the writer, so the flag and the file cannot disagree.
+        # DECLARED IS NOT ENABLED: `--servers` is "a comma-separated list of server names to enable
+        # from config" (its own help), so a server this runner wrote into the config reaches the
+        # model only when the flag names it. MEASURED by the custom-harness dimension (2026-10-20):
+        # with the config valid and the flag missing, the harness's own MCP server was never called.
         cmd += ["--servers", ",".join(server_names)]
     if "bash" in disabled:
-        # EXPLICITLY off, not merely un-asked-for: a resumed session brings its shell runtime back,
-        # so a turn that only omitted -x had bash anyway and ran the command it was supposed to be
-        # unable to run. With --no-shell on the same resumed session the request declared no bash at
-        # all and the model said so. Both measured.
+        # EXPLICITLY off, not merely un-asked-for: a resumed session brings its shell runtime back
+        # otherwise (measured). It takes the file tools with it, as it always has on this base.
         cmd.append("--no-shell")
     else:
-        # Without it this framework has NO tools of its own at all: they come from MCP servers, and
-        # `-x` is what turns on the local shell and file runtime (measured — a turn without it
-        # answered that it had no file-system tool, and its request declared zero tools).
+        # Without it this framework has NO tools of its own at all: they come from MCP servers.
         cmd.append("-x")
-    if resume_session_id and _fast_agent_session_present(cwd, cmd, resume_session_id):
-        # The store is pointed at this turn's model first, because --resume restores the
-        # session's own and the --model flag does not override it (measured).
+    known = bool(resume_session_id) and _fast_agent_session_present(cwd, cmd, resume_session_id)
+    if known:
+        # The store is pointed at this turn's model first: the loaded session keeps its own, and
+        # neither --model nor ACP changes it (measured).
         _fast_agent_set_model(cwd, resume_session_id, model)
-        cmd += ["--resume", resume_session_id]
     skills = pathlib.Path(cwd) / ".harness" / "fast-agent" / "skills"
     if skills.is_dir():
         cmd += ["--skills", str(skills)]
-    return cmd
+    job = {"argv": cmd, "cwd": str(pathlib.Path(cwd).resolve()), "prompt": prompt, "model": model,
+           "resume": resume_session_id or "", "resume_known": known,
+           # The client runs the agent's shell commands only when the shell is on at all.
+           "terminal": "bash" not in disabled,
+           "timeout": MAX_TURN_SECONDS}
+    return [FAST_AGENT_PYTHON, FAST_AGENT_DRIVER, json.dumps(job, separators=(",", ":"))]
 
 
 
@@ -13516,11 +13409,11 @@ BACKENDS = {
     # and emits claude's stream-json itself — the passthrough, as systemone's and nanobot's are.
     "dcode": {"providers": sorted(DCODE_PROVIDERS), "default_model": DCODE_DEFAULT_MODEL,
               "normalize": _claude_passthrough},
-    # fast-agent's stream is prose and its RECORD is the ATIF trajectory it writes, so the
-    # normaliser passes every line and the eof reads that file — opensquilla's arrangement.
+    # fast-agent is driven over its ACP server, so runner/fast_agent_driver.py emits claude's
+    # stream-json itself, streamed as the agent works: the passthrough, as dcode's is.
     "fast-agent": {"providers": sorted(FAST_AGENT_PROVIDERS),
                    "default_model": FAST_AGENT_DEFAULT_MODEL,
-                   "normalize": _fast_agent_to_claude},
+                   "normalize": _claude_passthrough},
     # The zeroclaw driver emits claude's stream-json itself (see zeroclaw_driver.py).
     "zeroclaw": {"providers": sorted(ZEROCLAW_PROVIDERS), "default_model": ZEROCLAW_DEFAULT_MODEL,
                  "normalize": _claude_passthrough},
