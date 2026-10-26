@@ -5363,7 +5363,7 @@ attached it and answered "Red"; the next turn, on nemotron-3.5-lightning through
 served as itself. The stored conversation holds the line in the image's place; the copy fast-agent keeps in the
 tool result's `_meta` for a client to preview is not sent to the model and stays.
 
-### nemotron-3.5-lightning off Deep Agents Code (0.37.2)
+### nemotron-3.5-lightning off Deep Agents Code, fast-agent and docker-agent (0.37.2)
 
 On 0.37.1, in a custom harness whose instruction asks for Markdown documents and decks, a person's own
 conversation on nemotron-3.5-lightning through OpenRouter answered "build. a md file for hello world" with
@@ -5375,3 +5375,14 @@ workspace root, and the fourth wrote it to `tmp/` again after reading AGENTS.md;
 the file at the root, and the console showed it. The model is off dcode (`_NOT_OFFERED`, one failure as before),
 and its three rows left support-matrix-results.json: dcode on OpenRouter, TokenRouter and the HarnessRouter API
 each pass one model fewer. Vercel does not serve it.
+
+The same harness on the other three new bases, the same two turns, four fresh conversations each (OpenRouter,
+0.37.1 on the test instance):
+
+- fast-agent: the fourth wrote the file to `tmp/hello_world.md` and no file reached the console; the second ran
+  about 150 shell commands before it answered, and saved its files in a `workspace/` folder inside the workspace.
+- docker-agent: the second saved the .md and a .pptx to `/tmp/content-studio-output/`, outside the workspace,
+  after answering "hi" with some 40 tool calls; no file reached the console.
+- vibe: four of four wrote the file at the workspace root, and the console showed it.
+
+The model is off fast-agent and docker-agent too, and their rows left support-matrix-results.json. vibe keeps it.

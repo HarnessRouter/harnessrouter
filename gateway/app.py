@@ -8358,6 +8358,10 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                 llama-3.3-70b      wrote its write_file call as text and made no file (HarnessRouter
     #                                    API, 0.37.0-rc.15), the failure it is left out of vibe, fast-agent
     #                                    and ten other bases for.
+    #                 nemotron-3.5-lightning  saved a requested .md and its .pptx to /tmp/content-studio-output/,
+    #                                    outside the workspace and never shown, 1 of 4 conversations, after
+    #                                    answering "hi" with some 40 tool calls (OpenRouter, 0.37.1 on the
+    #                                    test instance): what took it off dcode and fast-agent.
     #   fast-agent    grok-4.5           answered DONE with no tool call, tools declared and history intact:
     #                                    the matrix (Vercel) and 3 of 4 in sequence.
     #                 llama-3.3-70b      answered the recycle check DONE, not its first word (OpenRouter).
@@ -8375,6 +8379,10 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    workspace without the /data it was given), was refused, wrote it
     #                                    to /tmp, which its instructions say is never collected, and
     #                                    answered DONE (Vercel, 0.37.1-rc.2, the test instance's column).
+    #                 nemotron-3.5-lightning  saved a requested .md as tmp/hello_world.md, the folder its
+    #                                    instructions say is never shown (no file reached the console), 1 of 4
+    #                                    conversations; another ran about 150 shell commands for the same
+    #                                    file (OpenRouter, 0.37.1 on the test instance): what took it off dcode.
     #   dcode         grok-4.5           wrote its write_file call as JSON text, 1 of 4 in sequence.
     #                 kimi-k2.7-code     answered the artifact turn DONE with no tool call (Vercel).
     #                 hunyuan-4-preview  a follow-up streamed until Vercel ended it, about 13 minutes
@@ -8395,9 +8403,10 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    reruns of the same two turns after reading AGENTS.md, and another
     #                                    rerun put its .pptx there (OpenRouter, 0.37.1 on the test instance).
     "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash", "claude-opus-4.7"}),
-    "docker-agent": frozenset({"grok-build-0.1", "grok-4.5", "claude-opus-4.7", "llama-3.3-70b"}),
+    "docker-agent": frozenset({"grok-build-0.1", "grok-4.5", "claude-opus-4.7", "llama-3.3-70b",
+                               "nemotron-3.5-lightning"}),
     "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b",
-                             "qwen3.8-max", "nemotron-3-super"}),
+                             "qwen3.8-max", "nemotron-3-super", "nemotron-3.5-lightning"}),
     "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b", "muse-spark-1.1",
                         "llama-3.3-70b", "nemotron-3.5-lightning"}),
 }
