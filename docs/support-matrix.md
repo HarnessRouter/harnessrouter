@@ -2943,7 +2943,6 @@ Findings, pairs served by a connection other than the one under test or as a mod
 | dcode | muse-spark-1.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | HarnessRouter API  test 1 | cache 17% of input |
 | dcode | muse-wonder-1.0 | pass | pass | pass (gpt-6.1-sol) | pass | pass | HarnessRouter API  test 1 | cache 33% of input |
 | dcode | nemotron-3-super | pass | pass | pass (gpt-6.1-sol) | pass | pass | HarnessRouter API  test 1 | cache 0% of input |
-| dcode | nemotron-3.5-lightning | pass | pass | pass (gpt-6.1-sol) | pass | pass | HarnessRouter API  test 1 | cache 64% of input |
 | dcode | qwen3.7-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | HarnessRouter API  test 1 | cache 63% of input |
 | dcode | qwen3.7-plus | pass | pass | pass (gpt-6.1-sol) | pass | pass | HarnessRouter API  test 1 | cache 66% of input |
 | dcode | qwen3.8-27b | pass | pass | pass (gpt-6.1-sol) | pass | pass | HarnessRouter API  test 1 | cache 68% of input |
@@ -3107,7 +3106,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 51% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 49% of input |
 
-200 pairs, 1000 of 1000 scenario runs passed.
+199 pairs, 995 of 995 scenario runs passed.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -3154,7 +3153,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - vibe x claude-sonnet-5: no prompt cache reads over 77462 input tokens (every call paid full price)
 - vibe x claude-sonnet-5.5: no prompt cache reads over 77545 input tokens (every call paid full price)
 
-Not run in this column, 31 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 32 pairs the provider serves that the harness did not run, with the reason:
 
 - dcode x gemini-3-flash-preview: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
 - dcode x gemini-3.1-pro-preview: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
@@ -3167,6 +3166,7 @@ Not run in this column, 31 pairs the provider serves that the harness did not ru
 - dcode x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dcode x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - docker-agent x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
@@ -3962,7 +3962,6 @@ Not run in this column, 61 pairs the provider serves that the harness did not ru
 | dcode | muse-spark-1.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 17% of input |
 | dcode | muse-wonder-1.0 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 17% of input |
 | dcode | nemotron-3-super | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 0% of input |
-| dcode | nemotron-3.5-lightning | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 19% of input |
 | dcode | qwen3.7-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 63% of input |
 | dcode | qwen3.7-plus | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 66% of input |
 | dcode | qwen3.8-27b | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 68% of input |
@@ -4379,7 +4378,7 @@ session_id: 20260913_060549_70cbeb |
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 53% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 65% of input |
 
-494 pairs, 2429 of 2435 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
+493 pairs, 2424 of 2430 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -4415,7 +4414,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - pi x claude-haiku-5.5: no prompt cache reads over 25529 input tokens (every call paid full price)
 - qwen x claude-haiku-5.5: no prompt cache reads over 570679 input tokens (every call paid full price)
 
-Not run in this column, 934 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 935 pairs the provider serves that the harness did not run, with the reason:
 
 - agentzero x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4737,6 +4736,7 @@ Not run in this column, 934 pairs the provider serves that the harness did not r
 - dcode x muse-glimmer-30b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dcode x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
@@ -5408,7 +5408,6 @@ Not run in this column, 934 pairs the provider serves that the harness did not r
 | dcode | grok-build-0.1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter | cache 67% of input |
 | dcode | mistral-medium-3.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter | cache 68% of input |
 | dcode | nemotron-3-super | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter | cache 0% of input |
-| dcode | nemotron-3.5-lightning | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter | cache 51% of input |
 | dcode | qwen3.7-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter | cache 63% of input |
 | dcode | qwen3.7-plus | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter | cache 66% of input |
 | dcode | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter | cache 71% of input |
@@ -5629,7 +5628,7 @@ Not run in this column, 934 pairs the provider serves that the harness did not r
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 57% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 32% of input |
 
-272 pairs, 1249 of 1251 scenario runs passed; 21 pairs served by another connection or as another model are findings, not counted.
+271 pairs, 1244 of 1246 scenario runs passed; 21 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -5682,7 +5681,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - vibe x claude-sonnet-5: no prompt cache reads over 77995 input tokens (every call paid full price)
 - vibe x claude-sonnet-5.5: no prompt cache reads over 77418 input tokens (every call paid full price)
 
-Not run in this column, 592 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 593 pairs the provider serves that the harness did not run, with the reason:
 
 - aider x claude-fable-5: not run, not run in this column
 - aider x claude-fable-5-1: not run, not run in this column
@@ -5914,6 +5913,7 @@ Not run in this column, 592 pairs the provider serves that the harness did not r
 - dcode x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dcode x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x claude-fable-5-1: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
 - docker-agent x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
