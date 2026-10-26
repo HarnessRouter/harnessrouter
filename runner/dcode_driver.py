@@ -22,7 +22,7 @@ What this driver does, and why each part is here (every claim measured on that b
     session directory here, so that holds across a sandbox recycle.
   * A LOADED session replays its whole history as `session/update` notifications before the prompt
     is sent. Nothing is recorded until `session/prompt` goes out, or a turn's record would open
-    with every earlier turn's reply (the shape fast-agent's trajectory has, in another protocol).
+    with every earlier turn's reply (the shape fast-agent's trajectory had, in another protocol).
   * The model is NOT the `-M` flag once a session exists: the session carries its own, and
     `session/set_config_option(configId="model")` is the door. The flag still matters because the
     server's valid-model list is built from the model THIS process resolved, so `-M` is what puts

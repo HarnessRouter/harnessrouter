@@ -8457,12 +8457,17 @@ _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes
 #   glm-5.3        -> 400 {"message":"..type is invalid, allowed values: ['text']","code":"1210"}
 #                     at the preview read; the turn died at its own verification step.
 #   glm-5.3-flash  -> the SAME task, same preview read, completed. Accepts images; NOT listed.
+# 2026-10-26, through the product again (fast-agent's family tour, 0.37.1-rc.2): gpt-5.4 attached
+# its rendered slide earlier in the conversation, and the nemotron-3.5-lightning turn failed:
+#   nemotron-3.5-lightning -> 404 "No endpoints found that support image input" (OpenRouter)
 # Echo sweeps never catch this class: the image only appears when a TOOL returns one.
 # Consumed by the pi backend: pi replays a session's image tool-results to the CURRENT model
 # (a cross-model conversation is one session), so a text-only channel turns every follow-up in
 # an image-bearing session into a hard 400. Declared text-only, pi drops the image instead —
-# a degraded answer beats a dead conversation.
-_TEXT_ONLY_INPUT = {"qwen3.7-max", "glm-5.3"}
+# a degraded answer beats a dead conversation. dsh, omp and fast-agent read the same flag (fast-agent
+# keeps an image in its history under the model that attached it; the runner takes it out of the
+# stored conversation before a text-only model loads it).
+_TEXT_ONLY_INPUT = {"qwen3.7-max", "glm-5.3", "nemotron-3.5-lightning"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
 # values win), silently rejecting the us.anthropic.* ids this set exists to allow.
 _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROPIC_CLAUDE.values()]}
@@ -9396,7 +9401,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "idempotency_key": f"{translator.resp_id}:{name}",
                 # token-level streaming (claude): runner adds --include-partial-messages + emits deltas
                 "partial_messages": bool(partial_messages),
-                # pi: whether this model's channel takes image input (see _TEXT_ONLY_INPUT)
+                # pi, dsh, omp, fast-agent: whether this model's channel takes image input (see _TEXT_ONLY_INPUT)
                 "vision": model_req.strip().lower() not in _TEXT_ONLY_INPUT,
                 # hermes: which integration answers its image questions (vision_analyze, browser
                 # tools), resolved across the instance like image generation, so the capability

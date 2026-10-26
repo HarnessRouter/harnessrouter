@@ -699,6 +699,55 @@ def test_a_switch_rewrites_the_sessions_stored_model_and_nothing_else():
     assert _fast_agent_set_model(ws, "nope", "gemini-3-flash") is False
 
 
+def test_a_text_only_model_loads_the_conversation_without_its_images():
+    """fast-agent filters a message for its model only when the message is new, so an image
+    attach_media added under gpt-5.4 stayed in the history and nemotron-3.5-lightning's turn later
+    in the conversation failed at the provider ("No endpoints found that support image input",
+    the family tour on 0.37.1-rc.2). A turn declared text-only takes every block that is not text
+    out of the stored conversation first, as the line fast-agent writes when it removes one; a turn
+    on a model that reads images leaves the conversation exactly as it is."""
+    ws = _ws()
+    sid = "2610260950-FIta9i"
+    f = _fast_agent_session_file(ws, sid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"session_id": sid, "continuation": {"agents": {"harness": {
+        "model": "gpt-5.4", "model_spec": "generic.gpt-5.4", "history_file": "history_harness.json"}}}}))
+    png = {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"}
+    pdf = {"type": "resource", "resource": {"uri": "file:///w/a.pdf", "mimeType": "application/pdf",
+                                            "blob": "JVBERi0="}}
+    page = {"type": "resource", "resource": {"uri": "file:///w/a.md", "mimeType": "text/markdown",
+                                             "text": "# kept"}}
+    history = {"messages": [
+        {"role": "user", "content": [{"type": "text", "text": "make a slide"}]},
+        {"role": "user", "content": [], "tool_results": {"call-1": {
+            "content": [{"type": "text", "text": "attached"}, png], "isError": False}}},
+        {"role": "user", "content": [png]},
+        {"role": "user", "content": [page, pdf]},
+        {"role": "assistant", "content": [{"type": "text", "text": "done"}]}]}
+    h = f.parent / "history_harness.json"
+    h.write_text(json.dumps(history))
+
+    _fab("openai-api", Auth(base_url=UP, api_key="k"), "claude-sonnet-5", "hi", ws, {},
+         resume_session_id=sid)
+    assert json.loads(h.read_text()) == history, "a model that reads images gets them"
+
+    cmd = _fab("openai-api", Auth(base_url=UP, api_key="k"), "nemotron-3.5-lightning", "hi", ws, {},
+               resume_session_id=sid, vision=False)
+    assert cmd.job["resume_known"] is True
+    after = json.loads(h.read_text())["messages"]
+    text = json.dumps(after)
+    assert "iVBORw0KGgo=" not in text and "JVBERi0=" not in text
+    gone = "content was removed - nemotron-3.5-lightning does not support this content type]"
+    assert after[1]["tool_results"]["call-1"]["content"] == [
+        {"type": "text", "text": "attached"}, {"type": "text", "text": "[vision " + gone}]
+    assert after[2]["content"] == [{"type": "text", "text": "[vision " + gone}]
+    assert after[3]["content"] == [page, {"type": "text", "text": "[document " + gone}]
+    assert after[0] == history["messages"][0] and after[4] == history["messages"][4]
+    # the stored model was still pointed at the turn's, as on every resumed turn
+    stored = json.loads(f.read_text())["continuation"]["agents"]["harness"]
+    assert stored["model"] == "nemotron-3.5-lightning"
+
+
 def test_an_mcp_server_carries_its_bearer_and_its_transport():
     """PARSED, not substring-matched. The first version of this test asserted `'transport:
     "http"' in cfg`, which is true at ANY indentation — and the indentation was wrong: the server

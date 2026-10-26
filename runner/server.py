@@ -13140,6 +13140,69 @@ def _fast_agent_set_model(cwd: str, session_id: str, model: str) -> bool:
         return False
 
 
+def _fast_agent_drop_media(cwd: str, session_id: str, model: str) -> int:
+    """Take what is not text out of the stored conversation before a text-only model loads it.
+
+    fast-agent filters a message for the model it is sent to only when the message is new: an
+    image `attach_media` put into the conversation under a model that reads images stays in the
+    history file as it is, and a later turn on a model whose channel refuses images sends it
+    again. MEASURED (0.37.1-rc.2, the family tour): gpt-5.4 attached its rendered slide, and
+    nemotron-3.5-lightning's turn later in the same conversation failed at OpenRouter, "No
+    endpoints found that support image input", and so would every turn after it. So on a turn
+    whose model is declared text-only (the gateway's _TEXT_ONLY_INPUT, pi's `vision`), each block
+    that is not text becomes the line fast-agent itself writes when it removes one. Returns how
+    many blocks were taken out; the files are written beside and renamed, as the model is."""
+    path = _fast_agent_session_file(cwd, session_id)
+    note = f"content was removed - {model} does not support this content type]"
+
+    def text_only(blocks: list) -> tuple[list, int]:
+        kept, n = [], 0
+        for b in blocks:
+            kind = b.get("type") if isinstance(b, dict) else None
+            res = b.get("resource") if kind == "resource" else None
+            if kind in ("image", "audio") or (isinstance(res, dict) and "blob" in res):
+                label = "vision" if kind == "image" else "document"   # fast-agent's own labels
+                kept.append({"type": "text", "text": f"[{label} {note}"})
+                n += 1
+            else:
+                kept.append(b)
+        return kept, n
+
+    removed = 0
+    try:
+        with path.open(encoding="utf-8") as fh:
+            agents = ((json.load(fh).get("continuation") or {}).get("agents") or {})
+        names = {str(s.get("history_file")) for s in agents.values()
+                 if isinstance(s, dict) and s.get("history_file")}
+        for name in sorted(names):
+            hist = path.parent / pathlib.PurePath(name).name
+            if not hist.is_file():
+                continue
+            with hist.open(encoding="utf-8") as fh:
+                doc = json.load(fh)
+            n = 0
+            for msg in doc.get("messages") or []:
+                if not isinstance(msg, dict):
+                    continue
+                if isinstance(msg.get("content"), list):
+                    msg["content"], k = text_only(msg["content"])
+                    n += k
+                results = msg.get("tool_results")
+                for res in (results.values() if isinstance(results, dict) else results or []):
+                    if isinstance(res, dict) and isinstance(res.get("content"), list):
+                        res["content"], k = text_only(res["content"])
+                        n += k
+            if n:
+                tmp = hist.with_suffix(".json.hr-tmp")
+                with tmp.open("w", encoding="utf-8") as fh:
+                    json.dump(doc, fh)
+                os.replace(tmp, hist)
+                removed += n
+    except (OSError, ValueError):
+        pass
+    return removed
+
+
 def _fast_agent_config(cwd: str, tools_disabled: list[str] | None,
                        mcp_servers: list[dict] | None, base_url: str = "") -> tuple[pathlib.Path, list[str]]:
     """Write the fastagent.config.yaml this turn runs with, and name the servers it declares.
@@ -13232,7 +13295,7 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
                       resume_session_id: str | None = None,
                       mcp_servers: list[dict] | None = None,
                       tools_disabled: list[str] | None = None,
-                      max_turns: int | None = None) -> list[str]:
+                      max_turns: int | None = None, vision: bool = True) -> list[str]:
     pr = provider or "openai-api"
     if pr not in FAST_AGENT_PROVIDERS:
         raise HTTPException(400, f"unknown fast-agent provider '{pr}' "
@@ -13286,6 +13349,9 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
         # The store is pointed at this turn's model first: the loaded session keeps its own, and
         # neither --model nor ACP changes it (measured).
         _fast_agent_set_model(cwd, resume_session_id, model)
+        if not vision:
+            # ...and an image an earlier model attached is not sent to one that refuses images.
+            _fast_agent_drop_media(cwd, resume_session_id, model)
     skills = pathlib.Path(cwd) / ".harness" / "fast-agent" / "skills"
     if skills.is_dir():
         cmd += ["--skills", str(skills)]
@@ -15380,7 +15446,7 @@ class TurnReq(BaseModel):
     metadata: dict | None = None           # systemone: {"systemone": {"script": [...]}} selects a scripted provider (a probe)
     idempotency_key: str = ""              # dedup a retried /turn: same key -> same turn, no re-exec
     partial_messages: bool = False         # claude: stream token-level deltas (--include-partial-messages)
-    vision: bool = True                    # pi: whether the model's channel accepts image input
+    vision: bool = True                    # pi, dsh, omp, fast-agent: whether the model's channel accepts image input
     vision_auth: dict | None = None        # hermes: {provider, model, base_url, api_key} for its image questions
     codex_appserver: bool = False          # codex: run via app-server (streams item/agentMessage/delta)
     environment: dict | None = None        # {id, slug, entry}: the project layer at /env/<slug>, read-only (environments.py)
@@ -15715,7 +15781,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_fast_agent(req.provider, auth, model, req.prompt, cwd, env,
                                 resume_session_id=req.resume_session_id,
                                 mcp_servers=req.mcp_servers,
-                                tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+                                tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                                vision=bool(req.vision))
     elif backend == "dcode":
         model = model or DCODE_DEFAULT_MODEL
         cmd = _build_dcode(req.provider, auth, model, req.prompt, cwd, env,
