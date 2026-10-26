@@ -32,11 +32,10 @@ from server import (ALL_VIBE_TOOLS, Auth, BACKENDS,  # noqa: E402
                     ALL_DOCKER_AGENT_TOOLS, _build_docker_agent, _docker_agent_eof,
                     _docker_agent_home, _docker_agent_session_db, _sse_bridges,
                     _docker_agent_session_present, _docker_agent_to_claude,
-                    ALL_FAST_AGENT_TOOLS, _build_fast_agent, _fast_agent_eof,
-                    _record_cli_session_id,
+                    ALL_FAST_AGENT_TOOLS, _build_fast_agent, _claude_passthrough,
+                    FAST_AGENT_ACP_BIN, FAST_AGENT_DRIVER,
                     _fast_agent_home, _fast_agent_session_file,
-                    _fast_agent_session_present, _fast_agent_set_model,
-                    _fast_agent_to_claude, _fast_agent_traj)
+                    _fast_agent_session_present, _fast_agent_set_model, _fast_agent_drop_media)
 
 UP = "https://up.example/v1"
 FIX = pathlib.Path(__file__).resolve().parent / "fixtures" / "batch4"
@@ -556,44 +555,35 @@ def test_the_bridged_server_is_written_as_a_stdio_toolset():
 
 # ══ fast-agent (fast-agent-mcp 0.10.45) ═══════════════════════════════════════════════════════
 
-FA_FIXTURE = "fast-agent-three-turns.atif.json"
-# The three prompts of the captured conversation, in order. A turn's record must hold its own
-# steps, and this turn's prompt is the boundary (see _fast_agent_eof).
-FA_PROMPTS = (
-    "Reply with exactly: FA-E2E-FIRST",
-    "Create a file called e2e.txt containing the word MADE, then say in one sentence what word I "
-    "asked you to reply with in my first message.",
-    "Run the shell command `echo NOPE` and tell me what it printed.",
-)
+class _Argv(list):
+    """The agent's argv, out of the driver command the builder returns, with the driver's job on it."""
+    job: dict
 
 
-def _fa_ws() -> str:
-    """A workspace whose trajectory file IS the captured three-turn conversation."""
-    ws = _ws()
-    traj = _fast_agent_traj(ws)
-    traj.parent.mkdir(parents=True, exist_ok=True)
-    traj.write_text((FIX / FA_FIXTURE).read_text())
-    return ws
+def _fab(*a, **kw) -> _Argv:
+    cmd = _build_fast_agent(*a, **kw)
+    assert cmd[1] == FAST_AGENT_DRIVER, cmd[:2]
+    job = json.loads(cmd[2])
+    argv = _Argv(job["argv"])
+    argv.job = job
+    return argv
 
 
-def _fa_eof(ws: str, prompt: str, rc: int = 0):
-    state = {"model": "gpt-5.4", "final": "", "cwd": ws, "prompt": prompt}
-    # the stream carries nothing on this base; everything comes out of the eof
-    assert _fast_agent_to_claude({"anything": True}, state) == []
-    return _fast_agent_eof(state, rc), state
-
-
-def test_fast_agent_is_registered_with_an_eof_that_carries_the_turn():
-    assert "fast-agent" in BACKENDS
-    assert BACKENDS["fast-agent"]["normalize"] is _fast_agent_to_claude
-    assert getattr(BACKENDS["fast-agent"]["normalize"], "eof", None) is _fast_agent_eof
+def test_fast_agent_runs_its_acp_server_through_the_streaming_driver():
+    """0.37.1: driven over `fast-agent-acp` so each step streams as it happens (fast_agent_driver);
+    the driver writes claude's stream-json itself, so the normaliser is the passthrough."""
+    assert BACKENDS["fast-agent"]["normalize"] is _claude_passthrough
+    cmd = _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", _ws(), {})
+    assert cmd[0] == FAST_AGENT_ACP_BIN and "go" not in cmd and "--quiet" not in cmd
+    assert "--no-permissions" in cmd
+    assert cmd.job["prompt"] == "hi" and cmd.job["terminal"] is True
 
 
 def test_the_instruction_file_is_the_one_the_runner_writes_and_names():
     ws = _ws()
     # it has no instruction-file convention of its own: the file is passed with -i (aider's shape)
     assert _agent_doc_path(ws, "fast-agent") == pathlib.Path(ws) / "AGENTS.md"
-    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    cmd = _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
     assert cmd[cmd.index("-i") + 1] == str(pathlib.Path(ws) / "AGENTS.md")
 
 
@@ -603,7 +593,7 @@ def test_the_agent_works_in_the_session_and_keeps_its_store_out_of_it():
     --workspace was given, the home resolved UNDER it and FAST_AGENT_HOME was ignored, so the
     session store moved into the directory the user collects."""
     ws, env = _ws(), {}
-    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, env)
+    cmd = _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, env)
     assert cmd[cmd.index("--workspace") + 1] == str(pathlib.Path(ws).resolve())
     assert cmd[cmd.index("--home") + 1] == str(_fast_agent_home(ws))
     assert str(_fast_agent_home(ws)).endswith("/.harness/fast-agent")
@@ -612,68 +602,70 @@ def test_the_agent_works_in_the_session_and_keeps_its_store_out_of_it():
 
 def test_the_credential_is_in_the_two_variables_its_generic_client_reads():
     ws, env = _ws(), {}
-    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="real-key"), "gpt-5.4", "hi", ws, env)
+    _fab("openai-api", Auth(base_url=UP, api_key="real-key"), "gpt-5.4", "hi", ws, env)
     assert env["GENERIC_BASE_URL"].startswith("http://127.0.0.1:")   # the relay, not the upstream
     assert env["GENERIC_API_KEY"].startswith("hr-relay-")
     assert "real-key" not in json.dumps(env)
 
 
-def test_the_model_rides_the_generic_prefix_and_the_trajectory_is_cleared_per_turn():
-    ws = _fa_ws()
-    assert _fast_agent_traj(ws).is_file()
-    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "claude-haiku-5.5",
-                            "hi", ws, {})
+def test_the_model_rides_the_generic_prefix():
+    cmd = _fab("openai-api", Auth(base_url=UP, api_key="k"), "claude-haiku-5.5", "hi", _ws(), {})
     assert cmd[cmd.index("--model") + 1] == "generic.claude-haiku-5.5"
-    assert not _fast_agent_traj(ws).exists(), (
-        "last turn's trajectory would otherwise answer for this one")
-    assert cmd[cmd.index("--trajectory-format") + 1] == "atif"
 
 
 def test_the_shell_runtime_is_asked_for_and_withheld_by_NAME():
     """Measured on a resumed session: omitting -x left bash in place and the model ran the command;
     --no-shell made the request declare no bash at all."""
     ws = _ws()
-    on = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    on = _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
     assert "-x" in on and "--no-shell" not in on
-    off = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+    off = _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
                             tools_disabled=["bash"])
     assert "--no-shell" in off and "-x" not in off
+    # the client offers its terminal only when the shell is on at all
+    assert on.job["terminal"] is True and off.job["terminal"] is False
 
 
 def test_the_two_file_tools_are_withheld_in_the_config_and_only_when_asked():
     ws = _ws()
-    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
     cfg = (_fast_agent_home(ws) / "fastagent.config.yaml").read_text()
     assert "enable_read_text_file: true" in cfg
     assert 'write_text_file_mode: "auto"' in cfg
-    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+    _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
                       tools_disabled=["read_text_file", "edit_file"])
     cfg = (_fast_agent_home(ws) / "fastagent.config.yaml").read_text()
     assert "enable_read_text_file: false" in cfg
     assert 'write_text_file_mode: "off"' in cfg
     # with the shell runtime withheld there is no shell section to write at all
-    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+    _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
                       tools_disabled=["bash"])
     assert "shell:" not in (_fast_agent_home(ws) / "fastagent.config.yaml").read_text()
 
 
-def test_resume_is_passed_only_when_the_session_file_is_there():
+def test_resume_is_asked_for_only_when_the_session_file_is_there():
+    """The conversation is loaded through the protocol (session/load), so the id rides the job, and
+    `resume_known` says the store has it: a stored conversation that will not load fails the turn
+    instead of running as a new one."""
     ws = _ws()
     sid = "2610160220-7kil4q"
-    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
-                            resume_session_id=sid)
-    assert "--resume" not in cmd
+    cmd = _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+               resume_session_id=sid)
+    assert "--resume" not in cmd and cmd.job["resume"] == sid and cmd.job["resume_known"] is False
     assert _resume_lost("fast-agent", cmd, sid, ws) == sid
     f = _fast_agent_session_file(ws, sid)
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps({"session_id": sid, "continuation": {"agents": {"harness": {
-        "shell_enabled": True, "model": "gpt-5.4", "model_spec": "generic.gpt-5.4",
+        "shell_enabled": True, "model": "claude-haiku-5.5", "model_spec": "generic.claude-haiku-5.5",
         "history_file": "history_harness.json"}}}}))
-    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
-                            resume_session_id=sid)
-    assert cmd[cmd.index("--resume") + 1] == sid
+    cmd = _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+               resume_session_id=sid)
+    assert cmd.job["resume_known"] is True
     assert _fast_agent_session_present(ws, cmd, sid) is True
     assert _resume_lost("fast-agent", cmd, sid, ws) is None
+    # the loaded session keeps its own model, so the store is pointed at this turn's first
+    stored = json.loads(f.read_text())["continuation"]["agents"]["harness"]
+    assert stored["model"] == "gpt-5.4" and stored["model_spec"] == "generic.gpt-5.4"
 
 
 def test_a_switch_rewrites_the_sessions_stored_model_and_nothing_else():
@@ -707,6 +699,78 @@ def test_a_switch_rewrites_the_sessions_stored_model_and_nothing_else():
     assert _fast_agent_set_model(ws, "nope", "gemini-3-flash") is False
 
 
+def test_a_text_only_model_loads_the_conversation_without_its_images():
+    """fast-agent filters a message for its model only when the message is new, so an image
+    attach_media added under gpt-5.4 stayed in the history and nemotron-3.5-lightning's turn later
+    in the conversation failed at the provider ("No endpoints found that support image input",
+    the family tour on 0.37.1-rc.2). A turn declared text-only takes every block that is not text
+    out of the stored conversation first, as the line fast-agent writes when it removes one; a turn
+    on a model that reads images leaves the conversation exactly as it is."""
+    ws = _ws()
+    sid = "2610260950-FIta9i"
+    f = _fast_agent_session_file(ws, sid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"session_id": sid, "continuation": {"agents": {"harness": {
+        "model": "gpt-5.4", "model_spec": "generic.gpt-5.4", "history_file": "history_harness.json"}}}}))
+    png = {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"}
+    pdf = {"type": "resource", "resource": {"uri": "file:///w/a.pdf", "mimeType": "application/pdf",
+                                            "blob": "JVBERi0="}}
+    page = {"type": "resource", "resource": {"uri": "file:///w/a.md", "mimeType": "text/markdown",
+                                             "text": "# kept"}}
+    history = {"messages": [
+        {"role": "user", "content": [{"type": "text", "text": "make a slide"}]},
+        {"role": "user", "content": [], "tool_results": {"call-1": {
+            "content": [{"type": "text", "text": "attached"}, png], "isError": False}}},
+        {"role": "user", "content": [png]},
+        {"role": "user", "content": [page, pdf]},
+        {"role": "assistant", "content": [{"type": "text", "text": "done"}]}]}
+    h = f.parent / "history_harness.json"
+    h.write_text(json.dumps(history))
+
+    _fab("openai-api", Auth(base_url=UP, api_key="k"), "claude-sonnet-5", "hi", ws, {},
+         resume_session_id=sid)
+    assert json.loads(h.read_text()) == history, "a model that reads images gets them"
+
+    cmd = _fab("openai-api", Auth(base_url=UP, api_key="k"), "nemotron-3.5-lightning", "hi", ws, {},
+               resume_session_id=sid, vision=False)
+    assert cmd.job["resume_known"] is True
+    after = json.loads(h.read_text())["messages"]
+    text = json.dumps(after)
+    assert "iVBORw0KGgo=" not in text and "JVBERi0=" not in text
+    gone = "content was removed - nemotron-3.5-lightning does not support this content type]"
+    assert after[1]["tool_results"]["call-1"]["content"] == [
+        {"type": "text", "text": "attached"}, {"type": "text", "text": "[vision " + gone}]
+    assert after[2]["content"] == [{"type": "text", "text": "[vision " + gone}]
+    assert after[3]["content"] == [page, {"type": "text", "text": "[document " + gone}]
+    assert after[0] == history["messages"][0] and after[4] == history["messages"][4]
+    # the stored model was still pointed at the turn's, as on every resumed turn
+    stored = json.loads(f.read_text())["continuation"]["agents"]["harness"]
+    assert stored["model"] == "nemotron-3.5-lightning"
+
+
+def test_the_media_drop_writes_only_inside_the_session_store():
+    """The session id is the agent's own (its init event) and the history file's name is read from
+    its store, so neither may point the rewrite outside the session's own directory."""
+    ws = _ws()
+    png = {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"}
+    outside = pathlib.Path(ws) / "victim.json"
+    outside.write_text(json.dumps({"messages": [{"role": "user", "content": [png]}]}))
+    # an id that climbs out of the store
+    evil = pathlib.Path(ws) / "evil"
+    evil.mkdir()
+    (evil / "session.json").write_text(json.dumps({"continuation": {"agents": {"a": {
+        "history_file": "../victim.json"}}}}))
+    assert _fast_agent_drop_media(ws, "../../../evil", "m") == 0
+    # a history file name that climbs out of the session's directory
+    sid = "2610260950-FIta9i"
+    f = _fast_agent_session_file(ws, sid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"continuation": {"agents": {"a": {
+        "history_file": "../../../../victim.json"}}}}))
+    assert _fast_agent_drop_media(ws, sid, "m") == 0
+    assert png in json.loads(outside.read_text())["messages"][0]["content"]
+
+
 def test_an_mcp_server_carries_its_bearer_and_its_transport():
     """PARSED, not substring-matched. The first version of this test asserted `'transport:
     "http"' in cfg`, which is true at ANY indentation — and the indentation was wrong: the server
@@ -717,7 +781,7 @@ def test_an_mcp_server_carries_its_bearer_and_its_transport():
     because a column declares no MCP servers. Found by the custom-harness dimension, 2026-10-20."""
     import yaml
     ws = _ws()
-    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+    _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
                       mcp_servers=[{"name": "plugs", "url": "https://p.example/mcp",
                                     "transport": "http", "auth": "tok-7"},
                                    {"name": "legacy", "url": "https://l.example/sse",
@@ -745,7 +809,7 @@ def test_a_declared_server_is_also_enabled_on_the_command_line():
     the DOCUMENT rather than against a second copy of the naming rule."""
     import yaml
     ws = _ws()
-    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+    cmd = _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
                             mcp_servers=[{"name": "one", "url": "https://a.example/mcp"},
                                          {"name": "two", "command": ["/bin/echo"]}])
     doc = yaml.safe_load((_fast_agent_home(ws) / "fastagent.config.yaml").read_text())
@@ -755,7 +819,7 @@ def test_a_declared_server_is_also_enabled_on_the_command_line():
 
 def test_no_servers_means_no_servers_flag():
     ws = _ws()
-    cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
+    cmd = _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {})
     assert "--servers" not in cmd
     assert "mcp:" not in (_fast_agent_home(ws) / "fastagent.config.yaml").read_text()
 
@@ -765,100 +829,13 @@ def test_every_server_body_sits_under_its_own_name():
     `mcp.servers` holds nothing but server names."""
     import yaml
     ws = _ws()
-    _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
+    _fab("openai-api", Auth(base_url=UP, api_key="k"), "gpt-5.4", "hi", ws, {},
                       mcp_servers=[{"name": "one", "url": "https://a.example/mcp"},
                                    {"name": "two", "url": "https://b.example/mcp"}])
     doc = yaml.safe_load((_fast_agent_home(ws) / "fastagent.config.yaml").read_text())
     for name, body in doc["mcp"]["servers"].items():
         assert isinstance(body, dict) and body.get("transport"), (name, body)
         assert not set(body) - {"transport", "url", "command", "args", "headers"}, body
-
-
-def test_a_turns_record_is_its_own_steps_and_not_the_whole_conversation():
-    """Its trajectory holds every turn of a resumed session — eight steps across three here — and
-    a turn that reported all of them arrived with every earlier reply glued in front of its own."""
-    ws = _fa_ws()
-    evs, state = _fa_eof(ws, FA_PROMPTS[2])
-    texts = [b["text"] for e in evs for b in (e.get("message", {}).get("content") or [])
-             if b.get("type") == "text"]
-    assert len(texts) == 1
-    assert texts[0].startswith("E2EFA I can't run that command")
-    assert "FA-E2E-FIRST" not in texts[0], "the first turn's answer is not this turn's"
-    assert state["final"] == texts[0]
-
-
-def test_the_middle_turns_tool_call_and_its_result_come_off_the_real_trajectory():
-    ws = _fa_ws()
-    evs, state = _fa_eof(ws, FA_PROMPTS[1])
-    calls = [b for e in evs for b in (e.get("message", {}).get("content") or [])
-             if b.get("type") == "tool_use"]
-    results = [b for e in evs for b in (e.get("message", {}).get("content") or [])
-               if b.get("type") == "tool_result"]
-    assert [c["name"] for c in calls] == ["bash"]
-    assert calls[0]["id"] == "call_3379114"
-    assert results[0]["tool_use_id"] == calls[0]["id"] and results[0]["is_error"] is False
-    assert "process exit code was 0" in results[0]["content"]
-    assert "FA-E2E-FIRST" in state["final"], "this turn's own answer, which recalls the first"
-    assert "I can't run that command" not in state["final"], "the turn after it is not this one"
-
-
-def test_the_session_id_and_the_usage_come_off_the_trajectory_too():
-    ws = _fa_ws()
-    evs, _state = _fa_eof(ws, FA_PROMPTS[0])
-    init = evs[0]
-    assert init["subtype"] == "init" and init["session_id"] == "2610160220-7kil4q"
-    res = evs[-1]
-    assert res["subtype"] == "success" and res["is_error"] is False
-    # the turn's own step (1863 prompt / 18 completion), not final_metrics' 4524 / 715, which is
-    # every call of all three turns in this trajectory
-    assert res["usage"]["input_tokens"] == 1863
-    assert res["usage"]["output_tokens"] == 18
-    assert "cache_read_tokens" not in res["usage"]
-
-
-def test_each_turns_usage_is_its_own_calls():
-    ws = _fa_ws()
-    got = [_fa_eof(ws, p)[0][-1]["usage"] for p in FA_PROMPTS]
-    assert [(u["input_tokens"], u["output_tokens"]) for u in got] == [(1863, 18), (909 + 947, 23 + 339), (805, 335)]
-    assert sum(u["input_tokens"] for u in got) == 4524           # together, the trajectory's own total
-
-
-def test_a_turns_cache_reads_are_its_own_and_its_input_is_the_fresh_part():
-    ws = _ws()
-    traj = _fast_agent_traj(ws)
-    traj.parent.mkdir(parents=True, exist_ok=True)
-    m = lambda p, c, r: {"prompt_tokens": p, "completion_tokens": c, "cached_tokens": r}
-    traj.write_text(json.dumps({"session_id": "s1", "steps": [
-        {"step_id": 1, "source": "user", "message": "one"},
-        {"step_id": 2, "source": "agent", "message": "M1", "metrics": m(2348, 5, 0)},
-        {"step_id": 3, "source": "user", "message": "two"},
-        {"step_id": 4, "source": "agent", "message": "", "metrics": m(2393, 80, 2359)},
-        {"step_id": 5, "source": "agent", "message": "DONE", "metrics": m(2592, 5, 2390)}],
-        "final_metrics": {"total_prompt_tokens": 7333, "total_completion_tokens": 90, "total_cached_tokens": 4749}}))
-    u = _fa_eof(ws, "two")[0][-1]["usage"]
-    assert (u["input_tokens"], u["output_tokens"], u["cache_read_tokens"]) == (2393 + 2592 - 4749, 85, 4749)
-
-
-def test_an_init_that_only_the_eof_emits_still_records_the_cli_session_id():
-    """THE BUG THIS BASE'S FIRST COLUMN FOUND (2026-10-20). Its stream carries nothing — the ATIF
-    trajectory is read at eof — so its `init` event only ever appears in the eof batch, and the
-    capture that remembers the CLI's conversation id lived in the streaming loop alone. The id was
-    never recorded, so the gateway had none to send back, so the builder never passed `--resume`,
-    and every follow-up turn silently began a new conversation. `_resume_lost` stayed quiet because
-    an EMPTY resume id is not a lost one.
-
-    Four of the five matrix scenarios passed anyway: they ask the model to echo a token and never
-    test the history. The recall scenario answered the literal word "word"; a clean two-turn probe
-    with a word that is nowhere in the workspace answered "remember", 993 input tokens against the
-    first turn's 989. The CLI was never at fault — by hand, `--resume` answered the word and the
-    trajectory grew from three steps to five."""
-    ws = _fa_ws()
-    evs, _state = _fa_eof(ws, FA_PROMPTS[0])
-    init = next(e for e in evs if e.get("subtype") == "init")
-    rec: dict = {}
-    for ev in evs:                      # exactly what the eof branch now does, in order
-        _record_cli_session_id(rec, ev)
-    assert rec["session_id"] == init["session_id"] == "2610160220-7kil4q"
 
 
 def test_both_places_a_turns_events_are_produced_record_the_session_id():
@@ -871,31 +848,6 @@ def test_both_places_a_turns_events_are_produced_record_the_session_id():
         "both the streaming loop and the eof loop call it, and nothing else does")
     # and the capture exists nowhere else in a hand-written form, which is how they drifted
     assert 'rec["session_id"] = ev["session_id"]' not in body.split("def _record_cli_session_id")[0]
-
-
-def test_a_cumulative_message_contributes_only_its_new_text():
-    # measured on this CLI: a two-step turn reported "FAOK" and then "FAOK\n\nDONE"
-    ws = _ws()
-    traj = _fast_agent_traj(ws)
-    traj.parent.mkdir(parents=True, exist_ok=True)
-    traj.write_text(json.dumps({"session_id": "s1", "steps": [
-        {"step_id": 1, "source": "user", "message": "go"},
-        {"step_id": 2, "source": "agent", "message": "FAOK"},
-        {"step_id": 3, "source": "agent", "message": "FAOK\n\nDONE"}],
-        "final_metrics": {"total_prompt_tokens": 10, "total_completion_tokens": 2}}))
-    evs, state = _fa_eof(ws, "go")
-    texts = [b["text"] for e in evs for b in (e.get("message", {}).get("content") or [])
-             if b.get("type") == "text"]
-    assert texts == ["FAOK", "DONE"], texts
-    assert state["final"] == "FAOK\nDONE"
-
-
-def test_a_turn_that_wrote_no_trajectory_fails_and_leaves_the_reason_to_stderr():
-    ws = _ws()   # no trajectory file at all: the CLI died before writing one
-    evs, _state = _fa_eof(ws, "go", rc=1)
-    res = evs[-1]
-    assert res["subtype"] == "error" and res["is_error"] is True
-    assert res["result"] == "", "the run loop's stderr tail is the reason, not a placeholder"
 
 
 def test_the_tools_offered_are_the_three_with_a_switch():

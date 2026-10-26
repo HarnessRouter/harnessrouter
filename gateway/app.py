@@ -8367,6 +8367,14 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    the word it was asked for (OpenRouter).
     #                 qwen3.8-27b        refused its follow-up's word ("would amount to confirming a
     #                                    specific version number, which I don't disclose") (HarnessRouter API).
+    #                 qwen3.8-max        answered its first turn "GPT-5.5", after reasoning that "the
+    #                                    instructions say: if the user asks about the model being used,
+    #                                    reply with: GPT-5.5"; no such line is in its prompt or in
+    #                                    fast-agent's (Vercel, 0.37.1-rc.2, the test instance's column).
+    #                 nemotron-3-super   wrote the artifact turn's file to /workspaces/<session>/ (its
+    #                                    workspace without the /data it was given), was refused, wrote it
+    #                                    to /tmp, which its instructions say is never collected, and
+    #                                    answered DONE (Vercel, 0.37.1-rc.2, the test instance's column).
     #   dcode         grok-4.5           wrote its write_file call as JSON text, 1 of 4 in sequence.
     #                 kimi-k2.7-code     answered the artifact turn DONE with no tool call (Vercel).
     #                 hunyuan-4-preview  a follow-up streamed until Vercel ended it, about 13 minutes
@@ -8377,10 +8385,16 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    ("M1-claude-opus-4.5"), served as meta/muse-spark-1.1 (HarnessRouter
     #                                    API, 0.37.0-rc.15); 4 of 4 first turns on the probe after it do not
     #                                    erase a measured failure.
+    #                 llama-3.3-70b      answered the recycle check DONE, the artifact turn's word, with the
+    #                                    whole history restored and the first word its first message
+    #                                    (OpenRouter, 0.37.1-rc.2, the test instance's column); the failure it
+    #                                    is off fast-agent for.
     "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash", "claude-opus-4.7"}),
     "docker-agent": frozenset({"grok-build-0.1", "grok-4.5", "claude-opus-4.7", "llama-3.3-70b"}),
-    "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b"}),
-    "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b", "muse-spark-1.1"}),
+    "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b",
+                             "qwen3.8-max", "nemotron-3-super"}),
+    "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b", "muse-spark-1.1",
+                        "llama-3.3-70b"}),
 }
 # Muse Wonder (muse-wonder-1.0), on every base that offers the Meta family, review instance
 # 0.34.0-rc.7 (2026-10-15): the five scenarios passed on all 21 through OpenRouter and through Vercel;
@@ -8443,12 +8457,17 @@ _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes
 #   glm-5.3        -> 400 {"message":"..type is invalid, allowed values: ['text']","code":"1210"}
 #                     at the preview read; the turn died at its own verification step.
 #   glm-5.3-flash  -> the SAME task, same preview read, completed. Accepts images; NOT listed.
+# 2026-10-26, through the product again (fast-agent's family tour, 0.37.1-rc.2): gpt-5.4 attached
+# its rendered slide earlier in the conversation, and the nemotron-3.5-lightning turn failed:
+#   nemotron-3.5-lightning -> 404 "No endpoints found that support image input" (OpenRouter)
 # Echo sweeps never catch this class: the image only appears when a TOOL returns one.
 # Consumed by the pi backend: pi replays a session's image tool-results to the CURRENT model
 # (a cross-model conversation is one session), so a text-only channel turns every follow-up in
 # an image-bearing session into a hard 400. Declared text-only, pi drops the image instead —
-# a degraded answer beats a dead conversation.
-_TEXT_ONLY_INPUT = {"qwen3.7-max", "glm-5.3"}
+# a degraded answer beats a dead conversation. dsh, omp and fast-agent read the same flag (fast-agent
+# keeps an image in its history under the model that attached it; the runner takes it out of the
+# stored conversation before a text-only model loads it).
+_TEXT_ONLY_INPUT = {"qwen3.7-max", "glm-5.3", "nemotron-3.5-lightning"}
 # Union of BOTH tables' values — a dict merge would drop the bedrock ids (shared keys, anthropic
 # values win), silently rejecting the us.anthropic.* ids this set exists to allow.
 _PROVIDER_CLAUDE_IDS = {v.lower() for v in [*_BEDROCK_CLAUDE.values(), *_ANTHROPIC_CLAUDE.values()]}
@@ -9382,7 +9401,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 "idempotency_key": f"{translator.resp_id}:{name}",
                 # token-level streaming (claude): runner adds --include-partial-messages + emits deltas
                 "partial_messages": bool(partial_messages),
-                # pi: whether this model's channel takes image input (see _TEXT_ONLY_INPUT)
+                # pi, dsh, omp, fast-agent: whether this model's channel takes image input (see _TEXT_ONLY_INPUT)
                 "vision": model_req.strip().lower() not in _TEXT_ONLY_INPUT,
                 # hermes: which integration answers its image questions (vision_analyze, browser
                 # tools), resolved across the instance like image generation, so the capability

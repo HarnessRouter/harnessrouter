@@ -228,7 +228,8 @@ def test_text_and_tool_calls_keep_the_order_the_reader_saw():
         {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "then more"}},
     ])
     kinds = [(e["type"], e["message"]["content"][0]["type"]) for e in evs]
-    assert kinds == [("assistant", "text"), ("assistant", "tool_use"),
+    # each chunk is its own event, streamed as it came (acp_turn.Stream)
+    assert kinds == [("assistant", "text"), ("assistant", "text"), ("assistant", "tool_use"),
                      ("user", "tool_result"), ("assistant", "text")]
 
 
@@ -253,7 +254,8 @@ def test_progress_updates_are_not_the_turns_answer():
         {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "the answer"}},
     ])
     assert answer == "the answer"
-    assert len(evs) == 1
+    # the thought is shown as thinking, never as the answer; the plan and the echoed prompt not at all
+    assert [e["message"]["content"][0]["type"] for e in evs] == ["thinking", "text"]
 
 
 def test_an_empty_turn_produces_no_events_and_no_answer():
@@ -528,3 +530,28 @@ def test_an_agent_that_will_not_exit_is_killed_and_the_turn_still_ends(tmp_path)
     except ProcessLookupError:
         alive = False
     assert not alive, f"agent {pid} outlived the turn"
+
+
+# ── streamed, not held ────────────────────────────────────────────────────────────────────────
+def test_an_update_reaches_the_record_while_the_prompt_is_still_running(tmp_path):
+    """THE BUG THIS PINS (Richard, 2026-10-26): the driver held every update until session/prompt
+    returned, so a turn showed "Thinking" for its whole length and then everything at once."""
+    import subprocess
+    agent = pathlib.Path(__file__).resolve().parent / "fixtures" / "batch4" / "fake_acp_agent.py"
+    log = tmp_path / "asked.ndjson"
+    job = {"argv": [sys.executable, str(agent)], "cwd": str(tmp_path), "prompt": "do it", "model": "gpt-5.4",
+           "model_spec": "", "resume": "", "timeout": 60}
+    env = {**os.environ, "FAKE_ACP_MODE": "slow_prompt", "FAKE_ACP_LOG": str(log)}
+    proc = subprocess.Popen([sys.executable, str(pathlib.Path(D.__file__)), json.dumps(job)], cwd=str(tmp_path),
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, env=env)
+    seen = []
+    t0 = __import__("time").time()
+    for line in proc.stdout:
+        if line.strip().startswith("{"):
+            seen.append((__import__("time").time() - t0, json.loads(line)))
+    proc.wait(timeout=30)
+    first = next(t for t, e in seen if e.get("type") == "assistant"
+                 and e["message"]["content"][0].get("text") == "FIRST ")
+    done = next(t for t, e in seen if e.get("type") == "result")
+    assert done - first >= 1.5, (first, done)
+    assert seen[-1][1]["result"] == "FIRST THE NEW ANSWER"

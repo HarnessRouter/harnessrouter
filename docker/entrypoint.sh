@@ -253,7 +253,7 @@ backend_bin() {
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
     docker-agent) echo "$TOOLS/bin/docker-agent" ;;
-    fast-agent) echo "$TOOLS/fast-agent-venv/bin/fast-agent" ;;
+    fast-agent) echo "$TOOLS/fast-agent-venv/bin/fast-agent-acp" ;;
     dcode) echo "$TOOLS/dcode-venv/bin/dcode" ;;
     nanobot) echo "$TOOLS/nanobot-venv/bin/nanobot" ;;
     zeroclaw) echo "$TOOLS/bin/zeroclaw" ;;
@@ -1213,7 +1213,7 @@ install_fast_agent() {
     install_unlocked_venv "fast-agent" "${HR_FAST_AGENT_BASE_PYTHON:-python3}" "$TOOLS/fast-agent-venv" "fast-agent-mcp==$fa_ver" || return 1
   fi
   # RUN what was installed and compare the version it REPORTS, and prove the two surfaces this
-  # backend depends on: the generic client's own env-var names and the ATIF trajectory writer.
+  # backend depends on: the generic client's own env-var names and the ACP server the runner drives.
   "$TOOLS/fast-agent-venv/bin/python" -c '
 import sys, importlib.metadata as md
 have = md.version("fast-agent-mcp")
@@ -1224,6 +1224,8 @@ src = open(llm_generic.__file__).read()
 for name in ("GENERIC_BASE_URL",):
     if name not in src:
         sys.exit("fast-agent-mcp %s no longer reads %s, which the runner sets" % (have, name))
+if not any(e.name == "fast-agent-acp" for e in md.distribution("fast-agent-mcp").entry_points):
+    sys.exit("fast-agent-mcp %s has no fast-agent-acp, which the runner drives" % have)
 ' "$fa_ver" || { rm -rf "$TOOLS/fast-agent-venv"; return 1; }
 }
 
@@ -1604,7 +1606,11 @@ install_backends() {
     echo "[harnessrouter] installing fast-agent $FAST_AGENT_PIN (Apache-2.0, version-pinned)…"
     try_install "fast-agent" install_fast_agent || true
   fi
-  [ -x "$TOOLS/fast-agent-venv/bin/fast-agent" ] && export HR_FAST_AGENT_BIN="$TOOLS/fast-agent-venv/bin/fast-agent"
+  if [ -x "$TOOLS/fast-agent-venv/bin/fast-agent-acp" ]; then
+    export HR_FAST_AGENT_ACP_BIN="$TOOLS/fast-agent-venv/bin/fast-agent-acp"
+    # The driver is stdlib-only, so the agent's own interpreter runs it (dcode's arrangement).
+    export HR_FAST_AGENT_PYTHON="$TOOLS/fast-agent-venv/bin/python"
+  fi
 
   DCODE_PIN="${HR_DCODE_VERSION:-$DCODE_LOCKED}"
   if wanted dcode && [ "$("$TOOLS/dcode-venv/bin/python" -c 'import importlib.metadata as m;print(m.version("deepagents-code"))' 2>/dev/null)" != "$DCODE_PIN" ]; then

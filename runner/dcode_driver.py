@@ -22,7 +22,7 @@ What this driver does, and why each part is here (every claim measured on that b
     session directory here, so that holds across a sandbox recycle.
   * A LOADED session replays its whole history as `session/update` notifications before the prompt
     is sent. Nothing is recorded until `session/prompt` goes out, or a turn's record would open
-    with every earlier turn's reply (the shape fast-agent's trajectory has, in another protocol).
+    with every earlier turn's reply (the shape fast-agent's trajectory had, in another protocol).
   * The model is NOT the `-M` flag once a session exists: the session carries its own, and
     `session/set_config_option(configId="model")` is the door. The flag still matters because the
     server's valid-model list is built from the model THIS process resolved, so `-M` is what puts
@@ -40,140 +40,12 @@ from __future__ import annotations
 
 import json
 import os
-import signal
-import subprocess
 import sys
-import threading
 import time
 
-# A client that never answers would hang the agent; a client that waits forever would hang the
-# turn. Both are bounded, under the runner's own wall-clock cap.
-_RPC_TIMEOUT = float(os.environ.get("HR_DCODE_RPC_TIMEOUT", "120"))
-# How long the agent has to exit once its input ends, before it is killed (see Acp.close).
-_END_GRACE = float(os.environ.get("HR_DCODE_END_GRACE", "10"))
-_PROMPT_TIMEOUT = float(os.environ.get("HR_DCODE_PROMPT_TIMEOUT", "7200"))
-
-
-def emit(obj: dict) -> None:
-    sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
-
-
-class Acp:
-    """A newline-delimited JSON-RPC client for one `dcode --acp` process."""
-
-    def __init__(self, argv: list[str], cwd: str, env: dict) -> None:
-        self.proc = subprocess.Popen(argv, cwd=cwd, env=env, text=True, bufsize=1,
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, start_new_session=True)
-        self._id = 0
-        self._lock = threading.Lock()
-        self._pending: dict[int, list] = {}
-        self.updates: list[dict] = []
-        self.recording = False      # see the module docstring: a load replays the conversation
-        self.errtail: list[str] = []
-        threading.Thread(target=self._read_out, daemon=True).start()
-        threading.Thread(target=self._read_err, daemon=True).start()
-
-    # ── wire ──────────────────────────────────────────────────────────────────────────────────
-    def _send(self, obj: dict) -> None:
-        with self._lock:
-            try:
-                self.proc.stdin.write(json.dumps(obj) + "\n")   # type: ignore[union-attr]
-                self.proc.stdin.flush()                          # type: ignore[union-attr]
-            except (BrokenPipeError, ValueError):
-                pass
-
-    def call(self, method: str, params: dict, timeout: float = _RPC_TIMEOUT) -> dict:
-        with self._lock:
-            self._id += 1
-            rid = self._id
-            slot = [threading.Event(), None]
-            self._pending[rid] = slot
-        self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
-        if not slot[0].wait(timeout):
-            raise TimeoutError(method)
-        with self._lock:
-            self._pending.pop(rid, None)
-        return slot[1] or {}
-
-    def _read_out(self) -> None:
-        for raw in self.proc.stdout:        # type: ignore[union-attr]
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                msg = json.loads(raw)
-            except ValueError:
-                continue
-            if "id" in msg and ("result" in msg or "error" in msg):
-                with self._lock:
-                    slot = self._pending.get(msg["id"])
-                if slot:
-                    slot[1] = msg
-                    slot[0].set()
-                continue
-            if "id" in msg and "method" in msg:
-                self._answer(msg)
-                continue
-            if msg.get("method") == "session/update" and self.recording:
-                self.updates.append((msg.get("params") or {}).get("update") or {})
-        # the agent's stdout closed: wake anything still waiting rather than letting it time out
-        with self._lock:
-            for slot in self._pending.values():
-                slot[1] = {"error": {"code": -32000, "message": "the agent closed its stream"}}
-                slot[0].set()
-
-    def close(self) -> None:
-        """End the agent and WAIT until it has exited. dcode 0.2 keeps a lock on its thread for as
-        long as its process lives (deepagents_code/thread_ownership.py), and the next turn of the
-        conversation is another process loading that thread. MEASURED 2026-10-25, four matrix
-        columns at once: this driver sent SIGTERM and returned at once; an idle agent took 1.3 to
-        1.7 s to go, two caught the signal and were still running minutes later, orphaned, and the
-        turn after them was refused its own thread ("Thread … is open elsewhere"). End of input is
-        how an ACP client ends the agent (it exits 0 in about 1.6 s and releases the thread itself);
-        one that has not gone in _END_GRACE is killed with its group, and its lock goes with it.
-        The runner holds the turn's result until this process exits, so the next turn starts only
-        once the agent is gone."""
-        p = self.proc
-        if p.poll() is None:
-            try:
-                p.stdin.close()     # type: ignore[union-attr]  (a write racing it is dropped: _send)
-            except (OSError, ValueError):
-                pass
-            try:
-                p.wait(timeout=_END_GRACE)
-                return
-            except subprocess.TimeoutExpired:
-                pass
-            try:
-                os.killpg(p.pid, signal.SIGKILL)
-            except OSError:
-                pass
-        p.wait()
-
-    def _read_err(self) -> None:
-        for raw in self.proc.stderr:        # type: ignore[union-attr]
-            self.errtail.append(raw.rstrip()[:400])
-            del self.errtail[:-40]
-
-    def _answer(self, msg: dict) -> None:
-        """The agent's own requests. It asks for permission; it must not be left waiting."""
-        method = str(msg.get("method") or "")
-        if method == "session/request_permission":
-            opts = ((msg.get("params") or {}).get("options") or [])
-            pick = next((o for o in opts
-                         if "allow" in str(o.get("kind", "")).lower()
-                         or "allow" in str(o.get("optionId", "")).lower()), None)
-            pick = pick or (opts[0] if opts else None)
-            result = ({"outcome": {"outcome": "selected", "optionId": pick["optionId"]}}
-                      if pick else {"outcome": {"outcome": "cancelled"}})
-            self._send({"jsonrpc": "2.0", "id": msg["id"], "result": result})
-            return
-        # Anything else — a filesystem or terminal request — is refused by name rather than
-        # ignored: this client advertises neither capability, and silence would hang the agent.
-        self._send({"jsonrpc": "2.0", "id": msg["id"],
-                    "error": {"code": -32601, "message": f"this client does not implement {method}"}})
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from acp_turn import Acp, Stream, emit, error_text, _PROMPT_TIMEOUT  # noqa: E402
+import acp_turn  # noqa: E402
 
 
 # The tools whose own name the server sends as the call's title. Everything else it renames for a
@@ -203,83 +75,9 @@ def _tool_name(title: str, kind: str) -> str:
     return title or kind or "tool"
 
 
-def error_text(err: dict) -> str:
-    """The readable reason inside a JSON-RPC error, which is not its `message`.
-
-    A provider refusal arrives as -32603 "Internal error" with the real thing in `data.details`,
-    and that string is this agent's own traceback with its frames joined by " / " — MEASURED on a
-    401 through the relay: `Error code: 401 - {...'Authentication failed'...} / raise
-    OpenAIAuthenticationError( / langchain_openai...OpenAIAuthenticationError: ... / During task
-    with name 'model'`. The first segment is the reason; the rest is the agent's internals, and a
-    turn's record is not where they belong."""
-    if not isinstance(err, dict):
-        return "the agent reported an error"
-    data = err.get("data") if isinstance(err.get("data"), dict) else {}
-    text = str(data.get("details") or err.get("message") or "").strip()
-    if not text:
-        return "the agent reported an error"
-    return text.split(" / ")[0].strip().splitlines()[0][:600]
-
-
 def translate(updates: list[dict]) -> tuple[list[dict], str]:
-    """ACP session updates → canonical claude events, and the turn's answer.
-
-    Text arrives in chunks; they are joined into one block per run of them and flushed when a tool
-    call interrupts, so the transcript keeps the order the reader saw."""
-    evs: list[dict] = []
-    buf: list[str] = []
-    final: list[str] = []
-    calls: dict[str, str] = {}
-
-    def flush() -> None:
-        text = "".join(buf).strip()
-        buf.clear()
-        if text:
-            final.append(text)
-            evs.append({"type": "assistant", "message": {"content": [
-                {"type": "text", "text": text}]}})
-
-    for u in updates:
-        kind = str(u.get("sessionUpdate") or "")
-        if kind == "agent_message_chunk":
-            buf.append(str((u.get("content") or {}).get("text") or ""))
-        elif kind == "tool_call":
-            flush()
-            cid = str(u.get("toolCallId") or "tool")
-            name = _tool_name(str(u.get("title") or ""), str(u.get("kind") or ""))
-            calls[cid] = name
-            args = u.get("rawInput")
-            evs.append({"type": "assistant", "message": {"content": [
-                {"type": "tool_use", "id": cid, "name": name,
-                 "input": args if isinstance(args, dict) else {"input": args}}]}})
-        elif kind == "tool_call_update":
-            status = str(u.get("status") or "")
-            if status not in ("completed", "failed"):
-                continue                      # pending / in_progress: the call row already said so
-            cid = str(u.get("toolCallId") or "tool")
-            calls.pop(cid, None)
-            parts = []
-            for item in (u.get("content") or []):
-                if not isinstance(item, dict):
-                    continue
-                inner = item.get("content") if isinstance(item.get("content"), dict) else {}
-                parts.append(str(inner.get("text") or item.get("text") or ""))
-            evs.append({"type": "user", "message": {"content": [
-                {"type": "tool_result", "tool_use_id": cid, "is_error": status == "failed",
-                 "content": "\n".join(p for p in parts if p)[:8000]}]}})
-        # agent_thought_chunk, plan, user_message_chunk, current_mode_update: progress, not the
-        # turn's record. The thought chunks are deliberately not rendered as the answer.
-    flush()
-    for cid, name in calls.items():
-        # One call in this protocol never gets a completion: an edit_file with a full diff is sent
-        # through the server's `start_edit_tool_call` branch, which emits the call and nothing
-        # after it (measured on a six-tool turn — the edit landed, the status stayed `pending`).
-        # A tool_use with no tool_result is a hole in the record, so it is closed by saying exactly
-        # that rather than by claiming an outcome nobody reported.
-        evs.append({"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": cid, "is_error": False,
-             "content": f"(the agent reported no completion for this {name} call)"}]}})
-    return evs, "\n".join(final).strip()
+    """The events a list of this agent's updates streams, and the turn's answer (acp_turn.translate)."""
+    return acp_turn.translate(updates, _tool_name)
 
 
 def main() -> int:
@@ -289,8 +87,9 @@ def main() -> int:
     model_spec = str(job.get("model_spec") or "")
     resume = str(job.get("resume") or "")
     started = time.time()
+    stream = Stream(_tool_name)
     try:
-        acp = Acp(list(job["argv"]), cwd, env)
+        acp = Acp(list(job["argv"]), cwd, env, on_update=stream.update)
     except OSError as e:
         emit({"type": "result", "subtype": "error", "is_error": True,
               "result": f"dcode did not start: {e}", "usage": {}})
@@ -354,16 +153,17 @@ def main() -> int:
             if "error" in res:
                 emit({"type": "system", "subtype": "notice",
                       "text": f"this turn's model could not be set on the session: {model_spec}"})
-        acp.recording = True        # everything before this is the loaded conversation's replay
+        acp.recording = True        # everything before this is the loaded conversation's replay;
+        #                             from here each update is written as it arrives (Stream)
         out = acp.call("session/prompt",
                        {"sessionId": session_id,
                         "prompt": [{"type": "text", "text": str(job["prompt"])}]},
                        timeout=min(_PROMPT_TIMEOUT, max(60.0, float(job.get("timeout") or _PROMPT_TIMEOUT))))
     except TimeoutError as e:
         return fail(f"the agent did not answer {e} in time", with_tail=True)
-    evs, answer = translate(acp.updates)
-    for ev in evs:
-        emit(ev)
+    acp.recording = False
+    stream.finish()
+    answer = stream.answer()
     if "error" in out:
         err = out["error"] if isinstance(out.get("error"), dict) else {}
         blob = json.dumps(err)
