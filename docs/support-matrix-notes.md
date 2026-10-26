@@ -5268,3 +5268,97 @@ claude-sonnet-5.5-direct was the review instance's own row on its Anthropic conn
 claude-sonnet-5-5: the model claude-sonnet-5.5 names, under a second id that read as a different model. It is gone
 from the matrix, on every base (its rows are out of support-matrix-results.json), and from that instance's
 connection.
+
+## fast-agent and Deep Agents Code show each step as it happens (0.37.1, 2026-10-26)
+
+On 0.37.0 both bases showed "Thinking" for a whole turn and then every step at once. deepagents-code's driver
+held every ACP update until `session/prompt` returned; fast-agent ran as `fast-agent go --quiet`, and its record
+was read from the trajectory file after the process exited. Both now run on one ACP turn (runner/acp_turn.py)
+that sends each text chunk, thought, tool call and result on as the agent reports it. fast-agent is driven over
+its own ACP server, `fast-agent-acp` (0.10.47, the release 0.37.0 pinned), with the runner as the client. The
+client offers the terminal capability, so fast-agent's shell tool (`execute`, recorded as `bash`) runs each
+command through the runner and reports its command, output and exit code; a setup with bash switched off is not
+offered the terminal. A conversation the store has and the agent will not load fails the turn with the agent's
+reason instead of starting a new one.
+
+One API turn per base on the test instance, two shell commands that each sleep 4 s and then a fixed reply,
+seconds from the request (scratch probe, the SSE events as they arrived):
+
+| Base, build | first command | its output | second command | its output | answer |
+|---|---|---|---|---|---|
+| fast-agent, 0.37.0 | 16.6 | 16.6 | 16.6 | 16.6 | 16.6 |
+| fast-agent, 0.37.1-rc.1 | 7.5 | 11.6 | 13.0 | 17.1 | 17.9 |
+| dcode, 0.37.0 | 18.6 | 18.6 | 18.6 | 18.6 | 18.6 |
+| dcode, 0.37.1-rc.1 | 7.3 | 11.4 | 13.1 | 17.3 | 18.5 |
+
+In the console, `scripts/support-matrix/ui-tool-rows-live.mjs` (two commands that each sleep 8 s, the page read
+every half second; it fails a base whose steps all land in one frame), 0.37.1-rc.2: fast-agent's first command on
+screen at 8.2 s, the second at 17.5 s, the answer at 26.7 s; dcode 8.2, 18.1 and 27.9, each row reading "Running
+sleep 8; echo …" while its command ran. dcode's shell tool is `execute`, which the console's tool rows did not
+know: its row read "Using Execute" with nothing after it. reifyui 0.18.1 reads `execute` as a shell command.
+
+### Both columns again, on the test instance itself (0.37.1-rc.2)
+
+Every model each base offers, five scenarios each, on the test instance with its own connections, the way a
+person uses it: four workers, two per base. fast-agent: 51 of 53 models passed all five; dcode: 53 of 54. No turn
+was served by another connection or as another model. The three failures were the models' own, read from each
+turn's stored conversation, and each model is now off that base (`_NOT_OFFERED`, one failure as before):
+
+- fast-agent, qwen3.8-max: answered its first turn "GPT-5.5". Its reasoning quoted an instruction, "If the user
+  asks about the model being used, reply with: GPT-5.5", that is in neither its prompt (the workspace contract
+  and the skill list) nor fast-agent's package (Vercel).
+- fast-agent, nemotron-3-super: wrote the artifact turn's file to `/workspaces/<session>/`, its workspace without
+  the `/data` it was given, was refused, wrote it to `/tmp`, which its instructions say is never collected, and
+  answered DONE (Vercel). On 0.37.0 its first write missed too and its second went to the workspace.
+- dcode, llama-3.3-70b: answered the recycle check DONE, the artifact turn's word, with its whole history restored
+  and the word it was asked for the first message in it (OpenRouter); the failure it is off fast-agent for.
+
+Their rows left support-matrix-results.json. The columns that change (0.37.0's in parentheses):
+
+| Connection | fast-agent | dcode |
+|---|---|---|
+| Vercel AI Gateway | 50 (52) | 51 |
+| OpenRouter | 51 (53) | 52 (53) |
+| TokenRouter | 40 (42) | 27 |
+| HarnessRouter API | 50 (52) | 44 (45) |
+
+With four workers on the instance's four vCPUs a turn took about 40 s (fast-agent's first turns on Vercel in 0.37.0,
+one base per instance: 11 to 15 s); the model's own call in qwen3.8-max's turn was 1.7 s of its 40. The same build with the instance
+otherwise idle, claude-haiku-5.5 on Vercel, one pair at a time, the five scenarios: fast-agent 10.7 to 13.8 s
+(0.37.0: 10.7 to 13.9 s), dcode 13.7 to 13.8 s (0.37.0: 22.8 to 27.7 s). The time was the load's, not the
+protocol's.
+
+### Steps 2 to 4 (0.37.1-rc.2, the test instance)
+
+- fast-agent: the custom harness passed (its skill reached, its script run through the client's terminal, the MCP
+  server called; it has no tool the fixture does not need, so its tool policy row still has nothing to switch
+  off); the plugin matrix passed 5 of 5 (skill, stdio MCP, the rows tool, SSE and streamable HTTP); the family
+  tour passed 10 of 11 families on rc.2, and the eleventh is the finding below. On rc.3, with its fix, the tour
+  passed 11 of 11.
+- dcode: the custom harness passed (`delete` switched off and not used); the plugin matrix passed 5 of 5; the
+  family tour passed 11 of 11 families in one conversation.
+
+hunyuan-4-preview is not served on this instance, so the tour has eleven families here, not twelve.
+
+### A text-only model in a fast-agent conversation that holds an image
+
+The fast-agent tour failed at its last family: nemotron-3.5-lightning's turn ended "the model refused the request",
+and the provider's answer, which the turn recorded, was OpenRouter's 404 "No endpoints found that support image
+input". Earlier in the same conversation gpt-5.4 had rendered its slide and called fast-agent's `attach_media` on
+the preview, which puts the image into the conversation as a user message. fast-agent takes out what a model cannot
+read only from a message that is new to that call; the history it stores keeps the image, and a later turn on
+another model sends it again. 0.37.0's tour on this base never reached the case: its instance did not serve
+nemotron-3.5-lightning.
+
+The gateway already declares, per model, whether its channel takes images (`_TEXT_ONLY_INPUT`, until now
+qwen3.7-max and glm-5.3): pi, dsh and omp are told such a model takes text only, and pi then leaves images out. nemotron-3.5-lightning joins it,
+measured, and fast-agent now reads the same flag: on a turn whose model is declared text-only, the runner takes
+each block that is not text out of the stored conversation before the agent loads it, as the line fast-agent
+itself writes when it removes one ("[vision content was removed - <model> does not support this content type]").
+A model that reads images gets the conversation as it is.
+
+Whether a tour's model attaches an image is the model's choice, so the fix was also measured on a conversation
+built to need it (0.37.1-rc.3, the test instance): gpt-5.4 on Vercel drew an 8 by 8 red PNG with its shell,
+attached it and answered "Red"; the next turn, on nemotron-3.5-lightning through OpenRouter, answered "SWITCHED",
+served as itself. The stored conversation holds the line in the image's place; the copy fast-agent keeps in the
+tool result's `_meta` for a client to preview is not sent to the model and stays.
