@@ -35,7 +35,7 @@ from server import (ALL_VIBE_TOOLS, Auth, BACKENDS,  # noqa: E402
                     ALL_FAST_AGENT_TOOLS, _build_fast_agent, _claude_passthrough,
                     FAST_AGENT_ACP_BIN, FAST_AGENT_DRIVER,
                     _fast_agent_home, _fast_agent_session_file,
-                    _fast_agent_session_present, _fast_agent_set_model)
+                    _fast_agent_session_present, _fast_agent_set_model, _fast_agent_drop_media)
 
 UP = "https://up.example/v1"
 FIX = pathlib.Path(__file__).resolve().parent / "fixtures" / "batch4"
@@ -746,6 +746,29 @@ def test_a_text_only_model_loads_the_conversation_without_its_images():
     # the stored model was still pointed at the turn's, as on every resumed turn
     stored = json.loads(f.read_text())["continuation"]["agents"]["harness"]
     assert stored["model"] == "nemotron-3.5-lightning"
+
+
+def test_the_media_drop_writes_only_inside_the_session_store():
+    """The session id is the agent's own (its init event) and the history file's name is read from
+    its store, so neither may point the rewrite outside the session's own directory."""
+    ws = _ws()
+    png = {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"}
+    outside = pathlib.Path(ws) / "victim.json"
+    outside.write_text(json.dumps({"messages": [{"role": "user", "content": [png]}]}))
+    # an id that climbs out of the store
+    evil = pathlib.Path(ws) / "evil"
+    evil.mkdir()
+    (evil / "session.json").write_text(json.dumps({"continuation": {"agents": {"a": {
+        "history_file": "../victim.json"}}}}))
+    assert _fast_agent_drop_media(ws, "../../../evil", "m") == 0
+    # a history file name that climbs out of the session's directory
+    sid = "2610260950-FIta9i"
+    f = _fast_agent_session_file(ws, sid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"continuation": {"agents": {"a": {
+        "history_file": "../../../../victim.json"}}}}))
+    assert _fast_agent_drop_media(ws, sid, "m") == 0
+    assert png in json.loads(outside.read_text())["messages"][0]["content"]
 
 
 def test_an_mcp_server_carries_its_bearer_and_its_transport():

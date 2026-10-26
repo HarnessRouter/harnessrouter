@@ -13152,8 +13152,7 @@ def _fast_agent_drop_media(cwd: str, session_id: str, model: str) -> int:
     whose model is declared text-only (the gateway's _TEXT_ONLY_INPUT, pi's `vision`), each block
     that is not text becomes the line fast-agent itself writes when it removes one. Returns how
     many blocks were taken out; the files are written beside and renamed, as the model is."""
-    path = _fast_agent_session_file(cwd, session_id)
-    note = f"content was removed - {model} does not support this content type]"
+    note =f"content was removed - {model} does not support this content type]"
 
     def text_only(blocks: list) -> tuple[list, int]:
         kept, n = [], 0
@@ -13168,17 +13167,23 @@ def _fast_agent_drop_media(cwd: str, session_id: str, model: str) -> int:
                 kept.append(b)
         return kept, n
 
+    # The id is the agent's own (its init event), and the history file's name is read from the
+    # agent's store: both are kept to paths inside the session store before anything is written.
+    store = os.path.realpath(os.path.join(str(_fast_agent_home(cwd)), "sessions"))
+    sdir = os.path.realpath(os.path.join(store, session_id))
+    if not sdir.startswith(store + os.sep):
+        return 0
     removed = 0
     try:
-        with path.open(encoding="utf-8") as fh:
+        with open(os.path.join(sdir, "session.json"), encoding="utf-8") as fh:
             agents = ((json.load(fh).get("continuation") or {}).get("agents") or {})
         names = {str(s.get("history_file")) for s in agents.values()
                  if isinstance(s, dict) and s.get("history_file")}
         for name in sorted(names):
-            hist = path.parent / pathlib.PurePath(name).name
-            if not hist.is_file():
+            hist = os.path.realpath(os.path.join(sdir, name))
+            if not hist.startswith(sdir + os.sep) or not os.path.isfile(hist):
                 continue
-            with hist.open(encoding="utf-8") as fh:
+            with open(hist, encoding="utf-8") as fh:
                 doc = json.load(fh)
             n = 0
             for msg in doc.get("messages") or []:
@@ -13193,8 +13198,8 @@ def _fast_agent_drop_media(cwd: str, session_id: str, model: str) -> int:
                         res["content"], k = text_only(res["content"])
                         n += k
             if n:
-                tmp = hist.with_suffix(".json.hr-tmp")
-                with tmp.open("w", encoding="utf-8") as fh:
+                tmp = hist + ".hr-tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
                     json.dump(doc, fh)
                 os.replace(tmp, hist)
                 removed += n
