@@ -17,7 +17,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app as gw  # noqa: E402
 
 HARNESS_TS = Path(__file__).resolve().parents[2] / "ui" / "src" / "lib" / "harness.ts"
-ENTRY = re.compile(r"\n  \{ id: '([a-z0-9-]+)', name: '[^']*', version: '[^']*', backend: '([a-z]+)'(.*?)\n    tools: \[", re.S)
+# The BACKEND may carry a hyphen as well as the id: `docker-agent` is the first base whose backend
+# does (claude-code's is plain `claude`), and with `[a-z]+` its entry simply did not match — the
+# parse then found one fewer entry than the catalog and the diff pointed at the wrong base.
+ENTRY = re.compile(r"\n  \{ id: '([a-z0-9-]+)', name: '[^']*', version: '[^']*', backend: '([a-z-]+)'(.*?)\n    tools: \[", re.S)
 
 
 def _entries() -> list[tuple[str, str, list[str], str]]:

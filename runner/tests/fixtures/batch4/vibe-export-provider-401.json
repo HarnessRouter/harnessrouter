@@ -1,0 +1,16 @@
+{
+  "outcome": "config_error",
+  "stop_reason": null,
+  "error": {
+    "message": "Invalid API key (from env var HR_PROBE_KEY). Please check your API key and try again.",
+    "code": "invalid_api_key"
+  },
+  "session_id": "d31ca2a6-04cc-160d-e3bc-c2deabcd5810",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cached_input_tokens": 0,
+    "total_tokens": 0
+  },
+  "steps": 1
+}

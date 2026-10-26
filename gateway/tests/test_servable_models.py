@@ -59,9 +59,11 @@ async def test_a_chain_restricts_to_what_that_vendor_actually_serves(monkeypatch
     _patch(monkeypatch, chain=["tr"], conn_provider="tokenrouter")
     got = await A._servable_models("org", "hermes")
     assert got is not None, "a chain must no longer mean 'offer everything'"
-    # the five with no channel are exactly what must not be offered
+    # the ids with no channel are exactly what must not be offered
     assert got.isdisjoint(A._TOKENROUTER_NO_CHANNEL)
-    assert "claude-sonnet-4.6" in got and "kimi-k3" in got
+    # kimi-k3 was this test's served example until TokenRouter served it as another model (2026-10-25)
+    # and it joined the table above; deepseek-v4.1-flash is served as itself
+    assert "claude-sonnet-4.6" in got and "deepseek-v4.1-flash" in got and "kimi-k3" not in got
 
 
 @pytest.mark.asyncio
@@ -90,3 +92,38 @@ async def test_no_chain_still_answers_from_the_map(monkeypatch):
     _patch(monkeypatch, chain=[], model_map={"gpt-5.4": "Vercel"}, integrations=[integ])
     monkeypatch.setattr(A, "_integration_serves_backend", lambda _i, _b: True)
     assert await A._servable_models("org", "codex") == {"gpt-5.4"}
+
+
+@pytest.mark.asyncio
+async def test_a_connection_the_router_would_refuse_offers_none_of_its_models(monkeypatch):
+    """MEASURED on the support matrix (2026-10-20), and the same class of broken promise this
+    file opens with: an instance whose only connection was google offered docker-agent the whole
+    gemini family as available — eight ids — and every turn came back "No connection on this
+    account serves gemini-4-argon", because the router refuses a chain connection whose
+    (provider, base) pair has no wiring row and this function never asked. docker-agent has a
+    google row now (probed, same commit), which is why this test asks about a base that does not.
+
+    The picker now asks the router's own question, so the two cannot drift: whatever
+    _chain_refusal says about a connection, the picker says about its models."""
+    # goose is the DOCUMENTED case of a deliberately absent row ("No ("google", "goose") row:
+    # unprobed is unlisted", in the wiring table itself), and its catalog carries nine gemini ids
+    # — so the picker had nine promises to break. fast-agent and dcode are in the same position.
+    assert not A._INTEGRATION_WIRING.get(("google", "goose")), \
+        "this test needs a base google cannot drive; pick another if that changes"
+    assert [m for m in A._MODEL_CATALOG["goose"]["models"] if "gemini" in str(m)]
+    _patch(monkeypatch, chain=["g"], conn_provider="google")
+    got = await A._servable_models("org", "goose")
+    assert got == set(), got
+    # and a base google CAN drive still gets google's table
+    assert A._INTEGRATION_WIRING.get(("google", "vibe"))
+    _patch(monkeypatch, chain=["g"], conn_provider="google")
+    vibe = await A._servable_models("org", "vibe")
+    assert vibe and "gemini-3.8-flash" in vibe
+
+
+@pytest.mark.asyncio
+async def test_the_refused_connection_does_not_turn_into_no_restriction(monkeypatch):
+    """The failure mode to avoid while fixing it: a skipped connection must not fall through to
+    `return None`, which means "offer everything" — the original bug this file records."""
+    _patch(monkeypatch, chain=["g"], conn_provider="google")
+    assert await A._servable_models("org", "goose") is not None

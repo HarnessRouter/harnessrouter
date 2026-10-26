@@ -1,0 +1,22 @@
+{"toolCallId": "toolu_01U6RBquWBGHKr6C5p5wmnD5", "title": "ls", "kind": "search", "status": "pending", "rawInput": {"path": "/tmp/acp4-ws-r9fi"}, "sessionUpdate": "tool_call"}
+{"toolCallId": "toolu_01D1zjfvu4fhPYAWLiEBpHQR", "title": "Read `/tmp/acp4-ws-r9fi/AGENTS.md`", "kind": "read", "status": "pending", "rawInput": {"file_path": "/tmp/acp4-ws-r9fi/AGENTS.md"}, "sessionUpdate": "tool_call"}
+{"toolCallId": "toolu_01D1zjfvu4fhPYAWLiEBpHQR", "status": "completed", "content": [{"content": {"text": "@@ lines 1-1 of 1 @@\nhello harness", "type": "text"}, "type": "content"}], "sessionUpdate": "tool_call_update"}
+{"toolCallId": "toolu_01U6RBquWBGHKr6C5p5wmnD5", "status": "completed", "content": [{"content": {"text": "['/tmp/acp4-ws-r9fi/.git/', '/tmp/acp4-ws-r9fi/.harness/', '/tmp/acp4-ws-r9fi/AGENTS.md']", "type": "text"}, "type": "content"}], "sessionUpdate": "tool_call_update"}
+{"toolCallId": "toolu_01F6mpe36nYYEEdXKoadf7pp", "title": "Write `/tmp/acp4-ws-r9fi/tools.txt`", "kind": "edit", "status": "pending", "rawInput": {"file_path": "/tmp/acp4-ws-r9fi/tools.txt", "content": "HELLO"}, "sessionUpdate": "tool_call"}
+{"toolCallId": "toolu_01F6mpe36nYYEEdXKoadf7pp", "status": "completed", "content": [{"content": {"text": "Updated file /tmp/acp4-ws-r9fi/tools.txt", "type": "text"}, "type": "content"}], "sessionUpdate": "tool_call_update"}
+{"toolCallId": "toolu_01AGU1K6U9hD4gHvirWpk33y", "title": "Edit `/tmp/acp4-ws-r9fi/tools.txt`", "kind": "edit", "status": "pending", "content": [{"path": "/tmp/acp4-ws-r9fi/tools.txt", "oldText": "HELLO", "newText": "WORLD", "type": "diff"}], "locations": [{"path": "/tmp/acp4-ws-r9fi/tools.txt"}], "rawInput": {"path": "/tmp/acp4-ws-r9fi/tools.txt", "content": {"path": "/tmp/acp4-ws-r9fi/tools.txt", "oldText": "HELLO", "newText": "WORLD", "type": "diff"}}, "sessionUpdate": "tool_call"}
+{"toolCallId": "toolu_01Tpnns7cua6VGqJQVqWqEbV", "title": "grep", "kind": "search", "status": "pending", "rawInput": {"pattern": "WORLD", "path": "/tmp/acp4-ws-r9fi", "output_mode": "content"}, "sessionUpdate": "tool_call"}
+{"toolCallId": "toolu_01Tpnns7cua6VGqJQVqWqEbV", "status": "completed", "content": [{"content": {"text": "/tmp/acp4-ws-r9fi/tools.txt:\n  1: WORLD", "type": "text"}, "type": "content"}], "sessionUpdate": "tool_call_update"}
+{"content": {"text": "Running", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+{"content": {"text": " the shell command to", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+{"content": {"text": " ech", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+{"content": {"text": "o DONE.", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+{"content": {"text": " This", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+{"content": {"text": " pr", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+{"content": {"text": "ints a f", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+{"content": {"text": "ixed string to stdout.", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+{"toolCallId": "toolu_01LJ7wAvyvstY3pUyNngtZJt", "title": "echo DONE", "kind": "execute", "status": "pending", "rawInput": {"command": "echo DONE"}, "sessionUpdate": "tool_call"}
+{"content": {"text": "Running the shell command to echo DONE. This prints a fixed string to stdout.", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+{"toolCallId": "toolu_01LJ7wAvyvstY3pUyNngtZJt", "status": "completed", "content": [{"content": {"text": "**Command:**\n```bash\necho DONE\n```\n\n**Output:**\n```\nDONE\n```\n\n**Status:** Command succeeded with exit code 0", "type": "text"}, "type": "content"}], "sessionUpdate": "tool_call_update"}
+{"content": {"text": "D", "type": "text"}, "sessionUpdate": "agent_message_chunk"}
+{"content": {"text": "ONE-ALL", "type": "text"}, "sessionUpdate": "agent_message_chunk"}

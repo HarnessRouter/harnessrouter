@@ -167,6 +167,9 @@ RUN chmod +x /tmp/install-kits.sh \
 COPY gateway/ /app/gateway/
 COPY runner/  /app/runner/
 COPY docker/entrypoint.sh /app/entrypoint.sh
+# The hash-locked dependency trees the first-boot installer fills vibe's, fast-agent's and dcode's
+# venvs from (pip --require-hashes): part of this reviewed image, never fetched at boot.
+COPY docker/locks/ /app/locks/
 COPY docker/hr-retention /usr/local/bin/hr-retention
 RUN chmod +x /app/entrypoint.sh /usr/local/bin/hr-retention
 

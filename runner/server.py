@@ -412,6 +412,102 @@ def _nanobot_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
         return False
 
 
+def _docker_agent_home(cwd: str) -> pathlib.Path:
+    return pathlib.Path(cwd) / ".harness" / "docker-agent"
+
+
+def _docker_agent_session_db(cwd: str) -> pathlib.Path:
+    return _docker_agent_home(cwd) / "sessions.db"
+
+
+def _docker_agent_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Whether the session store really holds this conversation.
+
+    `--session <id>` CREATES an id the store does not have, silently and as an empty conversation,
+    so this is asked of the store rather than inferred from the argv. The store is the CLI's own
+    sqlite file; it is queried read-only with the same predicate the CLI matches on (its id), and
+    sqlite reads the WAL itself so there is no second file to look at (goose's lesson, where
+    searching the bytes for a session NAME matched a workspace path and failed a turn)."""
+    db = _docker_agent_session_db(cwd)
+    if not session_id or not db.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            tables = [r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            for table in tables:
+                cols = [r[1] for r in con.execute(f"PRAGMA table_info('{table}')").fetchall()]
+                for col in cols:
+                    if col.lower() in ("id", "session_id", "sessionid"):
+                        row = con.execute(
+                            f"SELECT 1 FROM \"{table}\" WHERE \"{col}\" = ? LIMIT 1",
+                            (session_id,)).fetchone()
+                        if row:
+                            return True
+        finally:
+            con.close()
+    except sqlite3.Error:
+        # A store this runner cannot read is not a conversation it can promise; the turn then runs
+        # as a new one and the user is told (_resume_lost).
+        return False
+    return False
+
+
+def _dcode_state_db(cwd: str) -> pathlib.Path:
+    """The CLI's own store, under the redirected HOME."""
+    return pathlib.Path(cwd) / ".harness" / "home" / ".deepagents" / ".state" / "sessions.db"
+
+
+def _dcode_threads(cwd: str) -> list[str]:
+    """Thread ids this workspace's store has, read from the checkpointer's own table.
+
+    An ACP session IS a LangGraph thread, and the thread's checkpoints are the only record of it:
+    `dcode --acp` builds the agent on `get_checkpointer()` and writes nothing to
+    `dcode_thread_workspaces` — that table is the TUI's, and in a workspace that has only ever run
+    ACP turns it does not exist at all (measured: after two turns the store held `checkpoints` and
+    `writes` and no third table). The db itself is per session directory, under the redirected
+    HOME, so a thread_id in THIS db is a conversation of THIS workspace and no cwd column is
+    needed. Asking it is how _resume_lost learns that a thread the caller named is really there."""
+    db = _dcode_state_db(cwd)
+    if not db.is_file():
+        return []
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = con.execute("SELECT DISTINCT thread_id FROM checkpoints").fetchall()
+            return [str(r[0]) for r in rows if r and r[0]]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return []
+
+
+def _dcode_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    return bool(session_id) and session_id in _dcode_threads(cwd)
+
+
+def _fast_agent_home(cwd: str) -> pathlib.Path:
+    """$FAST_AGENT_HOME for this session: its sessions/ and processes/ live here.
+
+    Its default is `./.fast-agent` — in the workspace, where the session store would be handed back
+    to the user as a deliverable on every turn (goose's lesson). Under .harness/ it is excluded
+    from the produced list and still travels in the checkpoint, which is what --resume needs."""
+    return pathlib.Path(cwd) / ".harness" / "fast-agent"
+
+
+def _fast_agent_traj(cwd: str) -> pathlib.Path:
+    return _fast_agent_home(cwd) / "turn.atif.json"
+
+
+def _fast_agent_session_file(cwd: str, session_id: str) -> pathlib.Path:
+    return _fast_agent_home(cwd) / "sessions" / session_id / "session.json"
+
+
+def _fast_agent_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Whether the session store holds this conversation: its own file, not a search of bytes."""
+    return bool(session_id) and _fast_agent_session_file(cwd, session_id).is_file()
+
 def _zeroclaw_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
     """Ask zeroclaw's own ACP session store for the conversation: a row in acp_sessions with this
     uuid is exactly what `session/resume` loads. Read-only, so a turn never contends for the lock
@@ -448,15 +544,27 @@ _SESSION_PRESENT = {
     "openhands": _openhands_session_present,
     "cheetahclaws": _cheetahclaws_session_present,
     "agentzero": _agentzero_session_present,
-    # This batch: three builders perform the lookup themselves and carry the id in argv only when
-    # they found it (mimo's -s, gajae's -r, jcode's --resume all exit without running the model on
-    # an id their store does not hold), so argv IS the builder's conclusion. The two driver-backed
+    # This batch: two builders perform the lookup themselves and carry the id in argv only when
+    # they found it (mimo's -s and jcode's --resume both exit without running the model on an id
+    # their store does not hold), so argv IS the builder's conclusion. The two driver-backed
     # bases pass the key on every turn and must ask their store.
     "mimo": _argv_session_present,
-    "gajae": _argv_session_present,
     "jcode": _argv_session_present,
     "opensquilla": _opensquilla_session_present,
     "nanobot": _nanobot_session_present,
+    # vibe: _build_vibe asks its own session store (_vibe_session_present) and passes --resume only
+    # when the conversation is there, so the id in argv IS that lookup's conclusion.
+    "vibe": _argv_session_present,
+    # docker-agent passes --session on EVERY turn (an id its store does not have is created with
+    # that id, as a new conversation), so the argv says nothing: its store is asked instead.
+    "docker-agent": _docker_agent_session_present,
+    # dcode's ACP session id is a LangGraph thread id, and the checkpointer's table is the only
+    # place it exists: the driver asks the agent to load it and the store is what knows it is
+    # there.
+    "dcode": _dcode_session_present,
+    # fast-agent: _build_fast_agent passes --resume only when the session's own file is in the
+    # store, so the argv is that lookup's conclusion.
+    "fast-agent": _argv_session_present,
     # zeroclaw: the driver asks for `session/resume` on every turn that has an id and starts a new
     # session when the store says it is not there, so the store is asked here too.
     "zeroclaw": _zeroclaw_session_present,
@@ -555,7 +663,11 @@ _CALLER_ENV_RESERVED = ("HR_", "HARNESS_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "
                         # zeroclaw reads ZEROCLAW_<section>__<key> as config overrides (the runner puts
                         # the relay key there), so a harness variable named so could move its endpoint
                         # or its excluded tools, or stop it from starting
-                        "ZEROCLAW_")
+                        "ZEROCLAW_",
+                        # vibe reads VIBE_<key> as config overrides (enable_telemetry among them), and a
+                        # visible MISTRAL_API_KEY makes it fetch the organization's settings from Mistral
+                        # with no switch to stop it
+                        "VIBE_", "MISTRAL_")
 _CALLER_ENV_RESERVED_NAMES = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "PWD", "TMPDIR",
                               "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
                               "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
@@ -788,12 +900,6 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       # workspace hydrated from before that from dragging one through every
                       # later checkpoint.
                       "./.harness/home/.local/share/mimocode/snapshot",
-                      # gajae reads models.yml's apiKey as an env var NAME, so the file holds no
-                      # credential today — but pi's models.json did until it didn't, and auth.json
-                      # is written by `gjc /login`, which a task could run.
-                      "./.harness/home/.gjc/agent/auth.json",
-                      "./.harness/home/.gjc/agent/models.yml",
-                      "./.harness/home/.gjc/agent/.env",
                       # jcode keeps provider credentials under its own home and in the per-provider
                       # env files its `provider add --api-key-stdin` writes. The runner puts the
                       # relay's per-turn placeholder in the ENVIRONMENT and writes neither, but
@@ -801,6 +907,24 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       "./.harness/home/.jcode/auth.json",
                       "./.harness/home/.jcode/credentials.json",
                       "./.harness/home/.config/jcode",
+                      # vibe: its config.toml is rewritten at the start of every turn and can
+                      # carry an MCP server's Authorization header (the same standing as
+                      # opencode.json and kilo.json above), and $VIBE_HOME/.env is the file its own
+                      # `vibe --setup` writes an API key into — the runner never writes it, the
+                      # relay's placeholder rides the environment, but a task could run the wizard.
+                      # The per-turn export directory is excluded because --output-dir ALSO copies
+                      # the whole session journal into it, which would travel in every checkpoint
+                      # beside the real store under home/logs (the same bloat opencode's snapshot
+                      # repo caused). The export itself is read before the turn ends.
+                      "./.harness/vibe/home/config.toml",
+                      "./.harness/vibe/home/.env",
+                      "./.harness/vibe/out",
+                      # fast-agent's fastagent.config.yaml and docker-agent's agent.yaml: rewritten
+                      # at the start of every turn, and each carries an MCP server's Authorization
+                      # header as written (the standing of vibe's config.toml above). Their session
+                      # stores beside them MUST travel, so the exclusion is the file.
+                      "./.harness/fast-agent/fastagent.config.yaml",
+                      "./.harness/docker-agent/agent.yaml",
                       # opensquilla stores provider keys in its profile .env and its onboarding
                       # writes api_key straight into config.toml. The driver passes the relay
                       # placeholder in the environment instead, but `opensquilla onboard` or
@@ -818,6 +942,13 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       # as written, and those commonly hold a bearer token. Rewritten every turn, so
                       # nothing is lost by leaving it out; its data dir beside it MUST travel.
                       "./.harness/zeroclaw/config.toml",
+                      # dcode stores API keys added with its own `/auth` in
+                      # $HOME/.deepagents/.state/auth.json (its auth_store writes it 0600). The
+                      # runner never writes it — the relay's placeholder rides the environment —
+                      # but a task that ran the command would, and the CONVERSATION lives in
+                      # sessions.db in the same directory and MUST travel, so the exclusion is the
+                      # file and not the directory (nanobot's shape).
+                      "./.harness/home/.deepagents/.state/auth.json",
                       # Dependency/scratch dirs (any depth): re-creatable by the agent, and they
                       # dominate checkpoint size — a node project checkpointed 200MB+ and paid
                       # that again on every hydrate. The agent reinstalls when it needs them.
@@ -898,8 +1029,6 @@ AGENTZERO_DEFAULT_MODEL = os.environ.get("AGENTZERO_DEFAULT_MODEL", "gpt-6.1-sol
 # MiMo Code is an opencode fork (its repo root package.json is still literally "opencode"), so it
 # shares opencode's default for the same reason: multi-family through one connection.
 MIMO_DEFAULT_MODEL = os.environ.get("MIMO_DEFAULT_MODEL", "gpt-6.1-sol")
-# Gajae-Code is pi's lineage (docs/porting-from-pi-mono.md), so it shares pi's default too.
-GAJAE_DEFAULT_MODEL = os.environ.get("GAJAE_DEFAULT_MODEL", "gpt-5.4")
 JCODE_DEFAULT_MODEL = os.environ.get("JCODE_DEFAULT_MODEL", "gpt-5.4")
 OPENSQUILLA_DEFAULT_MODEL = os.environ.get("OPENSQUILLA_DEFAULT_MODEL", "gpt-5.4")
 NANOBOT_DEFAULT_MODEL = os.environ.get("NANOBOT_DEFAULT_MODEL", "gpt-5.4")
@@ -1013,13 +1142,12 @@ def _git_ensure(ws: str) -> None:
         ".harness/agentzero/base/usr/.env", ".harness/agentzero/base/usr/secrets.env",
         *_PER_TURN_CONFIG,
         # this batch — the same files CHECKPOINT_EXCLUDE drops from the tarball
-        ".harness/home/.gjc/agent/auth.json", ".harness/home/.gjc/agent/models.yml",
-        ".harness/home/.gjc/agent/.env",
         ".harness/home/.jcode/auth.json", ".harness/home/.jcode/credentials.json",
         ".harness/home/.config/jcode/",
         ".harness/opensquilla/.env", ".harness/opensquilla/secrets.toml",
         ".harness/nanobot/config.json",
         ".harness/zeroclaw/config.toml",
+        ".harness/home/.deepagents/.state/auth.json",
         "# harness: the CLI home is checkpointed by tar, not by this repo (see _git_ensure)",
         ".harness/home/",
         # Agent Zero's whole base, for the #193 reason: its chat.json stores the full rendered
@@ -1491,13 +1619,6 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # us here too — one directory, named in mimo.json.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
-    elif backend == "gajae":
-        # ~/.gjc/agent/skills/<name>/SKILL.md, the CANONICAL user location in gjc's own discovery
-        # table (docs/skills.md), with the agent dir redirected by GJC_CODING_AGENT_DIR into
-        # .harness/home/.gjc/agent (see _build_gajae). User-global for pi's reason: gjc gates
-        # project-local files behind a trust decision, and the user root loads unconditionally.
-        rootrels = [".harness/home/.gjc/agent/skills"]
-        entryroot = ".harness/home/.gjc/agent/skills"
     elif backend == "jcode":
         # ~/.jcode/skills/<name>/SKILL.md — jcode's GLOBAL skills root (tool/skill.rs names it
         # first), and $HOME is already <cwd>/.harness/home, so this is both inside a loader path
@@ -1523,6 +1644,34 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # still. Written down here rather than quietly: see the PR body's follow-up.
         rootrels = [f"{_NANOBOT_WS}/skills"]
         entryroot = f"{_NANOBOT_WS}/skills"
+    elif backend == "fast-agent":
+        # .harness/fast-agent/skills/<name>/SKILL.md — a directory of our own, named on the
+        # command line with --skills, which is the one place this framework takes skills from
+        # (there is no home-directory convention to guess at).
+        rootrels = [".harness/fast-agent/skills"]
+        entryroot = ".harness/fast-agent/skills"
+    elif backend == "dcode":
+        # $HOME/.deepagents/agent/skills/<name>/SKILL.md — the user-level skills directory of its
+        # default agent profile (get_user_skills_dir), with $HOME redirected to .harness/home. Not
+        # a project directory: those live in the workspace the user collects.
+        rootrels = [".harness/home/.deepagents/agent/skills"]
+        entryroot = ".harness/home/.deepagents/agent/skills"
+    elif backend == "docker-agent":
+        # $HOME/.agents/skills/<name>/SKILL.md — the global root in its own discovery order
+        # (pkg/skills: a repository's .agents/skills, .claude/skills and .github/skills, then the
+        # home one), with $HOME redirected to .harness/home. The repository roots sit in the
+        # workspace, where a harness skill would be handed back as a deliverable.
+        rootrels = [".harness/home/.agents/skills"]
+        entryroot = ".harness/home/.agents/skills"
+    elif backend == "vibe":
+        # $VIBE_HOME/skills/<name>/SKILL.md — one of the two GLOBAL skill directories in its own
+        # discovery list (the other is ~/.agents/skills), and VIBE_HOME is already this session's
+        # .harness/vibe/home, so the bundle is inside a loader path, inside the excluded tree and
+        # inside the checkpoint. NOT the project's .vibe/skills, its third source: that one sits in
+        # the workspace, where every skill would come back to the user as a deliverable of their own
+        # task (goose's lesson), and it is read only in a trusted folder anyway.
+        rootrels = [".harness/vibe/home/skills"]
+        entryroot = ".harness/vibe/home/skills"
     elif backend == "zeroclaw":
         # <agent workspace>/skills/<name>/SKILL.md, the per-agent root zeroclaw loads for a session
         # (docs/book/src/tools/skills.md). The agent workspace is under .harness/ (_ZEROCLAW_AGENT_WS),
@@ -1728,6 +1877,14 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # dropped in silence and the agent simply never has those tools.
 _BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",), "grok": ("sse",),
                        "cheetahclaws": ("http",), "jcode": ("http", "sse"),
+                       # vibe's mcp_servers take transport "http" | "streamable-http" | "stdio":
+                       # the product's own servers are streamable HTTP, which it speaks, and an SSE
+                       # server a harness declares has no client there at all.
+                       "vibe": ("sse",),
+                       # docker-agent's remote toolset takes transport_type "streamable" or "sse",
+                       # and the product's own servers are streamable; an SSE one is bridged for
+                       # the same reason as the others until that path is measured.
+                       "docker-agent": ("sse",),
                        # opensquilla's MCPServerEntry takes transport "stdio" | "sse" only, so a
                        # streamable-HTTP server has no client here either.
                        "opensquilla": ("http",)}
@@ -1749,7 +1906,29 @@ _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_brid
 # guard is there to stop. Bridged, there is no url for nanobot to validate: the runner speaks to the
 # server and the agent sees a stdio command. Its own remote client keeps handling PUBLIC servers,
 # which is measured (the deepwiki server over streamable HTTP and SSE, both columns).
-_BRIDGE_LOOPBACK_BACKENDS = {"nanobot"}
+# docker-agent is the SECOND base in this class, measured the same way (the browser column,
+# 2026-10-21): it was the one base of four that made no browser call and answered "unable to open
+# the page or click the link interactively … If you enable the browser toolset, I can do it
+# directly", while its config held the server correctly as a `type: mcp` toolset with the
+# streamable url and the bearer. The A/B that settles it, same config and same transport, only the
+# host changed:
+#   https://<public probe>/mcp          -> mcp_init_started, mcp_init_finished, 16 tools
+#   http://127.0.0.1:8080/v1/mcp/plugs  -> NO mcp_init event at all, 15 tools (its four built-in
+#                                          toolsets), nothing on stderr, nothing in the record
+# So it does not attempt a loopback url. What refuses it is its own HTTP client's address guard,
+# read off its source on review (2026-10-24, v1.150.0 and v1.152.0 alike): pkg/httpclient/ssrf.go
+# refuses to dial a non-public address and says so as a stdout `warning` event ("refusing to dial
+# non-public address 127.0.0.1") that _docker_agent_to_claude drops; a toolset's
+# `allow_private_ips: true` is the documented opt-in. The bridge does not need it: bridged, there is
+# no url left to refuse, and its own remote client keeps handling public servers, which the plugin
+# matrix measured on both transports.
+# fast-agent is the THIRD, and it fails the other way: it DOES try the loopback url and its MCP
+# startup dies, taking the turn with it — "MCP Server: 'plugs': Failed to initialize … Details:
+# MCPError: Not Found", then "RuntimeError: Core not initialized, please call initialize() first".
+# Three runs of the browser column, same crash each time, no browser call in any of them. Bridged
+# it has no url to start, and its own remote client keeps the public servers the plugin matrix
+# measured on both transports.
+_BRIDGE_LOOPBACK_BACKENDS = {"nanobot", "docker-agent", "fast-agent"}
 _LOOPBACK_HOSTS = ("localhost", "127.", "::1", "0.0.0.0", "169.254.", "10.", "192.168.")
 
 
@@ -1958,11 +2137,9 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         # grok loads AGENTS.md (and CLAUDE.md, AGENT.md …) at every level from the repo root down to
         # the cwd, once the folder is trusted; _build_grok sets GROK_FOLDER_TRUST=0. Verified on
         # 1.0.41: a token written in AGENTS.md was in the model request.
-        # The five added in this batch all read AGENTS.md from the project root, each verified
+        # The four added in this batch all read AGENTS.md from the project root, each verified
         # against the pinned build rather than the docs:
         #   mimo        — opencode's instruction-context loader, unchanged in the fork
-        #   gajae       — discovery/agents-md.ts, "Discovers standalone AGENTS.md files by walking
-        #                 up from cwd", plus ~/.gjc/agent/AGENTS.md (system-prompt.ts)
         #   jcode       — jcode-base/src/prompt.rs load_agents_md_files_from_dirs, which labels it
         #                 "Project Instructions (AGENTS.md)"; no CLAUDE.md branch, despite the
         #                 repo shipping one of its own
@@ -1970,10 +2147,31 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         #                 "keep AGENTS.md project rules only"
         #   nanobot     — its own workspace template set writes AGENTS.md, so that is the name its
         #                 context builder reads
+        # vibe reads the AGENTS.md files from the project root down, and merges them into the system
+        # prompt under their own heading — but ONLY in a trusted folder: a programmatic run without
+        # --trust says on stderr that project configuration "will be ignored", and the contract
+        # never reaches the model. _build_vibe passes --trust for exactly this reason, and the pair
+        # was measured together (an instruction in this file was obeyed in the answer).
         "AGENTS.md" if backend in ("codex", "hermes", "pi", "dsh", "opencode", "cline", "omp",
                                    "goose", "kimi", "aider", "openhands", "kilo", "grok",
                                    "agentzero",
-                                   "mimo", "gajae", "jcode", "opensquilla", "nanobot")
+                                   "mimo", "jcode", "opensquilla", "nanobot", "vibe",
+                                   # docker-agent reads it through its own prompt-files lookup,
+                                   # which walks up from the working directory for AGENTS.md and
+                                   # CLAUDE.md; the config this runner writes names AGENTS.md in
+                                   # `add_prompt_files`, so the name is the runner's choice and
+                                   # this is it.
+                                   "docker-agent",
+                                   # dcode reads the project's AGENTS.md through
+                                   # find_project_agent_md — but only when the workspace is a git
+                                   # PROJECT, which every session here is (measured both ways: no
+                                   # token in the answer in a plain directory, the token in it
+                                   # after git init).
+                                   "dcode",
+                                   # fast-agent has no instruction-file convention at all: the
+                                   # file the runner writes is passed as the agent's instruction
+                                   # with -i, which is aider's arrangement, so the name is ours.
+                                   "fast-agent")
         else "CLAUDE.md")
 
 
@@ -3725,218 +3923,6 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     return cmd
 
 
-# ── gajae-code (Yeachan-Heo/gajae-code, binary `gjc`) ─────────────────────────────────────────
-# Pi's lineage, ported to its own tree (docs/porting-from-pi-mono.md; its npm dependency set still
-# carries `pi-ai`, and `$pickenv("GJC_TIMING", "PI_TIMING")` reads pi's env names as fallbacks).
-# Measured on the pinned 0.18.5 binary (2026-10-02), `gjc -p --mode json` emits pi's event stream
-# with pi's field names — session{id} / message_update{assistantMessageEvent} / message_end{message}
-# / tool_execution_start{toolCallId,toolName,args} / tool_execution_end{toolCallId,result,isError} /
-# agent_end — and every assistant message_end carries `model` and
-# `usage:{input,output,cacheRead,cacheWrite}`. So it reads through _pi_to_claude, as omp does,
-# rather than carrying a copy of it; _gajae_to_claude adds only the one event pi has no branch for.
-#
-# WHAT IS NOT PI:
-#   * no --approve / --auto-approve flag exists, and none is needed: print mode runs tools
-#     unattended (measured — it wrote a file with nothing attached to approve).
-#   * the tool switch is an ALLOWLIST (--tools a,b,c) like omp's, not pi's --exclude-tools.
-#   * resume is `-r <id>` against a session DIRECTORY (--session-dir), and a missing id exits
-#     without running the model, printing plain text `Session "<id>" not found.` — so the lookup
-#     happens here and -r is added only when the file is present.
-#   * the agent dir is GJC_CODING_AGENT_DIR and the custom-provider file is models.yml.
-GAJAE_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
-
-# gjc reads `providers.<n>.apiKey` as the NAME of an environment variable, so the credential is
-# named in models.yml and never written into it (the same discipline as opencode's `{env:VAR}`).
-_GAJAE_KEY_ENV = "HR_GAJAE_KEY"
-
-# Every tool id gjc 0.18.5 registers, read off tools/descriptors.ts's `names` table plus the three
-# hidden ones, and not off `--help`, whose list is stale (it advertises a `notebook` tool this build
-# does not have). An unknown name on --tools is a WARNING and is dropped (cli/args.ts filters
-# against BUILTIN_TOOLS before the agent sees it), so unlike omp a drifted list cannot kill a turn —
-# it can only make the allowlist narrower than intended, which is why the list is pinned by a test.
-# `computer` is macOS-arm64 only and is therefore never present in the image.
-ALL_GAJAE_TOOLS = {
-    "read", "bash", "edit", "ast_grep", "ast_edit", "render_mermaid", "ask", "debug", "bisect",
-    "eval", "python", "calc", "ssh", "github", "find", "search", "lsp", "browser", "checkpoint",
-    "rewind", "task", "subagent", "job", "monitor", "cron", "recipe", "irc", "todo_write",
-    "web_search", "search_tool_bm25", "skill_discovery", "telegram_send", "write", "skill", "goal",
-    "move_session",
-}
-
-
-def _gajae_has_session(session_dir: pathlib.Path, session_id: str) -> bool:
-    """Is this session in this workspace's session directory?
-
-    gjc names its files `<ISO timestamp>_<id>.jsonl` (measured), so the id is matched inside the
-    name rather than as the whole of it. Without this check `-r` on an id the directory does not
-    hold exits before the first event and prints only prose, which would read to the runner as a
-    turn that produced nothing."""
-    if not session_id or not session_dir.is_dir():
-        return False
-    try:
-        return any(p.is_file() for p in session_dir.rglob(f"*{session_id}*.jsonl"))
-    except OSError:
-        return False
-
-
-def _gajae_write_mcp(hdir: pathlib.Path, servers: list[dict] | None) -> str:
-    """Write the file `gjc --mcp-config` takes ("Tools-only MCP config file (absolute path)") and
-    return its path, or "" when there is nothing to write.
-
-    Standard mcpServers schema. The file goes under .harness/ rather than into the agent dir
-    because --mcp-config names it explicitly, and --no-mcp is passed beside it so the CONVENTIONAL
-    locations (the agent dir's mcp.json and the project's .gjc/mcp.json) are not also loaded: the
-    project one is a file in the workspace, which a task could write and the next turn would
-    execute — the hole pi closes with --no-extensions and opencode with --pure."""
-    entries: dict = {}
-    for i, sv in enumerate(servers or []):
-        if not isinstance(sv, dict):
-            continue
-        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
-        url = (sv.get("url") or "").strip()
-        if url:
-            entry: dict = {"type": "sse" if str(sv.get("transport") or "").lower() == "sse" else "http",
-                           "url": url}
-            if _mcp_headers(sv):
-                entry["headers"] = _mcp_headers(sv)
-        elif sv.get("command"):
-            entry = {"type": "stdio", "command": str(sv["command"]),
-                     "args": [str(a) for a in (sv.get("args") or [])]}
-        else:
-            continue
-        entries[name] = entry
-    if not entries:
-        return ""
-    hdir.mkdir(parents=True, exist_ok=True)
-    path = hdir / "gajae-mcp.json"
-    path.write_text(json.dumps({"mcpServers": entries}, indent=2))
-    return str(path)
-
-
-def _gajae_to_claude(obj: dict, state: dict) -> list[dict]:
-    """gjc's `--mode json` stream is pi's, so this delegates to _pi_to_claude for every event pi
-    knows and handles only the one it does not.
-
-    `agent_failed` is gjc's own: print-mode.ts writes `{"type":"agent_failed","error":<diagnostic>}`
-    when the run's terminal disposition is a failure that no assistant message_end already reported
-    (an empty turn among them). Without a branch for it that turn reads as a completed turn whose
-    answer is whatever text came before — the failure-reported-as-prose shape _CLAUDE_ERR_RE and
-    _GOOSE_ERR_RE exist for. The error becomes the turn's reason and is NOT rendered as the answer.
-    pi and omp may emit the same event (it is in their shared AgentEvent union); this is NOT added
-    to _pi_to_claude because it has not been measured on either of those builds, and a normaliser
-    changed on an unmeasured assumption is how the last three of these went wrong."""
-    if obj.get("type") == "agent_failed":
-        err = obj.get("error")
-        if isinstance(err, dict):
-            text = str(err.get("message") or err.get("code") or "gajae agent failed")
-        else:
-            text = str(err or "gajae agent failed")
-        state["_pi_error"] = text[:500]
-        return []
-    return _pi_to_claude(obj, state)
-
-
-def _build_gajae(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
-                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-                 tools_disabled: list[str] | None = None, vision: bool = True) -> list[str]:
-    pr = provider or "anthropic"
-    if pr not in GAJAE_PROVIDERS:
-        raise HTTPException(400, f"unknown gajae provider '{pr}' (one of {sorted(GAJAE_PROVIDERS)})")
-    home = pathlib.Path(env.get("HOME") or cwd)
-    agent_dir = home / ".gjc" / "agent"
-    agent_dir.mkdir(parents=True, exist_ok=True)
-    env["GJC_CODING_AGENT_DIR"] = str(agent_dir)
-    # The signed model-preset registry is an HTTPS fetch at start-up that can rewrite which model a
-    # preset names. The harness names one model explicitly and must get that model, so the registry
-    # is off: a catalog fetched at run time is exactly the substitution surface matrix rule 2 is
-    # about, and the sandbox should not reach out for it either.
-    env["GJC_MODEL_PRESET_REGISTRY_DISABLED"] = "1"
-
-    use_custom = bool(auth.base_url) or pr in ("azure", "openai-api", "tokenrouter")
-    if use_custom:
-        if not auth.base_url:
-            raise HTTPException(400, f"gajae provider '{pr}' needs a base_url (none configured)")
-        if auth.api_format == "anthropic":
-            api = "anthropic-messages"
-        elif auth.api_format == "openai":
-            api = "openai-completions"
-        elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
-            api = "anthropic-messages"
-        elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
-            api = "openai-responses"
-        else:
-            api = "openai-completions"
-        if api in ("openai-completions", "openai-responses") and auth.api_key and not auth.api_format:
-            # The relay, for pi's reasons, plus one of its own: the key would otherwise be written
-            # literally into models.yml, which lives under the checkpointed workspace.
-            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
-            auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
-        # gjc resolves `apiKey` as the NAME of an environment variable (resolveApiKeyConfig), so the
-        # credential is named here and read from the environment — hermes's `key_env` discipline,
-        # and the reason models.yml can be in the workspace at all. It is still excluded from the
-        # checkpoint beside pi's and omp's, because a future build reading it as a literal must not
-        # turn this file into a leak.
-        env[_GAJAE_KEY_ENV] = auth.api_key or ""
-        base = (auth.base_url or "").rstrip("/")
-        if api == "anthropic-messages":
-            base = base.removesuffix("/v1")
-        elif not auth.api_format and not base.endswith("/v1"):
-            base += "/v1"
-        (agent_dir / "models.yml").write_text(json.dumps({"providers": {"hr": {
-            "baseUrl": base, "api": api, "apiKey": _GAJAE_KEY_ENV,
-            "models": [{"id": model, "name": model, "reasoning": False,
-                        "input": ["text", "image"] if vision else ["text"],
-                        "contextWindow": 200000, "maxTokens": 32000}],
-        }}}, indent=2))
-        pname = "hr"
-    else:
-        pname = pr
-        if pr == "anthropic" and auth.api_key:
-            env["ANTHROPIC_API_KEY"] = auth.api_key
-        elif pr == "openai" and auth.api_key:
-            env["OPENAI_API_KEY"] = auth.api_key
-
-    session_dir = pathlib.Path(cwd, ".harness", "gajae-sessions")
-    session_dir.mkdir(parents=True, exist_ok=True)
-    cmd = ["gjc", "-p", "--mode", "json",
-           # --model takes a FUZZY pattern. The id is given fully qualified so the exact entry
-           # wins: a custom provider also gets auto-enabled /v1/models discovery (model-registry.ts
-           # ~2976 adds `discovery:{type:"openai-models-list"}` to any custom OpenAI-family
-           # provider, optional so a relay that answers 404 degrades to the static model), and a
-           # bare family name among 300 discovered ids is a substitution waiting to happen.
-           "--model", f"{pname}/{model}" if pname == "hr" else model,
-           # Session storage AND lookup, inside .harness/ so the transcript is checkpointed and
-           # never handed back as a produced file.
-           "--session-dir", str(session_dir),
-           # Rules discovery stays ON: AGENTS.md is how the workspace contract reaches the model.
-           # What is off is everything that executes or fetches something the workspace could have
-           # planted — see --no-mcp below and the preset registry above.
-           "--no-mcp",
-           # Title generation is a second model call per turn for a string nothing here reads.
-           "--no-title",
-           # No LSP server to talk to in the sandbox, and it is a per-turn start-up cost.
-           "--no-lsp"]
-    mcp_path = _gajae_write_mcp(pathlib.Path(cwd, ".harness"), mcp_servers)
-    if mcp_path:
-        cmd += ["--mcp-config", mcp_path]
-    if resume_session_id and _gajae_has_session(session_dir, resume_session_id):
-        cmd += ["-r", resume_session_id]
-    elif resume_session_id:
-        print(f"[resume] gajae: session {resume_session_id} not in this workspace — starting fresh",
-              flush=True)
-    if tools_disabled:
-        disabled = {x.split(" (")[0].strip().lower() for x in tools_disabled if x and x.strip()}
-        enabled = [t for t in sorted(ALL_GAJAE_TOOLS) if t not in disabled]
-        if len(enabled) == len(ALL_GAJAE_TOOLS):
-            pass          # named nothing this runtime has: an allowlist that removes nothing is not sent
-        elif not enabled:
-            cmd += ["--no-tools"]
-        else:
-            cmd += [f"--tools={','.join(enabled)}"]
-    cmd.append(prompt)
-    return cmd
-
-
 # ── hermes (NousResearch hermes-agent CLI) ──────────────────────────────────────────
 # One-shot turns run `hermes -z` (auto-approves, prints ONLY the final text on stdout, writes a
 # JSON usage report via --usage-file); follow-up turns run `hermes chat -q -r <sid>` because the
@@ -4117,6 +4103,92 @@ def _with_anthropic_cache(body: bytes) -> bytes:
               and content[-1].get("type") in ("text", "tool_result", "image", "document")):
             content[-1]["cache_control"] = mark
             changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+# The upstreams where a chat request's breakpoints were measured to be read back (0.37.0-rc.14, claude-sonnet-4.6,
+# a three-turn session per base): OpenRouter and Vercel's AI Gateway. Anthropic's OpenAI-compatible endpoint
+# took the field and cached nothing; TokenRouter wrote a cache entry (2583 tokens, billed as a write) that no
+# later call read, so there the field only costs. Every other upstream is sent the request as the client wrote it.
+_CHAT_CACHE_HOSTS = frozenset({"openrouter.ai", "ai-gateway.vercel.sh"})
+
+
+def _chat_cache_reads(base: str) -> bool:
+    """Whether this route's upstream reads back the breakpoints a chat request carries (_CHAT_CACHE_HOSTS)."""
+    return (urllib.parse.urlsplit(base or "").hostname or "").lower() in _CHAT_CACHE_HOSTS
+
+
+def _with_chat_cache(body: bytes) -> bytes:
+    """A chat/completions request for a Claude model with no cache_control of its own, with the two
+    breakpoints _with_anthropic_cache sets on a Messages request: the last system message and the
+    last message, each as a text part carrying cache_control. A client whose only model client is
+    OpenAI chat (vibe, docker-agent and fast-agent all drive Claude this way) sends none, and every
+    call of its agent loop paid for its whole prompt: no cache read in any Claude pair of the
+    0.37.0 matrix, on any connection. A request that already carries a breakpoint is the client's
+    own policy and goes through untouched; a model that is not Claude is left alone; only an
+    upstream that reads them back gets them (_chat_cache_reads)."""
+    if b"cache_control" in body or b"claude" not in body.lower():
+        return body
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        return body
+    if not isinstance(doc, dict) or "claude" not in str(doc.get("model") or "").lower():
+        return body
+    msgs = doc.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return body
+    mark = {"type": "ephemeral"}
+
+    def marked(m) -> bool:
+        if not isinstance(m, dict):
+            return False
+        content = m.get("content")
+        if isinstance(content, str) and content.strip():
+            m["content"] = [{"type": "text", "text": content, "cache_control": mark}]
+            return True
+        if isinstance(content, list) and content and isinstance(content[-1], dict) and content[-1].get("type") == "text":
+            content[-1]["cache_control"] = mark
+            return True
+        return False
+
+    changed = False
+    system = [i for i, m in enumerate(msgs) if isinstance(m, dict) and m.get("role") in ("system", "developer")]
+    if system and system[-1] != len(msgs) - 1:
+        changed = marked(msgs[system[-1]])
+    if isinstance(msgs[-1], dict) and msgs[-1].get("role") in ("user", "tool"):
+        changed = marked(msgs[-1]) or changed
+    return json.dumps(doc).encode() if changed else body
+
+
+def _cache_control_refused(data: bytes) -> bool:
+    """Whether a provider's 400 names cache_control: a strict OpenAI-compatible server that takes
+    no field it does not know."""
+    return b"cache_control" in (data or b"")
+
+
+def _without_chat_cache(body: bytes) -> bytes:
+    """The chat request without the breakpoints _with_chat_cache set: every cache_control taken off
+    the message parts, and a message left with one plain text part sent as that text again. Only
+    a body that carried none of its own is ever marked, so every one here is the relay's."""
+    try:
+        doc = json.loads(body or b"")
+    except (ValueError, UnicodeDecodeError):
+        return body
+    msgs = doc.get("messages") if isinstance(doc, dict) else None
+    if not isinstance(msgs, list):
+        return body
+    changed = False
+    for m in msgs:
+        content = m.get("content") if isinstance(m, dict) else None
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.pop("cache_control", None) is not None:
+                changed = True
+        if (len(content) == 1 and isinstance(content[0], dict) and set(content[0]) == {"type", "text"}
+                and content[0]["type"] == "text"):
+            m["content"] = content[0]["text"]
     return json.dumps(doc).encode() if changed else body
 
 
@@ -4434,6 +4506,94 @@ def _stringify_assistant_content(body: bytes) -> bytes:
     except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
         pass
     return body
+
+
+def _trailing_system_as_user(body: bytes) -> bytes:
+    """A conversation that ENDS with a system message -> that message sent as the user's turn.
+
+    VT Code's continuation request appends its "## Environment" block (the date, the working
+    directory and the project's instructions) as a system message AFTER the assistant's answer, and
+    two provider families refuse the result for two different-sounding reasons (both measured on the
+    Vercel gateway, 2026-10-16, on a turn that had already done its work):
+      anthropic/claude-haiku-5.5 — 400 "This model does not support assistant message prefill. The
+        conversation must end with a user message" (the Messages translation has nowhere to put a
+        trailing system message, so the assistant's turn becomes the last one, which that model
+        reads as a prefill);
+      google/gemini-3-flash — the same request, refused for the empty user turn beside it (see
+        _drop_empty_messages).
+    Neither is one family's quirk: a trailing system message is unexpressible in the Messages shape
+    and ill-defined in Gemini's, so the repair is keyed on what the provider says rather than on who
+    said it (the lesson grok's root-combinator repair was gated too narrowly for).
+
+    The text is kept verbatim and only its ROLE changes, which is the smallest change that makes
+    the conversation end with a user turn. It is what the client meant — context handed to the model
+    before it continues — and it is applied only after a provider has refused the body as sent."""
+    try:
+        obj = json.loads(body)
+        msgs = obj.get("messages")
+        if (isinstance(msgs, list) and len(msgs) > 1 and isinstance(msgs[-1], dict)
+                and msgs[-1].get("role") == "system" and msgs[-1].get("content")):
+            msgs[-1]["role"] = "user"
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
+        pass
+    return body
+
+
+def _drop_empty_messages(body: bytes) -> bytes:
+    """Messages with no content and no tool calls -> gone.
+
+    `"user message must have content"` (param `messages.5.content`), Google through the Vercel
+    gateway, 2026-10-16: VT Code puts an empty user turn after a tool result, which OpenAI accepts
+    and Gemini does not. An empty turn carries nothing, so dropping it cannot change what the model
+    is told; a message with tool_calls or a tool result is never empty in this sense and is left
+    alone, as is the only message of a one-message body."""
+    try:
+        obj = json.loads(body)
+        msgs = obj.get("messages")
+        if not isinstance(msgs, list) or len(msgs) < 2:
+            return body
+        def _empty(m: dict) -> bool:
+            c = m.get("content")
+            if isinstance(c, list):
+                # a structured content array with nothing in it, or only blank text parts: the
+                # shape VT Code actually sends (measured: `messages.9.content`, refused by Google
+                # AND by OpenAI through the gateway). An early version of this read a list as
+                # "structured, leave alone" and the repair then never fired on the body it was
+                # written for.
+                return not any(str((p or {}).get("text") or "").strip() if isinstance(p, dict)
+                               else str(p or "").strip() for p in c)
+            return not str(c or "").strip()
+
+        keep = []
+        for m in msgs:
+            if (isinstance(m, dict) and m.get("role") in ("user", "assistant")
+                    and not m.get("tool_calls") and not m.get("tool_call_id") and _empty(m)):
+                continue
+            keep.append(m)
+        if len(keep) != len(msgs) and keep:
+            obj["messages"] = keep
+            return json.dumps(obj, separators=(",", ":")).encode()
+    except Exception:  # noqa: BLE001
+        pass
+    return body
+
+
+def _conversation_order_refused(code: int, data: bytes) -> bool:
+    """Whether the provider refused the ORDER of the conversation it was sent."""
+    if code not in (400, 422):
+        return False
+    d = data or b""
+    return (b"must end with a user message" in d or b"assistant message prefill" in d
+            or b"last message must be" in d)
+
+
+def _empty_message_refused(code: int, data: bytes) -> bool:
+    """Whether the provider refused a message that carried nothing."""
+    if code not in (400, 422):
+        return False
+    d = data or b""
+    return b"message must have content" in d or b"must have non-empty content" in d
 
 
 _EFFORT_SHAPE_REFUSED_RE = re.compile(rb"is not supported for this model\. Use .{0,80}adaptive", re.S)
@@ -4974,6 +5134,148 @@ def _google_with_signatures(body: bytes, sigs: dict) -> bytes:
     return json.dumps(doc).encode() if changed else body
 
 
+# OpenRouter carries a Gemini 3 tool call's thought signature in its own shape: a `reasoning_details`
+# entry {"type": "reasoning.encrypted", "data": …, "id": <the tool call's id>, "format":
+# "google-gemini-v1"} on the answer, which it takes back on the replayed assistant message.
+# OpenAI-shaped clients drop the field (docker-agent 1.152.0 sent none back in 69 requests), and
+# without it the model's next call in the turn came back MALFORMED_FUNCTION_CALL, finish_reason
+# "error": 3 of 8 artifact turns (docker-agent, gemini-3.5-flash-lite, OpenRouter, 2026-10-25). With
+# the entries put back, 8 of 8 and none. So, as with Google's own shape above, the relay keeps each
+# entry under its tool call's id as the answer passes, on every route, and returns it on the message
+# that made the call. An entry with no id belongs to no call and is not kept.
+def _encrypted_reasoning_in(doc) -> list[dict]:
+    """The reasoning.encrypted entries of one answer or stream chunk that name a tool call."""
+    out: list[dict] = []
+    for ch in (doc.get("choices") or []) if isinstance(doc, dict) else []:
+        part = (ch.get("delta") or ch.get("message")) if isinstance(ch, dict) else None
+        details = part.get("reasoning_details") if isinstance(part, dict) else None
+        for rd in details if isinstance(details, list) else []:
+            if isinstance(rd, dict) and rd.get("type") == "reasoning.encrypted" and rd.get("id"):
+                out.append(rd)
+    return out
+
+
+def _encrypted_reasoning_in_line(line: bytes) -> list[dict]:
+    """The same, read off one SSE `data:` line."""
+    if not line.startswith(b"data:") or b"reasoning.encrypted" not in line:
+        return []
+    try:
+        return _encrypted_reasoning_in(json.loads(line[5:]))
+    except (ValueError, UnicodeDecodeError):
+        return []
+
+
+def _with_encrypted_reasoning(body: bytes, held: dict) -> bytes:
+    """The request with each replayed assistant message that made a tool call carrying the encrypted
+    reasoning this relay saw for its calls. A message that already carries reasoning_details is left
+    as the client wrote it; a body without tool calls is untouched."""
+    if b"tool_calls" not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(doc, dict) or not isinstance(doc.get("messages"), list):
+        return body
+    changed = False
+    for msg in doc["messages"]:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant" or msg.get("reasoning_details"):
+            continue
+        got = [held[cid] for cid in (str(tc.get("id") or "") for tc in msg.get("tool_calls") or []
+                                     if isinstance(tc, dict)) if cid in held]
+        if got:
+            msg["reasoning_details"] = got
+            changed = True
+    return json.dumps(doc).encode() if changed else body
+
+
+# A reasoning item's encrypted content opens only for the model, and the account, that produced it, and
+# an item's id is a reference the upstream resolves against the responses it stored. A Responses-API
+# client that replays every earlier turn's items as it got them (dcode) sends, after a model switch,
+# what another model minted, and the upstream refuses: "The encrypted content for item rs_tmp_… could
+# not be verified" (Gemini to gpt-6.1-sol on OpenRouter), "Unknown parameter: 'input[2].status'" and
+# "Item with id 'rs_…' not found" (grok-4.3 to gpt-6.1-sol on TokenRouter, where an id with no content
+# was looked up as a stored item), 2026-10-25. A relay route lives one turn, so it cannot tell which
+# model minted an earlier turn's item; it knows the items THIS turn minted, and replays those as they
+# are (a tool loop within the turn needs them). An earlier turn is replayed as plain content, the
+# shape the codex rollout repair settled on (_sanitize_codex_rollout): its reasoning items go (no other
+# model can read them), and its other items lose their id and status, keeping their content and
+# call_id, so nothing is resolved upstream and the tool calls still pair with their results. Only
+# routes that ask for it (`turn_reasoning_only`) are changed.
+def _output_item_ids_in(doc) -> list[str]:
+    """Ids of the output items (reasoning, message, function call) one Responses event, or one whole
+    response, carries."""
+    if not isinstance(doc, dict):
+        return []
+    items = [doc["item"]] if isinstance(doc.get("item"), dict) else []
+    for src in (doc, doc.get("response")):
+        if isinstance(src, dict) and isinstance(src.get("output"), list):
+            items += src["output"]
+    return [str(i["id"]) for i in items if isinstance(i, dict) and i.get("id")]
+
+
+def _output_item_ids_in_line(line: bytes) -> list[str]:
+    """The same, read off one SSE `data:` line."""
+    if not line.startswith(b"data:") or b'"id"' not in line or not (b'"item"' in line or b'"output"' in line):
+        return []
+    try:
+        return _output_item_ids_in(json.loads(line[5:]))
+    except (ValueError, UnicodeDecodeError):
+        return []
+
+
+def _earlier_turns_as_content(body: bytes, minted: set) -> bytes:
+    """The Responses request with every item this turn did not mint replayed as plain content: a
+    reasoning item dropped, an assistant message as an input message with its text, any other item
+    without its id and status. Anything else as it came."""
+    if b'"id"' not in body:
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    items = doc.get("input") if isinstance(doc, dict) else None
+    if not isinstance(items, list):
+        return body
+    out, changed = [], False
+    for it in items:
+        if not (isinstance(it, dict) and it.get("id") and str(it["id"]) not in minted):
+            out.append(it)
+            continue
+        changed = True
+        if it.get("type") == "reasoning":
+            continue
+        if it.get("type") == "message" and it.get("role") == "assistant" and isinstance(it.get("content"), list):
+            # An output message is valid input only with its id and status, which are what go; as
+            # plain content it is the input-message form, its text as one string. A strict
+            # Responses parser (TokenRouter's) refused the bare output form: "data did not match
+            # any variant of untagged enum ResponseInput" on dcode's recycle turn, glm-5.3-flash.
+            text = "".join(str(c.get("text") or "") for c in it["content"]
+                           if isinstance(c, dict) and c.get("type") in ("output_text", "text"))
+            out.append({"type": "message", "role": "assistant", "content": text})
+            continue
+        out.append({k: v for k, v in it.items() if k not in ("id", "status")})
+    if not changed:
+        return body
+    doc["input"] = out
+    return json.dumps(doc).encode()
+
+
+# Moonshot's kimi models allow one temperature, 1 ("invalid temperature: only 1 is allowed for this
+# model", through TokenRouter, 2026-10-25), and so does OpenAI's gpt-5.5 ("Unsupported value:
+# 'temperature' does not support 0.2 with this model. Only the default (1) value is supported.",
+# OpenAI direct, the same day): a harness that sends its own default (vibe: 0.2) had every turn on
+# those models refused. The temperature is the harness's, never the
+# person's, so a refusal of it is answered by sending none: the model's own default is the one it takes.
+_TEMPERATURE_REFUSED_RE = re.compile(rb"invalid temperature: only \d+(?:\.\d+)? is allowed"
+                                     rb"|'temperature' does not support \S+ with this model", re.I)
+
+
+def _temperature_refused(data: bytes) -> bool:
+    """Whether a provider's 400 is a refusal of the request's temperature."""
+    return bool(_TEMPERATURE_REFUSED_RE.search(data or b""))
+
+
 def _drop_top_level_field(body: bytes, field: str) -> bytes:
     """The JSON request without one top-level field; anything else is returned as it came."""
     try:
@@ -5507,6 +5809,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         if body is not None and self.path.endswith("/chat/completions"):
             body = _normalize_openai_chat_body(body)
             body = _with_free_form_objects(body)     # before the Gemini normaliser below, which has its own rules
+            if (flags.get("chat_cache") and _chat_cache_reads(base)
+                    and not flags.get(f"no_chat_cache:{_body_model}")):
+                # Before the repairs below, so a repair a provider asked for (a tool result as a
+                # string) still has the last word on the shape.
+                body = _with_chat_cache(body)
             if flags.get("stream_usage"):
                 body = _request_stream_usage(body)
             if flags.get("plain_stream"):
@@ -5521,12 +5828,23 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 body = _repair_tool_call_ids(body, dedupe=bool(flags.get("dedupe_tool_call_ids")))
             if flags.get("stringify_assistant_content"):
                 body = _stringify_assistant_content(body)
+            # Once a provider has refused the client's conversation SHAPE, every later request in
+            # the turn carries the same shape — the client does not learn. The flag is set by the
+            # retry below and applied here, which is the difference between a repair that fixes one
+            # request and a repair that fixes the turn: measured on vtcode, where the first request
+            # was repaired and sent again while the next three were refused untouched.
+            if flags.get("drop_empty_messages"):
+                body = _drop_empty_messages(body)
+            if flags.get("trailing_system_as_user"):
+                body = _trailing_system_as_user(body)
             if flags.get("drop_stream_options"):
                 body = _drop_stream_options(body)
             if flags.get(f"reasoning_effort_none:{_body_model}"):
                 body = _set_reasoning_effort_none(body)
             if flags.get(f"drop_reasoning_effort:{_body_model}"):
                 body = _drop_top_level_field(body, "reasoning_effort")
+            if flags.get(f"drop_temperature:{_body_model}"):
+                body = _drop_top_level_field(body, "temperature")
             for field in flags.get("drop_fields", ()):
                 body = _drop_top_level_field(body, field)
             headers["content-length"] = str(len(body))
@@ -5535,6 +5853,12 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             if fixed is not body:
                 body = fixed
                 headers["content-length"] = str(len(body))
+        if flags.get("turn_reasoning_only") and body is not None and self.path.split("?", 1)[0].endswith("/responses"):
+            body = _earlier_turns_as_content(body, flags.setdefault("items_minted", set()))
+            headers["content-length"] = str(len(body))
+        if flags.get("encrypted_reasoning") and body is not None and self.path.endswith("/chat/completions"):
+            body = _with_encrypted_reasoning(body, flags["encrypted_reasoning"])
+            headers["content-length"] = str(len(body))
         google = _GOOGLE_HOST in base or bool(flags.get("thought_signature"))
         if google and body is not None and self.path.endswith("/chat/completions"):
             body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
@@ -5606,6 +5930,27 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     headers["content-length"] = str(len(body))
                     continue
                 effort_back = False
+                bare = (_without_chat_cache(body) if body is not None and flags.get("chat_cache")
+                        and self.path.endswith("/chat/completions") else None)
+                if (attempt < 2 and e.code in (400, 422) and _cache_control_refused(data)
+                        and bare is not None and bare != body):
+                    # A server that takes no field it does not know refused the breakpoints the
+                    # relay set: the call goes again without them, and this model gets none on
+                    # this route from now on.
+                    flags[f"no_chat_cache:{_body_model}"] = True
+                    body = bare
+                    headers["content-length"] = str(len(body))
+                    continue
+                warm = _drop_top_level_field(body, "temperature") if body is not None else None
+                if (attempt < 2 and e.code == 400 and _temperature_refused(data)
+                        and warm is not None and warm != body):
+                    # A model that takes one temperature only, refusing the harness's own default
+                    # (vibe sends 0.2): the call goes again at the model's default, and this model
+                    # is sent none on this route from now on.
+                    flags[f"drop_temperature:{_body_model}"] = True
+                    body = warm
+                    headers["content-length"] = str(len(body))
+                    continue
                 renamed = _rename_max_tokens(body) if body is not None else None
                 if (attempt < 2 and e.code == 400 and b"max_completion_tokens" in data
                         and renamed is not None and renamed != body):
@@ -5649,6 +5994,27 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     body = assistant
                     headers["content-length"] = str(len(body))
                     continue
+                if (attempt < 2 and _empty_message_refused(e.code, data) and body is not None
+                        and not flags.get("drop_empty_messages")):
+                    trimmed = _drop_empty_messages(body)
+                    if trimmed != body:
+                        flags["drop_empty_messages"] = True
+                        body = trimmed
+                        headers["content-length"] = str(len(body))
+                        print("[relay] provider refused a message with no content for "
+                              f"model={_body_model}; sent again without the empty turns", flush=True)
+                        continue
+                if (attempt < 2 and _conversation_order_refused(e.code, data) and body is not None
+                        and not flags.get("trailing_system_as_user")):
+                    reordered = _trailing_system_as_user(body)
+                    if reordered != body:
+                        flags["trailing_system_as_user"] = True
+                        body = reordered
+                        headers["content-length"] = str(len(body))
+                        print("[relay] provider refused a conversation ending in a system message "
+                              f"for model={_body_model}; sent again with it as the user's turn",
+                              flush=True)
+                        continue
                 effort = _set_reasoning_effort_none(body) if body is not None else None
                 if (attempt < 2 and e.code == 400 and b"reasoning_effort" in data
                         and b"'none'" in data and effort is not None and effort != body):
@@ -5792,8 +6158,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     pass          # the client hung up first; nothing left to tell
                 return
         ctype = resp.headers.get("content-type") or ""
-        # the bytes go through untouched; a Google answer's tool-call signatures are read as they pass
-        sigs = flags.setdefault("google_sigs", {}) if google else None
+        # the bytes go through untouched; a Google answer's tool-call signatures are read as they pass.
+        # On EVERY route, not only Google's host: an aggregator serving Gemini 3 (Vercel's gateway)
+        # streams the same extra_content.google.thought_signature, and a replay without it is not
+        # refused with the 400 that teaches this relay the need — it comes back as an answer with no
+        # content and finish_reason "error" (measured 2026-10-24: docker-agent, gemini-3.5-flash-lite,
+        # 8 of 12 artifact turns through Vercel). The first signature seen marks the route
+        # (`thought_signature`), and every later request on it gets them back.
+        sigs = flags.setdefault("google_sigs", {})
         if "text/event-stream" in ctype:
             self.send_response(resp.status)
             self.send_header("content-type", ctype)
@@ -5877,8 +6249,15 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # stream is line-buffered as it passes; the bytes still go through untouched
                 pending += chunk
                 # a route that rewrites usage forwards whole lines (as rewritten) instead of the
-                # raw read, so a rewrite never straddles two reads
-                out_lines = [] if (flags.get("usage_no_nulls") or flags.get("plain_stream")) else None
+                # raw read, so a rewrite never straddles two reads.
+                # EVERY rewrite flag has to be named here, not only in _rewrite_stream_line: this
+                # is the gate that decides whether the rewritten lines are what the client gets,
+                # and a flag added to the rewriter alone changes nothing at all. Measured the hard
+                # way — `tool_index_fill` was added to the rewriter, the suite passed on it, and
+                # the Google column failed again with the identical error because the bytes still
+                # went through untouched.
+                out_lines = [] if (flags.get("usage_no_nulls") or flags.get("plain_stream")
+                                   or flags.get("tool_index_fill") or flags.get("split_finish_content")) else None
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
                     if out_lines is not None:
@@ -5892,9 +6271,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     seen_thinking = _thinking_in_sse_line(line)
                     if seen_thinking is not None:
                         call_thinking = seen_thinking
+                    for rd in _encrypted_reasoning_in_line(line):
+                        flags.setdefault("encrypted_reasoning", {})[str(rd["id"])] = rd
+                    if flags.get("turn_reasoning_only"):
+                        flags.setdefault("items_minted", set()).update(_output_item_ids_in_line(line))
                     if sigs is not None:
                         for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
+                            flags["thought_signature"] = True
                 if out_lines is not None:
                     chunk = b"".join(out_lines)
                 _stream_fold(flags, call_usage, call_thinking, folded)   # on the route before the client has it
@@ -5909,7 +6293,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             call_usage.update(_usage_in_sse_line(pending.strip()))
             seen_thinking = _thinking_in_sse_line(pending.strip())
             _stream_fold(flags, call_usage, seen_thinking if seen_thinking is not None else call_thinking, folded)
-            if (flags.get("usage_no_nulls") or flags.get("plain_stream")) and pending:
+            if (flags.get("usage_no_nulls") or flags.get("plain_stream") or flags.get("split_finish_content")) and pending:
                 tail_bytes = _rewrite_stream_line(pending, flags, line_state)   # a last line with no newline after it
                 self.wfile.write(f"{len(tail_bytes):x}\r\n".encode() + tail_bytes + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
@@ -5956,13 +6340,27 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 data = _model_metadata_with_context_length(data)
             if flags.get("usage_no_nulls"):
                 data = _usage_without_nulls(data)
+            if flags.get("turn_reasoning_only") and b'"output"' in data:
+                try:
+                    flags.setdefault("items_minted", set()).update(_output_item_ids_in(json.loads(data)))
+                except (ValueError, UnicodeDecodeError):
+                    pass
+            if b"reasoning.encrypted" in data:
+                try:
+                    for rd in _encrypted_reasoning_in(json.loads(data)):
+                        flags.setdefault("encrypted_reasoning", {})[str(rd["id"])] = rd
+                except (ValueError, UnicodeDecodeError):
+                    pass
             if sigs is not None and b"thought_signature" in data:
                 try:
                     doc = json.loads(data)
                 except ValueError:
                     doc = None
                 if isinstance(doc, dict):
-                    sigs.update(_google_signatures_in(doc))
+                    found = _google_signatures_in(doc)
+                    sigs.update(found)
+                    if found:
+                        flags["thought_signature"] = True
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -6280,12 +6678,106 @@ def _plain_trailer_line(line: bytes, state: dict) -> bytes:
     return line
 
 
+def _tool_call_index_line(line: bytes, state: dict) -> bytes:
+    """One SSE line with the `index` a streamed tool call arrived without.
+
+    Google's OpenAI-compatible surface omits it. MEASURED 2026-10-19 straight at
+    generativelanguage.googleapis.com/v1beta/openai, gemini-3.8-flash with one function tool: the
+    streamed delta carries `id`, `type`, `function` and Google's own
+    `extra_content.google.thought_signature`, and NO `index` —
+
+        "tool_calls":[{"extra_content":{...},"function":{"arguments":"{…}","name":"write_file"},
+                       "id":"call_4217092","type":"function"}]
+
+    OpenAI's streaming shape puts an `index` on every tool-call delta, because that is how a client
+    merges the chunks of one call. A client that follows it refuses the answer: vibe 2.26.1 raises
+    `ValueError("Tool call chunk missing index")` in its own `core/types.py` while merging, so the
+    turn FAILS after the model has answered and the work is lost (the artifact scenario of its
+    Google column, 211 s, found by the support matrix). The index is positional information only
+    the stream has, so the relay is the one place that can supply it.
+
+    Each distinct tool-call id takes the next index for its choice — two calls in one answer stay
+    two — and a continuation chunk, which carries no id, keeps the index of the call it continues.
+    """
+    raw = line.strip()
+    if not raw.startswith(b"data:") or b'"tool_calls"' not in raw:
+        return line
+    payload = raw[5:].strip()
+    if not payload.startswith(b"{"):
+        return line
+    try:
+        obj = json.loads(payload)
+    except ValueError:
+        return line
+    choices = obj.get("choices") if isinstance(obj, dict) else None
+    if not isinstance(choices, list):
+        return line
+    per = state.setdefault("tool_index", {})
+    changed = False
+    for ch in choices:
+        if not isinstance(ch, dict):
+            continue
+        delta = ch.get("delta") if isinstance(ch.get("delta"), dict) else ch.get("message")
+        calls = (delta or {}).get("tool_calls") if isinstance(delta, dict) else None
+        if not isinstance(calls, list):
+            continue
+        slot = per.setdefault(str(ch.get("index", 0)), {"ids": {}, "next": 0, "last": 0})
+        for tc in calls:
+            if not isinstance(tc, dict) or tc.get("index") is not None:
+                continue
+            cid = str(tc.get("id") or "")
+            if cid:
+                if cid not in slot["ids"]:
+                    slot["ids"][cid] = slot["next"]
+                    slot["next"] += 1
+                slot["last"] = slot["ids"][cid]
+            tc["index"] = slot["last"]
+            changed = True
+    if not changed:
+        return line
+    return b"data: " + json.dumps(obj, separators=(",", ":")).encode()
+
+
 def _rewrite_stream_line(line: bytes, flags: dict, state: dict) -> bytes:
+    if flags.get("split_finish_content"):
+        line = _split_finish_content_line(line)
     if flags.get("usage_no_nulls"):
         line = _usage_without_nulls(line)
+    if flags.get("tool_index_fill"):
+        line = _tool_call_index_line(line, state)
     if flags.get("plain_stream"):
         line = _plain_trailer_line(line, state)
     return line
+
+
+def _split_finish_content_line(line: bytes) -> bytes:
+    """One SSE line whose choice carries text AND a finish reason, as two events: the text, then the
+    finish (with the usage). docker-agent 1.152.0 returns on a stop, length or refusal finish before
+    it reads the same chunk's text (pkg/runtime/streaming.go), and TokenRouter sends an answer's last
+    words in that chunk: MEASURED 2026-10-25, deepseek-v4.1-flash streamed "M", "1-deepseek-v4" and
+    ".1-flash" with finish_reason stop, and docker-agent's own output stopped at "M1-deepseek-v4"
+    (four answers cut at four different points, every one streamed whole). A chunk that also carries
+    tool calls is left as it is: docker-agent reads those before the finish, and splitting would
+    count them twice."""
+    if not line.startswith(b"data:") or b'"finish_reason"' not in line:
+        return line
+    try:
+        doc = json.loads(line[5:])
+    except (ValueError, UnicodeDecodeError):
+        return line
+    choices = doc.get("choices") if isinstance(doc, dict) else None
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        return line
+    ch = choices[0]
+    delta = ch.get("delta") if isinstance(ch.get("delta"), dict) else {}
+    if (not ch.get("finish_reason") or delta.get("tool_calls")
+            or not (delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning"))):
+        return line
+    text = {**doc, "choices": [{**ch, "finish_reason": None}]}
+    text.pop("usage", None)
+    finish = {**doc, "choices": [{**ch, "delta": {"role": delta["role"]} if delta.get("role") else {}}]}
+    return (b"data: " + json.dumps(text, separators=(",", ":")).encode() + b"\n\n"
+            + b"data: " + json.dumps(finish, separators=(",", ":")).encode())
 
 
 def _usage_without_nulls(line: bytes) -> bytes:
@@ -6333,7 +6825,9 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
 def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...] = (),
                         stream_usage: bool = False, gemini_schemas: bool = False,
                         usage_no_nulls: bool = False, exact_base: bool = False,
-                        aux: bool = False, plain_stream: bool = False) -> tuple[str, str]:
+                        aux: bool = False, plain_stream: bool = False,
+                        tool_index_fill: bool = False, turn_reasoning_only: bool = False,
+                        split_finish_content: bool = False, chat_cache: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -6343,6 +6837,15 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     normalises a gemini model's tool declarations on this route whatever the channel (see
     _build_grok for the one client that needs it). `usage_no_nulls` rewrites a null token count in an
     answer's usage to 0 for a client whose parser takes only a number there (_usage_without_nulls).
+    `tool_index_fill` supplies the `index` a streamed tool call arrives without on Google's
+    OpenAI-compatible surface, for a client that merges chunks by it (_tool_call_index_line).
+    `split_finish_content` streams a chunk's text and its finish as two events, for a client that
+    stops reading a chunk at its finish (_split_finish_content_line).
+    `turn_reasoning_only` replays an earlier turn's items as plain content, for a Responses client
+    that replays them across a model switch (_earlier_turns_as_content).
+    `chat_cache` puts prompt cache breakpoints on a Claude chat request that carries none, for a
+    client that drives Claude only through OpenAI chat, where the upstream reads them back
+    (_with_chat_cache, _chat_cache_reads).
     `exact_base` joins the client's resource onto the connection's base as stored, for a client that
     was calling that base directly before it had a route (Codex, and hermes on Azure): the same URL,
     with the relay between. `aux` marks a route for a helper model (hermes's image questions): the
@@ -6364,6 +6867,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
         flags = {"rename_max_tokens": False, "drop_fields": tuple(drop_fields),
                  "stream_usage": bool(stream_usage), "gemini_schemas": bool(gemini_schemas),
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
+                 "tool_index_fill": bool(tool_index_fill), "turn_reasoning_only": bool(turn_reasoning_only),
+                 "split_finish_content": bool(split_finish_content), "chat_cache": bool(chat_cache),
                  **({"aux": True} if aux else _turn_effort())}
         # The turn's trace context (#473), on every route of this turn: the relay reads it when it
         # forwards, and the relay's own threads never see the turn's context variables.
@@ -10737,7 +11242,7 @@ def _nanobot_config(auth: Auth, model: str, cfg_dir: pathlib.Path, workspace: st
     The api key is NAMED, not written: nanobot resolves `${VAR}` references anywhere in the config
     before use (config/loader.py resolve_config_env_vars, which raises if the variable is unset
     rather than silently sending an empty key), so the credential stays in the environment — the
-    same discipline opencode's `{env:VAR}` and gjc's apiKey-as-env-name give. The file is in
+    same discipline opencode's `{env:VAR}` reference gives. The file is in
     CHECKPOINT_EXCLUDE and .gitignore anyway, because a future build that stopped resolving
     references must not turn this file into a leak."""
     base = (auth.base_url or "").rstrip("/")
@@ -11631,6 +12136,1275 @@ def _agentzero_eof(state: dict, rc: int) -> list[dict]:
 _agentzero_to_claude.eof = _agentzero_eof   # type: ignore[attr-defined]
 
 
+# ── mistral-vibe (mistralai/mistral-vibe, PyPI mistral-vibe) ──────────────────────────────────
+# Mistral's own coding CLI, and the first base here whose programmatic mode is a written contract:
+# `vibe -p` with `--output streaming` puts one JSON session-journal entry per line on stdout, and
+# `--output-dir` writes an export.json carrying the outcome, the session id, the usage and the
+# reason a run ended. It is nobody's fork — no event stream this runner already parses — so it
+# carries its own normaliser.
+#
+# MEASURED on 2.26.1 against an OpenAI-compatible gateway (2026-10-14/15), every claim from a real
+# turn through a recording proxy rather than from the docs:
+#   * `[[providers]] backend = "generic"` with `api_base` + `api_key_env_var` IS an OpenAI
+#     chat/completions client, so every keyed turn rides the loopback relay and the placeholder
+#     bearer lives in the turn's ENVIRONMENT, which is where _relay_served_model and _relay_usage
+#     look for the route (a credential that rides only argv leaves both empty — openhands' lesson).
+#   * A programmatic run does NOT read the project's AGENTS.md unless `--trust` is passed: stderr
+#     says so and the workspace contract never reaches the model. With it, an instruction written
+#     in AGENTS.md was obeyed in the answer.
+#   * There is NO --model flag, and on `--resume` the SESSION's model beats the config's
+#     `active_model`: a resumed run whose config.toml named a second model asked the provider for
+#     the model the session started with, and its own export agreed. What does change the model on
+#     a resumed session is an agent profile — `$VIBE_HOME/agents/<name>.toml` with `active_model`,
+#     chosen with `--agent` — measured in both directions: the request carried the profile's model
+#     (google/gemini-3-flash where the session had started on anthropic/claude-haiku-5.5), the
+#     conversation was still there, and the AGENTS.md contract still applied. That is why this
+#     builder writes a profile per turn and not only a config. Without it the harness's model
+#     switch would be dropped in silence, which is matrix rule 2 broken by configuration.
+#   * A provider failure is NOT narrated as assistant text (goose's and claude's trap): a 401
+#     upstream was ONE attempt, exit 1, an empty stream, and `error {message, code}` beside
+#     `outcome: "config_error"` in export.json. The reason reaches the user from there.
+#   * Usage is spelled input_tokens / output_tokens / cached_input_tokens / total_tokens, and its
+#     input is GROSS (the cache is a subset), which is what _norm_token_usage nets.
+#   * A turn declares NINE tools, the same nine with nothing disabled and with two tools disabled:
+#     search_tool_functions, run_typescript, read_file, write_file, edit, bash, skill, todo and
+#     unified_harness_scratchpad. Two of them are DISPATCHERS — `run_typescript` runs a script with
+#     the tool registry in scope, `search_tool_functions` looks a tool up by name — which is how
+#     this runtime reaches the rest, including an MCP server's tools, so a judge that reads tool
+#     NAMES alone will not see an MCP call here (mimo's lesson, item 41 of the checklist).
+#   * `--disabled-tools` IS enforced, and NOT by withholding the declaration, which is the first
+#     thing measured here that contradicted its own first reading. With write_file and edit
+#     disabled: the request still declared both, the model called write_file, and the call came
+#     back `status: "failed"`, `decision: "skip"`, `error.code: "tool_denied"` with nothing
+#     written — the policy beats --auto-approve and the profile's bypass. So the tool's EFFECT is
+#     withheld rather than the tool, which is still enforcement (and still only of that tool: a
+#     model left with `bash` can write a file with a shell command). A first pass here read
+#     "web_search disappeared from the list" as proof of withholding; web_search is not among the
+#     nine and was never declared, so that check had no input — item 18, caught by re-measuring
+#     against a tool the base really has.
+VIBE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+VIBE_BIN = os.environ.get("HR_VIBE_BIN", "/data/agent-tools/vibe-venv/bin/vibe")
+VIBE_DEFAULT_MODEL = os.environ.get("VIBE_DEFAULT_MODEL", "gpt-5.4")
+# The provider and profile names inside the config this builder writes. Both are ours: VIBE_HOME is
+# per session and lives under .harness/, so nothing here can collide with a user's own file.
+_VIBE_PROVIDER = "harness"
+_VIBE_AGENT = "harness"
+# The variable config.toml names and the turn's process holds (see the relay note above).
+_VIBE_KEY_ENV = "HR_VIBE_RELAY_KEY"
+# Every tool the unified harness declares, read off the requests of a measured turn. The gateway's
+# catalog carries the same list; gateway/tests/test_vibe_tools.py holds the two equal.
+ALL_VIBE_TOOLS = ("search_tool_functions", "run_typescript", "read_file", "write_file", "edit",
+                  "bash", "skill", "todo", "unified_harness_scratchpad",
+                  # 3.0.0: the agent waits for the next message or for background work to finish
+                  "wait")
+# 3.0.1 sends max_tokens on every request: the declared max_context_length minus the input minus a
+# 4096-token reserve, about 187,000 here, which providers refuse as an output cap. 2.26.1 sent none.
+# The relay takes it off, as it does for kimi and openhands, and max_context_length stays declared
+# for compaction's threshold.
+_VIBE_DROP_FIELDS = ("max_tokens",)
+
+
+def _vibe_home(cwd: str) -> pathlib.Path:
+    """VIBE_HOME for this session: config.toml, agents/, skills/ and the session store.
+
+    Under `.harness/` so it is excluded from the produced-files list and still travels in the
+    checkpoint, which is what keeps `--resume` working across a sandbox recycle."""
+    return pathlib.Path(cwd) / ".harness" / "vibe" / "home"
+
+
+def _vibe_out(cwd: str) -> pathlib.Path:
+    """Where `--output-dir` puts this turn's export.json (read by the eof handler)."""
+    return pathlib.Path(cwd) / ".harness" / "vibe" / "out"
+
+
+def _vibe_sessions(cwd: str) -> pathlib.Path:
+    return _vibe_home(cwd) / "logs" / "session"
+
+
+def _vibe_session_present(cwd: str, cmd: list[str], session_id: str) -> bool:
+    """Whether this session's store really holds the conversation `--resume` would continue.
+
+    Asked of the store rather than of the bytes (goose's lesson): the unified store keeps one
+    directory per session id with a meta.json in it, and a legacy store keeps its own directory of
+    the same name, so a directory with that name under the session root is the predicate the CLI
+    itself matches on."""
+    if not session_id:
+        return False
+    root = _vibe_sessions(cwd)
+    for cand in (root / "unified" / session_id, root / session_id):
+        if cand.is_dir():
+            return True
+    return False
+
+
+def _vibe_toml(v) -> str:
+    """One TOML scalar. Written by hand because the runner has no TOML writer and the values are
+    ours: a model id, a URL, an env-var name and booleans."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int) and not isinstance(v, bool):
+        return str(v)
+    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _vibe_config(auth: Auth, model: str, home: pathlib.Path,
+                 mcp_servers: list[dict] | None) -> None:
+    """Write $VIBE_HOME/config.toml: one provider, one model, and every default that would
+    otherwise spend the turn's money or change the turn's model turned off."""
+    q = _vibe_toml
+    base = (auth.base_url or "").rstrip("/")
+    lines = [
+        "# written per turn by the harness runner — do not edit, it is overwritten",
+        f"active_model = {q(model)}",
+        # The posture the turn runs with; --auto-approve on the command line grants the tool calls.
+        'default_agent = "accept-edits"',
+        "",
+        "# Mistral's telemetry sends traces to the provider's endpoint, authenticated with the",
+        "# provider's API key, on by default. A turn here talks to one place: the relay.",
+        "enable_telemetry = false",
+        "# A pinned CLI that offers to update itself is a CLI that can change under a measurement",
+        "# (Muse Code's launcher did exactly that mid-column, checklist item 25).",
+        "enable_update_checks = false",
+        "enable_auto_update = false",
+        "# Nobody is attached to a headless turn.",
+        "enable_notifications = false",
+        "",
+        "[project_context]",
+        "# No recent commits in the system prompt: the workspace's history is the runner's own",
+        "# checkpoints, new every turn, so the prompt changed every turn and no prompt cache carried",
+        "# from one turn to the next (measured 2026-10-25 on OpenRouter: nothing read across turns,",
+        "# 10533 tokens read within one).",
+        "default_commit_count = 0",
+        "",
+        "[session_logging]",
+        "# OFF: a generated session title is a SECOND model call on this turn's route, which would",
+        "# bill the user for a title and put a model call in the record nobody asked for.",
+        "generate_titles = false",
+        "",
+        f"[[providers]]",
+        f"name = {q(_VIBE_PROVIDER)}",
+        f"api_base = {q(base)}",
+        f"api_key_env_var = {q(_VIBE_KEY_ENV)}",
+        "# \"generic\" is its OpenAI chat/completions client; \"mistral\" would speak Mistral's own",
+        "# API, which no connection here serves.",
+        'backend = "generic"',
+        "",
+        f"[[models]]",
+        f"name = {q(model)}",
+        f"provider = {q(_VIBE_PROVIDER)}",
+        # alias defaults to name (ModelConfig._default_alias_to_name), and active_model matches on
+        # the alias — so one id names the model everywhere and there is no indirection to get wrong.
+        "# Declared because the window is otherwise unknown here, which leaves compaction with no",
+        "# threshold to derive; the real limit is the provider's and it refuses what does not fit.",
+        "max_context_length = 200000",
+        "",
+    ]
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        transport = str(sv.get("transport") or "").lower()
+        if sv.get("command"):
+            cmd = sv["command"]
+            argv = cmd if isinstance(cmd, list) else [str(cmd)]
+            args = [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]
+            lines += ["[[mcp_servers]]", f"name = {q(name)}", 'transport = "stdio"',
+                      f"command = {q(str(argv[0]))}",
+                      "args = [" + ", ".join(q(a) for a in args) + "]", ""]
+            continue
+        if not url:
+            continue
+        # The product's own servers (database, media, plugs) are streamable HTTP, which this CLI
+        # speaks natively; an SSE server a harness declares has no client here, so
+        # _BRIDGED_TRANSPORTS turns it into a stdio launcher before this runs.
+        lines += ["[[mcp_servers]]", f"name = {q(name)}",
+                  'transport = "streamable-http"' if transport != "sse" else 'transport = "sse"',
+                  f"url = {q(url)}", ""]
+        # The bearer the gateway minted for this turn goes through the shared helper, which is the
+        # one place a server's headers come from: eight writers once kept their own copy and
+        # dropped `auth`, and those bases had no browser at all.
+        hdrs = _mcp_headers(sv)
+        if hdrs:
+            lines += [f"[mcp_servers.auth]", 'type = "static"',
+                      "headers = { " + ", ".join(f"{q(k)} = {q(v)}" for k, v in hdrs.items()) + " }",
+                      ""]
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text("\n".join(lines))
+
+
+def _vibe_profile(home: pathlib.Path, model: str) -> None:
+    """Write $VIBE_HOME/agents/<_VIBE_AGENT>.toml — the turn's model, and the one door that beats a
+    resumed session's stored model (measured; see the note on this backend)."""
+    d = home / "agents"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{_VIBE_AGENT}.toml").write_text("\n".join([
+        "# written per turn by the harness runner — do not edit, it is overwritten",
+        "# A resumed session restores the model it started on, and the config layer does not",
+        "# override it. This profile does, which is how a harness's model switch reaches the",
+        "# provider on turn two.",
+        f"active_model = {_vibe_toml(model)}",
+        # The sandbox is the trust boundary and nobody is attached to approve anything — the same
+        # grant --auto-approve gives, stated in the profile so a run that loses the flag still has it.
+        "bypass_tool_permissions = true",
+        "",
+    ]))
+
+
+def _vibe_export(cwd: str) -> dict:
+    """This turn's export.json, or {} when the run died before writing one."""
+    try:
+        with open(_vibe_out(cwd) / "export.json", encoding="utf-8") as fh:
+            obj = json.load(fh)
+        return obj if isinstance(obj, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _vibe_usage(u: dict | None) -> dict:
+    """The export's usage → the canonical shape.
+
+    Its three names — input_tokens, output_tokens, cached_input_tokens — are all already in
+    _norm_token_usage's picker, so this is a pass-through rather than a mapping; it is a function
+    anyway because its INPUT is gross (the cached read sits inside input_tokens) and the netting
+    that makes billing right happens in there. A cache WRITE count it does not report at all, so
+    those tokens are billed as fresh input, which is the honest reading of what we are told."""
+    return _norm_token_usage(u if isinstance(u, dict) else None)
+
+
+def _vibe_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE session-journal entry to zero+ canonical claude events.
+
+    Entries arrive complete (`generationStatus: "completed"`), one line each, and each carries its
+    own id; they are de-duplicated by that id so a re-emitted entry cannot double a tool row or an
+    answer. `message` is a turn's prose, `effect` is a tool call with its input and its result in
+    one object, and the session id rides every entry — the first one is where system/init comes
+    from, because this CLI has no init event of its own."""
+    kind = obj.get("type")
+    sid = obj.get("sessionId")
+    out: list[dict] = []
+    if sid and not state.get("_vibe_init"):
+        state["_vibe_init"] = sid
+        out.append({"type": "system", "subtype": "init", "session_id": sid,
+                    "model": state.get("model")})
+    eid = str(obj.get("id") or "")
+    seen = state.setdefault("_vibe_seen", set())
+    if eid and eid in seen:
+        return out
+    if eid:
+        seen.add(eid)
+    if kind == "message":
+        role = obj.get("role")
+        text = "\n".join(b.get("text") or "" for b in (obj.get("content") or [])
+                         if isinstance(b, dict) and b.get("type") == "text").strip()
+        outcome = obj.get("outcome") if isinstance(obj.get("outcome"), dict) else {}
+        if outcome.get("type") == "discarded":
+            # 3.0.0 streams a draft it then threw away (`outcome: {type: discarded, cause: retry |
+            # failure | steer | interrupt}`): an answer cut off at the output limit is discarded and
+            # asked again. It was never the answer, so it is neither shown nor kept as the final.
+            return out
+        if role == "assistant" and text:
+            state["final"] = text
+            out.append({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": text}]}})
+        # A `user` entry is this turn's own prompt played back. It is NOT rendered: the gateway
+        # already stores what was sent, and a judge that reads the transcript tail must not be able
+        # to satisfy a recall check with the prompt's own copy of the answer (the rig defect that
+        # made 593 of 596 rows pass, batch 3).
+        return out
+    if kind == "effect":
+        detail = obj.get("detail") if isinstance(obj.get("detail"), dict) else {}
+        st = obj.get("state") if isinstance(obj.get("state"), dict) else {}
+        name = str(detail.get("toolName") or obj.get("title") or "tool")
+        args = detail.get("input")
+        if str(((st.get("error") or {}) if isinstance(st.get("error"), dict) else {}).get("code")
+               or "") == "tool_denied":
+            # The tool policy refused this call: `status: "failed"`, `decision: "skip"`,
+            # `error.code: "tool_denied"`, and nothing happened (measured with write_file and edit
+            # disabled — the file was not written).
+            #
+            # It is NOT recorded as a tool call. On every other base here a disabled tool is
+            # withheld from the model, so a turn's tool list means "what ran"; this runtime instead
+            # declares the tool and refuses the call, and recording the attempt as a call would make
+            # this base's list mean something different from all the others'. The custom-harness
+            # dimension reads exactly that list to decide whether a withheld tool stayed unused, so
+            # a row would have failed for a call that never happened.
+            # The attempt is not swallowed either: it becomes the `system/notice` the gateway
+            # renders as a note on the reply, so a person reading a turn where the model tried to
+            # use a tool their harness switched off is told so.
+            text = f"{name} was refused: this harness has it switched off"
+            seen_notice = state.setdefault("_vibe_denied", [])
+            if text in seen_notice:
+                return out
+            seen_notice.append(text)
+            return out + [{"type": "system", "subtype": "notice", "text": text}]
+        out.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": eid or name, "name": name,
+             "input": args if isinstance(args, dict) else {"input": args}}]}})
+        status = str(st.get("status") or "")
+        if status:
+            body = st.get("outputText")
+            if not body:
+                payload = st.get("output")
+                body = payload if isinstance(payload, str) else json.dumps(payload, default=str)
+            ok = bool((st.get("display") or {}).get("success", status == "completed"))
+            out.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": eid or name, "is_error": not ok,
+                 "content": str(body or "")[:8000]}]}})
+        return out
+    return out
+
+
+def _vibe_eof(state: dict, rc: int) -> list[dict]:
+    """The verdict comes from export.json, not from the exit code alone.
+
+    The CLI's exit codes are a documented contract (0 finished, 1 usage/config, 2 the model API or
+    the runtime, 3 a limit or a refusal, 4 an aborted socket run), and the export says which of
+    those it was in words: `outcome`, plus `error {message, code}` when there is one. A run killed
+    before it wrote an export leaves an empty reason on purpose, so the run loop's stderr tail is
+    what the user reads instead of a placeholder of ours."""
+    exp = _vibe_export(state.get("cwd") or "")
+    usage = _vibe_usage(exp.get("usage"))
+    err = exp.get("error") if isinstance(exp.get("error"), dict) else {}
+    why = str((err or {}).get("message") or "").strip()
+    outcome = str(exp.get("outcome") or "")
+    ok = rc == 0 and outcome == "finished" and not why
+    if not exp:
+        return [{"type": "result", "subtype": "success" if rc == 0 else "error",
+                 "is_error": rc != 0, "result": state.get("final", ""), "usage": usage}]
+    if not ok and not why:
+        # A limit or a refusal: the outcome IS the reason, and it is the only one there is.
+        why = {"turn_limit": "the turn limit was reached",
+               "token_limit": "the token budget was reached",
+               "price_limit": "the price limit was reached",
+               "deadline": "the time limit was reached",
+               "terminated": "the run was stopped",
+               "length": "the conversation or the answer hit the model's token limit",
+               "refusal": "the model refused the request",
+               "aborted": "the run was aborted"}.get(outcome, outcome)
+    return [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+             "result": state.get("final", "") if ok else (why or state.get("final", "")),
+             "usage": usage}]
+
+
+_vibe_to_claude.eof = _vibe_eof   # type: ignore[attr-defined]
+
+
+def _build_vibe(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                tools_disabled: list[str] | None = None,
+                max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in VIBE_PROVIDERS:
+        raise HTTPException(400, f"unknown vibe provider '{pr}' (one of {sorted(VIBE_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"vibe provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        # Every keyed turn rides the relay: the connection's real key never reaches the CLI's
+        # environment, where the agent's own shell could read it, and the relay is the only tap
+        # that can say which model actually answered.
+        #
+        # tool_index_fill: this client merges a streamed tool call's chunks by their `index` and
+        # raises ValueError("Tool call chunk missing index") when one has none — its own
+        # core/types.py, raised AFTER the model has answered, so the turn's work is lost. Google's
+        # OpenAI-compatible surface sends no index (measured; see _tool_call_index_line), which
+        # failed the artifact scenario of this base's Google column and nothing else in it. The
+        # flag is on for every route because the repair only ever ADDS the field the OpenAI
+        # streaming shape already defines, and the provider that needs it is decided by the
+        # connection rather than by this builder.
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key,
+                                                    drop_fields=_VIBE_DROP_FIELDS,
+                                                    tool_index_fill=True, chat_cache=True)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    home, out = _vibe_home(cwd), _vibe_out(cwd)
+    _vibe_config(auth, model, home, mcp_servers)
+    _vibe_profile(home, model)
+    env["VIBE_HOME"] = str(home)
+    env[_VIBE_KEY_ENV] = auth.api_key or ""
+    # Last turn's export must not be able to answer for this one: the eof handler reads this file,
+    # and a run that dies before writing it would otherwise be scored by the previous turn's
+    # outcome — a stale pass, which is worse than no verdict at all. The whole directory goes,
+    # because --output-dir also copies the session journal into it and that copy grows with the
+    # conversation.
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True, exist_ok=True)
+    cmd = [VIBE_BIN, "-p", prompt,
+           # Without it a programmatic run ignores the project's AGENTS.md, which is where the
+           # harness's whole workspace contract lives (measured; stderr says so).
+           "--trust",
+           # The profile carries this turn's model, and beats a resumed session's own (measured).
+           "--agent", _VIBE_AGENT,
+           "--output", "streaming",
+           "--auto-approve",
+           "--output-dir", str(out)]
+    if resume_session_id and _vibe_session_present(cwd, cmd, resume_session_id):
+        cmd += ["--resume", resume_session_id]
+    if max_turns:
+        cmd += ["--max-turns", str(int(max_turns))]
+    for t in (tools_disabled or []):
+        name = str(t or "").strip()
+        if name:
+            # Measured: a named tool is still DECLARED to the model and its calls are refused with
+            # `tool_denied`, nothing written — the effect is withheld, which is what makes this
+            # base's tool_enforcement "hard" rather than an instruction, and why the normaliser
+            # turns a refused call into a notice instead of a tool row.
+            cmd += ["--disabled-tools", name]
+    return cmd
+
+
+
+# ── Docker Agent (docker/docker-agent, Go) ────────────────────────────────────────────────────
+# Docker's own agent builder and runtime, the successor to cagent. A turn is
+# `docker-agent run --exec --json`, which streams NDJSON of its own shape, and everything about the
+# run — the provider, the model, the agent's instructions, its toolsets, its skills, its MCP
+# servers — comes from a YAML config this builder writes per turn.
+#
+# MEASURED on v1.150.0 (2026-10-16) against the Vercel AI Gateway through a recording proxy:
+#   * `providers.<name>` with `provider: openai`, `api_type: openai_chatcompletions`, `base_url`
+#     and `token_key` is the relay door, and the config needs `version: "8"` for that section to
+#     exist at all — version 2 is refused with a hint naming the version that supports it.
+#   * `--session <id>` takes an id that does NOT exist yet and creates it, so the harness's own
+#     session id is the CLI's: no mapping, and the gateway's resume id needs no translation. The
+#     store is a sqlite file named by `--session-db`, which lives under .harness/ and therefore
+#     travels in the checkpoint; _docker_agent_session_present asks that file whether the
+#     conversation is really there, because an id the store has lost is created silently as a NEW
+#     conversation (opencode's lesson, where four sessions answered three recalls each from an
+#     empty history).
+#   * Its stream is read as: `tool_call` (id + name + arguments), `tool_call_response`
+#     (tool_call_id + response), `agent_choice` (the assistant's answer), `token_usage` (per
+#     REQUEST, see _docker_agent_usage), `stream_stopped` (reason + finish_reason). `user_message`
+#     is the prompt played back and is not rendered.
+#   * Fifteen tools reach the model from the four toolsets this config declares, measured off the
+#     request itself rather than from the docs (ALL_DOCKER_AGENT_TOOLS below). A toolset's `tools`
+#     key is an include list, which is how a disabled tool is withheld — there is no per-tool deny.
+#   * Its filesystem toolset declares `excludePatterns` as an optional array (`anyOf` with no
+#     `items`), which Google's validator refuses outright:
+#     "GenerateContentRequest.tools[0].function_declarations[5].parameters.properties
+#     [excludePatterns].items: field predicate failed". The relay already repairs exactly this
+#     shape once a channel's validator names it (_with_gemini_schemas), and this backend's route
+#     asks for it up front rather than paying the first failure on every gemini turn.
+DOCKER_AGENT_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+DOCKER_AGENT_BIN = os.environ.get("HR_DOCKER_AGENT_BIN", "/data/agent-tools/bin/docker-agent")
+DOCKER_AGENT_DEFAULT_MODEL = os.environ.get("DOCKER_AGENT_DEFAULT_MODEL", "gpt-5.4")
+_DA_PROVIDER = "harness"
+_DA_AGENT = "root"
+_DA_KEY_ENV = "HR_DOCKER_AGENT_RELAY_KEY"
+# Each toolset this config declares, and the tools it brings. MEASURED off a turn's own request on
+# v1.150.0; the gateway's catalog publishes the same list, held to it by
+# gateway/tests/test_docker_agent_tools.py. The grouping matters because a tool is withheld by
+# narrowing its TOOLSET's include list — the runtime has no per-tool deny.
+_DOCKER_AGENT_TOOLSETS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("filesystem", ("read_file", "read_multiple_files", "write_file", "edit_file",
+                    "list_directory", "directory_tree", "search_files_content",
+                    "create_directory", "remove_directory")),
+    ("shell", ("shell",)),
+    ("todo", ("create_todo", "create_todos", "update_todos", "list_todos")),
+    ("think", ("think",)),
+)
+ALL_DOCKER_AGENT_TOOLS = tuple(t for _set, tools in _DOCKER_AGENT_TOOLSETS for t in tools)
+
+
+def _docker_agent_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
+                         tools_disabled: list[str] | None, max_turns: int | None) -> pathlib.Path:
+    """Write .harness/docker-agent/agent.yaml for this turn and return its path."""
+    disabled = {str(t) for t in (tools_disabled or ())}
+
+    def q(v) -> str:
+        """One YAML scalar, always quoted. The only caller-supplied strings that reach this are a
+        model id, a URL, an MCP server name and a tool name, and quoting them all is what keeps a
+        value with a colon in it from becoming a mapping."""
+        return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    lines = [
+        "# written per turn by the harness runner — do not edit, it is overwritten",
+        # The `providers` section does not exist before config version 8: version 2 is refused
+        # with a hint that names the version to use.
+        'version: "8"',
+        "",
+        "providers:",
+        f"  {_DA_PROVIDER}:",
+        "    provider: openai",
+        "    api_type: openai_chatcompletions",
+        f"    base_url: {q((auth.base_url or '').rstrip('/'))}",
+        f"    token_key: {q(_DA_KEY_ENV)}",
+        "",
+        "models:",
+        "  turn:",
+        f"    provider: {q(_DA_PROVIDER)}",
+        f"    model: {q(model)}",
+        "",
+        "agents:",
+        f"  {_DA_AGENT}:",
+        "    model: turn",
+        "    description: the harness turn",
+        "    instruction: |",
+        "      You are an autonomous coding agent working in a real git workspace with shell and",
+        "      file access. Read and edit files and run commands to complete the task end to end.",
+        # The workspace contract the runner writes, loaded by the CLI itself rather than inlined
+        # here: its prompt-files lookup walks up from the working directory for these names.
+        "    add_prompt_files:",
+        "      - AGENTS.md",
+        # Its own skill discovery: $HOME/.agents/skills, where _write_skills puts the bundle.
+        "    skills: true",
+    ]
+    if max_turns:
+        lines.append(f"    max_iterations: {int(max_turns)}")
+    lines.append("    toolsets:")
+    for name, tools in _DOCKER_AGENT_TOOLSETS:
+        kept = [t for t in tools if t not in disabled]
+        if not kept:
+            # every tool in this toolset was withheld: the toolset itself is left out, which is
+            # the only way to say that here (an empty include list means "include nothing", and
+            # the runtime reads a missing key as "all of them")
+            continue
+        lines.append(f"      - type: {name}")
+        if len(kept) != len(tools):
+            lines.append("        tools:")
+            lines += [f"          - {q(t)}" for t in kept]
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if sv.get("command"):
+            cmdv = sv["command"]
+            argv = cmdv if isinstance(cmdv, list) else [str(cmdv)]
+            args = [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]
+            lines += ["      - type: mcp", f"        name: {q(name)}",
+                      f"        command: {q(str(argv[0]))}"]
+            if args:
+                lines.append("        args:")
+                lines += [f"          - {q(a)}" for a in args]
+            continue
+        if not url:
+            continue
+        lines += ["      - type: mcp", f"        name: {q(name)}", "        remote:",
+                  f"          url: {q(url)}",
+                  # streamable HTTP is what the product's own servers speak; an SSE server a
+                  # harness declares is bridged to stdio before this runs.
+                  '          transport_type: "streamable"']
+        hdrs = _mcp_headers(sv)
+        if hdrs:
+            lines.append("          headers:")
+            lines += [f"            {q(k)}: {q(v)}" for k, v in hdrs.items()]
+    lines.append("")
+    path = _docker_agent_home(cwd) / "agent.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines))
+    return path
+
+
+def _docker_agent_usage(state: dict) -> dict:
+    """The turn's usage: the SUM of what each request reported, not the last one's.
+
+    Its `token_usage` event carries a running `context_length` at the top and the request's own
+    numbers under `last_message` — and the top-level `input_tokens` moves with the context rather
+    than with what was billed (3059 then 3157 on a two-request turn). jcode's defect was reading
+    exactly that kind of field: the summary looked authoritative and under-reported the turn by
+    more than half. So each event's `last_message` is accumulated here."""
+    return _norm_token_usage({
+        "input_tokens": state.get("_da_in", 0),
+        "output_tokens": state.get("_da_out", 0),
+        "cached_input_tokens": state.get("_da_cache_read", 0),
+        "cache_creation_input_tokens": state.get("_da_cache_write", 0),
+    }) if state.get("_da_in") or state.get("_da_out") else {}
+
+
+def _docker_agent_flush(state: dict) -> list[dict]:
+    """Emit the buffered answer fragments as one assistant text block (see the agent_choice branch)."""
+    buf = state.pop("_da_buf", None)
+    text = str((buf or {}).get("text") or "").strip()
+    if not text:
+        return []
+    state["final"] = text
+    return [{"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}]
+
+
+def _docker_agent_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Map ONE line of `docker-agent run --exec --json` to zero+ canonical claude events."""
+    t = str(obj.get("type") or "")
+    if t == "stream_started":
+        sid = str(obj.get("session_id") or "")
+        if sid and not state.get("_da_sid"):
+            state["_da_sid"] = sid
+            return [{"type": "system", "subtype": "init", "session_id": sid,
+                     "model": state.get("model")}]
+        return []
+    if t == "token_usage":
+        last = ((obj.get("usage") or {}).get("last_message") or {}) if isinstance(obj.get("usage"), dict) else {}
+        state["_da_in"] = state.get("_da_in", 0) + int(last.get("input_tokens") or 0)
+        state["_da_out"] = state.get("_da_out", 0) + int(last.get("output_tokens") or 0)
+        state["_da_cache_read"] = state.get("_da_cache_read", 0) + int(last.get("cached_input_tokens") or 0)
+        state["_da_cache_write"] = state.get("_da_cache_write", 0) + int(last.get("cached_write_tokens") or 0)
+        if last.get("finish_reason"):
+            state["_da_finish"] = str(last["finish_reason"])
+        return []
+    if t == "tool_call":
+        out = _docker_agent_flush(state)
+        call = obj.get("tool_call") if isinstance(obj.get("tool_call"), dict) else {}
+        fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args) if args.strip() else {}
+            except ValueError:
+                args = {"arguments": args}
+        return out + [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": str(call.get("id") or "tool"),
+             "name": str(fn.get("name") or "tool"),
+             "input": args if isinstance(args, dict) else {"arguments": args}}]}}]
+    if t == "tool_call_response":
+        res = obj.get("result") if isinstance(obj.get("result"), dict) else {}
+        body = obj.get("response")
+        if not isinstance(body, str):
+            body = res.get("output") if isinstance(res.get("output"), str) else json.dumps(res, default=str)
+        return [{"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": str(obj.get("tool_call_id") or "tool"),
+             "is_error": bool(res.get("error") or obj.get("error")),
+             "content": str(body or "")[:8000]}]}}]
+    if t == "agent_choice":
+        # A DELTA, not a message: a long answer arrives as several of these sharing one
+        # `message_id`. Read as whole messages, a turn's reply became its LAST fragment — "RST" for
+        # an answer of "DA-E2E-FIRST" (measured end to end, 2026-10-16). They are buffered here and
+        # flushed as one text block when the message changes, when a tool call interrupts it, or
+        # when the stream ends, which keeps the order the reader sees.
+        text = str(obj.get("content") or "")
+        if not text:
+            return []
+        mid = str(obj.get("message_id") or "")
+        buf = state.get("_da_buf")
+        out = []
+        if buf is not None and buf.get("mid") != mid:
+            out = _docker_agent_flush(state)
+            buf = None
+        if buf is None:
+            buf = {"mid": mid, "text": ""}
+            state["_da_buf"] = buf
+        buf["text"] += text
+        return out
+    if t == "error":
+        state["_da_error"] = str(obj.get("error") or obj.get("message") or "")[:1000]
+        return []
+    if t == "stream_stopped":
+        out = _docker_agent_flush(state)
+        reason = str(obj.get("reason") or "")
+        state["_da_stopped"] = reason or "normal"
+        if reason and reason != "normal" and not state.get("_da_error"):
+            state["_da_error"] = f"the run stopped: {reason}"
+        return out
+    # team_info, toolset_info, agent_info, mcp_init_*, message_added, hook_*, partial_tool_call:
+    # the TUI's own progress. partial_tool_call in particular is the same call arriving in
+    # fragments, and rendering those would put a row on the transcript per keystroke.
+    return []
+
+
+def _docker_agent_eof(state: dict, rc: int) -> list[dict]:
+    # A run killed mid-answer leaves fragments buffered; they are the answer as far as it got.
+    evs = _docker_agent_flush(state)
+    usage = _docker_agent_usage(state)
+    why = state.get("_da_error") or ""
+    ok = rc == 0 and not why
+    if ok and not str(state.get("final") or "").strip():
+        # NOTHING was said: the CLI exited 0, reported no error, and not one agent_choice fragment
+        # arrived all turn. An empty string in the result slot would reach the person as a done
+        # pill over a blank reply, which is the shape opencode's eof already refuses to leave
+        # blank. MEASURED in the first column (2026-10-20, gemini-3.5-flash-lite, the recycle
+        # scenario): one provider request, one tool call, its result, and then the run ended —
+        # 46 s, exit 0, `result: ""`, rendered as a completed turn with no answer. It did NOT
+        # reproduce on a re-run, so what the CLI or the model did is not established and this
+        # claims nothing about it; what is established is that the record said success and
+        # carried no answer and no reason. The finish_reason the CLI's own token_usage event
+        # carried is named because it is the one fact about the stop that was in the stream, and
+        # having it in the record is the difference between one look and five.
+        fin = str(state.get("_da_finish") or "")
+        why = ("the agent ended the turn without answering"
+               + (f" (the last finish_reason it reported was {fin})" if fin else ""))
+        ok = False
+    return evs + [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                   "result": state.get("final", "") if ok else (why or state.get("final", "")),
+                   "usage": usage}]
+
+
+_docker_agent_to_claude.eof = _docker_agent_eof   # type: ignore[attr-defined]
+
+
+def _build_docker_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                        resume_session_id: str | None = None,
+                        mcp_servers: list[dict] | None = None,
+                        tools_disabled: list[str] | None = None,
+                        max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in DOCKER_AGENT_PROVIDERS:
+        raise HTTPException(400, f"unknown docker-agent provider '{pr}' "
+                                 f"(one of {sorted(DOCKER_AGENT_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"docker-agent provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        # gemini_schemas up front: its filesystem toolset declares an optional array parameter
+        # with no `items`, which Google's validator refuses, and the relay's repair is the same one
+        # grok's route asks for (measured on this base, 2026-10-16).
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key,
+                                                    gemini_schemas=True, split_finish_content=True,
+                                                    chat_cache=True)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    cfg = _docker_agent_config(auth, model, cwd, mcp_servers, tools_disabled, max_turns)
+    env[_DA_KEY_ENV] = auth.api_key or ""
+    # Its own state (the model catalogue it caches, the first-run marker, the install id) under
+    # .harness/, so the workspace the user collects holds none of it. $HOME is already redirected
+    # there by the runner, which is what catches the paths these two do not cover (its cache dir).
+    env["DOCKER_AGENT_DATA_DIR"] = str(_docker_agent_home(cwd) / "data")
+    env["DOCKER_AGENT_CONFIG_DIR"] = str(_docker_agent_home(cwd) / "config")
+    # "We collect anonymous usage data … To disable: set TELEMETRY_ENABLED=false" — the CLI's own
+    # words on first run, and the variable is exactly that, not a DOCKER_AGENT_-prefixed one
+    # (pkg/telemetry/utils.go). A turn here talks to one place.
+    env["TELEMETRY_ENABLED"] = "false"
+    env["OTEL_SDK_DISABLED"] = "true"
+    # Self-update is opt-in upstream (it runs only when DOCKER_AGENT_AUTO_UPDATE is truthy), and
+    # this says so out loud: a pinned binary that can replace itself mid-column is how Muse Code's
+    # version changed under a measurement.
+    env["DOCKER_AGENT_AUTO_UPDATE"] = "false"
+    # A toolset whose command is missing otherwise fetches it from the aqua registry at the moment
+    # the model calls it. Every stdio MCP command this runner writes is already on this box (the
+    # bridge's interpreter), so there is nothing to fetch and a download inside a turn is not
+    # something a person asked for.
+    env["DOCKER_AGENT_AUTO_INSTALL"] = "false"
+    sid = resume_session_id or ("hr-" + uuid.uuid4().hex)
+    cmd = [DOCKER_AGENT_BIN, "run",
+           # No TUI, and the stream this runner parses rather than the human one.
+           "--exec", "--json",
+           # Nobody is attached to approve a tool call; the sandbox is the boundary.
+           "--yolo",
+           # The harness's session id IS the CLI's: an id the store does not have is created with
+           # that id, so there is no mapping to keep and no second identifier to lose.
+           "--session", sid,
+           "--session-db", str(_docker_agent_session_db(cwd)),
+           str(cfg), prompt]
+    return cmd
+
+
+
+# ── deepagents-code (langchain-ai/deepagents, PyPI deepagents-code, `dcode`) ──────────────────
+# LangChain's terminal coding agent on their Deep Agents SDK, driven over the **Agent Client
+# Protocol** rather than its headless flag — the first base here on ACP, and the reason is that the
+# headless flag cannot carry a conversation.
+#
+#   `dcode -n "<task>"` always starts a fresh thread. Its own source says so, about `--rubric`:
+#   "`run_non_interactive` takes no resume or thread-id argument, so it always starts a fresh
+#   thread". MEASURED against that (2026-10-16): five turns in one workspace, each passing
+#   `-r <thread_id>` for a thread with 22 checkpoints in the store, produced five NEW threads and
+#   five "this thread has no earlier message" answers. A base on that path passes `first turn` and
+#   fails `follow-up`, `switch` and `recycle`.
+#
+# `dcode --acp` is the same agent behind ACP over stdio, and its server is built with
+# `load_sessions=True`, so `session/load` restores a conversation IN A DIFFERENT PROCESS — which is
+# what one-process-per-turn needs. MEASURED on 0.1.84 (2026-10-19), two processes, live provider:
+#   * Process one created a session and was told to answer one word and WRITE NOTHING (updates:
+#     one message chunk, no tool call). Process two loaded that session id and answered what the
+#     word was — a question nothing in the workspace could answer, which is the control the first,
+#     WRONG reading of this base lacked (see docs/support-matrix-notes.md).
+#   * `session/load` REPLAYS the whole conversation as `session/update` notifications before the
+#     prompt goes out, so dcode_driver.py starts recording only after the load returns; otherwise
+#     every turn's record would open with every earlier turn's reply.
+#   * It requires the same `cwd` the session was created with, which is the session directory here,
+#     so a resume holds across a sandbox recycle.
+#   * The session id is the LangGraph thread id, and the thread's CHECKPOINTS are where it lives:
+#     the ACP path never writes `dcode_thread_workspaces` (the TUI's table, absent altogether in a
+#     workspace that has only run ACP turns), so _dcode_threads reads `checkpoints`.
+#   * The model is the SESSION's, not the flag's: `_restore_persisted_selections` puts the model a
+#     loaded session was created with back on it, so a switch turn must say so — the driver sends
+#     `session/set_config_option {configId: "model"}` on every turn. The value is validated against
+#     a list whose FIRST entry is THIS process's `-M` resolved spec, which is why the flag is still
+#     passed: it is what puts this turn's model in the list at all.
+#   * Permission: the agent calls `session/request_permission` on the client, and the driver allows
+#     — the sandbox is the trust boundary, the same grant claude gets with
+#     --dangerously-skip-permissions. `--yolo` is not the way to it here: ACP mode exits 2 unless
+#     the YOLO acknowledgement was given in the interactive TUI, and `--auto-approve` would install
+#     a classifier that spends a second model on every decision.
+#   * Tools reaching the model, read off a turn's own request body: ls, read_file, write_file,
+#     edit_file, delete, glob, grep, execute, task, compact_conversation, update_goal, ask_user,
+#     fetch_url, get_current_thread_id. Two differences from the headless path, both measured on
+#     the same build: `js_eval` is NOT declared (ACP mode leaves `enable_interpreter` at its False
+#     default and `--no-interpreter` is not plumbed into it), and `ask_user` IS (its
+#     `enable_ask_user` default is True there). `--allow-fs-tools` works, and in ACP mode it
+#     governs `execute` too — FS_TOOL_NAMES includes it, and a turn launched with
+#     `--allow-fs-tools read_file,ls` declared neither the shell nor the five write tools. So the
+#     eight withholdable tools are the whole filesystem set, `-S` is not needed for the shell to
+#     be there, and read_file is never withheld because the flag's own parser rejects a list
+#     without it.
+#   * ask_user is the one tool that cannot be withheld AND cannot work here: it raises a free-form
+#     LangGraph interrupt, which this protocol has no shape for, and the ACP server answers the
+#     prompt with error -32600 "ACP limitation". The driver names that outcome in the result rather
+#     than reporting an unexplained failure.
+#   * The operator's step budget is a no-op on this base (it is on eleven of twenty): `--max-turns`
+#     "requires -n or piped stdin" and is rejected in ACP mode, and the only neighbouring flag,
+#     `--recursion-limit`, counts LangGraph graph steps rather than turns. The turn's wall clock
+#     (MAX_TURN_SECONDS) is what bounds it.
+#   * It reads the project's AGENTS.md through find_project_agent_md — but only when the workspace
+#     is a git PROJECT, which every session here is (measured both ways: no token in the answer in
+#     a plain directory, the token in it after `git init`).
+#   * stdin: `dcode threads list --json` with an inherited stdin hung for eight minutes and
+#     returned at once with it closed — the same shape vtcode showed, and the reason _run_turn_bg
+#     closes stdin for every turn now. ACP owns the child's stdin here, and the driver's own stdin
+#     is the runner's to close.
+# The driver speaks JSON-RPC to the CLI and claude's stream-json to the runner, so this backend's
+# normaliser is the passthrough, as systemone's and nanobot's are.
+# No `anthropic` here, unlike the other four: this builder sets OPENAI_BASE_URL and the CLI's
+# langchain-openai model posts to /v1/responses, which an Anthropic Messages endpoint does not
+# have. That is codex's provider set rather than vibe's, and the gateway's wiring agrees.
+DCODE_PROVIDERS = {"openai", "azure", "openai-api", "tokenrouter"}
+DCODE_BIN = os.environ.get("HR_DCODE_BIN", "/data/agent-tools/dcode-venv/bin/dcode")
+DCODE_PYTHON = os.environ.get("HR_DCODE_PYTHON", "/data/agent-tools/dcode-venv/bin/python")
+DCODE_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dcode_driver.py")
+DCODE_DEFAULT_MODEL = os.environ.get("DCODE_DEFAULT_MODEL", "gpt-5.4")
+# The filesystem set `--allow-fs-tools` governs, which on this surface includes the shell. The
+# other six a turn declares — read_file (the flag's parser requires it), task,
+# compact_conversation, update_goal, ask_user and fetch_url with get_current_thread_id — have no
+# switch, so they are NOT offered: a tool id the runtime cannot withhold would be reported as off
+# by the console and disable nothing (UHP §4.3).
+_DCODE_FS_TOOLS = ("ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute")
+ALL_DCODE_TOOLS = ("ls", "write_file", "edit_file", "delete", "glob", "grep", "execute")
+
+
+def _dcode_config(cwd: str) -> None:
+    """Write $HOME/.deepagents/config.toml: the warnings off, so nothing of the CLI's own writing
+    lands on the stream the driver reads (it prints its Tavily notice and the suppression recipe
+    itself)."""
+    home = pathlib.Path(cwd) / ".harness" / "home" / ".deepagents"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text(
+        "# written per turn by the harness runner — do not edit, it is overwritten\n"
+        "[warnings]\n"
+        'suppress = ["tavily", "ripgrep"]\n'
+        "\n[startup]\n"
+        "# A workspace .env is the task's own file, and this CLI applies it to the PROCESS\n"
+        "# environment by default; a cloned repository's .env is not something a turn should\n"
+        "# inherit (the project's own documentation calls this defense in depth).\n"
+        "read_project_dotenv = false\n")
+
+
+def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                 tools_disabled: list[str] | None = None,
+                 max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in DCODE_PROVIDERS:
+        raise HTTPException(400, f"unknown dcode provider '{pr}' (one of {sorted(DCODE_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"dcode provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, turn_reasoning_only=True)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    _dcode_config(cwd)
+    # langchain-openai's own variables, which is what `-M openai:<id>` resolves through. It posts
+    # to **/v1/responses**, not chat/completions, which is why this base is NOT in
+    # CHAT_ONLY_BACKENDS: a Responses-only id is reachable here, as it is on codex.
+    env["OPENAI_BASE_URL"] = (auth.base_url or "").rstrip("/")
+    env["OPENAI_API_KEY"] = auth.api_key or ""
+    # Every default that would phone home, change the binary, or write into the user's own files:
+    env["DEEPAGENTS_CODE_NO_UPDATE_CHECK"] = "1"
+    env["DEEPAGENTS_CODE_AUTO_UPDATE"] = "0"
+    env["DEEPAGENTS_CODE_PLUGIN_AUTO_UPDATE"] = "0"
+    env["DEEPAGENTS_CODE_PRICES_AUTO_UPDATE"] = "0"
+    # "the memory prompt tells the agent to proactively persist learnings to the AGENTS.md memory
+    # files" — the user's instruction file is the harness's, written fresh every turn, so an agent
+    # editing it would be editing something the next turn overwrites.
+    env["DEEPAGENTS_CODE_MEMORY_AUTO_SAVE"] = "0"
+    env["DEEPAGENTS_CODE_READ_PROJECT_DOTENV"] = "0"
+    # No download inside a turn. This CLI fetches a pinned, SHA-256-verified ripgrep of its own
+    # the first time `grep` is called, and install_dcode does that at install time instead — into
+    # the venv (share/deepagents-code/bin/rg, verified on python:3.12-slim), which is where it is
+    # found whatever HOME a turn runs with. If that copy is missing, this flag's own
+    # documentation says what happens: the search falls back to "the slow Python regex path",
+    # which is a working grep and not a failed turn.
+    env["DEEPAGENTS_CODE_OFFLINE"] = "1"
+    # LangSmith tracing is on by default in its own right; --no-tracing covers the session and this
+    # covers the SDK underneath it.
+    env["LANGSMITH_TRACING"] = "false"
+    env["LANGCHAIN_TRACING_V2"] = "false"
+    disabled = {str(t) for t in (tools_disabled or ())}
+    model_spec = f"openai:{model}"
+    cmd = [DCODE_BIN,
+           "--acp",
+           "--no-tracing",
+           # not this turn's model so much as this turn's PERMISSION to ask for it: the server's
+           # valid-model list is built from the spec this process resolves (see the driver).
+           "-M", model_spec,
+           "--max-retries", "2"]
+    fs_kept = [t for t in _DCODE_FS_TOOLS if t not in disabled]
+    if len(fs_kept) != len(_DCODE_FS_TOOLS):
+        if "read_file" not in fs_kept:
+            fs_kept = ["read_file", *fs_kept]
+        cmd += ["--allow-fs-tools", ",".join(fs_kept)]
+    if mcp_servers:
+        cfg = _write_mcp_config_claude(cwd, mcp_servers)
+        if cfg:
+            cmd += ["--mcp-config", cfg, "--trust-project-mcp"]
+    else:
+        # Nothing declared: its auto-discovery would otherwise pick up a config in the workspace,
+        # which is the task's own file rather than the harness's declaration.
+        cmd.append("--no-mcp")
+    # The driver speaks ACP to that process and claude's stream-json to the runner.
+    job = {"argv": cmd, "cwd": str(pathlib.Path(cwd).resolve()),
+           # The task rides the protocol, not the command line: ACP takes it in session/prompt.
+           "prompt": prompt,
+           "model": model, "model_spec": model_spec,
+           # Asked for, not assumed: a thread the store no longer has runs as a new session, and
+           # _resume_lost (which asked the store before this ran) is what tells the user. A thread
+           # the store DOES have (resume_known) must load, or the turn fails with the agent's own
+           # reason: it is never answered as a new conversation without a word.
+           "resume": resume_session_id or "",
+           "resume_known": bool(resume_session_id) and _dcode_session_present(cwd, cmd, resume_session_id),
+           # A cap of its own, under the runner's, so a turn that never answers is reported as the
+           # limit rather than as an unexplained failure.
+           "timeout": MAX_TURN_SECONDS}
+    return [DCODE_PYTHON, DCODE_DRIVER, json.dumps(job, separators=(",", ":"))]
+
+
+
+# ── fast-agent (evalstate/fast-agent, PyPI fast-agent-mcp) ────────────────────────────────────
+# An MCP-first agent framework with a one-shot CLI: `fast-agent go -m "<task>" --quiet` prints the
+# answer, and `--trajectory-output` writes the whole turn as ATIF — a structured record with the
+# steps, each step's tool calls AND their results, each step's token metrics and the session id. So
+# this base's stream carries nothing and its EOF carries everything: _fast_agent_eof reads that file
+# (opensquilla's arrangement, where the CLI's own transcript is replayed at the end of the turn).
+#
+# MEASURED on 0.10.45 (2026-10-16) against the Vercel AI Gateway through a recording proxy:
+#   * `GENERIC_BASE_URL` + `GENERIC_API_KEY` with `--model generic.<id>` is its OpenAI-compatible
+#     client pointed at the relay (`llm_generic.py` reads exactly those two).
+#   * **It has no tools at all by default.** A first turn asked to write a file answered "I can't
+#     create files in this conversation because I have no file-system tool", and the request
+#     declared ZERO tools: its tools come from MCP servers. `-x` (`--shell`) turns on the local
+#     runtime, and with it a turn declares four — bash, process, read_text_file, edit_file — and
+#     the file was written. Every turn here passes it.
+#   * `--resume <session_id>` continues a conversation (measured with a question the workspace
+#     could not answer), and sessions live under `$FAST_AGENT_HOME/sessions/<id>/` — a directory
+#     whose default is `./.fast-agent`, i.e. inside the workspace the user collects, which is why
+#     FAST_AGENT_HOME is set per session.
+#   * A resumed session RESTORES ITS OWN MODEL: turn two with `--model generic.google/gemini-3-flash`
+#     asked the provider for the first turn's claude id. The model is in the session's own
+#     `session.json` (`continuation.agents.<name>.model` and `.model_spec`), so this builder writes
+#     this turn's model there before `--resume` reads it — the fourth base in this batch with that
+#     shape (checklist item 42), and the second where the door is the store.
+#   * Its MCP client takes stdio, sse AND streamable http with `headers`, so nothing is bridged.
+FAST_AGENT_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+FAST_AGENT_BIN = os.environ.get("HR_FAST_AGENT_BIN",
+                                "/data/agent-tools/fast-agent-venv/bin/fast-agent")
+FAST_AGENT_DEFAULT_MODEL = os.environ.get("FAST_AGENT_DEFAULT_MODEL", "gpt-5.4")
+# The agent's name inside the session store, which is also the key under
+# `continuation.agents` that carries the model. It is ours: `--name` sets it.
+_FA_AGENT = "harness"
+# Its OpenAI-compatible client's own two variables (llm_generic.py).
+_FA_BASE_ENV = "GENERIC_BASE_URL"
+_FA_KEY_ENV = "GENERIC_API_KEY"
+# The three tools a person can really switch off here, and the switch each travels on:
+#   bash            `-x` is withheld, which takes the whole local shell runtime with it
+#   read_text_file  shell.enable_read_text_file = false
+#   edit_file       shell.write_text_file_mode = "off"
+# `process` is NOT offered: it is the shell runtime's second tool and has no switch of its own, so
+# a toggle for it would either disable nothing or silently take bash away too.
+ALL_FAST_AGENT_TOOLS = ("bash", "read_text_file", "edit_file")
+
+
+def _fast_agent_set_model(cwd: str, session_id: str, model: str) -> bool:
+    """Point the session's stored model at THIS turn's model, before --resume reads it.
+
+    MEASURED: without this a resumed turn asks the provider for the model the session started on,
+    and the harness's switch is dropped in silence — matrix rule 2 broken by the store. The file is
+    plain JSON with no checksum of its own; only the two model fields change, the agent's history
+    and its prompt are left exactly as they are, and it is written beside and renamed so a crash
+    cannot leave half a session behind.
+
+    Nothing ELSE is written into it. The same file also carries `shell_enabled`, and setting that
+    looked like the way to withhold the shell on a resumed turn — but `--no-shell` does it on the
+    command line, measured, so writing into another program's state for it would be a change with
+    no measurement behind it (the lesson of the opensquilla `[memory] source` claim)."""
+    path = _fast_agent_session_file(cwd, session_id)
+    try:
+        with path.open(encoding="utf-8") as fh:
+            doc = json.load(fh)
+        agents = ((doc.get("continuation") or {}).get("agents") or {})
+        if not isinstance(agents, dict) or not agents:
+            return False
+        changed = False
+        for spec in agents.values():
+            if not isinstance(spec, dict):
+                continue
+            if spec.get("model") != model:
+                spec["model"] = model
+                changed = True
+            want = f"generic.{model}"
+            if spec.get("model_spec") != want:
+                spec["model_spec"] = want
+                changed = True
+        if not changed:
+            return False
+        tmp = path.with_suffix(".json.hr-tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        os.replace(tmp, path)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _fast_agent_config(cwd: str, tools_disabled: list[str] | None,
+                       mcp_servers: list[dict] | None, base_url: str = "") -> tuple[pathlib.Path, list[str]]:
+    """Write the fastagent.config.yaml this turn runs with, and name the servers it declares.
+
+    Only three things are in it: the tool switches a harness's disabled set travels on, the MCP
+    servers it declared, and the logger turned down so the answer is the only thing on stdout.
+
+    The server NAMES come back with the path because `go` needs them on the command line as well:
+    `--servers` is "a comma-separated list of server names to enable FROM CONFIG" (its own help),
+    so a declaration this file carries reaches the agent only when the flag names it. They are
+    returned rather than recomputed in the builder so the flag and the file cannot disagree."""
+    disabled = {str(t) for t in (tools_disabled or ())}
+
+    def q(v) -> str:
+        return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    lines = ["# written per turn by the harness runner — do not edit, it is overwritten",
+             "logger:",
+             "  progress_display: false",
+             "  show_chat: false",
+             "  show_tools: false",
+             "",
+             # Stated here, where a workspace's .env cannot reach: fast-agent reads a .env in the
+             # directory it runs in, so OTEL__ENABLED there sent the turn's traces to the endpoint it
+             # named, and GENERIC__BASE_URL there sent the model call around the relay (both
+             # measured on 0.10.47). The config file outranks that .env for both.
+             "otel:",
+             "  enabled: false",
+             "",
+             ]
+    if base_url:
+        lines += ["generic:", f"  base_url: {q(base_url.rstrip('/'))}", ""]
+    if "bash" not in disabled:
+        # Only when the shell runtime is on at all: read_text_file and the edit tool are the
+        # two the config withholds, and the shell itself is withheld by not passing -x (see
+        # _build_fast_agent), so a `shell:` section would have nothing to say.
+        read_ok = "false" if "read_text_file" in disabled else "true"
+        edit_mode = '"off"' if "edit_file" in disabled else '"auto"'
+        lines += ["shell:",
+                  f"  enable_read_text_file: {read_ok}",
+                  f"  write_text_file_mode: {edit_mode}",
+                  ""]
+    entries = []
+    for i, sv in enumerate(mcp_servers or []):
+        if not isinstance(sv, dict):
+            continue
+        name = _mcp_name(sv.get("name") or sv.get("id") or f"server{i}")
+        url = (sv.get("url") or "").strip()
+        if sv.get("command"):
+            cmdv = sv["command"]
+            argv = cmdv if isinstance(cmdv, list) else [str(cmdv)]
+            args = [str(a) for a in argv[1:]] + [str(a) for a in (sv.get("args") or [])]
+            body = [f"    transport: \"stdio\"", f"    command: {q(str(argv[0]))}"]
+            if args:
+                body.append("    args: [" + ", ".join(q(a) for a in args) + "]")
+            entries.append((name, body))
+            continue
+        if not url:
+            continue
+        transport = "sse" if str(sv.get("transport") or "").lower() == "sse" else "http"
+        body = [f"    transport: {q(transport)}", f"    url: {q(url)}"]
+        hdrs = _mcp_headers(sv)
+        if hdrs:
+            # Through the shared helper, the one place a server's headers come from.
+            body.append("    headers:")
+            body += [f"      {q(k)}: {q(v)}" for k, v in hdrs.items()]
+        entries.append((name, body))
+    if entries:
+        # `mcp.servers.<name>.<field>`: the body is indented UNDER the name, which it was not —
+        # the name and its fields were emitted at the same depth, so `servers` came out as three
+        # sibling keys (`deepwiki: null`, `transport`, `url`) and the CLI refused to start at all:
+        # "Error loading fast-agent settings: 3 validation errors for Settings / mcp: Invalid
+        # configuration value" — one per key. MEASURED by the custom-harness dimension
+        # (2026-10-20), which is the first thing here to declare an MCP server on this base; the
+        # support-matrix column declares none and passed 274 of 280 scenarios with this broken.
+        # The indent is applied HERE, once, rather than written into each body line, so a body
+        # built anywhere above cannot carry the wrong depth.
+        lines += ["mcp:", "  servers:"]
+        for name, body in entries:
+            lines.append(f"    {name}:")
+            lines += [f"  {b}" for b in body]
+        lines.append("")
+    path = _fast_agent_home(cwd) / "fastagent.config.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines))
+    return path, [name for name, _body in entries]
+
+
+def _fast_agent_to_claude(obj: dict, state: dict) -> list[dict]:
+    """Nothing comes off the stream: `--quiet` prints prose, and the turn's record is the ATIF file
+    the eof handler reads. A JSON line here would only be an answer that happens to be JSON."""
+    return []
+
+
+def _fast_agent_eof(state: dict, rc: int) -> list[dict]:
+    """The whole turn, out of the ATIF trajectory: the session id, the steps, the usage.
+
+    Each agent step's `message` is CUMULATIVE — a two-step turn reported "FAOK" and then
+    "FAOK\\n\\nDONE" — so a step that only extends the previous one contributes its new text and not
+    the whole of it again (docker-agent's delta lesson, in another spelling)."""
+    path = _fast_agent_traj(str(state.get("cwd") or ""))
+    try:
+        with path.open(encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        doc = {}
+    evs: list[dict] = []
+    sid = str(doc.get("session_id") or "")
+    if sid:
+        evs.append({"type": "system", "subtype": "init", "session_id": sid,
+                    "model": state.get("model")})
+    # A resumed session's trajectory holds every turn of the conversation (measured: nine steps
+    # across three turns), and a turn's record must hold its own. The boundary is this turn's own
+    # prompt: everything up to and including the LAST user step carrying it belongs to the turns
+    # before. Without this, each reply arrived with every earlier reply glued in front of it.
+    steps = [x for x in (doc.get("steps") or []) if isinstance(x, dict)]
+    prompt = str(state.get("prompt") or "")
+    if prompt:
+        cut = max((i for i, x in enumerate(steps)
+                   if x.get("source") == "user" and str(x.get("message") or "") == prompt),
+                  default=-1)
+        steps = steps[cut + 1:]
+        # ...and STOP at the next user message. Trimming only the front is right for the file this
+        # turn just wrote (its own prompt is the last one in it) and wrong for any trajectory that
+        # also holds what came after — which is how its own captured fixture reads, and what a
+        # stale file would look like if the clear in _build_fast_agent ever failed. Two independent
+        # guards for one invariant: a turn's record is one turn.
+        nxt = next((i for i, x in enumerate(steps) if x.get("source") == "user"), None)
+        if nxt is not None:
+            steps = steps[:nxt]
+    seen_text = ""
+    for step in steps:
+        if step.get("source") != "agent":
+            continue
+        text = str(step.get("message") or "")
+        new = text[len(seen_text):] if text.startswith(seen_text) else text
+        if new.strip():
+            evs.append({"type": "assistant",
+                        "message": {"content": [{"type": "text", "text": new.strip()}]}})
+            state["final"] = (state.get("final", "") + "\n" + new.strip()).strip()
+        if text:
+            seen_text = text
+        for call in (step.get("tool_calls") or []):
+            if not isinstance(call, dict):
+                continue
+            args = call.get("arguments")
+            evs.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": str(call.get("tool_call_id") or "tool"),
+                 "name": str(call.get("function_name") or "tool"),
+                 "input": args if isinstance(args, dict) else {"arguments": args}}]}})
+        for res in ((step.get("observation") or {}).get("results") or []):
+            if not isinstance(res, dict):
+                continue
+            evs.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": str(res.get("source_call_id") or "tool"),
+                 "is_error": bool((res.get("extra") or {}).get("is_error")),
+                 "content": str(res.get("content") or "")[:8000]}]}})
+    # The usage is this turn's own steps, each of which carries its call's counts. final_metrics
+    # totals the whole trajectory, and a resumed session's trajectory holds every earlier turn:
+    # measured 2026-10-25, a third turn reported 7077 prompt tokens, the four calls of all three
+    # turns, where its own two calls took 2385.
+    own = [x["metrics"] for x in steps if x.get("source") == "agent" and isinstance(x.get("metrics"), dict)]
+    usage = _norm_token_usage({"input_tokens": sum(int(m.get("prompt_tokens") or 0) for m in own),
+                               "output_tokens": sum(int(m.get("completion_tokens") or 0) for m in own),
+                               "cached_input_tokens": sum(int(m.get("cached_tokens") or 0) for m in own)})
+    ok = rc == 0 and bool(doc)
+    # No trajectory at all means the CLI died before writing one; the run loop's stderr tail is the
+    # reason, and an empty result lets it through rather than shadowing it.
+    return evs + [{"type": "result", "subtype": "success" if ok else "error", "is_error": not ok,
+                   "result": state.get("final", "") if ok else "", "usage": usage}]
+
+
+_fast_agent_to_claude.eof = _fast_agent_eof   # type: ignore[attr-defined]
+
+
+def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
+                      resume_session_id: str | None = None,
+                      mcp_servers: list[dict] | None = None,
+                      tools_disabled: list[str] | None = None,
+                      max_turns: int | None = None) -> list[str]:
+    pr = provider or "openai-api"
+    if pr not in FAST_AGENT_PROVIDERS:
+        raise HTTPException(400, f"unknown fast-agent provider '{pr}' "
+                                 f"(one of {sorted(FAST_AGENT_PROVIDERS)})")
+    if not auth.base_url:
+        raise HTTPException(400, f"fast-agent provider '{pr}' needs a base_url (none configured)")
+    if auth.api_key:
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, chat_cache=True)
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+    home = _fast_agent_home(cwd)
+    home.mkdir(parents=True, exist_ok=True)
+    cfg, server_names = _fast_agent_config(cwd, tools_disabled, mcp_servers, base_url=auth.base_url or "")
+    env["FAST_AGENT_HOME"] = str(home)
+    env[_FA_BASE_ENV] = (auth.base_url or "").rstrip("/")
+    env[_FA_KEY_ENV] = auth.api_key or ""
+    traj = _fast_agent_traj(cwd)
+    # Last turn's trajectory must not be able to answer for this one: the eof reads this file.
+    try:
+        traj.unlink()
+    except OSError:
+        pass
+    disabled = {str(t) for t in (tools_disabled or ())}
+    doc = _agent_doc_path(cwd, "fast-agent")
+    cmd = [FAST_AGENT_BIN, "go",
+           "--name", _FA_AGENT,
+           # WITHOUT THIS the agent works in its own home: measured end to end, a turn asked to
+           # write e2e.txt wrote it into .harness/fast-agent/ (its `working_dir` in the trajectory's
+           # tool metadata), which this product excludes from the produced-files list — so the
+           # user's deliverable would simply not exist for them. The workspace root is the session
+           # directory, and the home stays under .harness/ because FAST_AGENT_HOME says so.
+           "--workspace", str(pathlib.Path(cwd).resolve()),
+           # ...and the home NAMED, not left to the environment: with --workspace given the home
+           # resolved under it (`<cwd>/.fast-agent`) and FAST_AGENT_HOME was ignored, so the
+           # session store landed in the directory the user collects. The flag beats both.
+           "--home", str(home),
+           "--model", f"generic.{model}",
+           # The harness's workspace contract IS this agent's instruction: it has no
+           # instruction-file convention of its own, so the file the runner writes is named here
+           # (aider's arrangement).
+           "-i", str(doc),
+           "-m", prompt,
+           # the answer on stdout and nothing else; the record comes from the trajectory
+           "--quiet",
+           "-c", str(cfg),
+           "--trajectory-output", str(traj),
+           "--trajectory-format", "atif"]
+    if server_names:
+        # DECLARED IS NOT ENABLED on this entry point. `go` builds an ad-hoc agent, and its
+        # `--servers` is "a comma-separated list of server names to enable from config" (its own
+        # help), so a server this runner wrote into the config reaches the model only when the
+        # flag names it. MEASURED by the custom-harness dimension (2026-10-20): with the config
+        # valid and the flag missing, the turn ran, recorded ZERO tool calls, and the harness's
+        # own MCP server was never called — the model simply had nothing attached. The names come
+        # from the writer, so the flag and the file cannot disagree.
+        cmd += ["--servers", ",".join(server_names)]
+    if "bash" in disabled:
+        # EXPLICITLY off, not merely un-asked-for: a resumed session brings its shell runtime back,
+        # so a turn that only omitted -x had bash anyway and ran the command it was supposed to be
+        # unable to run. With --no-shell on the same resumed session the request declared no bash at
+        # all and the model said so. Both measured.
+        cmd.append("--no-shell")
+    else:
+        # Without it this framework has NO tools of its own at all: they come from MCP servers, and
+        # `-x` is what turns on the local shell and file runtime (measured — a turn without it
+        # answered that it had no file-system tool, and its request declared zero tools).
+        cmd.append("-x")
+    if resume_session_id and _fast_agent_session_present(cwd, cmd, resume_session_id):
+        # The store is pointed at this turn's model first, because --resume restores the
+        # session's own and the --model flag does not override it (measured).
+        _fast_agent_set_model(cwd, resume_session_id, model)
+        cmd += ["--resume", resume_session_id]
+    skills = pathlib.Path(cwd) / ".harness" / "fast-agent" / "skills"
+    if skills.is_dir():
+        cmd += ["--skills", str(skills)]
+    return cmd
+
+
+
 BACKENDS = {
     "claude": {"providers": sorted(CLAUDE_PROVIDERS), "default_model": CLAUDE_DEFAULT_MODEL,
                "normalize": _claude_passthrough},
@@ -11713,10 +13487,6 @@ BACKENDS = {
     # same relationship omp has to pi.
     "mimo": {"providers": sorted(MIMO_PROVIDERS), "default_model": MIMO_DEFAULT_MODEL,
              "normalize": _opencode_to_claude},
-    # Gajae-Code speaks pi's `--mode json` events with pi's field names, so _gajae_to_claude
-    # delegates to pi's and adds only the one event pi has no branch for (agent_failed).
-    "gajae": {"providers": sorted(GAJAE_PROVIDERS), "default_model": GAJAE_DEFAULT_MODEL,
-              "normalize": _gajae_to_claude},
     # jcode's NDJSON is its OWN schema (src/cli/commands.rs emit_ndjson_event), including a `tokens`
     # event the turn has to ACCUMULATE because its own `done.usage` holds only the last request's.
     "jcode": {"providers": sorted(JCODE_PROVIDERS), "default_model": JCODE_DEFAULT_MODEL,
@@ -11730,6 +13500,27 @@ BACKENDS = {
     # normaliser is the passthrough, as systemone's is.
     "nanobot": {"providers": sorted(NANOBOT_PROVIDERS), "default_model": NANOBOT_DEFAULT_MODEL,
                 "normalize": _claude_passthrough},
+    # mistral-vibe's `--output streaming` is its own session-journal shape (one entry per line,
+    # `message` and `effect`), and the turn's verdict is in the export.json its eof handler reads
+    # rather than in the stream — so it carries its own normaliser and its own eof.
+    "vibe": {"providers": sorted(VIBE_PROVIDERS), "default_model": VIBE_DEFAULT_MODEL,
+             "normalize": _vibe_to_claude},
+    # Docker Agent's `run --exec --json` is its own NDJSON (tool_call / tool_call_response /
+    # agent_choice / token_usage / stream_stopped), with its usage reported per REQUEST — see
+    # _docker_agent_usage for why the turn's numbers are accumulated rather than read off the last
+    # event.
+    "docker-agent": {"providers": sorted(DOCKER_AGENT_PROVIDERS),
+                     "default_model": DOCKER_AGENT_DEFAULT_MODEL,
+                     "normalize": _docker_agent_to_claude},
+    # deepagents-code is driven over ACP, so runner/dcode_driver.py speaks JSON-RPC to the CLI
+    # and emits claude's stream-json itself — the passthrough, as systemone's and nanobot's are.
+    "dcode": {"providers": sorted(DCODE_PROVIDERS), "default_model": DCODE_DEFAULT_MODEL,
+              "normalize": _claude_passthrough},
+    # fast-agent's stream is prose and its RECORD is the ATIF trajectory it writes, so the
+    # normaliser passes every line and the eof reads that file — opensquilla's arrangement.
+    "fast-agent": {"providers": sorted(FAST_AGENT_PROVIDERS),
+                   "default_model": FAST_AGENT_DEFAULT_MODEL,
+                   "normalize": _fast_agent_to_claude},
     # The zeroclaw driver emits claude's stream-json itself (see zeroclaw_driver.py).
     "zeroclaw": {"providers": sorted(ZEROCLAW_PROVIDERS), "default_model": ZEROCLAW_DEFAULT_MODEL,
                  "normalize": _claude_passthrough},
@@ -11934,12 +13725,39 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 # systemone, openhands, agentzero, opensquilla, nanobot, zeroclaw) are absent: their budget is the
 # CLI's own. jcode is absent too — its counter in _jcode_to_claude predates this one and emits
 # jcode's own usage, so it stays.
-_GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "gajae", "qwen", "gemini", "cline",
+_GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "qwen", "gemini", "cline",
                         "opencode", "mimo", "kilo", "qoder"}
 
 
+def _record_cli_session_id(rec: dict, ev: dict) -> None:
+    """Remember the CLI's own conversation id from an `init` event: it is what the gateway sends
+    back as the next turn's resume id, and therefore what every `--resume` is built from.
+
+    Called from BOTH places a turn's events are produced — the streaming loop and the eof — and
+    that is the whole point. MEASURED on fast-agent's first column (2026-10-20): its stream
+    carries nothing at all (the ATIF trajectory is read at eof), so its init event only ever
+    appeared in the eof batch, where the capture did not exist. The id was never recorded, the
+    gateway had none to send, the builder's `if resume_session_id and ...` was false, and EVERY
+    follow-up turn silently started a new conversation — while `_resume_lost` stayed quiet,
+    because an EMPTY resume id is not a lost one.
+
+    What that looked like from outside: four of the five matrix scenarios passed, because they ask
+    the model to echo a token and never test the history; the recall scenario answered the literal
+    word "word", and a clean two-turn probe (a word that is nowhere in the workspace) answered
+    "remember" with 993 input tokens against the first turn's 989 — no history at all. The CLI was
+    never at fault: by hand, `fast-agent go --resume <id>` answered the word and its trajectory
+    grew from three steps to five.
+
+    This is the opencode lesson (see _resume_lost) arriving through a different door: there, four
+    hosted sessions answered recalls from an empty history and nothing said so."""
+    # Last init wins, which is what the streaming loop did before this was factored out: a turn
+    # that reports a second id has continued into it, and nothing here changes that.
+    if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
+        rec["session_id"] = ev["session_id"]
+
+
 def _running_usage(state: dict) -> dict:
-    """What a translator has counted of a turn's usage so far: pi's (omp's, gajae's) per message,
+    """What a translator has counted of a turn's usage so far: pi's (omp's) per message,
     dsh's per step. It is the turn's usage on their result, and on a budget's stop, which comes
     before their CLI says anything terminal. {} where nothing is kept as the turn goes."""
     usage: dict = {}
@@ -12006,6 +13824,17 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
         # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
+                                # NOTHING a turn runs may wait on stdin. Every CLI here is given
+                                # its prompt in argv, and the runner's own stdin is whatever the
+                                # container was started with — so a CLI that reads stdin anyway
+                                # blocks until the turn's wall-clock cap with no output at all.
+                                # MEASURED on vtcode 0.177.0 (2026-10-16): `vtcode exec --json
+                                # "<prompt>"` with an inherited stdin produced no events and made
+                                # no model call for as long as it was left running; the identical
+                                # argv with stdin closed answered in seconds. Isolated against the
+                                # two other suspects (its ripgrep / ast-grep installers), which
+                                # turned out to be irrelevant.
+                                stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 start_new_session=True, **_as_session(cwd, env))
     except Exception as e:  # noqa: BLE001
@@ -12061,8 +13890,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                     continue
                 with _turns_lock:
                     rec["events"].append(ev)
-                if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
-                    rec["session_id"] = ev["session_id"]   # CLI conversation id → next turn's --resume
+                _record_cli_session_id(rec, ev)
                 if (step_cap and not state.get("_stop") and ev.get("type") == "assistant"
                         and _count_tool_calls(ev, state) > step_cap):
                     state["_stop"] = "max_turns"
@@ -12093,6 +13921,9 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 continue
             with _turns_lock:
                 rec["events"].append(ev)
+            # The SAME capture the streaming loop does, because a base whose stream carries nothing
+            # emits its init HERE (see _record_cli_session_id for what it cost to learn that).
+            _record_cli_session_id(rec, ev)
     if result_ev is None and state.get("_stop") == "max_turns":
         # Stopped at its budget before the CLI said anything terminal (codex's turn.completed
         # never comes once it is killed): the turn's result is the budget's, with what its
@@ -12123,9 +13954,24 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     # Never leave a failure opaque: surface the captured CLI stderr (and result-event error) so the
     # gateway/trace shows WHY it failed (throttling, model error, etc.) instead of an empty string.
     if rec["status"] in ("failed", "error", "timeout"):
-        tail = "\n".join(errbuf[-30:]).strip()
+        # FRAMES OUT FIRST, once, because everything below reads this tail: the refusal search, the
+        # reason, and the result event a failed turn shows as its answer. The harness's own account
+        # (#504) keeps them: error_detail is read from raw_tail, frames and all.
+        raw_tail = "\n".join(errbuf[-30:]).strip()
+        tail = _without_traceback_frames(raw_tail)
         ev_err = (result_ev or {}).get("result") or (result_ev or {}).get("error") or ""
-        refusal = next((ln.strip() for ln in errbuf if _PROVIDER_REFUSAL.search(ln)), "")
+        # A TRACEBACK FRAME IS NOT A REFUSAL, and the refusal wins over everything else below.
+        # MEASURED end to end (2026-10-21): the
+        # reason for every failed fast-agent turn in the browser column was the single line
+        # `│   579 │   try:` — rich's gutter, where 579 is a SOURCE LINE NUMBER that
+        # `_PROVIDER_REFUSAL`'s `\b5\d\d\b` arm reads as an HTTP 5xx. The CLI's own sentence
+        # ("RuntimeError: Core not initialized, please call initialize() first") was two lines
+        # further down and never stood a chance. The arm itself is left alone: it carries many
+        # providers' phrasings ("HTTP 503", "Error code: 429", "503 Service Unavailable") and
+        # tightening it to exclude a bare number would risk missing a real refusal — the frames
+        # are what does not belong in the search.
+        refusal = next((ln.strip() for ln in tail.splitlines()
+                        if _PROVIDER_REFUSAL.search(ln)), "")
         if not refusal and _relay_last_finish(env) == "content_filter":
             # THE PROVIDER DECLINED, and the CLI's own account of a failure it could not see is not
             # the reason. A refused request comes back as an answer with no content and no
@@ -12144,7 +13990,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         # a driver that handles the exception in-process hands its diagnostic over in the state (an
         # agentzero turn, #546); every other base printed it, and it is in the output's tail
         detail = _failure_detail(str(rec.get("backend") or ""), rec["events"],
-                                 str(state.get("diagnostic") or "") or tail)
+                                 str(state.get("diagnostic") or "") or raw_tail)
         rec["error_detail"] = detail
         made = result_ev is None
         if made:
@@ -12157,6 +14003,8 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             _settle(result_ev)
         result_ev["error_detail"] = detail
         if not made and not str(result_ev.get("result") or "").strip() and tail:
+            # ...and the ANSWER a failed turn shows is this same filtered text: before the filter
+            # it was `│  1585 │   │   │   exc`, the frame that happened to be 30 lines from the end.
             result_ev["result"] = tail[:2000]   # so the trace's result event isn't empty either
     if result_ev is not None:
         # The turn's ending goes out last, with the failure's own account of itself on it (#504).
@@ -12184,9 +14032,39 @@ def _failure_reason(refusal: str, ev_err: str, tail: str, rc: int) -> str:
     # nor that path, and both name internals the product does not show. The sentence before them
     # is the reason and stays.
     tail = "\n".join(ln for ln in tail.splitlines() if not _CLI_RESUME_HINT.match(ln.strip())).strip()
+    tail = _without_traceback_frames(tail)
     if tail and _NO_DIAGNOSTIC_RE.fullmatch(ev_err):
         ev_err = ""
     return (refusal or ev_err or tail or f"exit_code={rc}, no diagnostic output")[:2000]
+
+
+# A rich-rendered traceback: box-drawing borders, a gutter of line numbers and source, and the
+# arrow rich puts on the failing line. These are FRAMES, not a reason, and a tail is read from the
+# END, so they win over the CLI's own sentence unless they are dropped.
+# The first non-space character decides it: a box-drawing char (U+2500..U+257F covers every border,
+# corner and gutter rich draws) or the arrow it marks the failing line with. A line of CLI prose
+# never starts with one, and this catches the bordered title line ("╭── Traceback … ──╮") that a
+# rule-only test would miss.
+_FRAME_LEAD = "\u2500\u2501\u2502\u2503\u250c\u250f\u2510\u2513\u2514\u2517\u2518\u251b" \
+              "\u251c\u2523\u2524\u252b\u2550\u2551\u2554\u2557\u255a\u255d\u2560\u2563" \
+              "\u256d\u256e\u256f\u2570\u2571\u2572\u2574\u2575\u2576\u2577\u2578\u2579" \
+              "\u257a\u257b\u257c\u257d\u257e\u257f\u276f\u2771"
+
+
+def _without_traceback_frames(tail: str) -> str:
+    """The CLI's own words out of a tail that ends in a traceback.
+
+    MEASURED by the browser column (2026-10-21): fast-agent writes a rich-formatted traceback to
+    stderr when an MCP server fails to start, so the turn's reason — the last lines of stderr —
+    came out as `│   579 │   try:` and its answer as `│  1585 │   │   │   exc`. The CLI had said
+    what happened three lines above the box: "MCP Server: 'plugs': Failed to initialize … Details:
+    MCPError: Not Found". A person reading the record got a gutter line instead.
+
+    Frames and rules go; everything else stays in order. A tail that is NOTHING but frames comes
+    back empty, so the caller falls through to the exit code rather than quoting a border."""
+    kept = [ln for ln in tail.splitlines()
+            if ln.strip() and ln.strip()[0] not in _FRAME_LEAD]
+    return "\n".join(kept).strip()
 
 
 _DIAG_MAX = 4000   # the harness's own diagnostic (its exception and stack frames), capped
@@ -13692,7 +15570,7 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # opensquilla is in this set for the same reason gemini is: `--permissions` picks a posture
     # (restricted / bypass / full) and there is no per-tool deny list anywhere on its agent CLI, so
     # UHP §4.3 requires the disabled set be conveyed as a standing instruction rather than silently
-    # dropped. nanobot, mimo, gajae and jcode are NOT here — each has a real switch.
+    # dropped. nanobot, mimo and jcode are NOT here — each has a real switch.
     if backend in ("codex", "hermes", "dsh", "gemini", "opensquilla") and req.tools_disabled:
         _off = ", ".join(t for t in req.tools_disabled if t)
         if _off:
@@ -13928,13 +15806,6 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         cmd = _build_mimo(req.provider, auth, model, req.prompt, cwd, env,
                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                           skills_dir=skills_dir, tools_disabled=req.tools_disabled)
-    elif backend == "gajae":
-        model = model or GAJAE_DEFAULT_MODEL
-        # Skills are already under .harness/home/.gjc/agent/skills, gjc's own user-global root, so
-        # there is nothing to name on the command line (pi's and omp's arrangement).
-        cmd = _build_gajae(req.provider, auth, model, req.prompt, cwd, env,
-                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                           tools_disabled=req.tools_disabled, vision=bool(req.vision))
     elif backend == "jcode":
         model = model or JCODE_DEFAULT_MODEL
         cmd = _build_jcode(req.provider, auth, model, req.prompt, cwd, env,
@@ -13946,6 +15817,30 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
                                  resume_session_id=req.resume_session_id,
                                  mcp_servers=req.mcp_servers,
                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "fast-agent":
+        model = model or FAST_AGENT_DEFAULT_MODEL
+        cmd = _build_fast_agent(req.provider, auth, model, req.prompt, cwd, env,
+                                resume_session_id=req.resume_session_id,
+                                mcp_servers=req.mcp_servers,
+                                tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "dcode":
+        model = model or DCODE_DEFAULT_MODEL
+        cmd = _build_dcode(req.provider, auth, model, req.prompt, cwd, env,
+                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                           tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "docker-agent":
+        model = model or DOCKER_AGENT_DEFAULT_MODEL
+        cmd = _build_docker_agent(req.provider, auth, model, req.prompt, cwd, env,
+                                  resume_session_id=req.resume_session_id,
+                                  mcp_servers=req.mcp_servers,
+                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+    elif backend == "vibe":
+        model = model or VIBE_DEFAULT_MODEL
+        # Skills are already under $VIBE_HOME/skills, one of its own global roots, so there is
+        # nothing to name on the command line (pi's and omp's arrangement).
+        cmd = _build_vibe(req.provider, auth, model, req.prompt, cwd, env,
+                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                          tools_disabled=req.tools_disabled, max_turns=req.max_turns)
     elif backend == "nanobot":
         model = model or NANOBOT_DEFAULT_MODEL
         cmd = _build_nanobot(req.provider, auth, model, req.prompt, cwd, env,

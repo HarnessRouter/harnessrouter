@@ -22,7 +22,7 @@ def _tool_use(i):
 
 
 def _child_script(n_calls: int = 8, pause: float = 0.05, repeat: bool = False,
-                  result: dict | None = None, hang: bool = False) -> str:
+                  result: dict | None = None, hang: bool = False, at_once: bool = False) -> str:
     """A CLI that streams a claude-shaped turn: init, n tool rounds, then a result (or, with `hang`,
     nothing more until it is killed). `repeat` reports every call twice, the way a normaliser may
     report a call's start and then its completion."""
@@ -41,6 +41,19 @@ def _child_script(n_calls: int = 8, pause: float = 0.05, repeat: bool = False,
     done = result or {"type": "result", "subtype": "success", "is_error": False,
                       "result": "done anyway"}
     lines.append("time.sleep(30)" if hang else f"print({json.dumps(json.dumps(done))}, flush=True)")
+    if at_once:
+        # The whole turn in ONE write, under the pipe's atomic size: it is in the pipe before the
+        # runner can read a line. Printed line by line, a runner on a loaded machine read the third
+        # call and stopped the CLI before it had printed its result (2026-10-25, 1 run in 7 under load).
+        out = []
+        for i in range(n_calls):
+            out.append(json.dumps(_tool_use(i)))
+            out.append(json.dumps({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": f"t{i}", "content": "ok"}]}}))
+        body = "\n".join([json.dumps({"type": "system", "subtype": "init", "session_id": "s1"})] + out
+                         + [json.dumps(done)]) + "\n"
+        assert len(body.encode()) < 4096, "past PIPE_BUF the write is no longer atomic"
+        return f"import sys\nsys.stdout.write({body!r})\nsys.stdout.flush()\n"
     return "\n".join(lines) + "\n"
 
 
@@ -85,7 +98,7 @@ def test_a_result_already_written_when_the_budget_stops_the_turn_is_not_a_succes
     """The CLI wrote its whole turn before the runner read a line: its success result is still
     in the pipe after the stop. It keeps its usage, and the turn is still incomplete at its budget."""
     usage = {"input_tokens": 1200, "output_tokens": 40}
-    rec = _run(tmp_path, _child_script(pause=0, result={
+    rec = _run(tmp_path, _child_script(at_once=True, result={
         "type": "result", "subtype": "success", "is_error": False, "result": "all done",
         "usage": usage}))
     assert rec["status"] == "max_turns"
@@ -121,14 +134,23 @@ def test_a_remote_base_is_stopped_gracefully_and_its_charge_kept(tmp_path, monke
     monkeypatch.setitem(rs.BACKENDS, "remotebase", {"remote": True})
     cancelled = {"type": "result", "subtype": "error", "is_error": True,
                  "result": "cancel accepted", "charge": {"credits": 3}}
+    # The handler raises and the cancel is printed once the stack has unwound, as qoder_driver.py does.
+    # A handler that printed itself died with "reentrant call inside <_io.BufferedWriter>" whenever
+    # the SIGTERM landed inside one of the CLI's own prints, which on a loaded machine it did (1 run in
+    # 15), and the cancel's charge was never written.
     script = "\n".join([
         "import json,signal,sys,time",
+        "class Cancelled(BaseException):",
+        "    pass",
         "def term(*a):",
-        f"    print({json.dumps(json.dumps(cancelled))}, flush=True)",
-        "    sys.exit(0)",
+        "    raise Cancelled()",
         "signal.signal(signal.SIGTERM, term)",
-    ] + [f"print({json.dumps(json.dumps(_tool_use(i)))}, flush=True)" for i in range(4)]
-        + ["time.sleep(30)"]) + "\n"
+        "try:",
+    ] + [f"    print({json.dumps(json.dumps(_tool_use(i)))}, flush=True)" for i in range(4)]
+        + ["    time.sleep(30)",
+           "except Cancelled:",
+           "    signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+           f"    print({json.dumps(json.dumps(cancelled))}, flush=True)"]) + "\n"
     rec = _run(tmp_path, script, backend="remotebase")
     final = _results(rec)[-1]
     assert rec["status"] == "max_turns"
@@ -137,7 +159,7 @@ def test_a_remote_base_is_stopped_gracefully_and_its_charge_kept(tmp_path, monke
 
 
 def test_the_budget_set_covers_exactly_the_unbounded_bases():
-    assert rs._GENERIC_STEP_BUDGET == {"codex", "dsh", "pi", "omp", "gajae", "qwen", "gemini",
+    assert rs._GENERIC_STEP_BUDGET == {"codex", "dsh", "pi", "omp", "qwen", "gemini",
                                        "cline", "opencode", "mimo", "kilo", "qoder"}
     # and every entry is a backend the registry offers
     assert rs._GENERIC_STEP_BUDGET <= set(rs.BACKENDS)

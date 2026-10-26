@@ -1,0 +1,399 @@
+{
+ "schema_version": "ATIF-v1.8",
+ "session_id": "2610160220-7kil4q",
+ "trajectory_id": "traj_44b135aaa89b4d1db043a6d1d65cd163",
+ "agent": {
+  "name": "fast-agent",
+  "version": "0.10.45",
+  "model_name": "anthropic/claude-haiku-5.5",
+  "tool_definitions": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read_skill",
+     "description": "Read a skill's SKILL.md file or associated resources. Use this to load skill instructions before using the skill.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string",
+        "description": "Absolute path to the file to read (from the <location> in available_skills)"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   }
+  ],
+  "extra": {
+   "target_agent": "AGENTS",
+   "provider": "generic"
+  }
+ },
+ "steps": [
+  {
+   "step_id": 1,
+   "source": "system",
+   "message": "Always begin your reply with the token E2EFA.\n\n<!-- harness-skills:begin -->\n## Workspace\n\nYour working directory is this task's workspace and the ONLY place the user can see files. Save every deliverable (documents, decks, code, exports) to a relative path under it. Never write output to an absolute path outside it (/tmp, /app, the workspace parent directory, or your home directory): those files are not collected, and the user will never see them.\n<!-- harness-skills:end -->\n"
+  },
+  {
+   "step_id": 2,
+   "timestamp": "2026-10-16T06:20:40.598480Z",
+   "source": "user",
+   "message": "Reply with exactly: FA-E2E-FIRST"
+  },
+  {
+   "step_id": 3,
+   "timestamp": "2026-10-16T06:20:41.625955Z",
+   "source": "agent",
+   "model_name": "anthropic/claude-haiku-5.5",
+   "message": "E2EFA FA-E2E-FIRST",
+   "metrics": {
+    "prompt_tokens": 1863,
+    "completion_tokens": 18,
+    "cached_tokens": 0,
+    "extra": {
+     "observed_prompt_tokens_lower_bound": 1863,
+     "observed_completion_tokens_lower_bound": 18,
+     "observed_cached_tokens_lower_bound": 0,
+     "observed_reasoning_tokens_lower_bound": 0,
+     "provider": "generic",
+     "usage_schema": "openai-chat",
+     "model": "anthropic/claude-haiku-5.5",
+     "reasoning_tokens": 0,
+     "tool_calls": 0,
+     "usage_provider_attempt_count": 1,
+     "raw_usage": [
+      {
+       "completion_tokens": 18,
+       "prompt_tokens": 1863,
+       "total_tokens": 1881,
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": null,
+        "audio_tokens": null,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": null,
+        "text_tokens": null,
+        "image_tokens": 0
+       },
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": null,
+        "cached_tokens": 0,
+        "image_tokens": null,
+        "text_tokens": null,
+        "video_tokens": 0
+       },
+       "cost": 0.0001953,
+       "is_byok": false,
+       "cost_details": {
+        "upstream_inference_cost": null,
+        "upstream_inference_prompt_cost": 0,
+        "upstream_inference_completions_cost": 0
+       },
+       "cache_creation_input_tokens": 0,
+       "market_cost": 0.0001953,
+       "gateway_cost": 0.0001953
+      }
+     ]
+    }
+   },
+   "llm_call_count": 1,
+   "extra": {
+    "duration_ms": 1027.19,
+    "ttft_ms": 1024.87,
+    "time_to_response_ms": 1024.87,
+    "stop_reason": "LlmStopReason.END_TURN"
+   }
+  },
+  {
+   "step_id": 4,
+   "timestamp": "2026-10-16T06:20:42.823534Z",
+   "source": "user",
+   "message": "Create a file called e2e.txt containing the word MADE, then say in one sentence what word I asked you to reply with in my first message."
+  },
+  {
+   "step_id": 5,
+   "timestamp": "2026-10-16T06:20:43.866581Z",
+   "source": "agent",
+   "model_name": "anthropic/claude-haiku-5.5",
+   "message": "",
+   "tool_calls": [
+    {
+     "tool_call_id": "call_3379114",
+     "function_name": "bash",
+     "arguments": {
+      "command": "echo \"MADE\" > e2e.txt"
+     }
+    }
+   ],
+   "observation": {
+    "results": [
+     {
+      "source_call_id": "call_3379114",
+      "content": "process_id: process-1\nprocess exit code was 0",
+      "extra": {
+       "is_error": false,
+       "timing_ms": 112.77,
+       "tool_metadata": {
+        "variant": "shell",
+        "command": "echo \"MADE\" > e2e.txt",
+        "shell_name": "zsh",
+        "shell_path": "/bin/zsh",
+        "shell_kind": "local",
+        "shell_provider": null,
+        "working_dir": "/ws",
+        "working_dir_display": ".",
+        "idle_yield_seconds": 10,
+        "foreground_yield_seconds": 30,
+        "foreground_auto_await_max_seconds": 30.0,
+        "background": false,
+        "lifecycle": "session",
+        "timeout_seconds": null,
+        "output_byte_limit": 16000,
+        "streams_output": true,
+        "returns_exit_code": true
+       },
+       "process_metadata": {
+        "process_id": "process-1",
+        "lifecycle": "session",
+        "process_status": "completed",
+        "process_elapsed_seconds": 0.10701400006655604,
+        "os_process_id": 28019,
+        "exit_code": 0,
+        "output_line_count": 0,
+        "total_output_bytes": 0,
+        "has_observed_output": false,
+        "stdout_bytes": 0,
+        "stderr_bytes": 0
+       }
+      }
+     }
+    ]
+   },
+   "metrics": {
+    "prompt_tokens": 909,
+    "completion_tokens": 23,
+    "cached_tokens": 0,
+    "extra": {
+     "observed_prompt_tokens_lower_bound": 909,
+     "observed_completion_tokens_lower_bound": 23,
+     "observed_cached_tokens_lower_bound": 0,
+     "observed_reasoning_tokens_lower_bound": 0,
+     "provider": "generic",
+     "usage_schema": "openai-chat",
+     "model": "google/gemini-3-flash",
+     "reasoning_tokens": 0,
+     "tool_calls": 1,
+     "usage_provider_attempt_count": 1,
+     "raw_usage": [
+      {
+       "completion_tokens": 23,
+       "prompt_tokens": 909,
+       "total_tokens": 932,
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": null,
+        "audio_tokens": null,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": null,
+        "text_tokens": null,
+        "image_tokens": 0
+       },
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": null,
+        "cached_tokens": 0,
+        "image_tokens": null,
+        "text_tokens": null,
+        "video_tokens": 0
+       },
+       "cost": 0.0005235,
+       "is_byok": false,
+       "cost_details": {
+        "upstream_inference_cost": null,
+        "upstream_inference_prompt_cost": 0,
+        "upstream_inference_completions_cost": 0
+       },
+       "cache_creation_input_tokens": 0,
+       "market_cost": 0.0005235,
+       "gateway_cost": 0.0005235
+      }
+     ]
+    }
+   },
+   "llm_call_count": 1,
+   "extra": {
+    "duration_ms": 1042.14,
+    "ttft_ms": 967.28,
+    "time_to_response_ms": 967.28,
+    "stop_reason": "LlmStopReason.TOOL_USE"
+   }
+  },
+  {
+   "step_id": 6,
+   "timestamp": "2026-10-16T06:20:46.816052Z",
+   "source": "agent",
+   "model_name": "anthropic/claude-haiku-5.5",
+   "message": "E2EFA You asked me to reply with exactly FA-E2E-FIRST in your first message.",
+   "metrics": {
+    "prompt_tokens": 947,
+    "completion_tokens": 339,
+    "cached_tokens": 0,
+    "extra": {
+     "observed_prompt_tokens_lower_bound": 947,
+     "observed_completion_tokens_lower_bound": 339,
+     "observed_cached_tokens_lower_bound": 0,
+     "observed_reasoning_tokens_lower_bound": 316,
+     "provider": "generic",
+     "usage_schema": "openai-chat",
+     "model": "google/gemini-3-flash",
+     "reasoning_tokens": 316,
+     "tool_calls": 0,
+     "usage_provider_attempt_count": 1,
+     "raw_usage": [
+      {
+       "completion_tokens": 339,
+       "prompt_tokens": 947,
+       "total_tokens": 1286,
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": null,
+        "audio_tokens": null,
+        "reasoning_tokens": 316,
+        "rejected_prediction_tokens": null,
+        "text_tokens": null,
+        "image_tokens": 0
+       },
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": null,
+        "cached_tokens": 0,
+        "image_tokens": null,
+        "text_tokens": null,
+        "video_tokens": 0
+       },
+       "cost": 0.0014905,
+       "is_byok": false,
+       "cost_details": {
+        "upstream_inference_cost": null,
+        "upstream_inference_prompt_cost": 0,
+        "upstream_inference_completions_cost": 0
+       },
+       "cache_creation_input_tokens": 0,
+       "market_cost": 0.0014905,
+       "gateway_cost": 0.0014905
+      }
+     ]
+    }
+   },
+   "llm_call_count": 1,
+   "extra": {
+    "duration_ms": 2802.3,
+    "ttft_ms": 2634.03,
+    "time_to_response_ms": 2634.03,
+    "stop_reason": "LlmStopReason.END_TURN"
+   }
+  },
+  {
+   "step_id": 7,
+   "timestamp": "2026-10-16T06:20:47.995039Z",
+   "source": "user",
+   "message": "Run the shell command `echo NOPE` and tell me what it printed."
+  },
+  {
+   "step_id": 8,
+   "timestamp": "2026-10-16T06:20:50.724995Z",
+   "source": "agent",
+   "model_name": "anthropic/claude-haiku-5.5",
+   "message": "E2EFA I can't run that command. The only tool I have available right now is for reading skill files, so I have no way to execute `echo NOPE` or see its output. I won't guess at the result. If you run it yourself in a terminal, it should print `NOPE`.",
+   "metrics": {
+    "prompt_tokens": 805,
+    "completion_tokens": 335,
+    "cached_tokens": 0,
+    "extra": {
+     "observed_prompt_tokens_lower_bound": 805,
+     "observed_completion_tokens_lower_bound": 335,
+     "observed_cached_tokens_lower_bound": 0,
+     "observed_reasoning_tokens_lower_bound": 251,
+     "provider": "generic",
+     "usage_schema": "openai-chat",
+     "model": "anthropic/claude-haiku-5.5",
+     "reasoning_tokens": 251,
+     "tool_calls": 0,
+     "usage_provider_attempt_count": 1,
+     "raw_usage": [
+      {
+       "completion_tokens": 335,
+       "prompt_tokens": 805,
+       "total_tokens": 1140,
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": null,
+        "audio_tokens": null,
+        "reasoning_tokens": 251,
+        "rejected_prediction_tokens": null,
+        "text_tokens": null,
+        "image_tokens": 0
+       },
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": null,
+        "cached_tokens": 0,
+        "image_tokens": null,
+        "text_tokens": null,
+        "video_tokens": 0
+       },
+       "cost": 0.000248,
+       "is_byok": false,
+       "cost_details": {
+        "upstream_inference_cost": null,
+        "upstream_inference_prompt_cost": 0,
+        "upstream_inference_completions_cost": 0
+       },
+       "cache_creation_input_tokens": 0,
+       "market_cost": 0.000248,
+       "gateway_cost": 0.000248
+      }
+     ]
+    }
+   },
+   "llm_call_count": 1,
+   "extra": {
+    "duration_ms": 2728.83,
+    "ttft_ms": 2187.42,
+    "time_to_response_ms": 2187.42,
+    "stop_reason": "LlmStopReason.END_TURN"
+   }
+  }
+ ],
+ "final_metrics": {
+  "total_prompt_tokens": 4524,
+  "total_completion_tokens": 715,
+  "total_cached_tokens": 0,
+  "total_steps": 8,
+  "extra": {
+   "total_reasoning_tokens": 567,
+   "llm_usage_expected_call_count": 4,
+   "llm_usage_observed_call_count": 4,
+   "llm_usage_call_coverage_ratio": 1.0,
+   "llm_usage_calls_complete": true,
+   "observed_prompt_tokens_lower_bound": 4524,
+   "observed_completion_tokens_lower_bound": 715,
+   "observed_cached_tokens_lower_bound": 0,
+   "observed_cost_usd_lower_bound": 0,
+   "observed_reasoning_tokens_lower_bound": 567,
+   "observed_tool_use_prompt_tokens_lower_bound": 0,
+   "accounting": {
+    "schema": "fast-agent.accounting/v1",
+    "scope": "observed",
+    "provider_usage_complete": true,
+    "observed_token_availability": {
+     "prompt_tokens": true,
+     "completion_tokens": true,
+     "cached_tokens": true
+    }
+   }
+  }
+ }
+}

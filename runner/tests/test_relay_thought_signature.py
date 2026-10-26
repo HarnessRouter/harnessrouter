@@ -49,3 +49,83 @@ def test_the_replay_carries_the_seen_signature_or_the_sentinel():
     untouched = b'{"model": "gemini-3.6-flash", "messages": [{"role": "user", "content": "hi"}]}'
     assert server._google_with_signatures(untouched, sigs) is untouched
     assert server._google_with_signatures(b"not json tool_calls", sigs) == b"not json tool_calls"
+
+
+def test_an_aggregator_that_streams_signatures_gets_them_back_on_the_replay():
+    """Not Google's host: an aggregator (Vercel's gateway) that serves Gemini 3 streams the same
+    signature, and a replay without it is not refused with the 400 that teaches the relay — it comes
+    back as an answer with no content and finish_reason "error" (measured 2026-10-24, docker-agent,
+    gemini-3.5-flash-lite through Vercel, 8 of 12 artifact turns). The first signature the route
+    sees marks it, and the next request carries the signature back."""
+    import threading
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    got: list[dict] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self):
+            got.append(json.loads(self.rfile.read(int(self.headers["content-length"]))))
+            line = b"data: " + json.dumps(_delta("call_1", "sigA")).encode() + b"\n\ndata: [DONE]\n\n"
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("content-length", str(len(line)))
+            self.end_headers()
+            self.wfile.write(line)
+
+        def log_message(self, *a):
+            pass
+
+    up = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = server._hermes_relay_route(f"http://127.0.0.1:{up.server_address[1]}/v1", "sk-key")
+        headers = {"authorization": f"Bearer {tok}", "content-type": "application/json"}
+
+        def post(body: bytes) -> None:
+            urllib.request.urlopen(urllib.request.Request(base + "/chat/completions", data=body, method="POST",
+                                                          headers=headers), timeout=10).read()
+
+        post(json.dumps({"model": "google/gemini-3.5-flash-lite", "stream": True,
+                         "messages": [{"role": "user", "content": "hi"}]}).encode())
+        post(_replay())      # call_1's tool call replayed WITHOUT its extra_content, as an OpenAI-shaped client does
+        calls = {tc["id"]: tc for m in got[1]["messages"] for tc in m.get("tool_calls") or []}
+        assert calls["call_1"]["extra_content"]["google"]["thought_signature"] == "sigA"
+        assert calls["call_k"]["extra_content"]["google"]["thought_signature"] == "kept"
+        assert calls["call_x"]["extra_content"]["google"]["thought_signature"] == server._GOOGLE_SIG_SKIP
+    finally:
+        up.shutdown()
+
+
+def test_a_route_that_never_saw_a_signature_is_left_alone():
+    """A non-Google upstream whose answers carry no signature: replays go through as the client sent them."""
+    import threading
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    got: list[dict] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self):
+            got.append(json.loads(self.rfile.read(int(self.headers["content-length"]))))
+            line = b"data: " + json.dumps(_delta("call_1")).encode() + b"\n\ndata: [DONE]\n\n"
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("content-length", str(len(line)))
+            self.end_headers()
+            self.wfile.write(line)
+
+        def log_message(self, *a):
+            pass
+
+    up = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base, tok = server._hermes_relay_route(f"http://127.0.0.1:{up.server_address[1]}/v1", "sk-key")
+        headers = {"authorization": f"Bearer {tok}", "content-type": "application/json"}
+        for body in (json.dumps({"model": "gpt-5.4", "stream": True, "messages": [{"role": "user", "content": "hi"}]}).encode(),
+                     _replay()):
+            urllib.request.urlopen(urllib.request.Request(base + "/chat/completions", data=body, method="POST",
+                                                          headers=headers), timeout=10).read()
+        calls = {tc["id"]: tc for m in got[1]["messages"] for tc in m.get("tool_calls") or []}
+        assert "extra_content" not in calls["call_1"] and "extra_content" not in calls["call_x"]
+    finally:
+        up.shutdown()

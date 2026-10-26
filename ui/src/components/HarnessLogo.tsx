@@ -27,13 +27,20 @@ const LOGO: Record<string, string> = {
   jcode: '/logos/jcode.png',     // jcode's own app icon (MIT 1jehuang/jcode); a black mark on transparency, upstream ships no light variant
   opensquilla: '/logos/opensquilla.png',   // the OpenSquilla mark (Apache-2.0 TokenRhythm/opensquilla)
   nanobot: '/logos/nanobot.svg',   // the nanobot mark (MIT HKUDS/nanobot)
+  vibe: '/logos/vibe.svg',   // Vibe's own mark (distribution/zed/icons/mistral_vibe.svg in the Apache-2.0 mistralai/mistral-vibe repository), the glyph Mistral ships for editor surfaces. Like jcode's it is a BLACK mark on transparency and upstream ships no light variant, so it carries no contrast on a dark surface
   // ZeroClaw's own mark, the ice crab: the zeroclaw-labs organization's avatar on GitHub, cut square
   // and scaled to 192 px (open source 0.34.0). The armored crab in its v0.8.5 dashboard is an older mark.
   zeroclaw: '/logos/zeroclaw.png',
   mimo: '/logos/mimo.png',       // Xiaomi MiMo's square mark, drawn at 192 px from the wordmark mimo.xiaomi.com/coder serves
   aider: '/logos/aider.png',   // aider's own app icon (aider.chat/assets/icons/apple-touch-icon.png, from the Apache-2.0 repo's website assets)
   kimi: '/logos/kimi.png',     // the official Kimi mark (the K app icon from kimi.ai/code), supplied by Richard 2026-09-17
+  // The batch-4 bases of open source 0.37.0, each the mark its own repository publishes (Richard asked for them 2026-10-25)
+  'docker-agent': '/logos/docker-agent.svg',   // the Docker mark as the Apache-2.0 docker/docker-agent repository ships it (docs/assets/docker-mark.svg)
+  'fast-agent': '/logos/fast-agent.svg',       // fast-agent's own icon, the amber chevron (docs/docs/assets/brand/fast-agent-icon.svg in the Apache-2.0 evalstate/fast-agent repository)
+  dcode: '/logos/dcode.svg',                   // the square icon of the Deep Agents logo (.github/images/logo-light.svg in the MIT langchain-ai/deepagents repository), cut from its wordmark
 };
+// No entry for vtcode: that base is not in this tree at all (its headless mode drops a harness's
+// MCP servers — docs/support-matrix-notes.md), so neither its mark nor its row is carried here.
 
 /** The base harness's mark file, or '' when it has none. */
 export const harnessLogoSrc = (id: string): string => LOGO[id] || '';

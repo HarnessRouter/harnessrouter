@@ -1,0 +1,13 @@
+{
+  "outcome": "finished",
+  "stop_reason": null,
+  "error": null,
+  "session_id": "dbd7c9b9-9af1-47e6-53a9-49dba340c915",
+  "usage": {
+    "input_tokens": 24077,
+    "output_tokens": 378,
+    "cached_input_tokens": 0,
+    "total_tokens": 24455
+  },
+  "steps": 2
+}
