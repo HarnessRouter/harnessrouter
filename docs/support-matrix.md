@@ -3048,7 +3048,6 @@ Findings, pairs served by a connection other than the one under test or as a mod
 | fast-agent | muse-spark-1.2 | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 34% of input |
 | fast-agent | muse-spark-1.3 | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 18% of input |
 | fast-agent | muse-wonder-1.0 | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 54% of input |
-| fast-agent | nemotron-3-super | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 0% of input |
 | fast-agent | nemotron-3.5-lightning | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 30% of input |
 | fast-agent | qwen3.7-max | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 36% of input |
 | fast-agent | qwen3.7-plus | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 52% of input |
@@ -3108,7 +3107,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 51% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 49% of input |
 
-201 pairs, 1005 of 1005 scenario runs passed.
+200 pairs, 1000 of 1000 scenario runs passed.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -3155,7 +3154,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - vibe x claude-sonnet-5: no prompt cache reads over 77462 input tokens (every call paid full price)
 - vibe x claude-sonnet-5.5: no prompt cache reads over 77545 input tokens (every call paid full price)
 
-Not run in this column, 30 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 31 pairs the provider serves that the harness did not run, with the reason:
 
 - dcode x gemini-3-flash-preview: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
 - dcode x gemini-3.1-pro-preview: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
@@ -3180,6 +3179,7 @@ Not run in this column, 30 pairs the provider serves that the harness did not ru
 - fast-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- fast-agent x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x qwen3.8-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x deepseek-v4.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4100,7 +4100,6 @@ Not run in this column, 61 pairs the provider serves that the harness did not ru
 | fast-agent | muse-spark-1.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | muse-spark-1.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | muse-wonder-1.0 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
-| fast-agent | nemotron-3-super | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | nemotron-3.5-lightning | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | qwen3.7-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | qwen3.7-plus | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
@@ -4380,7 +4379,7 @@ session_id: 20260913_060549_70cbeb |
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 53% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 65% of input |
 
-495 pairs, 2434 of 2440 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
+494 pairs, 2429 of 2435 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -4416,7 +4415,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - pi x claude-haiku-5.5: no prompt cache reads over 25529 input tokens (every call paid full price)
 - qwen x claude-haiku-5.5: no prompt cache reads over 570679 input tokens (every call paid full price)
 
-Not run in this column, 933 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 934 pairs the provider serves that the harness did not run, with the reason:
 
 - agentzero x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4802,6 +4801,7 @@ Not run in this column, 933 pairs the provider serves that the harness did not r
 - fast-agent x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- fast-agent x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x qwen3.8-27b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5495,7 +5495,6 @@ Not run in this column, 933 pairs the provider serves that the harness did not r
 | fast-agent | grok-4.6 | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
 | fast-agent | grok-build-0.1 | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
 | fast-agent | mistral-medium-3.5 | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
-| fast-agent | nemotron-3-super | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
 | fast-agent | nemotron-3.5-lightning | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
 | fast-agent | qwen3.7-max | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
 | fast-agent | qwen3.7-plus | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter |  |
@@ -5630,7 +5629,7 @@ Not run in this column, 933 pairs the provider serves that the harness did not r
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 57% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 32% of input |
 
-273 pairs, 1254 of 1256 scenario runs passed; 21 pairs served by another connection or as another model are findings, not counted.
+272 pairs, 1249 of 1251 scenario runs passed; 21 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -5683,7 +5682,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - vibe x claude-sonnet-5: no prompt cache reads over 77995 input tokens (every call paid full price)
 - vibe x claude-sonnet-5.5: no prompt cache reads over 77418 input tokens (every call paid full price)
 
-Not run in this column, 591 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 592 pairs the provider serves that the harness did not run, with the reason:
 
 - aider x claude-fable-5: not run, not run in this column
 - aider x claude-fable-5-1: not run, not run in this column
@@ -5971,6 +5970,7 @@ Not run in this column, 591 pairs the provider serves that the harness did not r
 - fast-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- fast-agent x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x qwen3.8-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x claude-fable-5: not run, not run in this column
 - goose x claude-fable-5-1: not run, not run in this column
@@ -6474,7 +6474,6 @@ Not run in this column, 591 pairs the provider serves that the harness did not r
 | fast-agent | muse-spark-1.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | muse-spark-1.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | muse-wonder-1.0 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
-| fast-agent | nemotron-3-super | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | qwen3.7-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | qwen3.7-plus | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
@@ -6652,7 +6651,7 @@ Not run in this column, 591 pairs the provider serves that the harness did not r
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 17% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 32% of input |
 
-370 pairs, 1743 of 1761 scenario runs passed; 9 pairs served by another connection or as another model are findings, not counted.
+369 pairs, 1738 of 1756 scenario runs passed; 9 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -6688,7 +6687,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - qwen x claude-haiku-5.5: no prompt cache reads over 569929 input tokens (every call paid full price)
 - qwen x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
-Not run in this column, 1041 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 1042 pairs the provider serves that the harness did not run, with the reason:
 
 - agentzero x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7123,6 +7122,7 @@ Not run in this column, 1041 pairs the provider serves that the harness did not 
 - fast-agent x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- fast-agent x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x qwen3.8-27b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
