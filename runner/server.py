@@ -13289,7 +13289,7 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
     skills = pathlib.Path(cwd) / ".harness" / "fast-agent" / "skills"
     if skills.is_dir():
         cmd += ["--skills", str(skills)]
-    job = {"argv": cmd, "cwd": str(pathlib.Path(cwd).resolve()), "prompt": prompt, "model": model,
+    job = {"argv": cmd, "cwd": cwd, "prompt": prompt, "model": model,
            "resume": resume_session_id or "", "resume_known": known,
            # The client runs the agent's shell commands only when the shell is on at all.
            "terminal": "bash" not in disabled,
