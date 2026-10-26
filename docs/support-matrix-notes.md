@@ -5386,3 +5386,24 @@ The same harness on the other three new bases, the same two turns, four fresh co
 - vibe: four of four wrote the file at the workspace root, and the console showed it.
 
 The model is off fast-agent and docker-agent too, and their rows left support-matrix-results.json. vibe keeps it.
+
+### fast-agent reaches a server at any path (0.37.3)
+
+The browser column of 0.37.0 read fast-agent's crash on the plugs server ("MCP Server: 'plugs': Failed to
+initialize … MCPError: Not Found", then "RuntimeError: Core not initialized") as a refusal of the loopback
+address, because bridging the loopback url fixed it. The hosted service's column (2026-10-26) put the plugs
+server at a public https url and fast-agent failed the same way, twice, with the bearer it was given. A stand-in
+server that logs each request settled it: fast-agent 0.10.47 posted twice to `/v1/mcp/plugs/mcp`. Its url parser
+appends `/mcp` to a streamable-HTTP url with no query string whose path does not end in `/mcp` (or `/sse`), and
+the 404 for the path it made up became the whole turn's failure. The host never mattered; the path did.
+
+So fast-agent now bridges exactly the servers its parser would rewrite, on any host, and keeps its own client
+for the rest (the public probe at `/mcp`, deepwiki). It leaves the loopback set, where nanobot and docker-agent
+stay: their refusals are of the address, measured on their own. A server a person adds at a path like
+`/api/tools` reaches fast-agent through the bridge too, which it did not before.
+
+The same column found docker-agent running part of the built-in officecli skill as a shell command each time it
+read the skill. docker-agent expands ``!`command` `` in every local SKILL.md, as Claude Code's skills do, and the
+skill's line "with morph `!!` prefix awareness" holds that sequence, so the text up to the next backtick ran as a
+command, failed, and left an error inside the skill text the model read. The line is reworded in the skills
+repository (HarnessRouter/skills 1553417); an image built from now on carries it.

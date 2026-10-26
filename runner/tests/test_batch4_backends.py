@@ -510,22 +510,42 @@ def test_a_loopback_server_is_bridged_for_docker_agent():
     assert "HR_MCP_URL" in launcher and "127.0.0.1:8080" in launcher
 
 
-def test_a_loopback_server_is_bridged_for_fast_agent_too():
-    """The same class, the other failure mode: fast-agent DOES try the loopback url and its MCP
-    startup dies, taking the whole turn with it — "MCP Server: 'plugs': Failed to initialize …
-    MCPError: Not Found", then "RuntimeError: Core not initialized". Three runs of the browser
-    column, the same crash each time and no browser call in any of them; bridged, it passed in 12 s
-    (2026-10-21)."""
+def test_the_plugs_server_is_bridged_for_fast_agent():
+    """fast-agent appends /mcp to a streamable-HTTP path that does not end in it, so it posted to
+    /v1/mcp/plugs/mcp, got a 404, and its MCP startup took the turn with it ("MCPError: Not Found",
+    then "RuntimeError: Core not initialized"). Bridged, it passed in 12 s (2026-10-21)."""
     ws = _ws()
     out = _sse_bridges(ws, [{"name": "plugs", "url": "http://127.0.0.1:8080/v1/mcp/plugs",
                              "headers": {"Authorization": "Bearer t"}}], "fast-agent")
     assert out[0].get("command") and "url" not in out[0]
 
 
-def test_a_public_server_still_goes_to_fast_agents_own_client():
+def test_a_public_server_at_such_a_path_is_bridged_for_fast_agent_too():
+    """The hosted service's plugs server is a public https url at the same kind of path: fast-agent
+    failed on it the same way, twice (2026-10-26). The path decides, not the host."""
     ws = _ws()
-    out = _sse_bridges(ws, [{"name": "probe", "url": "https://probe.example/mcp"}], "fast-agent")
-    assert out[0].get("url") == "https://probe.example/mcp" and "command" not in out[0]
+    out = _sse_bridges(ws, [{"name": "plugs", "url": "https://gw.example/v1/mcp/plugs",
+                             "headers": {"Authorization": "Bearer t"}}], "fast-agent")
+    assert out[0].get("command") and "url" not in out[0]
+    assert "https://gw.example/v1/mcp/plugs" in pathlib.Path(out[0]["command"]).read_text()
+
+
+def test_a_server_fast_agent_does_not_rewrite_stays_on_its_own_client():
+    ws = _ws()
+    for url, transport in (("https://probe.example/mcp", "http"), ("https://probe.example/mcp/", "http"),
+                           ("https://probe.example/sse", "sse"), ("https://probe.example/v1/stream?k=1", "http"),
+                           ("https://probe.example/events", "sse")):
+        out = _sse_bridges(ws, [{"name": "probe", "url": url, "transport": transport}], "fast-agent")
+        assert out[0].get("url") == url and "command" not in out[0], url
+
+
+def test_the_path_rule_is_fast_agents_alone():
+    # docker-agent and nanobot take /v1/mcp/plugs as given on a public host (the hosted service's browser
+    # column passed docker-agent on 2026-10-26 and nanobot on 2026-10-14); only a loopback url bridges them
+    ws = _ws()
+    for backend in ("docker-agent", "nanobot", "claude"):
+        out = _sse_bridges(ws, [{"name": "plugs", "url": "https://gw.example/v1/mcp/plugs"}], backend)
+        assert out[0].get("url") == "https://gw.example/v1/mcp/plugs" and "command" not in out[0], backend
 
 
 def test_a_public_server_still_goes_to_docker_agents_own_client():

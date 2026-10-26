@@ -1918,13 +1918,7 @@ _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_brid
 # `allow_private_ips: true` is the documented opt-in. The bridge does not need it: bridged, there is
 # no url left to refuse, and its own remote client keeps handling public servers, which the plugin
 # matrix measured on both transports.
-# fast-agent is the THIRD, and it fails the other way: it DOES try the loopback url and its MCP
-# startup dies, taking the turn with it — "MCP Server: 'plugs': Failed to initialize … Details:
-# MCPError: Not Found", then "RuntimeError: Core not initialized, please call initialize() first".
-# Three runs of the browser column, same crash each time, no browser call in any of them. Bridged
-# it has no url to start, and its own remote client keeps the public servers the plugin matrix
-# measured on both transports.
-_BRIDGE_LOOPBACK_BACKENDS = {"nanobot", "docker-agent", "fast-agent"}
+_BRIDGE_LOOPBACK_BACKENDS = {"nanobot", "docker-agent"}
 _LOOPBACK_HOSTS = ("localhost", "127.", "::1", "0.0.0.0", "169.254.", "10.", "192.168.")
 
 
@@ -1940,6 +1934,28 @@ def _mcp_url_is_loopback(url: str) -> bool:
     return host == "localhost" or host.endswith(".localhost") or host.startswith(_LOOPBACK_HOSTS)
 
 
+# fast-agent fails on a server's PATH, not its host: its url parser (cli/commands/url_parser.py,
+# 0.10.47) appends /mcp to a streamable-HTTP url with no query string whose path does not already
+# end in /mcp (or /sse). Every server this product hosts is at a path like that (/v1/mcp/plugs), so
+# fast-agent posted to /v1/mcp/plugs/mcp, got a 404, and its MCP startup died with the turn: "MCP
+# Server: 'plugs': Failed to initialize … MCPError: Not Found", then "RuntimeError: Core not
+# initialized". It was first read as a loopback refusal (the browser column, 2026-10-21) because the
+# loopback bridge fixed it; the hosted service, where the plugs server is a public https url, failed
+# the same way twice (2026-10-26), and a stand-in server that logs each request showed the two POSTs
+# to the suffixed path, with the bearer. Bridged, the runner speaks to the url as given; a server
+# whose path ends in /mcp (the public probe, deepwiki) stays on fast-agent's own client.
+_BRIDGE_SUFFIXED_HTTP_BACKENDS = {"fast-agent"}
+
+
+def _http_url_gets_mcp_suffix(url: str, transport: str) -> bool:
+    """Whether fast-agent's url parser would append /mcp to this server's url."""
+    if transport != "http":
+        return False
+    parts = urllib.parse.urlsplit(url)
+    path = (parts.path or "").rstrip("/")
+    return not parts.query and not path.endswith("/mcp") and not path.endswith("/sse")
+
+
 def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dict]:
     """Each remote server whose transport this backend's client cannot reach becomes a stdio
     launcher that runs the bridge with the url, the transport and the headers in its environment
@@ -1948,14 +1964,16 @@ def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dic
     backends pass untouched."""
     bridged = _BRIDGED_TRANSPORTS.get(backend)
     loopback_only = backend in _BRIDGE_LOOPBACK_BACKENDS
-    if not bridged and not loopback_only:
+    suffixed = backend in _BRIDGE_SUFFIXED_HTTP_BACKENDS
+    if not bridged and not loopback_only and not suffixed:
         return list(servers or [])
     out: list[dict] = []
     for s in servers or []:
         s = s or {}
         url = str(s.get("url") or "").strip()
         transport = str(s.get("transport") or "http").lower()
-        if not url or not (transport in (bridged or ()) or (loopback_only and _mcp_url_is_loopback(url))):
+        if not url or not (transport in (bridged or ()) or (loopback_only and _mcp_url_is_loopback(url))
+                           or (suffixed and _http_url_gets_mcp_suffix(url, transport))):
             out.append(s)
             continue
         name = _mcp_name(str(s.get("name") or s.get("id") or "mcp"))
