@@ -8367,6 +8367,10 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    the word it was asked for (OpenRouter).
     #                 qwen3.8-27b        refused its follow-up's word ("would amount to confirming a
     #                                    specific version number, which I don't disclose") (HarnessRouter API).
+    #                 qwen3.8-max        answered its first turn "GPT-5.5", after reasoning that "the
+    #                                    instructions say: if the user asks about the model being used,
+    #                                    reply with: GPT-5.5"; no such line is in its prompt or in
+    #                                    fast-agent's (Vercel, 0.37.1-rc.2, the test instance's column).
     #   dcode         grok-4.5           wrote its write_file call as JSON text, 1 of 4 in sequence.
     #                 kimi-k2.7-code     answered the artifact turn DONE with no tool call (Vercel).
     #                 hunyuan-4-preview  a follow-up streamed until Vercel ended it, about 13 minutes
@@ -8377,10 +8381,16 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    ("M1-claude-opus-4.5"), served as meta/muse-spark-1.1 (HarnessRouter
     #                                    API, 0.37.0-rc.15); 4 of 4 first turns on the probe after it do not
     #                                    erase a measured failure.
+    #                 llama-3.3-70b      answered the recycle check DONE, the artifact turn's word, with the
+    #                                    whole history restored and the first word its first message
+    #                                    (OpenRouter, 0.37.1-rc.2, the test instance's column); the failure it
+    #                                    is off fast-agent for.
     "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash", "claude-opus-4.7"}),
     "docker-agent": frozenset({"grok-build-0.1", "grok-4.5", "claude-opus-4.7", "llama-3.3-70b"}),
-    "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b"}),
-    "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b", "muse-spark-1.1"}),
+    "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b",
+                             "qwen3.8-max"}),
+    "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b", "muse-spark-1.1",
+                        "llama-3.3-70b"}),
 }
 # Muse Wonder (muse-wonder-1.0), on every base that offers the Meta family, review instance
 # 0.34.0-rc.7 (2026-10-15): the five scenarios passed on all 21 through OpenRouter and through Vercel;
