@@ -5362,3 +5362,16 @@ built to need it (0.37.1-rc.3, the test instance): gpt-5.4 on Vercel drew an 8 b
 attached it and answered "Red"; the next turn, on nemotron-3.5-lightning through OpenRouter, answered "SWITCHED",
 served as itself. The stored conversation holds the line in the image's place; the copy fast-agent keeps in the
 tool result's `_meta` for a client to preview is not sent to the model and stays.
+
+### nemotron-3.5-lightning off Deep Agents Code (0.37.2)
+
+On 0.37.1, in a custom harness whose instruction asks for Markdown documents and decks, a person's own
+conversation on nemotron-3.5-lightning through OpenRouter answered "build. a md file for hello world" with
+`tmp/hello_world.md`: the workspace's scratch folder, which its instructions say is never shown or saved, so the
+console had no file to show. The tool calls are the record: it listed the workspace and its `tmp/`, then wrote
+there. The same two turns again, four fresh conversations on the same harness: three wrote the file at the
+workspace root, and the fourth wrote it to `tmp/` again after reading AGENTS.md; one of the three also built a
+.pptx nobody asked for and saved it in `tmp/`. A later turn on mistral-medium-3.5 in the first conversation wrote
+the file at the root, and the console showed it. The model is off dcode (`_NOT_OFFERED`, one failure as before),
+and its three rows left support-matrix-results.json: dcode on OpenRouter, TokenRouter and the HarnessRouter API
+each pass one model fewer. Vercel does not serve it.

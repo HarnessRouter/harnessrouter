@@ -8389,12 +8389,17 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    whole history restored and the first word its first message
     #                                    (OpenRouter, 0.37.1-rc.2, the test instance's column); the failure it
     #                                    is off fast-agent for.
+    #                 nemotron-3.5-lightning  saved the deliverable a user asked for ("build. a md file for
+    #                                    hello world") as tmp/hello_world.md, the folder its instructions say
+    #                                    is never shown, so no file reached the console; again in 1 of 4
+    #                                    reruns of the same two turns after reading AGENTS.md, and another
+    #                                    rerun put its .pptx there (OpenRouter, 0.37.1 on the test instance).
     "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash", "claude-opus-4.7"}),
     "docker-agent": frozenset({"grok-build-0.1", "grok-4.5", "claude-opus-4.7", "llama-3.3-70b"}),
     "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b",
                              "qwen3.8-max", "nemotron-3-super"}),
     "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b", "muse-spark-1.1",
-                        "llama-3.3-70b"}),
+                        "llama-3.3-70b", "nemotron-3.5-lightning"}),
 }
 # Muse Wonder (muse-wonder-1.0), on every base that offers the Meta family, review instance
 # 0.34.0-rc.7 (2026-10-15): the five scenarios passed on all 21 through OpenRouter and through Vercel;
