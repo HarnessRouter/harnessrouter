@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
-// The console's frame on a self-hosted instance: the rail's five places, the account menu (Profile, Bring your
-// own key, Docs, help, Log out through the instance's own sign-in), the workspace menu (the workspaces,
+// The console's frame on a self-hosted instance: the rail's five places and the team's letter, the account menu
+// (How it works, Profile, Bring your own key, Docs, help, Log out through the instance's own sign-in), the workspace menu (the workspaces,
 // Workspace settings, New workspace), and the switcher on the strict list: until the list answers no page is
 // drawn and no placeholder workspace is named; a list that could not be read is an error in the menu and in
 // place of the page; a chosen workspace gone from the list is said once, by name.
@@ -44,6 +44,7 @@ const meRows = () => Array.from(el.querySelectorAll('.me-pop [role="menuitem"]')
 
 beforeEach(() => {
   jest.clearAllMocks();
+  localStorage.clear();
   mockNav.path = '/studio';
   session = { user: 'harnessrouter', gated: true };
   stars = null;
@@ -60,12 +61,14 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
-test('the rail has the five places of this console, and nothing a self-hosted instance does not have', async () => {
+test('the rail has the five places of this console and the letter, and nothing a self-hosted instance does not have', async () => {
   await mount();
   const places = Array.from(el.querySelectorAll('.rail a.rail-btn')).map((a) => a.getAttribute('href'));
-  expect(places).toEqual(['/start', '/studio', '/shop', '/extensions', '/keys']);
+  expect(places).toEqual(['/start', '/studio', '/shop', '/extensions', '/keys', '/letter']);
   expect(el.querySelector('.rail a.rail-btn[aria-current="page"]')?.getAttribute('href')).toBe('/studio');
-  for (const gone of ['/arena', '/usage', '/letter', '/billing', '/organization', '/account']) {
+  // the letter sits last, right above the account button
+  expect(el.querySelector('.rail .rail-letter')?.nextElementSibling?.classList.contains('rail-me')).toBe(true);
+  for (const gone of ['/arena', '/usage', '/billing', '/organization', '/account']) {
     expect(el.querySelector(`a[href="${gone}"]`)).toBeNull();
   }
 });
@@ -75,14 +78,39 @@ test('the account menu: the signed-in user, Profile, Bring your own key, Docs, h
   await openMe();
   expect(el.querySelector('.me-pop .me-h')?.textContent).toBe('harnessrouter');
   const rows = meRows();
-  for (const want of ['Profile', 'Bring your own key', 'Docs', 'Join our Discord', 'Book a demo', 'Star us on GitHub', 'Log out']) {
+  for (const want of ['How it works', 'Profile', 'Bring your own key', 'Docs', 'Join our Discord', 'Book a demo', 'Star us on GitHub', 'Log out']) {
     expect(rows).toContain(want);
   }
-  for (const gone of ['Account', 'Organization', 'Billing', 'View all plans', 'How it works', 'Insights']) {
+  expect(rows[0]).toBe('How it works');
+  for (const gone of ['Account', 'Organization', 'Billing', 'View all plans', 'Insights']) {
     expect(rows).not.toContain(gone);
   }
   await act(async () => { (Array.from(el.querySelectorAll('.me-pop [role="menuitem"]')).find((r) => r.textContent === 'Profile') as HTMLButtonElement).click(); });
   expect(mockNav.push).toHaveBeenCalledWith('/profile');
+});
+
+test('the letter carries a dot until it is opened, and How it works opens it', async () => {
+  await mount();
+  const dot = el.querySelector('.rail-letter .letter-dot') as HTMLElement;
+  expect(dot.hidden).toBe(false);
+  expect(el.querySelector('.rail-me')?.classList.contains('dot')).toBe(true);
+  await openMe();
+  expect(el.querySelector('.me-pop .me-dot')).toBeTruthy();
+  await act(async () => { (Array.from(el.querySelectorAll('.me-pop [role="menuitem"]')).find((r) => r.textContent === 'How it works') as HTMLButtonElement).click(); });
+  expect(mockNav.push).toHaveBeenCalledWith('/letter');
+  act(() => root.unmount()); el.remove();
+  // opened: the rail marks the letter as here, and no dot is left anywhere
+  mockNav.path = '/letter';
+  await mount();
+  expect(el.querySelector('.rail a.rail-btn[aria-current="page"]')?.getAttribute('href')).toBe('/letter');
+  expect((el.querySelector('.rail-letter .letter-dot') as HTMLElement).hidden).toBe(true);
+  expect(el.querySelector('.rail-me')?.classList.contains('dot')).toBe(false);
+  act(() => root.unmount()); el.remove();
+  mockNav.path = '/studio';
+  await mount();
+  expect((el.querySelector('.rail-letter .letter-dot') as HTMLElement).hidden).toBe(true);
+  await openMe();
+  expect(el.querySelector('.me-pop .me-dot')).toBeNull();
 });
 
 test('Log out ends the instance\'s own session', async () => {
