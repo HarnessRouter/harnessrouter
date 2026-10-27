@@ -4652,7 +4652,10 @@ _IMAGE_TEXT_ONLY = "[An image is not shown here: this model reads text only.]"
 
 
 def _is_image_part(x: object) -> bool:
-    return isinstance(x, dict) and x.get("type") in _IMAGE_PARTS and (x.get("type") != "image" or "source" in x)
+    # `type` is read as a string only: a tool's JSON schema may have a property named `type`, whose value is a
+    # schema object, and a dict there failed the lookup and with it the whole request (0.37.5 to 0.37.6)
+    t = x.get("type") if isinstance(x, dict) else None
+    return isinstance(t, str) and t in _IMAGE_PARTS and (t != "image" or "source" in x)
 
 
 def _image_cap(model: str, route: tuple[str, str]) -> int | None:
