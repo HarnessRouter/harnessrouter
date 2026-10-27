@@ -8221,14 +8221,19 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # NOT added here: this base could serve them and no turn has, and a list is not a place to guess.
 for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
            "vibe", "docker-agent", "fast-agent", "dcode"):
-    # gpt-5.4 by default: see _GPT_6_1_DEFAULT below
-    _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
+    # gpt-5.4 by default, but dcode: see _GPT_6_1_DEFAULT below
+    _MODEL_CATALOG[_b] = {"default": "gpt-6.1-sol" if _b == "dcode" else "gpt-5.4",
+                          "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
 # on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
-# opencode, kilo, omp, goose, aider, agentzero and mimo. The rest keep gpt-5.4. cline, cheetahclaws, jcode, nanobot
-# and zeroclaw speak chat/completions, which OpenAI and Azure refuse for gpt-6.1-sol with the reasoning_effort
-# "none" those requests carry; openhands was refused the same way through TokenRouter; opensquilla is not offered
-# it. (TokenRouter serves gpt-6.1-sol from more than one upstream account, so a codex task's encrypted reasoning
+# opencode, kilo, omp, goose, aider, agentzero and mimo, and dcode, which drives the Responses API (2026-10-27,
+# from its five scenarios on every connection, 2026-10-25, and again on this build). The rest keep gpt-5.4. cline,
+# cheetahclaws, jcode, nanobot, zeroclaw, vibe, docker-agent and fast-agent speak chat/completions, where OpenAI,
+# Azure and TokenRouter refuse gpt-6.1-sol with function tools whatever the request says of the effort: left out
+# and "low" are refused ("Function tools with reasoning_effort are not supported for gpt-6.1-sol in
+# /v1/chat/completions"), and "none", the one the message offers, is not a level this model has (measured
+# 2026-10-27 on all three, one call each). openhands was refused the same way through TokenRouter; opensquilla is
+# not offered it. (TokenRouter serves gpt-6.1-sol from more than one upstream account, so a codex task's encrypted reasoning
 # does not reopen on a later turn there; OpenAI and Azure pass.)
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either

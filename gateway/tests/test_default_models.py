@@ -62,8 +62,10 @@ def test_the_console_preselects_the_catalogs_default():
 
 def test_gpt_6_1_sol_is_the_default_where_gpt_5_4_was_and_it_runs():
     sol = sorted(b for b, e in gw._MODEL_CATALOG.items() if e["default"] == "gpt-6.1-sol")
-    # where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter (2026-10-22)
-    assert sol == sorted(["codex", "hermes", "pi", "opencode", "kilo", "omp", "goose", "aider", "agentzero", "mimo"])
-    # refused it on a common connection (chat/completions with reasoning_effort "none"), or not offered it
-    for b in ("cline", "cheetahclaws", "jcode", "nanobot", "zeroclaw", "openhands", "opensquilla"):
+    # where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter (2026-10-22; dcode 2026-10-27)
+    assert sol == sorted(["codex", "hermes", "pi", "opencode", "kilo", "omp", "goose", "aider", "agentzero", "mimo",
+                          "dcode"])
+    # refused it on a common connection (chat/completions with function tools, at any effort), or not offered it
+    for b in ("cline", "cheetahclaws", "jcode", "nanobot", "zeroclaw", "openhands", "opensquilla",
+              "vibe", "docker-agent", "fast-agent"):
         assert gw._MODEL_CATALOG[b]["default"] == "gpt-5.4", b
