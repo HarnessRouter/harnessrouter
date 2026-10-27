@@ -226,7 +226,9 @@ def test_compose_patch_swaps_the_server_row_and_inserts_one_mcp_row_per_server(t
                                 "headers": {"X-Trace": "1"}},
                                {"name": "nourl"}])
     disabled = [e["id"] for e in doc if e.get("disabled") is True]
-    assert disabled == ["sdk-jsonrpc-server", "sandbox", "sandbox-policy", "bash-sandbox", "fs-sandbox", "permission"]
+    # web-search-deepseek: the stock search calls DeepSeek's own API with the relay's placeholder key (401)
+    assert disabled == ["sdk-jsonrpc-server", "sandbox", "sandbox-policy", "bash-sandbox", "fs-sandbox", "permission",
+                        "web-search-deepseek"]
     rows = [e for e in doc if "insert" in e][0]["insert"]
     assert rows[0]["id"] == "hr-sdk-jsonrpc-server" and rows[0]["name"].endswith("/.dsh/hr_dsh_server.mjs")
     assert rows[0]["inject"] == ["sdkAppStartup", "loader"] and rows[0]["config"] == {"maxTokensAsSuccess": True}

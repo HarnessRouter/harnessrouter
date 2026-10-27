@@ -498,6 +498,16 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
     entries: list = [{"id": "sdk-jsonrpc-server", "disabled": True}]
     entries += [{"id": rid, "disabled": True}
                 for rid in ("sandbox", "sandbox-policy", "bash-sandbox", "fs-sandbox", "permission")]
+    # The stock web_search provider calls DeepSeek's own API (https://api.deepseek.com/anthropic/v1/messages) with
+    # the relay's placeholder key: every search answered 401 "Authentication Fails" (measured on the test instance,
+    # 2026-10-27, and on the hosted service), and it would send a turn's queries to a provider the turn's
+    # connection never named. The provider row is off, and the tool itself is not registered: with the row off
+    # alone the model was still offered web_search, and every call failed "the configured web provider is not
+    # registered" (measured on the test instance). `search: false` is the web tool's own switch (its config:
+    # search, fetch, both default true), merged into the stock `tool-web` row; web_fetch (plain HTTP) stays, and a
+    # setup's own search plug is how an agent searches.
+    entries.append({"id": "web-search-deepseek", "disabled": True})
+    entries.append({"id": "tool-web", "config": {"search": False}})
     cjs = home / ".dsh" / "hr_dsh_server.mjs"
     inserted: list = [{"id": "hr-sdk-jsonrpc-server", "name": str(cjs),
                        "inject": ["sdkAppStartup", "loader"],
@@ -560,6 +570,32 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
     return str(path)
 
 
+# dsh's skill tool loads only what its skill-filesystem provider found (the runtime's own docs: project roots
+# <projectRoot>/.dsh/skills and .agents/skills, Config.customSkillDirs, then <dshHome>/skills and <agentsHome>/skills;
+# a root's direct children only, <name>/SKILL.md or <name>.md). The runner writes a setup's skills to .harness/skills
+# and a plugin package's to .harness/plugins/<package>/skills, neither of them a root, so every `skill` call answered
+# 'Error: skill "<name>" is unknown or no longer available' while AGENTS.md listed the names (measured on the test
+# instance, 2026-10-27, 2 of 2 for the built-in officecli; the hosted service saw 29 of 29). Each one is copied
+# into <dshHome>/skills, the user root: inside this session's own home under .harness/, so never a produced file,
+# and rewritten each turn. A setup's own skill wins a name a package also uses; packages in name order after it.
+def _install_skills(home: pathlib.Path, cwd: str) -> list[str]:
+    import shutil
+    dest = home / ".dsh" / "skills"
+    root = pathlib.Path(cwd) / ".harness"
+    sources = [root / "skills"] + sorted(p / "skills" for p in (root / "plugins").glob("*") if (p / "skills").is_dir())
+    shutil.rmtree(dest, ignore_errors=True)
+    installed: list[str] = []
+    for src in sources:
+        if not src.is_dir():
+            continue
+        for d in sorted(src.iterdir()):
+            if not (d.is_dir() and (d / "SKILL.md").is_file()) or d.name in installed or d.name.startswith("."):
+                continue
+            shutil.copytree(d, dest / d.name, symlinks=False)
+            installed.append(d.name)
+    return installed
+
+
 def main() -> int:
     global UPSTREAM_BASE, UPSTREAM_KEY, EFFORT, EFFORT_ROUTE
     job = json.loads(sys.argv[1])
@@ -569,6 +605,10 @@ def main() -> int:
     EFFORT_ROUTE = os.environ.pop("HR_DSH_REASONING_ROUTE", "")
     home = pathlib.Path(os.environ.get("HOME") or ".")
     cwd = job.get("cwd") or os.getcwd()
+    try:
+        _install_skills(home, cwd)
+    except OSError as e:   # a turn without its skills still runs, and says why on the runner's log
+        print(f"[dsh] skills not installed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Relay)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
