@@ -1675,7 +1675,8 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         rootrels = [str(_ZEROCLAW_AGENT_WS / "skills")]
         entryroot = str(_ZEROCLAW_AGENT_WS / "skills")
     else:
-        # dsh has no skill loader; the AGENTS.md block below is the only door.
+        # dsh's driver copies these into dsh's own skill root each turn (dsh_driver._install_skills), where its
+        # `skill` tool finds them; the AGENTS.md block below names them.
         # aider lands here on purpose too, and for a stronger reason: it has no skill loader AND no
         # instruction-file discovery, so its turn builder passes every file under this directory to
         # --read explicitly. Under .harness/ the bundle is excluded from produced files, so a skill

@@ -18447,9 +18447,11 @@ _BASE_CATALOG: dict[str, dict] = {
         # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). No per-tool
         # switch exists on the wire, so disabling is an instruction to the model, the same
         # standing as codex/hermes.
+        # web_search is not offered: dsh's stock provider calls DeepSeek's own API with the relay's placeholder
+        # key (401 every time, and off the turn's connection), so the driver turns that row off.
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
                   ("edit", "Edit"), ("str_replace_editor", "String Replace Editor"),
-                  ("glob", "Glob"), ("grep", "Grep"), ("web_search", "Web Search"),
+                  ("glob", "Glob"), ("grep", "Grep"),
                   ("web_fetch", "Web Fetch"), ("todo_write", "Todo"), ("skill", "Skill"),
                   ("subagent", "Subagent"), ("subagent_fork", "Subagent (fork)"),
                   ("workflow", "Workflow")],
