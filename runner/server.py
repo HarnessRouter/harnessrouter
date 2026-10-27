@@ -13351,6 +13351,84 @@ def _fast_agent_drop_media(cwd: str, session_id: str, model: str) -> int:
     return removed
 
 
+# What fast-agent itself believes a model id reads, as `--model generic.<id>` resolves it with no overlay:
+# its input types and its limits, or None for an id its table does not have. MEASURED on 0.10.47
+# (2026-10-27): an id it does not know is text only to it (ModelInfo's fallback, tokenizes
+# ["text/plain"]), so `enable_attach_media: auto` hid attach_media and every image was filtered out of
+# the messages. 65 of the ids this base sends were unknown, among them every dotted Claude id
+# (claude-opus-5.5; its table spells claude-opus-5-5) and gemini, grok, qwen, mistral and deepseek ids
+# whose channels take images: Claude on fast-agent never saw an image. Asked of fast-agent's own python
+# and table, once per id per process (0.8 s).
+_FA_PROBE = (
+    "import json, os, sys, tempfile\n"
+    "os.environ['FAST_AGENT_HOME'] = tempfile.mkdtemp()\n"
+    "from fast_agent.llm.model_factory import ModelFactory\n"
+    "r = ModelFactory.resolve_model_spec('generic.' + sys.argv[1])\n"
+    "i = r.build_model_info() if r.model_params is not None else None\n"
+    "print(json.dumps(None if i is None else {'tokenizes': list(i.tokenizes or [])}))\n")
+_FA_KNOWN: dict[str, dict | None] = {}
+# The image types a model whose channel takes images is declared to read (the gateway's `vision`).
+_FA_IMAGES = ("image/png", "image/jpeg", "image/gif", "image/webp")
+# Limits for an id fast-agent does not know. Its overlay is used only when it names both, and it then
+# sends the cap as max_tokens, which an id it does not know never carried: the turn's route drops it
+# again, so the provider's own default applies as before. The window only sets where its compaction
+# starts, which for an unknown id was never: one no model here reaches keeps it there.
+_FA_UNKNOWN_LIMITS = {"context_window": 2_000_000, "max_output_tokens": 128_000}
+# One file, rewritten every turn: a resumed session names the same `generic.<id>`, so it reads this
+# turn's file, never a stale one.
+_FA_OVERLAY_FILE = "harness-turn.yaml"
+
+
+def _fast_agent_known(model: str) -> dict | None | bool:
+    """fast-agent's own view of `model` (see _FA_PROBE); False when it could not be asked, which leaves
+    the turn exactly as it was before overlays."""
+    if model in _FA_KNOWN:
+        return _FA_KNOWN[model]
+    try:
+        out = subprocess.run([FAST_AGENT_PYTHON, "-I", "-c", _FA_PROBE, model], capture_output=True,
+                             text=True, timeout=60, cwd=tempfile.gettempdir())
+        view = json.loads(out.stdout.strip().splitlines()[-1]) if out.returncode == 0 else False
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        view = False
+    if view is not False and not (view is None or isinstance(view, dict)):
+        view = False
+    if view is not False:
+        _FA_KNOWN[model] = view
+    return view
+
+
+def _fast_agent_overlay(home: pathlib.Path, model: str, vision: bool) -> bool:
+    """Declare what this turn's model reads to fast-agent, where its own table says otherwise.
+
+    The gateway knows whether the model's channel takes images (`vision`, from _TEXT_ONLY_INPUT);
+    fast-agent decides from its own table whether to offer attach_media and whether to keep an image in
+    a message. Where the two disagree, a model overlay named exactly as the runner's `--model`
+    (`generic.<id>`) in `<home>/model-overlays/` carries the gateway's answer: fast-agent resolves the
+    name to the overlay and the id it sends upstream is unchanged (measured on 0.10.47). An id it
+    knows keeps its own limits and every other type it reads; an id it does not know gets
+    _FA_UNKNOWN_LIMITS. Where they agree, no overlay is written and an earlier one is removed.
+    Returns True when the overlay carries those made-up limits, so the route drops the cap."""
+    path = home / "model-overlays" / _FA_OVERLAY_FILE
+    known = _fast_agent_known(model)
+    takes = list(known["tokenizes"]) if isinstance(known, dict) else ["text/plain"]
+    if vision:
+        # a model it already lets read images keeps its own list
+        want = takes if any(str(t).startswith("image/") for t in takes) else takes + list(_FA_IMAGES)
+    else:
+        # a channel that refuses images: text alone, as _fast_agent_drop_media leaves the history
+        want = ["text/plain"]
+    if known is False or want == takes:
+        path.unlink(missing_ok=True)
+        return False
+    doc = {"name": f"generic.{model}", "provider": "generic", "model": model,
+           "metadata": {"tokenizes": want, **({} if known else _FA_UNKNOWN_LIMITS)}}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".yaml.hr-tmp")
+    tmp.write_text(json.dumps(doc), encoding="utf-8")       # JSON is YAML; fast-agent reads it with yaml
+    os.replace(tmp, path)
+    return not known
+
+
 def _fast_agent_config(cwd: str, tools_disabled: list[str] | None,
                        mcp_servers: list[dict] | None, base_url: str = "") -> tuple[pathlib.Path, list[str]]:
     """Write the fastagent.config.yaml this turn runs with, and name the servers it declares.
@@ -13450,11 +13528,16 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
                                  f"(one of {sorted(FAST_AGENT_PROVIDERS)})")
     if not auth.base_url:
         raise HTTPException(400, f"fast-agent provider '{pr}' needs a base_url (none configured)")
-    if auth.api_key:
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, chat_cache=True)
-        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home = _fast_agent_home(cwd)
     home.mkdir(parents=True, exist_ok=True)
+    if auth.api_key:
+        # what the model reads, declared where fast-agent's own table disagrees (_fast_agent_overlay);
+        # only through the relay, which takes back the cap made-up limits would add
+        made_up = _fast_agent_overlay(home, model, vision)
+        relay_base, relay_tok = _hermes_relay_route(
+            auth.base_url, auth.api_key, chat_cache=True,
+            drop_fields=("max_tokens", "max_completion_tokens") if made_up else ())
+        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     cfg, server_names = _fast_agent_config(cwd, tools_disabled, mcp_servers, base_url=auth.base_url or "")
     env["FAST_AGENT_HOME"] = str(home)
     env[_FA_BASE_ENV] = (auth.base_url or "").rstrip("/")
