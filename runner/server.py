@@ -4950,6 +4950,41 @@ def _refused_top_level_field(refused: bytes) -> str:
 _GOOGLE_SIG_SKIP = "skip_thought_signature_validator"
 _GOOGLE_HOST = "generativelanguage.googleapis.com"
 
+# A signature belongs to the model that made it. A conversation that moves from one Gemini model to another
+# replays the first model's calls, and Google refuses the second model's request when they carry the first
+# one's signatures: 400 "Corrupted thought signature." (hosted, 2026-10-27: a fast-agent deck conversation,
+# gemini-4-argon's turn, then gemini-3.6-flash, 3.5-flash, 3.5-flash-lite and 3.1-pro-preview each refused
+# twice; fast-agent keeps the signatures in its own history). So the relay keeps, for the life of the
+# process, which model made each tool call it saw a signature for, and a replayed call made by another model
+# goes with Google's sentinel instead, whether the signature came from this relay or from the harness.
+# OpenRouter's encrypted reasoning is the same: another model's entry is not put back. A route lives one
+# turn, so this is kept beside the routes. A signature whose maker this process never saw (a runner
+# restarted since) is kept as the harness sent it, and if Google calls it corrupted the call goes once more
+# with the sentinel in its place. The hosted broker keeps the same record per session.
+_SIG_MAKERS: dict[str, str] = {}
+_SIG_MAKERS_MAX = 50_000
+_SIG_MAKERS_LOCK = threading.Lock()
+_GOOGLE_SIG_CORRUPT_RE = re.compile(rb"Corrupted thought signature", re.I)
+
+
+def _sig_makers_keep(ids, model: str) -> None:
+    """Note `model` as the maker of each tool call id (the oldest notes go past _SIG_MAKERS_MAX)."""
+    if not model:
+        return
+    with _SIG_MAKERS_LOCK:
+        for cid in ids:
+            if cid:
+                _SIG_MAKERS.pop(str(cid), None)
+                _SIG_MAKERS[str(cid)] = model
+        while len(_SIG_MAKERS) > _SIG_MAKERS_MAX:
+            del _SIG_MAKERS[next(iter(_SIG_MAKERS))]
+
+
+def _sig_by_another(cid: str, want: str) -> bool:
+    """Whether the call `cid` was made by a model other than `want`, as far as this process saw."""
+    maker = _SIG_MAKERS.get(cid, "") if cid else ""
+    return bool(maker and want) and not _same_model(want, maker)
+
 
 # The relay's route carries no provider, only the upstream: a Gemini channel is known by its host.
 # TokenRouter serves Google's native API under its own root, and the hosted HarnessRouter service
@@ -5225,9 +5260,13 @@ def _google_signatures_in_line(line: bytes) -> list[tuple[str, str]]:
     return _google_signatures_in(doc) if isinstance(doc, dict) else []
 
 
-def _google_with_signatures(body: bytes, sigs: dict) -> bytes:
+def _google_with_signatures(body: bytes, sigs: dict, distrust: bool = False, fill: bool = True) -> bytes:
     """The request with every replayed assistant tool call carrying a thought signature: the one
-    this relay saw on the answer, else Google's sentinel. A body without tool calls is untouched."""
+    this relay saw on the answer, else Google's sentinel. A call another model made goes with the
+    sentinel even when the harness carried its signature (_SIG_MAKERS); with `distrust` (Google called
+    a signature corrupted), so does every call whose maker this process never saw. Without `fill`
+    (a route not known to be Google's) only signatures the harness carried are looked at. A body
+    without tool calls is untouched."""
     if b"tool_calls" not in body:
         return body
     try:
@@ -5236,6 +5275,7 @@ def _google_with_signatures(body: bytes, sigs: dict) -> bytes:
         return body
     if not isinstance(doc, dict) or not isinstance(doc.get("messages"), list):
         return body
+    want = str(doc.get("model") or "")
     changed = False
     for msg in doc["messages"]:
         if not isinstance(msg, dict) or msg.get("role") != "assistant":
@@ -5243,11 +5283,16 @@ def _google_with_signatures(body: bytes, sigs: dict) -> bytes:
         for tc in msg.get("tool_calls") or []:
             if not isinstance(tc, dict):
                 continue
-            ec = tc.get("extra_content")
-            if isinstance(ec, dict) and isinstance(ec.get("google"), dict) and ec["google"].get("thought_signature"):
-                continue
             cid = str(tc.get("id") or "")
-            tc["extra_content"] = {"google": {"thought_signature": sigs.get(cid) or _GOOGLE_SIG_SKIP}}
+            own = not _sig_by_another(cid, want) and not (distrust and cid not in _SIG_MAKERS)
+            ec = tc.get("extra_content")
+            carried = isinstance(ec, dict) and isinstance(ec.get("google"), dict) and ec["google"].get("thought_signature")
+            if (carried and own) or (not carried and not fill):
+                continue
+            sig = (sigs.get(cid) if own else "") or _GOOGLE_SIG_SKIP
+            if carried == sig:
+                continue
+            tc["extra_content"] = {"google": {"thought_signature": sig}}
             changed = True
     return json.dumps(doc).encode() if changed else body
 
@@ -5295,12 +5340,14 @@ def _with_encrypted_reasoning(body: bytes, held: dict) -> bytes:
         return body
     if not isinstance(doc, dict) or not isinstance(doc.get("messages"), list):
         return body
+    want = str(doc.get("model") or "")
     changed = False
     for msg in doc["messages"]:
         if not isinstance(msg, dict) or msg.get("role") != "assistant" or msg.get("reasoning_details"):
             continue
+        # another model's encrypted reasoning is not put back (see _SIG_MAKERS)
         got = [held[cid] for cid in (str(tc.get("id") or "") for tc in msg.get("tool_calls") or []
-                                     if isinstance(tc, dict)) if cid in held]
+                                     if isinstance(tc, dict)) if cid in held and not _sig_by_another(cid, want)]
         if got:
             msg["reasoning_details"] = got
             changed = True
@@ -5978,8 +6025,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             body = _with_encrypted_reasoning(body, flags["encrypted_reasoning"])
             headers["content-length"] = str(len(body))
         google = _GOOGLE_HOST in base or bool(flags.get("thought_signature"))
-        if google and body is not None and self.path.endswith("/chat/completions"):
-            body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
+        if ((google or (body is not None and b"thought_signature" in body))
+                and body is not None and self.path.endswith("/chat/completions")):
+            # on any route, a carried signature another model made is not sent (see _SIG_MAKERS)
+            body = _google_with_signatures(body, flags.setdefault("google_sigs", {}),
+                                           distrust=bool(flags.get("sig_distrust")), fill=google)
             headers["content-length"] = str(len(body))
         if ((((_gemini_channel(base) or flags.get("gemini_schemas"))
               and "gemini" in str(_body_model).lower())
@@ -6203,6 +6253,20 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # printed only its own "↻ Resumed session" line when Vercel refused gpt-6.1-sol for
                 # a spent budget (2026-10-13), and that line was the turn's whole error.
                 flags["last_refusal"] = _refusal_words(e.code, data)
+                distrusted = (_google_with_signatures(body, flags.setdefault("google_sigs", {}), distrust=True)
+                              if (attempt < 2 and e.code == 400 and body is not None and not flags.get("sig_distrust")
+                                  and _GOOGLE_SIG_CORRUPT_RE.search(data or b"")
+                                  and self.path.endswith("/chat/completions")) else None)
+                if distrusted is not None and distrusted != body:
+                    # Google called a replayed signature corrupted: one whose maker this process never saw
+                    # (see _SIG_MAKERS) goes as the sentinel, for this turn's calls from now on.
+                    flags["sig_distrust"] = flags["thought_signature"] = True
+                    google = True
+                    body = distrusted
+                    headers["content-length"] = str(len(body))
+                    print(f"[relay] provider called a thought signature corrupted for model={_body_model}; "
+                          f"sent again with the sentinel for calls of unknown origin", flush=True)
+                    continue
                 if (attempt < 2 and e.code == 400 and b"thought_signature" in data
                         and not flags.get("thought_signature") and body is not None):
                     # a Gemini 3 endpoint this relay did not recognise as Google names the need itself
@@ -6412,12 +6476,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         call_thinking = seen_thinking
                     for rd in _encrypted_reasoning_in_line(line):
                         flags.setdefault("encrypted_reasoning", {})[str(rd["id"])] = rd
+                        _sig_makers_keep([rd["id"]], str(_body_model))
                     if flags.get("turn_reasoning_only"):
                         flags.setdefault("items_minted", set()).update(_output_item_ids_in_line(line))
                     if sigs is not None:
                         for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
                             flags["thought_signature"] = True
+                            _sig_makers_keep([cid], str(_body_model))
                 if out_lines is not None:
                     chunk = b"".join(out_lines)
                 _stream_fold(flags, call_usage, call_thinking, folded)   # on the route before the client has it
@@ -6488,6 +6554,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     for rd in _encrypted_reasoning_in(json.loads(data)):
                         flags.setdefault("encrypted_reasoning", {})[str(rd["id"])] = rd
+                        _sig_makers_keep([rd["id"]], str(_body_model))
                 except (ValueError, UnicodeDecodeError):
                     pass
             if sigs is not None and b"thought_signature" in data:
@@ -6500,6 +6567,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     sigs.update(found)
                     if found:
                         flags["thought_signature"] = True
+                        _sig_makers_keep([cid for cid, _ in found], str(_body_model))
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
