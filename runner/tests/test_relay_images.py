@@ -200,3 +200,24 @@ def test_a_text_only_model_no_list_names_is_learned_from_openrouters_404(upstrea
     assert server._image_count(got[0]) == 2 and server._image_count(got[1]) == 0
     assert post("/chat/completions", _chat(2, "acme/unlisted-text-model")) == 200
     assert len(got) == 3 and server._image_count(got[2]) == 0                          # learned for the route
+
+
+def test_a_tool_with_a_property_named_type_is_walked_without_failing():
+    """0.37.7-rc.1: dcode's follow-up was refused (400), the rung counted the request's images, and a tool whose
+    parameters had a property named `type` (a schema object, so a dict where a part's type string sits) raised
+    TypeError: the relay dropped the connection and the turn failed with "Connection error"."""
+    body = _responses(2, "nvidia/nemotron-3-super")
+    body["tools"] = [{"type": "function", "name": "write_todos", "parameters": {"type": "object", "properties": {
+        "type": {"type": "string", "enum": ["image", "text"]}, "items": {"type": "array", "items": {"type": "object",
+                                                                                                    "properties": {"type": {"type": "string"}}}}}}}]
+    raw = json.dumps(body).encode()
+    assert server._image_count(raw) == 2
+    out = json.loads(server._fit_images(raw, 0))
+    assert server._image_count(json.dumps(out).encode()) == 0 and out["tools"] == body["tools"]
+
+
+def test_a_refusal_not_about_images_on_such_a_body_reaches_the_client(upstream):
+    post, got = upstream
+    body = _responses(2, "meta/llama-4-maverick")
+    body["tools"] = [{"type": "function", "name": "f", "parameters": {"type": "object", "properties": {"type": {"type": "string"}}}}]
+    assert post("/responses", body) == 400                      # the provider's own answer, not a dropped connection
