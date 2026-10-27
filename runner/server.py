@@ -4642,7 +4642,11 @@ _IMAGES_CAP_SEEN: dict[tuple[str, str], int] = {}
 _IMAGES_LIMIT_RE = re.compile(rb"(?:number of images|images?)\b[^0-9\"]{0,60}?(?:maximum|max|limit|more than|up to|at most)"
                               rb"[^0-9\"]{0,20}?(\d{1,4})", re.I)
 _IMAGES_NONE_RE = re.compile(rb"doesn't support the image|does not support (?:the )?image|not support(?:s|ed)? (?:image|vision)"
-                             rb"|image input is not supported|Unexpected item type in content", re.I)
+                             rb"|image input is not supported|Unexpected item type in content"
+                             rb"|No endpoints found that support image input", re.I)
+# OpenRouter says a model takes no image with a 404, "No endpoints found that support image input" (nemotron-3-super
+# and nemotron-3.5-lightning, 2026-10-26/27), where the others answer 400; the rung reads all of them.
+_IMAGES_REFUSED_STATUS = (400, 404, 413, 422)
 _IMAGE_NOT_SENT = "[An image from earlier in this conversation is not shown here.]"
 _IMAGE_TEXT_ONLY = "[An image is not shown here: this model reads text only.]"
 
@@ -6060,7 +6064,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # A refusal of the conversation's images (none taken, or more than the model's limit):
                 # learned for this route and sent once more with the images it takes. Any other
                 # refusal goes on to the repairs below.
-                sent_images = _image_count(body) if attempt < 2 and e.code in (400, 413, 422) else 0
+                sent_images = _image_count(body) if attempt < 2 and e.code in _IMAGES_REFUSED_STATUS else 0
                 allowed = _images_refused(data) if sent_images else None
                 if allowed is not None and allowed < sent_images:
                     _IMAGES_CAP_SEEN[image_route] = min(allowed, _IMAGES_CAP_SEEN.get(image_route, allowed))
