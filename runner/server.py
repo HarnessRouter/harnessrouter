@@ -12969,7 +12969,7 @@ DCODE_PROVIDERS = {"openai", "azure", "openai-api", "tokenrouter"}
 DCODE_BIN = os.environ.get("HR_DCODE_BIN", "/data/agent-tools/dcode-venv/bin/dcode")
 DCODE_PYTHON = os.environ.get("HR_DCODE_PYTHON", "/data/agent-tools/dcode-venv/bin/python")
 DCODE_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dcode_driver.py")
-DCODE_DEFAULT_MODEL = os.environ.get("DCODE_DEFAULT_MODEL", "gpt-5.4")
+DCODE_DEFAULT_MODEL = os.environ.get("DCODE_DEFAULT_MODEL", "gpt-6.1-sol")
 # The filesystem set `--allow-fs-tools` governs, which on this surface includes the shell. The
 # other six a turn declares — read_file (the flag's parser requires it), task,
 # compact_conversation, update_goal, ask_user and fetch_url with get_current_thread_id — have no
