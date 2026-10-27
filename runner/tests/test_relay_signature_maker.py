@@ -156,3 +156,22 @@ def test_a_runner_that_never_saw_the_call_learns_from_the_refusal(google_like, m
     makers.clear()                                                                 # a runner started since
     assert turn({"model": "gemini-3.6-flash", "messages": [ASK, ARGON_CALL, RESULT]}) == 200
     assert len(got) == 2 and _sigs_of(got[0]) == ["sigArgon"] and _sigs_of(got[1]) == [SKIP]
+
+
+def test_a_call_replayed_under_the_harness_own_id_is_known_by_its_signature():
+    """A harness that replays Google's calls under ids of its own and keeps the signatures on them: by id alone
+    no maker is found, so the signature itself (its digest) says who made it, and argon's goes to
+    gemini-3.6-flash as the sentinel."""
+    server._sig_makers_keep(["call_1"], "gemini-4-argon", ["sigArgon"])
+    server._sig_makers_keep(["call_2"], "gemini-3.6-flash", ["sigFlash"])
+    body = json.dumps({"model": "gemini-3.6-flash", "messages": [{"role": "assistant", "content": None, "tool_calls": [
+        {"id": "effect-0b9e", "type": "function", "function": {"name": "f", "arguments": "{}"},
+         "extra_content": {"google": {"thought_signature": "sigArgon"}}},
+        {"id": "effect-77aa", "type": "function", "function": {"name": "f", "arguments": "{}"},
+         "extra_content": {"google": {"thought_signature": "sigFlash"}}},
+        {"id": "effect-c0de", "type": "function", "function": {"name": "f", "arguments": "{}"},
+         "extra_content": {"google": {"thought_signature": "unseen"}}}]}]}).encode()
+    out = json.loads(server._google_with_signatures(body, {}))
+    got = [tc["extra_content"]["google"]["thought_signature"] for tc in out["messages"][0]["tool_calls"]]
+    assert got == [SKIP, "sigFlash", "unseen"]                  # argon's goes as the sentinel; its own and an unseen one stay
+    assert not any("sigArgon" in k or "sigFlash" in k for k in server._SIG_MAKERS)      # kept as digests, never the signature

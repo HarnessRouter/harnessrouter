@@ -4969,28 +4969,42 @@ _GOOGLE_HOST = "generativelanguage.googleapis.com"
 # turn, so this is kept beside the routes. A signature whose maker this process never saw (a runner
 # restarted since) is kept as the harness sent it, and if Google calls it corrupted the call goes once more
 # with the sentinel in its place. The hosted broker keeps the same record per session.
+# The maker is also kept under a digest of the signature itself (never the signature), so a harness that replays a
+# call under an id of its own while keeping Google's signature on it is still known by what it carries: by id
+# alone no maker would be found and another model's signature would go on. None measured does this today (vibe
+# 3.0.2 keeps the provider's ids and carries no signature, 2026-10-27); the hosted broker keeps the same record.
 _SIG_MAKERS: dict[str, str] = {}
 _SIG_MAKERS_MAX = 50_000
 _SIG_MAKERS_LOCK = threading.Lock()
 _GOOGLE_SIG_CORRUPT_RE = re.compile(rb"Corrupted thought signature", re.I)
 
 
-def _sig_makers_keep(ids, model: str) -> None:
-    """Note `model` as the maker of each tool call id (the oldest notes go past _SIG_MAKERS_MAX)."""
+def _sig_key(sig: str) -> str:
+    """The record's key for a signature's own maker: a digest, never the signature."""
+    return "sig:" + hashlib.sha256(str(sig).encode()).hexdigest()[:32]
+
+
+def _sig_makers_keep(ids, model: str, sigs=()) -> None:
+    """Note `model` as the maker of each tool call id and of each signature (the oldest notes go past
+    _SIG_MAKERS_MAX)."""
     if not model:
         return
     with _SIG_MAKERS_LOCK:
-        for cid in ids:
-            if cid:
-                _SIG_MAKERS.pop(str(cid), None)
-                _SIG_MAKERS[str(cid)] = model
+        for key in [str(c) for c in ids if c] + [_sig_key(s) for s in sigs if s]:
+            _SIG_MAKERS.pop(key, None)
+            _SIG_MAKERS[key] = model
         while len(_SIG_MAKERS) > _SIG_MAKERS_MAX:
             del _SIG_MAKERS[next(iter(_SIG_MAKERS))]
 
 
-def _sig_by_another(cid: str, want: str) -> bool:
+def _sig_maker(cid: str, carried: str = "") -> str:
+    """Who made the call `cid` (or, under an id this process never saw, the signature it carries), or ""."""
+    return (_SIG_MAKERS.get(cid, "") if cid else "") or (_SIG_MAKERS.get(_sig_key(carried), "") if carried else "")
+
+
+def _sig_by_another(cid: str, want: str, carried: str = "") -> bool:
     """Whether the call `cid` was made by a model other than `want`, as far as this process saw."""
-    maker = _SIG_MAKERS.get(cid, "") if cid else ""
+    maker = _sig_maker(cid, carried)
     return bool(maker and want) and not _same_model(want, maker)
 
 
@@ -5292,9 +5306,11 @@ def _google_with_signatures(body: bytes, sigs: dict, distrust: bool = False, fil
             if not isinstance(tc, dict):
                 continue
             cid = str(tc.get("id") or "")
-            own = not _sig_by_another(cid, want) and not (distrust and cid not in _SIG_MAKERS)
             ec = tc.get("extra_content")
             carried = isinstance(ec, dict) and isinstance(ec.get("google"), dict) and ec["google"].get("thought_signature")
+            known = bool(_sig_maker(cid, carried if isinstance(carried, str) else ""))
+            own = (not _sig_by_another(cid, want, carried if isinstance(carried, str) else "")
+                   and not (distrust and not known))
             if (carried and own) or (not carried and not fill):
                 continue
             sig = (sigs.get(cid) if own else "") or _GOOGLE_SIG_SKIP
@@ -6491,7 +6507,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                         for cid, sig in _google_signatures_in_line(line):
                             sigs[cid] = sig
                             flags["thought_signature"] = True
-                            _sig_makers_keep([cid], str(_body_model))
+                            _sig_makers_keep([cid], str(_body_model), [sig])
                 if out_lines is not None:
                     chunk = b"".join(out_lines)
                 _stream_fold(flags, call_usage, call_thinking, folded)   # on the route before the client has it
@@ -6575,7 +6591,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     sigs.update(found)
                     if found:
                         flags["thought_signature"] = True
-                        _sig_makers_keep([cid for cid, _ in found], str(_body_model))
+                        _sig_makers_keep([cid for cid, _ in found], str(_body_model), [s for _, s in found])
             self.send_header("content-length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
