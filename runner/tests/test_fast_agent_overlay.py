@@ -3,8 +3,10 @@
 MEASURED on fast-agent 0.10.47 (2026-10-27): an id its table does not have is text only to it, so
 attach_media is not offered and images are filtered out of the messages; claude-opus-5.5 was one of 65
 such ids. A model overlay named `generic.<id>` in the home's model-overlays/ is what `--model
-generic.<id>` resolves to, with the id sent upstream unchanged. These tests pin the decision and what
-reaches the relay; fast-agent's own view is stubbed (its python is not on a test machine)."""
+generic.<id>` resolves to, with the id sent upstream unchanged. Every turn's overlay also carries
+fast-agent's stream wait (its own 150 s cut a long gemini-4-argon turn, hosted 2026-10-27). These tests pin
+the decision and what reaches the relay; fast-agent's own view is stubbed (its python is not on a test
+machine)."""
 import json
 import pathlib
 import subprocess
@@ -60,7 +62,16 @@ def test_an_id_it_does_not_know_reads_images_when_its_channel_does(view):
 def test_an_id_it_knows_with_images_is_left_to_its_own_table(view):
     view["gpt-5.4"] = {"tokenizes": GPT}
     _, flags, doc, _ = _turn("gpt-5.4", vision=True)
-    assert doc is None and "max_tokens" not in flags["drop_fields"]
+    assert "metadata" not in doc and "max_tokens" not in flags["drop_fields"]
+
+
+def test_every_turn_waits_for_its_stream_as_long_as_the_relay_does(view):
+    view["gpt-5.4"] = {"tokenizes": GPT}
+    for model, vision in (("gpt-5.4", True), ("claude-opus-5.5", True), ("qwen3.7-max", False)):
+        _, _, doc, _ = _turn(model, vision=vision)
+        assert doc["name"] == f"generic.{model}"
+        assert doc["defaults"] == {"streaming_timeout": server._FA_STREAM_WAIT_S}
+    assert server._FA_STREAM_WAIT_S > server.HR_RELAY_UPSTREAM_TIMEOUT_S > 150
 
 
 def test_a_text_only_channel_reads_text_alone_whatever_the_table_says(view):
@@ -70,7 +81,7 @@ def test_a_text_only_channel_reads_text_alone_whatever_the_table_says(view):
     assert doc["metadata"] == {"tokenizes": ["text/plain"]} and "max_tokens" not in flags["drop_fields"]
     # an id it does not know is already text only to it: nothing to declare
     _, _, doc, _ = _turn("qwen3.7-max", vision=False)
-    assert doc is None
+    assert "metadata" not in doc
 
 
 def test_a_known_text_only_id_whose_channel_takes_images_gets_them(view):
@@ -80,18 +91,18 @@ def test_a_known_text_only_id_whose_channel_takes_images_gets_them(view):
     assert "max_tokens" not in flags["drop_fields"]
 
 
-def test_the_file_is_this_turns_and_an_earlier_one_goes_when_none_is_needed(view):
+def test_the_file_is_this_turns_and_says_nothing_of_reading_when_none_is_needed(view):
     view["gpt-5.4"] = {"tokenizes": GPT}
     _, _, doc, ws = _turn("claude-sonnet-5.5", vision=True)
     assert doc["model"] == "claude-sonnet-5.5"
     _, _, doc, _ = _turn("gpt-5.4", vision=True, ws=ws)       # a switch to a model its table knows
-    assert doc is None
+    assert doc["model"] == "gpt-5.4" and "metadata" not in doc
 
 
 def test_when_it_cannot_be_asked_the_turn_is_as_before(view):
     view["claude-opus-5.5"] = False
     _, flags, doc, _ = _turn("claude-opus-5.5", vision=True)
-    assert doc is None and "max_tokens" not in flags["drop_fields"]
+    assert "metadata" not in doc and "max_tokens" not in flags["drop_fields"]
 
 
 def test_its_view_is_asked_once_per_id(monkeypatch):

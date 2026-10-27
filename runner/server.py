@@ -13377,6 +13377,13 @@ _FA_UNKNOWN_LIMITS = {"context_window": 2_000_000, "max_output_tokens": 128_000}
 # One file, rewritten every turn: a resumed session names the same `generic.<id>`, so it reads this
 # turn's file, never a stale one.
 _FA_OVERLAY_FILE = "harness-turn.yaml"
+# How long fast-agent waits for its stream to start and between its events. Its own default is 150 s
+# (300 s at a high reasoning effort), shorter than the relay's wait upstream: a gemini-4-argon turn with
+# a long conversation of images failed after 291 s on fast-agent's own "OpenAI stream did not start
+# within 150.0 seconds" while the provider was still working (hosted, 2026-10-27). The relay's wait
+# decides, and fast-agent's is a little longer, so the relay's answer, which says what happened, is the
+# one that arrives.
+_FA_STREAM_WAIT_S = HR_RELAY_UPSTREAM_TIMEOUT_S + 30
 
 
 def _fast_agent_known(model: str) -> dict | None | bool:
@@ -13398,15 +13405,15 @@ def _fast_agent_known(model: str) -> dict | None | bool:
 
 
 def _fast_agent_overlay(home: pathlib.Path, model: str, vision: bool) -> bool:
-    """Declare what this turn's model reads to fast-agent, where its own table says otherwise.
+    """This turn's model as fast-agent should take it: a model overlay named exactly as the runner's
+    `--model` (`generic.<id>`) in `<home>/model-overlays/`. fast-agent resolves the name to the overlay
+    and the id it sends upstream is unchanged (measured on 0.10.47). It always carries the stream wait
+    (_FA_STREAM_WAIT_S), and what the model reads where fast-agent's own table says otherwise.
 
     The gateway knows whether the model's channel takes images (`vision`, from _TEXT_ONLY_INPUT);
     fast-agent decides from its own table whether to offer attach_media and whether to keep an image in
-    a message. Where the two disagree, a model overlay named exactly as the runner's `--model`
-    (`generic.<id>`) in `<home>/model-overlays/` carries the gateway's answer: fast-agent resolves the
-    name to the overlay and the id it sends upstream is unchanged (measured on 0.10.47). An id it
-    knows keeps its own limits and every other type it reads; an id it does not know gets
-    _FA_UNKNOWN_LIMITS. Where they agree, no overlay is written and an earlier one is removed.
+    a message. Where the two disagree the overlay carries the gateway's answer. An id it knows keeps
+    its own limits and every other type it reads; an id it does not know gets _FA_UNKNOWN_LIMITS.
     Returns True when the overlay carries those made-up limits, so the route drops the cap."""
     path = home / "model-overlays" / _FA_OVERLAY_FILE
     known = _fast_agent_known(model)
@@ -13417,16 +13424,16 @@ def _fast_agent_overlay(home: pathlib.Path, model: str, vision: bool) -> bool:
     else:
         # a channel that refuses images: text alone, as _fast_agent_drop_media leaves the history
         want = ["text/plain"]
-    if known is False or want == takes:
-        path.unlink(missing_ok=True)
-        return False
+    reads = known is not False and want != takes
     doc = {"name": f"generic.{model}", "provider": "generic", "model": model,
-           "metadata": {"tokenizes": want, **({} if known else _FA_UNKNOWN_LIMITS)}}
+           "defaults": {"streaming_timeout": _FA_STREAM_WAIT_S}}
+    if reads:
+        doc["metadata"] = {"tokenizes": want, **({} if known else _FA_UNKNOWN_LIMITS)}
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".yaml.hr-tmp")
     tmp.write_text(json.dumps(doc), encoding="utf-8")       # JSON is YAML; fast-agent reads it with yaml
     os.replace(tmp, path)
-    return not known
+    return reads and not known
 
 
 def _fast_agent_config(cwd: str, tools_disabled: list[str] | None,
@@ -13531,8 +13538,9 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
     home = _fast_agent_home(cwd)
     home.mkdir(parents=True, exist_ok=True)
     if auth.api_key:
-        # what the model reads, declared where fast-agent's own table disagrees (_fast_agent_overlay);
-        # only through the relay, which takes back the cap made-up limits would add
+        # the stream wait, and what the model reads where fast-agent's own table disagrees
+        # (_fast_agent_overlay); only through the relay, whose wait it is and which takes back the
+        # cap made-up limits would add
         made_up = _fast_agent_overlay(home, model, vision)
         relay_base, relay_tok = _hermes_relay_route(
             auth.base_url, auth.api_key, chat_cache=True,
