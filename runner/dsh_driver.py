@@ -501,9 +501,13 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
     # The stock web_search provider calls DeepSeek's own API (https://api.deepseek.com/anthropic/v1/messages) with
     # the relay's placeholder key: every search answered 401 "Authentication Fails" (measured on the test instance,
     # 2026-10-27, and on the hosted service), and it would send a turn's queries to a provider the turn's
-    # connection never named. The row is off, so no web_search is offered; web_fetch (plain HTTP) stays, and a
+    # connection never named. The provider row is off, and the tool itself is not registered: with the row off
+    # alone the model was still offered web_search, and every call failed "the configured web provider is not
+    # registered" (measured on the test instance). `search: false` is the web tool's own switch (its config:
+    # search, fetch, both default true), merged into the stock `tool-web` row; web_fetch (plain HTTP) stays, and a
     # setup's own search plug is how an agent searches.
     entries.append({"id": "web-search-deepseek", "disabled": True})
+    entries.append({"id": "tool-web", "config": {"search": False}})
     cjs = home / ".dsh" / "hr_dsh_server.mjs"
     inserted: list = [{"id": "hr-sdk-jsonrpc-server", "name": str(cjs),
                        "inject": ["sdkAppStartup", "loader"],

@@ -50,3 +50,5 @@ def test_the_deepseek_web_search_row_is_off(tmp_path):
     path = dsh_driver._compose_patch(tmp_path / "home", [], cwd=str(tmp_path))
     entries = yaml.safe_load(pathlib.Path(path).read_text())
     assert {"id": "web-search-deepseek", "disabled": True} in entries
+    # the tool itself is not registered: the provider row off alone still offered web_search, failing every call
+    assert {"id": "tool-web", "config": {"search": False}} in entries
