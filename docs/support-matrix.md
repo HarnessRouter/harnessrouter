@@ -2434,7 +2434,6 @@ Not run in this column, 331 pairs the provider serves that the harness did not r
 | fast-agent | gemini-3.5-flash-lite | pass | pass | pass (gemini-4-argon) | pass | pass | Google AI Studio |  |
 | fast-agent | gemini-3.6-flash | pass | pass | pass (gemini-4-argon) | pass | pass | Google AI Studio |  |
 | fast-agent | gemini-3.8-flash | pass | pass | pass (gemini-4-argon) | pass | pass | Google AI Studio |  |
-| fast-agent | gemini-4-argon | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
 | hermes | gemini-3.6-flash | n/a | n/a | n/a | n/a | n/a | ? | re-run on the sponsored Tier 3 key and 0.13.14 (the relays drop the field Google refuses); first try on the Free-tier ke ; retested once; first try: first Your openai-api key was refused: API call failed after 3 retries: HTTP 429: [{
   |
 | opencode | gemini-3.6-flash | pass | pass | n/a | FAIL | pass | Google AI Studio | artifact: [{"connection": "integration:Google AI Studio", "status": "failed", "error": "Bad Request: [{\n  \"error\": {\n    \"code\": 400,\n    \"mes ; re-run on the sponsored Tier 3 key and 0.13.14 (the relays drop the field Google refuses); first try on the Free-tier ke ; retested once; first try: followup [{"connection": "integration:Google AI Studio", "status": "failed", "error": "To; artifact [{"connection": "integration:Google AI Studio", "status": "failed", "error": "To; recycle [{"connection": "integration:Google AI Studio", "status": "failed", "error": "To |
@@ -2449,9 +2448,9 @@ Not run in this column, 331 pairs the provider serves that the harness did not r
 | vibe | gemini-3.8-flash | pass | pass | pass (gemini-4-argon) | pass | pass | Google AI Studio | cache 0% of input |
 | vibe | gemini-4-argon | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio | cache 6% of input |
 
-29 pairs, 126 of 128 scenario runs passed.
+28 pairs, 121 of 123 scenario runs passed.
 
-Not run in this column, 35 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 36 pairs the provider serves that the harness did not run, with the reason:
 
 - dsh x gemini-3-flash-preview: not run, not run in this column
 - dsh x gemini-3.1-flash-lite: not run, not run in this column
@@ -2460,6 +2459,7 @@ Not run in this column, 35 pairs the provider serves that the harness did not ru
 - dsh x gemini-3.5-flash-lite: not run, not run in this column
 - dsh x gemini-3.8-flash: not run, not run in this column
 - dsh x gemini-4-argon: not run, not run in this column
+- fast-agent x gemini-4-argon: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x gemini-3-flash-preview: not run, not run in this column
 - hermes x gemini-3.1-flash-lite: not run, not run in this column
 - hermes x gemini-3.1-pro-preview: not run, not run in this column
@@ -2982,7 +2982,6 @@ Findings, pairs served by a connection other than the one under test or as a mod
 | docker-agent | gpt-5.6-terra | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 85% of input |
 | docker-agent | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 67% of input |
 | docker-agent | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | HarnessRouter API  test 1 | cache 72% of input |
-| docker-agent | grok-4.20 | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 65% of input |
 | docker-agent | grok-4.3 | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 75% of input |
 | docker-agent | grok-4.6 | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 54% of input |
 | docker-agent | hunyuan-4-preview | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 70% of input |
@@ -3023,7 +3022,6 @@ Findings, pairs served by a connection other than the one under test or as a mod
 | fast-agent | gemini-3.6-flash | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 0% of input |
 | fast-agent | gemini-3.7-flash | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 0% of input |
 | fast-agent | gemini-3.8-flash | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 0% of input |
-| fast-agent | gemini-4-argon | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 0% of input |
 | fast-agent | glm-5.3 | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 66% of input |
 | fast-agent | glm-5.3-flash | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 0% of input |
 | fast-agent | gpt-5.2 | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 56% of input |
@@ -3104,7 +3102,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 51% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6-sol) | pass | pass | HarnessRouter API  test 1 | cache 49% of input |
 
-197 pairs, 985 of 985 scenario runs passed.
+195 pairs, 975 of 975 scenario runs passed.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -3151,7 +3149,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - vibe x claude-sonnet-5: no prompt cache reads over 77462 input tokens (every call paid full price)
 - vibe x claude-sonnet-5.5: no prompt cache reads over 77545 input tokens (every call paid full price)
 
-Not run in this column, 34 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 35 pairs the provider serves that the harness did not run, with the reason:
 
 - dcode x gemini-3-flash-preview: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
 - dcode x gemini-3.1-pro-preview: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
@@ -3169,6 +3167,7 @@ Not run in this column, 34 pairs the provider serves that the harness did not ru
 - docker-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - docker-agent x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - docker-agent x gpt-6.1-sol: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
+- docker-agent x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4002,7 +4001,6 @@ Not run in this column, 61 pairs the provider serves that the harness did not ru
 | docker-agent | gpt-6-luna | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 100% of input |
 | docker-agent | gpt-6-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 100% of input |
 | docker-agent | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | cache 100% of input |
-| docker-agent | grok-4.20 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 77% of input |
 | docker-agent | grok-4.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 53% of input |
 | docker-agent | grok-4.6 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 82% of input |
 | docker-agent | hunyuan-4-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 80% of input |
@@ -4074,7 +4072,6 @@ Not run in this column, 61 pairs the provider serves that the harness did not ru
 | fast-agent | gemini-3.6-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | gemini-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | gemini-3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
-| fast-agent | gemini-4-argon | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | glm-5.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | glm-5.3-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
 | fast-agent | gpt-5.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter |  |
@@ -4376,7 +4373,7 @@ session_id: 20260913_060549_70cbeb |
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 53% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 65% of input |
 
-491 pairs, 2414 of 2420 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
+489 pairs, 2404 of 2410 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -4412,7 +4409,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - pi x claude-haiku-5.5: no prompt cache reads over 25529 input tokens (every call paid full price)
 - qwen x claude-haiku-5.5: no prompt cache reads over 570679 input tokens (every call paid full price)
 
-Not run in this column, 937 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 939 pairs the provider serves that the harness did not run, with the reason:
 
 - agentzero x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4739,6 +4736,7 @@ Not run in this column, 937 pairs the provider serves that the harness did not r
 - docker-agent x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - docker-agent x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- docker-agent x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4788,6 +4786,7 @@ Not run in this column, 937 pairs the provider serves that the harness did not r
 - dsh x qwen3.7-plus: not run, not run in this column
 - dsh x qwen3.8-27b: not run, not run in this column
 - dsh x qwen3.8-flash: not run, not run in this column
+- fast-agent x gemini-4-argon: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - fast-agent x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - fast-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5441,7 +5440,6 @@ Not run in this column, 937 pairs the provider serves that the harness did not r
 | docker-agent | gpt-5.6-terra | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 100% of input |
 | docker-agent | gpt-6-luna | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 100% of input |
 | docker-agent | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | My TokenRouter | cache 100% of input |
-| docker-agent | grok-4.20 | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 43% of input |
 | docker-agent | grok-4.3 | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 81% of input |
 | docker-agent | grok-4.6 | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 88% of input |
 | docker-agent | hunyuan-4-preview | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 38% of input |
@@ -5626,7 +5624,7 @@ Not run in this column, 937 pairs the provider serves that the harness did not r
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 57% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6-sol) | pass | pass | My TokenRouter | cache 32% of input |
 
-269 pairs, 1234 of 1236 scenario runs passed; 21 pairs served by another connection or as another model are findings, not counted.
+268 pairs, 1229 of 1231 scenario runs passed; 21 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -5679,7 +5677,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - vibe x claude-sonnet-5: no prompt cache reads over 77995 input tokens (every call paid full price)
 - vibe x claude-sonnet-5.5: no prompt cache reads over 77418 input tokens (every call paid full price)
 
-Not run in this column, 595 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 596 pairs the provider serves that the harness did not run, with the reason:
 
 - aider x claude-fable-5: not run, not run in this column
 - aider x claude-fable-5-1: not run, not run in this column
@@ -5917,6 +5915,7 @@ Not run in this column, 595 pairs the provider serves that the harness did not r
 - docker-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - docker-agent x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - docker-agent x gpt-6.1-sol: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
+- docker-agent x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -6404,7 +6403,6 @@ Not run in this column, 595 pairs the provider serves that the harness did not r
 | docker-agent | gpt-6-luna | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 67% of input |
 | docker-agent | gpt-6-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 72% of input |
 | docker-agent | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | cache 72% of input |
-| docker-agent | grok-4.20 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 54% of input |
 | docker-agent | grok-4.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 54% of input |
 | docker-agent | grok-4.6 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 66% of input |
 | docker-agent | hunyuan-4-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 84% of input |
@@ -6450,7 +6448,6 @@ Not run in this column, 595 pairs the provider serves that the harness did not r
 | fast-agent | gemini-3.6-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | gemini-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | gemini-3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
-| fast-agent | gemini-4-argon | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | glm-5.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | glm-5.3-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
 | fast-agent | gpt-5.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway |  |
@@ -6651,7 +6648,7 @@ Not run in this column, 595 pairs the provider serves that the harness did not r
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 17% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 32% of input |
 
-369 pairs, 1738 of 1756 scenario runs passed; 9 pairs served by another connection or as another model are findings, not counted.
+367 pairs, 1728 of 1746 scenario runs passed; 9 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -6687,7 +6684,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - qwen x claude-haiku-5.5: no prompt cache reads over 569929 input tokens (every call paid full price)
 - qwen x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
-Not run in this column, 1042 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 1044 pairs the provider serves that the harness did not run, with the reason:
 
 - agentzero x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7049,6 +7046,7 @@ Not run in this column, 1042 pairs the provider serves that the harness did not 
 - docker-agent x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - docker-agent x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
+- docker-agent x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7114,6 +7112,7 @@ Not run in this column, 1042 pairs the provider serves that the harness did not 
 - dsh x qwen3.8-flash: not run, not run in this column
 - dsh x qwen3.8-max: not run, not run in this column
 - dsh x step-3.7-flash: not run, not run in this column
+- fast-agent x gemini-4-argon: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - fast-agent x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - fast-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
