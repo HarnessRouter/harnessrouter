@@ -21,6 +21,8 @@ QWEN_SAYS = ("<400> InternalError.Algo.InvalidParameter: The provided messages i
              "The error info is [Unexpected item type in content.].")
 NEMOTRON_SAYS = "This model doesn't support the image content block that you provided. Update the content block and try again."
 MISTRAL_SAYS = "Total number of images exceeds the maximum allowed of 8."
+# OpenRouter's answer for a model with no image-capable endpoint: a 404 (nemotron-3-super, 2026-10-27)
+OPENROUTER_SAYS = "No endpoints found that support image input"
 PNG = "data:image/png;base64,iVBORw0KGgo="
 
 
@@ -55,6 +57,8 @@ def test_each_wording_is_read_and_nothing_else_is():
     assert server._images_refused(_err(QWEN_SAYS)) == 0
     assert server._images_refused(_err(NEMOTRON_SAYS)) == 0
     assert server._images_refused(_err(MISTRAL_SAYS)) == 8
+    assert server._images_refused(_err(OPENROUTER_SAYS)) == 0
+    assert 404 in server._IMAGES_REFUSED_STATUS
     assert server._images_refused(_err("max_tokens: 100000 > 64000, which is the maximum allowed")) is None
     assert server._images_refused(_err("invalid temperature: only 1 is allowed")) is None
     assert server._images_refused(b"") is None
@@ -91,9 +95,12 @@ def test_a_body_within_the_limit_goes_byte_for_byte():
 
 # ── through the relay, against an upstream that refuses as Vercel's routes did ──────────────────────────────
 
-def _vercel_like(doc: dict) -> bytes | None:
-    """The refusal Vercel's route gave for this request on 10-27, or None when it answers."""
+def _vercel_like(doc: dict) -> bytes | tuple | None:
+    """The refusal Vercel's route gave for this request on 10-27, or None when it answers; (status, body) for
+    OpenRouter's 404."""
     n, m = server._image_count(json.dumps(doc).encode()), str(doc.get("model"))
+    if "unlisted-text-model" in m and n:
+        return 404, _err(OPENROUTER_SAYS)
     if "qwen3.7-max" in m and n:
         return _err(QWEN_SAYS)
     if "nemotron" in m and n:
@@ -118,7 +125,9 @@ def upstream(monkeypatch):
             got.append(raw)
             doc = json.loads(raw)
             refused = _vercel_like(doc)
-            if refused is not None:
+            if isinstance(refused, tuple):
+                code, out = refused
+            elif refused is not None:
                 code, out = 400, refused
             elif self.path.endswith("/responses"):
                 code, out = 200, json.dumps({"id": "resp_1", "object": "response", "status": "completed", "model": doc["model"],
@@ -183,3 +192,32 @@ def test_a_model_that_takes_images_is_sent_all_of_them_and_other_refusals_pass_t
     assert post("/responses", _responses(2, "meta/llama-4-maverick")) == 400
     # not about images: no fitted resend (the relay's other repairs may still try their own)
     assert all(server._image_count(b) == 2 for b in got[1:])
+
+
+def test_a_text_only_model_no_list_names_is_learned_from_openrouters_404(upstream):
+    post, got = upstream
+    assert post("/chat/completions", _chat(2, "acme/unlisted-text-model")) == 200 and len(got) == 2
+    assert server._image_count(got[0]) == 2 and server._image_count(got[1]) == 0
+    assert post("/chat/completions", _chat(2, "acme/unlisted-text-model")) == 200
+    assert len(got) == 3 and server._image_count(got[2]) == 0                          # learned for the route
+
+
+def test_a_tool_with_a_property_named_type_is_walked_without_failing():
+    """0.37.7-rc.1: dcode's follow-up was refused (400), the rung counted the request's images, and a tool whose
+    parameters had a property named `type` (a schema object, so a dict where a part's type string sits) raised
+    TypeError: the relay dropped the connection and the turn failed with "Connection error"."""
+    body = _responses(2, "nvidia/nemotron-3-super")
+    body["tools"] = [{"type": "function", "name": "write_todos", "parameters": {"type": "object", "properties": {
+        "type": {"type": "string", "enum": ["image", "text"]}, "items": {"type": "array", "items": {"type": "object",
+                                                                                                    "properties": {"type": {"type": "string"}}}}}}}]
+    raw = json.dumps(body).encode()
+    assert server._image_count(raw) == 2
+    out = json.loads(server._fit_images(raw, 0))
+    assert server._image_count(json.dumps(out).encode()) == 0 and out["tools"] == body["tools"]
+
+
+def test_a_refusal_not_about_images_on_such_a_body_reaches_the_client(upstream):
+    post, got = upstream
+    body = _responses(2, "meta/llama-4-maverick")
+    body["tools"] = [{"type": "function", "name": "f", "parameters": {"type": "object", "properties": {"type": {"type": "string"}}}}]
+    assert post("/responses", body) == 400                      # the provider's own answer, not a dropped connection
