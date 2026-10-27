@@ -87,7 +87,9 @@ def test_an_aggregator_that_streams_signatures_gets_them_back_on_the_replay():
 
         post(json.dumps({"model": "google/gemini-3.5-flash-lite", "stream": True,
                          "messages": [{"role": "user", "content": "hi"}]}).encode())
-        post(_replay())      # call_1's tool call replayed WITHOUT its extra_content, as an OpenAI-shaped client does
+        # call_1's tool call replayed WITHOUT its extra_content, as an OpenAI-shaped client does, to the model
+        # that made it (another model's goes as the sentinel: test_relay_signature_maker.py)
+        post(_replay().replace(b'"gemini-3.6-flash"', b'"google/gemini-3.5-flash-lite"'))
         calls = {tc["id"]: tc for m in got[1]["messages"] for tc in m.get("tool_calls") or []}
         assert calls["call_1"]["extra_content"]["google"]["thought_signature"] == "sigA"
         assert calls["call_k"]["extra_content"]["google"]["thought_signature"] == "kept"
