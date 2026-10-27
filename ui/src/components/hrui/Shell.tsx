@@ -1,7 +1,8 @@
 'use client';
-// The console's frame: a 64px rail on the left (the mark, the workspace, five places, the account) and the
-// page beside it. Every page draws its own top. The workspace and account menus open beside the rail. On a
-// phone the rail is a bottom bar of three places and More; Add-ons and API Keys are in More there.
+// The console's frame: a 64px rail on the left (the mark, the workspace, five places, the team's letter, the
+// account) and the page beside it. Every page draws its own top. The workspace and account menus open beside
+// the rail. On a phone the rail is a bottom bar of three places and More; Add-ons, API Keys and the letter are
+// in More there.
 import './hrui.css';
 import './hrui-console.css';
 import Link from 'next/link';
@@ -14,6 +15,7 @@ import { wsColor, WsBadge } from './ws';
 import { toast, ToastHost } from './toast';
 import { NewWorkspaceSheet, PeopleSheet, useWorkspaceSheets, WS_MENU_EVENT } from './WorkspaceSheets';
 import { movedTo } from './moved';
+import { letterUnread, markLetterRead } from './letter';
 import { Skel, SkHead, SkRows } from './Skel';
 
 export const LINKS = {
@@ -40,6 +42,7 @@ function placeOf(path: string): string {
   if (/^\/(shop|kits|marketplace)(\/|$)/.test(path)) return 'shop';
   if (/^\/(extensions|plugins|environments)(\/|$)/.test(path)) return 'extensions';
   if (/^\/(start|quickstart|dashboard|overview)(\/|$)/.test(path)) return 'start';
+  if (/^\/letter\/?$/.test(path)) return 'letter';
   const p = PLACES.find((x) => path === x.href || path.startsWith(x.href + '/'));
   return p ? p.key : '';
 }
@@ -115,6 +118,9 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
     window.addEventListener(WS_MENU_EVENT, on);
     return () => window.removeEventListener(WS_MENU_EVENT, on);
   }, [wsOpen, setWsOpen, setMeOpen]);
+  // the letter's dot, until it has been opened here
+  const [unread, setUnread] = useState(false);
+  useEffect(() => { if (here === 'letter') markLetterRead(); setUnread(letterUnread()); }, [here]);
   const stars = useGithubStars();
   const op = useOperator();
   useEffect(() => { setWsOpen(false); setMeOpen(false); }, [pathname, setWsOpen, setMeOpen]);
@@ -178,7 +184,12 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
               {p.icon}{p.key === 'studio' ? <span className="rail-l2">{p.label}</span> : p.label}
             </Link>
           ))}
-          <button ref={meBtn} type="button" className={`rail-me${meOpen || pathname.startsWith('/profile') || pathname.startsWith('/byok') ? ' on' : ''}${meMore ? ' more-on' : ''}`}
+          {/* How it works: the team's letter, above the account button (in More on a phone) */}
+          <Link href="/letter" className={`rail-btn rail-letter${here === 'letter' ? ' on' : ''}`} data-nav="letter"
+            aria-current={here === 'letter' ? 'page' : undefined} title="How it works · a letter from the team" aria-label="How it works, a letter from the team">
+            {Ic.letter}Letter<i className="letter-dot" aria-hidden="true" hidden={!unread} />
+          </Link>
+          <button ref={meBtn} type="button" className={`rail-me${meOpen || pathname.startsWith('/profile') || pathname.startsWith('/byok') ? ' on' : ''}${meMore ? ' more-on' : ''}${unread ? ' dot' : ''}`}
             aria-haspopup="menu" aria-expanded={meOpen} aria-label="Account and settings"
             onClick={() => { setWsOpen(false); setMeOpen(!meOpen); }}>
             <MyPic className="me-av" /><span className="me-l">More</span>
@@ -235,6 +246,11 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
       {meOpen && (
         <div ref={mePop} className="ws-pop me-pop" role="menu" aria-label="Account">
           {op?.user ? <div className="me-h">{op.user}</div> : null}
+          {/* How it works stays in this menu at every width, first, with the unread dot until it is read */}
+          <button type="button" className={`me-row${here === 'letter' ? ' on' : ''}`} role="menuitem" onClick={() => go('/letter')}>
+            {Ic.letter}How it works{unread ? <i className="me-dot" role="img" aria-label="Unread" /> : null}
+          </button>
+          <hr />
           {PLACES.filter((p) => ['extensions', 'keys'].includes(p.key)).map((p) => (
             <button key={p.key} type="button" className={`me-row me-mob${here === p.key ? ' on' : ''}`} role="menuitem" onClick={() => go(p.href)}>{p.icon}{p.label}</button>
           ))}
