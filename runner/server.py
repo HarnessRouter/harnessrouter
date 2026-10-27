@@ -4623,6 +4623,110 @@ def _effort_shape_refused(data: bytes) -> bool:
     return bool(_EFFORT_SHAPE_REFUSED_RE.search(data or b""))
 
 
+# ── the images a conversation carries, fitted to what the model takes ────────────────────
+# A harness replays its whole conversation on every call, images included: a deck agent renders its slides
+# and looks at them on every turn, and each look stays in the history. A model that reads text only refuses
+# the next call outright, and a model with an image limit refuses it once the history passes that limit, so a
+# switch to such a model mid-conversation failed every turn after (2026-10-27, Deep Agents Code on the hosted
+# service, all three on Vercel's route): qwen3.7-max "Unexpected item type in content", nemotron-3-super "This
+# model doesn't support the image content block that you provided", mistral-medium-3.5 "Total number of images
+# exceeds the maximum allowed of 8". The call is sent with the images the model can take: none for a model
+# that reads text only, the most recent N for a model that takes N (the earlier looks were already answered in
+# the conversation's own words), each one not sent replaced by a line that says so. Known limits apply before
+# the first call; a refusal that says the model takes no image, or names its limit, is learned for the
+# (upstream host, model) for the life of the process and the call goes once more, fitted.
+_IMAGE_PARTS = {"input_image": "input_text", "image_url": "text", "image": "text"}   # image part -> its text part
+_IMAGES_NONE = frozenset({"qwen3.7-max", "glm-5.3", "nemotron-3.5-lightning", "nemotron-3-super"})
+_IMAGES_CAP_FAMILIES = ((re.compile(r"^(?:mistral|magistral|devstral|pixtral|ministral|codestral)\b"), 8),)  # Mistral's 8 a request
+_IMAGES_CAP_SEEN: dict[tuple[str, str], int] = {}
+_IMAGES_LIMIT_RE = re.compile(rb"(?:number of images|images?)\b[^0-9\"]{0,60}?(?:maximum|max|limit|more than|up to|at most)"
+                              rb"[^0-9\"]{0,20}?(\d{1,4})", re.I)
+_IMAGES_NONE_RE = re.compile(rb"doesn't support the image|does not support (?:the )?image|not support(?:s|ed)? (?:image|vision)"
+                             rb"|image input is not supported|Unexpected item type in content", re.I)
+_IMAGE_NOT_SENT = "[An image from earlier in this conversation is not shown here.]"
+_IMAGE_TEXT_ONLY = "[An image is not shown here: this model reads text only.]"
+
+
+def _is_image_part(x: object) -> bool:
+    return isinstance(x, dict) and x.get("type") in _IMAGE_PARTS and (x.get("type") != "image" or "source" in x)
+
+
+def _image_cap(model: str, route: tuple[str, str]) -> int | None:
+    """How many images the model on this route takes in one call: 0, a number, or None (no known limit)."""
+    bare = (model or "").strip().lower().rsplit("/", 1)[-1]
+    caps = [_IMAGES_CAP_SEEN[route]] if route in _IMAGES_CAP_SEEN else []
+    if bare in _IMAGES_NONE:
+        caps.append(0)
+    caps += [n for rx, n in _IMAGES_CAP_FAMILIES if rx.match(bare)]
+    return min(caps) if caps else None
+
+
+def _images_refused(refused: bytes) -> int | None:
+    """The image count a provider's refusal allows: its stated limit, 0 when it takes no image, None when the
+    refusal is not about images."""
+    m = _IMAGES_LIMIT_RE.search(refused or b"")
+    if m:
+        return int(m.group(1))
+    return 0 if _IMAGES_NONE_RE.search(refused or b"") else None
+
+
+def _fit_images(body: bytes, cap: int) -> bytes:
+    """The request with at most `cap` image parts, the most recent kept; each earlier one becomes a text part of
+    the same shape (Responses input_text, chat and Messages text). Any shape: the parts are found wherever they
+    sit (a message's content, a tool result's output). Returned byte for byte when nothing is over the cap."""
+    if not body or (b"image" not in body):
+        return body
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    found: list[tuple[list, int]] = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for i, v in enumerate(x):
+                if _is_image_part(v):
+                    found.append((x, i))
+                else:
+                    walk(v)
+
+    walk(doc)
+    over = len(found) - max(cap, 0)
+    if over <= 0:
+        return body
+    for parent, i in found[:over]:
+        parent[i] = {"type": _IMAGE_PARTS[parent[i]["type"]], "text": _IMAGE_TEXT_ONLY if cap <= 0 else _IMAGE_NOT_SENT}
+    return json.dumps(doc).encode()
+
+
+def _image_count(body: bytes) -> int:
+    """How many image parts the request carries (0 for a body that is not JSON)."""
+    if not body or b"image" not in body:
+        return 0
+    try:
+        doc = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return 0
+    n = 0
+
+    def walk(x):
+        nonlocal n
+        if _is_image_part(x):
+            n += 1
+        elif isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(doc)
+    return n
+
+
 def _set_reasoning_effort_none(body: bytes) -> bytes:
     """Set `reasoning_effort: "none"` in one chat-completions body.
 
@@ -5899,6 +6003,15 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             if fixed != body:
                 body = fixed
                 headers["content-length"] = str(len(body))
+        # The conversation's images, as many as this model takes (_IMAGE_PARTS): known limits now, a
+        # refused count learned below. Before the level, so the body kept without it is fitted too.
+        image_route = ((urllib.parse.urlsplit(base).hostname or "").lower(), str(_body_model))
+        image_cap = _image_cap(str(_body_model), image_route) if body is not None else None
+        if image_cap is not None:
+            fitted = _fit_images(body, image_cap)
+            if fitted is not body:
+                body = fitted
+                headers["content-length"] = str(len(body))
         # The thinking level the turn asked for, written the way this route and this model take it
         # (runner/reasoning.py). Last of the body's changes, so it is what the provider reads. A
         # turn that asked for none never reaches here: its body leaves as the client wrote it.
@@ -5944,6 +6057,18 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     headers["content-length"] = str(len(body))
                     continue
                 effort_back = False
+                # A refusal of the conversation's images (none taken, or more than the model's limit):
+                # learned for this route and sent once more with the images it takes. Any other
+                # refusal goes on to the repairs below.
+                sent_images = _image_count(body) if attempt < 2 and e.code in (400, 413, 422) else 0
+                allowed = _images_refused(data) if sent_images else None
+                if allowed is not None and allowed < sent_images:
+                    _IMAGES_CAP_SEEN[image_route] = min(allowed, _IMAGES_CAP_SEEN.get(image_route, allowed))
+                    body = _fit_images(body, allowed)
+                    headers["content-length"] = str(len(body))
+                    print(f"[relay] provider refused {sent_images} images for model={_body_model}; sent again "
+                          f"with at most {allowed}, and at most {allowed} from now on on this route", flush=True)
+                    continue
                 bare = (_without_chat_cache(body) if body is not None and flags.get("chat_cache")
                         and self.path.endswith("/chat/completions") else None)
                 if (attempt < 2 and e.code in (400, 422) and _cache_control_refused(data)
