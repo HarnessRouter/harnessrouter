@@ -8367,6 +8367,11 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    outside the workspace and never shown, 1 of 4 conversations, after
     #                                    answering "hi" with some 40 tool calls (OpenRouter, 0.37.1 on the
     #                                    test instance): what took it off dcode and fast-agent.
+    #                 grok-4.20          asked to restyle a deck another model had made in the same
+    #                                    conversation (gpt-6.1-sol), said it had and made no tool call, on
+    #                                    the hosted service (2026-10-27). Off there and here alike (Richard:
+    #                                    "Hide those two pairs"), though the same two turns on the test
+    #                                    instance's route (Vercel, 0.37.7) made the change, 2 of 2.
     #   fast-agent    grok-4.5           answered DONE with no tool call, tools declared and history intact:
     #                                    the matrix (Vercel) and 3 of 4 in sequence.
     #                 llama-3.3-70b      answered the recycle check DONE, not its first word (OpenRouter).
@@ -8388,6 +8393,12 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    instructions say is never shown (no file reached the console), 1 of 4
     #                                    conversations; another ran about 150 shell commands for the same
     #                                    file (OpenRouter, 0.37.1 on the test instance): what took it off dcode.
+    #                 gemini-4-argon     after another model's turn (gpt-6.1-sol, claude-haiku-4.5) whose
+    #                                    history holds an image attach_media added, on Google's own API: one
+    #                                    tool call and then an empty answer, or a promise and no tool call,
+    #                                    twice each (hosted, 2026-10-27). argon after argon, and the same
+    #                                    conversation without the image, pass, as does Vercel's route. Off
+    #                                    here as on the hosted service (Richard: "Hide those two pairs").
     #   dcode         grok-4.5           wrote its write_file call as JSON text, 1 of 4 in sequence.
     #                 kimi-k2.7-code     answered the artifact turn DONE with no tool call (Vercel).
     #                 hunyuan-4-preview  a follow-up streamed until Vercel ended it, about 13 minutes
@@ -8409,9 +8420,9 @@ _NOT_OFFERED: dict[str, frozenset[str]] = {
     #                                    rerun put its .pptx there (OpenRouter, 0.37.1 on the test instance).
     "vibe": frozenset({"gpt-5.6-luna", "llama-3.3-70b", "deepseek-v4.1-flash", "claude-opus-4.7"}),
     "docker-agent": frozenset({"grok-build-0.1", "grok-4.5", "claude-opus-4.7", "llama-3.3-70b",
-                               "nemotron-3.5-lightning"}),
+                               "nemotron-3.5-lightning", "grok-4.20"}),
     "fast-agent": frozenset({"grok-4.5", "llama-3.3-70b", "kimi-k2.7-code", "hunyuan-4-preview", "qwen3.8-27b",
-                             "qwen3.8-max", "nemotron-3-super", "nemotron-3.5-lightning"}),
+                             "qwen3.8-max", "nemotron-3-super", "nemotron-3.5-lightning", "gemini-4-argon"}),
     "dcode": frozenset({"grok-4.5", "kimi-k2.7-code", "hunyuan-4-preview", "muse-glimmer-30b", "muse-spark-1.1",
                         "llama-3.3-70b", "nemotron-3.5-lightning"}),
 }
