@@ -7260,6 +7260,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
         "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
         "step-3.7-flash":     "stepfun/step-3.7-flash",
+        "minimax-m3.1-flash": "minimax/minimax-m3.1-flash",
         "minimax-m3":         "minimax/minimax-m3",
         "nemotron-3-ultra":   "nvidia/nemotron-3-ultra-550b-a55b",
         "hunyuan-3":          "tencent/hy3",
@@ -7654,7 +7655,7 @@ _MODEL_ORDER: tuple[str, ...] = (
     # Tencent
     "hunyuan-4-preview", "hunyuan-3",
     # MiniMax
-    "minimax-m3",
+    "minimax-m3.1-flash", "minimax-m3",
     # NVIDIA
     "nemotron-3.5-lightning", "nemotron-3-ultra", "nemotron-3-super",
     # inclusionAI
@@ -7949,9 +7950,12 @@ _MODEL_CATALOG: dict[str, dict] = {
     # Every other id is OFFERED SO THE MATRIX CAN MEASURE IT HERE (the pi precedent): it rides the
     # same relay path kimi's column measured, but no minimax column has run yet.
     # minimax-m3 is not on TokenRouter (_TOKENROUTER_NO_CHANNEL); Vercel and OpenRouter serve it.
+    # minimax-m3.1-flash (MiniMax, 2026-10-19; minimax/minimax-m3.1-flash on OpenRouter's, Vercel's and
+    # TokenRouter's lists, 2026-10-28) is offered on this base only, where it passed the five matrix scenarios
+    # and a deck conversation that switches to it from minimax-m3 on each of the three.
     "minimax": {"default": "minimax-m3",
                 "models": [
-                    "minimax-m3",
+                    "minimax-m3.1-flash", "minimax-m3",
                     "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                     "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                     "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",
