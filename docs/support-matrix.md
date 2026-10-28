@@ -715,7 +715,7 @@ Not run in this column, 3 pairs the provider serves that the harness did not run
 
 9 pairs, 43 of 44 scenario runs passed.
 
-Not run in this column, 59 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 60 pairs the provider serves that the harness did not run, with the reason:
 
 - codex x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -760,6 +760,7 @@ Not run in this column, 59 pairs the provider serves that the harness did not ru
 - codex x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x mistral-medium-3.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x muse-glimmer-30b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -793,7 +794,7 @@ Not run in this column, 59 pairs the provider serves that the harness did not ru
 
 9 pairs, 44 of 44 scenario runs passed.
 
-Not run in this column, 39 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 40 pairs the provider serves that the harness did not run, with the reason:
 
 - codex x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -826,6 +827,7 @@ Not run in this column, 39 pairs the provider serves that the harness did not ru
 - codex x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x mistral-medium-3.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -851,7 +853,7 @@ Not run in this column, 39 pairs the provider serves that the harness did not ru
 
 9 pairs, 43 of 44 scenario runs passed.
 
-Not run in this column, 54 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 55 pairs the provider serves that the harness did not run, with the reason:
 
 - codex x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -892,6 +894,7 @@ Not run in this column, 54 pairs the provider serves that the harness did not ru
 - codex x kimi-k3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x mistral-medium-3.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x muse-glimmer-30b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -1075,7 +1078,7 @@ Not run in this column, 3 pairs the provider serves that the harness did not run
 
 53 pairs, 264 of 264 scenario runs passed.
 
-Not run in this column, 15 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 16 pairs the provider serves that the harness did not run, with the reason:
 
 - dsh x claude-haiku-5.5: not run, not run in this column
 - dsh x claude-opus-5.5: not run, not run in this column
@@ -1089,6 +1092,7 @@ Not run in this column, 15 pairs the provider serves that the harness did not ru
 - dsh x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x muse-wonder-1.0: not run, not run in this column
 - dsh x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -1145,13 +1149,14 @@ Not run in this column, 15 pairs the provider serves that the harness did not ru
 
 45 pairs, 224 of 224 scenario runs passed.
 
-Not run in this column, 5 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 6 pairs the provider serves that the harness did not run, with the reason:
 
 - dsh x claude-opus-5.5: not run, not run in this column
 - dsh x claude-sonnet-5.5: not run, not run in this column
 - dsh x gpt-6-luna: not run, not run in this column
 - dsh x gpt-6-sol: not run, not run in this column
 - dsh x gpt-6.1-sol: not run, not run in this column
+- dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
 ## Provider: dsh-vercel
 
@@ -1215,7 +1220,7 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 
 55 pairs, 262 of 266 scenario runs passed.
 
-Not run in this column, 13 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 14 pairs the provider serves that the harness did not run, with the reason:
 
 - dsh x claude-haiku-5.5: not run, not run in this column
 - dsh x claude-opus-5.5: not run, not run in this column
@@ -1227,6 +1232,7 @@ Not run in this column, 13 pairs the provider serves that the harness did not ru
 - dsh x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x muse-wonder-1.0: not run, not run in this column
 - dsh x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -1364,7 +1370,7 @@ Not run in this column, 7 pairs the provider serves that the harness did not run
 
 47 pairs, 235 of 235 scenario runs passed.
 
-Not run in this column, 361 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 367 pairs the provider serves that the harness did not run, with the reason:
 
 - cline x claude-fable-5: not run, not run in this column
 - cline x claude-fable-5-1: not run, not run in this column
@@ -1411,6 +1417,7 @@ Not run in this column, 361 pairs the provider serves that the harness did not r
 - cline x llama-3.3-70b: not run, not run in this column
 - cline x llama-4-maverick: not run, not run in this column
 - cline x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- cline x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x mistral-medium-3.5: not run, not run in this column
 - cline x muse-glimmer-30b: not run, not run in this column
 - cline x muse-spark-1.1: not run, not run in this column
@@ -1471,6 +1478,7 @@ Not run in this column, 361 pairs the provider serves that the harness did not r
 - dsh x llama-3.3-70b: not run, not run in this column
 - dsh x llama-4-maverick: not run, not run in this column
 - dsh x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x mistral-medium-3.5: not run, not run in this column
 - dsh x muse-glimmer-30b: not run, not run in this column
 - dsh x muse-spark-1.1: not run, not run in this column
@@ -1531,6 +1539,7 @@ Not run in this column, 361 pairs the provider serves that the harness did not r
 - hermes x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x llama-4-maverick: not run, not run in this column
 - hermes x minimax-m3: not run, not run in this column
+- hermes x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x mistral-medium-3.5: not run, not run in this column
 - hermes x muse-glimmer-30b: not run, not run in this column
 - hermes x muse-spark-1.1: not run, not run in this column
@@ -1591,6 +1600,7 @@ Not run in this column, 361 pairs the provider serves that the harness did not r
 - opencode x llama-3.3-70b: not run, not run in this column
 - opencode x llama-4-maverick: not run, not run in this column
 - opencode x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opencode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x mistral-medium-3.5: not run, not run in this column
 - opencode x muse-glimmer-30b: not run, not run in this column
 - opencode x muse-spark-1.1: not run, not run in this column
@@ -1651,6 +1661,7 @@ Not run in this column, 361 pairs the provider serves that the harness did not r
 - pi x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x llama-4-maverick: not run, not run in this column
 - pi x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- pi x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x mistral-medium-3.5: not run, not run in this column
 - pi x muse-glimmer-30b: not run, not run in this column
 - pi x muse-spark-1.1: not run, not run in this column
@@ -1711,6 +1722,7 @@ Not run in this column, 361 pairs the provider serves that the harness did not r
 - qwen x llama-3.3-70b: not run, not run in this column
 - qwen x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- qwen x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x mistral-medium-3.5: not run, not run in this column
 - qwen x muse-glimmer-30b: not run, not run in this column
 - qwen x muse-spark-1.1: not run, not run in this column
@@ -1776,7 +1788,7 @@ Not run in this column, 361 pairs the provider serves that the harness did not r
 
 41 pairs, 205 of 205 scenario runs passed.
 
-Not run in this column, 247 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 253 pairs the provider serves that the harness did not run, with the reason:
 
 - cline x claude-fable-5: not run, not run in this column
 - cline x claude-fable-5-1: not run, not run in this column
@@ -1812,6 +1824,7 @@ Not run in this column, 247 pairs the provider serves that the harness did not r
 - cline x grok-build-0.1: not run, not run in this column
 - cline x hunyuan-4-preview: not run, not run in this column
 - cline x kimi-k2.7-code: not run, not run in this column
+- cline x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x mistral-medium-3.5: not run, not run in this column
 - cline x nemotron-3-super: not run, not run in this column
 - cline x nemotron-3.5-lightning: not run, not run in this column
@@ -1853,6 +1866,7 @@ Not run in this column, 247 pairs the provider serves that the harness did not r
 - dsh x grok-build-0.1: not run, not run in this column
 - dsh x hunyuan-4-preview: not run, not run in this column
 - dsh x kimi-k2.7-code: not run, not run in this column
+- dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x mistral-medium-3.5: not run, not run in this column
 - dsh x nemotron-3-super: not run, not run in this column
 - dsh x nemotron-3.5-lightning: not run, not run in this column
@@ -1894,6 +1908,7 @@ Not run in this column, 247 pairs the provider serves that the harness did not r
 - hermes x grok-build-0.1: not run, not run in this column
 - hermes x hunyuan-4-preview: not run, not run in this column
 - hermes x kimi-k2.7-code: not run, not run in this column
+- hermes x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x mistral-medium-3.5: not run, not run in this column
 - hermes x nemotron-3-super: not run, not run in this column
 - hermes x nemotron-3.5-lightning: not run, not run in this column
@@ -1935,6 +1950,7 @@ Not run in this column, 247 pairs the provider serves that the harness did not r
 - opencode x grok-build-0.1: not run, not run in this column
 - opencode x hunyuan-4-preview: not run, not run in this column
 - opencode x kimi-k2.7-code: not run, not run in this column
+- opencode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x mistral-medium-3.5: not run, not run in this column
 - opencode x nemotron-3-super: not run, not run in this column
 - opencode x nemotron-3.5-lightning: not run, not run in this column
@@ -1976,6 +1992,7 @@ Not run in this column, 247 pairs the provider serves that the harness did not r
 - pi x grok-build-0.1: not run, not run in this column
 - pi x hunyuan-4-preview: not run, not run in this column
 - pi x kimi-k2.7-code: not run, not run in this column
+- pi x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x mistral-medium-3.5: not run, not run in this column
 - pi x nemotron-3-super: not run, not run in this column
 - pi x nemotron-3.5-lightning: not run, not run in this column
@@ -2017,6 +2034,7 @@ Not run in this column, 247 pairs the provider serves that the harness did not r
 - qwen x grok-build-0.1: not run, not run in this column
 - qwen x hunyuan-4-preview: not run, not run in this column
 - qwen x kimi-k2.7-code: not run, not run in this column
+- qwen x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x mistral-medium-3.5: not run, not run in this column
 - qwen x nemotron-3-super: not run, not run in this column
 - qwen x nemotron-3.5-lightning: not run, not run in this column
@@ -2080,7 +2098,7 @@ Not run in this column, 247 pairs the provider serves that the harness did not r
 
 47 pairs, 234 of 235 scenario runs passed.
 
-Not run in this column, 331 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 337 pairs the provider serves that the harness did not run, with the reason:
 
 - cline x claude-fable-5: not run, not run in this column
 - cline x claude-fable-5-1: not run, not run in this column
@@ -2123,6 +2141,7 @@ Not run in this column, 331 pairs the provider serves that the harness did not r
 - cline x kimi-k3: not run, not run in this column
 - cline x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- cline x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x mistral-medium-3.5: not run, not run in this column
 - cline x muse-glimmer-30b: not run, not run in this column
 - cline x muse-spark-1.1: not run, not run in this column
@@ -2178,6 +2197,7 @@ Not run in this column, 331 pairs the provider serves that the harness did not r
 - dsh x kimi-k3: not run, not run in this column
 - dsh x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x mistral-medium-3.5: not run, not run in this column
 - dsh x muse-glimmer-30b: not run, not run in this column
 - dsh x muse-spark-1.1: not run, not run in this column
@@ -2233,6 +2253,7 @@ Not run in this column, 331 pairs the provider serves that the harness did not r
 - hermes x kimi-k3: not run, not run in this column
 - hermes x ling-3.0-flash: not run, not run in this column
 - hermes x minimax-m3: not run, not run in this column
+- hermes x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x mistral-medium-3.5: not run, not run in this column
 - hermes x muse-glimmer-30b: not run, not run in this column
 - hermes x muse-spark-1.1: not run, not run in this column
@@ -2288,6 +2309,7 @@ Not run in this column, 331 pairs the provider serves that the harness did not r
 - opencode x kimi-k3: not run, not run in this column
 - opencode x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opencode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x mistral-medium-3.5: not run, not run in this column
 - opencode x muse-glimmer-30b: not run, not run in this column
 - opencode x muse-spark-1.1: not run, not run in this column
@@ -2343,6 +2365,7 @@ Not run in this column, 331 pairs the provider serves that the harness did not r
 - pi x kimi-k3: not run, not run in this column
 - pi x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- pi x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x mistral-medium-3.5: not run, not run in this column
 - pi x muse-glimmer-30b: not run, not run in this column
 - pi x muse-spark-1.1: not run, not run in this column
@@ -2398,6 +2421,7 @@ Not run in this column, 331 pairs the provider serves that the harness did not r
 - qwen x kimi-k3: not run, not run in this column
 - qwen x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- qwen x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x mistral-medium-3.5: not run, not run in this column
 - qwen x muse-glimmer-30b: not run, not run in this column
 - qwen x muse-spark-1.1: not run, not run in this column
@@ -2570,7 +2594,7 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 
 31 pairs, 155 of 155 scenario runs passed.
 
-Not run in this column, 19 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 20 pairs the provider serves that the harness did not run, with the reason:
 
 - goose x claude-opus-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x claude-opus-5.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -2587,6 +2611,7 @@ Not run in this column, 19 pairs the provider serves that the harness did not ru
 - goose x grok-4.6: not run, not run in this column
 - goose x grok-build-0.1: not run, not run in this column
 - goose x hunyuan-4-preview: not run, not run in this column
+- goose x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x nemotron-3-super: not run, not run in this column
 - goose x nemotron-3.5-lightning: not run, not run in this column
 - goose x qwen3.7-plus: not run, not run in this column
@@ -2676,7 +2701,7 @@ Not run in this column, 5 pairs the provider serves that the harness did not run
 
 55 pairs, 274 of 275 scenario runs passed.
 
-Not run in this column, 13 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 14 pairs the provider serves that the harness did not run, with the reason:
 
 - goose x claude-haiku-5.5: not run, not run in this column
 - goose x claude-opus-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -2690,6 +2715,7 @@ Not run in this column, 13 pairs the provider serves that the harness did not ru
 - goose x gpt-6.1-sol: not run, not run in this column
 - goose x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- goose x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x muse-wonder-1.0: not run, not run in this column
 
 ## Provider: goose-tokenrouter
@@ -2741,7 +2767,7 @@ Not run in this column, 13 pairs the provider serves that the harness did not ru
 
 42 pairs, 209 of 210 scenario runs passed.
 
-Not run in this column, 8 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 9 pairs the provider serves that the harness did not run, with the reason:
 
 - goose x claude-opus-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x claude-opus-5.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -2751,6 +2777,7 @@ Not run in this column, 8 pairs the provider serves that the harness did not run
 - goose x gpt-6-luna: not run, not run in this column
 - goose x gpt-6-sol: not run, not run in this column
 - goose x gpt-6.1-sol: not run, not run in this column
+- goose x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
 ## Provider: goose-vercel
 
@@ -2822,7 +2849,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 
 - goose x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
-Not run in this column, 11 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 12 pairs the provider serves that the harness did not run, with the reason:
 
 - goose x claude-haiku-5.5: not run, not run in this column
 - goose x claude-opus-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -2834,6 +2861,7 @@ Not run in this column, 11 pairs the provider serves that the harness did not ru
 - goose x gpt-6-luna: not run, not run in this column
 - goose x gpt-6-sol: not run, not run in this column
 - goose x gpt-6.1-sol: not run, not run in this column
+- goose x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x muse-wonder-1.0: not run, not run in this column
 
 ## Provider: grok-default
@@ -3149,7 +3177,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - vibe x claude-sonnet-5: no prompt cache reads over 77462 input tokens (every call paid full price)
 - vibe x claude-sonnet-5.5: no prompt cache reads over 77545 input tokens (every call paid full price)
 
-Not run in this column, 35 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 39 pairs the provider serves that the harness did not run, with the reason:
 
 - dcode x gemini-3-flash-preview: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
 - dcode x gemini-3.1-pro-preview: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
@@ -3162,6 +3190,7 @@ Not run in this column, 35 pairs the provider serves that the harness did not ru
 - dcode x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dcode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
@@ -3170,6 +3199,7 @@ Not run in this column, 35 pairs the provider serves that the harness did not ru
 - docker-agent x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- docker-agent x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x gpt-5.3-codex: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - fast-agent x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
@@ -3177,6 +3207,7 @@ Not run in this column, 35 pairs the provider serves that the harness did not ru
 - fast-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- fast-agent x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x qwen3.8-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -3186,6 +3217,7 @@ Not run in this column, 35 pairs the provider serves that the harness did not ru
 - vibe x gpt-5.6-luna: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - vibe x gpt-6.1-sol: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
+- vibe x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
 ## Provider: hermes-azure-e2
 
@@ -3331,6 +3363,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 | minimax | kimi-k3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter, OpenRouter | cache 77% of input |
 | minimax | llama-3.3-70b | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | served as meta-llama/llama-3.3-70b-instruct (the provider's alias of the same model) ; retested once; first try: artifact the cards do not match the record: cards [model.txt,model.txt,hello-minimax.txt] ; cache 63% of input |
 | minimax | minimax-m3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway, OpenRouter | served as minimax/minimax-m3 (the provider's alias of the same model) ; cache 68% of input |
+| minimax | minimax-m3.1-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter, Vercel AI Gateway | cache 73% of input |
 | minimax | mistral-medium-3.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter, OpenRouter | served as mistralai/mistral-medium-3-5 (the provider's alias of the same model) ; cache 68% of input |
 | minimax | muse-glimmer-30b | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway, OpenRouter | served as meta/muse-glimmer-30b (the provider's alias of the same model) ; cache 50% of input |
 | minimax | muse-spark-1.1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway, OpenRouter | served as meta/muse-spark-1.1 (the provider's alias of the same model) ; cache 50% of input |
@@ -3345,7 +3378,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 | minimax | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter, OpenRouter | cache 66% of input |
 | minimax | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter, OpenRouter | served as stepfun/step-3.7-flash (the provider's alias of the same model) ; cache 65% of input |
 
-56 pairs, 273 of 275 scenario runs passed; 1 pairs served by another connection or as another model are findings, not counted.
+57 pairs, 278 of 280 scenario runs passed; 1 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -3504,7 +3537,7 @@ Not run in this column, 4 pairs the provider serves that the harness did not run
 
 52 pairs, 259 of 259 scenario runs passed.
 
-Not run in this column, 16 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 17 pairs the provider serves that the harness did not run, with the reason:
 
 - omp x claude-haiku-5.5: not run, not run in this column
 - omp x claude-opus-5.5: not run, not run in this column
@@ -3519,6 +3552,7 @@ Not run in this column, 16 pairs the provider serves that the harness did not ru
 - omp x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- omp x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x muse-wonder-1.0: not run, not run in this column
 - omp x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -3574,7 +3608,7 @@ Not run in this column, 16 pairs the provider serves that the harness did not ru
 
 44 pairs, 219 of 219 scenario runs passed.
 
-Not run in this column, 6 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 7 pairs the provider serves that the harness did not run, with the reason:
 
 - omp x claude-opus-5.5: not run, not run in this column
 - omp x claude-sonnet-5.5: not run, not run in this column
@@ -3582,6 +3616,7 @@ Not run in this column, 6 pairs the provider serves that the harness did not run
 - omp x gpt-6-luna: not run, not run in this column
 - omp x gpt-6-sol: not run, not run in this column
 - omp x gpt-6.1-sol: not run, not run in this column
+- omp x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
 ## Provider: omp-vercel
 
@@ -3649,7 +3684,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 
 - omp x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
-Not run in this column, 14 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 15 pairs the provider serves that the harness did not run, with the reason:
 
 - omp x claude-haiku-5.5: not run, not run in this column
 - omp x claude-opus-5.5: not run, not run in this column
@@ -3662,6 +3697,7 @@ Not run in this column, 14 pairs the provider serves that the harness did not ru
 - omp x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- omp x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x muse-wonder-1.0: not run, not run in this column
 - omp x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4164,6 +4200,7 @@ session_id: 20260913_060549_70cbeb |
 | kimi | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | OpenRouter | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | kimi | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 50% of input |
 | minimax | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
+| minimax | minimax-m3.1-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter, Vercel AI Gateway | cache 60% of input |
 | omp | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | OpenRouter | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
 | omp | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | OpenRouter | served as openai/gpt-6-astra (the provider's alias of the same model) |
 | omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter | served as openai/gpt-6-luna (the provider's alias of the same model) |
@@ -4373,7 +4410,7 @@ session_id: 20260913_060549_70cbeb |
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 53% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenRouter | cache 65% of input |
 
-489 pairs, 2404 of 2410 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
+490 pairs, 2409 of 2415 scenario runs passed; 7 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -4409,7 +4446,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - pi x claude-haiku-5.5: no prompt cache reads over 25529 input tokens (every call paid full price)
 - qwen x claude-haiku-5.5: no prompt cache reads over 570679 input tokens (every call paid full price)
 
-Not run in this column, 939 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 959 pairs the provider serves that the harness did not run, with the reason:
 
 - agentzero x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4462,6 +4499,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - agentzero x llama-3.3-70b: not run, not run in this column
 - agentzero x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- agentzero x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x mistral-medium-3.5: not run, not run in this column
 - agentzero x muse-glimmer-30b: not run, not run in this column
 - agentzero x muse-spark-1.1: not run, not run in this column
@@ -4526,6 +4564,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - aider x llama-3.3-70b: not run, not run in this column
 - aider x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - aider x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- aider x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - aider x mistral-medium-3.5: not run, not run in this column
 - aider x muse-glimmer-30b: not run, not run in this column
 - aider x muse-spark-1.1: not run, not run in this column
@@ -4590,6 +4629,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - cheetahclaws x llama-3.3-70b: not run, not run in this column
 - cheetahclaws x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cheetahclaws x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- cheetahclaws x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cheetahclaws x mistral-medium-3.5: not run, not run in this column
 - cheetahclaws x muse-glimmer-30b: not run, not run in this column
 - cheetahclaws x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4645,6 +4685,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - cline x kimi-k3: not run, not run in this column
 - cline x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- cline x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x mistral-medium-3.5: not run, not run in this column
 - cline x muse-wonder-1.0: not run, not run in this column
 - cline x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4700,6 +4741,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - codex x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x mistral-medium-3.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x muse-glimmer-30b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4728,6 +4770,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - dcode x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dcode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x muse-glimmer-30b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4746,6 +4789,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - docker-agent x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- docker-agent x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4774,6 +4818,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - dsh x llama-3.3-70b: not run, not run in this column
 - dsh x llama-4-maverick: not run, not run in this column
 - dsh x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x muse-glimmer-30b: not run, not run in this column
 - dsh x muse-spark-1.1: not run, not run in this column
 - dsh x muse-spark-1.2: not run, not run in this column
@@ -4799,6 +4844,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - fast-agent x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- fast-agent x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -4855,6 +4901,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - goose x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x llama-4-maverick: not run, not run in this column
 - goose x minimax-m3: not run, not run in this column
+- goose x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x mistral-medium-3.5: not run, not run in this column
 - goose x muse-glimmer-30b: not run, not run in this column
 - goose x muse-spark-1.1: not run, not run in this column
@@ -4922,6 +4969,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - grok x llama-3.3-70b: not run, not run in this column
 - grok x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - grok x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- grok x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - grok x mistral-medium-3.5: not run, not run in this column
 - grok x muse-glimmer-30b: not run, not run in this column
 - grok x muse-spark-1.1: not run, not run in this column
@@ -4951,6 +4999,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - hermes x gemini-4-argon: not run, not run in this column
 - hermes x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- hermes x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x muse-wonder-1.0: not run, not run in this column
 - kilo x claude-fable-5: not run, not run in this column
 - kilo x claude-fable-5-1: not run, not run in this column
@@ -5003,6 +5052,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - kilo x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kilo x llama-4-maverick: not run, not run in this column
 - kilo x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- kilo x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kilo x mistral-medium-3.5: not run, not run in this column
 - kilo x muse-glimmer-30b: not run, not run in this column
 - kilo x muse-spark-1.1: not run, not run in this column
@@ -5067,6 +5117,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - kimi x llama-3.3-70b: not run, not run in this column
 - kimi x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kimi x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- kimi x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kimi x mistral-medium-3.5: not run, not run in this column
 - kimi x muse-glimmer-30b: not run, not run in this column
 - kimi x muse-spark-1.1: not run, not run in this column
@@ -5197,6 +5248,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - omp x llama-3.3-70b: not run, not run in this column
 - omp x llama-4-maverick: not run, not run in this column
 - omp x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- omp x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x mistral-medium-3.5: not run, not run in this column
 - omp x muse-glimmer-30b: not run, not run in this column
 - omp x muse-spark-1.1: not run, not run in this column
@@ -5229,6 +5281,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - opencode x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opencode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x muse-wonder-1.0: not run, not run in this column
 - opencode x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5280,6 +5333,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - openhands x llama-3.3-70b: not run, not run in this column
 - openhands x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - openhands x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- openhands x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - openhands x mistral-medium-3.5: not run, not run in this column
 - openhands x muse-glimmer-30b: not run, not run in this column
 - openhands x muse-spark-1.1: not run, not run in this column
@@ -5312,6 +5366,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - pi x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- pi x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x muse-wonder-1.0: not run, not run in this column
 - pi x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5333,6 +5388,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - qwen x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- qwen x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x muse-wonder-1.0: not run, not run in this column
 - qwen x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5348,6 +5404,7 @@ Not run in this column, 939 pairs the provider serves that the harness did not r
 - vibe x llama-3.3-70b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x llama-4-maverick: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- vibe x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
@@ -5677,7 +5734,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - vibe x claude-sonnet-5: no prompt cache reads over 77995 input tokens (every call paid full price)
 - vibe x claude-sonnet-5.5: no prompt cache reads over 77418 input tokens (every call paid full price)
 
-Not run in this column, 596 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 614 pairs the provider serves that the harness did not run, with the reason:
 
 - aider x claude-fable-5: not run, not run in this column
 - aider x claude-fable-5-1: not run, not run in this column
@@ -5715,6 +5772,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - aider x grok-build-0.1: not run, not run in this column
 - aider x hunyuan-4-preview: not run, not run in this column
 - aider x kimi-k2.7-code: not run, not run in this column
+- aider x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - aider x mistral-medium-3.5: not run, not run in this column
 - aider x nemotron-3-super: not run, not run in this column
 - aider x nemotron-3.5-lightning: not run, not run in this column
@@ -5759,6 +5817,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - cheetahclaws x grok-build-0.1: not run, not run in this column
 - cheetahclaws x hunyuan-4-preview: not run, not run in this column
 - cheetahclaws x kimi-k2.7-code: not run, not run in this column
+- cheetahclaws x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cheetahclaws x mistral-medium-3.5: not run, not run in this column
 - cheetahclaws x nemotron-3-super: not run, not run in this column
 - cheetahclaws x nemotron-3.5-lightning: not run, not run in this column
@@ -5805,6 +5864,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - claude-code x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- claude-code x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x mistral-medium-3.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5840,6 +5900,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - cline x gpt-5.6-terra: not run, not run in this column
 - cline x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - cline x kimi-k2.7-code: not run, not run in this column
+- cline x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x mistral-medium-3.5: not run, not run in this column
 - cline x qwen3.7-max: not run, not run in this column
 - cline x qwen3.8-max: not run, not run in this column
@@ -5880,6 +5941,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - codex x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x mistral-medium-3.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5909,6 +5971,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - dcode x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dcode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x claude-fable-5-1: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
 - docker-agent x claude-opus-4.7: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -5918,6 +5981,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - docker-agent x grok-4.20: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x grok-build-0.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- docker-agent x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x claude-fable-5: not run, not run in this column
 - dsh x claude-fable-5-1: not run, not run in this column
@@ -5954,6 +6018,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - dsh x grok-build-0.1: not run, not run in this column
 - dsh x hunyuan-4-preview: not run, not run in this column
 - dsh x kimi-k2.7-code: not run, not run in this column
+- dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x mistral-medium-3.5: not run, not run in this column
 - dsh x nemotron-3-super: not run, not run in this column
 - dsh x nemotron-3.5-lightning: not run, not run in this column
@@ -5968,6 +6033,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - fast-agent x grok-4.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x hunyuan-4-preview: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- fast-agent x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3.5-lightning: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x qwen3.8-max: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -6009,6 +6075,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - goose x grok-build-0.1: not run, not run in this column
 - goose x hunyuan-4-preview: not run, not run in this column
 - goose x kimi-k2.7-code: not run, not run in this column
+- goose x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x mistral-medium-3.5: not run, not run in this column
 - goose x nemotron-3-super: not run, not run in this column
 - goose x nemotron-3.5-lightning: not run, not run in this column
@@ -6043,6 +6110,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - hermes x gpt-5.6-sol: not run, not run in this column
 - hermes x gpt-5.6-terra: not run, not run in this column
 - hermes x kimi-k2.7-code: not run, not run in this column
+- hermes x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x mistral-medium-3.5: not run, not run in this column
 - hermes x qwen3.7-max: not run, not run in this column
 - hermes x qwen3.8-max: not run, not run in this column
@@ -6083,6 +6151,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - kimi x grok-build-0.1: not run, not run in this column
 - kimi x hunyuan-4-preview: not run, not run in this column
 - kimi x kimi-k2.7-code: not run, not run in this column
+- kimi x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kimi x mistral-medium-3.5: not run, not run in this column
 - kimi x nemotron-3-super: not run, not run in this column
 - kimi x nemotron-3.5-lightning: not run, not run in this column
@@ -6126,6 +6195,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - omp x grok-build-0.1: not run, not run in this column
 - omp x hunyuan-4-preview: not run, not run in this column
 - omp x kimi-k2.7-code: not run, not run in this column
+- omp x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x mistral-medium-3.5: not run, not run in this column
 - omp x nemotron-3-super: not run, not run in this column
 - omp x nemotron-3.5-lightning: not run, not run in this column
@@ -6160,6 +6230,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - opencode x gpt-5.6-sol: not run, not run in this column
 - opencode x gpt-5.6-terra: not run, not run in this column
 - opencode x kimi-k2.7-code: not run, not run in this column
+- opencode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x mistral-medium-3.5: not run, not run in this column
 - opencode x qwen3.7-max: not run, not run in this column
 - opencode x qwen3.8-max: not run, not run in this column
@@ -6200,6 +6271,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - openhands x grok-build-0.1: not run, not run in this column
 - openhands x hunyuan-4-preview: not run, not run in this column
 - openhands x kimi-k2.7-code: not run, not run in this column
+- openhands x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - openhands x mistral-medium-3.5: not run, not run in this column
 - openhands x nemotron-3-super: not run, not run in this column
 - openhands x nemotron-3.5-lightning: not run, not run in this column
@@ -6234,6 +6306,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - pi x gpt-5.6-sol: not run, not run in this column
 - pi x gpt-5.6-terra: not run, not run in this column
 - pi x kimi-k2.7-code: not run, not run in this column
+- pi x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x mistral-medium-3.5: not run, not run in this column
 - pi x qwen3.7-max: not run, not run in this column
 - pi x qwen3.8-max: not run, not run in this column
@@ -6265,6 +6338,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - qwen x gpt-5.6-terra: not run, not run in this column
 - qwen x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - qwen x kimi-k2.7-code: not run, not run in this column
+- qwen x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x mistral-medium-3.5: not run, not run in this column
 - qwen x qwen3.7-max: not run, not run in this column
 - qwen x qwen3.8-max: not run, not run in this column
@@ -6275,6 +6349,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 - vibe x gpt-5.6-luna: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x gpt-6-astra: not run, the model answers on the Responses API only and this harness speaks chat/completions only
 - vibe x gpt-6.1-sol: not run, this provider's connection refuses the pair for this harness (the gateway's channel rules)
+- vibe x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
 ## Provider: vercel
 
@@ -6511,6 +6586,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 | kimi | gpt-6-sol | pass | pass | pass (gpt-6-luna) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-sol (the provider's alias of the same model) |
 | kimi | gpt-6.1-sol | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6.1-sol (the provider's alias of the same model) ; cache 50% of input |
 | minimax | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | no prompt cache reads (finding below) ; served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) |
+| minimax | minimax-m3.1-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 73% of input |
 | omp | claude-haiku-5.5 | pass | pass | pass (claude-haiku-4.5) | pass | pass | Vercel AI Gateway | served as anthropic/claude-haiku-5.5 (the provider's alias of the same model) ; cache 100% of input |
 | omp | gpt-6-astra | pass | pass | pass (gpt-6-sol) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-astra (the provider's alias of the same model) |
 | omp | gpt-6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway | served as openai/gpt-6-luna (the provider's alias of the same model) |
@@ -6648,7 +6724,7 @@ Not run in this column, 596 pairs the provider serves that the harness did not r
 | vibe | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 17% of input |
 | vibe | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Vercel AI Gateway | cache 32% of input |
 
-367 pairs, 1728 of 1746 scenario runs passed; 9 pairs served by another connection or as another model are findings, not counted.
+368 pairs, 1733 of 1751 scenario runs passed; 9 pairs served by another connection or as another model are findings, not counted.
 
 Findings, pairs served by a connection other than the one under test or as a model other than the id asked for:
 
@@ -6684,7 +6760,7 @@ Findings, pairs served by a connection other than the one under test or as a mod
 - qwen x claude-haiku-5.5: no prompt cache reads over 569929 input tokens (every call paid full price)
 - qwen x grok-4.1-fast: served as spacexai/grok-4.1-fast-reasoning (the CLI reports the model it ran)
 
-Not run in this column, 1044 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 1065 pairs the provider serves that the harness did not run, with the reason:
 
 - agentzero x claude-fable-5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x claude-fable-5-1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -6733,6 +6809,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - agentzero x kimi-k3: not run, not run in this column
 - agentzero x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- agentzero x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - agentzero x mistral-medium-3.5: not run, not run in this column
 - agentzero x muse-glimmer-30b: not run, not run in this column
 - agentzero x muse-spark-1.1: not run, not run in this column
@@ -6792,6 +6869,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - aider x kimi-k3: not run, not run in this column
 - aider x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - aider x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- aider x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - aider x mistral-medium-3.5: not run, not run in this column
 - aider x muse-glimmer-30b: not run, not run in this column
 - aider x muse-spark-1.1: not run, not run in this column
@@ -6851,6 +6929,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - cheetahclaws x kimi-k3: not run, not run in this column
 - cheetahclaws x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cheetahclaws x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- cheetahclaws x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cheetahclaws x mistral-medium-3.5: not run, not run in this column
 - cheetahclaws x muse-glimmer-30b: not run, not run in this column
 - cheetahclaws x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -6913,6 +6992,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - claude-code x kimi-k3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- claude-code x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x mistral-medium-3.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x muse-glimmer-30b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - claude-code x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -6965,6 +7045,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - cline x kimi-k3: not run, not run in this column
 - cline x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- cline x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - cline x mistral-medium-3.5: not run, not run in this column
 - cline x muse-wonder-1.0: not run, not run in this column
 - cline x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7016,6 +7097,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - codex x kimi-k3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- codex x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x mistral-medium-3.5: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x muse-glimmer-30b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - codex x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7039,6 +7121,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - dcode x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dcode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x muse-glimmer-30b: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x muse-spark-1.1: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dcode x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7052,6 +7135,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - docker-agent x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- docker-agent x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - docker-agent x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x claude-fable-5: not run, not run in this column
@@ -7097,6 +7181,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - dsh x kimi-k3: not run, not run in this column
 - dsh x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x mistral-medium-3.5: not run, not run in this column
 - dsh x muse-glimmer-30b: not run, not run in this column
 - dsh x muse-spark-1.1: not run, not run in this column
@@ -7121,6 +7206,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - fast-agent x kimi-k2.7-code: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- fast-agent x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3-super: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - fast-agent x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7172,6 +7258,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - goose x kimi-k3: not run, not run in this column
 - goose x ling-3.0-flash: not run, not run in this column
 - goose x minimax-m3: not run, not run in this column
+- goose x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - goose x mistral-medium-3.5: not run, not run in this column
 - goose x muse-glimmer-30b: not run, not run in this column
 - goose x muse-spark-1.1: not run, not run in this column
@@ -7234,6 +7321,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - grok x kimi-k3: not run, not run in this column
 - grok x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - grok x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- grok x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - grok x mistral-medium-3.5: not run, not run in this column
 - grok x muse-glimmer-30b: not run, not run in this column
 - grok x muse-spark-1.1: not run, not run in this column
@@ -7283,6 +7371,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - hermes x hunyuan-3: not run, not run in this column
 - hermes x kimi-k3: not run, not run in this column
 - hermes x minimax-m3: not run, not run in this column
+- hermes x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - hermes x mistral-medium-3.5: not run, not run in this column
 - hermes x muse-wonder-1.0: not run, not run in this column
 - hermes x nemotron-3-ultra: not run, not run in this column
@@ -7337,6 +7426,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - kilo x kimi-k3: not run, not run in this column
 - kilo x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kilo x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- kilo x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kilo x mistral-medium-3.5: not run, not run in this column
 - kilo x muse-glimmer-30b: not run, not run in this column
 - kilo x muse-spark-1.1: not run, not run in this column
@@ -7396,6 +7486,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - kimi x kimi-k3: not run, not run in this column
 - kimi x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kimi x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- kimi x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - kimi x mistral-medium-3.5: not run, not run in this column
 - kimi x muse-glimmer-30b: not run, not run in this column
 - kimi x muse-spark-1.1: not run, not run in this column
@@ -7516,6 +7607,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - omp x kimi-k3: not run, not run in this column
 - omp x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- omp x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - omp x mistral-medium-3.5: not run, not run in this column
 - omp x muse-glimmer-30b: not run, not run in this column
 - omp x muse-spark-1.1: not run, not run in this column
@@ -7567,6 +7659,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - opencode x kimi-k3: not run, not run in this column
 - opencode x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- opencode x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - opencode x mistral-medium-3.5: not run, not run in this column
 - opencode x muse-wonder-1.0: not run, not run in this column
 - opencode x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7618,6 +7711,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - openhands x kimi-k3: not run, not run in this column
 - openhands x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - openhands x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- openhands x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - openhands x mistral-medium-3.5: not run, not run in this column
 - openhands x muse-glimmer-30b: not run, not run in this column
 - openhands x muse-spark-1.1: not run, not run in this column
@@ -7669,6 +7763,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - pi x kimi-k3: not run, not run in this column
 - pi x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- pi x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - pi x mistral-medium-3.5: not run, not run in this column
 - pi x muse-wonder-1.0: not run, not run in this column
 - pi x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7713,6 +7808,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - qwen x kimi-k3: not run, not run in this column
 - qwen x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- qwen x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - qwen x mistral-medium-3.5: not run, not run in this column
 - qwen x muse-wonder-1.0: not run, not run in this column
 - qwen x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
@@ -7728,6 +7824,7 @@ Not run in this column, 1044 pairs the provider serves that the harness did not 
 - vibe x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
+- vibe x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - vibe x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 

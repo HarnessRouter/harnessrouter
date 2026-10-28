@@ -220376,5 +220376,277 @@
    "turns_with_usage": 5
   },
   "deleted": 200
+ },
+ "minimax-default|minimax|minimax-m3.1-flash": {
+  "provider": "minimax-default",
+  "harness": "minimax",
+  "model": "minimax-m3.1-flash",
+  "at": "2026-10-28T22:58:25.878Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.95,
+   "tail": "Reply with exactly: M1-minimax-m3.1-flash M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 11.9 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess343b3976812c476dbd29fb33f32c5ec7",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 12.5,
+   "tail": "Reply with exactly: M2-minimax-m3.1-flash M2-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 9.7 s",
+   "answer": "M2-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.1-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.34,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol MiniMax Code \u00b7 gpt-6.1-sol \u00b7 Done in 9.4 s",
+   "answer": "M3-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 38.28,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. I'll create that file now. Created a file, read a file +1 \u22120 DONE Created hello-minimax.txt containing HELLO. txt hello-minimax.txt TXT MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 15.7 s",
+   "answer": "I'll create that file now.\n\nDONE\n\nCreated [hello-minimax.txt](/data/workspaces/hsess343b3976812c476dbd29fb33f32c5ec7/hello-minimax.txt) containing `HELLO`.",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.85,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 8.0 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess343b3976812c476dbd29fb33f32c5ec7\",\"checkpoint_sha\":\"29f592e2bb3202cd071b5deca9351a1a3c3da33cd5b4d8131ee88ffe80e7a85c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:My TokenRouter",
+  "connections": [
+   "integration:My TokenRouter",
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "MiniMax-M3.1-Flash",
+   "openai/gpt-6.1-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18293,
+   "cache_read": 49706,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|minimax|minimax-m3.1-flash": {
+  "provider": "openrouter",
+  "harness": "minimax",
+  "model": "minimax-m3.1-flash",
+  "at": "2026-10-28T23:04:08.998Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.81,
+   "tail": "Reply with exactly: M1-minimax-m3.1-flash M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 7.2 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess50b99fa1247045b18c14fc6b4d99fb41",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.82,
+   "tail": "Reply with exactly: M2-minimax-m3.1-flash M2-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 6.0 s",
+   "answer": "M2-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.1-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.87,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol MiniMax Code \u00b7 gpt-6.1-sol \u00b7 Done in 6.9 s",
+   "answer": "M3-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.09,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. Thought Creating the file in the workspace now. Created a file, ran a command +1 \u22120 DONE File created and verified: hello-minimax.txt \u2014 contains HELLO followed by a trailing newline (6 bytes). txt hello-minimax.txt TXT MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 12.2 s",
+   "answer": "Creating the file in the workspace now.\n\nDONE\n\nFile created and verified: [hello-minimax.txt](/data/workspaces/hsess50b99fa1247045b18c14fc6b4d99fb41/hello-minimax.txt) \u2014 contains `HELLO` followed by a trailing newline (6 bytes).",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.78,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 7.2 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess50b99fa1247045b18c14fc6b4d99fb41\",\"checkpoint_sha\":\"05c7ebb15d1559acf23eb58cf72f28728cea72c0fdb6abd39f751d2bdc4599dd\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter",
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "minimax/minimax-m3.1-flash",
+   "openai/gpt-6.1-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 27133,
+   "cache_read": 41412,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|minimax|minimax-m3.1-flash": {
+  "provider": "vercel",
+  "harness": "minimax",
+  "model": "minimax-m3.1-flash",
+  "at": "2026-10-28T23:09:23.048Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.05,
+   "tail": "Reply with exactly: M1-minimax-m3.1-flash M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 10.5 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessdcb5ace7d3d1480c8e9c03835c7109fd",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.01,
+   "tail": "Reply with exactly: M2-minimax-m3.1-flash M2-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 8.5 s",
+   "answer": "M2-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.1-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.89,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol MiniMax Code \u00b7 gpt-6.1-sol \u00b7 Done in 8.0 s",
+   "answer": "M3-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 32.6,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. I'll create that file now. Created a file, read a file +1 \u22120 DONE Created hello-minimax.txt containing exactly HELLO (verified by reading it back \u2014 5 bytes, no trailing newline). txt hello-minimax.txt TXT MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 12.5 s",
+   "answer": "I'll create that file now.\n\nDONE\n\nCreated [hello-minimax.txt](/data/workspaces/hsessdcb5ace7d3d1480c8e9c03835c7109fd/hello-minimax.txt) containing exactly `HELLO` (verified by reading it back \u2014 5 bytes, no trailing newline).",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.93,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 8.1 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessdcb5ace7d3d1480c8e9c03835c7109fd\",\"checkpoint_sha\":\"2280e5fa28571d0f3adc95dca444d6e96061903f4836ed02ec027297116c556a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "minimax/minimax-m3.1-flash",
+   "openai/gpt-6.1-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18381,
+   "cache_read": 49182,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
  }
 }

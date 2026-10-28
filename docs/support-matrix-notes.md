@@ -5424,3 +5424,21 @@ matrix's five scenarios do not reach (2026-10-27):
 Both pairs are off the hosted service, and off here alike (`_NOT_OFFERED`, the console's lists, and their rows
 in support-matrix-results.json), on Richard's word: "Hide those two pairs". fast-agent keeps the Gemini family
 and docker-agent the rest of grok's.
+
+### minimax-m3.1-flash on MiniMax Code (0.37.9)
+
+MiniMax M3.1 Flash is listed by OpenRouter, Vercel and TokenRouter as `minimax/minimax-m3.1-flash` (read
+2026-10-28), so it is one catalog id, `minimax-m3.1-flash`, in the shared slug table. It is offered on the
+minimax base only. Measured on the 0.37.9 release candidate on hr-test, with the instance's model routes set
+to each aggregator in turn and put back after:
+
+- **Five scenarios** on each of TokenRouter (the instance's own routing, the `minimax-default` column),
+  OpenRouter and Vercel: first, follow-up, switch to gpt-6.1-sol, artifact and recycle all pass, served as
+  `minimax-m3.1-flash` (TokenRouter names it `MiniMax-M3.1-Flash`).
+- **A deck conversation** on each: minimax-m3 builds `deck.pptx`, then minimax-m3.1-flash makes it red and
+  then makes the title bold at 40 pt, 3 of 3 turns completed on each aggregator. Each deck was read back:
+  the slide's colour is red and its title bold at 40 pt.
+
+TokenRouter also lists `MiniMax-M3`, its name for minimax-m3, which this table still records as having no
+TokenRouter channel. Opening it changes what four bases (hermes, kimi, minimax, goose) are offered on
+TokenRouter, so it waits for those columns to be measured.
