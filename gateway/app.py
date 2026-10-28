@@ -7260,6 +7260,8 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
         "kimi-k2.7-code":     "moonshotai/kimi-k2.7-code",
         "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
         "step-3.7-flash":     "stepfun/step-3.7-flash",
+        "MiniMax-M3.1-Flash": "minimax/minimax-m3.1-flash",
+        "MiniMax-M3":         "minimax/minimax-m3",
         "minimax-m3":         "minimax/minimax-m3",
         "nemotron-3-ultra":   "nvidia/nemotron-3-ultra-550b-a55b",
         "hunyuan-3":          "tencent/hy3",
@@ -7421,7 +7423,7 @@ _VENDOR_MODELS: dict[str, dict[str, str]] = {
 # defect, not an availability one, so it is recorded here rather than as a missing channel.
 # Re-test with a newer hermes before adding it back.
 _TOKENROUTER_NO_CHANNEL = {
-    "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
+    "MiniMax-M3.1-Flash", "MiniMax-M3", "minimax-m3", "nemotron-3-ultra", "hunyuan-3", "ling-3.0-flash", "qwen3.7-flash",
     "qwen3.8-27b",   # not on TokenRouter's /v1/models (2026-09-12)
     "claude-haiku-5.5",   # not on TokenRouter's /v1/models (2026-10-07): the vendor, OpenRouter and Vercel serve it
     # No Meta id is on TokenRouter's list (2026-09-13).
@@ -7654,7 +7656,7 @@ _MODEL_ORDER: tuple[str, ...] = (
     # Tencent
     "hunyuan-4-preview", "hunyuan-3",
     # MiniMax
-    "minimax-m3",
+    "MiniMax-M3.1-Flash", "MiniMax-M3", "minimax-m3",
     # NVIDIA
     "nemotron-3.5-lightning", "nemotron-3-ultra", "nemotron-3-super",
     # inclusionAI
@@ -7951,7 +7953,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # minimax-m3 is not on TokenRouter (_TOKENROUTER_NO_CHANNEL); Vercel and OpenRouter serve it.
     "minimax": {"default": "minimax-m3",
                 "models": [
-                    "minimax-m3",
+                    "MiniMax-M3.1-Flash", "MiniMax-M3", "minimax-m3",
                     "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
                     "gpt-5.4-mini", "gpt-5.2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5.5", "claude-opus-5",
                     "claude-sonnet-5.5", "claude-sonnet-5", "claude-opus-4.8", "claude-opus-4.7", "claude-sonnet-4.6",

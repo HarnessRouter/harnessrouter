@@ -45,6 +45,10 @@ def test_the_default_is_minimax_s_own_model_and_agrees_with_the_runner():
     assert "minimax-m3" in cat["models"]
 
 
+def test_minimax_offers_current_provider_model_ids():
+    assert {"MiniMax-M3.1-Flash", "MiniMax-M3"} <= set(A._MODEL_CATALOG["minimax"]["models"])
+
+
 def test_minimax_is_wired_like_kimi_and_speaks_the_custom_openai_format():
     kimi = {k[0]: v for k, v in A._INTEGRATION_WIRING.items() if k[1] == "kimi"}
     mm = {k[0]: v for k, v in A._INTEGRATION_WIRING.items() if k[1] == "minimax"}
