@@ -1407,7 +1407,7 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # dsh (DeepSeek Harness) is multi-family via dsh-llm-pi-ai — pi's unified LLM library as
     # a Cordis plugin — so its wiring mirrors pi's: 'deepseek' on the runner is the launch
     # adapter for the deepseek family, 'tokenrouter' again means "OpenAI/Anthropic-compatible,
-    # api picked by model family" at the driver's relay. A first-party DeepSeek Platform
+    # api picked by model family" at the runner's relay. A first-party DeepSeek Platform
     # integration is still NOT listed: nobody here holds a platform key; unprobed is unlisted.
     ("anthropic", "dsh"): "anthropic",         ("openai", "dsh"): "openai",
     ("azure-foundry", "dsh"): "azure",

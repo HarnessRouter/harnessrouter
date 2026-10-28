@@ -24,7 +24,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 os.environ.setdefault("HR_BACKING", "local")
 from server import (_hermes_relay_route, _rewrite_stream_line,  # noqa: E402
-                    _tool_call_index_line)
+                    _rewrites_stream_lines, _tool_call_index_line)
 
 # The line as Google really sends it, fields and order kept.
 GOOGLE = (b'data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"extra_content":'
@@ -137,7 +137,11 @@ def test_every_rewrite_flag_is_named_in_the_gate_THAT_FORWARDS_THE_REWRITE():
     lines instead of the raw read, and that decision is its own expression. `tool_index_fill` was
     added to the rewriter, this file's other nine tests passed, and the Google column failed again
     with the identical error — because the gate still named only the two older flags, so the bytes
-    went through untouched. Any flag the rewriter reads must be named there too.
+    went through untouched. Any flag the rewriter reads must turn the gate on too.
+
+    The gate is one function now, _rewrites_stream_lines, shared by the streaming loop and the
+    stream's last line (#382), so the expression is checked to be that function and the function is
+    asked about each flag, rather than the expression's text searched for the flag's name.
     """
     import re
     src = (pathlib.Path(__file__).resolve().parents[1] / "server.py").read_text()
@@ -145,5 +149,8 @@ def test_every_rewrite_flag_is_named_in_the_gate_THAT_FORWARDS_THE_REWRITE():
     read = set(re.findall(r'flags\.get\("([a-z_]+)"\)', rewriter))
     assert read, "the rewriter reads no flags; this test is looking at the wrong function"
     gate = src.split("out_lines = [] if", 1)[1].split("else None", 1)[0]
-    missing = sorted(f for f in read if f'"{f}"' not in gate)
+    assert gate.strip() == "_rewrites_stream_lines(flags)", gate
+    tail = src.split("tail_bytes = _rewrite_stream_line(", 1)[0].rsplit("\n", 2)[-2]
+    assert "_rewrites_stream_lines(flags)" in tail, tail   # the last line goes through the same gate
+    missing = sorted(f for f in read if not _rewrites_stream_lines({f: True}))
     assert not missing, f"the rewriter acts on {missing}, which the gate never turns on"
