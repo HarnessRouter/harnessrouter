@@ -1,7 +1,7 @@
 'use client';
 // The setup page's shared pieces (docs/uxuidesign/console-91, agentHead / towerHtml / sideTog): the
-// one bar on top (back, name, what it runs, Tasks · Settings, the setup's actions) and the Agent
-// stack column beside the work, its 56 px head on the same line as every other column's.
+// one bar on top (back, name, what it runs, the setup's actions, Tasks · Settings at its right end) and
+// the Agent stack column beside the work, its 56 px head on the same line as every other column's.
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { isoSvg, LAYERS, PARTS, SUBS, type Drops } from '../tower';
@@ -19,6 +19,10 @@ import { DeployCloud } from './DeployCloud';
 export type SetupTab = 'tasks' | 'settings';
 const SETUP_TABS: readonly SetupTab[] = ['tasks', 'settings'];
 
+// the tabs' icons (the hosted console's setup page redesign): Tasks a list, Settings a gear
+const TAB_SVG = { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const;
+const TASKS_IC = <svg {...TAB_SVG}><path d="M9 6h11M9 12h11M9 18h11" /><path d="M4 6h.01M4 12h.01M4 18h.01" /></svg>;
+const SETTINGS_IC = <svg {...TAB_SVG}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>;
 // the bar's action as an icon, on a phone: Connect your app (a plug)
 const PLUG_IC = <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z" /></svg>;
 /** The design's BACK_IC: a chevron pointing left (the bar's back, a task's back on a phone). */
@@ -35,10 +39,11 @@ export function HealthPill({ r }: { r: SetupRow }) {
   return <span className="pill neutral" title={tip}>Idle</span>;
 }
 
-/** The setup page's one bar (agentHead): back to Harness Studio; the name on the first line, its
- *  agent harness and model on the second (the Harness ID is the first row of Settings › Agent
- *  harness); Tasks · Settings; and the setup's two actions, Deploy to Cloud (DeployCloud.tsx) and
- *  Connect your app. */
+/** The setup page's one bar (agentHead, as the hosted console's setup page redesign draws it): back to
+ *  Harness Studio; the name on the first line, its agent harness and model on the second (the Harness ID
+ *  is the first row of Settings › Agent harness); the setup's two actions, Deploy to Cloud
+ *  (DeployCloud.tsx) and Connect your app; and Tasks · Settings at the bar's right end, each with its
+ *  icon. */
 // A tab chosen with the keyboard keeps the keyboard on it. The page changes its address for the new tab and
 // draws the bar again, often as a new tree, so the focus tabKeys gave the new tab was lost to the page body
 // (audit, 10-21): the bar that draws next puts it back on the selected tab.
@@ -55,16 +60,15 @@ export function AgentHead({ r, tab, onTab, onSetUpApp, dirty }: {
     tabsRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
   }, [tab]);
   const model = r.h.defaultModel || '';
-  const tb = (k: SetupTab, label: React.ReactNode) => (
-    <button type="button" role="tab" aria-selected={tab === k} tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => onTab(k)}>{label}</button>
+  const tb = (k: SetupTab, icon: React.ReactNode, label: React.ReactNode) => (
+    <button type="button" role="tab" aria-selected={tab === k} tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => onTab(k)}>{icon}{label}</button>
   );
   const act = (label: string, icon: React.ReactNode, onClick?: () => void, primary = false) => (
     <button type="button" className={`btn small ag-act${primary ? ' primary' : ''}`} aria-label={label} title={label}
       onClick={onClick}>{icon}<span className="ag-act-l">{label}</span></button>
   );
   return (
-    <header className="ag-bar">
-      {/* the name's side: an equal share of the bar with the action's side, so the tabs sit in its middle */}
+    <header className="ag-bar ag-rt">
       <div className="ag-lft">
         <Link className="ag-back" href="/studio" aria-label="Back to Harness Studio" title="Harness Studio">{BACK_IC}</Link>
         <div className="ag-ident">
@@ -77,16 +81,17 @@ export function AgentHead({ r, tab, onTab, onSetUpApp, dirty }: {
           </div>
         </div>
       </div>
-      <div ref={tabsRef} className="tabs inline ag-tabs" role="tablist" onKeyDown={(e) => tabKeys(e, SETUP_TABS, tab, (k) => { refocusTab = true; onTab(k); })}>
-        {tb('tasks', 'Tasks')}
-        {tb('settings', <>Settings{dirty ? <i className="dirty-dot" role="img" aria-label="Unsaved changes" /> : null}</>)}
-      </div>
       <div className="ag-right">
         {/* the setup's two actions: where it runs (Deploy to Cloud), and connecting your app to it
-            (Connect your app, the primary one). On a phone each folds to its icon (its words stay its
-            name and tooltip), so the setup's name keeps the row */}
+            (Connect your app, the primary one). They sit before the tabs, so Tasks · Settings keep the
+            bar's right end. On a phone each folds to its icon (its words stay its name and tooltip),
+            so the setup's name keeps the row */}
         <DeployCloud id={r.h.id} name={r.h.name} />
         {act('Connect your app', PLUG_IC, onSetUpApp, true)}
+      </div>
+      <div ref={tabsRef} className="tabs inline ag-tabs" role="tablist" onKeyDown={(e) => tabKeys(e, SETUP_TABS, tab, (k) => { refocusTab = true; onTab(k); })}>
+        {tb('tasks', TASKS_IC, 'Tasks')}
+        {tb('settings', SETTINGS_IC, <>Settings{dirty ? <i className="dirty-dot" role="img" aria-label="Unsaved changes" /> : null}</>)}
       </div>
     </header>
   );

@@ -1,7 +1,8 @@
 'use client';
 // One setup (docs/uxuidesign/console-91, view `agent`: agentView, agentHead, tasksBody, newPane,
-// taskPane, setSide, sideTog). One bar on top (back, name, Tasks · Settings, Deploy to Cloud, Connect
-// your app); the rest of the window is work, every column starting with a 56 px bar on one hairline.
+// taskPane, setSide, sideTog). One bar on top (back, name, Deploy to Cloud and Connect your app, then
+// Tasks · Settings at its right end); the rest of the window is work, every column starting with a 56 px
+// bar on one hairline.
 // Tasks: the task list, the open task (or New task), the Agent stack. Settings: the layers, the open
 // layer, the Agent stack with that layer's brick lit. A test is a task: New task starts one, and every
 // task of the setup takes follow-ups.
