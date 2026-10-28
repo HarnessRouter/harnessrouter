@@ -230,8 +230,10 @@ export default function SetupPage() {
     return (
       <div className="tk-page">
         <Skel label="Loading the setup" className="hrui-skel-contents">
-          <header className="ag-bar" aria-hidden="true">
+          {/* the setup's bar while it loads: the same bar (setup/parts AgentHead), its tabs' place held at the right end */}
+          <header className="ag-bar ag-rt" aria-hidden="true">
             <div className="ag-lft"><SkLine w={32} h={32} r={16} /><div style={{ display: 'grid', gap: 6 }}><SkLine w={180} h={20} /><SkLine w={240} h={10} /></div></div>
+            <div className="ag-sk-tabs"><SkLine w={84} h={14} /><SkLine w={96} h={14} /></div>
           </header>
         </Skel>
         <div className="tk-split" aria-hidden="true">
