@@ -45,10 +45,6 @@ def test_the_default_is_minimax_s_own_model_and_agrees_with_the_runner():
     assert "minimax-m3" in cat["models"]
 
 
-def test_minimax_offers_current_provider_model_ids():
-    assert {"MiniMax-M3.1-Flash", "MiniMax-M3"} <= set(A._MODEL_CATALOG["minimax"]["models"])
-
-
 def test_minimax_is_wired_like_kimi_and_speaks_the_custom_openai_format():
     kimi = {k[0]: v for k, v in A._INTEGRATION_WIRING.items() if k[1] == "kimi"}
     mm = {k[0]: v for k, v in A._INTEGRATION_WIRING.items() if k[1] == "minimax"}
@@ -57,3 +53,13 @@ def test_minimax_is_wired_like_kimi_and_speaks_the_custom_openai_format():
     assert "minimax" not in A._CUSTOM_FORMAT_BACKENDS["anthropic"]
     for runner_provider in mm.values():
         assert runner_provider in BACKENDS["minimax"]["providers"]
+
+
+def test_minimax_m3_1_flash_is_one_id_each_aggregator_serves_under_its_own_slug():
+    """MiniMax calls it MiniMax-M3.1-Flash. An id here is one lowercase name per model, and each vendor's own
+    name for it lives in _VENDOR_MODELS: a second spelling such as MiniMax-M3 would list minimax-m3 twice."""
+    for vendor in ("openrouter", "vercel", "tokenrouter"):
+        assert A._VENDOR_MODELS[vendor]["minimax-m3.1-flash"] == "minimax/minimax-m3.1-flash"
+    models = A._MODEL_CATALOG["minimax"]["models"]
+    assert models.index("minimax-m3.1-flash") < models.index("minimax-m3")       # newest first in its family
+    assert all(m == m.lower() for m in models)
