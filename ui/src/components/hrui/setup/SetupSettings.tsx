@@ -110,7 +110,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const providers = useModelProviders();
   const bases = useBases();
   const limits = useRuntimeDefaults();
-  const srv = bases?.[rec.base] || null;
+  const srv = bases?.[oobById(rec.base)?.id || rec.base] || null;
   const oob = oobById(rec.base);
   // ── the draft ──────────────────────────────────────────────────────────────────────────────
   // a setup with no model of its own keeps none ('' : the server runs it on its harness's default)

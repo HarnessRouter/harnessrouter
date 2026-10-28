@@ -42,5 +42,9 @@ const LOGO: Record<string, string> = {
 // No entry for vtcode: that base is not in this tree at all (its headless mode drops a harness's
 // MCP servers — docs/support-matrix-notes.md), so neither its mark nor its row is carried here.
 
-/** The base harness's mark file, or '' when it has none. */
-export const harnessLogoSrc = (id: string): string => LOGO[id] || '';
+// The bases whose backend is named apart from the base: a setup saved through the API can carry the backend
+// (`claude`) as its base, and draws the base's mark all the same (harness-base-alias.test.ts holds this to the OOB table).
+export const BACKEND_BASE: Record<string, string> = { claude: 'claude-code' };
+
+/** The base harness's mark file, by its id or its backend, or '' when it has none. */
+export const harnessLogoSrc = (id: string): string => LOGO[id] || LOGO[BACKEND_BASE[id] || ''] || '';

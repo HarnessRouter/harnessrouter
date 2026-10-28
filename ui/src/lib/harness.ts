@@ -283,7 +283,9 @@ export function offeredOob(bases: Record<string, BaseInfo> | null): OobHarness[]
   return OOB.filter((o) => o.status === 'ready' && !!bases?.[o.id]);
 }
 
-export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
+/** A base by its id, or by the backend it runs: the gateway takes either for a setup's base, so a setup made through the
+ *  API can carry `claude` where the console names the base `claude-code` (its setups read "claude", with no mark). */
+export const oobById = (id: string) => OOB.find((o) => o.id === id) || OOB.find((o) => o.backend === id) || null;
 
 // ── model catalog: the GATEWAY owns it, this file does not ────────────────────────────
 // The `models` / `defaultModel` fields above are the pre-fetch placeholder only (so first paint
