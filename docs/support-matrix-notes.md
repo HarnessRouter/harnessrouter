@@ -5457,3 +5457,20 @@ read the skill. docker-agent expands ``!`command` `` in every local SKILL.md, as
 skill's line "with morph `!!` prefix awareness" holds that sequence, so the text up to the next backtick ran as a
 command, failed, and left an error inside the skill text the model read. The line is reworded in the skills
 repository (HarnessRouter/skills 1553417); an image built from now on carries it.
+
+### Two pairs off after a deck conversation that changed models (0.37.8)
+
+On the hosted service, two pairs failed in deck conversations that changed models along the way, in a way the
+matrix's five scenarios do not reach (2026-10-27):
+
+- fast-agent with gemini-4-argon, on Google's own API, after another model's turn (gpt-6.1-sol or
+  claude-haiku-4.5) whose history holds the image attach_media added: one tool call and then an empty answer, or
+  a promise ("I'll update hello_world.pptx") and no tool call, twice each. argon after argon passed with the
+  images, and argon after gpt-6.1-sol passed without the image. On Vercel's route the same history passes.
+- docker-agent with grok-4.20, asked to restyle a deck gpt-6.1-sol had made in the same conversation: it said
+  the deck was red and made no tool call. On the test instance (Vercel, 0.37.7) the same two turns made the
+  change with a real tool call, 2 of 2, and the deck's XML was red.
+
+Both pairs are off the hosted service, and off here alike (`_NOT_OFFERED`, the console's lists, and their rows
+in support-matrix-results.json), on Richard's word: "Hide those two pairs". fast-agent keeps the Gemini family
+and docker-agent the rest of grok's.
