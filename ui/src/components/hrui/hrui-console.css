@@ -436,9 +436,14 @@
    under the layers, never pinned to the rail's foot; where the rail folds to chips (860 px and under)
    that one is not drawn and the one at the foot of the open layer is, its words in line with the
    fields above it. One is drawn at any width. */
-#hrui .set-split .lg-dz{display:flex;flex-direction:column;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+#hrui .set-split .lg-dz{display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+#hrui .set-split .lg-dz>.ly-n{flex:1 1 auto;min-width:0}
 #hrui .set-split .lg-dz>.ly-n b{color:var(--bad)}
 #hrui .set-split .lg-dz>.ly-n:hover{background:var(--bad-soft)}
+/* Duplicate: Delete setup's row, at its right end, blue */
+#hrui .set-split .lg-dz>.ly-n.lg-dup{flex:none;width:auto;text-align:right}
+#hrui .set-split .lg-dz>.ly-n.lg-dup b{color:var(--accent)}
+#hrui .set-split .lg-dz>.ly-n.lg-dup:hover{background:var(--accent-soft)}
 #hrui .set-split .lg-col>.lg-dz{display:none}
 /* Upload to cloud: the row above Delete setup, in the layers' own ink */
 #hrui .set-split .lg-dz>.ly-n.lg-up b{color:var(--fg)}
@@ -451,7 +456,8 @@
 @media (max-width:860px){
   #hrui .set-split .lg-rows>.lg-dz{display:none}
   #hrui .set-split .lg-col>.lg-dz{display:flex;margin-top:28px}
-  #hrui .set-split .lg-col>.lg-dz>.ly-n{margin:0 -8px}
+  #hrui .set-split .lg-col>.lg-dz>.ly-n:first-child{margin-left:-8px}
+  #hrui .set-split .lg-col>.lg-dz>.ly-n:last-child{margin-right:-8px}
 }
 /* a setup's Plugins tab (setup/PluginSwitches.tsx): the workspace's connected plugins in the design's
    rows, three columns that line up as a table's (the mark, the words, the switch, each switch as wide
@@ -510,7 +516,9 @@
 #hrui .bs-save .bs-board .bs-grid:not(.bs-g1):not(.bs-g3) .bs-x b{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 /* the setup's bar (setup/parts.tsx): the name's side and the action's side take equal shares, so Tasks
    and Settings sit in the bar's middle whatever either side holds (Richard, 2026-10-19); a long name
-   ellipsizes inside its share. A phone keeps the design's wrap, with the tabs on their own row. */
+   ellipsizes inside its share. A phone keeps the design's wrap, with the tabs on their own row. The
+   setup page's bar now puts the tabs at its right end instead: the `.ag-bar.ag-rt` rules at the end of
+   this file outrank these. */
 #hrui .ag-bar .ag-lft{display:flex;align-items:center;gap:10px;min-width:0;flex:0 1 auto}
 @media (min-width:701px){
   #hrui .ag-bar:where(:not(.hrui-legacy *)){display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);column-gap:16px}
@@ -1033,3 +1041,26 @@
 #hrui .set-hid code{flex:1 1 auto;min-width:0;font-size:13px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #hrui .set-hid .icon-btn{flex:none;width:28px;height:28px;color:var(--muted)}
 #hrui .set-hid .icon-btn:hover{color:var(--fg)}
+/* The setup's bar as the hosted console's setup page redesign draws it (Tasks and Settings at the right of the bar, no
+   longer its middle): the name on the left, then the setup's two actions, then the tabs at the right end, each with its
+   icon, the open one blue over a 3 px underline. 860 px and under the tabs take their own row; 600 and under they share
+   it equally, words only. Last in the file and one class past every older bar rule, on purpose */
+#hrui .ag-bar.ag-rt,#hrui .tk-page .ag-bar.ag-rt{display:flex;align-items:center;column-gap:16px;padding-right:20px}
+#hrui .ag-bar.ag-rt>.ag-lft{flex:1 1 auto;min-width:0}
+/* the actions keep their own width, just before the tabs (the older grid gave them the bar's right half and its padding) */
+#hrui .ag-bar.ag-rt>.ag-right,#hrui .tk-page .ag-bar.ag-rt>.ag-right{flex:none;margin-left:0;padding-right:0}
+#hrui .ag-bar.ag-rt>.tabs.inline.ag-tabs{flex:none;align-self:stretch;display:flex;align-items:stretch;gap:2px;margin:0 0 0 auto;padding:0;border:0}
+#hrui .ag-bar.ag-rt>.ag-tabs>button{position:relative;display:inline-flex;align-items:center;gap:8px;padding:0 14px;font-size:14px;font-weight:540;color:var(--muted);border-bottom:0;margin-bottom:-1px;white-space:nowrap}
+#hrui .ag-bar.ag-rt>.ag-tabs>button:hover{color:var(--fg)}
+#hrui .ag-bar.ag-rt>.ag-tabs>button.on{color:var(--accent);font-weight:540}
+#hrui .ag-bar.ag-rt>.ag-tabs>button.on::after{content:"";position:absolute;left:8px;right:8px;bottom:0;height:3px;border-radius:3px 3px 0 0;background:var(--accent)}
+#hrui .ag-bar.ag-rt>.ag-tabs>button>svg{width:16px;height:16px;margin:0;color:currentColor;vertical-align:0;flex:none}
+@media (max-width:860px){
+  #hrui .ag-bar.ag-rt,#hrui .tk-page .ag-bar.ag-rt{flex-wrap:wrap;height:auto;min-height:56px;row-gap:0;padding:8px 12px 0 8px}
+  #hrui .ag-bar.ag-rt>.tabs.inline.ag-tabs{order:9;flex:0 0 100%;max-width:100%;height:44px;margin:4px 0 0;overflow-x:auto;scrollbar-width:none}
+}
+@media (max-width:600px){
+  #hrui .ag-bar.ag-rt>.tabs.inline.ag-tabs{gap:0}
+  #hrui .ag-bar.ag-rt>.ag-tabs>button{flex:1 1 0;justify-content:center;padding:0 6px}
+  #hrui .ag-bar.ag-rt>.ag-tabs>button>svg{display:none}
+}

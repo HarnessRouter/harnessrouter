@@ -13,7 +13,8 @@
 // Capabilities tab counts the ones on of one of setupParts.ts's lists (setupPlugins, setupSkills,
 // setupTools); Skills and Tools list it, Plugins lists the workspace's connected plugins with a switch
 // each, beside what the setup includes (PluginSwitches.tsx); the layers list's Capabilities line counts
-// what a person added, as the Agent stack and Studio's card do. Under the layers: Delete setup.
+// what a person added, as the Agent stack and Studio's card do. Under the layers: Delete setup, and
+// Duplicate beside it.
 // (Deploy to Cloud is the page bar's, beside Connect your app: DeployCloud.tsx.)
 // Every value, list, default and ceiling shown is read from the services: the setup's record, the
 // bases document (tools, built-in skills, thinking levels, runtime defaults), the model catalog,
@@ -421,8 +422,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
       </div>
       {field('setName', 'Name', <input id="setName" className="set-in" value={c.name} aria-invalid={inv('setName')} onChange={(e) => set('name', e.target.value)} />)}
       {field('setHarness', 'Agent harness',
-        <div className="set-ro" id="setHarness"><span>{logo ? <img className="h-logo" src={logo} alt="" /> : null}{r.baseName}</span><span className="set-lock">{LOCK}Fixed once saved</span></div>,
-        <button type="button" className="link-q inl" onClick={() => setPop({ k: 'dup' })}>Duplicate with another agent harness</button>)}
+        <div className="set-ro" id="setHarness"><span>{logo ? <img className="h-logo" src={logo} alt="" /> : null}{r.baseName}</span><span className="set-lock">{LOCK}Fixed once saved</span></div>)}
       {sub('Model', '', null, <>
         {field('setModel', 'Default model',
           <select id="setModel" className="set-in" value={c.model} onChange={(e) => set('model', e.target.value)}>
@@ -648,11 +648,15 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const mcpEdit = pop?.k === 'mcp' && pop.i != null ? c.mcp[pop.i] || null : null;
 
   // Delete setup: the settings' last row, a layer row's anatomy, past a hairline and outside the
-  // layers' tablist; red, its name alone (the sheet says what deleting does, Richard 10-18). Drawn at
-  // any width (hrui-console.css): `rail` under the layers, else at the foot of the open layer.
+  // layers' tablist; red, its name alone (the sheet says what deleting does). Duplicate shares its
+  // row at the right, blue (as on the hosted console; its sheet picks the other agent harness).
+  // Drawn at any width (hrui-console.css): `rail` under the layers, else at the foot of the open
+  // layer.
   const delRow = (where: 'rail' | 'foot') => (
     <div className="lg-dz" data-where={where}>
       <button type="button" className="ly-n" aria-haspopup="dialog" onClick={() => setPop({ k: 'del' })}><b>Delete setup</b></button>
+      <button type="button" className="ly-n lg-dup" aria-haspopup="dialog" title="Duplicate with another agent harness"
+        onClick={() => setPop({ k: 'dup' })}><b>Duplicate</b></button>
     </div>
   );
 
