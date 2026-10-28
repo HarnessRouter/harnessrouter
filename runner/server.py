@@ -4741,13 +4741,30 @@ _REASONING_EFFORT_UNSUPPORTED_RE = re.compile(
     rb"|nsupported\s+parameter:?\s*\\?[\"']?reasoning_effort")
 
 
+# How the servers a custom endpoint runs refuse a field they do not know, each naming the field: an
+# OpenAI-shaped server's 'Unrecognized request argument supplied: reasoning_effort', a FastAPI one's
+# extra_forbidden ("Extra inputs are not permitted", loc ["body", "reasoning_effort"]), 'Unknown
+# parameter' / 'unknown field'. The driver's own relay dropped the field on any refusal naming it;
+# these keep that reach for a custom endpoint without reading every mention as one.
+_UNKNOWN_FIELD_WORDS = (b"unrecognized", b"unknown", b"extra inputs", b"extra_forbidden", b"not permitted",
+                        b"unsupported", b"not supported")
+
+
 def _reasoning_effort_unsupported(data: bytes) -> bool:
     """Whether a refusal says the model takes no `reasoning_effort` at all: 'The "reasoning_effort"
     parameter is not supported by "deepseek/deepseek-v4-pro"' (LLMTR, captured 2026-08-20 by
-    conformance T-01), or OpenAI's 'Unsupported parameter: 'reasoning_effort''. Not gpt-5.6's
-    'Function tools with reasoning_effort are not supported ... set reasoning_effort to 'none'',
-    which names a value to send instead (_set_reasoning_effort_none)."""
-    return bool(_REASONING_EFFORT_UNSUPPORTED_RE.search(data or b""))
+    conformance T-01), OpenAI's 'Unsupported parameter: 'reasoning_effort'', or a server that does not
+    know the field (_UNKNOWN_FIELD_WORDS). Not gpt-5.6's 'Function tools with reasoning_effort are not
+    supported ... set reasoning_effort to 'none'', which names a value to send instead
+    (_set_reasoning_effort_none), nor the same refusal naming another endpoint: dropping the field
+    answers neither."""
+    data = data or b""
+    if _REASONING_EFFORT_UNSUPPORTED_RE.search(data):
+        return True
+    low = data.lower()
+    if b"reasoning_effort" not in low or b"function tools" in low or b"'none'" in low:
+        return False
+    return any(w in low for w in _UNKNOWN_FIELD_WORDS)
 
 
 def _set_reasoning_effort_none(body: bytes) -> bytes:
@@ -7060,9 +7077,10 @@ def _tool_call_delta_without_empty_fields(line: bytes) -> bytes:
     OMITS both on continuation deltas; aggregators such as TokenRouter send them as EMPTY STRINGS,
     so the second delta overwrote the real id and name with "" and every tool call died as
     UNKNOWN_TOOL (captured live 2026-08-20 on deepseek/deepseek-v4-flash). The driver's own relay
-    did this until the base rode this one (#382). The space after `data:` is optional in SSE, so
-    `data:{` is read too (#572)."""
-    if b'""' not in line or b"tool_calls" not in line:
+    did this until the base rode this one (#382). A `null` passes the same guard and overwrites the
+    same way, so it is taken off too. The space after `data:` is optional in SSE, so `data:{` is
+    read too (#572)."""
+    if (b'""' not in line and b"null" not in line) or b"tool_calls" not in line:
         return line
     cr = line.endswith(b"\r")
     raw = line[:-1] if cr else line
@@ -7082,11 +7100,11 @@ def _tool_call_delta_without_empty_fields(line: bytes) -> bytes:
         for tc in calls if isinstance(calls, list) else []:
             if not isinstance(tc, dict):
                 continue
-            if tc.get("id") == "":
+            if "id" in tc and tc["id"] in ("", None):
                 del tc["id"]
                 changed = True
             fn = tc.get("function")
-            if isinstance(fn, dict) and fn.get("name") == "":
+            if isinstance(fn, dict) and "name" in fn and fn["name"] in ("", None):
                 del fn["name"]
                 changed = True
     if not changed:

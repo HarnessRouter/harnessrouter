@@ -149,6 +149,16 @@ def test_relay_drops_empty_id_and_name_only():
     assert tc2["function"]["arguments"] == '{"command"'
 
 
+def test_relay_drops_a_null_id_and_name_as_it_drops_empty_ones():
+    """The runtime's `!== undefined` guard lets null through too, so a null overwrote the real id and name."""
+    cont = (b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"type":"function",'
+            b'"function":{"name":null,"arguments":"{}"}}]},"finish_reason":null,"index":0}]}')
+    tc = json.loads(_strip_empty(cont)[6:])["choices"][0]["delta"]["tool_calls"][0]
+    assert "id" not in tc and "name" not in tc["function"] and tc["function"]["arguments"] == "{}"
+    content_null = b'data: {"choices":[{"delta":{"content":null,"tool_calls":[{"index":0,"function":{"arguments":"x"}}]}}]}'
+    assert _strip_empty(content_null) == content_null        # nothing of a call's to take off: the line goes as it came
+
+
 def test_relay_leaves_non_data_lines_alone():
     assert _strip_empty(b"data: [DONE]") == b"data: [DONE]"
     assert _strip_empty(b"") == b""
@@ -306,3 +316,18 @@ def test_a_refusal_that_names_another_value_or_another_field_is_not():
         b"To use function tools, set reasoning_effort to 'none'.")
     assert not rs._reasoning_effort_unsupported(b'{"error":{"message":"The \\"seed\\" parameter is not supported"}}')
     assert not rs._reasoning_effort_unsupported(b"")
+
+
+def test_a_server_that_does_not_know_the_field_is_recognised_as_refusing_it():
+    """A custom endpoint's own server names an unknown field its own way; the driver's relay dropped the field on
+    any refusal naming it, so the route keeps that reach (a dsh turn on such an endpoint retried and answered)."""
+    assert rs._reasoning_effort_unsupported(
+        b'{"error":{"message":"Unrecognized request argument supplied: reasoning_effort","type":"invalid_request_error"}}')
+    assert rs._reasoning_effort_unsupported(
+        b'{"detail":[{"type":"extra_forbidden","loc":["body","reasoning_effort"],"msg":"Extra inputs are not permitted"}]}')
+    assert rs._reasoning_effort_unsupported(b'{"error":"unknown field `reasoning_effort`, expected one of `model`, `messages`"}')
+    assert rs._reasoning_effort_unsupported(b'{"error":{"code":"unsupported_parameter","param":"reasoning_effort"}}')
+    # a refusal that names reasoning_effort but asks for another value or another endpoint is not one
+    assert not rs._reasoning_effort_unsupported(
+        b"Function tools with reasoning_effort are not supported for gpt-6.1-sol in /v1/chat/completions. Use /v1/responses.")
+    assert not rs._reasoning_effort_unsupported(b'{"error":{"message":"reasoning_effort must be one of low, medium, high"}}')
