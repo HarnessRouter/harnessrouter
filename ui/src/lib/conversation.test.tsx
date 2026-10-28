@@ -299,6 +299,52 @@ describe('a send whose own stream ends before the turn does', () => {
     expect(textOf(lastA(sid))).toBe('Partial, the middle, the end');
     expect(lastA(sid)?.elapsed).toBe(12);
   });
+
+  test('a produced file arriving after elapsed is recorded appears without reloading', async () => {
+    const sid = await openIdle();
+    streamThatStops('Done');
+    const producedFile = {
+      container_id: 'container-1',
+      file_id: 'file-1',
+      filename: 'report.csv',
+    };
+
+    mockChat.load.mockResolvedValue(record([
+      turn(),
+      turn({ id: 'r2', user: 'next', assistant: 'Done', elapsed: 12, files: [] }),
+    ]));
+
+    await act(async () => { await api.send('next'); });
+    await tick();
+
+    await act(async () => {
+      mockChat.bus[0].onMsg({
+        session_id: sid,
+        response_id: 'r2',
+        event: { type: 'response.completed', response: {} },
+      });
+    });
+
+    await tick(2500);
+    expect(lastA(sid)?.elapsed).toBe(12);
+    expect(lastA(sid)?.files).toEqual([]);
+
+    mockChat.load.mockResolvedValue(record([
+      turn(),
+      turn({
+        id: 'r2',
+        user: 'next',
+        assistant: 'Done',
+        elapsed: 12,
+        files: [producedFile],
+      }),
+    ]));
+
+    await tick(5000);
+
+    expect(lastA(sid)?.files).toContainEqual(producedFile);
+  });
+
 });
 
 describe('one live feed per setup in a tab', () => {

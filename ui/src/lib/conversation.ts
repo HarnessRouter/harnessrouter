@@ -687,7 +687,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
     const cur = getConvState(convKeyRef.current);
     const idx = turnIndexOf(cur.msgs);
     const last = [...cur.msgs].reverse().find((x) => x.role === 'assistant') as AsstMsg | undefined;
-    if (!last || last.status === 'running' || last.elapsed != null) return;
+    if (!last || last.status === 'running') return;
     const key = `${sid}#${idx}`;
     if (settledRead.current.has(key)) return;
     settledRead.current.add(key);
@@ -702,23 +702,58 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
           // record holds just the turns this thread does (nothing unrecorded after it)
           const whole = _gapped.has(sid) ? msgsFromTurns(turns).msgs : null;
           _gapped.delete(sid);
+
           setConvState(convKeyRef.current, (st) => {
             const answers = (ms: Msg[]) => ms.filter((x) => x.role === 'assistant').length;
-            if (whole && answers(whole) === answers(st.msgs)) return { msgs: carryClocks(whole, st.msgs) };
+            if (whole && answers(whole) === answers(st.msgs)) {
+              const merged = carryClocks(whole, st.msgs);
+              const localAnswers = st.msgs.filter(
+                (x): x is AsstMsg => x.role === 'assistant',
+              );
+              let answerIndex = 0;
+
+              return {
+                msgs: merged.map((x) => {
+                  if (x.role !== 'assistant') return x;
+
+                  const local = localAnswers[answerIndex++];
+                  if (!local) return x;
+
+                  const files = (local.files || []).reduce(
+                    (acc: RespFile[], f) => withFile(acc, f),
+                    x.files || [],
+                  );
+
+                  return { ...x, files };
+                }),
+              };
+            }
+
             const out = st.msgs.slice();
+
             for (let i = out.length - 1; i >= 0; i--) {
               if (out[i].role === 'assistant') {
-                // the record's files too: the stream's citations are one channel, and an answer whose
-                // stream missed them (a drop, a late collection) still shows every file it made
+                // The record's files may arrive after elapsed is recorded.
                 const a = out[i] as AsstMsg;
-                const files = (t.files || []).reduce((acc: RespFile[], f) => withFile(acc, f), a.files || []);
-                out[i] = { ...a, files, elapsed: typeof t.elapsed === 'number' ? t.elapsed : undefined };
+                const files = (t.files || []).reduce(
+                  (acc: RespFile[], f) => withFile(acc, f),
+                  a.files || [],
+                );
+
+                out[i] = {
+                  ...a,
+                  files,
+                  elapsed: t.elapsed,
+                };
                 break;
               }
             }
+
             return { msgs: out };
           });
-          return;
+
+          // Keep retrying while files have not arrived.
+          if ((t.files || []).length > 0 || left === 0) return;
         }
       } catch { /* transient; the retry below */ }
       // Growing gaps, about 85s in all: the persist trails the terminal event by seconds when the
