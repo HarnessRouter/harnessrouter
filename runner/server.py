@@ -7263,6 +7263,17 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
 
 
 QWEN_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+# The output cap Qwen Code puts on every request on its own initiative, the kimi precedent: nobody
+# configured it, and it is the CLI's figure for the model NAME, not for the model the endpoint serves.
+# 0.26.3 sent max_tokens: 32768 for qwen3-4b (captured between the relay and a real vLLM, 2026-10-28);
+# the report (#578) has 64000 for qwen3.5-9b. The image's 0.22.2 does the same on every call: 64000 for
+# most ids, 16384 for gpt-6.1-sol, 32000 for an id it does not know, never max_completion_tokens (measured
+# at a stub, 2026-10-28). A self-hosted model's window is the server's choice, and
+# vLLM refuses the whole request when the cap does not fit it: "max_tokens=64000 cannot be greater than
+# max_model_len=max_total_tokens=8192" there, "you requested 49350 tokens (16582 in the messages, 32768
+# in the completion)" here. Without the field the provider's own default applies, on vLLM the room left
+# in the window, as on every base that sends none. No max_completion_tokens was seen.
+_QWEN_DROP_FIELDS = ("max_tokens",)
 
 
 def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
@@ -7314,8 +7325,9 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # array of parts, which aggregators 400 with 'content must be a string' — measured live
         # against LLMTR; Azure's gpt-5.x deployments 400 on max_tokens), and the real key never
         # enters the CLI's environment — which matters more here than anywhere, because qwen
-        # takes its credential ONLY via env.
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        # takes its credential ONLY via env. The route also takes off the output cap the CLI
+        # invents (_QWEN_DROP_FIELDS).
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, drop_fields=_QWEN_DROP_FIELDS)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home = pathlib.Path(cwd) / ".harness" / "home"
     home.mkdir(parents=True, exist_ok=True)
