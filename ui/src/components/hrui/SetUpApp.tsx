@@ -1,6 +1,6 @@
 'use client';
-// "Set up the app" (Richard's "Set up a starter app" design, 10-19: `hand-sheet use-sheet`; before it
-// docs/uxuidesign/console-79 renderSheet0 and starterBody): the sheet a setup's "Set up the app"
+// "Connect your app" (the "Set up a starter app" design, 10-19: `hand-sheet use-sheet`; before it
+// docs/uxuidesign/console-79 renderSheet0 and starterBody): the sheet a setup's "Connect your app"
 // opens. Two steps, drawn as every coding-agent sheet draws them (start/Steps): copy the prompt and
 // send it to your coding agent, and create an API key (start/KeyStep) for the app's backend.
 //

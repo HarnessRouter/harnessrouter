@@ -14,7 +14,7 @@
 // setupTools); Skills and Tools list it, Plugins lists the workspace's connected plugins with a switch
 // each, beside what the setup includes (PluginSwitches.tsx); the layers list's Capabilities line counts
 // what a person added, as the Agent stack and Studio's card do. Under the layers: Delete setup.
-// (Deploy to Cloud is the page bar's, beside Set up the app: DeployCloud.tsx.)
+// (Deploy to Cloud is the page bar's, beside Connect your app: DeployCloud.tsx.)
 // Every value, list, default and ceiling shown is read from the services: the setup's record, the
 // bases document (tools, built-in skills, thinking levels, runtime defaults), the model catalog,
 // and the workspace's plugins and environments. What is not read yet shows nothing.
@@ -64,6 +64,13 @@ const PLUGIN_PACKAGE_MAX = 16 * 1024 * 1024;   // the gateway's own cap on one p
 const fmtMb = (n: number) => `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`;
 
 const LOCK = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
+const COPY = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>;
+
+/** Copy the Harness ID: the clipboard when the browser allows it, else the person is told how. */
+async function copyId(hid: string) {
+  try { await navigator.clipboard.writeText(hid); toast('Copied'); }
+  catch { toast('Text selected. Press Cmd or Ctrl + C.'); }
+}
 const PLUS = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
 const X = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>;
 
@@ -404,6 +411,14 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const BODY: Record<LayerKey, ReactNode> = {
     // the agent harness first, then its model (the models are this harness's own, so they follow it)
     harness: <>
+      {/* the Harness ID first, read only: what a task names to reach this setup (it left the page's bar) */}
+      <div className="set-f">
+        <span className="set-lb" id="setHidL">Harness ID</span>
+        <div className="set-ro set-hid" role="group" aria-labelledby="setHidL">
+          <code className="mono" title={id}>{id}</code>
+          <button type="button" className="icon-btn xs" aria-label="Copy Harness ID" title="Copy Harness ID" onClick={() => void copyId(id)}>{COPY}</button>
+        </div>
+      </div>
       {field('setName', 'Name', <input id="setName" className="set-in" value={c.name} aria-invalid={inv('setName')} onChange={(e) => set('name', e.target.value)} />)}
       {field('setHarness', 'Agent harness',
         <div className="set-ro" id="setHarness"><span>{logo ? <img className="h-logo" src={logo} alt="" /> : null}{r.baseName}</span><span className="set-lock">{LOCK}Fixed once saved</span></div>,

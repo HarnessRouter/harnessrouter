@@ -1,8 +1,8 @@
 /** @jest-environment jsdom */
 // The Next card under a new setup's first test (Richard, 2026-10-19: the "nx2" design). Your app (a
 // brick still to build) and the setup by its own name (a built brick) at the two ends, the task going
-// over and the result coming back between them, Set up the app under the wires. Its button opens the
-// setup page's Set up the app sheet.
+// over and the result coming back between them, Connect your app under the wires. Its button opens the
+// setup page's Connect your app sheet.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
@@ -46,7 +46,7 @@ describe('the Next card', () => {
     // the wires: the task goes over, the result comes back
     expect(card.querySelector('.nx-wire .go')?.textContent).toBe('task');
     expect(card.querySelector('.nx-wire .back')?.textContent).toBe('result');
-    expect(card.querySelector('.nx-mid button')?.textContent).toBe('Set up the app');
+    expect(card.querySelector('.nx-mid button')?.textContent).toBe('Connect your app');
     // no dash anywhere in its words, and this edition is not the hosted service
     expect(card.textContent).not.toMatch(/[-–—]/);
     expect(card.textContent).not.toContain('Cloud');
@@ -73,7 +73,7 @@ describe('the Next card', () => {
     expect(card.querySelector('.nx-flow')?.getAttribute('aria-label')).toContain(`sends each task to ${long}.`);
   });
 
-  test('Set up the app asks the setup’s page for its Set up the app sheet', () => {
+  test('Connect your app asks the setup’s page for its Connect your app sheet', () => {
     const heard = jest.fn();
     const on = (e: Event) => heard((e as CustomEvent).detail);
     window.addEventListener(SET_UP_APP_EVENT, on);

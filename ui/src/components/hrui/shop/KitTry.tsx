@@ -12,7 +12,7 @@
 // The Trace is the shared trace view (trace/TraceView): each event's time counts from its own
 // turn's start (a kit's task runs turn after turn for hours), and a step's detail opens over the
 // Trace panel. "Make it yours" stays at the foot of the panel, and Launch to your users opens the
-// design's starter sheet (Set up the app, starter: the coding agent takes the kit's app from the
+// design's starter sheet (Connect your app, starter: the coding agent takes the kit's app from the
 // starter-kit repository, in that repository's own steps), as the design's launchKit does, rather
 // than leaving the page.
 import Link from 'next/link';
@@ -189,7 +189,7 @@ export function KitTryPage({ kitId }: { kitId: string }) {
     // without one the header names nothing rather than the suggestion
     setKit({ ...kit, launched: true, harnessId: r.harnessId || kit.harnessId, runningOn: r.runningOn });
     // launched to users: a setup just made, opened on its Tasks like every one (start/open.ts); its
-    // header's Set up the app holds the kit's starter steps
+    // header's Connect your app holds the kit's starter steps
     const hid = r.harnessId || kit.harnessId;
     if (mode === 'launch' && hid) { openNewSetup(router, { id: hid }); return; }
     if (mode === 'reconnect') { toast('Database connected.'); checked.current = false; setFrameKey((n) => n + 1); return; }

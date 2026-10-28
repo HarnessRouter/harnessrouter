@@ -1,5 +1,5 @@
 'use client';
-// Deploy to Cloud: the setup page bar's second action, beside Set up the app (Richard, 10-23: "one click
+// Deploy to Cloud: the setup page bar's second action, beside Connect your app (10-23: "one click
 // deploy the local harness into HarnessRouter cloud"). One button, in the one place a setup's actions
 // live, and it always says where the setup stands:
 //   - Deploy to Cloud: never deployed. One click deploys it. The first time this instance has no cloud
