@@ -7266,7 +7266,9 @@ QWEN_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 # The output cap Qwen Code puts on every request on its own initiative, the kimi precedent: nobody
 # configured it, and it is the CLI's figure for the model NAME, not for the model the endpoint serves.
 # 0.26.3 sent max_tokens: 32768 for qwen3-4b (captured between the relay and a real vLLM, 2026-10-28);
-# the report (#578) has 64000 for qwen3.5-9b. A self-hosted model's window is the server's choice, and
+# the report (#578) has 64000 for qwen3.5-9b. The image's 0.22.2 does the same on every call: 64000 for
+# most ids, 16384 for gpt-6.1-sol, 32000 for an id it does not know, never max_completion_tokens (measured
+# at a stub, 2026-10-28). A self-hosted model's window is the server's choice, and
 # vLLM refuses the whole request when the cap does not fit it: "max_tokens=64000 cannot be greater than
 # max_model_len=max_total_tokens=8192" there, "you requested 49350 tokens (16582 in the messages, 32768
 # in the completion)" here. Without the field the provider's own default applies, on vLLM the room left
