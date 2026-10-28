@@ -81,6 +81,15 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
   // harness is not available), never another harness in its place
   const [h, setH] = useState(() => (demo != null ? demoPick(demo, bases).base || AUTO : AUTO));
   const [m, setM] = useState(() => (demo != null ? '' : AUTO));
+  // A demo opened before the server's harness list landed opened on Auto, and kept it: the first demo picked on a fresh
+  // Start was then saved composed and renamed, on whichever harness Auto chose, never the demo's own pair (and played no
+  // recording). Once the list is in, the demo takes its own harness, unless the person has already chosen one.
+  const hChosen = useRef(false);
+  useEffect(() => {
+    if (demo == null || hChosen.current || h !== AUTO || !bases) return;
+    const b = demoPick(demo, bases).base;
+    if (b) { setH(b); setM(''); }
+  }, [bases, demo, h]);
   const [pick, setPick] = useState<Pick>(null);
   const [q, setQ] = useState('');
   const [err, setErr] = useState('');
@@ -96,12 +105,18 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
   const [pos, setPos] = useState<{ style: CSSProperties; side: boolean } | null>(null);
 
   useEffect(() => () => { gone.current = true; }, []);
-  // a demo's model, once the server's catalog has landed: its own when the harness runs it
+  // a demo's model, once the server's catalog has landed: its own when the harness runs it. It is read again on every
+  // render and keeps following the demo until the person picks a model, so a catalog or an availability that lands after
+  // the sheet settled on Auto still reaches it
+  const mChosen = useRef(false);
+  const demoDp = demo != null ? demoPick(demo, bases) : null;
+  const demoM = demoDp && demoDp.base && demoDp.base === h ? demoDp.model : '';
   useEffect(() => {
+    if (demo != null && !mChosen.current && demoM && m !== demoM) { setM(demoM); return; }
     if (!catalog || !h || m) return;
     const dp = demo != null ? demoPick(demo, bases) : null;
     setM(dp && dp.base && dp.base === h ? dp.model || AUTO : AUTO);
-  }, [catalog, h, m, demo, bases]);
+  }, [catalog, h, m, demo, bases, demoM]);
   // the caret goes to the end of the sentence on a desktop; a phone keeps its keyboard down
   useEffect(() => {
     const t = setTimeout(() => { const d = ta.current; if (d && window.innerWidth > 700) { d.focus(); d.setSelectionRange(d.value.length, d.value.length); } }, 40);
@@ -175,6 +190,7 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
   const toggle = (k: 'h' | 'm') => { if (busy) return; setQ(''); setPick((p) => (p === k ? null : k)); };
   const closePick = () => { const b = pick === 'h' ? btnH.current : btnM.current; setPick(null); setQ(''); b?.focus(); };
   const chooseH = (id: string) => {
+    hChosen.current = true;
     if (id !== h) {
       // a chosen model the new harness does not run gives way to Auto, and says so
       const runs = (b: string) => runnableModels(b).includes(m);
@@ -186,7 +202,7 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
     }
     closePick();
   };
-  const chooseM = (id: string) => { setM(id); closePick(); };
+  const chooseM = (id: string) => { mChosen.current = true; setM(id); closePick(); };
   const close = () => { gone.current = true; onClose(); };
 
   const send = async () => {
