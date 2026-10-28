@@ -15,7 +15,7 @@ import { AgentComposer, AgentConversation, WorkingIndicator } from 'reifyui/agen
 import type { CustomHarness } from '@/lib/harness';
 import { harnessLogoSrc } from '@/components/HarnessLogo';
 import { rowOf } from '../setups';
-import { BACK_IC, StackPanel, useSideOff } from '../setup/parts';
+import { BACK_IC, SETTINGS_IC, StackPanel, TASKS_IC, useSideOff } from '../setup/parts';
 import { NewTaskHead } from '../setup/TaskDetail';
 import { harnessMark } from '../setup/AgentTurns';
 import { NewSetup } from '../NewSetup';
@@ -80,7 +80,9 @@ export function BuildPage() {
   const now = b.phase === 'composing' ? <><b>Setting up</b> · your harness</> : b.phase === 'saving' ? <><b>Saving</b> · your setup</> : null;
   return (
     <div className="tk-page">
-      <header className="ag-bar">
+      {/* the setup page's own bar (setup/parts AgentHead): Tasks · Settings at its right end with their icons, the same
+          layout while it builds, never its own. The setup's actions join it once the setup exists, before the tabs */}
+      <header className="ag-bar ag-rt">
         <div className="ag-lft">
           <Link className="ag-back" href="/studio" aria-label="Back to Harness Studio" title="Harness Studio">{BACK_IC}</Link>
           <div className="ag-ident">
@@ -91,11 +93,11 @@ export function BuildPage() {
             </div>
           </div>
         </div>
+        {/* Settings opens once the setup exists: until then Tasks is the one tab in the Tab order and the arrows have nowhere to go */}
         <div className="tabs inline ag-tabs" role="tablist">
-          <button type="button" role="tab" aria-selected className="on">Tasks</button>
-          <button type="button" role="tab" aria-selected={false} disabled>Settings</button>
+          <button type="button" role="tab" aria-selected tabIndex={0} className="on">{TASKS_IC}Tasks</button>
+          <button type="button" role="tab" aria-selected={false} tabIndex={-1} disabled>{SETTINGS_IC}Settings</button>
         </div>
-        <div className="ag-right" />
       </header>
       <div className="tk-split has-side show-d">
         <div className="tk-l">

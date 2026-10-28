@@ -19,10 +19,11 @@ import { DeployCloud } from './DeployCloud';
 export type SetupTab = 'tasks' | 'settings';
 const SETUP_TABS: readonly SetupTab[] = ['tasks', 'settings'];
 
-// the tabs' icons (the hosted console's setup page redesign): Tasks a list, Settings a gear
+// the tabs' icons (the hosted console's setup page redesign): Tasks a list, Settings a gear; the building page's bar draws
+// the same (start/BuildPage: one bar for a setup, before it exists and after)
 const TAB_SVG = { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const;
-const TASKS_IC = <svg {...TAB_SVG}><path d="M9 6h11M9 12h11M9 18h11" /><path d="M4 6h.01M4 12h.01M4 18h.01" /></svg>;
-const SETTINGS_IC = <svg {...TAB_SVG}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>;
+export const TASKS_IC = <svg {...TAB_SVG}><path d="M9 6h11M9 12h11M9 18h11" /><path d="M4 6h.01M4 12h.01M4 18h.01" /></svg>;
+export const SETTINGS_IC = <svg {...TAB_SVG}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>;
 // the bar's action as an icon, on a phone: Connect your app (a plug)
 const PLUG_IC = <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z" /></svg>;
 /** The design's BACK_IC: a chevron pointing left (the bar's back, a task's back on a phone). */
@@ -43,7 +44,7 @@ export function HealthPill({ r }: { r: SetupRow }) {
  *  Harness Studio; the name on the first line, its agent harness and model on the second (the Harness ID
  *  is the first row of Settings › Agent harness); the setup's two actions, Deploy to Cloud
  *  (DeployCloud.tsx) and Connect your app; and Tasks · Settings at the bar's right end, each with its
- *  icon. */
+ *  icon, where the building page's bar draws them too. */
 // A tab chosen with the keyboard keeps the keyboard on it. The page changes its address for the new tab and
 // draws the bar again, often as a new tree, so the focus tabKeys gave the new tab was lost to the page body
 // (audit, 10-21): the bar that draws next puts it back on the selected tab.

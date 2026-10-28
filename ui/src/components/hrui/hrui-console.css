@@ -1064,6 +1064,9 @@
   #hrui .ag-bar.ag-rt>.ag-tabs>button{flex:1 1 0;justify-content:center;padding:0 6px}
   #hrui .ag-bar.ag-rt>.ag-tabs>button>svg{display:none}
 }
+/* a tab that opens once the setup exists (the building page's Settings): drawn, not offered */
+#hrui .ag-bar.ag-rt>.ag-tabs>button:disabled{opacity:.45;cursor:default}
+#hrui .ag-bar.ag-rt>.ag-tabs>button:disabled:hover{color:var(--muted)}
 /* the setup's bar while it loads (studio/[id]): its tabs' place at the right end, on their own row at 860 and under, as the
    loaded bar draws them, so the tabs do not move when it lands */
 #hrui .ag-bar.ag-rt>.ag-sk-tabs{margin-left:auto;display:flex;align-items:center;gap:28px;padding:0 14px}
