@@ -124,7 +124,7 @@ export function brickLayer(tw: string): LayerKey | null {
 
 /** A click on a brick or part of the setup page's Agent stack opens the layer of Settings it is (a
  *  part, its own tab of Capabilities, even one the setup has none of yet). The first test's Next bar
- *  (start/NextBar) asks for the app's setup: Set up the app. */
+ *  (start/NextBar) asks for the app's setup: Connect your app. */
 export function useBrickNav(o: { onLayer: (k: LayerKey, cap?: CapTab) => void; onSetUpApp?: () => void }) {
   const ref = useRef(o);
   ref.current = o;

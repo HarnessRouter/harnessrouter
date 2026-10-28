@@ -1,13 +1,12 @@
 'use client';
 // The setup page's shared pieces (docs/uxuidesign/console-91, agentHead / towerHtml / sideTog): the
-// one bar on top (back, name, what it runs, Harness ID, Tasks · Settings, one action) and the Agent
+// one bar on top (back, name, what it runs, Tasks · Settings, the setup's actions) and the Agent
 // stack column beside the work, its 56 px head on the same line as every other column's.
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { isoSvg, LAYERS, PARTS, SUBS, type Drops } from '../tower';
 import { partIcon } from '../bricks';
 import { tabKeys } from '../tabKeys';
-import { toast } from '../toast';
 import { ago, healthOf, type SetupRow } from '../setups';
 import { SkLine } from '../Skel';
 import { harnessLogoSrc } from '@/components/HarnessLogo';
@@ -20,8 +19,7 @@ import { DeployCloud } from './DeployCloud';
 export type SetupTab = 'tasks' | 'settings';
 const SETUP_TABS: readonly SetupTab[] = ['tasks', 'settings'];
 
-const COPY = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>;
-// the bar's action as an icon, on a phone: Set up the app (a plug)
+// the bar's action as an icon, on a phone: Connect your app (a plug)
 const PLUG_IC = <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z" /></svg>;
 /** The design's BACK_IC: a chevron pointing left (the bar's back, a task's back on a phone). */
 export const BACK_IC = <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>;
@@ -37,14 +35,10 @@ export function HealthPill({ r }: { r: SetupRow }) {
   return <span className="pill neutral" title={tip}>Idle</span>;
 }
 
-async function copy(text: string) {
-  try { await navigator.clipboard.writeText(text); toast('Copied'); }
-  catch { toast('Text selected. Press Cmd or Ctrl + C.'); }
-}
-
 /** The setup page's one bar (agentHead): back to Harness Studio; the name on the first line, its
- *  agent harness, model and Harness ID on the second; Tasks · Settings; and the setup's two actions,
- *  Deploy to Cloud (DeployCloud.tsx) and Set up the app. */
+ *  agent harness and model on the second (the Harness ID is the first row of Settings › Agent
+ *  harness); Tasks · Settings; and the setup's two actions, Deploy to Cloud (DeployCloud.tsx) and
+ *  Connect your app. */
 // A tab chosen with the keyboard keeps the keyboard on it. The page changes its address for the new tab and
 // draws the bar again, often as a new tree, so the focus tabKeys gave the new tab was lost to the page body
 // (audit, 10-21): the bar that draws next puts it back on the selected tab.
@@ -80,11 +74,6 @@ export function AgentHead({ r, tab, onTab, onSetUpApp, dirty }: {
           <div className={`ag-l2${logo ? ' has-logo' : ''}`}>
             {logo ? <img className="h-logo" src={logo} alt="" aria-hidden="true" title={r.baseName} /> : null}<span className="ag-h">{r.baseName}</span>
             {model ? <><span className="sep" aria-hidden="true">·</span><span className="mono ag-m" title={model}>{model}</span></> : null}
-            <span className="sep sep-id" aria-hidden="true">·</span>
-            {/* the Harness ID, cut in its middle when the line runs short: its start, then its last six */}
-            <span className="hid ag-hid"><span className="mono ag-id" title={r.h.id}><span className="ag-id-a">{r.h.id.slice(0, -6)}</span><span className="ag-id-b">{r.h.id.slice(-6)}</span></span>
-              <button type="button" className="icon-btn xs" aria-label="Copy Harness ID" title={`Copy Harness ID ${r.h.id}`} onClick={() => void copy(r.h.id)}>{COPY}</button>
-            </span>
           </div>
         </div>
       </div>
@@ -94,10 +83,10 @@ export function AgentHead({ r, tab, onTab, onSetUpApp, dirty }: {
       </div>
       <div className="ag-right">
         {/* the setup's two actions: where it runs (Deploy to Cloud), and connecting your app to it
-            (Set up the app, the primary one). On a phone each folds to its icon (its words stay its
+            (Connect your app, the primary one). On a phone each folds to its icon (its words stay its
             name and tooltip), so the setup's name keeps the row */}
         <DeployCloud id={r.h.id} name={r.h.name} />
-        {act('Set up the app', PLUG_IC, onSetUpApp, true)}
+        {act('Connect your app', PLUG_IC, onSetUpApp, true)}
       </div>
     </header>
   );

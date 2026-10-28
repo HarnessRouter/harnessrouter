@@ -3,12 +3,12 @@
 // from the hosted console 10-22, "下面 set up the app 的动画"): once that test has finished, it shows what
 // comes next. At the left end your app, a brick still to build, built by your coding agent; at the
 // right end the setup, a built brick, by its own name; between them the task going over and the result
-// coming back, and under the wires Set up the app. Pressing it asks the setup's page for its Set up the
-// app sheet (SET_UP_APP_EVENT, heard where the page's Agent stack bricks are, settingsModel.useBrickNav),
+// coming back, and under the wires Connect your app. Pressing it asks the setup's page for its Connect
+// your app sheet (SET_UP_APP_EVENT, heard where the page's Agent stack bricks are, settingsModel.useBrickNav),
 // so the card needs nothing from the page.
 import { Fragment } from 'react';
 
-/** Fired on window to open the setup page's Set up the app sheet. */
+/** Fired on window to open the setup page's Connect your app sheet. */
 export const SET_UP_APP_EVENT = 'hrui:set-up-app';
 
 // The design's brick: the same art system as the bricks elsewhere (bricks.tsx partIcon, tower.ts),
@@ -59,7 +59,7 @@ export function NextBar({ id, name }: { id: string; name: string }) {
         <div className="nx-mid">
           <div className="nx-wire" aria-hidden="true"><i className="go"><em>task</em></i><i className="back"><em>result</em></i></div>
           <button type="button" className="btn small primary"
-            onClick={() => window.dispatchEvent(new CustomEvent(SET_UP_APP_EVENT, { detail: { id } }))}>Set up the app</button>
+            onClick={() => window.dispatchEvent(new CustomEvent(SET_UP_APP_EVENT, { detail: { id } }))}>Connect your app</button>
         </div>
         <div className="nx-end nx-setup" aria-hidden="true">
           <Brick state="built" />

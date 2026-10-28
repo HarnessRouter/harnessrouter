@@ -392,34 +392,22 @@
   #hrui .tk-newp .ac-hero{margin:0}
   #hrui .tp-tabs button{padding:0 10px}
 }
-/* the bar's second line (harness · model · Harness ID) stays one line from 1024 px up: the Harness ID
-   gives way first, cut in its middle (its start, an ellipsis, its last six, then Copy), then the
-   model. The design hid the ID under 900 px for want of room; cut, it fits, so it stays. */
+/* the bar's second line (harness · model) stays one line from 1024 px up; the Harness ID is the first row of
+   Settings › Agent harness, no longer on this line */
 #hrui .ag-bar .ag-l2 .ag-h{flex:none}
-/* the model never gives up width while the Harness ID can: shrinking it at all, even by hundredths of a pixel,
-   drew its "…" ("deepseek-v4.1-fla…" at 1440 and 1024, production re-check 10-21); "…" only past the whole line */
+/* the model keeps its width: "…" only past the whole line ("deepseek-v4.1-fla…" at 1440 and 1024 when it shared the
+   line with the Harness ID, production re-check 10-21) */
 #hrui .ag-bar .ag-l2 .ag-m{flex:0 0 auto;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis}
 #hrui .ag-bar .ag-l2 .sep{flex:none}
-#hrui .ag-bar .ag-l2 .ag-hid{display:inline-flex;flex:0 1000 auto;min-width:76px;margin-left:0}   /* the design's -4px
-   (under 900 px, from when only the copy icon showed) cut the ID's first letter */
-#hrui .ag-bar .ag-l2 .ag-hid .ag-id{display:inline-flex;flex:0 1 auto;min-width:0}
-#hrui .ag-bar .ag-l2 .ag-hid .icon-btn{flex:none}
-#hrui .ag-id-a{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#hrui .ag-id-b{flex:none}
-#hrui .ag-bar .ag-l2 .sep-id{display:inline}
 /* under 1024 px the bar stays one 56 px line, as the design draws it: the harness as its logo (its name stays for
-   screen readers and in the logo's tooltip; a harness with no logo keeps its name), the model whole, and the Harness
-   ID as its Copy button alone, the ID in the button's tooltip (the design hid the ID's text under 900 px; Richard: a
-   Harness ID is not for people to read). The model was cut at 768 and 390 in the production read-back (10-21); a bar
-   that grew to hold more rows moved the tabs' underline and shifted the page on load, so it doesn't grow.
+   screen readers and in the logo's tooltip; a harness with no logo keeps its name) and the model whole. The model
+   was cut at 768 and 390 in the production read-back (10-21); a bar that grew to hold more rows moved the tabs'
+   underline and shifted the page on load, so it doesn't grow.
    After the base rules on purpose: a media query adds no specificity, so a later rule would win */
 @media (max-width:1023px){
   #hrui .ag-bar .ag-l2.has-logo .ag-h{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-  #hrui .ag-bar .ag-l2 .sep-id{display:none}
-  #hrui .ag-bar .ag-l2 .ag-hid{flex:none;min-width:0;margin-left:4px}
-  #hrui .ag-bar .ag-l2 .ag-hid .ag-id{display:none}
-  /* with the ID's text gone the model is the line's only give: whole wherever the line holds it, "…" only where it truly
-     can't (701 px, or a harness with no logo), and Copy always whole */
+  /* the model is the line's only give: whole wherever the line holds it, "…" only where it truly can't (701 px, or a
+     harness with no logo) */
   #hrui .ag-bar .ag-l2 .ag-m{flex:0 1 auto}
 }
 #hrui .ag-act>svg{display:none;flex:none}
@@ -597,7 +585,7 @@
 #hrui .tp-head .tk-acts .demo-chip+.tk-running{margin-left:10px}
 /* the Next card under a new setup's first task (start/NextBar, the design's .nx2; Richard 2026-10-19):
    your app (a brick still to build) and the setup (a built brick) at the two ends, the task going
-   over and the result coming back between them, Set up the app under the wires. The design draws it
+   over and the result coming back between them, Connect your app under the wires. The design draws it
    at 612 px, its width in a task with the Agent stack open. The card is its own container, so what
    follows reads the card's width whatever panels are open: under 520 px Next takes its own line, the
    bricks shrink to 64 px, the wires stay between the two ends and the button takes the full width
@@ -647,7 +635,7 @@
    still breaks, and a table wider than the reply scrolls. */
 #hrui .uac-md th, #hrui .uac-md td{min-width:4em;overflow-wrap:break-word;word-break:normal}
 /* every coding-agent sheet is Richard's "Set up a starter app" sheet (10-19: hand-sheet use-sheet, its steps
-   the hx list, start/Steps): Set up the app and the guides. The design's own rules the generated sheet
+   the hx list, start/Steps): Connect your app and the guides. The design's own rules the generated sheet
    lacks, then what the console adds: a summary never runs past the step (a long key name ends in an
    ellipsis), and a hint or live line that warns reads as one */
 #hrui .use-sheet .hand{margin-top:18px}
@@ -678,7 +666,7 @@
    the pills under it start at different places; one width for all of them, the design's own at 1000 px */
 @media (max-width:520px){#hrui .agents-g:where(:not(.hrui-legacy *)){grid-template-columns:minmax(0,1fr) 120px!important}}
 
-/* Set up the app (Richard's set-up-a-starter-app design, 10-19): a step that is not next yet keeps its
+/* Connect your app (the set-up-a-starter-app design, 10-19): a step that is not next yet keeps its
    body at full strength, so the key row's Create reads as live from the start, as the design draws it.
    The older guides' fade (hrui.css .hx-s.empty .hx-d) stays for the other sheets. */
 #hrui .use-sheet .hx-s.empty .hx-d{opacity:1}
@@ -1024,7 +1012,7 @@
 #hrui .tk-d .tp-head .th-row>.tp-t{flex:1;min-width:0}
 #hrui .tk-d .tp-head .th-row>.tk-acts{margin-left:auto}
 
-/* Deploy to Cloud (setup/DeployCloud.tsx): the page bar's second action, beside Set up the app. Its menu
+/* Deploy to Cloud (setup/DeployCloud.tsx): the page bar's second action, beside Connect your app. Its menu
    (In Cloud) hangs under it, right aligned, as the task filter's does (.rng-pop); Update Cloud carries a
    dot; on a phone it folds to its icon like the bar's other action (.ag-act) */
 #hrui .dc-w{position:relative;display:inline-flex;flex:none}
@@ -1038,3 +1026,10 @@
 #hrui .ws-pop:not(.me-pop){display:flex;flex-direction:column;overscroll-behavior:contain}
 #hrui .ws-pop .ws-list{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow-y:auto}
 #hrui .ws-pop:not(.me-pop)>hr,#hrui .ws-pop:not(.me-pop)>.ws-row.plain{flex:none}
+/* Settings › Agent harness: the Harness ID, its first row, read only, with Copy (it left the page's bar). The label is
+   a field label's twin; the ID is whole where it fits and cut at its end where it doesn't, Copy always whole */
+#hrui .set-f .set-lb{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+#hrui .set-ro.set-hid{gap:8px;padding:5px 6px 5px 12px}
+#hrui .set-hid code{flex:1 1 auto;min-width:0;font-size:13px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .set-hid .icon-btn{flex:none;width:28px;height:28px;color:var(--muted)}
+#hrui .set-hid .icon-btn:hover{color:var(--fg)}

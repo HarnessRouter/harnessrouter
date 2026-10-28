@@ -338,3 +338,15 @@ describe('the arrow keys', () => {
     expect(document.activeElement?.textContent).toContain('Environment & limits');
   });
 });
+
+// The Harness ID lives in Settings › Agent harness, first, with its own Copy (not on the bar above the page).
+describe('the Harness ID', () => {
+  test('Agent harness shows it first, read-only, with Copy', async () => {
+    await settings(setup(), 'harness');
+    const f = el.querySelector('.lg-col .set-f');
+    expect(f?.querySelector('.set-lb')?.textContent).toBe('Harness ID');
+    expect(f?.querySelector('.set-hid code')?.textContent).toBe('chrn_p2');
+    expect(f?.querySelector('input')).toBeNull();
+    expect(f?.querySelector('button[aria-label="Copy Harness ID"]')).not.toBeNull();
+  });
+});

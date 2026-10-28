@@ -42,3 +42,11 @@ test('a click on a tab changes nothing about where focus goes', () => {
   draw('settings', onTab);
   expect(document.activeElement).not.toBe(tabNamed('Settings'));
 });
+
+test('the bar no longer carries the Harness ID: it lives in Settings', () => {
+  el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
+  draw('tasks', () => {});
+  expect(el.textContent).not.toContain('chrn_0123456789abcdef');
+  expect(el.querySelector('[aria-label="Copy Harness ID"]')).toBeNull();
+  expect(el.querySelector('[aria-label="Connect your app"]')).not.toBeNull();
+});

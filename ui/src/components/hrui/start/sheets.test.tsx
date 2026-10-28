@@ -4,7 +4,7 @@
 // step list, with the same copy step (Copy prompt on the right of the row under the prompt, no link
 // that opens Claude Code or Codex) and the same key step (the name row at once, a new key made in the
 // current workspace and shown once; each time the sheet opens it starts over). None offers to reuse a
-// key the app already has. Set up the app is two steps and claims nothing it cannot read (the task cards
+// key the app already has. Connect your app is two steps and claims nothing it cannot read (the task cards
 // do not say a task came from an app); no number it did not read is shown.
 import { act, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -148,7 +148,7 @@ describe.each(SHEETS)('%s', (title, sheet, base) => {
   });
 });
 
-describe('Set up the app', () => {
+describe('Connect your app', () => {
   it('says who builds and what runs behind it, true for each prompt, and names no hosted service', async () => {
     await draw(SHEETS[0][1]);
     expect(document.querySelector('.sub')?.textContent).toBe('Your coding agent adds Support replies to your app. This instance runs Hermes behind it, and every task your app sends shows in its task list.');
