@@ -299,6 +299,44 @@ describe('a send whose own stream ends before the turn does', () => {
     expect(textOf(lastA(sid))).toBe('Partial, the middle, the end');
     expect(lastA(sid)?.elapsed).toBe(12);
   });
+
+  // What a gateway that keeps no elapsed answers while a turn is written (#451): the session already
+  // says the turn ended, so the record reads as ended, but it is still the running one (completed_at
+  // null) and its produced files are not in it yet. The turn's last write says when it ended and
+  // holds the files.
+  const report = { container_id: 'c1', file_id: 'f1', filename: 'report.csv' };
+  test('a produced file the record holds only once the turn is written whole shows without a reload', async () => {
+    const sid = await openIdle();
+    streamThatStops('Done');
+    const midWrite = turn({ id: 'r2', user: 'next', assistant: 'Done', completed_at: null, files: [] });
+    mockChat.load.mockResolvedValue(record([turn({ completed_at: 1 }), midWrite]));
+    await act(async () => { await api.send('next'); });
+    await tick();
+    expect(C.getConvState(sid).busy).toBe(false);      // settled from the record read mid-write
+    await tick(2500);                                  // the settled read: still mid-write
+    expect(lastA(sid)?.files).toEqual([]);
+    mockChat.load.mockResolvedValue(record([turn({ completed_at: 1 }), { ...midWrite, completed_at: 1793000000, files: [report] }]));
+    await tick(6000);                                  // the next read finds the turn's last write
+    expect(lastA(sid)?.files).toEqual([report]);
+    expect(lastA(sid)?.elapsed).toBeUndefined();
+    expect(textOf(lastA(sid))).toBe('Done');
+  });
+
+  test('a record that does not hold this turn yet gives it nothing of the turn before', async () => {
+    const sid = await openIdle();
+    streamThatStops('Done');
+    mockChat.load.mockResolvedValue(record([turn({ completed_at: 1, files: [report] })]));
+    await act(async () => { await api.send('next'); });
+    await tick();
+    await act(async () => { mockChat.bus[0].onMsg({ session_id: sid, response_id: 'r2', event: { type: 'response.completed', response: {} } }); });
+    expect(C.getConvState(sid).busy).toBe(false);
+    await tick(2500);                                  // the settled read: the record ends on the previous turn
+    expect(lastA(sid)?.files).toEqual([]);
+    mockChat.load.mockResolvedValue(record([turn({ completed_at: 1, files: [report] }),
+      turn({ id: 'r2', user: 'next', assistant: 'Done', completed_at: 1793000000, files: [] })]));
+    await tick(6000);
+    expect(lastA(sid)?.files).toEqual([]);
+  });
 });
 
 describe('one live feed per setup in a tab', () => {

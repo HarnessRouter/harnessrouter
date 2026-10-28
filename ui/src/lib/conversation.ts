@@ -679,6 +679,10 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
   // took and cost is written by the gateway at settle, a moment after the terminal event. One
   // read (and one retry, since the persist can trail the event by a couple of seconds) folds
   // those figures into the last answer, so the per-turn line appears without a reload.
+  // The record is final when it says when the turn ended (completed_at) or what it took (elapsed):
+  // the gateway writes either with the turn's produced files, and a gateway that keeps no elapsed
+  // still says completed_at. Waiting for elapsed alone never folded the files there (#451): a turn
+  // settled from a record read mid-write kept no file card until a reload.
   const settledRead = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (busy) return;
@@ -696,8 +700,11 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
       if (stop) return;
       try {
         const { turns } = await loadSessionTurns(sid);
-        const t = turns[turns.length - 1];
-        if (t && typeof t.elapsed === 'number') {
+        // a record that does not hold this answer's turn yet ends on the previous turn, whose end and
+        // files are not this one's
+        const asked = getConvState(convKeyRef.current).msgs.filter((x) => x.role === 'assistant').length;
+        const t = turns.length >= asked ? turns[turns.length - 1] : undefined;
+        if (t && (typeof t.elapsed === 'number' || typeof t.completed_at === 'number')) {
           // a turn whose own stream ended before it did (_gapped): the record's whole answer, when the
           // record holds just the turns this thread does (nothing unrecorded after it)
           const whole = _gapped.has(sid) ? msgsFromTurns(turns).msgs : null;

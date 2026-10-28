@@ -101,6 +101,9 @@ export interface SessionTurn {
   id: string; status: string; user: string; assistant: string;
   /** What this turn alone took and cost; absent on turns from before the gateway kept them. */
   elapsed?: number | null;
+  /** When the turn ended, Unix seconds: null while its stored record is still the running one. The
+   *  record that says when it ended is the turn's last write, the one that holds its produced files. */
+  completed_at?: number | null;
   user_files?: { name: string }[];   // caller-attached input files (names; bytes live in the workspace)
   tools: { name: string; arguments: string; result?: string; output?: string; is_error?: boolean }[]; files: RespFile[];
 }
