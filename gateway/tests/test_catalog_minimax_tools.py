@@ -53,3 +53,13 @@ def test_minimax_is_wired_like_kimi_and_speaks_the_custom_openai_format():
     assert "minimax" not in A._CUSTOM_FORMAT_BACKENDS["anthropic"]
     for runner_provider in mm.values():
         assert runner_provider in BACKENDS["minimax"]["providers"]
+
+
+def test_minimax_m3_1_flash_is_one_id_each_aggregator_serves_under_its_own_slug():
+    """MiniMax calls it MiniMax-M3.1-Flash. An id here is one lowercase name per model, and each vendor's own
+    name for it lives in _VENDOR_MODELS: a second spelling such as MiniMax-M3 would list minimax-m3 twice."""
+    for vendor in ("openrouter", "vercel", "tokenrouter"):
+        assert A._VENDOR_MODELS[vendor]["minimax-m3.1-flash"] == "minimax/minimax-m3.1-flash"
+    models = A._MODEL_CATALOG["minimax"]["models"]
+    assert models.index("minimax-m3.1-flash") < models.index("minimax-m3")       # newest first in its family
+    assert all(m == m.lower() for m in models)

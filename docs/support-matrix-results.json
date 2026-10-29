@@ -16765,33 +16765,36 @@
   "provider": "dsh-anthropic",
   "harness": "dsh",
   "model": "claude-opus-5",
-  "at": "2026-09-08T12:15:13.274Z",
+  "at": "2026-10-28T23:35:34.813Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.38,
-   "tail": "Reply with exactly: M1-claude-opus-5 DEEPSEEK HARNESS M1-claude-opus-5",
+   "s": 7.82,
+   "tail": "Reply with exactly: M1-claude-opus-5 M1-claude-opus-5 DeepSeek Harness \u00b7 claude-opus-5 \u00b7 Done in 5.7 s",
+   "answer": "M1-claude-opus-5",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess41b69cf881fc418ba82830113f57ed6b",
+  "sid": "hsess019b8164cc814fd391c2c35bb3bebe44",
   "followup": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.71,
-   "tail": "Reply with exactly: M2-claude-opus-5 DEEPSEEK HARNESS M2-claude-opus-5",
+   "s": 7.76,
+   "tail": "Reply with exactly: M2-claude-opus-5 M2-claude-opus-5 DeepSeek Harness \u00b7 claude-opus-5 \u00b7 Done in 5.4 s",
+   "answer": "M2-claude-opus-5",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "claude-fable-5",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.27,
-   "tail": "Reply with exactly: M3-claude-fable-5 DEEPSEEK HARNESS M3-claude-fable-5",
+   "s": 7.76,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.7 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -16799,8 +16802,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.28,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.77,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 claude-opus-5 \u00b7 Done in 6.4 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -16817,55 +16821,71 @@
    "ok": true,
    "status": "done",
    "pill": "done",
-   "s": 9.56,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-opus-5",
+   "s": 9.74,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-opus-5 DeepSeek Harness \u00b7 claude-opus-5 \u00b7 Done in 6.8 s",
+   "answer": "M1-claude-opus-5",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess41b69cf881fc418ba82830113f57ed6b\",\"checkpoint_sha\":\"4700b8a623c78edb43e7f9ceb268985cee15517f1c7ed0dfdafee07c926c954f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess019b8164cc814fd391c2c35bb3bebe44\",\"checkpoint_sha\":\"78ce2f15e541aa3471a0a0d6c89dc7e202efc3afc6d0a0817e9bb5347c6aac56\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Anthropic",
   "connections": [
-   "integration:Anthropic"
+   "integration:Anthropic",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "claude-opus-5",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 13,
+   "cache_read": 48943,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-anthropic|dsh|claude-fable-5": {
   "provider": "dsh-anthropic",
   "harness": "dsh",
   "model": "claude-fable-5",
-  "at": "2026-09-08T12:16:13.726Z",
+  "at": "2026-10-28T23:34:28.025Z",
   "first": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.1,
-   "tail": "Reply with exactly: M1-claude-fable-5 DEEPSEEK HARNESS M1-claude-fable-5",
+   "s": 10.75,
+   "tail": "Reply with exactly: M1-claude-fable-5 M1-claude-fable-5 DeepSeek Harness \u00b7 claude-fable-5 \u00b7 Done in 7.5 s",
+   "answer": "M1-claude-fable-5",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess24de70330efc4462a6bf35f477417a68",
+  "sid": "hsess459f1bf7deb44087859e0ccb0c64534b",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.1,
-   "tail": "Reply with exactly: M2-claude-fable-5 DEEPSEEK HARNESS M2-claude-fable-5",
+   "s": 10.78,
+   "tail": "Reply with exactly: M2-claude-fable-5 M2-claude-fable-5 DeepSeek Harness \u00b7 claude-fable-5 \u00b7 Done in 7.0 s",
+   "answer": "M2-claude-fable-5",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "claude-opus-5",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.18,
-   "tail": "Reply with exactly: M3-claude-opus-5 DEEPSEEK HARNESS M3-claude-opus-5",
+   "s": 10.82,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 7.8 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -16873,8 +16893,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 14.34,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 13.84,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 claude-fable-5 \u00b7 Done in 10.9 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -16891,55 +16912,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.24,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-fable-5",
+   "s": 10.8,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-fable-5 DeepSeek Harness \u00b7 claude-fable-5 \u00b7 Done in 8.6 s",
+   "answer": "M1-claude-fable-5",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess24de70330efc4462a6bf35f477417a68\",\"checkpoint_sha\":\"8281a7ee3fe5d677e0f89674c8bde792f5c0537dc5b4690aef7e91eddcc6ec64\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess459f1bf7deb44087859e0ccb0c64534b\",\"checkpoint_sha\":\"c00db33eb87a4918178f635b3934dd8e2d16a3461ace5f2971c6f646f93e0f59\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Anthropic",
   "connections": [
-   "integration:Anthropic"
+   "integration:Anthropic",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "claude-fable-5",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 13,
+   "cache_read": 48958,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-anthropic|dsh|claude-fable-5-1": {
   "provider": "dsh-anthropic",
   "harness": "dsh",
   "model": "claude-fable-5-1",
-  "at": "2026-09-08T12:17:21.933Z",
+  "at": "2026-10-28T23:33:37.299Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 14.15,
-   "tail": "Reply with exactly: M1-claude-fable-5-1 DEEPSEEK HARNESS M1-claude-fable-5-1",
+   "s": 7.83,
+   "tail": "Reply with exactly: M1-claude-fable-5-1 M1-claude-fable-5-1 DeepSeek Harness \u00b7 claude-fable-5-1 \u00b7 Done in 5.6 s",
+   "answer": "M1-claude-fable-5-1",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess4ed5637e1e5a49f0a085b8f7925c731d",
+  "sid": "hsessf7c8d7bc37444b6886a0478c3070b7f6",
   "followup": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 12.66,
-   "tail": "Reply with exactly: M2-claude-fable-5-1 DEEPSEEK HARNESS M2-claude-fable-5-1",
+   "s": 8.02,
+   "tail": "Reply with exactly: M2-claude-fable-5-1 M2-claude-fable-5-1 DeepSeek Harness \u00b7 claude-fable-5-1 \u00b7 Done in 6.4 s",
+   "answer": "M2-claude-fable-5-1",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "claude-opus-5",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "done",
    "pill": "done",
-   "s": 9.61,
-   "tail": "Reply with exactly: M3-claude-opus-5 DEEPSEEK HARNESS M3-claude-opus-5",
+   "s": 9.39,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 6.6 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -16947,8 +16984,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 17.54,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 7.74,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 claude-fable-5-1 \u00b7 Done in 5.8 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -16965,55 +17003,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.31,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-fable-5-1",
+   "s": 7.76,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-fable-5-1 DeepSeek Harness \u00b7 claude-fable-5-1 \u00b7 Done in 5.3 s",
+   "answer": "M1-claude-fable-5-1",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess4ed5637e1e5a49f0a085b8f7925c731d\",\"checkpoint_sha\":\"e62c6599bf9f864f40f95f891c7ffd1245ca59bbd4f1210f51d33239143b2b65\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessf7c8d7bc37444b6886a0478c3070b7f6\",\"checkpoint_sha\":\"ae91a16974472652183f7f94c065a4ce3f52fccdcf186b9b35fcdc7e4dbeb37b\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Anthropic",
   "connections": [
-   "integration:Anthropic"
+   "integration:Anthropic",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "claude-fable-5-1",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 21,
+   "cache_read": 49010,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-anthropic|dsh|claude-opus-4.8": {
   "provider": "dsh-anthropic",
   "harness": "dsh",
   "model": "claude-opus-4.8",
-  "at": "2026-09-08T12:18:36.710Z",
+  "at": "2026-10-28T23:37:23.696Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.51,
-   "tail": "Reply with exactly: M1-claude-opus-4.8 DEEPSEEK HARNESS M1-claude-opus-4.8",
+   "s": 7.79,
+   "tail": "Reply with exactly: M1-claude-opus-4.8 M1-claude-opus-4.8 DeepSeek Harness \u00b7 claude-opus-4.8 \u00b7 Done in 5.8 s",
+   "answer": "M1-claude-opus-4.8",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess1d3b1e414d704238946096420db689b1",
+  "sid": "hsess94ae0029d5ec45e5810cdb237b49a324",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.14,
-   "tail": "Reply with exactly: M2-claude-opus-4.8 DEEPSEEK HARNESS M2-claude-opus-4.8",
+   "s": 10.86,
+   "tail": "Reply with exactly: M2-claude-opus-4.8 M2-claude-opus-4.8 DeepSeek Harness \u00b7 claude-opus-4.8 \u00b7 Done in 7.4 s",
+   "answer": "M2-claude-opus-4.8",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "claude-opus-5",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.18,
-   "tail": "Reply with exactly: M3-claude-opus-5 DEEPSEEK HARNESS M3-claude-opus-5",
+   "s": 7.73,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 6.0 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17021,8 +17075,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.19,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.96,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 claude-opus-4.8 \u00b7 Done in 9.2 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17039,55 +17094,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.1,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-opus-4.8",
+   "s": 7.84,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-opus-4.8 DeepSeek Harness \u00b7 claude-opus-4.8 \u00b7 Done in 5.3 s",
+   "answer": "M1-claude-opus-4.8",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess1d3b1e414d704238946096420db689b1\",\"checkpoint_sha\":\"5fa1cd90cfae80518b73130b458a937d357be85e944384e878708fa80257ba19\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess94ae0029d5ec45e5810cdb237b49a324\",\"checkpoint_sha\":\"b23d54a0f98f36ede8f4838194c66a202f7aba43d16dc95b418fb7e1b7a8024b\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Anthropic",
   "connections": [
-   "integration:Anthropic"
+   "integration:Anthropic",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "claude-opus-4-8",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 13,
+   "cache_read": 48990,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-anthropic|dsh|claude-sonnet-5": {
   "provider": "dsh-anthropic",
   "harness": "dsh",
   "model": "claude-sonnet-5",
-  "at": "2026-09-08T12:19:34.023Z",
+  "at": "2026-10-28T23:36:28.623Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.56,
-   "tail": "Reply with exactly: M1-claude-sonnet-5 DEEPSEEK HARNESS M1-claude-sonnet-5",
+   "s": 7.76,
+   "tail": "Reply with exactly: M1-claude-sonnet-5 M1-claude-sonnet-5 DeepSeek Harness \u00b7 claude-sonnet-5 \u00b7 Done in 5.5 s",
+   "answer": "M1-claude-sonnet-5",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess30fbf752ccd24573a97e5e84b8c206bf",
+  "sid": "hsessa2823c9b44a54341b6688dd26fc1e1b6",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.01,
-   "tail": "Reply with exactly: M2-claude-sonnet-5 DEEPSEEK HARNESS M2-claude-sonnet-5",
+   "s": 7.89,
+   "tail": "Reply with exactly: M2-claude-sonnet-5 M2-claude-sonnet-5 DeepSeek Harness \u00b7 claude-sonnet-5 \u00b7 Done in 5.3 s",
+   "answer": "M2-claude-sonnet-5",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "claude-opus-5",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 12.6,
-   "tail": "Reply with exactly: M3-claude-opus-5 DEEPSEEK HARNESS M3-claude-opus-5",
+   "s": 10.82,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 6.6 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17095,8 +17166,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.22,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.81,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 claude-sonnet-5 \u00b7 Done in 8.0 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17113,55 +17185,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.11,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-sonnet-5",
+   "s": 7.8,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-sonnet-5 DeepSeek Harness \u00b7 claude-sonnet-5 \u00b7 Done in 5.8 s",
+   "answer": "M1-claude-sonnet-5",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess30fbf752ccd24573a97e5e84b8c206bf\",\"checkpoint_sha\":\"a0519e9e41ed3cf2633ff98f96d28c95e8fb195f071988e5ab4024e725eacb6d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessa2823c9b44a54341b6688dd26fc1e1b6\",\"checkpoint_sha\":\"312394a79a1b491a0c7e1dfcf96e5abdbd7659d94bf0df87273772dd0bc45192\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Anthropic",
   "connections": [
-   "integration:Anthropic"
+   "integration:Anthropic",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "claude-sonnet-5",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 13,
+   "cache_read": 49280,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-anthropic|dsh|claude-opus-4.7": {
   "provider": "dsh-anthropic",
   "harness": "dsh",
   "model": "claude-opus-4.7",
-  "at": "2026-09-08T12:20:32.768Z",
+  "at": "2026-10-28T23:38:18.864Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 12.59,
-   "tail": "Reply with exactly: M1-claude-opus-4.7 DEEPSEEK HARNESS M1-claude-opus-4.7",
+   "s": 7.76,
+   "tail": "Reply with exactly: M1-claude-opus-4.7 M1-claude-opus-4.7 DeepSeek Harness \u00b7 claude-opus-4.7 \u00b7 Done in 5.4 s",
+   "answer": "M1-claude-opus-4.7",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess0472c97349404435ad3e36bf247ba854",
+  "sid": "hsessed2e4949b95e4bb583aeca56201ce1fb",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8,
-   "tail": "Reply with exactly: M2-claude-opus-4.7 DEEPSEEK HARNESS M2-claude-opus-4.7",
+   "s": 7.81,
+   "tail": "Reply with exactly: M2-claude-opus-4.7 M2-claude-opus-4.7 DeepSeek Harness \u00b7 claude-opus-4.7 \u00b7 Done in 5.8 s",
+   "answer": "M2-claude-opus-4.7",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "claude-opus-5",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.59,
-   "tail": "Reply with exactly: M3-claude-opus-5 DEEPSEEK HARNESS M3-claude-opus-5",
+   "s": 10.83,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 6.8 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17169,8 +17257,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.28,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.93,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 claude-opus-4.7 \u00b7 Done in 6.7 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17185,57 +17274,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.62,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-opus-4.7",
+   "s": 7.79,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-opus-4.7 DeepSeek Harness \u00b7 claude-opus-4.7 \u00b7 Done in 5.0 s",
+   "answer": "M1-claude-opus-4.7",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess0472c97349404435ad3e36bf247ba854\",\"checkpoint_sha\":\"5a04c6bcb904a3cd51dc7f5b64a57b5dea4e9860f5e2c8b11549e0fc958aff55\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessed2e4949b95e4bb583aeca56201ce1fb\",\"checkpoint_sha\":\"5cb4d14e5fea344a87a41bb60cd45882ff9766ecaf00b85c9d78935396f45a9c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Anthropic",
   "connections": [
-   "integration:Anthropic"
+   "integration:Anthropic",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "claude-opus-4-7",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 28,
+   "cache_read": 50620,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-anthropic|dsh|claude-sonnet-4.6": {
   "provider": "dsh-anthropic",
   "harness": "dsh",
   "model": "claude-sonnet-4.6",
-  "at": "2026-09-08T12:21:33.028Z",
+  "at": "2026-10-28T23:39:13.818Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 12.66,
-   "tail": "Reply with exactly: M1-claude-sonnet-4.6 DEEPSEEK HARNESS M1-claude-sonnet-4.6",
+   "s": 7.71,
+   "tail": "Reply with exactly: M1-claude-sonnet-4.6 M1-claude-sonnet-4.6 DeepSeek Harness \u00b7 claude-sonnet-4.6 \u00b7 Done in 5.7 s",
+   "answer": "M1-claude-sonnet-4.6",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess6374823b51da4d38a034c5fae3584408",
+  "sid": "hsess7aa2eed76afd46d5b4c47f567cd49e2c",
   "followup": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.53,
-   "tail": "Reply with exactly: M2-claude-sonnet-4.6 DEEPSEEK HARNESS M2-claude-sonnet-4.6",
+   "s": 7.76,
+   "tail": "Reply with exactly: M2-claude-sonnet-4.6 M2-claude-sonnet-4.6 DeepSeek Harness \u00b7 claude-sonnet-4.6 \u00b7 Done in 5.5 s",
+   "answer": "M2-claude-sonnet-4.6",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "claude-opus-5",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.61,
-   "tail": "Reply with exactly: M3-claude-opus-5 DEEPSEEK HARNESS M3-claude-opus-5",
+   "s": 10.8,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 7.3 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17243,8 +17348,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.25,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.88,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 claude-sonnet-4.6 \u00b7 Done in 8.0 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17261,55 +17367,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.13,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-sonnet-4.6",
+   "s": 7.75,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-sonnet-4.6 DeepSeek Harness \u00b7 claude-sonnet-4.6 \u00b7 Done in 5.9 s",
+   "answer": "M1-claude-sonnet-4.6",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess6374823b51da4d38a034c5fae3584408\",\"checkpoint_sha\":\"36571bbc0601712159d6c39e7d89ad04b49f0abecc07ee57209ff07ad50518b0\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess7aa2eed76afd46d5b4c47f567cd49e2c\",\"checkpoint_sha\":\"5b6fdbbffc5b9004631831fc0fa1773412445aa1789cdc25af9efe0105279034\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Anthropic",
   "connections": [
-   "integration:Anthropic"
+   "integration:Anthropic",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "claude-sonnet-4-6",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 16,
+   "cache_read": 37257,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-anthropic|dsh|claude-haiku-4.5": {
   "provider": "dsh-anthropic",
   "harness": "dsh",
   "model": "claude-haiku-4.5",
-  "at": "2026-09-08T12:22:33.372Z",
+  "at": "2026-10-28T23:40:08.618Z",
   "first": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.04,
-   "tail": "Reply with exactly: M1-claude-haiku-4.5 DEEPSEEK HARNESS M1-claude-haiku-4.5",
+   "s": 7.69,
+   "tail": "Reply with exactly: M1-claude-haiku-4.5 M1-claude-haiku-4.5 DeepSeek Harness \u00b7 claude-haiku-4.5 \u00b7 Done in 5.0 s",
+   "answer": "M1-claude-haiku-4.5",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess80948285d2894ffab0ffbc339411552f",
+  "sid": "hsess2b3466841a1149da84036219b018ffd5",
   "followup": {
    "ok": true,
-   "status": "completed",
+   "status": "done",
    "pill": "done",
-   "s": 8.19,
-   "tail": "Reply with exactly: M2-claude-haiku-4.5 DEEPSEEK HARNESS M2-claude-haiku-4.5",
+   "s": 9.32,
+   "tail": "Reply with exactly: M2-claude-haiku-4.5 M2-claude-haiku-4.5 DeepSeek Harness \u00b7 claude-haiku-4.5 \u00b7 Done in 6.4 s",
+   "answer": "M2-claude-haiku-4.5",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "claude-opus-5",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.1,
-   "tail": "Reply with exactly: M3-claude-opus-5 DEEPSEEK HARNESS M3-claude-opus-5",
+   "s": 10.73,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 7.0 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17317,8 +17439,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.29,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.76,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 claude-haiku-4.5 \u00b7 Done in 6.9 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17335,55 +17458,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.12,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-claude-haiku-4.5",
+   "s": 7.96,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-haiku-4.5 DeepSeek Harness \u00b7 claude-haiku-4.5 \u00b7 Done in 6.3 s",
+   "answer": "M1-claude-haiku-4.5",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess80948285d2894ffab0ffbc339411552f\",\"checkpoint_sha\":\"a704f8b69a87d3e8a5485cdf4b8534aeb214f3cdda2564d3edb029c620b1f313\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess2b3466841a1149da84036219b018ffd5\",\"checkpoint_sha\":\"1ec00327f38c66a73d3af91dd542f259cc4aa2eb74d4b654e7a6499c7378780c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Anthropic",
   "connections": [
-   "integration:Anthropic"
+   "integration:Anthropic",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "claude-haiku-4-5-20251001",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 20,
+   "cache_read": 37735,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-azure-e2|dsh|gpt-6-astra": {
   "provider": "dsh-azure-e2",
   "harness": "dsh",
   "model": "gpt-6-astra",
-  "at": "2026-09-08T12:32:37.338Z",
+  "at": "2026-10-28T23:55:04.874Z",
   "first": {
    "ok": true,
-   "status": "completed",
+   "status": "done",
    "pill": "done",
-   "s": 11.07,
-   "tail": "Reply with exactly: M1-gpt-6-astra DEEPSEEK HARNESS M1-gpt-6-astra",
+   "s": 9.26,
+   "tail": "Reply with exactly: M1-gpt-6-astra M1-gpt-6-astra DeepSeek Harness \u00b7 gpt-6-astra \u00b7 Done in 6.3 s",
+   "answer": "M1-gpt-6-astra",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess5143f92871cb4de481aaef9f6a0e1e65",
+  "sid": "hsess22c13295986246cb989908786b7c7c2b",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.09,
-   "tail": "Reply with exactly: M2-gpt-6-astra DEEPSEEK HARNESS M2-gpt-6-astra",
+   "s": 7.69,
+   "tail": "Reply with exactly: M2-gpt-6-astra M2-gpt-6-astra DeepSeek Harness \u00b7 gpt-6-astra \u00b7 Done in 5.8 s",
+   "answer": "M2-gpt-6-astra",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-5.6-sol",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.56,
-   "tail": "Reply with exactly: M3-gpt-5.6-sol DEEPSEEK HARNESS M3-gpt-5.6-sol",
+   "s": 7.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.4 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17391,8 +17530,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 17.59,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.73,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-6-astra \u00b7 Done in 8.4 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17407,57 +17547,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.62,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-6-astra",
+   "s": 10.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-6-astra DeepSeek Harness \u00b7 gpt-6-astra \u00b7 Done in 8.0 s",
+   "answer": "M1-gpt-6-astra",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess5143f92871cb4de481aaef9f6a0e1e65\",\"checkpoint_sha\":\"eccee7b42f73160a79ce760911113d3957ac3d109c0c6d857eaa86721cb151c2\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess22c13295986246cb989908786b7c7c2b\",\"checkpoint_sha\":\"dd6c912025d012e40ba8063eb2fa88a51904058190277c04c7947a0b422ff745\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Azure OpenAI E2",
   "connections": [
-   "integration:Azure OpenAI E2"
+   "integration:Azure OpenAI E2",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-6-astra",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18,
+   "cache_read": 26866,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-azure-e2|dsh|gpt-5.6-sol": {
   "provider": "dsh-azure-e2",
   "harness": "dsh",
   "model": "gpt-5.6-sol",
-  "at": "2026-09-08T12:33:45.465Z",
+  "at": "2026-10-28T23:56:00.644Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 14.14,
-   "tail": "Reply with exactly: M1-gpt-5.6-sol DEEPSEEK HARNESS M1-gpt-5.6-sol",
+   "s": 10.73,
+   "tail": "Reply with exactly: M1-gpt-5.6-sol M1-gpt-5.6-sol DeepSeek Harness \u00b7 gpt-5.6-sol \u00b7 Done in 8.9 s",
+   "answer": "M1-gpt-5.6-sol",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess81de0c4dcffb4f92b70f38768ef8bb97",
+  "sid": "hsessceac0a4d790841c6bd04bed8cac469b3",
   "followup": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 12.71,
-   "tail": "Reply with exactly: M2-gpt-5.6-sol DEEPSEEK HARNESS M2-gpt-5.6-sol",
+   "s": 7.69,
+   "tail": "Reply with exactly: M2-gpt-5.6-sol M2-gpt-5.6-sol DeepSeek Harness \u00b7 gpt-5.6-sol \u00b7 Done in 5.5 s",
+   "answer": "M2-gpt-5.6-sol",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 14.4,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.5 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17465,8 +17621,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.18,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.73,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.6-sol \u00b7 Done in 8.3 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17483,55 +17640,71 @@
    "ok": true,
    "status": "done",
    "pill": "done",
-   "s": 9.63,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.6-sol",
+   "s": 9.26,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.6-sol DeepSeek Harness \u00b7 gpt-5.6-sol \u00b7 Done in 6.2 s",
+   "answer": "M1-gpt-5.6-sol",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess81de0c4dcffb4f92b70f38768ef8bb97\",\"checkpoint_sha\":\"b3797920b7f54f4bb75b3c49ab59dcffb7082eb529169cae506fab2d4ff7ae0f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessceac0a4d790841c6bd04bed8cac469b3\",\"checkpoint_sha\":\"146e1316c4f22e2a5580a344215b7764d2cae960186254750e65443ff5d34666\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Azure OpenAI E2",
   "connections": [
-   "integration:Azure OpenAI E2"
+   "integration:Azure OpenAI E2",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.6-sol",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18,
+   "cache_read": 26935,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-azure-e2|dsh|gpt-5.6-terra": {
   "provider": "dsh-azure-e2",
   "harness": "dsh",
   "model": "gpt-5.6-terra",
-  "at": "2026-09-08T12:34:56.752Z",
+  "at": "2026-10-28T23:56:56.458Z",
   "first": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.08,
-   "tail": "Reply with exactly: M1-gpt-5.6-terra DEEPSEEK HARNESS M1-gpt-5.6-terra",
+   "s": 7.68,
+   "tail": "Reply with exactly: M1-gpt-5.6-terra M1-gpt-5.6-terra DeepSeek Harness \u00b7 gpt-5.6-terra \u00b7 Done in 5.3 s",
+   "answer": "M1-gpt-5.6-terra",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess1299d49587ce41bc8dc7ef8813f2fd2f",
+  "sid": "hsessefc029838b8142aebb10ea6591b77b9a",
   "followup": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.62,
-   "tail": "Reply with exactly: M2-gpt-5.6-terra DEEPSEEK HARNESS M2-gpt-5.6-terra",
+   "s": 7.67,
+   "tail": "Reply with exactly: M2-gpt-5.6-terra M2-gpt-5.6-terra DeepSeek Harness \u00b7 gpt-5.6-terra \u00b7 Done in 4.7 s",
+   "answer": "M2-gpt-5.6-terra",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.07,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.7,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.3 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17539,8 +17712,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.12,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.73,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.6-terra \u00b7 Done in 8.6 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17555,57 +17729,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.63,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.6-terra",
+   "s": 7.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.6-terra DeepSeek Harness \u00b7 gpt-5.6-terra \u00b7 Done in 5.1 s",
+   "answer": "M1-gpt-5.6-terra",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess1299d49587ce41bc8dc7ef8813f2fd2f\",\"checkpoint_sha\":\"cc4f206491eeb39f2a1b8eb93fdddf999cc8ef657eeafabf9db41cd477cb5eb3\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessefc029838b8142aebb10ea6591b77b9a\",\"checkpoint_sha\":\"ab910003bfaaae29e0ac9a35df4ae5bd9220a2d9607fcd35602a9977df5b916c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Azure OpenAI E2",
   "connections": [
-   "integration:Azure OpenAI E2"
+   "integration:Azure OpenAI E2",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.6-terra",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18,
+   "cache_read": 26918,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-azure-e2|dsh|gpt-5.6-luna": {
   "provider": "dsh-azure-e2",
   "harness": "dsh",
   "model": "gpt-5.6-luna",
-  "at": "2026-09-08T12:35:55.470Z",
+  "at": "2026-10-28T23:57:47.592Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.39,
-   "tail": "Reply with exactly: M1-gpt-5.6-luna DEEPSEEK HARNESS M1-gpt-5.6-luna",
+   "s": 7.72,
+   "tail": "Reply with exactly: M1-gpt-5.6-luna M1-gpt-5.6-luna DeepSeek Harness \u00b7 gpt-5.6-luna \u00b7 Done in 5.1 s",
+   "answer": "M1-gpt-5.6-luna",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess2b488fd4e0c44b9bbc030dc6c4321c4a",
+  "sid": "hsessbcba43449f32498f97bfffd81e9ff7b1",
   "followup": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.59,
-   "tail": "Reply with exactly: M2-gpt-5.6-luna DEEPSEEK HARNESS M2-gpt-5.6-luna",
+   "s": 7.67,
+   "tail": "Reply with exactly: M2-gpt-5.6-luna M2-gpt-5.6-luna DeepSeek Harness \u00b7 gpt-5.6-luna \u00b7 Done in 4.5 s",
+   "answer": "M2-gpt-5.6-luna",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.25,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.8 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17613,8 +17803,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 14.42,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 7.75,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.6-luna \u00b7 Done in 6.0 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17631,55 +17822,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.25,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.6-luna",
+   "s": 7.67,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.6-luna DeepSeek Harness \u00b7 gpt-5.6-luna \u00b7 Done in 4.8 s",
+   "answer": "M1-gpt-5.6-luna",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess2b488fd4e0c44b9bbc030dc6c4321c4a\",\"checkpoint_sha\":\"95a57ac70ffbed1f06ab28baf08acc264df8b4f1462d443d92ae4451b98565b2\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessbcba43449f32498f97bfffd81e9ff7b1\",\"checkpoint_sha\":\"2692726a90d2fb9d02b2949ba1cbc90aa9ad7dd6e2cb4f179ff5bb5feb1dc7c5\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Azure OpenAI E2",
   "connections": [
-   "integration:Azure OpenAI E2"
+   "integration:Azure OpenAI E2",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.6-luna",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18,
+   "cache_read": 26947,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-azure-e2|dsh|gpt-5.5": {
   "provider": "dsh-azure-e2",
   "harness": "dsh",
   "model": "gpt-5.5",
-  "at": "2026-09-08T12:37:00.560Z",
+  "at": "2026-10-28T23:58:35.707Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.53,
-   "tail": "Reply with exactly: M1-gpt-5.5 DEEPSEEK HARNESS M1-gpt-5.5",
+   "s": 7.65,
+   "tail": "Reply with exactly: M1-gpt-5.5 M1-gpt-5.5 DeepSeek Harness \u00b7 gpt-5.5 \u00b7 Done in 5.7 s",
+   "answer": "M1-gpt-5.5",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess633924af3b7346a6bb0c4aeba0a47aa6",
+  "sid": "hsess6303120d02844a12bbe31ea2b2d51dfb",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.01,
-   "tail": "Reply with exactly: M2-gpt-5.5 DEEPSEEK HARNESS M2-gpt-5.5",
+   "s": 7.65,
+   "tail": "Reply with exactly: M2-gpt-5.5 M2-gpt-5.5 DeepSeek Harness \u00b7 gpt-5.5 \u00b7 Done in 4.6 s",
+   "answer": "M2-gpt-5.5",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.13,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.2 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17687,8 +17894,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.17,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.75,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.5 \u00b7 Done in 6.3 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17703,57 +17911,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.62,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.5",
+   "s": 7.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.5 DeepSeek Harness \u00b7 gpt-5.5 \u00b7 Done in 5.9 s",
+   "answer": "M1-gpt-5.5",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess633924af3b7346a6bb0c4aeba0a47aa6\",\"checkpoint_sha\":\"cf96029bff6d406cc7c68a18efa22d47fa5d9c96a9ac3af32bad6a2e733855b6\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess6303120d02844a12bbe31ea2b2d51dfb\",\"checkpoint_sha\":\"8371b6580b5b806b7c563f4f730fe2ddd5652d64700805c65f30f0ab4411b183\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Azure OpenAI E2",
   "connections": [
-   "integration:Azure OpenAI E2"
+   "integration:Azure OpenAI E2",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.5",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 8186,
+   "cache_read": 25600,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-azure-e2|dsh|gpt-5.4": {
   "provider": "dsh-azure-e2",
   "harness": "dsh",
   "model": "gpt-5.4",
-  "at": "2026-09-08T12:37:59.208Z",
+  "at": "2026-10-28T23:59:26.732Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.47,
-   "tail": "Reply with exactly: M1-gpt-5.4 DEEPSEEK HARNESS M1-gpt-5.4",
+   "s": 7.69,
+   "tail": "Reply with exactly: M1-gpt-5.4 M1-gpt-5.4 DeepSeek Harness \u00b7 gpt-5.4 \u00b7 Done in 4.6 s",
+   "answer": "M1-gpt-5.4",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsessb910b4783fb34424b06d78f89275648a",
+  "sid": "hsess26b97b040cca4bf6ba0d3a4955e171d4",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.02,
-   "tail": "Reply with exactly: M2-gpt-5.4 DEEPSEEK HARNESS M2-gpt-5.4",
+   "s": 7.66,
+   "tail": "Reply with exactly: M2-gpt-5.4 M2-gpt-5.4 DeepSeek Harness \u00b7 gpt-5.4 \u00b7 Done in 4.4 s",
+   "answer": "M2-gpt-5.4",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 25.29,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.67,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.2 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17761,8 +17985,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.36,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.74,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.4 \u00b7 Done in 6.5 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17777,57 +18002,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.75,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.4",
+   "s": 7.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.4 DeepSeek Harness \u00b7 gpt-5.4 \u00b7 Done in 4.5 s",
+   "answer": "M1-gpt-5.4",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsessb910b4783fb34424b06d78f89275648a\",\"checkpoint_sha\":\"7856cd1597fa5083428614df7a9eb48c11588c01225fe1f47cb8208343b2ace7\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess26b97b040cca4bf6ba0d3a4955e171d4\",\"checkpoint_sha\":\"f7fc31e046140614a688132bc8cf41a5971d35621bc6a85d3c1e244c4f964077\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Azure OpenAI E2",
   "connections": [
-   "integration:Azure OpenAI E2"
+   "integration:Azure OpenAI E2",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.4",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 13841,
+   "cache_read": 19968,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-azure-e2|dsh|gpt-5.4-mini": {
   "provider": "dsh-azure-e2",
   "harness": "dsh",
   "model": "gpt-5.4-mini",
-  "at": "2026-09-08T12:44:47.612Z",
+  "at": "2026-10-29T00:00:17.839Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.42,
-   "tail": "Reply with exactly: M1-gpt-5.4-mini DEEPSEEK HARNESS M1-gpt-5.4-mini",
+   "s": 10.7,
+   "tail": "Reply with exactly: M1-gpt-5.4-mini M1-gpt-5.4-mini DeepSeek Harness \u00b7 gpt-5.4-mini \u00b7 Done in 8.6 s",
+   "answer": "M1-gpt-5.4-mini",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsesse81fe35d963341fdb5046eee1ea1b1ae",
+  "sid": "hsess6ded0d218bb64826a4f3eb6f3c506a39",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.13,
-   "tail": "Reply with exactly: M2-gpt-5.4-mini DEEPSEEK HARNESS M2-gpt-5.4-mini",
+   "s": 7.68,
+   "tail": "Reply with exactly: M2-gpt-5.4-mini M2-gpt-5.4-mini DeepSeek Harness \u00b7 gpt-5.4-mini \u00b7 Done in 5.7 s",
+   "answer": "M2-gpt-5.4-mini",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 23.78,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.67,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 4.9 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17835,8 +18076,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.19,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.72,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.4-mini \u00b7 Done in 7.7 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17851,57 +18093,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.56,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.4-mini",
+   "s": 7.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.4-mini DeepSeek Harness \u00b7 gpt-5.4-mini \u00b7 Done in 5.1 s",
+   "answer": "M1-gpt-5.4-mini",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsesse81fe35d963341fdb5046eee1ea1b1ae\",\"checkpoint_sha\":\"f6c38f1b99c736561f66ec1d9a335fa4eb3d5132ad22e0bf99239eb56c25cfee\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess6ded0d218bb64826a4f3eb6f3c506a39\",\"checkpoint_sha\":\"3e259a3dcfcad54764905f12715779c16333b6d6f24f2f1883dba2db7f023fc3\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Azure OpenAI E2",
   "connections": [
-   "integration:Azure OpenAI E2"
+   "integration:Azure OpenAI E2",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.4-mini",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 8230,
+   "cache_read": 25600,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-azure-e2|dsh|gpt-5.2": {
   "provider": "dsh-azure-e2",
   "harness": "dsh",
   "model": "gpt-5.2",
-  "at": "2026-09-08T12:42:36.034Z",
+  "at": "2026-10-29T00:02:06.050Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.51,
-   "tail": "Reply with exactly: M1-gpt-5.2 DEEPSEEK HARNESS M1-gpt-5.2",
+   "s": 7.7,
+   "tail": "Reply with exactly: M1-gpt-5.2 M1-gpt-5.2 DeepSeek Harness \u00b7 gpt-5.2 \u00b7 Done in 4.8 s",
+   "answer": "M1-gpt-5.2",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsessd3210ee9eabc4a82b447b1e313c1ecff",
+  "sid": "hsessd2bae8482c084cf5b3b0327189b0683a",
   "followup": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.62,
-   "tail": "Reply with exactly: M2-gpt-5.2 DEEPSEEK HARNESS M2-gpt-5.2",
+   "s": 7.67,
+   "tail": "Reply with exactly: M2-gpt-5.2 M2-gpt-5.2 DeepSeek Harness \u00b7 gpt-5.2 \u00b7 Done in 4.6 s",
+   "answer": "M2-gpt-5.2",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 23.73,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.69,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.5 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -17909,8 +18167,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.21,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.75,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.2 \u00b7 Done in 6.7 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17925,61 +18184,83 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.61,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.2",
+   "s": 7.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.2 DeepSeek Harness \u00b7 gpt-5.2 \u00b7 Done in 4.7 s",
+   "answer": "M1-gpt-5.2",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsessd3210ee9eabc4a82b447b1e313c1ecff\",\"checkpoint_sha\":\"9bd3c554afd12b9834a113645c0cc973f12fbf40a363c79fcfb82afc92714f37\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessd2bae8482c084cf5b3b0327189b0683a\",\"checkpoint_sha\":\"be2d3bc0968cad3909d9c6a414f90ee6830cc062aeab21bd42f80dfddff74b36\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Azure OpenAI E2",
   "connections": [
-   "integration:Azure OpenAI E2"
+   "integration:Azure OpenAI E2",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.2",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 7413,
+   "cache_read": 26368,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-azure-e2|dsh|gpt-5.3-codex": {
   "provider": "dsh-azure-e2",
   "harness": "dsh",
   "model": "gpt-5.3-codex",
-  "at": "2026-09-08T12:43:48.952Z",
+  "at": "2026-10-29T00:01:11.927Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.47,
-   "tail": "Reply with exactly: M1-gpt-5.3-codex DEEPSEEK HARNESS M1-gpt-5.3-codex",
+   "s": 7.65,
+   "tail": "Reply with exactly: M1-gpt-5.3-codex M1-gpt-5.3-codex DeepSeek Harness \u00b7 gpt-5.3-codex \u00b7 Done in 5.4 s",
+   "answer": "M1-gpt-5.3-codex",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsessd37bae3d758f42f49f9787b71a738310",
+  "sid": "hsessb13be6df327f423ab06a888bf296232d",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8,
-   "tail": "Reply with exactly: M2-gpt-5.3-codex DEEPSEEK HARNESS M2-gpt-5.3-codex",
+   "s": 10.72,
+   "tail": "Reply with exactly: M2-gpt-5.3-codex M2-gpt-5.3-codex DeepSeek Harness \u00b7 gpt-5.3-codex \u00b7 Done in 6.5 s",
+   "answer": "M2-gpt-5.3-codex",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": null,
-   "ok": null,
-   "why": "only one model"
+   "to": "gpt-6.1-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.2 s",
+   "answer": "M3-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
   },
   "artifact": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.09,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.72,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.3-codex \u00b7 Done in 8.0 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -17994,57 +18275,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.58,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.3-codex",
+   "s": 7.71,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.3-codex DeepSeek Harness \u00b7 gpt-5.3-codex \u00b7 Done in 6.0 s",
+   "answer": "M1-gpt-5.3-codex",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsessd37bae3d758f42f49f9787b71a738310\",\"checkpoint_sha\":\"5ab5cffa51ca9f801c86c80b23b82990dc60c1ed629eb557d539845c2ed5e16c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessb13be6df327f423ab06a888bf296232d\",\"checkpoint_sha\":\"fbe22c0bf241192533d7f38a9cb875d9ef5be5afc9e2c021bff7477c944efe0d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Azure OpenAI E2",
   "connections": [
-   "integration:Azure OpenAI E2"
+   "integration:Azure OpenAI E2",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.3-codex",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 7416,
+   "cache_read": 26368,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-google|dsh|gemini-3.6-flash": {
   "provider": "dsh-google",
   "harness": "dsh",
   "model": "gemini-3.6-flash",
-  "at": "2026-09-08T12:46:15.092Z",
+  "at": "2026-10-28T23:36:13.338Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.56,
-   "tail": "Reply with exactly: M1-gemini-3.6-flash DEEPSEEK HARNESS M1-gemini-3.6-flash",
+   "s": 10.77,
+   "tail": "Reply with exactly: M1-gemini-3.6-flash M1-gemini-3.6-flash DeepSeek Harness \u00b7 gemini-3.6-flash \u00b7 Done in 7.8 s",
+   "answer": "M1-gemini-3.6-flash",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsessb3911d1bc4f145278835524210ad5a19",
+  "sid": "hsessb193f6d1663a4344bfcea53de0effd88",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.03,
-   "tail": "Reply with exactly: M2-gemini-3.6-flash DEEPSEEK HARNESS M2-gemini-3.6-flash",
+   "s": 7.95,
+   "tail": "Reply with exactly: M2-gemini-3.6-flash M2-gemini-3.6-flash DeepSeek Harness \u00b7 gemini-3.6-flash \u00b7 Done in 6.1 s",
+   "answer": "M2-gemini-3.6-flash",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gemini-3.8-flash",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.05,
-   "tail": "Reply with exactly: M3-gemini-3.8-flash DEEPSEEK HARNESS M3-gemini-3.8-flash",
+   "s": 8,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 6.3 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18052,8 +18349,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.21,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.91,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gemini-3.6-flash \u00b7 Done in 7.0 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18070,55 +18368,71 @@
    "ok": true,
    "status": "done",
    "pill": "done",
-   "s": 9.63,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gemini-3.6-flash",
+   "s": 8.2,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.6-flash DeepSeek Harness \u00b7 gemini-3.6-flash \u00b7 Done in 6.4 s",
+   "answer": "M1-gemini-3.6-flash",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsessb3911d1bc4f145278835524210ad5a19\",\"checkpoint_sha\":\"eec64fc507708baffc4a7bef73fc9b20d13b425e1edb29475a0a342176a3abf6\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessb193f6d1663a4344bfcea53de0effd88\",\"checkpoint_sha\":\"ba51336b4fa477ad48cf75235a134e8383c45b2347ea4d3a5516611e98d31baf\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Google AI Studio",
   "connections": [
-   "integration:Google AI Studio"
+   "integration:Google AI Studio",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gemini-3.6-flash",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 16620,
+   "cache_read": 24645,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-google|dsh|gemini-3.8-flash": {
   "provider": "dsh-google",
   "harness": "dsh",
   "model": "gemini-3.8-flash",
-  "at": "2026-09-08T12:47:10.762Z",
+  "at": "2026-10-28T23:33:46.251Z",
   "first": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.11,
-   "tail": "Reply with exactly: M1-gemini-3.8-flash DEEPSEEK HARNESS M1-gemini-3.8-flash",
+   "s": 10.81,
+   "tail": "Reply with exactly: M1-gemini-3.8-flash M1-gemini-3.8-flash DeepSeek Harness \u00b7 gemini-3.8-flash \u00b7 Done in 7.5 s",
+   "answer": "M1-gemini-3.8-flash",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess71f8f3a49f824d97952a4f6fa1ff9781",
+  "sid": "hsess3154f46c5b1a46ef949ccee589230a05",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.03,
-   "tail": "Reply with exactly: M2-gemini-3.8-flash DEEPSEEK HARNESS M2-gemini-3.8-flash",
+   "s": 10.86,
+   "tail": "Reply with exactly: M2-gemini-3.8-flash M2-gemini-3.8-flash DeepSeek Harness \u00b7 gemini-3.8-flash \u00b7 Done in 7.0 s",
+   "answer": "M2-gemini-3.8-flash",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gemini-3.6-flash",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8,
-   "tail": "Reply with exactly: M3-gemini-3.6-flash DEEPSEEK HARNESS M3-gemini-3.6-flash",
+   "s": 7.94,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.9 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18126,8 +18440,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.18,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 13.84,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gemini-3.8-flash \u00b7 Done in 11.5 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18144,22 +18459,35 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.1,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gemini-3.8-flash",
+   "s": 10.89,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.8-flash DeepSeek Harness \u00b7 gemini-3.8-flash \u00b7 Done in 6.7 s",
+   "answer": "M1-gemini-3.8-flash",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess71f8f3a49f824d97952a4f6fa1ff9781\",\"checkpoint_sha\":\"85fb2f3250a9dd2a3799981ff2185db0baac092aeae98ec8e901b169f01b7825\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess3154f46c5b1a46ef949ccee589230a05\",\"checkpoint_sha\":\"2e0b24fdc21aa3d4fbaa9b7f6a7245c2bb84a8b024a7b83e97e0cd1544d55c3b\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Google AI Studio",
   "connections": [
-   "integration:Google AI Studio"
+   "integration:Google AI Studio",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gemini-3.8-flash",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 16455,
+   "cache_read": 24800,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-google|dsh|gemini-3.7-flash": {
@@ -18240,33 +18568,36 @@
   "provider": "dsh-google",
   "harness": "dsh",
   "model": "gemini-3.5-flash",
-  "at": "2026-09-08T12:49:00.397Z",
+  "at": "2026-10-28T23:37:09.000Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.55,
-   "tail": "Reply with exactly: M1-gemini-3.5-flash DEEPSEEK HARNESS M1-gemini-3.5-flash",
+   "s": 10.75,
+   "tail": "Reply with exactly: M1-gemini-3.5-flash M1-gemini-3.5-flash DeepSeek Harness \u00b7 gemini-3.5-flash \u00b7 Done in 6.5 s",
+   "answer": "M1-gemini-3.5-flash",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess093d62d71dac45d0a550d2e5c0e28f51",
+  "sid": "hsess0042b413810d4833a7b33811c1063ece",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 7.99,
-   "tail": "Reply with exactly: M2-gemini-3.5-flash DEEPSEEK HARNESS M2-gemini-3.5-flash",
+   "s": 7.75,
+   "tail": "Reply with exactly: M2-gemini-3.5-flash M2-gemini-3.5-flash DeepSeek Harness \u00b7 gemini-3.5-flash \u00b7 Done in 5.4 s",
+   "answer": "M2-gemini-3.5-flash",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gemini-3.6-flash",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "completed",
+   "status": "done",
    "pill": "done",
-   "s": 7.99,
-   "tail": "Reply with exactly: M3-gemini-3.6-flash DEEPSEEK HARNESS M3-gemini-3.6-flash",
+   "s": 9.43,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 6.7 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18274,8 +18605,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.2,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.83,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gemini-3.5-flash \u00b7 Done in 6.9 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18290,57 +18622,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.62,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gemini-3.5-flash",
+   "s": 10.94,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.5-flash DeepSeek Harness \u00b7 gemini-3.5-flash \u00b7 Done in 8.0 s",
+   "answer": "M1-gemini-3.5-flash",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess093d62d71dac45d0a550d2e5c0e28f51\",\"checkpoint_sha\":\"3d7c820dc18f85bbde60700a838dce7b41d07853361e9fc63a0d1ce3594741ea\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess0042b413810d4833a7b33811c1063ece\",\"checkpoint_sha\":\"454b3bcfb12366813f5630b5981ade66a660a7d7a17cd752f7281f6f86de329a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Google AI Studio",
   "connections": [
-   "integration:Google AI Studio"
+   "integration:Google AI Studio",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gemini-3.5-flash",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 16721,
+   "cache_read": 24710,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-google|dsh|gemini-3.5-flash-lite": {
   "provider": "dsh-google",
   "harness": "dsh",
   "model": "gemini-3.5-flash-lite",
-  "at": "2026-09-08T12:49:55.916Z",
+  "at": "2026-10-28T23:38:08.519Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.57,
-   "tail": "Reply with exactly: M1-gemini-3.5-flash-lite DEEPSEEK HARNESS M1-gemini-3.5-flash-lite",
+   "s": 7.86,
+   "tail": "Reply with exactly: M1-gemini-3.5-flash-lite M1-gemini-3.5-flash-lite DeepSeek Harness \u00b7 gemini-3.5-flash-lite \u00b7 Done in 5.6 s",
+   "answer": "M1-gemini-3.5-flash-lite",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess2d8153387ea7412a8b81cb608ac68c17",
+  "sid": "hsessfa952bd292ce4d5997d430159a8934c4",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 7.99,
-   "tail": "Reply with exactly: M2-gemini-3.5-flash-lite DEEPSEEK HARNESS M2-gemini-3.5-flash-lite",
+   "s": 7.71,
+   "tail": "Reply with exactly: M2-gemini-3.5-flash-lite M2-gemini-3.5-flash-lite DeepSeek Harness \u00b7 gemini-3.5-flash-lite \u00b7 Done in 5.4 s",
+   "answer": "M2-gemini-3.5-flash-lite",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gemini-3.6-flash",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8,
-   "tail": "Reply with exactly: M3-gemini-3.6-flash DEEPSEEK HARNESS M3-gemini-3.6-flash",
+   "s": 10.78,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 6.7 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18348,8 +18696,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.04,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.8,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gemini-3.5-flash-lite \u00b7 Done in 6.8 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18366,55 +18715,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.21,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gemini-3.5-flash-lite",
+   "s": 7.86,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.5-flash-lite DeepSeek Harness \u00b7 gemini-3.5-flash-lite \u00b7 Done in 5.6 s",
+   "answer": "M1-gemini-3.5-flash-lite",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess2d8153387ea7412a8b81cb608ac68c17\",\"checkpoint_sha\":\"5118aebcdd4676d91872e1cd65c5eff78ca7205b212f5b620950550d8f92a56f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessfa952bd292ce4d5997d430159a8934c4\",\"checkpoint_sha\":\"f44989715b272a6bd22867bc2fb4bc922b391b01e60fca71e239122c6117b2d2\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Google AI Studio",
   "connections": [
-   "integration:Google AI Studio"
+   "integration:Google AI Studio",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gemini-3.5-flash-lite",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 23206,
+   "cache_read": 18091,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-google|dsh|gemini-3.1-flash-lite": {
   "provider": "dsh-google",
   "harness": "dsh",
   "model": "gemini-3.1-flash-lite",
-  "at": "2026-09-08T12:50:46.980Z",
+  "at": "2026-10-28T23:40:16.781Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.42,
-   "tail": "Reply with exactly: M1-gemini-3.1-flash-lite DEEPSEEK HARNESS M1-gemini-3.1-flash-lite",
+   "s": 10.76,
+   "tail": "Reply with exactly: M1-gemini-3.1-flash-lite M1-gemini-3.1-flash-lite DeepSeek Harness \u00b7 gemini-3.1-flash-lite \u00b7 Done in 6.6 s",
+   "answer": "M1-gemini-3.1-flash-lite",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess1d1a939ede984578a7cf5a907c465157",
+  "sid": "hsessfb97915df2fc44229967e56b90d88cdf",
   "followup": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.6,
-   "tail": "Reply with exactly: M2-gemini-3.1-flash-lite DEEPSEEK HARNESS M2-gemini-3.1-flash-lite",
+   "s": 10.91,
+   "tail": "Reply with exactly: M2-gemini-3.1-flash-lite M2-gemini-3.1-flash-lite DeepSeek Harness \u00b7 gemini-3.1-flash-lite \u00b7 Done in 6.6 s",
+   "answer": "M2-gemini-3.1-flash-lite",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gemini-3.6-flash",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8,
-   "tail": "Reply with exactly: M3-gemini-3.6-flash DEEPSEEK HARNESS M3-gemini-3.6-flash",
+   "s": 10.86,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 6.8 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18422,8 +18787,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 7.99,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.79,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE. txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gemini-3.1-flash-lite \u00b7 Done in 7.7 s",
+   "answer": "DONE.",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18440,55 +18806,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.02,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gemini-3.1-flash-lite",
+   "s": 7.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.1-flash-lite DeepSeek Harness \u00b7 gemini-3.1-flash-lite \u00b7 Done in 4.3 s",
+   "answer": "M1-gemini-3.1-flash-lite",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess1d1a939ede984578a7cf5a907c465157\",\"checkpoint_sha\":\"338ca6ffbc05f5a3d002e5bc04d54ca1f55f9f593c158ca9869b09fdc15256bd\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessfb97915df2fc44229967e56b90d88cdf\",\"checkpoint_sha\":\"3d887e239008ec05f264a4de4066ddaef1d738813a0a97dbb55a7576fb7d7e90\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Google AI Studio",
   "connections": [
-   "integration:Google AI Studio"
+   "integration:Google AI Studio",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gemini-3.1-flash-lite",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 17137,
+   "cache_read": 24117,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-google|dsh|gemini-3.1-pro-preview": {
   "provider": "dsh-google",
   "harness": "dsh",
   "model": "gemini-3.1-pro-preview",
-  "at": "2026-09-08T12:51:39.429Z",
+  "at": "2026-10-28T23:39:03.653Z",
   "first": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 10.95,
-   "tail": "Reply with exactly: M1-gemini-3.1-pro-preview DEEPSEEK HARNESS M1-gemini-3.1-pro-preview",
+   "s": 13.85,
+   "tail": "Reply with exactly: M1-gemini-3.1-pro-preview M1-gemini-3.1-pro-preview DeepSeek Harness \u00b7 gemini-3.1-pro-preview \u00b7 Done in 10.5 s",
+   "answer": "M1-gemini-3.1-pro-preview",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsesse56ff1d2c20d445e84d918f96f45505a",
+  "sid": "hsesscb9fa1de202a475a82b8e3bc7cd73346",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.08,
-   "tail": "Reply with exactly: M2-gemini-3.1-pro-preview DEEPSEEK HARNESS M2-gemini-3.1-pro-preview",
+   "s": 10.75,
+   "tail": "Reply with exactly: M2-gemini-3.1-pro-preview M2-gemini-3.1-pro-preview DeepSeek Harness \u00b7 gemini-3.1-pro-preview \u00b7 Done in 7.4 s",
+   "answer": "M2-gemini-3.1-pro-preview",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gemini-3.6-flash",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 7.99,
-   "tail": "Reply with exactly: M3-gemini-3.6-flash DEEPSEEK HARNESS M3-gemini-3.6-flash",
+   "s": 10.74,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 6.9 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18496,8 +18878,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 14.29,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 13.9,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gemini-3.1-pro-preview \u00b7 Done in 11.2 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18514,55 +18897,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.32,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gemini-3.1-pro-preview",
+   "s": 13.84,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3.1-pro-preview DeepSeek Harness \u00b7 gemini-3.1-pro-preview \u00b7 Done in 10.8 s",
+   "answer": "M1-gemini-3.1-pro-preview",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsesse56ff1d2c20d445e84d918f96f45505a\",\"checkpoint_sha\":\"fa3fab7b4e89ce43e50261c5a5374d5f4b17b9db94be057da9102bffd9df812b\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsesscb9fa1de202a475a82b8e3bc7cd73346\",\"checkpoint_sha\":\"c02a8fe8e416e156fe5655983971e06a69506d1cbcc88effeb4f084c386270ff\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Google AI Studio",
   "connections": [
-   "integration:Google AI Studio"
+   "integration:Google AI Studio",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gemini-3.1-pro-preview",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 22896,
+   "cache_read": 18531,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-google|dsh|gemini-3-flash-preview": {
   "provider": "dsh-google",
   "harness": "dsh",
   "model": "gemini-3-flash-preview",
-  "at": "2026-09-08T12:52:44.411Z",
+  "at": "2026-10-28T23:41:17.647Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.51,
-   "tail": "Reply with exactly: M1-gemini-3-flash-preview DEEPSEEK HARNESS M1-gemini-3-flash-preview",
+   "s": 7.68,
+   "tail": "Reply with exactly: M1-gemini-3-flash-preview M1-gemini-3-flash-preview DeepSeek Harness \u00b7 gemini-3-flash-preview \u00b7 Done in 5.3 s",
+   "answer": "M1-gemini-3-flash-preview",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsesscc3177e030544fd7bd31b6607be7e3e1",
+  "sid": "hsessf0497ee2e2fb4dc194592d85d754384d",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.08,
-   "tail": "Reply with exactly: M2-gemini-3-flash-preview DEEPSEEK HARNESS M2-gemini-3-flash-preview",
+   "s": 7.68,
+   "tail": "Reply with exactly: M2-gemini-3-flash-preview M2-gemini-3-flash-preview DeepSeek Harness \u00b7 gemini-3-flash-preview \u00b7 Done in 4.9 s",
+   "answer": "M2-gemini-3-flash-preview",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gemini-3.6-flash",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.06,
-   "tail": "Reply with exactly: M3-gemini-3.6-flash DEEPSEEK HARNESS M3-gemini-3.6-flash",
+   "s": 7.7,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.9 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18570,8 +18969,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.21,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 7.69,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gemini-3-flash-preview \u00b7 Done in 5.9 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18586,57 +18986,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.58,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gemini-3-flash-preview",
+   "s": 7.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gemini-3-flash-preview DeepSeek Harness \u00b7 gemini-3-flash-preview \u00b7 Done in 5.8 s",
+   "answer": "M1-gemini-3-flash-preview",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsesscc3177e030544fd7bd31b6607be7e3e1\",\"checkpoint_sha\":\"21b0828d75f635319608d33724c740ef3f1e1a9a72fcb33fc524634680bc90f1\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsessf0497ee2e2fb4dc194592d85d754384d\",\"checkpoint_sha\":\"0ba3888be0399422aacb861462fa7699b1591e9e1bb248e764513a53b3ae2c7f\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:Google AI Studio",
   "connections": [
-   "integration:Google AI Studio"
+   "integration:Google AI Studio",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gemini-3-flash-preview",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 25162,
+   "cache_read": 16093,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-openai|dsh|gpt-6-astra": {
   "provider": "dsh-openai",
   "harness": "dsh",
   "model": "gpt-6-astra",
-  "at": "2026-09-08T12:23:44.555Z",
+  "at": "2026-10-28T23:44:51.034Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.4,
-   "tail": "Reply with exactly: M1-gpt-6-astra DEEPSEEK HARNESS M1-gpt-6-astra",
+   "s": 10.72,
+   "tail": "Reply with exactly: M1-gpt-6-astra M1-gpt-6-astra DeepSeek Harness \u00b7 gpt-6-astra \u00b7 Done in 6.9 s",
+   "answer": "M1-gpt-6-astra",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess9511f759dbc44f86ab1a927a123384fc",
+  "sid": "hsess417014e962f544fc8634835b1c704f20",
   "followup": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.68,
-   "tail": "Reply with exactly: M2-gpt-6-astra DEEPSEEK HARNESS M2-gpt-6-astra",
+   "s": 7.7,
+   "tail": "Reply with exactly: M2-gpt-6-astra M2-gpt-6-astra DeepSeek Harness \u00b7 gpt-6-astra \u00b7 Done in 5.8 s",
+   "answer": "M2-gpt-6-astra",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-5.6-sol",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.6,
-   "tail": "Reply with exactly: M3-gpt-5.6-sol DEEPSEEK HARNESS M3-gpt-5.6-sol",
+   "s": 7.69,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.4 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18644,8 +19060,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.25,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.71,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-6-astra \u00b7 Done in 8.0 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18660,57 +19077,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.55,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-6-astra",
+   "s": 7.72,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-6-astra DeepSeek Harness \u00b7 gpt-6-astra \u00b7 Done in 5.8 s",
+   "answer": "M1-gpt-6-astra",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess9511f759dbc44f86ab1a927a123384fc\",\"checkpoint_sha\":\"3194ae7af68d08ee244156c27578da96446258136d7ebeccb413fc5a8a0c6740\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess417014e962f544fc8634835b1c704f20\",\"checkpoint_sha\":\"0e7a0504ab4e0b1b08f33877c7cb21650ac26a283c92204c883760e3f868d63b\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:OpenAI",
   "connections": [
-   "integration:OpenAI"
+   "integration:OpenAI",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-6-astra",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18,
+   "cache_read": 26849,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-openai|dsh|gpt-5.6-sol": {
   "provider": "dsh-openai",
   "harness": "dsh",
   "model": "gpt-5.6-sol",
-  "at": "2026-09-08T12:24:43.337Z",
+  "at": "2026-10-28T23:45:45.272Z",
   "first": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.05,
-   "tail": "Reply with exactly: M1-gpt-5.6-sol DEEPSEEK HARNESS M1-gpt-5.6-sol",
+   "s": 7.71,
+   "tail": "Reply with exactly: M1-gpt-5.6-sol M1-gpt-5.6-sol DeepSeek Harness \u00b7 gpt-5.6-sol \u00b7 Done in 5.9 s",
+   "answer": "M1-gpt-5.6-sol",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess16c275a8703641758427ab56751de997",
+  "sid": "hsess7d3ce21c1c034871943499f3e2f12c27",
   "followup": {
    "ok": true,
-   "status": "completed",
+   "status": "done",
    "pill": "done",
-   "s": 8.09,
-   "tail": "Reply with exactly: M2-gpt-5.6-sol DEEPSEEK HARNESS M2-gpt-5.6-sol",
+   "s": 9.25,
+   "tail": "Reply with exactly: M2-gpt-5.6-sol M2-gpt-5.6-sol DeepSeek Harness \u00b7 gpt-5.6-sol \u00b7 Done in 6.4 s",
+   "answer": "M2-gpt-5.6-sol",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.51,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.71,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.1 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18718,8 +19151,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.14,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.72,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.6-sol \u00b7 Done in 6.8 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18734,57 +19168,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.62,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.6-sol",
+   "s": 7.74,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.6-sol DeepSeek Harness \u00b7 gpt-5.6-sol \u00b7 Done in 5.6 s",
+   "answer": "M1-gpt-5.6-sol",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess16c275a8703641758427ab56751de997\",\"checkpoint_sha\":\"8871f74949dc54ebf571b8be369fd7c6831db9846be85e35d6ebfe5ae3fb1744\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess7d3ce21c1c034871943499f3e2f12c27\",\"checkpoint_sha\":\"3b17bbb85ade1ad96d3959426211d63162d3bb9e8ca6b54e0cf6c620b61cc996\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:OpenAI",
   "connections": [
-   "integration:OpenAI"
+   "integration:OpenAI",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.6-sol",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18,
+   "cache_read": 26961,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-openai|dsh|gpt-5.6-terra": {
   "provider": "dsh-openai",
   "harness": "dsh",
   "model": "gpt-5.6-terra",
-  "at": "2026-09-08T12:25:38.918Z",
+  "at": "2026-10-28T23:46:38.119Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.5,
-   "tail": "Reply with exactly: M1-gpt-5.6-terra DEEPSEEK HARNESS M1-gpt-5.6-terra",
+   "s": 7.68,
+   "tail": "Reply with exactly: M1-gpt-5.6-terra M1-gpt-5.6-terra DeepSeek Harness \u00b7 gpt-5.6-terra \u00b7 Done in 4.5 s",
+   "answer": "M1-gpt-5.6-terra",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsesse239f2ed9e5c47eca33f43881254e514",
+  "sid": "hsess4f13d14a0e7444a6bd94ba47cacaa2f4",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 7.99,
-   "tail": "Reply with exactly: M2-gpt-5.6-terra DEEPSEEK HARNESS M2-gpt-5.6-terra",
+   "s": 7.69,
+   "tail": "Reply with exactly: M2-gpt-5.6-terra M2-gpt-5.6-terra DeepSeek Harness \u00b7 gpt-5.6-terra \u00b7 Done in 4.7 s",
+   "answer": "M2-gpt-5.6-terra",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.15,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.7,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.5 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18792,8 +19242,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.28,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.75,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.6-terra \u00b7 Done in 6.6 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18808,57 +19259,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.61,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.6-terra",
+   "s": 7.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.6-terra DeepSeek Harness \u00b7 gpt-5.6-terra \u00b7 Done in 4.9 s",
+   "answer": "M1-gpt-5.6-terra",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsesse239f2ed9e5c47eca33f43881254e514\",\"checkpoint_sha\":\"7cf479aab486d37580a0dd43a875f186290e3ad60608dabe02d4de818ef5880d\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess4f13d14a0e7444a6bd94ba47cacaa2f4\",\"checkpoint_sha\":\"ba86abeeb58229b82cfd55a10fdc0fae4bc280a7996b0921f8867467134e8f97\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:OpenAI",
   "connections": [
-   "integration:OpenAI"
+   "integration:OpenAI",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.6-terra",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18,
+   "cache_read": 26999,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-openai|dsh|gpt-5.6-luna": {
   "provider": "dsh-openai",
   "harness": "dsh",
   "model": "gpt-5.6-luna",
-  "at": "2026-09-08T12:26:37.628Z",
+  "at": "2026-10-28T23:47:29.253Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.52,
-   "tail": "Reply with exactly: M1-gpt-5.6-luna DEEPSEEK HARNESS M1-gpt-5.6-luna",
+   "s": 7.65,
+   "tail": "Reply with exactly: M1-gpt-5.6-luna M1-gpt-5.6-luna DeepSeek Harness \u00b7 gpt-5.6-luna \u00b7 Done in 4.8 s",
+   "answer": "M1-gpt-5.6-luna",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsessf641acca359242a1a1b31fdb8135a323",
+  "sid": "hsess9b1a20be5ee343aba72848ae66ffd09d",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8,
-   "tail": "Reply with exactly: M2-gpt-5.6-luna DEEPSEEK HARNESS M2-gpt-5.6-luna",
+   "s": 7.67,
+   "tail": "Reply with exactly: M2-gpt-5.6-luna M2-gpt-5.6-luna DeepSeek Harness \u00b7 gpt-5.6-luna \u00b7 Done in 4.7 s",
+   "answer": "M2-gpt-5.6-luna",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.52,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.3 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18866,8 +19333,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.28,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 7.7,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.6-luna \u00b7 Done in 5.9 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18882,57 +19350,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.54,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.6-luna",
+   "s": 7.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.6-luna DeepSeek Harness \u00b7 gpt-5.6-luna \u00b7 Done in 5.3 s",
+   "answer": "M1-gpt-5.6-luna",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsessf641acca359242a1a1b31fdb8135a323\",\"checkpoint_sha\":\"345a319d769a3ac2a471cfe7bda0e252abde4fb744c48e4d7f5a6617533d3683\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess9b1a20be5ee343aba72848ae66ffd09d\",\"checkpoint_sha\":\"385caf33561a2af149c31b9d82d6a622501bb79c54ee01431cd0f8c9838cb9cb\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:OpenAI",
   "connections": [
-   "integration:OpenAI"
+   "integration:OpenAI",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.6-luna",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18,
+   "cache_read": 26949,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-openai|dsh|gpt-5.5": {
   "provider": "dsh-openai",
   "harness": "dsh",
   "model": "gpt-5.5",
-  "at": "2026-09-08T12:27:34.778Z",
+  "at": "2026-10-28T23:48:17.350Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.49,
-   "tail": "Reply with exactly: M1-gpt-5.5 DEEPSEEK HARNESS M1-gpt-5.5",
+   "s": 7.68,
+   "tail": "Reply with exactly: M1-gpt-5.5 M1-gpt-5.5 DeepSeek Harness \u00b7 gpt-5.5 \u00b7 Done in 5.1 s",
+   "answer": "M1-gpt-5.5",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsessc8315cdcb65b43e8a84eb919443e9b60",
+  "sid": "hsess4529440b709f44e2b7ac74b9825122c7",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8,
-   "tail": "Reply with exactly: M2-gpt-5.5 DEEPSEEK HARNESS M2-gpt-5.5",
+   "s": 7.69,
+   "tail": "Reply with exactly: M2-gpt-5.5 M2-gpt-5.5 DeepSeek Harness \u00b7 gpt-5.5 \u00b7 Done in 5.1 s",
+   "answer": "M2-gpt-5.5",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.59,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.3 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -18940,8 +19424,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.26,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 13.76,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.5 \u00b7 Done in 10.9 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -18956,57 +19441,73 @@
   },
   "recycle": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.63,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.5",
+   "s": 7.74,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.5 DeepSeek Harness \u00b7 gpt-5.5 \u00b7 Done in 5.5 s",
+   "answer": "M1-gpt-5.5",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsessc8315cdcb65b43e8a84eb919443e9b60\",\"checkpoint_sha\":\"058968cbd3a3a80a263a6fa552e659408afcac5855c712d5d72869348b23ccf0\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess4529440b709f44e2b7ac74b9825122c7\",\"checkpoint_sha\":\"b4a29383916ebdcaee80777034eb8cbf991be097fe0f2e24a6e6f9a506f1ce59\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:OpenAI",
   "connections": [
-   "integration:OpenAI"
+   "integration:OpenAI",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.5-2026-04-23",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 9211,
+   "cache_read": 24576,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-openai|dsh|gpt-5.4": {
   "provider": "dsh-openai",
   "harness": "dsh",
   "model": "gpt-5.4",
-  "at": "2026-09-08T12:28:31.923Z",
+  "at": "2026-10-28T23:49:11.624Z",
   "first": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.07,
-   "tail": "Reply with exactly: M1-gpt-5.4 DEEPSEEK HARNESS M1-gpt-5.4",
+   "s": 7.7,
+   "tail": "Reply with exactly: M1-gpt-5.4 M1-gpt-5.4 DeepSeek Harness \u00b7 gpt-5.4 \u00b7 Done in 4.7 s",
+   "answer": "M1-gpt-5.4",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess15b8c26a59a8464494172aae0fcc6d5e",
+  "sid": "hsess82e1bddc5dfb48498f5273b2fbfba093",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.14,
-   "tail": "Reply with exactly: M2-gpt-5.4 DEEPSEEK HARNESS M2-gpt-5.4",
+   "s": 7.69,
+   "tail": "Reply with exactly: M2-gpt-5.4 M2-gpt-5.4 DeepSeek Harness \u00b7 gpt-5.4 \u00b7 Done in 4.9 s",
+   "answer": "M2-gpt-5.4",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.09,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.8 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -19014,8 +19515,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.15,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 10.76,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.4 \u00b7 Done in 7.6 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -19032,55 +19534,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.07,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.4",
+   "s": 7.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.4 DeepSeek Harness \u00b7 gpt-5.4 \u00b7 Done in 5.0 s",
+   "answer": "M1-gpt-5.4",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess15b8c26a59a8464494172aae0fcc6d5e\",\"checkpoint_sha\":\"f22082c03e335f7b02831a0dea1c6acccf8e82ae4787a884431822dc17484875\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess82e1bddc5dfb48498f5273b2fbfba093\",\"checkpoint_sha\":\"5f1f327ecc2a5f0ac46915b165a328a611d8c7cd157fc28aa526bb84e0502860\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:OpenAI",
   "connections": [
-   "integration:OpenAI"
+   "integration:OpenAI",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.4-2026-03-05",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 9211,
+   "cache_read": 24576,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-openai|dsh|gpt-5.4-mini": {
   "provider": "dsh-openai",
   "harness": "dsh",
   "model": "gpt-5.4-mini",
-  "at": "2026-09-08T12:29:27.687Z",
+  "at": "2026-10-28T23:50:02.884Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.49,
-   "tail": "Reply with exactly: M1-gpt-5.4-mini DEEPSEEK HARNESS M1-gpt-5.4-mini",
+   "s": 7.68,
+   "tail": "Reply with exactly: M1-gpt-5.4-mini M1-gpt-5.4-mini DeepSeek Harness \u00b7 gpt-5.4-mini \u00b7 Done in 4.6 s",
+   "answer": "M1-gpt-5.4-mini",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsess16d7ff7ed8054aaeb250601dfcfcdaf9",
+  "sid": "hsesse41a479da2a54e539d5477e7a20f0cd0",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 7.99,
-   "tail": "Reply with exactly: M2-gpt-5.4-mini DEEPSEEK HARNESS M2-gpt-5.4-mini",
+   "s": 7.7,
+   "tail": "Reply with exactly: M2-gpt-5.4-mini M2-gpt-5.4-mini DeepSeek Harness \u00b7 gpt-5.4-mini \u00b7 Done in 4.6 s",
+   "answer": "M2-gpt-5.4-mini",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.49,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.71,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.7 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -19088,8 +19606,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 14.33,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 7.7,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.4-mini \u00b7 Done in 5.6 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -19106,55 +19625,71 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.12,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.4-mini",
+   "s": 7.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.4-mini DeepSeek Harness \u00b7 gpt-5.4-mini \u00b7 Done in 5.2 s",
+   "answer": "M1-gpt-5.4-mini",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsess16d7ff7ed8054aaeb250601dfcfcdaf9\",\"checkpoint_sha\":\"8278663413b1c4a905d65dbc547134f04c4ab44f3a010e6d05d15be88d52d5d0\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsesse41a479da2a54e539d5477e7a20f0cd0\",\"checkpoint_sha\":\"7800a25dd25e850b6d2e8fea38a5f03fbcc7d3e04b9a1acc76dabc2f57247dae\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:OpenAI",
   "connections": [
-   "integration:OpenAI"
+   "integration:OpenAI",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.4-mini-2026-03-17",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 7334,
+   "cache_read": 26496,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-openai|dsh|gpt-5.2": {
   "provider": "dsh-openai",
   "harness": "dsh",
   "model": "gpt-5.2",
-  "at": "2026-09-08T12:30:26.272Z",
+  "at": "2026-10-28T23:51:39.146Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.51,
-   "tail": "Reply with exactly: M1-gpt-5.2 DEEPSEEK HARNESS M1-gpt-5.2",
+   "s": 7.65,
+   "tail": "Reply with exactly: M1-gpt-5.2 M1-gpt-5.2 DeepSeek Harness \u00b7 gpt-5.2 \u00b7 Done in 4.7 s",
+   "answer": "M1-gpt-5.2",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsessf62957e8b3f641d7a7b2dadba457e274",
+  "sid": "hsess21094b91527d49398f4dc8b9f94e7b8e",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.19,
-   "tail": "Reply with exactly: M2-gpt-5.2 DEEPSEEK HARNESS M2-gpt-5.2",
+   "s": 7.68,
+   "tail": "Reply with exactly: M2-gpt-5.2 M2-gpt-5.2 DeepSeek Harness \u00b7 gpt-5.2 \u00b7 Done in 4.6 s",
+   "answer": "M2-gpt-5.2",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": "gpt-6-astra",
+   "to": "gpt-6.1-sol",
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.51,
-   "tail": "Reply with exactly: M3-gpt-6-astra DEEPSEEK HARNESS M3-gpt-6-astra",
+   "s": 7.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.2 s",
+   "answer": "M3-gpt-6.1-sol",
    "turn_files": [],
    "why": ""
   },
@@ -19162,8 +19697,9 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 17.46,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 7.75,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.2 \u00b7 Done in 5.9 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -19180,59 +19716,81 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.26,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.2",
+   "s": 7.69,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.2 DeepSeek Harness \u00b7 gpt-5.2 \u00b7 Done in 4.5 s",
+   "answer": "M1-gpt-5.2",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsessf62957e8b3f641d7a7b2dadba457e274\",\"checkpoint_sha\":\"7fc2e5d8a7d7cae2e9b33050712fd27495d81708dbaaad07b27773db82f88b63\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess21094b91527d49398f4dc8b9f94e7b8e\",\"checkpoint_sha\":\"8a57362108f320398133abe373aecdc193dca699a2fca5eb20b0d3b8d9e6fa67\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:OpenAI",
   "connections": [
-   "integration:OpenAI"
+   "integration:OpenAI",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.2-2025-12-11",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 7713,
+   "cache_read": 26112,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-openai|dsh|gpt-5.3-codex": {
   "provider": "dsh-openai",
   "harness": "dsh",
   "model": "gpt-5.3-codex",
-  "at": "2026-09-08T12:31:34.550Z",
+  "at": "2026-10-28T23:50:51.077Z",
   "first": {
    "ok": true,
-   "status": "done",
+   "status": "completed",
    "pill": "done",
-   "s": 9.39,
-   "tail": "Reply with exactly: M1-gpt-5.3-codex DEEPSEEK HARNESS M1-gpt-5.3-codex",
+   "s": 7.68,
+   "tail": "Reply with exactly: M1-gpt-5.3-codex M1-gpt-5.3-codex DeepSeek Harness \u00b7 gpt-5.3-codex \u00b7 Done in 4.7 s",
+   "answer": "M1-gpt-5.3-codex",
    "turn_files": [],
    "why": ""
   },
-  "sid": "hsessb7c26cbc7527461aa19d159f525c7d0c",
+  "sid": "hsess4206458027384aa7b941639bd3687369",
   "followup": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.03,
-   "tail": "Reply with exactly: M2-gpt-5.3-codex DEEPSEEK HARNESS M2-gpt-5.3-codex",
+   "s": 7.68,
+   "tail": "Reply with exactly: M2-gpt-5.3-codex M2-gpt-5.3-codex DeepSeek Harness \u00b7 gpt-5.3-codex \u00b7 Done in 4.5 s",
+   "answer": "M2-gpt-5.3-codex",
    "turn_files": [],
    "why": ""
   },
   "switch": {
-   "to": null,
-   "ok": null,
-   "why": "only one model"
+   "to": "gpt-6.1-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.7,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.2 s",
+   "answer": "M3-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
   },
   "artifact": {
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 11.11,
-   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. DEEPSEEK HARNESS Used a tool DONE txt hello-dsh.txt TXT \u00b7 output Preview",
+   "s": 7.69,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 gpt-5.3-codex \u00b7 Done in 5.9 s",
+   "answer": "DONE",
    "turn_files": [
     "hello-dsh.txt"
    ],
@@ -19249,22 +19807,35 @@
    "ok": true,
    "status": "completed",
    "pill": "done",
-   "s": 8.05,
-   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. DEEPSEEK HARNESS M1-gpt-5.3-codex",
+   "s": 7.68,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-gpt-5.3-codex DeepSeek Harness \u00b7 gpt-5.3-codex \u00b7 Done in 4.7 s",
+   "answer": "M1-gpt-5.3-codex",
    "turn_files": [],
    "why": "",
    "recycled": {
     "code": 200,
-    "body": "{\"session_id\":\"hsessb7c26cbc7527461aa19d159f525c7d0c\",\"checkpoint_sha\":\"5f0a5dd05e03d651b9a44e42c37167108a96efae69cc9e5d5c465b56c0b11723\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+    "body": "{\"session_id\":\"hsess4206458027384aa7b941639bd3687369\",\"checkpoint_sha\":\"a2f1f8020745faec13c52e6bb6ba37cac6acc86ef3804c11fdf9f019a68ebabc\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
    }
   },
   "connection": "integration:OpenAI",
   "connections": [
-   "integration:OpenAI"
+   "integration:OpenAI",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "gpt-5.3-codex",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 7372,
+   "cache_read": 26368,
+   "turns_with_usage": 5
+  },
   "deleted": 200
  },
  "dsh-openrouter|dsh|gpt-6.1-sol": {
@@ -24913,49 +25484,92 @@
   "provider": "dsh-tokenrouter",
   "harness": "dsh",
   "model": "claude-haiku-4.5",
-  "at": "2026-10-27T04:48:59.260Z",
+  "at": "2026-10-29T00:05:20.688Z",
   "first": {
-   "ok": false,
-   "status": "failed",
-   "pill": "failed",
-   "s": 135.62,
-   "tail": "age limits. You will regain access on 2026-11-01 at 00:00 UTC. (request id: 202610270449058283159205xrs6ei5)\"},\"type\":\"error\"} Failed after 2s The turn failed: 400 {\"error\":{\"type\":\"<nil>\",\"message\":\"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC. (request id: 202610270449058283159205xrs6ei5)\"},\"type\":\"error\"} DeepSeek Harness \u00b7 claude-haiku-4.5",
-   "answer": "400 {\"error\":{\"type\":\"<nil>\",\"message\":\"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC. (request id: 202610270449058283159205xrs6ei5)\"},\"type\":\"error\"}",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.7,
+   "tail": "Reply with exactly: M1-claude-haiku-4.5 M1-claude-haiku-4.5 DeepSeek Harness \u00b7 claude-haiku-4.5 \u00b7 Done in 5.4 s",
+   "answer": "M1-claude-haiku-4.5",
    "turn_files": [],
-   "why": "The turn failed: 400 {\"error\":{\"type\":\"<nil>\",\"message\":\"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC. (request id: 202610270449058283159205xrs6ei5)\"},\"type\":\"error\"}"
+   "why": ""
   },
-  "sid": "hsessd59eb9230d984a32b14b171da67d82b1",
+  "sid": "hsessc0ac2f2eb10f4170aa52adc6493d4322",
   "followup": {
-   "ok": null,
-   "why": "first turn failed"
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.68,
+   "tail": "Reply with exactly: M2-claude-haiku-4.5 M2-claude-haiku-4.5 DeepSeek Harness \u00b7 claude-haiku-4.5 \u00b7 Done in 5.3 s",
+   "answer": "M2-claude-haiku-4.5",
+   "turn_files": [],
+   "why": ""
   },
   "switch": {
-   "ok": null,
-   "why": "first turn failed"
+   "to": "gpt-6.1-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.68,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol DeepSeek Harness \u00b7 gpt-6.1-sol \u00b7 Done in 5.4 s",
+   "answer": "M3-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
   },
   "artifact": {
-   "ok": null,
-   "why": "first turn failed"
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.7,
+   "tail": "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE. Created hello-dsh.txt +1 \u22120 DONE txt hello-dsh.txt TXT DeepSeek Harness \u00b7 claude-haiku-4.5 \u00b7 Done in 7.8 s",
+   "answer": "DONE",
+   "turn_files": [
+    "hello-dsh.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-dsh.txt"
+   ],
+   "record_files": [
+    "hello-dsh.txt"
+   ],
+   "cards_agree": true
   },
   "recycle": {
-   "ok": null,
-   "why": "first turn failed"
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.7,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-claude-haiku-4.5 DeepSeek Harness \u00b7 claude-haiku-4.5 \u00b7 Done in 5.1 s",
+   "answer": "M1-claude-haiku-4.5",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessc0ac2f2eb10f4170aa52adc6493d4322\",\"checkpoint_sha\":\"04d746cf19a31a0c0eeeea0d07bbc04010b86ca9798e06a851941e39015a6db3\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
   },
-  "connection": "integration:tokenrouter",
+  "connection": "integration:My TokenRouter",
   "connections": [
-   "integration:tokenrouter"
+   "integration:My TokenRouter",
+   "integration:Vercel AI Gateway"
   ],
-  "served": [],
+  "served": [
+   "claude-haiku-4-5-20251001",
+   "openai/gpt-6.1-sol"
+  ],
   "substituted": [],
-  "foreign": [],
-  "unlabelled": 1,
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
   "tokens": {
-   "input": 0,
-   "cache_read": 0,
-   "turns_with_usage": 0
+   "input": 47461,
+   "cache_read": 37785,
+   "turns_with_usage": 5
   },
-  "kept": "hsessd59eb9230d984a32b14b171da67d82b1",
-  "deleted": 0
+  "deleted": 200
  },
  "dsh-tokenrouter|dsh|gemini-3.8-flash": {
   "provider": "dsh-tokenrouter",
@@ -223618,6 +224232,278 @@
   "tokens": {
    "input": 19056,
    "cache_read": 42242,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "minimax-default|minimax|minimax-m3.1-flash": {
+  "provider": "minimax-default",
+  "harness": "minimax",
+  "model": "minimax-m3.1-flash",
+  "at": "2026-10-28T22:58:25.878Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 13.95,
+   "tail": "Reply with exactly: M1-minimax-m3.1-flash M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 11.9 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess343b3976812c476dbd29fb33f32c5ec7",
+  "followup": {
+   "ok": true,
+   "status": "done",
+   "pill": "done",
+   "s": 12.5,
+   "tail": "Reply with exactly: M2-minimax-m3.1-flash M2-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 9.7 s",
+   "answer": "M2-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.1-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.34,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol MiniMax Code \u00b7 gpt-6.1-sol \u00b7 Done in 9.4 s",
+   "answer": "M3-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 38.28,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. I'll create that file now. Created a file, read a file +1 \u22120 DONE Created hello-minimax.txt containing HELLO. txt hello-minimax.txt TXT MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 15.7 s",
+   "answer": "I'll create that file now.\n\nDONE\n\nCreated [hello-minimax.txt](/data/workspaces/hsess343b3976812c476dbd29fb33f32c5ec7/hello-minimax.txt) containing `HELLO`.",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.85,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 8.0 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess343b3976812c476dbd29fb33f32c5ec7\",\"checkpoint_sha\":\"29f592e2bb3202cd071b5deca9351a1a3c3da33cd5b4d8131ee88ffe80e7a85c\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:My TokenRouter",
+  "connections": [
+   "integration:My TokenRouter",
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "MiniMax-M3.1-Flash",
+   "openai/gpt-6.1-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18293,
+   "cache_read": 49706,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "openrouter|minimax|minimax-m3.1-flash": {
+  "provider": "openrouter",
+  "harness": "minimax",
+  "model": "minimax-m3.1-flash",
+  "at": "2026-10-28T23:04:08.998Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.81,
+   "tail": "Reply with exactly: M1-minimax-m3.1-flash M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 7.2 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsess50b99fa1247045b18c14fc6b4d99fb41",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 7.82,
+   "tail": "Reply with exactly: M2-minimax-m3.1-flash M2-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 6.0 s",
+   "answer": "M2-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.1-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.87,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol MiniMax Code \u00b7 gpt-6.1-sol \u00b7 Done in 6.9 s",
+   "answer": "M3-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.09,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. Thought Creating the file in the workspace now. Created a file, ran a command +1 \u22120 DONE File created and verified: hello-minimax.txt \u2014 contains HELLO followed by a trailing newline (6 bytes). txt hello-minimax.txt TXT MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 12.2 s",
+   "answer": "Creating the file in the workspace now.\n\nDONE\n\nFile created and verified: [hello-minimax.txt](/data/workspaces/hsess50b99fa1247045b18c14fc6b4d99fb41/hello-minimax.txt) \u2014 contains `HELLO` followed by a trailing newline (6 bytes).",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.78,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. Thought M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 7.2 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsess50b99fa1247045b18c14fc6b4d99fb41\",\"checkpoint_sha\":\"05c7ebb15d1559acf23eb58cf72f28728cea72c0fdb6abd39f751d2bdc4599dd\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:OpenRouter",
+  "connections": [
+   "integration:OpenRouter",
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "minimax/minimax-m3.1-flash",
+   "openai/gpt-6.1-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 27133,
+   "cache_read": 41412,
+   "turns_with_usage": 5
+  },
+  "deleted": 200
+ },
+ "vercel|minimax|minimax-m3.1-flash": {
+  "provider": "vercel",
+  "harness": "minimax",
+  "model": "minimax-m3.1-flash",
+  "at": "2026-10-28T23:09:23.048Z",
+  "first": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 14.05,
+   "tail": "Reply with exactly: M1-minimax-m3.1-flash M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 10.5 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "sid": "hsessdcb5ace7d3d1480c8e9c03835c7109fd",
+  "followup": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 11.01,
+   "tail": "Reply with exactly: M2-minimax-m3.1-flash M2-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 8.5 s",
+   "answer": "M2-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": ""
+  },
+  "switch": {
+   "to": "gpt-6.1-sol",
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.89,
+   "tail": "Reply with exactly: M3-gpt-6.1-sol M3-gpt-6.1-sol MiniMax Code \u00b7 gpt-6.1-sol \u00b7 Done in 8.0 s",
+   "answer": "M3-gpt-6.1-sol",
+   "turn_files": [],
+   "why": ""
+  },
+  "artifact": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 32.6,
+   "tail": "Create a file named hello-minimax.txt containing exactly the word HELLO, then reply DONE. I'll create that file now. Created a file, read a file +1 \u22120 DONE Created hello-minimax.txt containing exactly HELLO (verified by reading it back \u2014 5 bytes, no trailing newline). txt hello-minimax.txt TXT MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 12.5 s",
+   "answer": "I'll create that file now.\n\nDONE\n\nCreated [hello-minimax.txt](/data/workspaces/hsessdcb5ace7d3d1480c8e9c03835c7109fd/hello-minimax.txt) containing exactly `HELLO` (verified by reading it back \u2014 5 bytes, no trailing newline).",
+   "turn_files": [
+    "hello-minimax.txt"
+   ],
+   "why": "",
+   "files": [
+    "hello-minimax.txt"
+   ],
+   "record_files": [
+    "hello-minimax.txt"
+   ],
+   "cards_agree": true
+  },
+  "recycle": {
+   "ok": true,
+   "status": "completed",
+   "pill": "done",
+   "s": 10.93,
+   "tail": "What exact word did I ask you to reply with in my very first message of this task? Reply with just that word. M1-minimax-m3.1-flash MiniMax Code \u00b7 minimax-m3.1-flash \u00b7 Done in 8.1 s",
+   "answer": "M1-minimax-m3.1-flash",
+   "turn_files": [],
+   "why": "",
+   "recycled": {
+    "code": 200,
+    "body": "{\"session_id\":\"hsessdcb5ace7d3d1480c8e9c03835c7109fd\",\"checkpoint_sha\":\"2280e5fa28571d0f3adc95dca444d6e96061903f4836ed02ec027297116c556a\",\"hydrated\":true,\"hydrate\":{\"ok\":true,\"restored\":true,\"bytes_in"
+   }
+  },
+  "connection": "integration:Vercel AI Gateway",
+  "connections": [
+   "integration:Vercel AI Gateway"
+  ],
+  "served": [
+   "minimax/minimax-m3.1-flash",
+   "openai/gpt-6.1-sol"
+  ],
+  "substituted": [],
+  "switch_served": [
+   "openai/gpt-6.1-sol"
+  ],
+  "unlabelled": 0,
+  "tokens": {
+   "input": 18381,
+   "cache_read": 49182,
    "turns_with_usage": 5
   },
   "deleted": 200
