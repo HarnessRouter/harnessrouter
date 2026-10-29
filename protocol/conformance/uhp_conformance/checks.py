@@ -1359,6 +1359,50 @@ def f09(ctx):
     return f"kept: {sid} still reads after its harness was deleted"
 
 
+@check("F-10", "A repeated create with the same Idempotency-Key returns the first harness", "full",
+       f"{SPEC}/harnesses.md#51-create")
+def f10(ctx):
+    # Only a server that says it honours the key is held to it; one that ignores the header is
+    # allowed to say so, and the check skips rather than punishing it for a capability it declined.
+    caps = (ctx.state.get("discovery") or {}).get("capabilities") or {}
+    if not caps.get("harness_idempotency"):
+        raise Skip("this server does not report the harness_idempotency capability")
+    key = f"uhp-conformance-{uuid.uuid4().hex}"
+    body = {"name": f"uhp-conformance-idem-{uuid.uuid4().hex[:6]}", "base": _supported_base(ctx)}
+    made = []
+    try:
+        first = ctx.client.post("/v1/harnesses", body=body, headers={"Idempotency-Key": key})
+        assert first.status == 200, f"first create returned HTTP {first.status}: {first.body[:200]!r}"
+        hid = (first.json or {}).get("id")
+        assert hid, "the first create returned no id"
+        made.append(hid)
+        again = ctx.client.post("/v1/harnesses", body=body, headers={"Idempotency-Key": key})
+        assert again.status == 200, f"the repeat returned HTTP {again.status}: {again.body[:200]!r}"
+        made.append((again.json or {}).get("id"))
+        assert made[-1] == hid, (
+            "the repeat made a second harness instead of returning the first. The client whose answer "
+            "was lost cannot tell the two apart, which is the duplicate the key exists to prevent.")
+        other = ctx.client.post("/v1/harnesses", body={**body, "name": body["name"] + "-other"},
+                                headers={"Idempotency-Key": key})
+        if other.status == 200:
+            made.append((other.json or {}).get("id"))
+        assert other.status == 409 and _error_code(other) == "idempotency_key_reused", (
+            f"a repeat of the key carrying a different request answered HTTP {other.status} "
+            f"{_error_code(other)!r}, expected 409 idempotency_key_reused: answering it with the first "
+            "harness would answer for a harness that was never asked for")
+        assert ctx.client.delete(f"/v1/harnesses/{hid}").status in (200, 204), "the delete failed"
+        after = ctx.client.post("/v1/harnesses", body=body, headers={"Idempotency-Key": key})
+        assert after.status == 200, f"a repeat after the delete returned HTTP {after.status}: {after.body[:200]!r}"
+        made.append((after.json or {}).get("id"))
+        assert made[-1] and made[-1] != hid, (
+            "a repeat after the key's harness was deleted did not create one; the key names no harness "
+            "once it is deleted, so a client that deleted it can make it again")
+    finally:
+        for h in {m for m in made if m}:
+            ctx.client.delete(f"/v1/harnesses/{h}")
+    return f"{hid} returned for both attempts, a changed request refused with 409, made again after its delete"
+
+
 @check("F-02", "Creating a harness with an unsupported base is refused", "full",
        f"{SPEC}/harnesses.md#41-create")
 def f02(ctx):
