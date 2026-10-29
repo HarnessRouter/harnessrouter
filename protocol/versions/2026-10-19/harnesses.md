@@ -258,15 +258,22 @@ What the harness object comes back with and cannot be written (`id`, `object`, `
 server's own read-only fields) MUST be accepted and ignored, so that a harness read and sent back
 saves. Both refusals hold for an update as well.
 
-A client MAY send `Idempotency-Key: <opaque string>` on a create. A server that reports the
-`harness_idempotency` capability answers a repeat of the same key, from the same principal and
-within a stated window, with the harness the first request created, and does not create another.
-A repeat carrying a different request is `409` with `code: "idempotency_key_reused"`. A server
-without the capability ignores the header, so the request still creates a harness.
+A client MAY send `Idempotency-Key: <opaque string>` on a create. The key belongs to the client
+and is chosen before its first attempt. It is what makes a retry after a lost answer safe: the
+client cannot tell whether its first create reached the server, and without a key its retry makes
+a second harness.
 
-The key belongs to the client and is chosen before its first attempt; the server keeps it only for
-the stated window. That is what makes a retry after a lost answer safe: the client cannot tell
-whether its first create reached the server, and without a key its retry makes a second harness.
+A server that reports the `harness_idempotency` capability MUST keep a create's key for at least
+24 hours, in the caller's scope, and for a repeat of it:
+
+- answer with the harness the first request created, and not create another;
+- if the first request is still creating that harness, wait for it and answer with it, rather than
+  with a conflict or a not-found;
+- answer `409` with `code: "idempotency_key_reused"` when the repeat carries a different request.
+
+Once the harness a key created is deleted, the key names no harness, and a repeat creates one as
+the first request did. A server without the capability ignores the header, so every request
+creates a harness.
 
 ### 5.2 Update
 

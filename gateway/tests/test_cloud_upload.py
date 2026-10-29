@@ -314,3 +314,77 @@ def test_a_destination_stored_before_the_check_is_not_called(api, cloud, monkeyp
     before = list(cloud.calls)
     out = asyncio.run(gw._cloud_upload_one(ORG, hid, {"base_url": "https://10.0.0.5", "api_key": "sk-hr-good"}, {}))
     assert out["ok"] is False and "cannot be used" in out["error"] and cloud.calls == before
+
+
+class KeyedCloud(Cloud):
+    """A Cloud that reports harness_idempotency (Harnesses §5.1) and keeps a create's key: a repeat
+    gets the harness the key made while it exists, and a key whose harness was deleted makes one."""
+    def __init__(self):
+        super().__init__()
+        self.by_key: dict[str, str] = {}
+        self.sent_keys: list[str] = []
+        self.lose_next_answer = False
+
+    def handle(self, req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/v1/uhp":
+            return httpx.Response(200, json={"capabilities": {"harness_idempotency": True}})
+        if req.url.path == "/v1/harnesses" and req.method == "POST":
+            k = req.headers.get("idempotency-key", "")
+            self.sent_keys.append(k)
+            if k and self.by_key.get(k) in self.harnesses:
+                hid = self.by_key[k]
+                return httpx.Response(200, json={**self.harnesses[hid], "id": hid})
+            r = super().handle(req)
+            if k and r.status_code == 200:
+                self.by_key[k] = r.json()["id"]
+            if self.lose_next_answer:      # made on Cloud, the answer lost on the way back
+                self.lose_next_answer = False
+                raise httpx.ReadTimeout("the answer was lost", request=req)
+            return r
+        return super().handle(req)
+
+
+def test_a_deploy_whose_answer_was_lost_gets_the_same_copy_back_from_a_cloud_that_keeps_keys(api, monkeypatch):
+    """#582: the create reached Cloud and made the copy, but its answer never came back, so no record
+    names it. The next deploy sends the same key and Cloud answers with that copy: one copy, not two.
+    A copy deleted on Cloud since is made again under the same key, and a changed form is a new key."""
+    c = KeyedCloud()
+    real = httpx.AsyncClient
+
+    class Patched(real):
+        def __init__(self, *a, **kw):
+            kw["transport"] = httpx.MockTransport(lambda r: c.handle(r))
+            super().__init__(*a, **kw)
+    monkeypatch.setattr(gw.httpx, "AsyncClient", Patched)
+    monkeypatch.setattr(gw, "_checked_clients", {})
+    api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
+    hid = _harness(api, "Lost answer")
+    c.lose_next_answer = True
+    assert api.post(f"/v1/harnesses/{hid}/upload").status_code == 502
+    assert len(c.harnesses) == 1
+    r = api.post(f"/v1/harnesses/{hid}/upload")
+    assert r.status_code == 200, r.text
+    assert list(c.harnesses) == [r.json()["remote_id"]]
+    assert c.sent_keys[0] == c.sent_keys[1] and c.sent_keys[0].startswith(f"deploy:{hid}:")
+    first = r.json()["remote_id"]
+    assert api.post(f"/v1/harnesses/{hid}/upload").json()["action"] == "replace"   # PUT, no key
+    assert len(c.sent_keys) == 2
+    del c.harnesses[first]                                                         # deleted on Cloud
+    again = api.post(f"/v1/harnesses/{hid}/upload").json()
+    assert again["action"] == "create" and again["remote_id"] != first and list(c.harnesses) == [again["remote_id"]]
+    assert c.sent_keys[2] == c.sent_keys[0]
+
+
+def test_a_cloud_that_does_not_keep_keys_is_sent_none(api, cloud):
+    api.post("/v1/cloud-upload/targets", json={"api_key": "sk-hr-good", "base_url": CLOUD})
+    hid = _harness(api, "No keys there")
+    seen = []
+    real = cloud.handle
+
+    def spy(req):
+        if req.method == "POST" and req.url.path == "/v1/harnesses":
+            seen.append(req.headers.get("idempotency-key"))
+        return real(req)
+    cloud.handle = spy
+    assert api.post(f"/v1/harnesses/{hid}/upload").status_code == 200
+    assert seen == [None]

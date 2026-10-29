@@ -4830,8 +4830,9 @@ UHP_CAPABILITIES = {
     "idempotency": True,
     # Harnesses §5.1: POST /v1/harnesses honours an Idempotency-Key. A separate key from
     # `idempotency` (Tasks §6) because a client asks about a create, not a turn, and neither
-    # claim should silently imply the other.
-    "harness_idempotency": True,
+    # claim should silently imply the other. Only with a store to keep keys in: without one a
+    # keyed create is refused 503, which a client that read `true` would not expect.
+    "harness_idempotency": control_store.enabled(),
     "plugins": True,
     "environments": True,
     # Tasks §2.1: a request that starts a task may bring its earlier turns as user and assistant
@@ -20759,6 +20760,48 @@ async def _pub_org_member(request: Request) -> tuple[str, str]:
     return org, p.get("member", "")
 
 
+# Harnesses §5.1: a create's key is kept a day, as Tasks §6 asks of a task's, so a deploy retried the
+# next morning still finds the first copy.
+_HARNESS_IDEM_TTL = 86400
+# A claim whose harness has not landed after this long belongs to a create that died without
+# releasing it (a killed process): a repeat takes the key over instead of waiting out the day.
+_HARNESS_IDEM_STALE = 120.0
+
+
+async def _harness_idem_claim(org: str, sha: str, hid: str, req: str) -> dict | None:
+    """Claim a create's Idempotency-Key for `hid`. None: this request holds the key and creates.
+    A record: the live harness an earlier request with the key created, which is the answer.
+
+    While the first request is still creating, a repeat waits for it (Tasks §6: never a conflict
+    or a not-found for work in progress). Once the key's harness is deleted the key names none, and
+    the repeat creates one, so a deploy whose Cloud copy was deleted makes it again."""
+    if not control_store.enabled():     # no durable store: refuse rather than create blind
+        raise HTTPException(503, "idempotency store unavailable; retry")
+    deadline = time.time() + _HARNESS_IDEM_STALE + 30
+    while time.time() < deadline:
+        try:
+            held = await control_store.idem_reserve(org, sha, hid, req, _HARNESS_IDEM_TTL)
+        except Exception as e:  # noqa: BLE001 — fail CLOSED: a retried create is safe, a duplicate is not
+            raise HTTPException(503, "idempotency store unavailable; retry") from e
+        if held is None:
+            return None
+        if str(held.get("req_hash") or "") not in ("", req):
+            raise uhp_error(409, "idempotency_key_reused",
+                            "This Idempotency-Key was used with a different request.", "Idempotency-Key")
+        first = str(held.get("resp_id") or "")
+        v = await _vertex_get(first)
+        if v and str(v.get("deleted") or "") not in ("1", "true", "True"):
+            return v
+        if v or time.time() - float(held.get("ts") or 0) > _HARNESS_IDEM_STALE:
+            # deleted since, or its create died: release it (only while it still names `first`)
+            # and claim again, where one racer wins and the others wait on that one
+            await control_store.idem_release(org, sha, first)
+            await asyncio.sleep(0.1)
+            continue
+        await asyncio.sleep(0.5)
+    raise HTTPException(503, "the first request with this Idempotency-Key is still creating its harness; retry")
+
+
 @app.post("/v1/harnesses")
 async def create_harness_public(body: HarnessBody, request: Request) -> dict:
     return await _harness_create_as(await _principal(request), body,
@@ -20770,36 +20813,22 @@ async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
     """The public create, for the caller `p`: every check it makes, then the record. `hid` is the id
     New setup's builder derives from its build's key (setup_builder.setup_id), else a new one.
 
-    `idem_key` is the request's Idempotency-Key (Harnesses §5.1). The reservation is taken BEFORE
-    any prepare step writes a blob or a package, so a retry after a lost answer replays the first
-    harness — and does not duplicate the side effects either."""
+    `idem_key` is the request's Idempotency-Key (Harnesses §5.1). The key is claimed BEFORE any
+    prepare step writes a blob or a package, so a retry after a lost answer replays the first
+    harness and does not duplicate the side effects either."""
     org, member = p.get("org", ""), p.get("member", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
     await _require_offered_model(org, body.base, body.default_model)
     hid = hid or _rid("chrn")
-    idem_hash = _idem_sha(idem_key) if idem_key else ""
-    idem_req = _harness_req_hash(body) if idem_key else ""
-    reserved = False
+    idem_sha = ""
     if idem_key:
-        if not control_store.enabled():     # no durable store: refuse rather than create blind
-            raise HTTPException(503, "idempotency store unavailable; retry")
-        try:
-            existing = await control_store.idem_reserve(org, idem_hash, hid, idem_req, int(_IDEM_TTL))
-        except Exception as e:  # noqa: BLE001 — fail CLOSED: a retried create is safe, a duplicate is not
-            raise HTTPException(503, "idempotency store unavailable; retry") from e
-        if existing is not None:
-            if str(existing.get("req_hash") or "") not in ("", idem_req):
-                raise uhp_error(409, "idempotency_key_reused",
-                                "This Idempotency-Key was used with a different request.",
-                                "Idempotency-Key")
-            v = await _vertex_get(str(existing.get("resp_id") or ""))
-            if not v or str(v.get("deleted") or "") in ("1", "true", "True"):
-                # the same answer a GET gives for a harness that is gone
-                raise uhp_error(404, "harness_not_found",
-                                "idempotent replay: original harness not found", "harness_id")
-            return _harness_out(v)
-        reserved = True
+        # Scoped to the workspace the harness is made in, so a key never answers with another
+        # workspace's harness (_scope_keeps), and apart from /v1/responses' keys.
+        idem_sha = _idem_sha(f"harness\n{p.get('workspace') or ''}\n{idem_key}")
+        first = await _harness_idem_claim(org, idem_sha, hid, _harness_req_hash(body))
+        if first is not None:
+            return _harness_out(first)
     try:
         body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
         body.skills = await _skills_prepare(body.skills)
@@ -20811,10 +20840,10 @@ async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
                  "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
         await _vg_upsert("Harness", hid, props)
     except Exception:
-        # nothing was persisted under this key, so release it: a retry that replayed this
-        # reservation would name a harness that never existed (a poisoned key).
-        if reserved:
-            await control_store.idem_release(org, idem_hash, hid)
+        # nothing was persisted under this key, so release it: a retry would otherwise wait on a
+        # harness that is never written
+        if idem_sha:
+            await control_store.idem_release(org, idem_sha, hid)
         raise
     if await _plugs_ensure_required(org, hid):
         return _harness_out(await _vertex_get(hid) or {"id": hid, **props})
@@ -21837,11 +21866,11 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     # a record an upload before remote ids were kept names none: its copy is at the local id
     rid = str((rec or {}).get("remote_id") or hid)
     hdr = {"authorization": f"Bearer {target['api_key']}"}
-    if harness_idem:
-        # One key per logical create, derived from the local harness and the form being sent, so a
-        # deploy retried later (a lost answer, a closed laptop) replays Cloud's copy instead of
-        # making a second one. A different harness, or a changed form, is a different key.
-        hdr["idempotency-key"] = f"deploy:{hid}:{fp}"
+    # A create's key (Harnesses §5.1), from the local harness and the form being sent: a deploy
+    # whose answer was lost (a timeout, a restart before the record was saved) sends it again and
+    # gets Cloud's copy back instead of making a second one. A copy deleted on Cloud since leaves
+    # the key naming none, so the same key makes it again.
+    create_hdr = {**hdr, "idempotency-key": f"deploy:{hid}:{fp}"} if harness_idem else hdr
     wait = httpx.Timeout(60.0, connect=8.0)
     try:
         r = None
@@ -21851,7 +21880,8 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
             if r.status_code == 404:
                 action, r = "create", None
         if r is None:
-            r = await _checked_http().post(f"{target['base_url']}/v1/harnesses", json=body, headers=hdr, timeout=wait)
+            r = await _checked_http().post(f"{target['base_url']}/v1/harnesses", json=body, headers=create_hdr,
+                                           timeout=wait)
     except Exception as e:  # noqa: BLE001
         return {"id": hid, "ok": False, "action": action, "error": f"could not reach cloud: {str(e)[:120]}"}
     try:
