@@ -1,7 +1,8 @@
 'use client';
 // One setup (docs/uxuidesign/console-91, view `agent`: agentView, agentHead, tasksBody, newPane,
-// taskPane, setSide, sideTog). One bar on top (back, name, Harness ID, Tasks · Settings, Set up the
-// app); the rest of the window is work, every column starting with a 56 px bar on one hairline.
+// taskPane, setSide, sideTog). One bar on top (back, name, Deploy to Cloud and Connect your app, then
+// Tasks · Settings at its right end); the rest of the window is work, every column starting with a 56 px
+// bar on one hairline.
 // Tasks: the task list, the open task (or New task), the Agent stack. Settings: the layers, the open
 // layer, the Agent stack with that layer's brick lit. A test is a task: New task starts one, and every
 // task of the setup takes follow-ups.
@@ -171,7 +172,7 @@ export default function SetupPage() {
     toast('That task is not in this setup.');
     newTest();
   });
-  // Set up the app: the design's sheet, over whichever tab is open
+  // Connect your app: the design's sheet, over whichever tab is open
   const [app, setApp] = useState(false);
   const onSetUpApp = () => setApp(true);
   // Settings' open layer is in the address too (?layer=), so a brick of the Agent stack opens it
@@ -229,8 +230,10 @@ export default function SetupPage() {
     return (
       <div className="tk-page">
         <Skel label="Loading the setup" className="hrui-skel-contents">
-          <header className="ag-bar" aria-hidden="true">
+          {/* the setup's bar while it loads: the same bar (setup/parts AgentHead), its tabs' place held at the right end */}
+          <header className="ag-bar ag-rt" aria-hidden="true">
             <div className="ag-lft"><SkLine w={32} h={32} r={16} /><div style={{ display: 'grid', gap: 6 }}><SkLine w={180} h={20} /><SkLine w={240} h={10} /></div></div>
+            <div className="ag-sk-tabs"><SkLine w={84} h={14} /><SkLine w={96} h={14} /></div>
           </header>
         </Skel>
         <div className="tk-split" aria-hidden="true">

@@ -303,10 +303,10 @@ describe('the Plugins tab: the workspace’s connected plugins, a switch each', 
 });
 
 describe('Deploy to Cloud lives in the page bar, not here', () => {
-  test('the settings end with Delete setup alone', async () => {
+  test('the settings end with Delete setup and Duplicate alone', async () => {
     await settings(setup(), 'harness');
     expect(el.querySelector('.lg-rows .ly-n.lg-up')).toBeNull();
-    expect([...el.querySelectorAll('.lg-rows .lg-dz .ly-n')].map((b) => b.textContent)).toEqual(['Delete setup']);
+    expect([...el.querySelectorAll('.lg-rows .lg-dz .ly-n')].map((b) => b.textContent)).toEqual(['Delete setup', 'Duplicate']);
     expect(el.textContent).not.toContain('Upload to cloud');
   });
 });
@@ -336,5 +336,29 @@ describe('the arrow keys', () => {
     await keyOn(el.querySelector('.ly-list [role=tab][aria-selected=true]') as Element, 'ArrowDown');
     expect(on('.ly-list')).toContain('Environment & limits');
     expect(document.activeElement?.textContent).toContain('Environment & limits');
+  });
+});
+
+// The Harness ID lives in Settings › Agent harness, first, with its own Copy (not on the bar above the page).
+describe('the Harness ID', () => {
+  test('Agent harness shows it first, read-only, with Copy', async () => {
+    await settings(setup(), 'harness');
+    const f = el.querySelector('.lg-col .set-f');
+    expect(f?.querySelector('.set-lb')?.textContent).toBe('Harness ID');
+    expect(f?.querySelector('.set-hid code')?.textContent).toBe('chrn_p2');
+    expect(f?.querySelector('input')).toBeNull();
+    expect(f?.querySelector('button[aria-label="Copy Harness ID"]')).not.toBeNull();
+  });
+});
+
+// Duplicate shares Delete setup's row, at its right (as on the hosted console), and no longer sits under the agent harness.
+describe('Duplicate', () => {
+  test('is the second button of every Delete setup row, and Agent harness has none', async () => {
+    await settings(setup(), 'harness');
+    const rows = Array.from(el.querySelectorAll('.lg-dz'));
+    expect(rows.length).toBe(2);                                             // the rail's and the open layer's foot
+    for (const row of rows) expect(Array.from(row.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['Delete setup', 'Duplicate']);
+    expect(el.textContent).not.toContain('Duplicate with another agent harness');
+    expect(el.querySelector('.lg-dup')?.getAttribute('title')).toBe('Duplicate with another agent harness');
   });
 });

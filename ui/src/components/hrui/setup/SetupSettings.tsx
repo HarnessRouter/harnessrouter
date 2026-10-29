@@ -13,8 +13,9 @@
 // Capabilities tab counts the ones on of one of setupParts.ts's lists (setupPlugins, setupSkills,
 // setupTools); Skills and Tools list it, Plugins lists the workspace's connected plugins with a switch
 // each, beside what the setup includes (PluginSwitches.tsx); the layers list's Capabilities line counts
-// what a person added, as the Agent stack and Studio's card do. Under the layers: Delete setup.
-// (Deploy to Cloud is the page bar's, beside Set up the app: DeployCloud.tsx.)
+// what a person added, as the Agent stack and Studio's card do. Under the layers: Delete setup, and
+// Duplicate beside it.
+// (Deploy to Cloud is the page bar's, beside Connect your app: DeployCloud.tsx.)
 // Every value, list, default and ceiling shown is read from the services: the setup's record, the
 // bases document (tools, built-in skills, thinking levels, runtime defaults), the model catalog,
 // and the workspace's plugins and environments. What is not read yet shows nothing.
@@ -64,6 +65,13 @@ const PLUGIN_PACKAGE_MAX = 16 * 1024 * 1024;   // the gateway's own cap on one p
 const fmtMb = (n: number) => `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`;
 
 const LOCK = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
+const COPY = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>;
+
+/** Copy the Harness ID: the clipboard when the browser allows it, else the person is told how. */
+async function copyId(hid: string) {
+  try { await navigator.clipboard.writeText(hid); toast('Copied'); }
+  catch { toast('Text selected. Press Cmd or Ctrl + C.'); }
+}
 const PLUS = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
 const X = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>;
 
@@ -102,7 +110,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const providers = useModelProviders();
   const bases = useBases();
   const limits = useRuntimeDefaults();
-  const srv = bases?.[rec.base] || null;
+  const srv = bases?.[oobById(rec.base)?.id || rec.base] || null;
   const oob = oobById(rec.base);
   // ── the draft ──────────────────────────────────────────────────────────────────────────────
   // a setup with no model of its own keeps none ('' : the server runs it on its harness's default)
@@ -404,10 +412,17 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const BODY: Record<LayerKey, ReactNode> = {
     // the agent harness first, then its model (the models are this harness's own, so they follow it)
     harness: <>
+      {/* the Harness ID first, read only: what a task names to reach this setup (it left the page's bar) */}
+      <div className="set-f">
+        <span className="set-lb" id="setHidL">Harness ID</span>
+        <div className="set-ro set-hid" role="group" aria-labelledby="setHidL">
+          <code className="mono" title={id}>{id}</code>
+          <button type="button" className="icon-btn xs" aria-label="Copy Harness ID" title="Copy Harness ID" onClick={() => void copyId(id)}>{COPY}</button>
+        </div>
+      </div>
       {field('setName', 'Name', <input id="setName" className="set-in" value={c.name} aria-invalid={inv('setName')} onChange={(e) => set('name', e.target.value)} />)}
       {field('setHarness', 'Agent harness',
-        <div className="set-ro" id="setHarness"><span>{logo ? <img className="h-logo" src={logo} alt="" /> : null}{r.baseName}</span><span className="set-lock">{LOCK}Fixed once saved</span></div>,
-        <button type="button" className="link-q inl" onClick={() => setPop({ k: 'dup' })}>Duplicate with another agent harness</button>)}
+        <div className="set-ro" id="setHarness"><span>{logo ? <img className="h-logo" src={logo} alt="" /> : null}{r.baseName}</span><span className="set-lock">{LOCK}Fixed once saved</span></div>)}
       {sub('Model', '', null, <>
         {field('setModel', 'Default model',
           <select id="setModel" className="set-in" value={c.model} onChange={(e) => set('model', e.target.value)}>
@@ -633,11 +648,15 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const mcpEdit = pop?.k === 'mcp' && pop.i != null ? c.mcp[pop.i] || null : null;
 
   // Delete setup: the settings' last row, a layer row's anatomy, past a hairline and outside the
-  // layers' tablist; red, its name alone (the sheet says what deleting does, Richard 10-18). Drawn at
-  // any width (hrui-console.css): `rail` under the layers, else at the foot of the open layer.
+  // layers' tablist; red, its name alone (the sheet says what deleting does). Duplicate shares its
+  // row at the right, blue (as on the hosted console; its sheet picks the other agent harness).
+  // Drawn at any width (hrui-console.css): `rail` under the layers, else at the foot of the open
+  // layer.
   const delRow = (where: 'rail' | 'foot') => (
     <div className="lg-dz" data-where={where}>
       <button type="button" className="ly-n" aria-haspopup="dialog" onClick={() => setPop({ k: 'del' })}><b>Delete setup</b></button>
+      <button type="button" className="ly-n lg-dup" aria-haspopup="dialog" title="Duplicate with another agent harness"
+        onClick={() => setPop({ k: 'dup' })}><b>Duplicate</b></button>
     </div>
   );
 

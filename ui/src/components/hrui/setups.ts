@@ -183,10 +183,16 @@ export function pageSig(page: { sessions: TraceCard[]; cursor: string }): string
     [c.session_id, c.status, c.finished_at, c.last_response_id].join(':')).join('|');
 }
 
+/** The server's row for a setup's base, found by the base's id or by the backend a record made through the API may
+ *  carry in its place (`claude` for claude-code). */
+function serverBase(h: CustomHarness, bases: Record<string, BaseInfo> | null): BaseInfo | null {
+  return bases?.[oobById(h.base)?.id || h.base] || null;
+}
+
 /** The agent harness's name as the catalog spells it ("Hermes"); a record made through the API may
  *  carry its id as its label ("hermes"), so the label only stands in when the catalog has no name. */
 function nameOfBase(h: CustomHarness, bases: Record<string, BaseInfo> | null): string {
-  return bases?.[h.base]?.label || oobById(h.base)?.name || h.baseLabel || h.base;
+  return serverBase(h, bases)?.label || oobById(h.base)?.name || h.baseLabel || h.base;
 }
 
 /** A setup's tasks of the last day read again, from its newest page on: null when that page reads
@@ -410,7 +416,7 @@ export function useSetups(opts: { live?: boolean; scope?: string } = {}): {
     const start: RowSrc[] = list.map((h) => {
       const was = prev.get(h.id), k = knownTasks.get(h.id);
       return {
-        h, baseName: nameOfBase(h, bases), base: bases?.[h.base] || null,
+        h, baseName: nameOfBase(h, bases), base: serverBase(h, bases),
         binding: was ? was.binding : hasPlugsEntry(h) ? undefined : null,
         cards: was?.cards ?? k?.cards ?? [], capped: was?.capped ?? k?.capped ?? false, sig: was?.sig ?? k?.sig ?? null,
         at: 0, known: !!(was?.known || k), failed: false,
@@ -598,14 +604,14 @@ export function useSetup(id: string): { row: SetupRow | null; cards: TraceCard[]
       again.current.n = 0;
       knownTasks.set(id, { cards: day.m.cards, capped: day.m.capped, sig: day.m.sig });
       setCards(day.m.cards);
-      setRow(rowOf(h, baseName, day.m.cards, day.m.capped, plugs, bases?.[h.base] || null));
+      setRow(rowOf(h, baseName, day.m.cards, day.m.capped, plugs, serverBase(h, bases)));
       return;
     }
     // the read failed: the last one that answered in this tab stands (none: nothing is claimed), and
     // the setup is read again shortly
     const k = knownTasks.get(id);
     if (k) setCards(k.cards);
-    setRow({ ...rowOf(h, baseName, k?.cards || [], k?.capped || false, plugs, bases?.[h.base] || null), tasksKnown: !!k, readFailed: true });
+    setRow({ ...rowOf(h, baseName, k?.cards || [], k?.capped || false, plugs, serverBase(h, bases)), tasksKnown: !!k, readFailed: true });
     const A = again.current;
     const ms = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** A.n);
     A.n += 1;

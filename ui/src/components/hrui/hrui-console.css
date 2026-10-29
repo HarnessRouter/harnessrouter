@@ -392,34 +392,22 @@
   #hrui .tk-newp .ac-hero{margin:0}
   #hrui .tp-tabs button{padding:0 10px}
 }
-/* the bar's second line (harness · model · Harness ID) stays one line from 1024 px up: the Harness ID
-   gives way first, cut in its middle (its start, an ellipsis, its last six, then Copy), then the
-   model. The design hid the ID under 900 px for want of room; cut, it fits, so it stays. */
+/* the bar's second line (harness · model) stays one line from 1024 px up; the Harness ID is the first row of
+   Settings › Agent harness, no longer on this line */
 #hrui .ag-bar .ag-l2 .ag-h{flex:none}
-/* the model never gives up width while the Harness ID can: shrinking it at all, even by hundredths of a pixel,
-   drew its "…" ("deepseek-v4.1-fla…" at 1440 and 1024, production re-check 10-21); "…" only past the whole line */
+/* the model keeps its width: "…" only past the whole line ("deepseek-v4.1-fla…" at 1440 and 1024 when it shared the
+   line with the Harness ID, production re-check 10-21) */
 #hrui .ag-bar .ag-l2 .ag-m{flex:0 0 auto;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis}
 #hrui .ag-bar .ag-l2 .sep{flex:none}
-#hrui .ag-bar .ag-l2 .ag-hid{display:inline-flex;flex:0 1000 auto;min-width:76px;margin-left:0}   /* the design's -4px
-   (under 900 px, from when only the copy icon showed) cut the ID's first letter */
-#hrui .ag-bar .ag-l2 .ag-hid .ag-id{display:inline-flex;flex:0 1 auto;min-width:0}
-#hrui .ag-bar .ag-l2 .ag-hid .icon-btn{flex:none}
-#hrui .ag-id-a{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#hrui .ag-id-b{flex:none}
-#hrui .ag-bar .ag-l2 .sep-id{display:inline}
 /* under 1024 px the bar stays one 56 px line, as the design draws it: the harness as its logo (its name stays for
-   screen readers and in the logo's tooltip; a harness with no logo keeps its name), the model whole, and the Harness
-   ID as its Copy button alone, the ID in the button's tooltip (the design hid the ID's text under 900 px; Richard: a
-   Harness ID is not for people to read). The model was cut at 768 and 390 in the production read-back (10-21); a bar
-   that grew to hold more rows moved the tabs' underline and shifted the page on load, so it doesn't grow.
+   screen readers and in the logo's tooltip; a harness with no logo keeps its name) and the model whole. The model
+   was cut at 768 and 390 in the production read-back (10-21); a bar that grew to hold more rows moved the tabs'
+   underline and shifted the page on load, so it doesn't grow.
    After the base rules on purpose: a media query adds no specificity, so a later rule would win */
 @media (max-width:1023px){
   #hrui .ag-bar .ag-l2.has-logo .ag-h{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-  #hrui .ag-bar .ag-l2 .sep-id{display:none}
-  #hrui .ag-bar .ag-l2 .ag-hid{flex:none;min-width:0;margin-left:4px}
-  #hrui .ag-bar .ag-l2 .ag-hid .ag-id{display:none}
-  /* with the ID's text gone the model is the line's only give: whole wherever the line holds it, "…" only where it truly
-     can't (701 px, or a harness with no logo), and Copy always whole */
+  /* the model is the line's only give: whole wherever the line holds it, "…" only where it truly can't (701 px, or a
+     harness with no logo) */
   #hrui .ag-bar .ag-l2 .ag-m{flex:0 1 auto}
 }
 #hrui .ag-act>svg{display:none;flex:none}
@@ -448,9 +436,14 @@
    under the layers, never pinned to the rail's foot; where the rail folds to chips (860 px and under)
    that one is not drawn and the one at the foot of the open layer is, its words in line with the
    fields above it. One is drawn at any width. */
-#hrui .set-split .lg-dz{display:flex;flex-direction:column;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+#hrui .set-split .lg-dz{display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+#hrui .set-split .lg-dz>.ly-n{flex:1 1 auto;min-width:0}
 #hrui .set-split .lg-dz>.ly-n b{color:var(--bad)}
 #hrui .set-split .lg-dz>.ly-n:hover{background:var(--bad-soft)}
+/* Duplicate: Delete setup's row, at its right end, blue */
+#hrui .set-split .lg-dz>.ly-n.lg-dup{flex:none;width:auto;text-align:right}
+#hrui .set-split .lg-dz>.ly-n.lg-dup b{color:var(--accent)}
+#hrui .set-split .lg-dz>.ly-n.lg-dup:hover{background:var(--accent-soft)}
 #hrui .set-split .lg-col>.lg-dz{display:none}
 /* Upload to cloud: the row above Delete setup, in the layers' own ink */
 #hrui .set-split .lg-dz>.ly-n.lg-up b{color:var(--fg)}
@@ -463,7 +456,8 @@
 @media (max-width:860px){
   #hrui .set-split .lg-rows>.lg-dz{display:none}
   #hrui .set-split .lg-col>.lg-dz{display:flex;margin-top:28px}
-  #hrui .set-split .lg-col>.lg-dz>.ly-n{margin:0 -8px}
+  #hrui .set-split .lg-col>.lg-dz>.ly-n:first-child{margin-left:-8px}
+  #hrui .set-split .lg-col>.lg-dz>.ly-n:last-child{margin-right:-8px}
 }
 /* a setup's Plugins tab (setup/PluginSwitches.tsx): the workspace's connected plugins in the design's
    rows, three columns that line up as a table's (the mark, the words, the switch, each switch as wide
@@ -522,7 +516,9 @@
 #hrui .bs-save .bs-board .bs-grid:not(.bs-g1):not(.bs-g3) .bs-x b{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 /* the setup's bar (setup/parts.tsx): the name's side and the action's side take equal shares, so Tasks
    and Settings sit in the bar's middle whatever either side holds (Richard, 2026-10-19); a long name
-   ellipsizes inside its share. A phone keeps the design's wrap, with the tabs on their own row. */
+   ellipsizes inside its share. A phone keeps the design's wrap, with the tabs on their own row. The
+   setup page's bar now puts the tabs at its right end instead: the `.ag-bar.ag-rt` rules at the end of
+   this file outrank these. */
 #hrui .ag-bar .ag-lft{display:flex;align-items:center;gap:10px;min-width:0;flex:0 1 auto}
 @media (min-width:701px){
   #hrui .ag-bar:where(:not(.hrui-legacy *)){display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);column-gap:16px}
@@ -597,7 +593,7 @@
 #hrui .tp-head .tk-acts .demo-chip+.tk-running{margin-left:10px}
 /* the Next card under a new setup's first task (start/NextBar, the design's .nx2; Richard 2026-10-19):
    your app (a brick still to build) and the setup (a built brick) at the two ends, the task going
-   over and the result coming back between them, Set up the app under the wires. The design draws it
+   over and the result coming back between them, Connect your app under the wires. The design draws it
    at 612 px, its width in a task with the Agent stack open. The card is its own container, so what
    follows reads the card's width whatever panels are open: under 520 px Next takes its own line, the
    bricks shrink to 64 px, the wires stay between the two ends and the button takes the full width
@@ -647,7 +643,7 @@
    still breaks, and a table wider than the reply scrolls. */
 #hrui .uac-md th, #hrui .uac-md td{min-width:4em;overflow-wrap:break-word;word-break:normal}
 /* every coding-agent sheet is Richard's "Set up a starter app" sheet (10-19: hand-sheet use-sheet, its steps
-   the hx list, start/Steps): Set up the app and the guides. The design's own rules the generated sheet
+   the hx list, start/Steps): Connect your app and the guides. The design's own rules the generated sheet
    lacks, then what the console adds: a summary never runs past the step (a long key name ends in an
    ellipsis), and a hint or live line that warns reads as one */
 #hrui .use-sheet .hand{margin-top:18px}
@@ -678,7 +674,7 @@
    the pills under it start at different places; one width for all of them, the design's own at 1000 px */
 @media (max-width:520px){#hrui .agents-g:where(:not(.hrui-legacy *)){grid-template-columns:minmax(0,1fr) 120px!important}}
 
-/* Set up the app (Richard's set-up-a-starter-app design, 10-19): a step that is not next yet keeps its
+/* Connect your app (the set-up-a-starter-app design, 10-19): a step that is not next yet keeps its
    body at full strength, so the key row's Create reads as live from the start, as the design draws it.
    The older guides' fade (hrui.css .hx-s.empty .hx-d) stays for the other sheets. */
 #hrui .use-sheet .hx-s.empty .hx-d{opacity:1}
@@ -1024,7 +1020,7 @@
 #hrui .tk-d .tp-head .th-row>.tp-t{flex:1;min-width:0}
 #hrui .tk-d .tp-head .th-row>.tk-acts{margin-left:auto}
 
-/* Deploy to Cloud (setup/DeployCloud.tsx): the page bar's second action, beside Set up the app. Its menu
+/* Deploy to Cloud (setup/DeployCloud.tsx): the page bar's second action, beside Connect your app. Its menu
    (In Cloud) hangs under it, right aligned, as the task filter's does (.rng-pop); Update Cloud carries a
    dot; on a phone it folds to its icon like the bar's other action (.ag-act) */
 #hrui .dc-w{position:relative;display:inline-flex;flex:none}
@@ -1038,3 +1034,40 @@
 #hrui .ws-pop:not(.me-pop){display:flex;flex-direction:column;overscroll-behavior:contain}
 #hrui .ws-pop .ws-list{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow-y:auto}
 #hrui .ws-pop:not(.me-pop)>hr,#hrui .ws-pop:not(.me-pop)>.ws-row.plain{flex:none}
+/* Settings › Agent harness: the Harness ID, its first row, read only, with Copy (it left the page's bar). The label is
+   a field label's twin; the ID is whole where it fits and cut at its end where it doesn't, Copy always whole */
+#hrui .set-f .set-lb{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+#hrui .set-ro.set-hid{gap:8px;padding:5px 6px 5px 12px}
+#hrui .set-hid code{flex:1 1 auto;min-width:0;font-size:13px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .set-hid .icon-btn{flex:none;width:28px;height:28px;color:var(--muted)}
+#hrui .set-hid .icon-btn:hover{color:var(--fg)}
+/* The setup's bar as the hosted console's setup page redesign draws it (Tasks and Settings at the right of the bar, no
+   longer its middle): the name on the left, then the setup's two actions, then the tabs at the right end, each with its
+   icon, the open one blue over a 3 px underline. 860 px and under the tabs take their own row; 600 and under they share
+   it equally, words only. Last in the file and one class past every older bar rule, on purpose */
+#hrui .ag-bar.ag-rt,#hrui .tk-page .ag-bar.ag-rt{display:flex;align-items:center;column-gap:16px;padding-right:20px}
+#hrui .ag-bar.ag-rt>.ag-lft{flex:1 1 auto;min-width:0}
+/* the actions keep their own width, just before the tabs (the older grid gave them the bar's right half and its padding) */
+#hrui .ag-bar.ag-rt>.ag-right,#hrui .tk-page .ag-bar.ag-rt>.ag-right{flex:none;margin-left:0;padding-right:0}
+#hrui .ag-bar.ag-rt>.tabs.inline.ag-tabs{flex:none;align-self:stretch;display:flex;align-items:stretch;gap:2px;margin:0 0 0 auto;padding:0;border:0}
+#hrui .ag-bar.ag-rt>.ag-tabs>button{position:relative;display:inline-flex;align-items:center;gap:8px;padding:0 14px;font-size:14px;font-weight:540;color:var(--muted);border-bottom:0;margin-bottom:-1px;white-space:nowrap}
+#hrui .ag-bar.ag-rt>.ag-tabs>button:hover{color:var(--fg)}
+#hrui .ag-bar.ag-rt>.ag-tabs>button.on{color:var(--accent);font-weight:540}
+#hrui .ag-bar.ag-rt>.ag-tabs>button.on::after{content:"";position:absolute;left:8px;right:8px;bottom:0;height:3px;border-radius:3px 3px 0 0;background:var(--accent)}
+#hrui .ag-bar.ag-rt>.ag-tabs>button>svg{width:16px;height:16px;margin:0;color:currentColor;vertical-align:0;flex:none}
+@media (max-width:860px){
+  #hrui .ag-bar.ag-rt,#hrui .tk-page .ag-bar.ag-rt{flex-wrap:wrap;height:auto;min-height:56px;row-gap:0;padding:8px 12px 0 8px}
+  #hrui .ag-bar.ag-rt>.tabs.inline.ag-tabs{order:9;flex:0 0 100%;max-width:100%;height:44px;margin:4px 0 0;overflow-x:auto;scrollbar-width:none}
+}
+@media (max-width:600px){
+  #hrui .ag-bar.ag-rt>.tabs.inline.ag-tabs{gap:0}
+  #hrui .ag-bar.ag-rt>.ag-tabs>button{flex:1 1 0;justify-content:center;padding:0 6px}
+  #hrui .ag-bar.ag-rt>.ag-tabs>button>svg{display:none}
+}
+/* a tab that opens once the setup exists (the building page's Settings): drawn, not offered */
+#hrui .ag-bar.ag-rt>.ag-tabs>button:disabled{opacity:.45;cursor:default}
+#hrui .ag-bar.ag-rt>.ag-tabs>button:disabled:hover{color:var(--muted)}
+/* the setup's bar while it loads (studio/[id]): its tabs' place at the right end, on their own row at 860 and under, as the
+   loaded bar draws them, so the tabs do not move when it lands */
+#hrui .ag-bar.ag-rt>.ag-sk-tabs{margin-left:auto;display:flex;align-items:center;gap:28px;padding:0 14px}
+@media (max-width:860px){#hrui .ag-bar.ag-rt>.ag-sk-tabs{order:9;flex:0 0 100%;height:44px;margin:4px 0 0;padding:0 14px}}

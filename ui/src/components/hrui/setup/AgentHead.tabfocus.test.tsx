@@ -42,3 +42,22 @@ test('a click on a tab changes nothing about where focus goes', () => {
   draw('settings', onTab);
   expect(document.activeElement).not.toBe(tabNamed('Settings'));
 });
+
+test('the bar no longer carries the Harness ID: it lives in Settings', () => {
+  el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
+  draw('tasks', () => {});
+  expect(el.textContent).not.toContain('chrn_0123456789abcdef');
+  expect(el.querySelector('[aria-label="Copy Harness ID"]')).toBeNull();
+  expect(el.querySelector('[aria-label="Connect your app"]')).not.toBeNull();
+});
+
+// the hosted console's setup page redesign: Tasks · Settings at the bar's right end, each with its icon; this edition's two
+// actions (Deploy to Cloud, Connect your app) sit just before them
+test('Tasks · Settings carry their icons and end the bar, after its actions', () => {
+  el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
+  draw('tasks', () => {});
+  const bar = el.querySelector('header.ag-bar')!;
+  expect(bar.classList.contains('ag-rt')).toBe(true);
+  expect(Array.from(el.querySelectorAll('[role="tab"]')).map((t) => [t.textContent, !!t.querySelector('svg')])).toEqual([['Tasks', true], ['Settings', true]]);
+  expect(Array.from(bar.children).map((c) => c.className)).toEqual(['ag-lft', 'ag-right', 'tabs inline ag-tabs']);
+});

@@ -108,7 +108,7 @@ test('the first test New setup handed over ends in the Next bar once its answer 
   await open({ key: 'n0', first: FIRST });
   expect(bar()).not.toBeNull();
   expect(bar()?.querySelector('.nx-setup b')?.textContent).toBe('Contract redlines');
-  expect(bar()?.querySelector('button')?.textContent).toBe('Set up the app');
+  expect(bar()?.querySelector('button')?.textContent).toBe('Connect your app');
   expect(bar()?.textContent).not.toContain('Cloud');
 });
 
