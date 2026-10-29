@@ -41,6 +41,8 @@ for body in json.loads(os.environ["FAKE_CALLS"]):
         urllib.request.urlopen(req, timeout=10).read()
     except urllib.error.HTTPError as e:
         e.read()
+if os.environ.get("FAKE_STDERR"):
+    print(os.environ["FAKE_STDERR"], file=sys.stderr, flush=True)
 says, sid = os.environ["FAKE_SAYS"], "9c87656f-c69b-48cb-8b6d-b0eecd6b670f"
 for ev in ({"type": "system", "subtype": "init", "session_id": sid, "model": "qwen3-4b"},
            {"type": "assistant", "session_id": sid, "parent_tool_use_id": None,
@@ -67,6 +69,9 @@ class _Provider(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}")
+        if "drop me" in json.dumps(body):
+            self.close_connection = True       # the connection closes with no answer at all
+            return
         if type(self).refuse(body):
             out, code, ctype = type(self).refusal, 400, "application/json"
         else:
@@ -83,13 +88,13 @@ class _Provider(BaseHTTPRequestHandler):
         pass
 
 
-def _turn(tmp_path, refusal: bytes, refuse, calls: list[dict], says: str) -> dict:
+def _turn(tmp_path, refusal: bytes, refuse, calls: list[dict], says: str, stderr: str = "") -> dict:
     handler = type("Provider", (_Provider,), {"refusal": refusal, "refuse": staticmethod(refuse)})
     up = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=up.serve_forever, daemon=True).start()
     cli = tmp_path / "fake_qwen.py"
     cli.write_text(_CLI)
-    env = {**os.environ, "FAKE_CALLS": json.dumps(calls), "FAKE_SAYS": says}
+    env = {**os.environ, "FAKE_CALLS": json.dumps(calls), "FAKE_SAYS": says, "FAKE_STDERR": stderr}
     _build_qwen("openai-api", Auth(api_key="sk-local", base_url=f"http://127.0.0.1:{up.server_address[1]}/v1"),
                 "qwen3-4b", "hi", str(tmp_path), env)
     tid = f"t-{time.time()}"
@@ -137,6 +142,25 @@ def test_a_later_refusal_after_an_answer_is_still_the_reason(tmp_path):
     calls = [_call(False), {**_call(False), "messages": [{"role": "user", "content": "too long"}]}]
     rec = _turn(tmp_path, FLAT, lambda b: "too long" in json.dumps(b), calls,
                 "[API Error: 400 status code (no body)]")
+    assert rec["error"] == f"The model provider refused the request (400: {VLLM_SAID})"
+
+
+def test_a_refusal_before_a_call_that_went_unanswered_is_not_the_reason(tmp_path):
+    """The CLI got past a refused call and its next call was never answered (the connection closed),
+    which is what it failed of. The earlier refusal is not this turn's reason: each call starts the
+    route's record afresh."""
+    calls = [{**_call(False), "messages": [{"role": "user", "content": "too long"}]},
+             {**_call(False), "messages": [{"role": "user", "content": "drop me"}]}]
+    rec = _turn(tmp_path, FLAT, lambda b: "too long" in json.dumps(b), calls, "Connection error.")
+    assert rec["status"] == "failed"
+    assert "Please reduce the length" not in rec["error"] and "Connection error." in rec["error"]
+
+
+def test_words_only_in_the_stderr_tail_are_not_what_the_turn_says(tmp_path):
+    """The CLI printed the provider's sentence to stderr and its result said "(no body)": the reason a
+    person reads is the result's, so the provider's words are still unsaid and lead it."""
+    rec = _turn(tmp_path, FLAT, lambda b: True, [_call(True)], "[API Error: 400 status code (no body)]",
+                stderr=f"debug: upstream said {VLLM_SAID}")
     assert rec["error"] == f"The model provider refused the request (400: {VLLM_SAID})"
 
 
