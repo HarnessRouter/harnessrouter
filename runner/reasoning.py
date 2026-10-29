@@ -15,8 +15,8 @@ docs/support-matrix-notes.md, "How much a model thinks"). Three things the measu
   lacks the one asked for gets the nearest one it has.
 - A model and route that were not measured get NOTHING sent, and the turn says so ("default").
 
-Pure functions over bytes, no imports from the runner: the relay applies them (runner/server.py), the
-DeepSeek Harness driver's own relay applies them (runner/dsh_driver.py), and the gateway reads
+Pure functions over bytes, no imports from the runner: the relay applies them (runner/server.py),
+for every base's model calls the DeepSeek Harness's included (#382), and the gateway reads
 `levels_for` for what /v1/bases offers (gateway/app.py loads this file by path).
 """
 from __future__ import annotations

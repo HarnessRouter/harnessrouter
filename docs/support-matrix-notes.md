@@ -6,6 +6,56 @@ The tables in [support-matrix.md](support-matrix.md) were produced by `scripts/s
 
 The run started on v0.13.5 and finished on v0.13.13. Every release between them came out of a finding below and was deployed on the instance behind a live-turn gate before the next column: 0.13.5 (local blob store lists by prefix), 0.13.6 (read caches, the word "refused" is not a key refusal), 0.13.7 (a Codex history kept whole under the same account, finished turns release their process handle), 0.13.8 (a Google key can be saved, qwen drops gpt-5.3-codex, a task reopened by URL keeps its model, the broker resends a Google request without the refused field, a self-hosted sandbox reaches the broker on loopback), 0.13.9 (opencode's base carries /v1), 0.13.10 (the relay's base carries its API version), 0.13.11 (the claude CLI strips it), 0.13.12 (a checkpoint that cannot be restored aborts the turn), 0.13.13 (owner trust normalises an Azure base like the broker).
 
+## dsh on the runner's relay (2026-10-27, #382)
+
+#382 takes the DeepSeek Harness driver's own relay away: every model call dsh makes now goes through a
+route on the runner's relay (`tool_call_deltas_no_empty`, `exact_base`). That changes every call this
+base makes, so its columns were measured again on the branch before it ships, and each one REPLACES the
+column that was there: a column holding pairs from the driver's relay (main) beside pairs from the
+runner's would describe software nobody shipped.
+
+The build: `fix/382-dsh-one-relay` at 3b4d6d8, rebased on #596, the image built from a clean clone, one
+self-hosted container with `HR_BACKENDS=dsh` (DeepSeek Harness 0.1.2rc1), owner trust. `run.mjs` ran in
+`mcr.microsoft.com/playwright:v1.63.0-noble` on the container's network, one provider at a time, the
+instance holding that provider's integration and nothing else.
+
+- **OpenRouter 61/61** (305 of 305 scenario runs), every Claude, GPT, Gemini, Grok, Muse and Llama id
+  on the menu, eight of them not on main's OpenRouter column (gpt-6-luna, gpt-6-sol, gpt-6.1-sol,
+  claude-haiku-5.5, claude-opus-5.5, claude-sonnet-5.5, gemini-4-argon, muse-wonder-1.0).
+- **Vercel 58/58** (290 of 290). gemini-3.1-pro-preview missed its recycle once: asked for the word of
+  its first message, it answered `DONE`, the reply to the turn before. The kept session had all four
+  earlier turns restored, so the history survived and the model answered the wrong turn; the retest
+  passed, and the first try is on the row.
+- **TokenRouter 38/38 outside Claude** (190 of 190). Claude is NOT measured on this column. The first
+  Claude pair, claude-haiku-4.5, was refused on its first turn: `You have reached your specified API
+  usage limits. You will regain access on 2026-11-01 at 00:00 UTC.` A direct call to
+  api.tokenrouter.com with `anthropic/claude-haiku-4.5`, the instance not involved, answered the same,
+  so it is this account's Claude channel and not the route. The other nine Claude ids were left out
+  rather than spent on the same refusal, and their rows from main go with the column. Claude on the
+  runner's relay is measured on OpenRouter (12 of 12) and Vercel (11 of 11); TokenRouter's ten are
+  re-run once the quota resets.
+- deepseek-v4-flash is not on the TokenRouter column: TokenRouter has no channel for it today (`No
+  available channel for model deepseek/deepseek-v4-flash`, a direct call). It passes on OpenRouter and
+  Vercel.
+
+**Not run**, by name: the custom-harness dimension, the plugin matrix and the family tour
+(docs/harness-verification.md steps 2 to 4), and the Anthropic, Azure OpenAI E2, Google and OpenAI
+columns. Those four columns' dsh rows are still the ones from main, measured on the driver's relay, as
+are the dsh rows in every other column that carries some (the multi-harness columns and the Gemini
+family's).
+
+What the run itself got wrong first, each fixed before a row was kept:
+
+- An image built from a Windows checkout with `core.autocrlf` carries CRLF scripts and the container
+  dies at once (`env: 'bash\r': No such file or directory`). Build from a clone with LF endings.
+- `EXPECT_CONNECTION` is the connection id the turns carry (`integration:tokenrouter`), not the
+  integration's name. Started with the name, the first four pairs listed their own connection as
+  foreign; recomputed against the id, none was served by another.
+- `samemodel.py` reads the gateway's vendor tables at `../../gateway/app.py`, so the suite needs the
+  whole tree, not `scripts/support-matrix` alone. Mounted alone, TokenRouter's own names for two models
+  (`tencent/hy4-preview`, `nvidia/nemotron-3-super-120b-a12b`) read as substitutions; judged again with
+  the tables, both are the model asked for, and every later run mounted the tree.
+
 ## `max_output_tokens` is reported, not applied (2026-10-18, #470)
 
 A request's `max_output_tokens` is accepted and named in `metadata.ignored_fields`; no base receives
@@ -5424,3 +5474,37 @@ matrix's five scenarios do not reach (2026-10-27):
 Both pairs are off the hosted service, and off here alike (`_NOT_OFFERED`, the console's lists, and their rows
 in support-matrix-results.json), on Richard's word: "Hide those two pairs". fast-agent keeps the Gemini family
 and docker-agent the rest of grok's.
+
+### minimax-m3.1-flash on MiniMax Code (0.37.9)
+
+MiniMax M3.1 Flash is listed by OpenRouter, Vercel and TokenRouter as `minimax/minimax-m3.1-flash` (read
+2026-10-28), so it is one catalog id, `minimax-m3.1-flash`, in the shared slug table. It is offered on the
+minimax base only. Measured on the 0.37.9 release candidate on hr-test, with the instance's model routes set
+to each aggregator in turn and put back after:
+
+- **Five scenarios** on each of TokenRouter (the instance's own routing, the `minimax-default` column),
+  OpenRouter and Vercel: first, follow-up, switch to gpt-6.1-sol, artifact and recycle all pass, served as
+  `minimax-m3.1-flash` (TokenRouter names it `MiniMax-M3.1-Flash`).
+- **A deck conversation** on each: minimax-m3 builds `deck.pptx`, then minimax-m3.1-flash makes it red and
+  then makes the title bold at 40 pt, 3 of 3 turns completed on each aggregator. Each deck was read back:
+  the slide's colour is red and its title bold at 40 pt.
+
+TokenRouter also lists `MiniMax-M3`, its name for minimax-m3, which this table still records as having no
+TokenRouter channel. Opening it changes what four bases (hermes, kimi, minimax, goose) are offered on
+TokenRouter, so it waits for those columns to be measured.
+
+### The dsh columns on the runner's relay, measured by the maintainer (0.37.10)
+
+The four columns this change touches most were measured again on the 0.37.10 release candidate on hr-test,
+each pair on its own connection through the instance's model routes (put back after): dsh-anthropic 8 of 8,
+dsh-google 7 of 7, dsh-openai 9 of 9 and dsh-azure-e2 9 of 9 pass all five scenarios, each served as the model
+asked for. On the direct Anthropic connection the relay now sends cache breakpoints and the key the way Anthropic
+reads it; on Google the signature rules apply; on all four the schema repairs run. gemini-3.7-flash keeps its
+earlier dsh-google row: this instance's Google connection does not serve it, so its run went to TokenRouter.
+
+dsh-tokenrouter's claude-haiku-4.5 row was a quota refusal on the tester's account ("You have reached your
+specified API usage limits"), not a result. It was run again on this instance's TokenRouter connection and passes.
+
+A deck conversation that changes model family on every turn passed 5 of 5: deepseek-v4-pro made `deck.pptx`,
+claude-sonnet-5 made it red, gemini-3.8-flash made the title bold at 40 pt, gemini-3.6-flash added a slide (one
+Gemini model after another) and gpt-5.4 set every bullet to 20 pt. The deck was read back with each change in it.

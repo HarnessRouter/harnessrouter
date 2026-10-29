@@ -1,8 +1,8 @@
-"""The Gemini tool-schema repair and the thought-signature reader exist three times: in the
-runner's relay (runner/server.py), in the DeepSeek Harness driver's own relay (runner/dsh_driver.py)
-and on the gateway's API front (gateway/app.py). Until there is one implementation (#382), one
-corpus goes through all three and the answers must agree, so a repair made in one copy fails here
-until it is made in the others.
+"""The Gemini tool-schema repair and the thought-signature reader exist twice: in the runner's
+relay (runner/server.py) and on the gateway's API front (gateway/app.py). The DeepSeek Harness
+driver had a third copy in a relay of its own until its model calls rode the runner's (#382).
+Until there is one implementation, one corpus goes through both and the answers must agree, so a
+repair made in one copy fails here until it is made in the other.
 
 It already had: the nullable-enum repair ({"type": ["string", "null"], "enum": [..., null]}, refused
 whole by Google's validator, 2026-09-27) was in the runner's copy only, so a dsh turn or a gateway
@@ -21,10 +21,9 @@ sys.path.insert(0, str(_ROOT / "gateway"))
 sys.path.insert(0, str(_ROOT / "runner"))
 os.environ.setdefault("HR_BACKING", "local")
 import app  # noqa: E402
-import dsh_driver  # noqa: E402
 import server  # noqa: E402
 
-COPIES = {"runner relay": server, "dsh driver": dsh_driver, "gateway": app}
+COPIES = {"runner relay": server, "gateway": app}
 
 SCHEMAS = [
     # the shapes each repair in _gemini_schema exists for
@@ -59,7 +58,6 @@ def _answers(fn, *args):
 @pytest.mark.parametrize("schema", SCHEMAS, ids=[str(i) for i in range(len(SCHEMAS))])
 def test_every_copy_normalises_a_schema_the_same_way(schema):
     got = _answers("_gemini_schema", schema)
-    assert got["dsh driver"] == got["runner relay"], got
     assert got["gateway"] == got["runner relay"], got
 
 
@@ -68,7 +66,6 @@ def test_every_copy_rewrites_a_request_body_the_same_way():
     body = json.dumps({"model": "google/gemini-3.8-flash", "messages": [{"role": "user", "content": "hi"}],
                        "tools": tools}).encode()
     got = {k: json.loads(v) for k, v in _answers("_with_gemini_schemas", body).items()}
-    assert got["dsh driver"] == got["runner relay"]
     assert got["gateway"] == got["runner relay"]
     plain = b'{"model": "google/gemini-3.8-flash", "messages": []}'
     for name, mod in COPIES.items():
@@ -90,7 +87,6 @@ SIGNATURE_DOCS = [
 @pytest.mark.parametrize("doc", SIGNATURE_DOCS, ids=[str(i) for i in range(len(SIGNATURE_DOCS))])
 def test_every_copy_reads_the_same_thought_signatures(doc):
     got = _answers("_google_signatures_in", doc)
-    assert got["dsh driver"] == got["runner relay"], got
     assert got["gateway"] == got["runner relay"], got
 
 

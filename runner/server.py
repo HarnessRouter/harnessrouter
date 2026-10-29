@@ -26,8 +26,8 @@ Backends + providers (registry-driven — pi was added as exactly that one entry
     - anthropic     : ANTHROPIC_API_KEY (+ optional ANTHROPIC_BASE_URL)
   backend "dsh" (DeepSeek Harness; official Python SDK drives the bundled JSON-RPC
   runtime — runner/dsh_driver.py re-emits its session.events as NDJSON):
-    - deepseek    : any OpenAI-compatible deepseek-family endpoint; DEEPSEEK-shaped auth
-                    goes to the driver as HR_DSH_* and stays OUT of the runtime env
+    - deepseek    : any OpenAI-compatible deepseek-family endpoint; the key stays in the
+                    runner's relay, and the driver gets the relay's base and a placeholder
   backend "pi" (earendil-works pi coding agent; `pi -p --mode json` event stream,
   multi-family like hermes — custom providers via ~/.pi/agent/models.json):
     - anthropic     : ANTHROPIC_API_KEY (native), base_url via models.json when set
@@ -858,7 +858,7 @@ CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
                       "./.harness/goose/config/secrets.yaml",
                       # dsh: the MCP cordis overlay can carry auth headers (same standing as
                       # claude's .mcp.json); the provider KEY itself never lands anywhere —
-                      # it lives only in the driver process (see dsh_driver.py's relay).
+                      # it stays in the runner's relay (see _build_dsh).
                       "./.harness/home/.dsh/cordis.yml",
                       # The per-turn config files the runner writes OUTSIDE the CLI home, each of
                       # which can carry an MCP server's Authorization header or a stdio server's
@@ -3324,7 +3324,7 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
 # close ladder never runs on a killed driver, and the runtime dies with the group.
 # "deepseek" is the launch provider (dsh's own adapter, auto-mounted); everything else rides
 # dsh-llm-pi-ai — pi's unified LLM library as a Cordis plugin — through a hand-declared route
-# at the driver's relay, so the api-by-family rules are the ones the pi backend already proved.
+# at the runner's relay, so the api-by-family rules are the ones the pi backend already proved.
 DSH_PROVIDERS = {"deepseek", "anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 _DSH_DEFAULT_BASE = {"anthropic": "https://api.anthropic.com/v1",
                      "openai": "https://api.openai.com/v1",
@@ -3348,21 +3348,22 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     # /v1 would make /v3/v1 and 404, so a custom base is used as-is.
     if auth.api_format != "openai" and not base.rstrip("/").endswith("/v1"):
         base = base.rstrip("/") + "/v1"   # the relay joins upstream paths against a /v1 base
-    # HR_DSH_*: consumed and scrubbed by the driver before the runtime starts. The runtime gets
-    # a loopback relay URL and a placeholder key — the credential never enters its environment.
-    env["HR_DSH_BASE_URL"] = base
-    env["HR_DSH_API_KEY"] = auth.api_key or ""
-    # The turn's thinking level: the driver's relay writes it into each call with the same function
-    # this relay uses (runner/reasoning.py), so what is recorded here is what it will apply.
+    # The runtime's model calls ride this relay, as every other base's do (#382). The route holds
+    # the connection's key; the driver hands the runtime the relay's base and the route's
+    # placeholder (HR_DSH_RELAY_*), so the credential enters neither the driver's process nor the
+    # runtime's. The base is joined exactly as computed above, so a custom endpoint keeps its own
+    # version path. tool_call_deltas_no_empty: the runtime's adapter lets a continuation delta's
+    # empty-string id and name overwrite the real ones (_tool_call_delta_without_empty_fields).
+    relay_base, relay_tok = _hermes_relay_route(base, auth.api_key, exact_base=True,
+                                                tool_call_deltas_no_empty=True)
+    env["HR_DSH_RELAY_BASE"] = relay_base
+    env["HR_DSH_RELAY_TOKEN"] = relay_tok
+    # The turn's thinking level is on the route (_turn_effort) and this relay writes it into each
+    # call (runner/reasoning.py), so what is recorded here is what it will apply.
     thinking = _TURN_THINKING.get() or {}
     if thinking.get("asked"):
-        env["HR_DSH_REASONING_EFFORT"] = thinking["asked"]
-        if thinking.get("route"):          # scrubbed by the driver with the rest of HR_DSH_*, before the runtime starts
-            env["HR_DSH_REASONING_ROUTE"] = thinking["route"]
         thinking["applied"] = reasoning.level_on(thinking.get("route") or reasoning.route_of(base), model,
                                                  thinking["asked"])
-    # The driver's own relay waits on the provider as long as this one does (dsh_driver._upstream_wait).
-    env["HR_RELAY_UPSTREAM_TIMEOUT_S"] = f"{HR_RELAY_UPSTREAM_TIMEOUT_S:g}"
     # No system_prompt in the job: harness instructions land in AGENTS.md (dsh reads it via
     # its dsh-agent-instructions loader), same mechanism as codex/hermes/pi.
     job = {"prompt": prompt, "model": model, "cwd": cwd,
@@ -4016,9 +4017,9 @@ def _hermes_mcp_section(servers: list[dict] | None) -> dict:
 # intermittent because whether a given tool-call message carries empty content is up to the
 # model (issue #12). Nothing sat between hermes and the provider to repair it, and the failure
 # killed the turn: a 400 is never retried, and re-running on the next chain connection re-runs
-# the whole task. So the openai-api path now routes through the same kind of loopback relay the
-# dsh backend already has (runner/dsh_driver.py): requests are normalized BEFORE the provider
-# sees them — prevention, not retry — and as with dsh, the real credential stays in this
+# the whole task. So the openai-api path now routes through a loopback relay (the dsh driver had
+# its own then; since #382 dsh rides this one too): requests are normalized BEFORE the provider
+# sees them — prevention, not retry — and the real credential stays in this
 # process; hermes gets a placeholder token the relay resolves per request, so the key never
 # enters the CLI's env, its state.db, or anything it could checkpoint.
 #
@@ -4733,6 +4734,37 @@ def _image_count(body: bytes) -> int:
 
     walk(doc)
     return n
+
+
+_REASONING_EFFORT_UNSUPPORTED_RE = re.compile(
+    rb"reasoning_effort\\?[\"']?\s+(?:parameter\s+)?is\s+not\s+supported"
+    rb"|nsupported\s+parameter:?\s*\\?[\"']?reasoning_effort")
+
+
+# How the servers a custom endpoint runs refuse a field they do not know, each naming the field: an
+# OpenAI-shaped server's 'Unrecognized request argument supplied: reasoning_effort', a FastAPI one's
+# extra_forbidden ("Extra inputs are not permitted", loc ["body", "reasoning_effort"]), 'Unknown
+# parameter' / 'unknown field'. The driver's own relay dropped the field on any refusal naming it;
+# these keep that reach for a custom endpoint without reading every mention as one.
+_UNKNOWN_FIELD_WORDS = (b"unrecognized", b"unknown", b"extra inputs", b"extra_forbidden", b"not permitted",
+                        b"unsupported", b"not supported")
+
+
+def _reasoning_effort_unsupported(data: bytes) -> bool:
+    """Whether a refusal says the model takes no `reasoning_effort` at all: 'The "reasoning_effort"
+    parameter is not supported by "deepseek/deepseek-v4-pro"' (LLMTR, captured 2026-08-20 by
+    conformance T-01), OpenAI's 'Unsupported parameter: 'reasoning_effort'', or a server that does not
+    know the field (_UNKNOWN_FIELD_WORDS). Not gpt-5.6's 'Function tools with reasoning_effort are not
+    supported ... set reasoning_effort to 'none'', which names a value to send instead
+    (_set_reasoning_effort_none), nor the same refusal naming another endpoint: dropping the field
+    answers neither."""
+    data = data or b""
+    if _REASONING_EFFORT_UNSUPPORTED_RE.search(data):
+        return True
+    low = data.lower()
+    if b"reasoning_effort" not in low or b"function tools" in low or b"'none'" in low:
+        return False
+    return any(w in low for w in _UNKNOWN_FIELD_WORDS)
 
 
 def _set_reasoning_effort_none(body: bytes) -> bytes:
@@ -6248,6 +6280,21 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     print(f"[relay] provider refused reasoning_effort's thinking shape for model={_body_model}; "
                           f"sent again without it", flush=True)
                     continue
+                if (attempt < 2 and e.code in (400, 422) and body is not None and b"reasoning_effort" in body
+                        and _reasoning_effort_unsupported(data)):
+                    # An aggregator serving a model over the OpenAI shape refuses the whole request
+                    # for a parameter that model does not take. The DeepSeek Harness adapter sends
+                    # reasoning_effort on every call, and its driver's own relay dropped it on this
+                    # refusal before the base rode this one (#382). It goes, for this model on this
+                    # route, and the request goes again.
+                    stripped = _drop_top_level_field(body, "reasoning_effort")
+                    if stripped != body:
+                        flags[f"drop_reasoning_effort:{_body_model}"] = True
+                        body = stripped
+                        headers["content-length"] = str(len(body))
+                        print(f"[relay] provider takes no reasoning_effort for model={_body_model}; "
+                              f"sent again without it", flush=True)
+                        continue
                 flat = _with_anthropic_schemas(body) if body is not None else None
                 if (attempt < 2 and e.code == 400 and b"input_schema" in data
                         and any(c.encode() in data for c in _ANTHROPIC_COMBINATORS)
@@ -6476,15 +6523,9 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 # stream is line-buffered as it passes; the bytes still go through untouched
                 pending += chunk
                 # a route that rewrites usage forwards whole lines (as rewritten) instead of the
-                # raw read, so a rewrite never straddles two reads.
-                # EVERY rewrite flag has to be named here, not only in _rewrite_stream_line: this
-                # is the gate that decides whether the rewritten lines are what the client gets,
-                # and a flag added to the rewriter alone changes nothing at all. Measured the hard
-                # way — `tool_index_fill` was added to the rewriter, the suite passed on it, and
-                # the Google column failed again with the identical error because the bytes still
-                # went through untouched.
-                out_lines = [] if (flags.get("usage_no_nulls") or flags.get("plain_stream")
-                                   or flags.get("tool_index_fill") or flags.get("split_finish_content")) else None
+                # raw read, so a rewrite never straddles two reads (every rewrite flag is named in
+                # _rewrites_stream_lines, the one gate for this and for the last line below)
+                out_lines = [] if _rewrites_stream_lines(flags) else None
                 while b"\n" in pending:
                     line, pending = pending.split(b"\n", 1)
                     if out_lines is not None:
@@ -6522,7 +6563,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             call_usage.update(_usage_in_sse_line(pending.strip()))
             seen_thinking = _thinking_in_sse_line(pending.strip())
             _stream_fold(flags, call_usage, seen_thinking if seen_thinking is not None else call_thinking, folded)
-            if (flags.get("usage_no_nulls") or flags.get("plain_stream") or flags.get("split_finish_content")) and pending:
+            if _rewrites_stream_lines(flags) and pending:
                 tail_bytes = _rewrite_stream_line(pending, flags, line_state)   # a last line with no newline after it
                 self.wfile.write(f"{len(tail_bytes):x}\r\n".encode() + tail_bytes + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
@@ -6821,9 +6862,9 @@ def _adapt_custom_auth(auth):
     """An anthropic-format custom integration pointing at bedrock-runtime rides the adapter.
 
     Every anthropic-format backend path converges on POST <base>/v1/messages (claude's CLI and
-    pi's client append it themselves; dsh chains its own relay into ours), so rewriting the auth
-    ONCE here covers all of them - and the real Bedrock key stays in this process, the same
-    credential win the hermes and dsh relays already have."""
+    pi's client append it themselves; dsh's route on this relay chains into the adapter's), so
+    rewriting the auth ONCE here covers all of them - and the real Bedrock key stays in this
+    process, the same credential win every relay route already has."""
     if auth.api_format != "anthropic" or not (auth.base_url and auth.api_key):
         return auth
     host = urllib.parse.urlsplit(auth.base_url).hostname or ""
@@ -6969,6 +7010,20 @@ def _tool_call_index_line(line: bytes, state: dict) -> bytes:
     return b"data: " + json.dumps(obj, separators=(",", ":")).encode()
 
 
+def _rewrites_stream_lines(flags: dict) -> bool:
+    """Whether this route rewrites a stream line by line (_rewrite_stream_line), and so forwards
+    whole lines as rewritten rather than each read as it came.
+
+    EVERY rewrite flag has to be named here, not only in _rewrite_stream_line: this is the gate that
+    decides whether the rewritten lines are what the client gets, and a flag added to the rewriter
+    alone changes nothing at all. Measured the hard way — `tool_index_fill` was added to the
+    rewriter, the suite passed on it, and the Google column failed again with the identical error
+    because the bytes still went through untouched. One gate for the stream and its last line also
+    means a route that rewrites lines never holds back a final line without a newline unsent."""
+    return bool(flags.get("usage_no_nulls") or flags.get("plain_stream") or flags.get("tool_index_fill")
+                or flags.get("split_finish_content") or flags.get("tool_call_deltas_no_empty"))
+
+
 def _rewrite_stream_line(line: bytes, flags: dict, state: dict) -> bytes:
     if flags.get("split_finish_content"):
         line = _split_finish_content_line(line)
@@ -6978,6 +7033,8 @@ def _rewrite_stream_line(line: bytes, flags: dict, state: dict) -> bytes:
         line = _tool_call_index_line(line, state)
     if flags.get("plain_stream"):
         line = _plain_trailer_line(line, state)
+    if flags.get("tool_call_deltas_no_empty"):
+        line = _tool_call_delta_without_empty_fields(line)
     return line
 
 
@@ -7009,6 +7066,50 @@ def _split_finish_content_line(line: bytes) -> bytes:
     finish = {**doc, "choices": [{**ch, "delta": {"role": delta["role"]} if delta.get("role") else {}}]}
     return (b"data: " + json.dumps(text, separators=(",", ":")).encode() + b"\n\n"
             + b"data: " + json.dumps(finish, separators=(",", ":")).encode())
+
+
+def _tool_call_delta_without_empty_fields(line: bytes) -> bytes:
+    """One chat-completions SSE line with an empty-string `id` and `function.name` taken off each
+    tool-call delta; any other line, and a line with nothing to take off, goes as it came.
+
+    The DeepSeek Harness runtime's adapter accumulates a streamed tool call the OpenAI way: the id
+    from `call.id` and the name from `call.function.name`, each guarded by `!== undefined`. OpenAI
+    OMITS both on continuation deltas; aggregators such as TokenRouter send them as EMPTY STRINGS,
+    so the second delta overwrote the real id and name with "" and every tool call died as
+    UNKNOWN_TOOL (captured live 2026-08-20 on deepseek/deepseek-v4-flash). The driver's own relay
+    did this until the base rode this one (#382). A `null` passes the same guard and overwrites the
+    same way, so it is taken off too. The space after `data:` is optional in SSE, so `data:{` is
+    read too (#572)."""
+    if (b'""' not in line and b"null" not in line) or b"tool_calls" not in line:
+        return line
+    cr = line.endswith(b"\r")
+    raw = line[:-1] if cr else line
+    if not raw.startswith(b"data:"):
+        return line
+    payload = raw[5:].removeprefix(b" ")
+    if not payload.startswith(b"{"):
+        return line
+    try:
+        obj = json.loads(payload)
+    except ValueError:
+        return line   # a line we cannot parse is a line we must not alter
+    changed = False
+    for ch in (obj.get("choices") or []) if isinstance(obj, dict) else []:
+        delta = ch.get("delta") if isinstance(ch, dict) else None
+        calls = delta.get("tool_calls") if isinstance(delta, dict) else None
+        for tc in calls if isinstance(calls, list) else []:
+            if not isinstance(tc, dict):
+                continue
+            if "id" in tc and tc["id"] in ("", None):
+                del tc["id"]
+                changed = True
+            fn = tc.get("function")
+            if isinstance(fn, dict) and "name" in fn and fn["name"] in ("", None):
+                del fn["name"]
+                changed = True
+    if not changed:
+        return line
+    return b"data: " + json.dumps(obj, separators=(",", ":")).encode() + (b"\r" if cr else b"")
 
 
 def _usage_without_nulls(line: bytes) -> bytes:
@@ -7058,7 +7159,8 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                         usage_no_nulls: bool = False, exact_base: bool = False,
                         aux: bool = False, plain_stream: bool = False,
                         tool_index_fill: bool = False, turn_reasoning_only: bool = False,
-                        split_finish_content: bool = False, chat_cache: bool = False) -> tuple[str, str]:
+                        split_finish_content: bool = False, chat_cache: bool = False,
+                        tool_call_deltas_no_empty: bool = False) -> tuple[str, str]:
     """Register one turn's upstream; → (relay base_url, placeholder bearer for the CLI).
 
     `drop_fields` names top-level request fields this route's client sends on its own initiative and
@@ -7081,7 +7183,9 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
     was calling that base directly before it had a route (Codex, and hermes on Azure): the same URL,
     with the relay between. `aux` marks a route for a helper model (hermes's image questions): the
     turn's thinking level is the main model's and stays off it, and what it serves is not the turn's
-    (_turn_relay_flags passes it over)."""
+    (_turn_relay_flags passes it over). `tool_call_deltas_no_empty` drops an empty-string id or name
+    from a streamed tool-call delta, for a client that lets a continuation delta's "" overwrite the
+    call's real ones (_tool_call_delta_without_empty_fields; the DeepSeek Harness runtime)."""
     with _HERMES_RELAY["lock"]:
         if _HERMES_RELAY["server"] is None:
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
@@ -7100,6 +7204,7 @@ def _hermes_relay_route(base_url: str, api_key: str, drop_fields: tuple[str, ...
                  "usage_no_nulls": bool(usage_no_nulls), "plain_stream": bool(plain_stream),
                  "tool_index_fill": bool(tool_index_fill), "turn_reasoning_only": bool(turn_reasoning_only),
                  "split_finish_content": bool(split_finish_content), "chat_cache": bool(chat_cache),
+                 "tool_call_deltas_no_empty": bool(tool_call_deltas_no_empty),
                  **({"aux": True} if aux else _turn_effort())}
         # The turn's trace context (#473), on every route of this turn: the relay reads it when it
         # forwards, and the relay's own threads never see the turn's context variables.
@@ -7263,6 +7368,17 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
 
 
 QWEN_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
+# The output cap Qwen Code puts on every request on its own initiative, the kimi precedent: nobody
+# configured it, and it is the CLI's figure for the model NAME, not for the model the endpoint serves.
+# 0.26.3 sent max_tokens: 32768 for qwen3-4b (captured between the relay and a real vLLM, 2026-10-28);
+# the report (#578) has 64000 for qwen3.5-9b. The image's 0.22.2 does the same on every call: 64000 for
+# most ids, 16384 for gpt-6.1-sol, 32000 for an id it does not know, never max_completion_tokens (measured
+# at a stub, 2026-10-28). A self-hosted model's window is the server's choice, and
+# vLLM refuses the whole request when the cap does not fit it: "max_tokens=64000 cannot be greater than
+# max_model_len=max_total_tokens=8192" there, "you requested 49350 tokens (16582 in the messages, 32768
+# in the completion)" here. Without the field the provider's own default applies, on vLLM the room left
+# in the window, as on every base that sends none. No max_completion_tokens was seen.
+_QWEN_DROP_FIELDS = ("max_tokens",)
 
 
 def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
@@ -7314,8 +7430,9 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # array of parts, which aggregators 400 with 'content must be a string' — measured live
         # against LLMTR; Azure's gpt-5.x deployments 400 on max_tokens), and the real key never
         # enters the CLI's environment — which matters more here than anywhere, because qwen
-        # takes its credential ONLY via env.
-        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+        # takes its credential ONLY via env. The route also takes off the output cap the CLI
+        # invents (_QWEN_DROP_FIELDS).
+        relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key, drop_fields=_QWEN_DROP_FIELDS)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     home = pathlib.Path(cwd) / ".harness" / "home"
     home.mkdir(parents=True, exist_ok=True)
