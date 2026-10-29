@@ -5818,6 +5818,28 @@ def _relay_last_finish(env: dict) -> str:
     return str(_turn_relay_flags(env).get("last_finish") or "").replace("-", "_")
 
 
+def _relay_refusal_unsaid(env: dict, *said: str) -> str:
+    """The provider's refusal of this turn's last call on its route, as the relay read it, when the
+    CLI's own account of the failure does not carry it; "" otherwise.
+
+    A CLI reports a refusal only as far as its client could read the body. Qwen Code 0.26.3 reads
+    the reason only under an `error` key, and vLLM up to 0.10.0 puts `message` at the top level
+    (`{"object":"error","message":...}`; nested from 0.10.1), so a turn vLLM refused for a window
+    too small read "API Error: 400 status code (no body)", while vLLM had said "This model's maximum
+    context length is 28672 tokens. However, you requested 49351 tokens ..." (#612, measured through
+    the relay with 0.26.3 at a stub, and at a real vLLM v0.8.5.post1 in #578). The relay passed that
+    body on byte for byte and kept its words on the route (`last_refusal`, _refusal_words, which
+    reads both shapes); only the hermes path read them. A CLI whose reason already has the words
+    keeps its own sentence: the comparison is on the message's start, which survives a CLI's own
+    prefix ("[API Error: 400 ...]"). A refusal with no message beyond its status says nothing the
+    CLI's "400" does not."""
+    words = str(_turn_relay_flags(env).get("last_refusal") or "")
+    msg = words.split(": ", 1)[1].strip() if ": " in words else ""
+    if not msg or any(msg[:60] in s for s in said):
+        return ""
+    return f"The model provider refused the request ({words})"
+
+
 def _relay_served_model(env: dict) -> str:
     """What the relay saw the provider serve on this turn's route, "" when the turn did not ride
     the relay or nothing answered yet (see _turn_relay_flags for which route that is)."""
@@ -6142,6 +6164,11 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                                          method=self.command, headers=headers)
             try:
                 resp = urllib.request.urlopen(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
+                # Answered: a refusal remembered on the route is no longer why anything fails. It
+                # was repaired (this call's own retry without stream_options, an unknown field, a
+                # level) or the CLI got past it, and a turn that fails later fails for another
+                # reason, which the refusal must not be read as (_relay_refusal_unsaid, #612).
+                flags.pop("last_refusal", None)
                 if effort_back:
                     # the provider took the call without the level: not offered again for this model
                     flags[f"effort_refused:{effort_model}"] = True
@@ -14377,8 +14404,12 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         # providers' phrasings ("HTTP 503", "Error code: 429", "503 Service Unavailable") and
         # tightening it to exclude a bare number would risk missing a real refusal — the frames
         # are what does not belong in the search.
-        refusal = next((ln.strip() for ln in tail.splitlines()
-                        if _PROVIDER_REFUSAL.search(ln)), "")
+        # The provider's own words come before a line of the CLI's that merely names the status: the
+        # relay saw the refusal the CLI could not read ("API Error: 400 status code (no body)" from
+        # Qwen Code on vLLM 0.10.0's body, #612), and "429 status code (no body)" would otherwise be
+        # the line the search below picks.
+        refusal = _relay_refusal_unsaid(env, str(ev_err), tail) or next(
+            (ln.strip() for ln in tail.splitlines() if _PROVIDER_REFUSAL.search(ln)), "")
         if not refusal and _relay_last_finish(env) == "content_filter":
             # THE PROVIDER DECLINED, and the CLI's own account of a failure it could not see is not
             # the reason. A refused request comes back as an answer with no content and no
