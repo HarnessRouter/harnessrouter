@@ -651,6 +651,15 @@ def _req_hash(body: "CreateResponseBody") -> str:
              **({"reasoning": body.reasoning} if body.reasoning else {})}
     return hashlib.sha256(json.dumps(canon, sort_keys=True, default=str).encode()).hexdigest()
 
+
+def _harness_req_hash(body: "HarnessBody") -> str:
+    """Stable hash of a create request as the client sent it (Harnesses §5.1).
+
+    Taken BEFORE the prepare steps, which rewrite the body in place: _skills_prepare offloads a
+    large bundle to a blob and _plugins_prepare replaces files with a handle. Hashed afterwards, a
+    retry would look like a different request and be refused 409 instead of replayed."""
+    return hashlib.sha256(json.dumps(body.model_dump(), sort_keys=True, default=str).encode()).hexdigest()
+
 REDIS_URL = os.environ.get("HARNESS_REDIS_URL", "")
 # Per-session execution lease (HR-INF-012). Modes: off | observe | enforce.
 #   observe (default) — acquire the lease + detect overlapping turns and LOG them, but never
@@ -4819,6 +4828,10 @@ UHP_CAPABILITIES = {
     "harness_management": True,
     "session_sharing": True,
     "idempotency": True,
+    # Harnesses §5.1: POST /v1/harnesses honours an Idempotency-Key. A separate key from
+    # `idempotency` (Tasks §6) because a client asks about a create, not a turn, and neither
+    # claim should silently imply the other.
+    "harness_idempotency": True,
     "plugins": True,
     "environments": True,
     # Tasks §2.1: a request that starts a task may bring its earlier turns as user and assistant
@@ -20748,26 +20761,61 @@ async def _pub_org_member(request: Request) -> tuple[str, str]:
 
 @app.post("/v1/harnesses")
 async def create_harness_public(body: HarnessBody, request: Request) -> dict:
-    return await _harness_create_as(await _principal(request), body)
+    return await _harness_create_as(await _principal(request), body,
+                                    idem_key=request.headers.get("idempotency-key", "").strip())
 
 
-async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None) -> dict:
+async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
+                             idem_key: str = "") -> dict:
     """The public create, for the caller `p`: every check it makes, then the record. `hid` is the id
-    New setup's builder derives from its build's key (setup_builder.setup_id), else a new one."""
+    New setup's builder derives from its build's key (setup_builder.setup_id), else a new one.
+
+    `idem_key` is the request's Idempotency-Key (Harnesses §5.1). The reservation is taken BEFORE
+    any prepare step writes a blob or a package, so a retry after a lost answer replays the first
+    harness — and does not duplicate the side effects either."""
     org, member = p.get("org", ""), p.get("member", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
     await _require_offered_model(org, body.base, body.default_model)
-    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
-    body.skills = await _skills_prepare(body.skills)
-    await _environment_check_ref(org, body.environment)
-    body.plugins = await _plugins_prepare(body, org)
     hid = hid or _rid("chrn")
-    now = str(int(time.time() * 1000))
-    props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
-             **_harness_props(body), **_harness_source_prop(body),
-             "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
-    await _vg_upsert("Harness", hid, props)
+    idem_hash = _idem_sha(idem_key) if idem_key else ""
+    idem_req = _harness_req_hash(body) if idem_key else ""
+    reserved = False
+    if idem_key:
+        if not control_store.enabled():     # no durable store: refuse rather than create blind
+            raise HTTPException(503, "idempotency store unavailable; retry")
+        try:
+            existing = await control_store.idem_reserve(org, idem_hash, hid, idem_req, int(_IDEM_TTL))
+        except Exception as e:  # noqa: BLE001 — fail CLOSED: a retried create is safe, a duplicate is not
+            raise HTTPException(503, "idempotency store unavailable; retry") from e
+        if existing is not None:
+            if str(existing.get("req_hash") or "") not in ("", idem_req):
+                raise uhp_error(409, "idempotency_key_reused",
+                                "This Idempotency-Key was used with a different request.",
+                                "Idempotency-Key")
+            v = await _vertex_get(str(existing.get("resp_id") or ""))
+            if not v or str(v.get("deleted") or "") in ("1", "true", "True"):
+                # the same answer a GET gives for a harness that is gone
+                raise uhp_error(404, "harness_not_found",
+                                "idempotent replay: original harness not found", "harness_id")
+            return _harness_out(v)
+        reserved = True
+    try:
+        body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
+        body.skills = await _skills_prepare(body.skills)
+        await _environment_check_ref(org, body.environment)
+        body.plugins = await _plugins_prepare(body, org)
+        now = str(int(time.time() * 1000))
+        props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
+                 **_harness_props(body), **_harness_source_prop(body),
+                 "custom": "1", "created_at": now, "updated_at": now, "deleted": "0"}
+        await _vg_upsert("Harness", hid, props)
+    except Exception:
+        # nothing was persisted under this key, so release it: a retry that replayed this
+        # reservation would name a harness that never existed (a poisoned key).
+        if reserved:
+            await control_store.idem_release(org, idem_hash, hid)
+        raise
     if await _plugs_ensure_required(org, hid):
         return _harness_out(await _vertex_get(hid) or {"id": hid, **props})
     return _harness_out({"id": hid, **props})
@@ -21766,13 +21814,14 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     refused = await _cloud_base_refused(target.get("base_url") or "")
     if refused:          # a destination stored before the address was checked
         return {"id": hid, "ok": False, "action": "skip", "error": f"that address cannot be used: {refused}"}
-    plugins_ok = False
+    plugins_ok = harness_idem = False
     try:
         d = (await _checked_http().get(f"{target['base_url']}/v1/uhp",
                                        timeout=httpx.Timeout(10.0, connect=5.0))).json()
-        plugins_ok = bool((d.get("capabilities") or {}).get("plugins"))
+        caps = d.get("capabilities") or {}
+        plugins_ok, harness_idem = bool(caps.get("plugins")), bool(caps.get("harness_idempotency"))
     except Exception:  # noqa: BLE001
-        plugins_ok = False
+        plugins_ok = harness_idem = False
     body = await _cloud_harness_body(org, hid, v, plugins_ok)
     fp = _cloud_fingerprint(body)
     per = records.setdefault("harnesses", {}).setdefault(hid, {})
@@ -21788,6 +21837,11 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
     # a record an upload before remote ids were kept names none: its copy is at the local id
     rid = str((rec or {}).get("remote_id") or hid)
     hdr = {"authorization": f"Bearer {target['api_key']}"}
+    if harness_idem:
+        # One key per logical create, derived from the local harness and the form being sent, so a
+        # deploy retried later (a lost answer, a closed laptop) replays Cloud's copy instead of
+        # making a second one. A different harness, or a changed form, is a different key.
+        hdr["idempotency-key"] = f"deploy:{hid}:{fp}"
     wait = httpx.Timeout(60.0, connect=8.0)
     try:
         r = None

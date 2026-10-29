@@ -1359,6 +1359,35 @@ def f09(ctx):
     return f"kept: {sid} still reads after its harness was deleted"
 
 
+@check("F-10", "A repeated create with the same Idempotency-Key returns the first harness", "full",
+       f"{SPEC}/harnesses.md#51-create")
+def f10(ctx):
+    # Only a server that says it honours the key is held to it; one that ignores the header is
+    # allowed to say so, and the check skips rather than punishing it for a capability it declined.
+    caps = (ctx.state.get("discovery") or {}).get("capabilities") or {}
+    if not caps.get("harness_idempotency"):
+        raise Skip("this server does not report the harness_idempotency capability")
+    base = _supported_base(ctx)
+    key = f"uhp-conformance-{uuid.uuid4().hex}"
+    body = {"name": f"uhp-conformance-idem-{uuid.uuid4().hex[:6]}", "base": base}
+    first = ctx.client.post("/v1/harnesses", body=body, headers={"Idempotency-Key": key})
+    assert first.status == 200, f"first create returned HTTP {first.status}: {first.body[:200]!r}"
+    hid = (first.json or {}).get("id")
+    assert hid, "the first create returned no id"
+    ctx.state.setdefault("_cleanup_harnesses", []).append(hid)
+    again = ctx.client.post("/v1/harnesses", body=body, headers={"Idempotency-Key": key})
+    assert again.status == 200, f"the retry returned HTTP {again.status}: {again.body[:200]!r}"
+    assert (again.json or {}).get("id") == hid, (
+        "the retry made a second harness instead of returning the first. The client whose answer "
+        "was lost cannot tell the two apart, which is the duplicate the key exists to prevent.")
+    changed = {**body, "name": body["name"] + "-other"}
+    other = ctx.client.post("/v1/harnesses", body=changed, headers={"Idempotency-Key": key})
+    assert other.status == 409, (
+        f"a reused key carrying a different request answered HTTP {other.status}, expected 409 — "
+        "silently replaying it would answer for a harness that was never asked for")
+    return f"{hid} returned for both attempts; a changed request refused with 409"
+
+
 @check("F-02", "Creating a harness with an unsupported base is refused", "full",
        f"{SPEC}/harnesses.md#41-create")
 def f02(ctx):
