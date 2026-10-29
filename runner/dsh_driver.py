@@ -6,466 +6,28 @@ Python SDK (`deepseek-harness-sdk`, pinned) drives the bundled JSON-RPC runtime 
 (`deepseek-harness-runtime-bin`, same pinned version); every `session.event` notification is
 re-emitted on stdout as one JSON line for server.py's normalizer.
 
-THE RELAY, and why it exists. The dsh LLM adapter accumulates streamed tool calls the OpenAI
-way — id from `call.id`, name from `call.function.name`, guarded by `!== undefined`. OpenAI
-OMITS those fields on continuation deltas; aggregators like TokenRouter send them as EMPTY
-STRINGS, so the second delta overwrites the real id/name with "" and every tool call dies as
-UNKNOWN_TOOL (captured live 2026-08-20 against deepseek/deepseek-v4-flash). The relay sits on
-loopback between the runtime and the endpoint and drops those empty fields from tool_call
-deltas — nothing else is touched. It also means the REAL key lives only in this process: the
-runtime is launched with DEEPSEEK_BASE_URL pointing at the relay and a placeholder key, so the
-credential never enters the dsh process env, its session log, or anything it could checkpoint.
+THE RELAY. The runtime's model calls ride the runner's relay (server.py, _HermesRelayHandler), as
+every other base's do. _build_dsh registers this turn's route there, holding the connection's
+key, and hands this process only the relay's base and the route's placeholder (HR_DSH_RELAY_BASE,
+HR_DSH_RELAY_TOKEN). The runtime is launched with DEEPSEEK_BASE_URL at that base and the
+placeholder as its key, so the credential never enters this process, the runtime's env, its
+session log, or anything it could checkpoint.
+
+The route carries the one repair this base needs of its own (tool_call_deltas_no_empty). The dsh
+LLM adapter accumulates streamed tool calls the OpenAI way: id from `call.id`, name from
+`call.function.name`, guarded by `!== undefined`. OpenAI OMITS those fields on continuation
+deltas; aggregators like TokenRouter send them as EMPTY STRINGS, so the second delta overwrites
+the real id/name with "" and every tool call dies as UNKNOWN_TOOL (captured live 2026-08-20
+against deepseek/deepseek-v4-flash). Until #382 this driver ran a loopback relay of its own for
+that, and every relay fix (the stream rules, the Gemini repairs, an answer when the provider does
+not answer) had to be made twice; most were made once.
 """
 from __future__ import annotations
 
-import http.client
-import http.server
 import json
-import re
 import os
 import pathlib
 import sys
-import threading
-import time
-import urllib.request
-
-import reasoning   # how much a model thinks on a turn; the runner's relay applies the same functions
-
-UPSTREAM_BASE = ""   # set in main() from HR_DSH_BASE_URL, then scrubbed from the env
-EFFORT = ""          # the thinking level the turn asked for (HR_DSH_REASONING_EFFORT), "" for none
-EFFORT_ROUTE = ""    # the provider the gateway named for the connection (HR_DSH_REASONING_ROUTE), "" = read the base
-_effort_refused: set = set()   # models whose provider refused the level on this turn
-
-
-def _upstream_wait() -> float:
-    """How long this relay waits on the provider: for the answer to begin, and in a stream for the
-    next EVENT. The runner's own figure (HR_RELAY_UPSTREAM_TIMEOUT_S, handed over by _build_dsh),
-    600 s when it is absent or not a positive number (the runner's default; see
-    _relay_upstream_timeout in server.py for why it is not shorter)."""
-    try:
-        v = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S") or 600)
-    except ValueError:
-        return 600.0
-    return v if v > 0 else 600.0
-
-
-UPSTREAM_WAIT_S = _upstream_wait()
-UPSTREAM_KEY = ""
-
-
-def _rewrite_sse_line(line: bytes) -> bytes:
-    """Drop empty-string id/name from tool_call deltas in one `data:` SSE line.
-
-    The space after the field's colon is OPTIONAL in the SSE spec, so a provider that writes
-    `data:{...}` is conformant and its deltas must be rewritten too — welding the prefix to
-    `data: {` turned this whole function into a pass-through against such an upstream, which is
-    exactly the UNKNOWN_TOOL failure it exists to prevent. Every other SSE reader in this tree
-    tests `data:`; so does this one, with the JSON-object check kept but separate."""
-    if not line.startswith(b"data:"):
-        return line
-    payload = line[5:].removeprefix(b" ")
-    if not payload.startswith(b"{"):
-        return line
-    try:
-        obj = json.loads(payload)
-        for ch in obj.get("choices") or []:
-            for tc in (ch.get("delta") or {}).get("tool_calls") or []:
-                if tc.get("id") == "":
-                    del tc["id"]
-                fn = tc.get("function") or {}
-                if fn.get("name") == "":
-                    del fn["name"]
-        return b"data: " + json.dumps(obj, separators=(",", ":")).encode()
-    except Exception:  # noqa: BLE001 — a line we cannot parse is a line we must not alter
-        return line
-
-
-# The deepseek-official adapter sends `reasoning_effort` on every request — DeepSeek's own API
-# takes it, but aggregators serving deepseek/* over the OpenAI shape refuse the whole request
-# (LLMTR: 'The "reasoning_effort" parameter is not supported by "deepseek/deepseek-v4-pro"',
-# captured 2026-08-20 by conformance T-01). The relay retries such a rejection ONCE without the
-# parameter and then strips it for the rest of the turn, so a provider that accepts it keeps it
-# and one that refuses it costs one extra round trip, once. Flipped by _Relay, read per request.
-_strip_reasoning_effort = False
-
-
-_GOOGLE_UNKNOWN_RE = re.compile(r'Unknown name \\?"([A-Za-z_][A-Za-z0-9_]*)\\?"(?! at \')')
-_drop_fields: list = []   # the top-level fields this upstream refused as unknown, dropped from then on
-# Gemini 3 requires each replayed tool call's thought signature (400 "Function call is missing a
-# thought_signature in functionCall parts", measured 2026-09-06); the relay reads them off the answer
-# as it streams past and puts them back on the replay, Google's sentinel for a call it never saw.
-_GOOGLE_SIG_SKIP = "skip_thought_signature_validator"
-_GOOGLE_HOST = "generativelanguage.googleapis.com"
-_google_sigs: dict = {}        # tool call id -> thought signature, this session's relay
-_google_required = False       # a 400 naming thought_signature from an endpoint not recognised as Google
-
-
-def _google_unknown_field(refused: bytes) -> str:
-    """The top-level field Google's OpenAI-compatible endpoint refused ("Unknown name \"store\":
-    Cannot find field."), or "" (a field named inside an object is not one to drop)."""
-    text = refused.decode("utf-8", "replace") if isinstance(refused, (bytes, bytearray)) else str(refused)
-    if "Cannot find field" not in text:
-        return ""
-    m = _GOOGLE_UNKNOWN_RE.search(text)
-    return m.group(1) if m else ""
-
-
-def _drop_top_level_fields(body: bytes, fields) -> bytes:
-    try:
-        obj = json.loads(body)
-    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
-        return body
-    if not isinstance(obj, dict) or not any(f in obj for f in fields):
-        return body
-    for f in fields:
-        obj.pop(f, None)
-    return json.dumps(obj).encode()
-
-
-_STRICT_GEMINI_HOST = "api.tokenrouter.com"   # TokenRouter's channels, by the upstream host
-# ── Gemini function declarations through a strict channel ────────────────────────────────
-# Google's native API validates function declarations against its own Schema (type, format,
-# description, nullable, enum, properties, required, items, min/max, anyOf and a few more) and
-# refuses anything else: "Unknown name \"$schema\" at 'tools[0].function_declarations[0].parameters'",
-# "Unknown name \"exclusiveMinimum\"", "schema didn't specify the schema type field". Google's own
-# OpenAI-compatible endpoint, OpenRouter and Vercel normalise a harness's JSON-schema declarations
-# before they reach it; TokenRouter's Gemini channels forward them as sent, so the first turn of a
-# task on opencode ($schema) and cline (exclusiveMinimum, a property without type) failed on the
-# ids those channels serve natively, gemini-3.8-flash for one (measured 2026-09-06, the platform
-# column). Until TokenRouter normalises them itself, this relay does, for that channel only.
-_GEMINI_SCHEMA_KEYS = {"type", "format", "title", "description", "nullable", "enum", "maxItems", "minItems",
-                       "properties", "required", "minProperties", "maxProperties", "minLength", "maxLength",
-                       "pattern", "example", "anyOf", "propertyOrdering", "default", "items", "minimum", "maximum"}
-
-
-def _gemini_schema(node):
-    """One JSON schema node as Google's function-declaration validator accepts it: only the keys it
-    names, `oneOf` as `anyOf`, `const` as a one-value enum, an exclusive bound as the bound, a type
-    list as one type plus nullable, a type on every node (inferred from its shape when left out),
-    items on every array, and `required` limited to properties that exist."""
-    if not isinstance(node, dict):
-        return node
-    out = {}
-    for k, v in node.items():
-        if k == "oneOf" and isinstance(v, list):
-            out.setdefault("anyOf", [_gemini_schema(x) for x in v])
-        elif k == "const":
-            out["enum"] = [v]
-        elif k == "exclusiveMinimum" and isinstance(v, (int, float)) and not isinstance(v, bool):
-            out.setdefault("minimum", v)
-        elif k == "exclusiveMaximum" and isinstance(v, (int, float)) and not isinstance(v, bool):
-            out.setdefault("maximum", v)
-        elif k not in _GEMINI_SCHEMA_KEYS:
-            continue
-        elif k == "properties" and isinstance(v, dict):
-            out[k] = {pk: _gemini_schema(pv) for pk, pv in v.items()}
-        elif k == "items":
-            out[k] = _gemini_schema(v) if isinstance(v, dict) else (_gemini_schema(v[0]) if isinstance(v, list) and v else {"type": "string"})
-        elif k == "anyOf" and isinstance(v, list):
-            out[k] = [_gemini_schema(x) for x in v]
-        else:
-            out[k] = v
-    t = out.get("type")
-    if isinstance(t, list):
-        non_null = [x for x in t if x != "null"]
-        out["type"] = non_null[0] if non_null else "string"
-        if "null" in t:
-            out["nullable"] = True
-    if isinstance(out.get("anyOf"), list):
-        # No anyOf leaves this relay: one channel refuses an anyOf node without a type ("schema
-        # didn't specify the schema type field", gemini-3.5-flash) and another refuses one with
-        # anything beside it ("schema specified other fields alongside any_of", gemini-3.6-flash,
-        # both measured 2026-09-06 on TokenRouter). The null member becomes `nullable`; a choice of
-        # constants becomes one enum; any other choice becomes its first member under the node's
-        # own description, which is what the model reads.
-        members = [m for m in out.pop("anyOf") if isinstance(m, dict) and m.get("type") != "null"]
-        if len(members) < len(node.get("anyOf") or []):
-            out["nullable"] = True
-        if members and all("enum" in m and "properties" not in m and "items" not in m for m in members):
-            out = {**members[0], **out, "enum": [x for m in members for x in m["enum"]]}
-            out.setdefault("type", "string")
-        elif members:
-            out = {**members[0], **out}
-            out.setdefault("type", members[0].get("type") or "string")
-    if isinstance(out.get("enum"), list) and None in out["enum"]:
-        # A nullable enum spelled the JSON-schema way ({"type": ["string", "null"], "enum": [..., null]},
-        # grok's todo_write status) is refused whole: "Enum values must share one supported primitive
-        # type" (gemini-3.5-flash-lite through Vercel, 2026-09-27). The null member is `nullable`.
-        out["enum"] = [x for x in out["enum"] if x is not None]
-        out["nullable"] = True
-        if not out["enum"]:
-            out.pop("enum")
-    if "type" not in out and "anyOf" not in out:
-        out["type"] = "object" if "properties" in out else ("array" if "items" in out else "string")
-    if out.get("type") == "array" and "items" not in out:
-        out["items"] = {"type": "string"}
-    if out.get("type") == "object" and not out.get("properties"):
-        out.pop("properties", None)                 # an empty properties object is refused too
-        out.pop("required", None)
-    elif isinstance(out.get("required"), list) and isinstance(out.get("properties"), dict):
-        req = [r for r in out["required"] if r in out["properties"]]
-        if req:
-            out["required"] = req
-        else:
-            out.pop("required")
-    return out
-
-
-def _with_gemini_schemas(body: bytes) -> bytes:
-    """The chat request with every tool's parameters normalised for Google's validator; a tool
-    that declares no parameter loses the empty declaration. A body without tools is untouched."""
-    if b'"tools"' not in body:
-        return body
-    try:
-        doc = json.loads(body)
-    except (ValueError, UnicodeDecodeError):
-        return body
-    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), list):
-        return body
-    changed = False
-    for tool in doc["tools"]:
-        fn = tool.get("function") if isinstance(tool, dict) else None
-        if not isinstance(fn, dict) or not isinstance(fn.get("parameters"), dict):
-            continue
-        params = _gemini_schema(fn["parameters"])
-        if params.get("type") == "object" and not params.get("properties"):
-            fn.pop("parameters")
-        else:
-            fn["parameters"] = params
-        changed = True
-    return json.dumps(doc).encode() if changed else body
-
-
-def _google_signatures_in(doc: dict) -> list:
-    """The (tool call id, thought signature) pairs one answer (a chunk or a whole message) carries."""
-    found = []
-    for ch in doc.get("choices") or []:
-        if not isinstance(ch, dict):
-            continue
-        holder = ch.get("delta") if isinstance(ch.get("delta"), dict) else ch.get("message")
-        if not isinstance(holder, dict):
-            continue
-        for tc in holder.get("tool_calls") or []:
-            if not isinstance(tc, dict):
-                continue
-            ec = tc.get("extra_content")
-            sig = ((ec or {}).get("google") or {}).get("thought_signature") if isinstance(ec, dict) else None
-            cid = tc.get("id")
-            if isinstance(sig, str) and sig and isinstance(cid, str) and cid:
-                found.append((cid, sig))
-    return found
-
-
-def _google_signatures_in_line(line: bytes) -> list:
-    """The signatures one SSE line carries; a line without one costs a substring check."""
-    if not line.startswith(b"data:") or b"thought_signature" not in line:
-        return []
-    try:
-        doc = json.loads(line[5:].strip())
-    except ValueError:
-        return []
-    return _google_signatures_in(doc) if isinstance(doc, dict) else []
-
-
-def _google_with_signatures(body: bytes, sigs: dict) -> bytes:
-    """The request with every replayed assistant tool call carrying a thought signature: the one
-    this relay saw on the answer, else Google's sentinel. A body without tool calls is untouched."""
-    if b"tool_calls" not in body:
-        return body
-    try:
-        doc = json.loads(body)
-    except (ValueError, UnicodeDecodeError):
-        return body
-    if not isinstance(doc, dict) or not isinstance(doc.get("messages"), list):
-        return body
-    changed = False
-    for msg in doc["messages"]:
-        if not isinstance(msg, dict) or msg.get("role") != "assistant":
-            continue
-        for tc in msg.get("tool_calls") or []:
-            if not isinstance(tc, dict):
-                continue
-            ec = tc.get("extra_content")
-            if isinstance(ec, dict) and isinstance(ec.get("google"), dict) and ec["google"].get("thought_signature"):
-                continue
-            cid = str(tc.get("id") or "")
-            tc["extra_content"] = {"google": {"thought_signature": sigs.get(cid) or _GOOGLE_SIG_SKIP}}
-            changed = True
-    return json.dumps(doc).encode() if changed else body
-
-
-def _drop_reasoning_effort(body: bytes) -> bytes:
-    try:
-        obj = json.loads(body)
-        if isinstance(obj, dict) and "reasoning_effort" in obj:
-            del obj["reasoning_effort"]
-            return json.dumps(obj, separators=(",", ":")).encode()
-    except Exception:  # noqa: BLE001 — a body we cannot parse is a body we must not alter
-        pass
-    return body
-
-
-class _Relay(http.server.BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
-    def do_POST(self):  # noqa: N802
-        global _strip_reasoning_effort, _google_required
-        body = self.rfile.read(int(self.headers.get("content-length") or 0))
-        # The adapters' base URLs point at this relay and they append their own API paths
-        # (/v1/chat/completions, /v1/responses, /v1/messages); the upstream base ends in /v1 —
-        # join without doubling.
-        tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
-        # Forward protocol headers (anthropic-version et al) verbatim; strip hop/auth/length.
-        drop = {"host", "content-length", "authorization", "x-api-key", "connection",
-                "accept-encoding", "transfer-encoding"}
-        headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
-        headers["authorization"] = f"Bearer {UPSTREAM_KEY}"
-        headers["x-api-key"] = UPSTREAM_KEY   # the anthropic-messages spelling; harmless elsewhere
-        headers.setdefault("accept", "*/*")
-        if _strip_reasoning_effort:
-            body = _drop_reasoning_effort(body)
-        if _drop_fields:
-            body = _drop_top_level_fields(body, _drop_fields)
-        google = _GOOGLE_HOST in UPSTREAM_BASE or _google_required
-        if google and tail.endswith("/chat/completions"):
-            body = _google_with_signatures(body, _google_sigs)
-        if _STRICT_GEMINI_HOST in UPSTREAM_BASE and tail.endswith("/chat/completions") and b"gemini" in body:
-            try:
-                _model = str((json.loads(body) or {}).get("model") or "")
-            except (ValueError, AttributeError):
-                _model = ""
-            if "gemini" in _model.lower():
-                body = _with_gemini_schemas(body)   # TokenRouter's Gemini channels forward tool schemas to Google's validator as sent
-        # The turn's thinking level, as the runner's relay writes it (runner/reasoning.py): last of
-        # the body's changes, and never what fails the call.
-        plain, effort_model, effort_back = None, "", False
-        if EFFORT and reasoning.shape_of(tail):
-            try:
-                effort_model = str((json.loads(body) or {}).get("model") or "")
-            except (ValueError, AttributeError):
-                effort_model = ""
-            if effort_model not in _effort_refused:
-                leveled, applied = reasoning.apply(body, reasoning.shape_of(tail), UPSTREAM_BASE, EFFORT,
-                                                   route=EFFORT_ROUTE)
-                if applied:
-                    plain, body = body, leveled
-        resp = None
-        for attempt in (0, 1, 2):
-            req = urllib.request.Request(UPSTREAM_BASE.rstrip("/") + tail,
-                                         data=body, method="POST", headers=headers)
-            try:
-                resp = urllib.request.urlopen(req, timeout=UPSTREAM_WAIT_S)
-                if effort_back:
-                    _effort_refused.add(effort_model)   # answered without the level: the level was the cause
-                break
-            except urllib.error.HTTPError as e:
-                data = e.read()
-                if plain is not None and attempt < 2 and e.code in (400, 422):
-                    body, plain, effort_back = plain, None, True
-                    continue
-                effort_back = False
-                stripped = _drop_reasoning_effort(body)
-                if attempt < 2 and b"reasoning_effort" in data and stripped != body:
-                    _strip_reasoning_effort = True
-                    body = stripped
-                    continue
-                if google and e.code == 400:
-                    # the harness shows this as "400 (no body)"; the refusal is here
-                    print(f"[dsh relay] google refused {tail}: {data[:300]!r}", flush=True)
-                if attempt < 2 and e.code == 400 and b"thought_signature" in data and not _google_required:
-                    # a Gemini 3 endpoint this relay did not recognise as Google names the need itself
-                    _google_required = True
-                    google = True
-                    body = _google_with_signatures(body, _google_sigs)
-                    continue
-                unknown = _google_unknown_field(data) if e.code == 400 else ""
-                if attempt < 2 and unknown and unknown not in _drop_fields:
-                    # Google's OpenAI-compatible endpoint refuses any field it does not know (dsh
-                    # sends OpenAI's optional store and seed; measured 2026-09-06). The refusal
-                    # names the field: drop it, remember it, send again.
-                    _drop_fields.append(unknown)
-                    body = _drop_top_level_fields(body, _drop_fields)
-                    continue
-                # pass provider errors through verbatim
-                self.send_response(e.code)
-                self.send_header("content-type", e.headers.get("content-type") or "application/json")
-                self.send_header("content-length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                return
-        ctype = resp.headers.get("content-type") or ""
-        # The empty-string id/name quirk is a chat-completions stream shape; other protocols
-        # (anthropic-messages, openai-responses) pass through byte-faithful.
-        rewrite = self.path.endswith("/chat/completions")
-        self.send_response(resp.status)
-        self.send_header("content-type", ctype)
-        if "text/event-stream" in ctype:
-            self.send_header("transfer-encoding", "chunked")
-            self.end_headers()
-            buf = b""
-            # The same two rules as the runner's relay (server.py, _forward), for the same reason.
-            # read1 forwards what has arrived: `read(4096)` waits for 4096 bytes or the end of the
-            # stream, so a short event sat here until the block filled. And an EVENT is the measure
-            # of a live provider, not bytes: an aggregator trickles comment lines while its own
-            # upstream says nothing, which keeps the socket from ever timing out, and the turn hung
-            # until its cap with nothing delivered.
-            last_event = time.monotonic()
-            stopped = ""
-            while True:
-                try:
-                    chunk = resp.read1(65536)
-                except (http.client.HTTPException, TimeoutError, OSError) as e:
-                    stopped = f"{type(e).__name__}: {e}"[:300]
-                    break
-                if not chunk:
-                    break
-                buf += chunk
-                while b"\n" in buf:
-                    line, buf = buf.split(b"\n", 1)
-                    if line.strip() and not line.lstrip().startswith(b":"):
-                        last_event = time.monotonic()
-                    if google:
-                        for cid, sig in _google_signatures_in_line(line.strip()):
-                            _google_sigs[cid] = sig
-                    out = (_rewrite_sse_line(line.rstrip(b"\r")) if rewrite else line.rstrip(b"\r")) + b"\n"
-                    self.wfile.write(f"{len(out):x}\r\n".encode() + out + b"\r\n")
-                self.wfile.flush()
-                if time.monotonic() - last_event > UPSTREAM_WAIT_S:
-                    stopped = f"no data for {UPSTREAM_WAIT_S:g} s, only keep-alive lines"
-                    break
-            if stopped:
-                # Said in the stream, and the body left unterminated with the connection closed: a
-                # zero chunk here would hand the runtime a complete answer missing its last events.
-                print(f"[dsh relay] upstream stopped mid-answer on {tail}: {stopped}", flush=True)
-                ev = ("data: " + json.dumps({"error": {
-                    "message": f"the provider stopped answering mid-stream: {stopped}",
-                    "type": "upstream_unavailable", "code": "upstream_unavailable"}}) + "\n\n").encode()
-                try:
-                    self.wfile.write(f"{len(ev):x}\r\n".encode() + ev + b"\r\n")
-                    self.wfile.flush()
-                except OSError:
-                    pass
-                self.close_connection = True
-                return
-            if buf:
-                out = _rewrite_sse_line(buf) if rewrite else buf
-                self.wfile.write(f"{len(out):x}\r\n".encode() + out + b"\r\n")
-            self.wfile.write(b"0\r\n\r\n")
-        else:
-            data = resp.read()
-            if google and b"thought_signature" in data:
-                try:
-                    doc = json.loads(data)
-                except ValueError:
-                    doc = None
-                if isinstance(doc, dict):
-                    _google_sigs.update(_google_signatures_in(doc))
-            self.send_header("content-length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-    def log_message(self, *a):  # diagnostics belong on stderr, never stdout
-        pass
 
 
 def _emit(method: str, payload) -> None:
@@ -474,7 +36,7 @@ def _emit(method: str, payload) -> None:
 
 
 def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = None,
-                   relay_port: int = 0, model: str = "", cwd: str = "") -> str:
+                   relay_base: str = "", model: str = "", cwd: str = "") -> str:
     """Our overlay on the runtime's stock `sdk` profile, in the loader's own patch grammar: a row
     named by id is merged, `disabled: true` stops one, and `insert` appends new rows.
 
@@ -543,15 +105,15 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
     if llm:
         # Non-deepseek families ride dsh's OWN multi-provider layer, dsh-llm-pi-ai — which is
         # pi's unified LLM library wrapped as a Cordis plugin, so the api-by-family choices are
-        # literally the ones the pi backend already proved. The route points at the loopback
-        # relay; apiKeyEnv resolves a placeholder, and the relay injects the real credential
-        # upstream — same isolation as the deepseek path.
+        # literally the ones the pi backend already proved. The route points at the runner's
+        # relay; apiKeyEnv resolves the route's placeholder, and the relay injects the real
+        # credential upstream — same isolation as the deepseek path.
         api = llm.get("api") or "openai-completions"
         # The same /v1 lesson the pi backend already paid for: the anthropic-messages client
         # appends /v1/messages to its base itself, the openai clients want /v1 present. Getting
         # it wrong here produced /v1/v1/messages against the relay — measured, not guessed.
-        base_url = (f"http://127.0.0.1:{relay_port}" if api == "anthropic-messages"
-                    else f"http://127.0.0.1:{relay_port}/v1")
+        base = relay_base.rstrip("/").removesuffix("/v1")   # the runner's relay names its base with /v1
+        base_url = base if api == "anthropic-messages" else f"{base}/v1"
         entries.append({"id": "llm-pi-ai", "config": {
             "providers": {"hr": {
                 "displayName": "HR Gateway",
@@ -597,12 +159,15 @@ def _install_skills(home: pathlib.Path, cwd: str) -> list[str]:
 
 
 def main() -> int:
-    global UPSTREAM_BASE, UPSTREAM_KEY, EFFORT, EFFORT_ROUTE
     job = json.loads(sys.argv[1])
-    UPSTREAM_BASE = os.environ.pop("HR_DSH_BASE_URL", "")
-    UPSTREAM_KEY = os.environ.pop("HR_DSH_API_KEY", "")
-    EFFORT = os.environ.pop("HR_DSH_REASONING_EFFORT", "")
-    EFFORT_ROUTE = os.environ.pop("HR_DSH_REASONING_ROUTE", "")
+    # The runner's relay and this turn's route on it (server.py, _build_dsh). Neither is a
+    # credential: the key stays in the runner, and the placeholder opens only this turn's route.
+    relay_base = os.environ.pop("HR_DSH_RELAY_BASE", "")
+    relay_tok = os.environ.pop("HR_DSH_RELAY_TOKEN", "")
+    if not (relay_base and relay_tok):
+        print("[dsh driver] no relay route was handed over (HR_DSH_RELAY_BASE, HR_DSH_RELAY_TOKEN)",
+              file=sys.stderr, flush=True)
+        return 2
     home = pathlib.Path(os.environ.get("HOME") or ".")
     cwd = job.get("cwd") or os.getcwd()
     try:
@@ -610,14 +175,12 @@ def main() -> int:
     except OSError as e:   # a turn without its skills still runs, and says why on the runner's log
         print(f"[dsh] skills not installed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Relay)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    os.environ["DEEPSEEK_BASE_URL"] = f"http://127.0.0.1:{srv.server_address[1]}/v1"
-    os.environ["DEEPSEEK_API_KEY"] = "hr-relay"   # the real key never reaches the runtime
+    os.environ["DEEPSEEK_BASE_URL"] = relay_base
+    os.environ["DEEPSEEK_API_KEY"] = relay_tok   # the real key never reaches the runtime
 
     from deepseek_harness import DeepSeekHarness
 
-    os.environ["HR_RELAY_TOKEN"] = "hr-relay"   # the placeholder the pi-ai route resolves
+    os.environ["HR_RELAY_TOKEN"] = relay_tok   # the placeholder the pi-ai route resolves
     # The sdk profile's approval policy reads this ('never' only under danger-full-access, 'ask'
     # otherwise), and a headless turn has no one to ask. The sandbox policy read it too before the
     # sandboxing executor rows were taken out of the composition (see _compose_patch): its default
@@ -633,12 +196,12 @@ def main() -> int:
     kwargs = dict(provider=("hr" if llm else "deepseek-official"), model=job["model"],
                   cwd=cwd, dsh_home=str(home / ".dsh"),
                   patches=(_compose_patch(home, job.get("mcp_servers") or [], llm=llm,
-                                          relay_port=srv.server_address[1], model=job["model"], cwd=cwd),),
+                                          relay_base=relay_base, model=job["model"], cwd=cwd),),
                   # A runtime whose plugin tree failed stays alive with a mute stdout; without a
                   # bound the initialize request waits forever and the turn reads as a hang.
                   request_timeout_seconds=180.0)
     sid = job.get("session_id") or None
-    _emit("__hr_init", {"session_id": sid or "", "relay_port": srv.server_address[1]})
+    _emit("__hr_init", {"session_id": sid or ""})
     with DeepSeekHarness(**kwargs) as h:
         r = h.run(job["prompt"], session_id=sid,
                   on_notification=lambda n: _emit(getattr(n, "method", ""), getattr(n, "payload", None)))

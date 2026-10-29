@@ -161,7 +161,8 @@ def test_dsh_client_gets_a_stdio_row(tmp_path):
     servers = [{"name": "probe", "command": "/ws/.harness/plugin-data/hr_probe/.launch-probe.sh",
                 "args": ["--data", "/ws/.harness/plugin-data/hr_probe"], "plugin": "hr-probe"},
                {"name": "remote", "url": "https://mcp.example.invalid/mcp"}]
-    out = pathlib.Path(dsh_driver._compose_patch(home, servers, relay_port=9999, model="m", cwd=str(tmp_path / "ws")))
+    out = pathlib.Path(dsh_driver._compose_patch(home, servers, relay_base="http://127.0.0.1:9999/v1", model="m",
+                                                 cwd=str(tmp_path / "ws")))
     rows = [r for e in yaml.safe_load(out.read_text()) if isinstance(e, dict) for r in (e.get("insert") or [])
             if r.get("name") == "@deepseek-ai/dsh-mcp-client"]
     by = {r["config"]["serverName"]: r["config"] for r in rows}
