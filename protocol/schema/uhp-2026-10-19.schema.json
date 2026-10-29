@@ -107,6 +107,10 @@
         "idempotency": {
           "type": "boolean"
         },
+        "harness_idempotency": {
+          "type": "boolean",
+          "description": "`POST /v1/harnesses` honours an `Idempotency-Key`: a repeat within 24 hours answers with\nthe harness the first request created. See Harnesses §5.1. Optional at every class.\n"
+        },
         "plugins": {
           "type": "boolean",
           "description": "The server installs Agent Plugins packages into harnesses, serves their files, and exports\na harness as a package. Optional at every class.\n"

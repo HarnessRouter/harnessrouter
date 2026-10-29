@@ -73,6 +73,7 @@ Rules:
 | `session_busy` | 409 | A task is already running in this session. |
 | `harness_busy` | 409 | A harness that retires its sessions with it has a task in progress; it is not retired mid-task ([Harnesses §5.3](harnesses.md#53-delete)). |
 | `plugin_conflict` | 409 | Two plugins share a name, or a component name collides across the harness and its plugins. `detail.component`, `detail.name` and `detail.between` say which. |
+| `idempotency_key_reused` | 409 | An `Idempotency-Key` came back with a different request than the one it was first sent with ([Harnesses §5.1](harnesses.md#51-create)). |
 | `file_too_large` | 413 | The upload exceeds the server's limit. `detail.max_bytes` states it. |
 | `model_unavailable` | 422 | The requested model cannot be served for this harness. |
 | `model_not_available` | 422 | A harness create or update named a `default_model` its base does not run ([Harnesses §5.1](harnesses.md#51-create)). |

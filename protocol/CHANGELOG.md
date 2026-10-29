@@ -2,6 +2,25 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.10.19.post4 (2026-10-29)
+
+F-10 checks the addition below on a server that reports `harness_idempotency`: a repeat of a
+create's key answers with the first harness, a repeat carrying a different request is refused `409`
+`idempotency_key_reused`, and once that harness is deleted a repeat creates one. It deletes every
+harness it made. A server without the capability skips F-10, so no verdict it had changes.
+
+## 2026-10-19, addition: a create's Idempotency-Key (capability `harness_idempotency`)
+
+`POST /v1/harnesses` ([Harnesses §5.1](versions/2026-10-19/harnesses.md#51-create)) takes an optional
+`Idempotency-Key`, as a task does. Without one, a client whose create answer was lost cannot tell
+whether the harness exists, and its retry makes a second. A server that reports the new capability
+keeps a create's key for at least 24 hours in the caller's scope. A repeat answers with the harness
+the first request created, waits for it while it is still being created, and is refused `409
+idempotency_key_reused` when it carries a different request. Once that harness is deleted the key
+names none, and a repeat creates one. Under [VERSIONING](VERSIONING.md) an optional request header
+and a new capability fit within a version: a server without the capability ignores the header, as
+every server did before.
+
 ## 2026-10-19, deprecation: the harness models view's `fallback`
 
 `fallback` in `GET /v1/harnesses/{harness_id}/models` ([Harnesses §3](versions/2026-10-19/harnesses.md#3-models))
