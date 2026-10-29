@@ -5492,3 +5492,19 @@ to each aggregator in turn and put back after:
 TokenRouter also lists `MiniMax-M3`, its name for minimax-m3, which this table still records as having no
 TokenRouter channel. Opening it changes what four bases (hermes, kimi, minimax, goose) are offered on
 TokenRouter, so it waits for those columns to be measured.
+
+### The dsh columns on the runner's relay, measured by the maintainer (0.37.10)
+
+The four columns this change touches most were measured again on the 0.37.10 release candidate on hr-test,
+each pair on its own connection through the instance's model routes (put back after): dsh-anthropic 8 of 8,
+dsh-google 7 of 7, dsh-openai 9 of 9 and dsh-azure-e2 9 of 9 pass all five scenarios, each served as the model
+asked for. On the direct Anthropic connection the relay now sends cache breakpoints and the key the way Anthropic
+reads it; on Google the signature rules apply; on all four the schema repairs run. gemini-3.7-flash keeps its
+earlier dsh-google row: this instance's Google connection does not serve it, so its run went to TokenRouter.
+
+dsh-tokenrouter's claude-haiku-4.5 row was a quota refusal on the tester's account ("You have reached your
+specified API usage limits"), not a result. It was run again on this instance's TokenRouter connection and passes.
+
+A deck conversation that changes model family on every turn passed 5 of 5: deepseek-v4-pro made `deck.pptx`,
+claude-sonnet-5 made it red, gemini-3.8-flash made the title bold at 40 pt, gemini-3.6-flash added a slide (one
+Gemini model after another) and gpt-5.4 set every bullet to 20 pt. The deck was read back with each change in it.

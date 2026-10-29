@@ -938,14 +938,14 @@ Not run in this column, 55 pairs the provider serves that the harness did not ru
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| dsh | claude-fable-5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
-| dsh | claude-fable-5-1 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
-| dsh | claude-haiku-4.5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
-| dsh | claude-opus-4.7 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
-| dsh | claude-opus-4.8 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
-| dsh | claude-opus-5 | pass | pass | pass (claude-fable-5) | pass | pass | Anthropic |  |
-| dsh | claude-sonnet-4.6 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
-| dsh | claude-sonnet-5 | pass | pass | pass (claude-opus-5) | pass | pass | Anthropic |  |
+| dsh | claude-fable-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Anthropic, Vercel AI Gateway | cache 100% of input |
+| dsh | claude-fable-5-1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Anthropic, Vercel AI Gateway | cache 100% of input |
+| dsh | claude-haiku-4.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Anthropic, Vercel AI Gateway | cache 100% of input |
+| dsh | claude-opus-4.7 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Anthropic, Vercel AI Gateway | cache 100% of input |
+| dsh | claude-opus-4.8 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Anthropic, Vercel AI Gateway | cache 100% of input |
+| dsh | claude-opus-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Anthropic, Vercel AI Gateway | cache 100% of input |
+| dsh | claude-sonnet-4.6 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Anthropic, Vercel AI Gateway | cache 100% of input |
+| dsh | claude-sonnet-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Anthropic, Vercel AI Gateway | cache 100% of input |
 
 8 pairs, 40 of 40 scenario runs passed.
 
@@ -959,17 +959,17 @@ Not run in this column, 3 pairs the provider serves that the harness did not run
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| dsh | gpt-5.2 | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
-| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass | Azure OpenAI E2 |  |
-| dsh | gpt-5.4 | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
-| dsh | gpt-5.4-mini | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
-| dsh | gpt-5.5 | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
-| dsh | gpt-5.6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
-| dsh | gpt-5.6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
-| dsh | gpt-5.6-terra | pass | pass | pass (gpt-6-astra) | pass | pass | Azure OpenAI E2 |  |
-| dsh | gpt-6-astra | pass | pass | pass (gpt-5.6-sol) | pass | pass | Azure OpenAI E2 |  |
+| dsh | gpt-5.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Azure OpenAI E2, Vercel AI Gateway | cache 78% of input |
+| dsh | gpt-5.3-codex | pass | pass | pass (gpt-6.1-sol) | pass | pass | Azure OpenAI E2, Vercel AI Gateway | cache 78% of input |
+| dsh | gpt-5.4 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Azure OpenAI E2, Vercel AI Gateway | cache 59% of input |
+| dsh | gpt-5.4-mini | pass | pass | pass (gpt-6.1-sol) | pass | pass | Azure OpenAI E2, Vercel AI Gateway | cache 76% of input |
+| dsh | gpt-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | Azure OpenAI E2, Vercel AI Gateway | cache 76% of input |
+| dsh | gpt-5.6-luna | pass | pass | pass (gpt-6.1-sol) | pass | pass | Azure OpenAI E2, Vercel AI Gateway | cache 100% of input |
+| dsh | gpt-5.6-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | Azure OpenAI E2, Vercel AI Gateway | cache 100% of input |
+| dsh | gpt-5.6-terra | pass | pass | pass (gpt-6.1-sol) | pass | pass | Azure OpenAI E2, Vercel AI Gateway | cache 100% of input |
+| dsh | gpt-6-astra | pass | pass | pass (gpt-6.1-sol) | pass | pass | Azure OpenAI E2, Vercel AI Gateway | cache 100% of input |
 
-9 pairs, 44 of 44 scenario runs passed.
+9 pairs, 45 of 45 scenario runs passed.
 
 Not run in this column, 3 pairs the provider serves that the harness did not run, with the reason:
 
@@ -981,14 +981,14 @@ Not run in this column, 3 pairs the provider serves that the harness did not run
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| dsh | gemini-3-flash-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-3.1-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-3.1-pro-preview | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-3.5-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-3.5-flash-lite | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-3.6-flash | pass | pass | pass (gemini-3.8-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-3-flash-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | Google AI Studio, Vercel AI Gateway | cache 39% of input |
+| dsh | gemini-3.1-flash-lite | pass | pass | pass (gpt-6.1-sol) | pass | pass | Google AI Studio, Vercel AI Gateway | cache 58% of input |
+| dsh | gemini-3.1-pro-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | Google AI Studio, Vercel AI Gateway | cache 45% of input |
+| dsh | gemini-3.5-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Google AI Studio, Vercel AI Gateway | cache 60% of input |
+| dsh | gemini-3.5-flash-lite | pass | pass | pass (gpt-6.1-sol) | pass | pass | Google AI Studio, Vercel AI Gateway | cache 44% of input |
+| dsh | gemini-3.6-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Google AI Studio, Vercel AI Gateway | cache 60% of input |
 | dsh | gemini-3.7-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
-| dsh | gemini-3.8-flash | pass | pass | pass (gemini-3.6-flash) | pass | pass | Google AI Studio |  |
+| dsh | gemini-3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | Google AI Studio, Vercel AI Gateway | cache 60% of input |
 
 8 pairs, 40 of 40 scenario runs passed.
 
@@ -1000,17 +1000,17 @@ Not run in this column, 1 pairs the provider serves that the harness did not run
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| dsh | gpt-5.2 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
-| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass | OpenAI |  |
-| dsh | gpt-5.4 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
-| dsh | gpt-5.4-mini | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
-| dsh | gpt-5.5 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
-| dsh | gpt-5.6-luna | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
-| dsh | gpt-5.6-sol | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
-| dsh | gpt-5.6-terra | pass | pass | pass (gpt-6-astra) | pass | pass | OpenAI |  |
-| dsh | gpt-6-astra | pass | pass | pass (gpt-5.6-sol) | pass | pass | OpenAI |  |
+| dsh | gpt-5.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenAI, Vercel AI Gateway | cache 77% of input |
+| dsh | gpt-5.3-codex | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenAI, Vercel AI Gateway | cache 78% of input |
+| dsh | gpt-5.4 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenAI, Vercel AI Gateway | cache 73% of input |
+| dsh | gpt-5.4-mini | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenAI, Vercel AI Gateway | cache 78% of input |
+| dsh | gpt-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenAI, Vercel AI Gateway | cache 73% of input |
+| dsh | gpt-5.6-luna | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenAI, Vercel AI Gateway | cache 100% of input |
+| dsh | gpt-5.6-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenAI, Vercel AI Gateway | cache 100% of input |
+| dsh | gpt-5.6-terra | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenAI, Vercel AI Gateway | cache 100% of input |
+| dsh | gpt-6-astra | pass | pass | pass (gpt-6.1-sol) | pass | pass | OpenAI, Vercel AI Gateway | cache 100% of input |
 
-9 pairs, 44 of 44 scenario runs passed.
+9 pairs, 45 of 45 scenario runs passed.
 
 Not run in this column, 3 pairs the provider serves that the harness did not run, with the reason:
 
@@ -1022,78 +1022,78 @@ Not run in this column, 3 pairs the provider serves that the harness did not run
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| dsh | claude-fable-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | claude-fable-5-1 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | claude-haiku-4.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | claude-opus-4.7 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | claude-opus-4.8 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | claude-opus-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | claude-sonnet-4.6 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | claude-sonnet-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | deepseek-v4-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | deepseek-v4-pro | pass | pass | pass (deepseek-v4-flash) | pass | pass | OpenRouter |  |
-| dsh | deepseek-v4.1-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-3-flash-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-3.1-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-3.1-pro-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-3.5-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-3.5-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-3.6-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gemini-3.8-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | glm-5.3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | glm-5.3-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gpt-5.2 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass | OpenRouter |  |
-| dsh | gpt-5.4 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gpt-5.4-mini | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gpt-5.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gpt-5.6-luna | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gpt-5.6-sol | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gpt-5.6-terra | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | gpt-6-astra | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | grok-4.3 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | grok-4.5 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | grok-4.6 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | grok-build-0.1 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | hunyuan-4-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | kimi-k2.7-code | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | kimi-k3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | llama-3.3-70b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | llama-4-maverick | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | mistral-medium-3.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | muse-glimmer-30b | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | muse-spark-1.1 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | muse-spark-1.2 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | muse-spark-1.3 | pass | pass | pass (gpt-6-astra) | pass | pass | OpenRouter |  |
-| dsh | nemotron-3-super | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | nemotron-3.5-lightning | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | qwen3.7-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | qwen3.7-plus | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | qwen3.8-27b | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | qwen3.8-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
-| dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | OpenRouter |  |
+| dsh | claude-fable-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | claude-fable-5-1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | claude-haiku-4.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | claude-haiku-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | claude-opus-4.7 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | claude-opus-4.8 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | claude-opus-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | claude-opus-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | claude-sonnet-4.6 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | claude-sonnet-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | claude-sonnet-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | deepseek-v4-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 78% of input |
+| dsh | deepseek-v4-pro | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 79% of input |
+| dsh | deepseek-v4.1-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 0% of input |
+| dsh | gemini-3-flash-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 20% of input |
+| dsh | gemini-3.1-flash-lite | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 0% of input |
+| dsh | gemini-3.1-pro-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 0% of input |
+| dsh | gemini-3.5-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 54% of input |
+| dsh | gemini-3.5-flash-lite | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 30% of input |
+| dsh | gemini-3.6-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 44% of input |
+| dsh | gemini-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 20% of input |
+| dsh | gemini-3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 20% of input |
+| dsh | gemini-4-argon | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 45% of input |
+| dsh | glm-5.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 79% of input |
+| dsh | glm-5.3-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 78% of input |
+| dsh | gpt-5.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 78% of input |
+| dsh | gpt-5.3-codex | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 69% of input |
+| dsh | gpt-5.4 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 70% of input |
+| dsh | gpt-5.4-mini | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 78% of input |
+| dsh | gpt-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 70% of input |
+| dsh | gpt-5.6-luna | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | gpt-5.6-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | gpt-5.6-terra | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | gpt-6-astra | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | gpt-6-luna | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | gpt-6-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 100% of input |
+| dsh | gpt-6.1-sol | pass | pass | pass (gpt-6-astra) | pass | pass | openrouter | cache 100% of input |
+| dsh | grok-4.20 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 80% of input |
+| dsh | grok-4.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 60% of input |
+| dsh | grok-4.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 79% of input |
+| dsh | grok-4.6 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 59% of input |
+| dsh | grok-build-0.1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 79% of input |
+| dsh | hunyuan-4-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 78% of input |
+| dsh | kimi-k2.7-code | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 78% of input |
+| dsh | kimi-k3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 80% of input |
+| dsh | llama-3.3-70b | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 85% of input |
+| dsh | llama-4-maverick | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 60% of input |
+| dsh | mistral-medium-3.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 79% of input |
+| dsh | muse-glimmer-30b | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 60% of input |
+| dsh | muse-spark-1.1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 59% of input |
+| dsh | muse-spark-1.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 20% of input |
+| dsh | muse-spark-1.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 1% of input |
+| dsh | muse-wonder-1.0 | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 21% of input |
+| dsh | nemotron-3-super | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 37% of input |
+| dsh | nemotron-3.5-lightning | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 55% of input |
+| dsh | qwen3.7-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 77% of input |
+| dsh | qwen3.7-plus | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 76% of input |
+| dsh | qwen3.8-27b | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 82% of input |
+| dsh | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 82% of input |
+| dsh | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 77% of input |
+| dsh | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | openrouter | cache 76% of input |
 
-53 pairs, 264 of 264 scenario runs passed.
+61 pairs, 305 of 305 scenario runs passed.
 
-Not run in this column, 16 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 8 pairs the provider serves that the harness did not run, with the reason:
 
-- dsh x claude-haiku-5.5: not run, not run in this column
-- dsh x claude-opus-5.5: not run, not run in this column
-- dsh x claude-sonnet-5.5: not run, not run in this column
-- dsh x gemini-4-argon: not run, not run in this column
-- dsh x gpt-6-luna: not run, not run in this column
-- dsh x gpt-6-sol: not run, not run in this column
-- dsh x gpt-6.1-sol: not run, not run in this column
 - dsh x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x jev-1.13: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x jev-latest: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- dsh x muse-wonder-1.0: not run, not run in this column
 - dsh x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
@@ -1101,139 +1101,132 @@ Not run in this column, 16 pairs the provider serves that the harness did not ru
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| dsh | claude-fable-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | claude-fable-5-1 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | claude-haiku-4.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | claude-opus-4.7 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | claude-opus-4.8 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | claude-opus-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | claude-sonnet-4.6 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | claude-sonnet-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | deepseek-v4-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | deepseek-v4-pro | pass | pass | pass (deepseek-v4-flash) | pass | pass | My TokenRouter |  |
-| dsh | deepseek-v4.1-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gemini-3-flash-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gemini-3.1-pro-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gemini-3.5-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gemini-3.5-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gemini-3.6-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gemini-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gemini-3.8-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | glm-5.3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | glm-5.3-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gpt-5.2 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass | My TokenRouter |  |
-| dsh | gpt-5.4 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gpt-5.4-mini | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gpt-5.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gpt-5.6-luna | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gpt-5.6-sol | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gpt-5.6-terra | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | gpt-6-astra | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
-| dsh | grok-4.3 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
-| dsh | grok-4.5 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
-| dsh | grok-4.6 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
-| dsh | grok-build-0.1 | pass | pass | pass (gpt-6-astra) | pass | pass | My TokenRouter |  |
-| dsh | hunyuan-4-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | kimi-k2.7-code | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | kimi-k3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | mistral-medium-3.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | nemotron-3-super | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | nemotron-3.5-lightning | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | qwen3.7-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | qwen3.7-plus | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | qwen3.8-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
-| dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | My TokenRouter |  |
+| dsh | claude-haiku-4.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | My TokenRouter, Vercel AI Gateway | cache 44% of input |
+| dsh | deepseek-v4-pro | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 72% of input |
+| dsh | deepseek-v4.1-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 79% of input |
+| dsh | gemini-3-flash-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 41% of input |
+| dsh | gemini-3.1-pro-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 37% of input |
+| dsh | gemini-3.5-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 46% of input |
+| dsh | gemini-3.5-flash-lite | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 30% of input |
+| dsh | gemini-3.6-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 54% of input |
+| dsh | gemini-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 41% of input |
+| dsh | gemini-3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 41% of input |
+| dsh | glm-5.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 80% of input |
+| dsh | glm-5.3-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 78% of input |
+| dsh | gpt-5.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 68% of input |
+| dsh | gpt-5.3-codex | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 69% of input |
+| dsh | gpt-5.4 | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 78% of input |
+| dsh | gpt-5.4-mini | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 78% of input |
+| dsh | gpt-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 69% of input |
+| dsh | gpt-5.6-luna | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 100% of input |
+| dsh | gpt-5.6-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 100% of input |
+| dsh | gpt-5.6-terra | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 100% of input |
+| dsh | gpt-6-astra | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 100% of input |
+| dsh | gpt-6-luna | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 100% of input |
+| dsh | gpt-6-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 100% of input |
+| dsh | gpt-6.1-sol | pass | pass | pass (gpt-6-astra) | pass | pass | tokenrouter | cache 100% of input |
+| dsh | grok-4.20 | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 66% of input |
+| dsh | grok-4.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 60% of input |
+| dsh | grok-4.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 80% of input |
+| dsh | grok-4.6 | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 73% of input |
+| dsh | grok-build-0.1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 97% of input |
+| dsh | hunyuan-4-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 79% of input |
+| dsh | kimi-k2.7-code | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 78% of input |
+| dsh | mistral-medium-3.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 79% of input |
+| dsh | nemotron-3-super | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 0% of input |
+| dsh | nemotron-3.5-lightning | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 36% of input |
+| dsh | qwen3.7-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 77% of input |
+| dsh | qwen3.7-plus | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 77% of input |
+| dsh | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 80% of input |
+| dsh | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 78% of input |
+| dsh | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | tokenrouter | cache 76% of input |
 
-45 pairs, 224 of 224 scenario runs passed.
+39 pairs, 195 of 195 scenario runs passed.
 
-Not run in this column, 6 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 10 pairs the provider serves that the harness did not run, with the reason:
 
+- dsh x claude-fable-5: not run, not run in this column
+- dsh x claude-fable-5-1: not run, not run in this column
+- dsh x claude-opus-4.7: not run, not run in this column
+- dsh x claude-opus-4.8: not run, not run in this column
+- dsh x claude-opus-5: not run, not run in this column
 - dsh x claude-opus-5.5: not run, not run in this column
+- dsh x claude-sonnet-4.6: not run, not run in this column
+- dsh x claude-sonnet-5: not run, not run in this column
 - dsh x claude-sonnet-5.5: not run, not run in this column
-- dsh x gpt-6-luna: not run, not run in this column
-- dsh x gpt-6-sol: not run, not run in this column
-- dsh x gpt-6.1-sol: not run, not run in this column
 - dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
 ## Provider: dsh-vercel
 
 | Harness | Model | First | Follow-up | Switch | Artifact | Recycle | Served by | Notes |
 |---|---|---|---|---|---|---|---|---|
-| dsh | claude-fable-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | claude-fable-5-1 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | claude-haiku-4.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | claude-opus-4.7 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | claude-opus-4.8 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | claude-opus-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | claude-sonnet-4.6 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | claude-sonnet-5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | deepseek-v4-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | deepseek-v4-pro | pass | pass | pass (deepseek-v4-flash) | pass | pass | Vercel AI Gateway |  |
-| dsh | deepseek-v4.1-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-3-flash-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-3.1-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-3.1-pro-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-3.5-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-3.5-flash-lite | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-3.6-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gemini-3.8-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | glm-5.3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | glm-5.3-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gpt-5.2 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gpt-5.3-codex | pass | pass | n/a | pass | pass | Vercel AI Gateway |  |
-| dsh | gpt-5.4 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gpt-5.4-mini | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gpt-5.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gpt-5.6-luna | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gpt-5.6-sol | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gpt-5.6-terra | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | gpt-6-astra | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | grok-4.1-fast | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| dsh | grok-4.20 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| dsh | grok-4.3 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| dsh | grok-4.5 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| dsh | grok-4.6 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| dsh | grok-build-0.1 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| dsh | hunyuan-4-preview | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | kimi-k2.7-code | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | kimi-k3 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | llama-3.3-70b | FAIL | n/a | n/a | n/a | n/a | Vercel AI Gateway | first: The turn failed: 400: {"message":"undefined: The maximum tokens you requested exceeds the model limit of 8192. Try again with a maximum toke |
-| dsh | llama-4-maverick | FAIL | n/a | n/a | n/a | n/a | Vercel AI Gateway | first: The turn failed: 405: {"message":"Tool calling is not supported for model: meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8","type":"AI_API |
-| dsh | llama-4-scout | pass | pass | pass (gpt-6-astra) | FAIL | FAIL | Vercel AI Gateway | artifact: The turn failed: model "meta/llama-4-scout" returned a completed response with no content ; recycle: answered without M1-llama-4-scout: ", "Create a file named hello-dsh.txt containing exactly the word HELLO, then reply DONE."] JSON {"type": |
-| dsh | mistral-medium-3.5 | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | muse-glimmer-30b | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| dsh | muse-spark-1.1 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| dsh | muse-spark-1.2 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| dsh | muse-spark-1.3 | pass | pass | pass (gpt-6-astra) | pass | pass | Vercel AI Gateway |  |
-| dsh | nemotron-3-super | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | nemotron-3.5-lightning | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | qwen3.7-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | qwen3.7-plus | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | qwen3.8-27b | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | qwen3.8-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | qwen3.8-max | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
-| dsh | step-3.7-flash | pass | pass | pass (deepseek-v4-pro) | pass | pass | Vercel AI Gateway |  |
+| dsh | claude-fable-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | claude-fable-5-1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | claude-haiku-4.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | claude-haiku-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | claude-opus-4.7 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | claude-opus-4.8 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | claude-opus-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | claude-opus-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | claude-sonnet-4.6 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | claude-sonnet-5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | claude-sonnet-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | deepseek-v4-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 79% of input |
+| dsh | deepseek-v4-pro | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 79% of input |
+| dsh | deepseek-v4.1-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 59% of input |
+| dsh | gemini-3-flash-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 42% of input |
+| dsh | gemini-3.1-flash-lite | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 15% of input |
+| dsh | gemini-3.1-pro-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | retested once; first try: recycle answered without M1-gemini-3.1-pro-preview: DONE ; cache 40% of input |
+| dsh | gemini-3.5-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 50% of input |
+| dsh | gemini-3.5-flash-lite | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 46% of input |
+| dsh | gemini-3.6-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 40% of input |
+| dsh | gemini-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 41% of input |
+| dsh | gemini-3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 30% of input |
+| dsh | gemini-4-argon | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 44% of input |
+| dsh | glm-5.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 80% of input |
+| dsh | glm-5.3-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 0% of input |
+| dsh | gpt-5.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 68% of input |
+| dsh | gpt-5.3-codex | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 69% of input |
+| dsh | gpt-5.4 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 78% of input |
+| dsh | gpt-5.4-mini | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 78% of input |
+| dsh | gpt-5.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 69% of input |
+| dsh | gpt-5.6-luna | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | gpt-5.6-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | gpt-5.6-terra | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | gpt-6-astra | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | gpt-6-luna | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | gpt-6-sol | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 100% of input |
+| dsh | gpt-6.1-sol | pass | pass | pass (gpt-6-astra) | pass | pass | vercel | cache 100% of input |
+| dsh | grok-4.20 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 71% of input |
+| dsh | grok-4.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 79% of input |
+| dsh | grok-4.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 40% of input |
+| dsh | grok-4.6 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 79% of input |
+| dsh | grok-build-0.1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 86% of input |
+| dsh | hunyuan-4-preview | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 79% of input |
+| dsh | kimi-k2.7-code | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 78% of input |
+| dsh | kimi-k3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 79% of input |
+| dsh | mistral-medium-3.5 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 0% of input |
+| dsh | muse-glimmer-30b | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 60% of input |
+| dsh | muse-spark-1.1 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 60% of input |
+| dsh | muse-spark-1.2 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 79% of input |
+| dsh | muse-spark-1.3 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 39% of input |
+| dsh | muse-wonder-1.0 | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 39% of input |
+| dsh | nemotron-3-super | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 0% of input |
+| dsh | qwen3.7-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 76% of input |
+| dsh | qwen3.7-plus | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 76% of input |
+| dsh | qwen3.8-27b | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 72% of input |
+| dsh | qwen3.8-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 77% of input |
+| dsh | qwen3.8-max | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 71% of input |
+| dsh | step-3.7-flash | pass | pass | pass (gpt-6.1-sol) | pass | pass | vercel | cache 57% of input |
 
-55 pairs, 262 of 266 scenario runs passed.
+58 pairs, 290 of 290 scenario runs passed.
 
-Not run in this column, 14 pairs the provider serves that the harness did not run, with the reason:
+Not run in this column, 6 pairs the provider serves that the harness did not run, with the reason:
 
-- dsh x claude-haiku-5.5: not run, not run in this column
-- dsh x claude-opus-5.5: not run, not run in this column
-- dsh x claude-sonnet-5.5: not run, not run in this column
-- dsh x gemini-4-argon: not run, not run in this column
-- dsh x gpt-6-luna: not run, not run in this column
-- dsh x gpt-6-sol: not run, not run in this column
-- dsh x gpt-6.1-sol: not run, not run in this column
 - dsh x hunyuan-3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x ling-3.0-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x minimax-m3: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x minimax-m3.1-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
-- dsh x muse-wonder-1.0: not run, not run in this column
 - dsh x nemotron-3-ultra: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 - dsh x qwen3.7-flash: not run, not in this harness's catalog (unmeasured or excluded, see the catalog's note)
 
