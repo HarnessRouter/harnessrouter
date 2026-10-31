@@ -81,6 +81,7 @@ def test_a_whole_transcript_reads_back_whole(stores):
     assert len(api.get(f"/v1/traces/{sid}/all?compact=1").content.splitlines()) == 4
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a 0o000 file, so the case cannot be built")
 def test_a_chunk_that_cannot_be_read_is_said_never_a_short_transcript(stores):
     tmp = stores
     chunks = [_event(0), _event(1), _event(2)]

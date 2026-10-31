@@ -739,10 +739,14 @@ def test_a_name_that_does_not_exist_and_one_we_could_not_look_up_are_told_apart(
     def flaky(host, port, *a, **kw):
         if host == "flaky.attacker.example":
             raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+        # What a resolver answers for a name that is not there, without asking one: with no
+        # network every real lookup fails as EAI_AGAIN, and the two cases would read the same.
+        if host == "gone.attacker.example":
+            raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
         return real(host, port, *a, **kw)
 
     monkeypatch.setattr(socket, "getaddrinfo", flaky)
-    gone = asyncio.run(app._internal_target("this-name-does-not-exist-hr-test.invalid", 443))
+    gone = asyncio.run(app._internal_target("gone.attacker.example", 443))
     unknown = asyncio.run(app._internal_target("flaky.attacker.example", 443))
     assert gone and unknown and gone != unknown, (gone, unknown)
 

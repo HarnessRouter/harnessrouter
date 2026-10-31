@@ -7,7 +7,10 @@ from __future__ import annotations
 import io
 import json
 import os
+import pathlib
+import shutil
 import sys
+import tempfile
 import time
 import zipfile
 
@@ -30,6 +33,12 @@ def api(tmp_path_factory):
     """The gateway's app, with the runner's environment routes answering its `_env_runner` calls
     in-process: real bytes on a temp volume, real builds (a venv with nothing in it, so no network)."""
     root = tmp_path_factory.mktemp("envstore")
+    if os.geteuid() == 0:
+        # As root a build runs as the environment's own identity (runner/environments.py), as it
+        # does in the image, and that identity must reach the store the way it reaches /data.
+        # pytest's temporary root is root's alone (0700), so the store goes beside it.
+        root = pathlib.Path(tempfile.mkdtemp(prefix="hr-envstore-"))
+        root.chmod(0o755)
     E.ENV_ROOT, E.ENV_MOUNT = str(root / "environments"), str(root / "env")
     E._tool_env = lambda: {**os.environ, "PIP_NO_CACHE_DIR": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"}
     mini = FastAPI()
@@ -50,6 +59,8 @@ def api(tmp_path_factory):
                     return getattr(c, m)(path, **kw)
                 return call
         yield Api()
+    if os.geteuid() == 0:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _wait_build(api, eid, n, seconds=240):

@@ -12,6 +12,26 @@ Third-party agent CLIs, SDKs, and dependencies have their own maintainers. Their
 implementation is outside this enrollment. Integration mistakes in our code
 remain in scope. The audit image does not install or authenticate provider CLIs.
 
+## How an instance is laid out
+
+One container runs three processes (`Dockerfile`, `docker/entrypoint.sh`):
+
+- The console listens on port 3000, the only port the image publishes. `ui/src/middleware.ts`
+  admits a request without the operator's login only for the sign-in page, the protocol
+  discovery documents, share links (the token is the credential), static assets baked into the
+  image, and API calls bearing a key, which the gateway checks itself. The console relays
+  `/api/harness/` to the gateway and adds its internal trust header only for a signed-in caller.
+- The gateway listens on loopback inside the container and runs as an unprivileged user. It
+  keeps the databases and the encrypted secret store on the data volume.
+- The runner listens on loopback too. It runs as root only so that each agent session runs as its
+  own uid, and its environment carries neither the login nor the secret store key.
+
+The published default password and `HR_AUTH_DISABLED=1` are the operator's choices, and the
+startup log warns about both. The boundaries that matter most are reaching the gateway or the
+runner past that gate; one agent session reaching another session's workspace, the gateway's
+data, the login or the secret store; and agent output (files, previews, messages) acting as the
+signed-in operator in the console.
+
 ## Intended behavior and trust boundaries
 
 The instance operator deliberately grants agents the ability to execute commands
