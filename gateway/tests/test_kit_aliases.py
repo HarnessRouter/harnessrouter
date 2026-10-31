@@ -29,7 +29,8 @@ WS = "org.a__ws1"
 
 
 def _pkg(name: str, version: str = "1.0.0", body: str = "") -> dict:
-    return {"files": [{"path": "plugin.json", "content": json.dumps({"name": name, "version": version})},
+    manifest = {"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": name, "version": version}
+    return {"files": [{"path": "plugin.json", "content": json.dumps(manifest)},
                       {"path": "skills/x/SKILL.md", "content": f"---\nname: x\ndescription: x\n---\n{body}"}],
             "enabled": True}
 
