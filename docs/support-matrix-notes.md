@@ -5508,3 +5508,11 @@ specified API usage limits"), not a result. It was run again on this instance's 
 A deck conversation that changes model family on every turn passed 5 of 5: deepseek-v4-pro made `deck.pptx`,
 claude-sonnet-5 made it red, gemini-3.8-flash made the title bold at 40 pt, gemini-3.6-flash added a slide (one
 Gemini model after another) and gpt-5.4 set every bullet to 20 pt. The deck was read back with each change in it.
+
+
+## Roder — adapter qualification
+
+The native app-server adapter is documented in [roder.md](roder.md). Its deterministic
+process suite covers the released binary's Responses and JSON-RPC contracts. Live provider
+columns, custom-harness measurement, the family tour, browser/environment columns, and
+benchmarks have not been measured. No other harness's verified results apply to Roder.
