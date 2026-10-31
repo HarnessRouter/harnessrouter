@@ -96,6 +96,10 @@ python -m pytest gateway/tests
 For container-level changes, build the image and walk the documented self-hosted flow before
 requesting review.
 
+For the optional open-source audit environment and enrollment process, see
+[the scanner preparation guide](.oss-scanner/README.md). These smoke tests do not
+replace the development checks above.
+
 ## License
 
 By contributing, you agree that your contribution is licensed under the Apache License 2.0, the

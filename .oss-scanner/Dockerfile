@@ -1,0 +1,46 @@
+# Audit image only. The scanner builds with network access, then audits offline.
+# Build with the repository root as context; do not use the product entrypoint.
+FROM node:22-bookworm-slim AS node
+FROM python:3.12-bookworm
+
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NEXT_PUBLIC_HR_EDITION=selfhost \
+    PYTHONUNBUFFERED=1
+
+# The suites assume an unprivileged user, as in CI: as root, the runner's environment tests take
+# the real account and group paths their stubs stand in for. `audit` owns the tree so the tests
+# can write their caches, and git trusts /src for root and `audit` alike.
+RUN useradd --create-home --uid 1000 audit \
+    && git config --system --add safe.directory /src
+
+# /src is the scanner's source-tree contract. Keep source and tests available.
+COPY --chown=audit:audit . /src
+WORKDIR /src
+
+# The same test installs as .github/workflows/tests.yml, so every suite runs here offline. The
+# three driver packages are the runner job's pins: without them those drivers' tests skip, and
+# the drivers are where this code meets the agent CLIs.
+RUN python -m pip install --no-cache-dir \
+      -r gateway/requirements.txt -r runner/requirements.txt \
+      pytest pytest-asyncio httpx jsonschema build wheel 'setuptools>=68' \
+      'systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.4.0' \
+      'cheetahclaws==3.5.88' 'qca-sdk==0.6.0' \
+    && python -m pip install --no-cache-dir -e protocol/conformance \
+    && python -m pip check
+
+USER audit
+RUN cd ui \
+    && npm ci --no-audit --no-fund \
+    && npm run build \
+    && npm run type-check
+USER root
+
+CMD ["bash"]

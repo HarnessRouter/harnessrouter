@@ -1,0 +1,78 @@
+# The scanner clones main, builds .oss-scanner/Dockerfile, adds its own layer and audits the
+# result with no network. A pull request that changes what that image installs is built here
+# first. Main is built by the scanner's own tools/check, after such a merge and weekly, because
+# the base images and the scanner's layer change without a commit here.
+#
+# The suites already run online in tests.yml on every pull request; this job proves they also run
+# inside the audit image offline, so it only triggers on what can change that image.
+name: oss-scanner environment
+
+on:
+  pull_request:
+    paths:
+      - '.oss-scanner/**'
+      - '.github/workflows/oss-scanner.yml'
+      - '.github/workflows/tests.yml'
+      - 'gateway/requirements.txt'
+      - 'runner/requirements.txt'
+      - 'protocol/conformance/pyproject.toml'
+      - 'ui/package.json'
+      - 'ui/package-lock.json'
+      - 'ui/.npmrc'
+  push:
+    branches: [main]
+    paths:
+      - '.oss-scanner/**'
+      - '.github/workflows/oss-scanner.yml'
+      - '.github/workflows/tests.yml'
+      - 'gateway/requirements.txt'
+      - 'runner/requirements.txt'
+      - 'protocol/conformance/pyproject.toml'
+      - 'ui/package.json'
+      - 'ui/package-lock.json'
+      - 'ui/.npmrc'
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-environment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: anthropics/oss-scanner
+          ref: 3b3138565ca68caa086bfa9ee42ea463ae3d036a
+          path: scanner
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate the proposed enrollment with the pinned upstream validator
+        run: |
+          python -m pip install PyYAML==6.0.2
+          mkdir -p scanner/projects/harnessrouter
+          cp source/.oss-scanner/enrollment/project.yaml scanner/projects/harnessrouter/project.yaml
+          python scanner/tools/validate.py
+      # Checkout credentials are not persisted, and no secrets reach either build.
+      - name: Build the pull request's audit image
+        if: github.event_name == 'pull_request'
+        run: |
+          docker build --progress=plain -f source/.oss-scanner/Dockerfile -t harnessrouter-oss-scan:ci source
+          echo "AUDIT_IMAGE=harnessrouter-oss-scan:ci" >> "$GITHUB_ENV"
+      - name: Build main the way the scanner does
+        if: github.event_name != 'pull_request'
+        run: |
+          python scanner/tools/check harnessrouter --no-shell --dir "$RUNNER_TEMP/oss-scanner-check"
+          echo "AUDIT_IMAGE=oss-scanner-check/built:harnessrouter" >> "$GITHUB_ENV"
+      # The scanner's agent machine: 2 CPUs and 8 GB, with networking disabled.
+      - name: Run the suites with external networking disabled
+        run: docker run --rm --network none --cpus 2 --memory 8g "$AUDIT_IMAGE" bash /src/.oss-scanner/check-offline.sh
