@@ -3004,7 +3004,7 @@
 #hrui .ka-game:where(:not(.hrui-legacy *)){flex:1;min-height:0;display:grid;place-items:center;padding:16px;background:#f6f7f9}
 #hrui .ka-world:where(:not(.hrui-legacy *)){display:block;width:100%;max-width:820px;max-height:100%;border-radius:12px}
 #hrui .ka-under:where(:not(.hrui-legacy *)){flex:none;border-top:1px solid #ececf0}#hrui .ka-under .ka-comp:where(:not(.hrui-legacy *)){border-top:0;display:flex;gap:10px;align-items:flex-end}#hrui .ka-under .ka-comp textarea:where(:not(.hrui-legacy *)){flex:1}#hrui .ka-under .ka-comp-b:where(:not(.hrui-legacy *)){margin:0;flex-direction:column;align-items:flex-end;gap:4px}
-/* workplace */
+/* harness bot */
 #hrui .ka-work:where(:not(.hrui-legacy *)){flex-direction:row}
 #hrui .ka-side:where(:not(.hrui-legacy *)){flex:none;width:210px;display:flex;flex-direction:column;gap:4px;padding:12px;border-right:1px solid #ececf0;background:#fbfbfc}
 #hrui .ka-search:where(:not(.hrui-legacy *)){height:30px;display:flex;align-items:center;padding:0 10px;border-radius:8px;background:#f0f0f3;color:#8a8a94;font-size:12px}
