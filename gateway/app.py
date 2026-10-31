@@ -18133,6 +18133,22 @@ def _kits() -> dict:
     return out
 
 
+def _kit_id(kid) -> str:
+    """A kit's current id for `kid`: itself, or the kit whose kit.json lists it in `aliases` (the
+    ids it had before a rename). A Harness launched under an old id stays that kit's: its record
+    reports the current id, the catalog counts it as launched, and a relaunch reuses it."""
+    kid = str(kid or "")
+    kits = _kits()
+    if not kid or kid in kits:
+        return kid
+    return next((k for k, kit in kits.items() if kid in (kit.get("aliases") or [])), kid)
+
+
+def _kit_replaces_packages(kit: dict) -> tuple[str, ...]:
+    """The names the kit's package had before a rename (kit.json harness.replaces_packages)."""
+    return tuple(str(n) for n in ((kit or {}).get("harness") or {}).get("replaces_packages") or [] if n)
+
+
 def _kit_plugin(kit: dict) -> dict | None:
     """The kit's plugin package, read whole from `<kit>/<harness.plugin>/` (an Agent Plugins
     package: plugin.json at its root, the kit's skills under skills/). A launched Harness installs
@@ -19263,8 +19279,9 @@ def _harness_out(v: dict) -> dict:
         created = 0
     return {"id": v.get("id"), "name": v.get("name"), "base": v.get("base"),
             # The starter kit that provisioned this Harness, when one did. The kit's app uses it
-            # to find its own Harness instead of asking the user to choose from a list.
-            "kit": v.get("kit") or None,
+            # to find its own Harness instead of asking the user to choose from a list. Under its
+            # current id, also for a Harness launched before the kit was renamed.
+            "kit": _kit_id(v.get("kit")) or None,
             "baseLabel": v.get("base_label") or v.get("base"),
             "defaultModel": v.get("default_model") or "",
             "systemPrompt": v.get("system_prompt") or "",
@@ -21305,7 +21322,7 @@ async def list_kits(request: Request) -> dict:
     # launched in, so "launched" here is a fact about the caller's workspace, not the org.
     ws, wsd = str(p.get("workspace") or ""), bool(p.get("workspace_default"))
     rows = await _vg_list_by_org("Harness", org)
-    by_kit = {str(r.get("kit") or ""): r for r in rows
+    by_kit = {_kit_id(r.get("kit")): r for r in rows
               if str(r.get("deleted") or "0") != "1" and _workspace_keep(str(r.get("workspace") or ""), ws, wsd)}
     out = []
     # Manifest order, NOT alphabetical. kits.json lists the kits in the order the catalogue wants
@@ -21392,16 +21409,21 @@ def _plugin_files_key(files: list) -> list[tuple]:
 
 
 async def _kit_plugin_ensure(org: str, hid: str, v: dict, kit_plugin: dict,
-                             reserved_mcp: tuple[str, ...] = ()) -> dict | None:
+                             reserved_mcp: tuple[str, ...] = (), replaces: tuple[str, ...] = ()) -> dict | None:
     """The kit's current package on an existing kit Harness. Installed when the Harness holds no
     package of that name, replaced when it holds another version, left alone when the versions
     match; the kit's loose skills from before the package layout give way to the package's. Three
     kit Harnesses launched before their kits shipped packages stayed without one through a
-    relaunch (hr-oss-test, 2026-09-14), while a fresh launch installed it."""
+    relaunch (hr-oss-test, 2026-09-14), while a fresh launch installed it.
+
+    `replaces` are the names the kit's package had before (kit.json harness.replaces_packages): a
+    package of one of those names is the kit's own under an old name, so it gives way to the
+    current one instead of being kept beside it."""
     want = _plugin_read_package(kit_plugin["files"])
     have = _plugins_of(v)
+    old = {e["name"] for e in have if e["name"] in replaces and e["name"] != want["name"]}
     same = next((e for e in have if e["name"] == want["name"]), None)
-    if same and (same.get("manifest") or {}).get("version") == (want.get("manifest") or {}).get("version"):
+    if same and not old and (same.get("manifest") or {}).get("version") == (want.get("manifest") or {}).get("version"):
         # The version matching is not the whole story: a kit whose files changed under the same
         # version (the Skill fix of 2026-09-14 shipped as 1.0.0 twice) would otherwise never reach
         # a launched Harness. Launch reflects the package on disk, byte for byte.
@@ -21409,13 +21431,14 @@ async def _kit_plugin_ensure(org: str, hid: str, v: dict, kit_plugin: dict,
         if _plugin_files_key(stored) == _plugin_files_key(kit_plugin["files"]):
             return None
     body = HarnessBody(name=str(v.get("name") or ""), base=str(v.get("base") or ""),
-                       plugins=[e for e in have if e["name"] != want["name"]] + [kit_plugin])
+                       plugins=[e for e in have if e["name"] != want["name"] and e["name"] not in old] + [kit_plugin])
     await _environment_check_ref(org, body.environment)
     body.plugins = await _plugins_prepare(body, org, previous=have, reserved_mcp=reserved_mcp)
     await _vg_upsert("Harness", hid, {"plugins": json.dumps(body.plugins), "skills": json.dumps([]),
                                       "updated_at": str(int(time.time() * 1000))})
     print(f"[kits] {v.get('kit')}: package {want['name']} {(want.get('manifest') or {}).get('version')} "
-          f"{'replaced' if same else 'installed'} on {hid}", flush=True)
+          f"{'replaced' if same else 'installed'} on {hid}"
+          f"{(' in place of ' + ', '.join(sorted(old))) if old else ''}", flush=True)
     return await _vertex_get(hid)
 
 
@@ -21423,13 +21446,13 @@ async def _kit_package_restore(org: str, hid: str, v: dict, name: str) -> list:
     """The files of a kit Harness's own package, put back from the kit in this image when its stored
     copy is missing (a restored volume, a copied graph). [] for a Harness that runs no kit, or a
     package that is not the kit's: only the kit's own package has a copy to put back."""
-    kit = _kits().get(str(v.get("kit") or ""))
+    kit = _kits().get(_kit_id(v.get("kit")))
     kp = _kit_plugin(kit) if kit else None
     if not kp or _plugin_read_package(kp["files"]).get("name") != name:
         return []
     reserved = tuple(str(d["name"]) for d in (_kit_launch_database(kit), _kit_launch_media(kit)) if d and d.get("name"))
     try:
-        v2 = await _kit_plugin_ensure(org, hid, v, kp, reserved)
+        v2 = await _kit_plugin_ensure(org, hid, v, kp, reserved, _kit_replaces_packages(kit))
     except Exception as e:  # noqa: BLE001 — the turn goes on and says the package is missing, as before
         print(f"[kits] {v.get('kit')}: package {name} could not be put back on {hid}: {type(e).__name__}", flush=True)
         return []
@@ -21448,6 +21471,8 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     org, member = p.get("org", ""), p.get("member", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    # An id the kit had before a rename launches the kit under its current id.
+    kit_id = _kit_id(kit_id)
     kit = _kits().get(kit_id)
     if not kit:
         raise uhp_error(404, "kit_not_found", f"No starter kit '{kit_id}' in this build.")
@@ -21473,7 +21498,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                         "Your Harnesses could not be read just now, so nothing was launched. "
                         "Try again in a moment.") from e
     existing = next((r for r in rows
-                     if str(r.get("kit") or "") == kit_id and str(r.get("deleted") or "0") != "1"
+                     if _kit_id(r.get("kit")) == kit_id and str(r.get("deleted") or "0") != "1"
                      and _workspace_keep(str(r.get("workspace") or ""), ws, wsd)),
                     None)
     want_h = (body_in.harness if body_in else "").strip()
@@ -21498,7 +21523,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
         if not target or str(target.get("org") or "") != org or str(target.get("deleted") or "0") == "1" \
                 or not _workspace_keep(str(target.get("workspace") or ""), ws, wsd):
             raise uhp_error(404, "harness_not_found", "No harness with that id.", "harness")
-        other = str(target.get("kit") or "")
+        other = _kit_id(target.get("kit"))
         if other and other != kit_id:
             raise uhp_error(409, "kit_conflict", f"That Harness runs the '{other}' kit.", "harness", {"kit": other})
         now0 = str(int(time.time() * 1000))
@@ -21516,6 +21541,19 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
 
     if existing:
         hid0 = str(existing.get("id") or "")
+        # A kit renamed since this Harness was launched: the stored id moves to the current one,
+        # and a name that is still exactly one of the kit's old defaults (harness.replaces_names)
+        # takes the current default. A name the person chose is theirs and is never touched.
+        spec0 = kit.get("harness") or {}
+        renamed: dict = {}
+        if str(existing.get("kit") or "") != kit_id:
+            renamed["kit"] = kit_id
+        if spec0.get("name") and str(existing.get("name") or "") in (spec0.get("replaces_names") or []):
+            renamed["name"] = str(spec0["name"])
+        if renamed:
+            await _vg_upsert("Harness", hid0, {**renamed, "updated_at": str(int(time.time() * 1000))})
+            existing = await _vertex_get(hid0) or {**existing, **renamed}
+            print(f"[kits] {kit_id}: {hid0} moved to the current {' and '.join(sorted(renamed))}", flush=True)
         # Someone who typed a connection string and pressed Launch means "connect this", whether
         # or not the Harness already existed — which is also how you reconnect after a password
         # change. Without one the existing connection is left alone.
@@ -21539,7 +21577,8 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
             # launched before the kit shipped one, or one holding an older version, gets the
             # current package on the next press of Launch. Same version: nothing is rewritten.
             existing = await _kit_plugin_ensure(org, hid0, existing, kit_plugin, tuple(
-                str(d["name"]) for d in (decl, media_decl) if d and d.get("name"))) or existing
+                str(d["name"]) for d in (decl, media_decl) if d and d.get("name")),
+                _kit_replaces_packages(kit)) or existing
         # The prompt too: it is the kit's, like the package, and a kit whose prompt changed
         # (the sheet one gained its output contract on 2026-09-22) must reach the Harness
         # people already run, or the fix ships to new launches only.

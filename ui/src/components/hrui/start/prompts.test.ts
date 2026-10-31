@@ -15,7 +15,7 @@ const OWN_APP: [string, string][] = [
 ];
 // a kit's own setup: the one launching the kit made in the workspace
 const K: SetupRef = { id: 'chrn_kit0123456789', name: 'Super Mario', harness: 'System One', model: 'jev-1.13', instr: '' };
-const KITS: [string, string, string][] = [['mario', 'kits/mario', 'Super Mario'], ['dashboard', 'kits/dashboard', 'Dashboards'], ['sheets', 'kits/sheets', 'Sheets'], ['workplace', 'kits/workplace', 'My Workplace'], ['video', 'kits/video', 'Video'], ['slides', 'kits/slides', 'Slides']];
+const KITS: [string, string, string][] = [['mario', 'kits/mario', 'Super Mario'], ['dashboard', 'kits/dashboard', 'Dashboards'], ['sheets', 'kits/sheets', 'Sheets'], ['harness-bot', 'kits/harness-bot', 'Harness Bot'], ['video', 'kits/video', 'Video'], ['slides', 'kits/slides', 'Slides']];
 const KIT_TEXTS: [string, string][] = KITS.map(([k, f, t]) => [`Make the ${k} kit yours`, starterPrompt(K, f, t)]);
 const KIT: [string, string] = KIT_TEXTS[1];
 const PROMPTS = [...OWN_APP, ...KIT_TEXTS];
@@ -166,7 +166,7 @@ describe.each(KIT_TEXTS)('%s: the kit\u2019s own setup', (_n, text) => {
 it('a kit whose app also calls other setups says which', () => {
   const by = Object.fromEntries(KIT_TEXTS.map(([n, t]) => [n, t]));
   expect(by['Make the sheets kit yours']).toContain('an agent column runs the other setup its column names');
-  expect(by['Make the workplace kit yours']).toContain('each teammate is a setup of its own');
+  expect(by['Make the harness-bot kit yours']).toContain('each teammate is a setup of its own');
   expect(by['Make the mario kit yours']).not.toContain('One exception');
   expect(by['Make the mario kit yours']).toContain('kit id "mario"');
 });
@@ -209,7 +209,7 @@ it('the backend path says what in each kit app changes', () => {
   expect(by['Make the mario kit yours']).toContain(API_BASE + '/v1/harnesses/' + K.id);
   expect(by['Make the dashboard kit yours']).toContain('configureKit is called in src/lib/dash.js');
   expect(by['Make the sheets kit yours']).toContain('leaving out any other setup whose kit is "sheets"');
-  expect(by['Make the workplace kit yours']).toContain('configureKit is called in src/App.jsx');
+  expect(by['Make the harness-bot kit yours']).toContain('configureKit is called in src/App.jsx');
   const slides = starterPrompt(K, 'kits/slides', 'Slides');
   expect(slides).toContain('const API = "/api/harness/v1" in kits/slides/app/src/lib/sl.js');
   expect(slides).not.toContain('reifyui/harness');

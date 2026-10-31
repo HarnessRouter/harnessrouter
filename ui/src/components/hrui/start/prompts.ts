@@ -39,7 +39,7 @@ export const API_BASE = (typeof window !== 'undefined' && window.location?.origi
 export const STARTER_REPO = 'https://github.com/HarnessRouter/starter-kit';
 /** The kits whose app is in the starter-kit repository (the design's repoUrl list, which matches
  *  the repository's kits/ folder). */
-const STARTER_KITS = /^(dashboard|video|mario|workplace|slides|sheets)$/;
+const STARTER_KITS = /^(dashboard|video|mario|harness-bot|slides|sheets)$/;
 /** The folder of a kit's app in the starter-kit repository, or '' when the kit has none there. */
 export const starterFolder = (kit: string | undefined | null): string => (kit && STARTER_KITS.test(kit) ? `kits/${kit}` : '');
 
@@ -109,14 +109,14 @@ function setupLines(a: SetupRef): string {
 /** The HarnessRouter repository: its image builds the kits' apps and serves them. */
 export const OSS_REPO = 'https://github.com/HarnessRouter/harnessrouter';
 /** The kits whose app has tests (`npm test` in its package.json). */
-const KIT_TESTS = /^(dashboard|video|workplace|sheets)$/;
+const KIT_TESTS = /^(dashboard|video|harness-bot|sheets)$/;
 
 /** The kits whose app also calls setups other than the kit's own, as their READMEs and code say:
  *  a Sheets agent column runs the setup the column names (the app refuses the sheet's own), and a
- *  Workplace teammate is a setup the app creates and calls by the teammate's own id. */
+ *  Harness Bot teammate is a setup the app creates and calls by the teammate's own id. */
 const KIT_OTHERS: Record<string, string> = {
   sheets: 'One exception: an agent column runs the other setup its column names, never this one (the app refuses that).',
-  workplace: 'One exception: each teammate is a setup of its own that the app creates, and the app calls a teammate with that teammate’s own Harness ID.',
+  'harness-bot': 'One exception: each teammate is a setup of its own that the app creates, and the app calls a teammate with that teammate’s own Harness ID.',
 };
 
 /** Where each kit's app sets the address its calls go to, read from the starter-kit repository
@@ -131,7 +131,7 @@ const KIT_WIRING: Record<string, string> = {
   dashboard: 'configureKit is called in src/lib/dash.js.',
   sheets: 'configureKit is called in src/lib/sh.js.',
   video: 'configureKit is called in src/lib/video.js, and src/lib/media.js has its own BASE "/api/harness/v1" for media addresses: change both.',
-  workplace: 'configureKit is called in src/App.jsx.',
+  'harness-bot': 'configureKit is called in src/App.jsx.',
 };
 
 /** The backend path's step that points the app at the person's backend: what in the app changes. */
@@ -154,7 +154,7 @@ function pointAtBackend(kit: string, app: string): string {
  *  How the app reaches it, from the kits' code (github.com/HarnessRouter/starter-kit, kits/<kit>/app,
  *  and reifyui/harness's kitHarness and streamTurn): no Harness ID is written into the app or any
  *  config. At start it looks up the setup launched from its kit id in the active workspace (the
- *  harness list's `kit` field, or the kit catalog's harnessId for Workplace), and sends that setup's
+ *  harness list's `kit` field, or the kit catalog's harnessId for Harness Bot), and sends that setup's
  *  id as metadata.harness_id on POST /api/harness/v1/responses. Launch keeps one such setup per
  *  workspace, so in this workspace that is `a`.
  *
@@ -164,7 +164,7 @@ function pointAtBackend(kit: string, app: string): string {
  *    to the same paths under API_BASE/v1, this instance's API, with the key as a bearer (every one
  *    of those routes resolves an API key). It answers the app's setup lookup with this setup alone (GET
  *    /v1/harnesses/{id} carries `kit`) and pins metadata.harness_id on POST /responses, so the
- *    changed app keeps calling `a`. Sheets and Workplace call other setups by design, so there the
+ *    changed app keeps calling `a`. Sheets and Harness Bot call other setups by design, so there the
  *    list stays and an id the browser names is kept when the key reaches it. A kit's auth.js asks
  *    the console's own session routes who is signed in; those are not API routes.
  *  - The image path: an image built from the person's fork of the kits, run as a HarnessRouter of

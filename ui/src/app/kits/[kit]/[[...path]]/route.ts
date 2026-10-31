@@ -7,7 +7,8 @@
 // A route handler rather than Next's static serving because these files are not part of this
 // app's build — they arrive from another repository, and which ones exist depends on what the
 // image was built with. Unknown paths fall through to index.html because a kit app is a SPA and
-// its client-side routes must survive a reload.
+// its client-side routes must survive a reload. A kit that was renamed keeps its old address: an
+// id listed in a kit's `aliases` (kit.json) is sent on to the kit's current one.
 import { NextResponse, type NextRequest } from 'next/server';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -25,12 +26,36 @@ const TYPES: Record<string, string> = {
   '.ttf': 'font/ttf', '.otf': 'font/otf', '.map': 'application/json; charset=utf-8',
 };
 
+const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+const readJson = (file: string) => fs.readFile(file, 'utf8').then((t) => JSON.parse(t)).catch(() => null);
+
+/** The kit in this image that lists `id` among its `aliases` (the ids it had before a rename), or
+ *  null. Read from the kits themselves, so a rename is one line in its kit.json and nothing here. */
+async function renamedTo(id: string): Promise<string | null> {
+  const manifest = await readJson(path.join(KITS_DIR, 'manifest.json'));
+  for (const kid of Array.isArray(manifest?.kits) ? manifest.kits : []) {
+    if (!SLUG.test(String(kid))) continue;
+    const k = await readJson(path.join(KITS_DIR, String(kid), 'kit.json'));
+    if (Array.isArray(k?.aliases) && k.aliases.includes(id)) return String(kid);
+  }
+  return null;
+}
+
 export async function GET(req: NextRequest, ctx: { params: Promise<{ kit: string; path?: string[] }> }) {
   const { kit, path: rest } = await ctx.params;
   // The kit id names a directory, so it must not be able to name a different one. Anything but
   // a plain slug is refused outright rather than normalised into something that looks safe.
-  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(kit || '')) {
+  if (!SLUG.test(kit || '')) {
     return new NextResponse('Not found', { status: 404 });
+  }
+  if (!(await fs.stat(path.join(KITS_DIR, kit)).then((st) => st.isDirectory()).catch(() => false))) {
+    // An old id of a renamed kit: the same page under the current one, the query kept. The
+    // Location is relative, so it names whatever host the person reached this console by.
+    const to = await renamedTo(kit);
+    if (!to) return new NextResponse('Not found', { status: 404 });
+    const where = `/kits/${to}/${(rest || []).map(encodeURIComponent).join('/')}${req.nextUrl.search}`;
+    return new NextResponse(null, { status: 308, headers: { location: where } });
   }
   const root = path.join(KITS_DIR, kit, 'app');
   const wanted = (rest || []).join('/');

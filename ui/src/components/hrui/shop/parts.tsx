@@ -16,7 +16,7 @@ const KIT_IC: Record<string, ReactNode> = {
   dashboard: sv(<><rect x="4" y="4" width="16" height="16" rx="2.5" /><path d="M8.5 15.5v-3M12 15.5v-7M15.5 15.5v-5" /></>),
   video: sv(<><rect x="4" y="5" width="16" height="14" rx="2.5" /><path d="M10.5 9.5v5l4-2.5z" fill="#fff" stroke="none" /></>, false),
   mario: sv(<><path d="M7.5 8.5h9a4.5 4.5 0 0 1 4.4 5.4l-.3 1.5a2.6 2.6 0 0 1-4.6 1.1L14.5 15h-5L8 16.5a2.6 2.6 0 0 1-4.6-1.1l-.3-1.5a4.5 4.5 0 0 1 4.4-5.4z" /><path d="M8.5 11v3M7 12.5h3" /><circle cx="15.5" cy="12" r=".6" fill="#fff" /><circle cx="17" cy="13.5" r=".6" fill="#fff" /></>),
-  workplace: sv(<><circle cx="9" cy="9" r="3" /><circle cx="16.5" cy="9.5" r="2.3" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0M14.5 19a4 4 0 0 1 6.5-3" /></>),
+  'harness-bot': sv(<><circle cx="9" cy="9" r="3" /><circle cx="16.5" cy="9.5" r="2.3" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0M14.5 19a4 4 0 0 1 6.5-3" /></>),
   slides: sv(<><rect x="3.5" y="4.5" width="17" height="12" rx="2.5" /><path d="M12 16.5V20M8.5 20h7M7.5 8.5h9M7.5 12h5" /></>),
   sheets: sv(<><rect x="4" y="4" width="16" height="16" rx="2.5" /><path d="M4 9.5h16M4 14.5h16M9.5 9.5V20" /></>),
 };
