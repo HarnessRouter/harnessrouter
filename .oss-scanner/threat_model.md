@@ -1,0 +1,74 @@
+# Community Edition security review
+
+## Scope
+
+Review only the public code in this repository: `gateway/`, `runner/`, `ui/`,
+`protocol/`, including adapters in those components, and their integration and
+packaging. This is the self-hosted
+Community Edition. Do not contact a hosted service, use a real provider account,
+or test deployments belonging to other people.
+
+Third-party agent CLIs, SDKs, and dependencies have their own maintainers. Their
+implementation is outside this enrollment. Integration mistakes in our code
+remain in scope. The audit image does not install or authenticate provider CLIs.
+
+## Intended behavior and trust boundaries
+
+The instance operator deliberately grants agents the ability to execute commands
+and edit their task workspace. A task running its authorized command is expected
+behavior; demonstrate a crossed boundary before treating execution as a flaw.
+An already-compromised host is outside this application's threat model.
+
+Prioritize these boundaries and distinguish proven behavior from assumptions:
+
+- Untrusted request bodies, identifiers, paths, filenames, archives, uploaded
+  content, and streamed events entering the gateway or runner.
+- Authentication and access checks before reading credentials, changing an
+  instance's configuration, or operating on another session's resources.
+- File containment, traversal, symlinks, and generated artifact access. Identify
+  which principal controls the path and which files the deployment exposes.
+- Credential forwarding, logs, errors, subprocess environments, and proxy
+  destinations. Use synthetic sentinel values, never production credentials.
+- The distinction between an agent's intended workspace authority and access to
+  unrelated sessions, instance configuration, or host resources.
+- UI rendering of untrusted files and agent output, plus browser-to-backend
+  authorization and request-origin checks.
+- Cancellation, session deletion, and resource handling under adversarial input.
+
+The service is intended for an operator-controlled installation. Do not assume
+that it implements a hosted multi-tenant product's policies. State all relevant
+deployment and attacker preconditions for each finding; consult `SECURITY.md`.
+
+## Offline environment and tests
+
+The audit Dockerfile builds the self-hosted UI and installs Python dependencies,
+pytest tooling, and the protocol conformance package. Sources live in `/src`.
+It does not run the product's first-boot entrypoint or download agent CLIs at
+runtime. No live model credentials are required for the smoke tests.
+
+Run `bash /src/.oss-scanner/check-offline.sh` inside the image with networking
+disabled. These are environment smoke tests, not exhaustive security coverage.
+Broader suites are `python -m pytest gateway/tests`,
+`python -m pytest runner/tests`, and the development checks in `CONTRIBUTING.md`.
+Some driver/integration tests need optional third-party packages or fixtures not
+installed here. Report skips and missing coverage explicitly. Do not install
+packages, call public endpoints, or use live accounts to make offline tests pass.
+
+## Findings and patches
+
+For each finding, provide the affected commit and files, attacker prerequisites,
+the reachable entry point, a minimal local reproducer with synthetic data,
+demonstrated impact, and a focused patch with a regression check where feasible.
+Prefer deterministic reproduction over speculative severity. Check whether an
+existing authorization or deployment control prevents the proposed attack.
+
+Critical findings require a demonstrated severe impact such as unauthenticated
+credential disclosure or execution across a protected boundary. High findings
+include proven authorization bypasses or sensitive file/credential exposure
+under stated realistic preconditions. Explain constraints on denial of service
+and lower-impact issues. Do not rate intended agent command execution as
+critical merely because a shell is involved.
+
+Use the private reporting channels in `SECURITY.md`. Do not open public issues
+or publish unpatched findings. Maintainers will validate reports and review
+patches before applying changes.

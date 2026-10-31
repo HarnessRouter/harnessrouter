@@ -1,0 +1,10 @@
+repo: https://github.com/HarnessRouter/harnessrouter#main
+primary_contact: contact@harnessrouter.ai
+homepage: https://harnessrouter.ai
+dockerfile: .oss-scanner/Dockerfile
+threat_model: .oss-scanner/threat_model.md
+output_format:
+  email:
+    min_severity: low
+  github_security_advisory:
+    min_severity: none

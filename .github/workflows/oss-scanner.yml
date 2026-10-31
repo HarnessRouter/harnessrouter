@@ -1,0 +1,58 @@
+name: oss-scanner environment
+
+on:
+  pull_request:
+    paths:
+      - '.oss-scanner/**'
+      - '.github/workflows/oss-scanner.yml'
+      - '.dockerignore'
+      - 'gateway/**'
+      - 'runner/**'
+      - 'ui/**'
+      - 'protocol/**'
+  push:
+    branches: [main]
+    paths:
+      - '.oss-scanner/**'
+      - '.github/workflows/oss-scanner.yml'
+      - '.dockerignore'
+      - 'gateway/**'
+      - 'runner/**'
+      - 'ui/**'
+      - 'protocol/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-environment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: anthropics/oss-scanner
+          ref: 3b3138565ca68caa086bfa9ee42ea463ae3d036a
+          path: scanner
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate the proposed enrollment with the pinned upstream validator
+        run: |
+          python -m pip install PyYAML==6.0.2
+          mkdir -p scanner/projects/harnessrouter
+          cp source/.oss-scanner/enrollment/project.yaml scanner/projects/harnessrouter/project.yaml
+          python scanner/tools/validate.py
+      - name: Build the audit image from the PR checkout
+        run: |
+          # The Dockerfile-specific ignore file preserves the audit source context.
+          # Checkout credentials are not persisted, and no secrets are passed to the build.
+          docker build --progress=plain -f source/.oss-scanner/Dockerfile -t harnessrouter-oss-scan:ci source
+      - name: Run smoke tests with external networking disabled
+        run: docker run --rm --network none harnessrouter-oss-scan:ci bash /src/.oss-scanner/check-offline.sh
