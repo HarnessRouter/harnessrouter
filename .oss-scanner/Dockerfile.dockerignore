@@ -11,6 +11,11 @@
 .env.*
 **/.env
 **/.env.*
+**/*.pem
+**/*.key
+**/*.db
+**/*.db-wal
+**/*.db-shm
 .hr-data/
 data/
 runner/henv*/

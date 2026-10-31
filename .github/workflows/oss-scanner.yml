@@ -1,3 +1,10 @@
+# The scanner clones main, builds .oss-scanner/Dockerfile, adds its own layer and audits the
+# result with no network. A pull request that changes what that image installs is built here
+# first. Main is built by the scanner's own tools/check, after such a merge and weekly, because
+# the base images and the scanner's layer change without a commit here.
+#
+# The suites already run online in tests.yml on every pull request; this job proves they also run
+# inside the audit image offline, so it only triggers on what can change that image.
 name: oss-scanner environment
 
 on:
@@ -5,21 +12,27 @@ on:
     paths:
       - '.oss-scanner/**'
       - '.github/workflows/oss-scanner.yml'
-      - '.dockerignore'
-      - 'gateway/**'
-      - 'runner/**'
-      - 'ui/**'
-      - 'protocol/**'
+      - '.github/workflows/tests.yml'
+      - 'gateway/requirements.txt'
+      - 'runner/requirements.txt'
+      - 'protocol/conformance/pyproject.toml'
+      - 'ui/package.json'
+      - 'ui/package-lock.json'
+      - 'ui/.npmrc'
   push:
     branches: [main]
     paths:
       - '.oss-scanner/**'
       - '.github/workflows/oss-scanner.yml'
-      - '.dockerignore'
-      - 'gateway/**'
-      - 'runner/**'
-      - 'ui/**'
-      - 'protocol/**'
+      - '.github/workflows/tests.yml'
+      - 'gateway/requirements.txt'
+      - 'runner/requirements.txt'
+      - 'protocol/conformance/pyproject.toml'
+      - 'ui/package.json'
+      - 'ui/package-lock.json'
+      - 'ui/.npmrc'
+  schedule:
+    - cron: '17 6 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -28,7 +41,7 @@ permissions:
 jobs:
   offline-environment:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,10 +62,17 @@ jobs:
           mkdir -p scanner/projects/harnessrouter
           cp source/.oss-scanner/enrollment/project.yaml scanner/projects/harnessrouter/project.yaml
           python scanner/tools/validate.py
-      - name: Build the audit image from the PR checkout
+      # Checkout credentials are not persisted, and no secrets reach either build.
+      - name: Build the pull request's audit image
+        if: github.event_name == 'pull_request'
         run: |
-          # The Dockerfile-specific ignore file preserves the audit source context.
-          # Checkout credentials are not persisted, and no secrets are passed to the build.
           docker build --progress=plain -f source/.oss-scanner/Dockerfile -t harnessrouter-oss-scan:ci source
-      - name: Run smoke tests with external networking disabled
-        run: docker run --rm --network none harnessrouter-oss-scan:ci bash /src/.oss-scanner/check-offline.sh
+          echo "AUDIT_IMAGE=harnessrouter-oss-scan:ci" >> "$GITHUB_ENV"
+      - name: Build main the way the scanner does
+        if: github.event_name != 'pull_request'
+        run: |
+          python scanner/tools/check harnessrouter --no-shell --dir "$RUNNER_TEMP/oss-scanner-check"
+          echo "AUDIT_IMAGE=oss-scanner-check/built:harnessrouter" >> "$GITHUB_ENV"
+      # The scanner's agent machine: 2 CPUs and 8 GB, with networking disabled.
+      - name: Run the suites with external networking disabled
+        run: docker run --rm --network none --cpus 2 --memory 8g "$AUDIT_IMAGE" bash /src/.oss-scanner/check-offline.sh

@@ -19,9 +19,14 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 COPY . /src
 WORKDIR /src
 
+# The same test installs as .github/workflows/tests.yml, so every suite runs here offline. The
+# three driver packages are the runner job's pins: without them those drivers' tests skip, and
+# the drivers are where this code meets the agent CLIs.
 RUN python -m pip install --no-cache-dir \
       -r gateway/requirements.txt -r runner/requirements.txt \
       pytest pytest-asyncio httpx jsonschema build wheel 'setuptools>=68' \
+      'systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.4.0' \
+      'cheetahclaws==3.5.88' 'qca-sdk==0.6.0' \
     && python -m pip install --no-cache-dir -e protocol/conformance \
     && python -m pip check
 
