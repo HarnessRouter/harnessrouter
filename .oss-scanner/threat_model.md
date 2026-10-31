@@ -61,18 +61,21 @@ deployment and attacker preconditions for each finding; consult `SECURITY.md`.
 
 ## Offline environment and tests
 
-The audit Dockerfile builds the self-hosted UI and installs Python dependencies,
-pytest tooling, and the protocol conformance package. Sources live in `/src`.
-It does not run the product's first-boot entrypoint or download agent CLIs at
-runtime. No live model credentials are required for the smoke tests.
+The audit Dockerfile builds the self-hosted UI and installs the Python
+dependencies, the test tooling, the protocol conformance package and the driver
+packages the runner's tests use, as `.github/workflows/tests.yml` does. Sources
+live in `/src`. It does not run the product's first-boot entrypoint or install
+the agent CLIs, so a turn cannot run end to end; the drivers' tests use stubs.
 
-Run `bash /src/.oss-scanner/check-offline.sh` inside the image with networking
-disabled. These are environment smoke tests, not exhaustive security coverage.
-Broader suites are `python -m pytest gateway/tests`,
-`python -m pytest runner/tests`, and the development checks in `CONTRIBUTING.md`.
-Some driver/integration tests need optional third-party packages or fixtures not
-installed here. Report skips and missing coverage explicitly. Do not install
-packages, call public endpoints, or use live accounts to make offline tests pass.
+`bash /src/.oss-scanner/check-offline.sh` runs every suite (gateway, benchmark,
+runner, conformance, console) with networking disabled. The suites assume an
+unprivileged user, as in CI: as root, the runner's environment tests take the
+real account and group paths their stubs stand in for, and fail. Run them as
+the image's `audit` user, which owns `/src`, for example
+`runuser -u audit -- python -m pytest runner/tests -q`; the script does this
+itself. A test that is skipped says why. Report skips and missing coverage
+explicitly. Do not install packages, call public endpoints, or use live
+accounts to make offline tests pass.
 
 ## Findings and patches
 

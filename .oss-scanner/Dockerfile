@@ -15,8 +15,14 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     NEXT_PUBLIC_HR_EDITION=selfhost \
     PYTHONUNBUFFERED=1
 
+# The suites assume an unprivileged user, as in CI: as root, the runner's environment tests take
+# the real account and group paths their stubs stand in for. `audit` owns the tree so the tests
+# can write their caches, and git trusts /src for root and `audit` alike.
+RUN useradd --create-home --uid 1000 audit \
+    && git config --system --add safe.directory /src
+
 # /src is the scanner's source-tree contract. Keep source and tests available.
-COPY . /src
+COPY --chown=audit:audit . /src
 WORKDIR /src
 
 # The same test installs as .github/workflows/tests.yml, so every suite runs here offline. The
@@ -30,9 +36,11 @@ RUN python -m pip install --no-cache-dir \
     && python -m pip install --no-cache-dir -e protocol/conformance \
     && python -m pip check
 
+USER audit
 RUN cd ui \
     && npm ci --no-audit --no-fund \
     && npm run build \
     && npm run type-check
+USER root
 
 CMD ["bash"]

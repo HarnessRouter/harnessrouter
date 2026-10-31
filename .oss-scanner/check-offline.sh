@@ -3,6 +3,10 @@
 # The same suites .github/workflows/tests.yml runs, so a green run here means the scanner can test
 # a patch the way a contributor does. Every suite runs even after one fails, so one run names them all.
 set -uo pipefail
+# The suites assume an unprivileged user, as in CI, so root runs them as `audit`.
+if [ "$(id -u)" = 0 ]; then
+  exec runuser -u audit -- env HOME=/home/audit bash "$0" "$@"
+fi
 cd /src
 failed=()
 for f in SECURITY.md CONTRIBUTING.md .oss-scanner/threat_model.md docs; do

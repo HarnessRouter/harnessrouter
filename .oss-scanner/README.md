@@ -31,7 +31,7 @@ authenticate to providers, or run the product's first-boot CLI installer.
 
 `primary_contact` is already published in `SECURITY.md`. Its value, and any future
 CC addresses, will also be public in the enrollment PR. Do not add credentials,
-private user data, private deployment information, or internal incident details.
+private user data, or private deployment information.
 For encrypted reports, follow upstream's `pgp` configuration; it cannot be
 combined with `auto_ccs`.
 
@@ -59,15 +59,22 @@ check retains the root `.dockerignore`. The adjacent `Dockerfile.dockerignore`
 overrides that product file so audit sources, documentation, and `SECURITY.md`
 remain available while local environment files, data, and caches are excluded.
 This is not a substitute for using a clean checkout without credentials.
-The offline smoke tests do not establish complete security coverage. Review
-optional dependency skips and the full development suites separately.
+`check-offline.sh` runs the same suites as `.github/workflows/tests.yml`. A green
+run means a patch can be tested offline in the image, not that the code is secure.
 
-The `oss-scanner environment` workflow validates the proposed enrollment with a
-pinned upstream validator, builds this image from the PR checkout on Linux, and
-runs the smoke tests with `--network none`. It checks the environment only; it
-does not submit an enrollment or invoke a model scan. The upstream check above
-also installs the program's extra tooling layer and remains a separate
-pre-enrollment check after these files are merged.
+The `oss-scanner environment` workflow does the same without a person:
+
+- It validates the proposed enrollment with the pinned upstream validator.
+- On a pull request that changes what the image installs, it builds this image
+  from the pull request.
+- On `main`, after such a merge and weekly, it runs
+  `tools/check harnessrouter --no-shell`. That is the upstream build above,
+  including the program's own layer, from an anonymous clone of `main`.
+- Either way it then runs `check-offline.sh` with `--network none` on 2 CPUs and
+  8 GB, the size of the scanner's agent machine.
+
+It checks the environment only; it does not submit an enrollment or invoke a
+model scan.
 
 ## What enrollment provides
 
