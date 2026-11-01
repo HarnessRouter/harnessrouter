@@ -15459,7 +15459,9 @@ def _collected_at_turn_start(ws: str) -> None:
 
 
 def _produced_keep(status: str, path: str) -> bool:
-    if not path or path.endswith("/") or status.startswith("D"):
+    # A D in EITHER column is a deletion: porcelain's XY spells one made in the worktree " D", and a
+    # leading-D check listed every file the agent deleted after its collection (size 0, GET /file 404).
+    if not path or path.endswith("/") or "D" in status:
         return False
     if path in _PRODUCED_EXCLUDE_NAMES or path.startswith(_PRODUCED_EXCLUDE_PREFIX):
         return False
