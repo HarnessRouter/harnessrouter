@@ -66,6 +66,47 @@ def test_a_deleted_file_is_not_offered():
     assert _produced_list(d) == []
 
 
+def test_a_file_deleted_after_its_collection_is_not_listed():
+    # git status --porcelain spells a worktree deletion " D" (index column blank, worktree column D), so a
+    # check for a leading "D" let it through: a file collected on one turn and deleted by the agent on the
+    # next was listed again, size 0, and the gateway's GET /file answered 404 for each one. The unstaged,
+    # the staged and the checkpointed deletion are all left out; only the new file is listed.
+    d = _ws()
+
+    def put(n):                                                # git rm takes an emptied directory with it
+        (pathlib.Path(d) / n).parent.mkdir(parents=True, exist_ok=True)
+        (pathlib.Path(d) / n).write_text(f"content of {n}")
+    for n in ("kept.md", "notes/draft.md", "notes/data.json", "old.html"):
+        put(n)
+    _produced_ack(d)
+    (pathlib.Path(d) / "notes/draft.md").unlink()              # deleted in the worktree: " D"
+    (pathlib.Path(d) / "old.html").unlink()
+    _git(d, "rm", "-q", "notes/data.json")                     # deletion staged: "D "
+    put("notes/final.md")
+    assert {f["path"] for f in _produced_list(d)} == {"notes/final.md"}
+    _git(d, "add", "-A")
+    _git(d, "commit", "-q", "-m", f"checkpoint {int(time.time())}")   # checkpointed: the diff shows D
+    assert {f["path"] for f in _produced_list(d)} == {"notes/final.md"}
+
+
+def test_after_a_deletion_every_listed_file_downloads(monkeypatch):
+    import server
+    from fastapi.testclient import TestClient
+    d = _ws()
+    for n in ("a.md", "b.md"):
+        (pathlib.Path(d) / n).write_text(f"content of {n}")
+    _produced_ack(d)
+    (pathlib.Path(d) / "a.md").unlink()
+    (pathlib.Path(d) / "c.md").write_text("content of c.md")
+    monkeypatch.setattr(server, "_SESSION_UIDS", False)
+    monkeypatch.setattr(server, "_ws", lambda identifier="": d)
+    c = TestClient(server.app)
+    paths = [f["path"] for f in c.get("/produced", params={"identifier": "s1"}).json()["files"]]
+    assert paths == ["c.md"]
+    for p in paths:
+        assert c.get("/file", params={"identifier": "s1", "path": p}).status_code == 200, repr(p)
+
+
 def test_each_produced_item_says_when_it_was_written():
     """A response carries at most HARNESS_RESP_MAX_FILES produced files, and the gateway puts the
     newest first by this field (a Mario run's 1,400 frames showed its first 24 without it,
