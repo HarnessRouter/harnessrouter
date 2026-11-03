@@ -4157,10 +4157,30 @@ def _hermes_mcp_section(servers: list[dict] | None) -> dict:
 # enters the CLI's env, its state.db, or anything it could checkpoint.
 #
 # One shared server, routes resolved from the placeholder bearer token: hermes is spawned per
-# turn with a fresh env, so each turn registers its upstream and the entry simply outlives the
-# turn (a few dozen bytes per turn, process lifetime — the sandbox recycles long before this
-# matters).
-_HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threading.Lock(),
+# turn with a fresh env, so each turn registers its upstream, and the route leaves with the turn.
+#
+# It used to outlive the turn ("a few dozen bytes per turn"). A route holds the connection's key, so
+# that was a spending right with no end: a process the agent left running kept a working route until
+# the runner restarted, on a key the operator had since removed (measured 2026-11-03: a real Vertex
+# route still answering 200 after its turn).
+#
+# The tokens of the routes the turn being built has registered. Its own variable and not a field of
+# _TURN_THINKING, which is part of the turn's result: a route's token is what spends the key.
+_TURN_ROUTE_TOKENS: contextvars.ContextVar[list | None] = contextvars.ContextVar("hr_turn_route_tokens", default=None)
+
+
+class _RelayRoutes(dict):
+    """The relay's routes. Every registrar stores here, so a registrar added later belongs to its
+    turn without having to know about any of this."""
+
+    def __setitem__(self, tok, route):
+        held = _TURN_ROUTE_TOKENS.get()
+        if held is not None:
+            held.append(tok)
+        super().__setitem__(tok, route)
+
+
+_HERMES_RELAY: dict = {"server": None, "port": 0, "routes": _RelayRoutes(), "lock": threading.Lock(),
                        # A route's totals (`usage`, `reasoning_tokens`) are folded in by the relay's
                        # request threads, one per call, and a CLI can have two calls in flight on one
                        # route (a background call beside the main one, parallel subagents) while the
@@ -4195,6 +4215,26 @@ def _route_trace_flag() -> dict:
         return {}
     return {"traceparent": trace["traceparent"],
             **({"tracestate": trace["tracestate"]} if trace.get("tracestate") else {})}
+
+
+def _relay_forget(tokens: list | None) -> None:
+    """These routes are over: a later call on one is refused like any unknown token, and the key it
+    held is gone from the table. A call already being forwarded finishes. The route's flags stay with
+    the turn's record, which reads its usage and served model from them after the turn."""
+    if tokens:
+        with _HERMES_RELAY["lock"]:
+            for tok in tokens:
+                _HERMES_RELAY["routes"].pop(tok, None)
+
+
+def _routes_end_with_turn(run, tokens: list | None):
+    """A turn's runner, whose routes leave when it returns, however it returns."""
+    def runner(*args, **kwargs):
+        try:
+            return run(*args, **kwargs)
+        finally:
+            _relay_forget(tokens)
+    return runner
 
 
 def _turn_route(flags: dict) -> dict:
@@ -16677,6 +16717,22 @@ class TurnReq(BaseModel):
 
 @app.post("/turn")
 def turn(req: TurnReq, identifier: str = "") -> dict:
+    """Start a turn. Its routes leave when its runner thread returns (_routes_end_with_turn), or here
+    when none started: a builder that refused the turn, or a retry answered by the turn already
+    running, may have registered routes that nothing would ever use."""
+    tokens: list[str] = []
+    _TURN_ROUTE_TOKENS.set(tokens)
+    started = False
+    try:
+        out = _start_turn(req, identifier)
+        started = not out.get("deduplicated")
+        return out
+    finally:
+        if not started:
+            _relay_forget(tokens)
+
+
+def _start_turn(req: TurnReq, identifier: str = "") -> dict:
     """Start a turn asynchronously and return immediately. Poll GET /turn/{id} for progress —
     a turn may run seconds to the 6h cap, far beyond a synchronous HTTP request.
 
@@ -17093,17 +17149,17 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         if key:
             _turn_by_key[key] = turn_id
     if use_appserver:
-        threading.Thread(target=_run_codex_appserver_bg,
+        threading.Thread(target=_routes_end_with_turn(_run_codex_appserver_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds,
                                req.max_turns),
                          daemon=True).start()
     elif backend == "hermes":
-        threading.Thread(target=_run_hermes_bg,
+        threading.Thread(target=_routes_end_with_turn(_run_hermes_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cwd, env, model, hermes_provider, req.prompt,
                                req.resume_session_id, req.timeout_seconds, hermes_mcp),
                          daemon=True).start()
     else:
-        threading.Thread(target=_run_turn_bg,
+        threading.Thread(target=_routes_end_with_turn(_run_turn_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
                          kwargs={"max_turns": req.max_turns, "prompt": req.prompt or "",
@@ -17146,6 +17202,8 @@ def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
     except Exception as e:  # noqa: BLE001
         print(f"[workspace] {ws}: remote purge did not run: {type(e).__name__}: {e}", flush=True)
         return {"backend": "qoder", "purged": False, "reason": f"purge did not run: {e}"[:300]}
+    finally:
+        _relay_forget([relay_tok])
     report: dict = {}
     for line in (proc.stdout or "").splitlines():
         try:
