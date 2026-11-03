@@ -16383,6 +16383,16 @@ def produced_ack(identifier: str = "") -> dict:
     return {"ok": True, "collected": _produced_ack(ws)}
 
 
+def _shown_file(root: str, path: str) -> pathlib.Path | None:
+    """The regular file `path` names under `root`, links followed, or None. A path's own spelling is the
+    gateway's check; where a link lands can only be read here, so a link to anything under a dot name
+    in the session is refused as the name itself would be."""
+    dest = _safe_join(root, path)
+    if dest is None or not dest.is_file():
+        return None
+    return None if any(s.startswith(".") for s in dest.relative_to(pathlib.Path(root).resolve()).parts) else dest
+
+
 @app.get("/file")
 def get_file(path: str, identifier: str = "") -> Response:
     """Raw bytes of a workspace file (for downloading turn-produced container files)."""
@@ -16392,10 +16402,8 @@ def get_file(path: str, identifier: str = "") -> Response:
     with _fs_as(_session_uid(ws)):
         # the visible root first, because that is how /produced named it; the session root second, so a
         # path written before the agent's workspace existed still downloads.
-        dest = _safe_join(_visible_root(ws), path)
-        if dest is None or not dest.is_file():
-            dest = _safe_join(ws, path)
-        if dest is None or not dest.is_file():
+        dest = _shown_file(_visible_root(ws), path) or _shown_file(ws, path)
+        if dest is None:
             raise HTTPException(404, "file not found")
         media = mimetypes.guess_type(str(dest))[0] or "application/octet-stream"
         try:
@@ -16595,11 +16603,17 @@ def _existing(ws: str, path: str) -> pathlib.Path | None:
 
 def _refuse_protected(ws: str, *paths: pathlib.Path) -> None:
     """400 for a path the base excludes as its own. On a nesting base a path at the session root is
-    adopted into the agent's directory at the next turn, so it is also checked as it will be there."""
+    adopted into the agent's directory at the next turn, so it is also checked as it will be there.
+
+    Every route that changes a file comes through here with the path resolved, so this is also where a
+    symlink is caught: `link/x` passes the gateway's check on its spelling and lands in `.harness/x`."""
+    base = pathlib.Path(ws).resolve()
+    for p in paths:
+        if any(s.startswith(".") for s in p.relative_to(base).parts):
+            raise HTTPException(400, "that is the agent's own machinery, not a workspace file")
     pats = _ws_excluded(ws)
     if not pats:
         return
-    base = pathlib.Path(ws).resolve()
     vis = pathlib.Path(_visible_root(ws)).resolve()
     sub = str(vis.relative_to(base)) if vis != base else ""
     for p in paths:

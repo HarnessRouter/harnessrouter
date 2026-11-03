@@ -68,12 +68,12 @@ def test_a_live_read_does_not_serve_the_runners_own_state(client, monkeypatch): 
     monkeypatch.setattr(gw.BACKING.workspace, "read", read)
     monkeypatch.setattr(gw, "_owned_session", owned)
     for path in (".harness/agent-subdir", "./.harness/x", "a/../.harness/x", ".harness", "//.harness/x"):
-        assert gw._ws_machinery(path), path
+        assert not gw._ws_path_allowed(path), path
     r = _req(client, "GET", "/v1/sessions/hsessx/files/.harness/agent-subdir")
     assert r.status_code == 404 and reads == []
     r = _req(client, "GET", "/v1/sessions/hsessx/files/report.md")
     assert r.status_code == 200 and r.content == b"visible" and reads == ["report.md"]
-    assert not gw._ws_machinery("my.harness/x") and not gw._ws_machinery("dir/.harness/x")
+    assert gw._ws_path_allowed("my.harness/x") and not gw._ws_path_allowed("dir/.harness/x")
 
 
 def test_a_caller_cannot_write_the_runners_own_state(client, monkeypatch):  # noqa: F811

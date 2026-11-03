@@ -9025,7 +9025,7 @@ _OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md", "GEMINI.md"}
 
 
 def _is_internal_output(name: str) -> bool:
-    return name in _OUTPUT_EXCLUDE_NAMES or name.startswith(".harness/") or "/.harness/" in name
+    return name in _OUTPUT_EXCLUDE_NAMES or not _ws_path_allowed(name)
 
 
 # ── output (container) file collection: produced-this-turn files → blobs + citations ────
@@ -11877,11 +11877,19 @@ _WS_HIDE_PREFIXES = (".git/", ".harness/", ".claude/", ".codex/", "tmp/",
 _WS_HIDE_NAMES = {".gitignore", "AGENTS.md", "CLAUDE.md"}
 
 
-def _ws_machinery(path: str) -> bool:
-    """Is this the runner's own state in a session? Never a person's file: the listing hides it, and a
-    caller neither reads nor writes it by path, however the path is spelled. Holding the workspace's
-    marker there let a caller's own PUT point the file routes anywhere (reported privately)."""
-    return posixpath.normpath("/" + (path or "")).lstrip("/").split("/", 1)[0] == ".harness"
+def _ws_path_allowed(path: str) -> bool:
+    """THE check on any path a route takes into a session's files. Default deny, so nothing depends on
+    knowing the name of what must be protected: every segment that starts with a dot is refused, which
+    is the runner's state, git's, every CLI's, a credential file, and `.` and `..`.
+
+    Each segment is read as written and nothing is cleaned first, so there is no spelling to get past
+    it. A segment with space around it is refused too, because the workspace backing strips the path
+    it is given: ` .git/config` passes a dot check here and is read as `.git/config` there. Where a
+    symlink lands can't be read from a string, so the runner checks that again after resolving it."""
+    p = str(path or "").lstrip("/")
+    if not p or "\\" in p or any(ord(c) < 32 or ord(c) == 127 for c in p):
+        return False
+    return all(s and s == s.strip() and not s.startswith(".") for s in p.split("/"))
 
 
 def _ws_visible(path: str) -> bool:
@@ -11889,7 +11897,7 @@ def _ws_visible(path: str) -> bool:
     produced-file collector excludes) so the listing reads like the agent's actual deliverables."""
     if not path or path.endswith("/"):
         return False
-    if path in _WS_HIDE_NAMES or path.startswith("."):
+    if path in _WS_HIDE_NAMES or not _ws_path_allowed(path):
         return False
     return not any(path.startswith(p) or f"/{p}" in path for p in _WS_HIDE_PREFIXES)
 
@@ -12244,7 +12252,7 @@ async def _reapply_app_writes(sid: str) -> int:
         return 0
     n = 0
     for name, (cid, from_app) in caps.items():
-        if not from_app:
+        if not from_app or not _ws_path_allowed(name):    # an app's write of this kind from before the rule stays out
             continue
         try:
             got = await _container_file_bytes(sid, cid)
@@ -12300,6 +12308,8 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
             media, fname = m.get("media_type", media), m.get("filename", fname)
         except Exception:  # noqa: BLE001
             pass
+    if fname != file_id and not _ws_path_allowed(posixpath.normpath(str(fname))):   # a capture from before this rule, by its id
+        return None
     return data, media, fname
 
 
@@ -12320,7 +12330,7 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
         if blob:
             try:
                 doc = json.loads(blob) or {}
-                items = doc.get("files") or []
+                items = [it for it in (doc.get("files") or []) if _ws_visible(str(it.get("path") or ""))]
                 produced_n = int(doc.get("produced") or 0)
             except Exception:  # noqa: BLE001
                 items = []
@@ -12438,7 +12448,9 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                 asked = 0
                 for it in items[:200]:
                     fid, path = it.get("file_id"), it.get("path")
-                    if not (fid and path):
+                    # A name from before the rule is left out, not refused: no route serves it, so it isn't
+                    # part of the turn's output, and refusing would take the whole zip with it.
+                    if not (fid and path) or not _ws_visible(str(path)):
                         continue
                     asked += 1
                     got = await _container_file_bytes(sid, fid)
@@ -12518,7 +12530,7 @@ async def read_session_file(sid: str, path: str, request: Request) -> Response:
     half-written deck is better than no deck, and the next read gets the rest.
     """
     await _owned_session(request, sid)
-    if _ws_machinery(path):
+    if not _ws_path_allowed(path):
         raise uhp_error(404, "file_not_found", f"No file '{path}' in this session's workspace.", "path")
     data = await BACKING.workspace.read(sid, path)
     if data is None:
@@ -12583,7 +12595,7 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
     # this shipped broken: it compared v["org"], but a session vertex carries the owner in
     # `tenant`, so every write 404'd on a session the caller could plainly read.
     _org, v = await _owned_session(request, sid)
-    if _ws_machinery(path):
+    if not _ws_path_allowed(path):
         raise uhp_error(400, "write_failed",
                         "Could not write that path. It must be inside the session workspace, and not "
                         "one of the agent's own files.")
