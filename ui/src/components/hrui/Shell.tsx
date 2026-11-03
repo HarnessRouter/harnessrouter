@@ -166,7 +166,7 @@ export function HruiShell({ children }: { children: React.ReactNode; ownStyles?:
   const go = (href: string) => { setMeOpen(false); setWsOpen(false); router.push(href); };
   const meMore = ['/byok', '/profile', '/extensions', '/keys'].some((p) => pathname === p || pathname.startsWith(p + '/'));
   return (
-    <div id="hrui">
+    <div id="hrui" data-theme="light">
       <div className="app">
         <nav className="rail" aria-label="Console">
           <Link className="rail-logo" href="/start" aria-label="Go to Start" title="Start">

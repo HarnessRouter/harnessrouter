@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import localFont from 'next/font/local';
 
 // Unified with the HarnessRouter marketing landing: paper theme + accent blue (#285AFF)
@@ -58,6 +58,9 @@ const DESC = SELF_HOSTED
   ? 'Run coding agents like Codex, Claude Code and Hermes on your own machine, with your own keys.'
   : 'One API routes your app to coding agents like Codex, Claude Code, Hermes, and Pi: '
     + 'run tasks, stream results, and pay per use with credits.';
+
+// The console is light whatever the system's appearance: its design is drawn for one palette (Richard, 2026-11-03).
+export const viewport: Viewport = { colorScheme: 'light' };
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),

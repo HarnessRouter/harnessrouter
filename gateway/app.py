@@ -11878,8 +11878,9 @@ _WS_HIDE_NAMES = {".gitignore", "AGENTS.md", "CLAUDE.md"}
 
 
 def _ws_machinery(path: str) -> bool:
-    """Is this the runner's own state in a session? Never a person's file: the listing hides it and a
-    write is refused there, so a live read by path doesn't serve it either, however the path is spelled."""
+    """Is this the runner's own state in a session? Never a person's file: the listing hides it, and a
+    caller neither reads nor writes it by path, however the path is spelled. Holding the workspace's
+    marker there let a caller's own PUT point the file routes anywhere (reported privately)."""
     return posixpath.normpath("/" + (path or "")).lstrip("/").split("/", 1)[0] == ".harness"
 
 
@@ -12582,6 +12583,10 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
     # this shipped broken: it compared v["org"], but a session vertex carries the owner in
     # `tenant`, so every write 404'd on a session the caller could plainly read.
     _org, v = await _owned_session(request, sid)
+    if _ws_machinery(path):
+        raise uhp_error(400, "write_failed",
+                        "Could not write that path. It must be inside the session workspace, and not "
+                        "one of the agent's own files.")
     _refuse_if_busy(v)
 
     if body.content_b64 is not None:

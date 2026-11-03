@@ -14,7 +14,7 @@ import { HR_LOGO, auMark } from './art';
 export function AuthFrame({ n, children }: { n: number; children: ReactNode }) {
   const svg = useMemo(() => auMark(n), [n]);
   return (
-    <div id="hrui">
+    <div id="hrui" data-theme="light">
       <div className="auth-layer">
         <div className="au-bg" aria-hidden="true" />
         <main className="au-stage">

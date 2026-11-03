@@ -74,3 +74,22 @@ def test_a_live_read_does_not_serve_the_runners_own_state(client, monkeypatch): 
     r = _req(client, "GET", "/v1/sessions/hsessx/files/report.md")
     assert r.status_code == 200 and r.content == b"visible" and reads == ["report.md"]
     assert not gw._ws_machinery("my.harness/x") and not gw._ws_machinery("dir/.harness/x")
+
+
+def test_a_caller_cannot_write_the_runners_own_state(client, monkeypatch):  # noqa: F811
+    """A caller's PUT of `.harness/agent-subdir` answered 200 on 0.37.16, so an API key alone could set the marker."""
+    writes = []
+
+    async def write(sid, path, data):
+        writes.append(path)
+        return True
+
+    async def owned(request, sid):
+        return "localorg", {}
+
+    monkeypatch.setattr(gw.BACKING.workspace, "write", write)
+    monkeypatch.setattr(gw, "_owned_session", owned)
+    r = _req(client, "PUT", "/v1/sessions/hsessx/files/.harness/agent-subdir", {"content": "/etc"})
+    assert r.status_code == 400 and writes == [], r.text
+    r = _req(client, "PUT", "/v1/sessions/hsessx/files/deck.json", {"content": "{}"})
+    assert r.status_code == 200 and writes == ["deck.json"], r.text
