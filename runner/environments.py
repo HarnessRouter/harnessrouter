@@ -38,6 +38,8 @@ import platform
 import pwd
 import ipaddress
 import re
+import uuid
+import sys
 import os
 import pathlib
 import shutil
@@ -723,10 +725,27 @@ def clean_specs(specs) -> list[str]:
 
 
 # ── builds ──────────────────────────────────────────────────────────────────────────────────────
+def _read_in_layer(path: pathlib.Path) -> str:
+    """A file a build's own code could have replaced, read as root: a link is refused rather than followed,
+    and a FIFO doesn't hang the reader."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "r") as f:
+        return f.read()
+
+
+def _new_in_layer(path: pathlib.Path, text: str, uid: int | None = None, gid: int | None = None) -> None:
+    """A new file in a tree a build's own code can write to, created by root. A name already there, a link above
+    all (dangling, it reads as absent), is an error rather than somewhere to write."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+        if uid is not None:
+            os.fchown(f.fileno(), uid, gid if gid is not None else uid)
+
+
 def build_record(env_id: str, n: int) -> dict | None:
-    p = version_dir(env_id, n) / ".hr-build.json"
     try:
-        return json.loads(p.read_text())
+        return json.loads(_read_in_layer(version_dir(env_id, n) / ".hr-build.json"))
     except (OSError, ValueError):
         return None
 
@@ -871,7 +890,7 @@ def _apt_packages(dst: pathlib.Path) -> list[dict]:
     """The archives a build unpacked, as manager/name/version, from their file names."""
     out = []
     try:
-        for name in (dst / "apt" / ".packages").read_text().split():
+        for name in _read_in_layer(dst / "apt" / ".packages").split():
             parts = name[:-4].split("_") if name.endswith(".deb") else []
             if len(parts) >= 2:
                 out.append({"manager": "apt", "name": parts[0], "version": parts[1].replace("%3a", ":")})
@@ -903,6 +922,20 @@ def _read_only(dst: pathlib.Path, gid: int | None = None) -> None:
             one(os.path.join(dirpath, f), False)
 
 
+def _end_build_processes(gid: int | None) -> None:
+    """Nothing of the build's identity outlives the part of the build that runs its code. The steps after it
+    run as root over paths that code could write, so a process left running (setup.sh's own daemon, say) could
+    swap a directory for a link between a check and a use. kill(-1) from that identity reaches all of its
+    processes in one pass, which a loop of forks cannot outrun, and nothing else."""
+    if gid is None or not _root():
+        return
+    try:
+        subprocess.run([sys.executable, "-I", "-c", "import os,signal\ntry:\n os.kill(-1,signal.SIGKILL)\nexcept ProcessLookupError:\n pass"],
+                       user=gid, group=gid, extra_groups=[], cwd="/", env={}, capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(f"could not end the build's processes: {type(e).__name__}") from e
+
+
 def _size(dst: pathlib.Path) -> tuple[int, int]:
     n = b = 0
     for dirpath, _, filenames in os.walk(dst):
@@ -923,8 +956,11 @@ def _write_record(dst: pathlib.Path, rec: dict) -> None:
     if isinstance(rec.get("log"), list):
         text = "\n".join(rec["log"])
         rec["log"] = text[-LOG_MAX:] if len(text) > LOG_MAX else text
-    tmp = dst / ".hr-build.json.tmp"
-    tmp.write_text(json.dumps(rec, indent=1))
+    # The layer belongs to the build's own code while it runs, and this runs as root. A name it could not have
+    # guessed, which must not exist yet: a fixed one could be a link it planted, and root's write would go there.
+    # The rename replaces a link at the final name rather than following it.
+    tmp = dst / f".hr-build.{uuid.uuid4().hex}.tmp"
+    _new_in_layer(tmp, json.dumps(rec, indent=1))
     os.replace(tmp, dst / ".hr-build.json")
 
 
@@ -972,6 +1008,12 @@ def _build(env_id: str, n: int, slug: str, activate: bool, spec: dict | None = N
         with tempfile.TemporaryDirectory(prefix="hr-env-build-") as scratch:
             env["HOME"] = env["TMPDIR"] = scratch
             env["npm_config_cache"] = os.path.join(scratch, "npm-cache")
+            if apt_specs:
+                # apt and dpkg -x run as root, unpacking under this tree: first, while root owns all of it
+                # and nothing of the project has run. After pip, whose build hooks are the project's own
+                # code, apt/ could be a link, and root would unpack wherever it pointed.
+                stage("system packages")
+                _apt_into_layer(log, dst, apt_specs, env, scratch, deadline, flush)
             if as_build:
                 # pip, npm and setup.sh run the project's and its packages' own code: as the
                 # environment's identity, which owns this layer and the scratch and nothing else.
@@ -1003,22 +1045,20 @@ def _build(env_id: str, n: int, slug: str, activate: bool, spec: dict | None = N
                          str(dst), env, deadline, as_build, flush)
                 if npm_specs:
                     if not (dst / "package.json").is_file():
-                        (dst / "package.json").write_text(json.dumps({"name": slug or "environment", "version": "0.0.0", "private": True}, indent=2) + "\n")
-                        if as_build:
-                            os.chown(dst / "package.json", gid, gid)
+                        # After pip, whose hooks are the project's code: a dangling link here reads as absent.
+                        _new_in_layer(dst / "package.json", json.dumps({"name": slug or "environment", "version": "0.0.0", "private": True}, indent=2) + "\n",
+                                      gid if as_build else None, gid if as_build else None)
                     _run(log, [npm, "install", "--no-audit", "--no-fund", "--save", *npm_specs], str(dst), env, deadline, as_build, flush)
                 try:
                     rec["runtime"]["node"] = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=10, env=env).stdout.strip().lstrip("v")
                 except (OSError, subprocess.TimeoutExpired):
                     pass
-            if apt_specs:   # apt-get and dpkg -x run none of the packages' code; apt's lists need root
-                stage("system packages")
-                _apt_into_layer(log, dst, apt_specs, env, scratch, deadline, flush)
             if (dst / "setup.sh").is_file():
                 stage("setup.sh")
                 _run(log, ["bash", "setup.sh"], str(dst), {**env, "ENV_ROOT": str(dst)}, deadline, as_build, flush)
             stage("finishing")
             rec["packages"] = _packages(dst, env, as_build)
+            _end_build_processes(gid)
             if (dst / "apt").is_dir():
                 rec["packages"] += _apt_packages(dst)
         _read_only(dst, gid)
@@ -1041,6 +1081,10 @@ def _build(env_id: str, n: int, slug: str, activate: bool, spec: dict | None = N
         else:
             _write_record(dst, rec)
     except Exception as e:  # noqa: BLE001 — the record IS the report; nothing else sees this thread
+        try:
+            _end_build_processes(env_gid(env_id))
+        except Exception:  # noqa: BLE001 — reported by the failure already being reported
+            pass
         rec["status"], rec["finished_at"], rec["error"], rec["stage"] = "failed", int(time.time()), str(e)[:500], ""
         log.append(f"failed: {e}")
         try:
