@@ -1636,6 +1636,176 @@ def _t12_measure(ctx, hid: str, nonce: str, model: str) -> str:
                    "failure is not the budget's, so there is nothing here about the step budget.")
     raise Skip(f"the task ended {status!r}, which is not an ending the step budget explains")
 
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# Full — a question for the person (Tasks §3.2, capability input_requests)
+# ══════════════════════════════════════════════════════════════════════════════════════
+# A harness that needs one answer ends its turn on the question: the response is `incomplete`
+# with reason `input_required`, the question is its last `input_request` item and its last
+# message's text, and the answer is an `input_response` item on the next task, chained on that
+# response. §3.2 names the tool a server gives a base that has none of its own, `ask_user`, so
+# the suite can ask any harness on a server with the capability to put a question — the only
+# way to measure the rule on work the model cannot do without asking.
+
+_ASK_TOOL = "ask_user"
+_T13_PROMPT = ('Call the tool {tool} exactly once, with kind "choice", prompt "Which colour?" and '
+               'options with ids "red" and "blue" (labels Red and Blue). Then stop. When the answer '
+               'arrives, reply with the single word ANSWERED followed by the answer you were given.')
+_T14_PROMPT = ('Call the tool {tool} exactly once, with kind "secret" and prompt "The deploy token?". '
+               'Then stop. When the answer arrives, reply with the single word RECEIVED and nothing '
+               'else; never repeat the value you were given.')
+
+
+def _input_request_item(d: dict) -> dict | None:
+    """The response's `input_request` item, the last one when there are several."""
+    items = [i for i in (d.get("output") or []) if isinstance(i, dict) and i.get("type") == "input_request"]
+    return items[-1] if items else None
+
+
+def _asked_in_output(d: dict) -> bool:
+    """Whether the harness called the ask tool at all, as the server's own items show it."""
+    return any(isinstance(i, dict) and i.get("type") == "function_call"
+               and _is_tool(str(i.get("name") or ""), _ASK_TOOL) for i in d.get("output") or [])
+
+
+def _message_texts(d: dict) -> list[str]:
+    return [str(p.get("text") or "") for i in (d.get("output") or []) if isinstance(i, dict)
+            and i.get("type") == "message" for p in (i.get("content") or []) if isinstance(p, dict)]
+
+
+def _ask(ctx, prompt: str, hid: str, model: str) -> dict:
+    """One task that asks, and what §3.2 requires of its ending. Skips where the model never asked,
+    since nothing was measured; fails where it asked and the task did not end on the question."""
+    body = {"input": prompt.format(tool=_ASK_TOOL), "metadata": {"harness_id": hid}, "stream": False}
+    if model:
+        body["model"] = model
+    r = ctx.client.post("/v1/responses", body=body)
+    assert r.status == 200, f"the task returned HTTP {r.status}: {r.body[:200]!r}"
+    d = r.json or {}
+    status, item = str(d.get("status") or ""), _input_request_item(d)
+    if status != "incomplete" or item is None:
+        if status == "incomplete" and _reason(d) == "input_required":
+            raise AssertionError("the task ended incomplete with reason input_required and no "
+                                 "input_request item: §3.2 makes the question an item a client answers "
+                                 "by id, and a reason alone leaves it nothing to answer")
+        if _asked_in_output(d) or (status == "incomplete" and _reason(d) == "input_required"):
+            raise AssertionError(
+                f"the harness called {_ASK_TOOL} and the task ended {status!r} with no input_request "
+                "item: §3.2 says the task ends incomplete, reason input_required, with the question "
+                "as an item. A question in prose is one a client cannot tell from an answer, and "
+                "cannot route an answer back to.")
+        raise Skip(f"the agent never called {_ASK_TOOL}, so no question was put and nothing was measured")
+    assert _reason(d) == "input_required", (
+        f"the task ended on a question with incomplete_details.reason {_reason(d)!r}; §3.2 requires "
+        "input_required, which is how a client tells a question from a budget")
+    assert str(item.get("id") or "").startswith("inreq_"), f"the input_request's id is {item.get('id')!r}, not inreq_-prefixed"
+    assert item.get("kind") in ("choice", "confirm", "free_text", "secret"), f"the input_request's kind is {item.get('kind')!r}"
+    prompt_text = str(item.get("prompt") or "")
+    assert prompt_text, "the input_request carries no prompt"
+    assert any(prompt_text in t for t in _message_texts(d)), (
+        "the question is not in any message item's text: §3.2 requires the turn's last message to "
+        "carry it as well, because a client that renders only message items is a valid client (§3.1)")
+    return d
+
+
+def _reason(d: dict) -> str:
+    details = d.get("incomplete_details")
+    return str(details.get("reason") or "") if isinstance(details, dict) else ""
+
+
+def _answer(ctx, prev: str, request_id: str, answer: str):
+    return ctx.client.post("/v1/responses", body={
+        "previous_response_id": prev,
+        "input": [{"type": "input_response", "input_request_id": request_id, "answer": answer}]})
+
+
+def _harness_that_asks(ctx) -> tuple[str, str]:
+    """The harness to ask on, and the model: a server that reports the capability is held to it."""
+    caps = (ctx.state.get("discovery") or {}).get("capabilities") or {}
+    if not caps.get("input_requests"):
+        raise Skip("this server does not report the input_requests capability")
+    h = _harness(ctx)
+    hid = str(h.get("id") or "")
+    if not hid:
+        raise Skip("the harness to run against has no id")
+    return hid, ctx.model or str(h.get("defaultModel") or "").strip()
+
+
+@check("T-13", "A task ends on a question for the person, and its answer continues it", "full",
+       f"{SPEC}/tasks.md#32-asking-the-person")
+def t13(ctx):
+    """The question and the answer, and the three refusals an answer can meet.
+
+    The task is told to ask a choice between red and blue through the server's `ask_user`. §3.2
+    requires it to end `incomplete` with reason `input_required`, the question as an
+    `input_request` item and in the last message's text. An answer outside the options is `422
+    input_response_invalid` and leaves the question standing; an answer to a request the response
+    does not hold is `409 input_not_pending`; the answer itself is an ordinary continuation that
+    ends terminal and not failed; and the same answer again is `409 input_not_pending`, since a
+    question is answered once.
+    """
+    hid, model = _harness_that_asks(ctx)
+    d = _ask(ctx, _T13_PROMPT, hid, model)
+    item = _input_request_item(d) or {}
+    ids = [str(o.get("id") or "") for o in (item.get("options") or []) if isinstance(o, dict)]
+    assert item.get("kind") == "choice" and {"red", "blue"} <= set(ids), (
+        f"the question asked for was a choice between red and blue; the item says kind "
+        f"{item.get('kind')!r} with options {ids}")
+    first, rid = str(d.get("id") or ""), str(item.get("id") or "")
+    bad = _answer(ctx, first, rid, "green")
+    assert bad.status == 422 and _error_code(bad) == "input_response_invalid", (
+        f"an answer outside the options returned HTTP {bad.status} {_error_code(bad)!r}; §3.2 "
+        "requires 422 input_response_invalid, and the request kept pending")
+    stale = _answer(ctx, first, "inreq_" + uuid.uuid4().hex[:12], "red")
+    assert stale.status == 409 and _error_code(stale) == "input_not_pending", (
+        f"an answer naming a request the response does not hold returned HTTP {stale.status} "
+        f"{_error_code(stale)!r}; §3.2 requires 409 input_not_pending (not 404: the response exists)")
+    ok = _answer(ctx, first, rid, "red")
+    assert ok.status == 200, (
+        f"the answer returned HTTP {ok.status} {_error_code(ok)!r}: {ok.body[:200]!r}. After a "
+        "refused answer the request stays pending (§3.2), and the answer that fits is a normal "
+        "continuation")
+    nxt = ok.json or {}
+    assert str(nxt.get("status") or "") in TERMINAL_STATUSES - {"failed", "cancelled"}, (
+        f"the task continued by the answer ended {nxt.get('status')!r}")
+    assert nxt.get("previous_response_id") == first, "the answer did not continue the response that asked"
+    assert ((nxt.get("metadata") or {}).get("session_id")
+            == (d.get("metadata") or {}).get("session_id")), "the answer ran in another session"
+    again = _answer(ctx, first, rid, "blue")
+    assert again.status == 409 and _error_code(again) == "input_not_pending", (
+        f"a second answer to the same request returned HTTP {again.status} {_error_code(again)!r}; "
+        "§3.2 answers a question once, and refuses the rest 409 input_not_pending")
+    return (f"asked {rid} ({item.get('kind')}, {len(ids)} options); 422 outside the options, 409 for a "
+            f"stale id, answered once ({nxt.get('status')}), 409 again")
+
+
+@check("T-14", "A secret answer reaches the harness and nothing a client reads", "full",
+       f"{SPEC}/tasks.md#32-asking-the-person")
+def t14(ctx):
+    """A `secret` answer is given to the harness outside the conversation: §3.2 says it appears in
+    no event, not in the stored response, not in `GET /v1/responses/{id}` and not in its
+    `input_items`. The answer is a nonce, so finding it anywhere is finding this answer."""
+    hid, model = _harness_that_asks(ctx)
+    d = _ask(ctx, _T14_PROMPT, hid, model)
+    item = _input_request_item(d) or {}
+    assert item.get("kind") == "secret", f"a secret was asked for; the item says kind {item.get('kind')!r}"
+    first, rid = str(d.get("id") or ""), str(item.get("id") or "")
+    secret = "uhp-secret-" + uuid.uuid4().hex
+    ok = _answer(ctx, first, rid, secret)
+    assert ok.status == 200, f"the answer returned HTTP {ok.status} {_error_code(ok)!r}: {ok.body[:200]!r}"
+    nxt = ok.json or {}
+    assert str(nxt.get("status") or "") != "failed", "the task continued by the secret ended failed"
+    second = str(nxt.get("id") or "")
+    where = {"the response to the answer": ok.body,
+             f"GET /v1/responses/{second}": ctx.client.get(f"/v1/responses/{second}").body,
+             f"GET /v1/responses/{second}/input_items": ctx.client.get(f"/v1/responses/{second}/input_items").body,
+             f"GET /v1/responses/{first}": ctx.client.get(f"/v1/responses/{first}").body}
+    leaked = [name for name, body in where.items() if secret.encode() in (body or b"")]
+    assert not leaked, (
+        f"the secret answer appears in {', '.join(leaked)}: §3.2 keeps a secret out of the "
+        "conversation, so a client reading the task back never sees what the person typed")
+    return f"the secret appears in none of {len(where)} places a client reads"
+
 # Full — session sharing
 # ══════════════════════════════════════════════════════════════════════════════════════
 # Sessions §5 is the Full requirement this suite could not see, and it is the one where a
