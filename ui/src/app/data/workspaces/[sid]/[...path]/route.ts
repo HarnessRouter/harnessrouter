@@ -17,6 +17,7 @@
 // decides — a request with no credentials gets no key and is refused there.
 import { NextResponse, type NextRequest } from 'next/server';
 import { LOCAL_MEMBER, LOCAL_ORG, SELF_HOSTED } from '@/lib/edition';
+import { relayContentSecurityPolicy } from '@/lib/public-artifact-response';
 
 // A header value is bytes, not text: `Headers.set` throws a TypeError the moment a filename
 // carries a Chinese character or an emoji, and the download dies with it. RFC 6266 is the way
@@ -87,7 +88,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ sid: string
 
   const name = (hit.filename || wanted).split('/').pop() || 'download';
   const out = new Headers();
-  out.set('content-type', hit.media_type || res.headers.get('content-type') || 'application/octet-stream');
+  const media = hit.media_type || res.headers.get('content-type') || 'application/octet-stream';
+  out.set('content-type', media);
+  // An agent's HTML or SVG file must never run with the console's origin.
+  out.set('content-security-policy', relayContentSecurityPolicy(res.headers.get('content-security-policy'), media));
   const len = res.headers.get('content-length');
   if (len) out.set('content-length', len);
   // Attacker-influenceable content served from the console's own origin: nosniff so a text/plain

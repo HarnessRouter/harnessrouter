@@ -34,9 +34,10 @@ const nextConfig: NextConfig = {
     ];
     return [
       {
-        // Public artifact proxies set their own stricter CSP and referrer policy. Next's
-        // configured headers can overwrite route response headers, so exclude them here.
-        source: "/((?!api/share/|kits/|[^/]+/[^/]+/workspace/).*)",
+        // Public artifact proxies set their own stricter CSP and referrer policy, and the relays of
+        // gateway content (/api/harness, /data/workspaces) their own sandbox. Next's configured
+        // headers can overwrite route response headers, so exclude them here.
+        source: "/((?!api/share/|api/harness/|data/workspaces/|kits/|[^/]+/[^/]+/workspace/).*)",
         headers: [
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
@@ -49,6 +50,10 @@ const nextConfig: NextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           ...baseline.filter(({ key }) => key !== "Referrer-Policy"),
         ],
+      })),
+      ...["/api/harness/:path*", "/data/workspaces/:path*"].map((source) => ({
+        source,
+        headers: [{ key: "X-Frame-Options", value: "DENY" }, ...baseline],
       })),
       {
         // A kit's own app, shown inside its Shop try page: framed by the console itself and by
