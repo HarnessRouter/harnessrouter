@@ -13,4 +13,4 @@ mcp==1.28.1
 # RS256 for the Vertex relay route: the runner signs the service account's token request itself
 # (_vertex_assertion), so the account's key never reaches the agent. The gateway's pin, since both
 # install into one environment in this image.
-cryptography==44.0.0
+cryptography==50.0.2

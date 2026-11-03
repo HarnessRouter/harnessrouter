@@ -2,6 +2,10 @@ import path from "node:path";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Nothing here uses next/image, so the image optimizer is off: it would decode whatever image a request
+  // names, a shared file or an agent's among them, with no sign-in, and it has been the road to two remote
+  // code execution bugs in its image library (GHSA-2464-fhr4-w9xw, GHSA-2xp9-vwfh-vxw4).
+  images: { unoptimized: true },
   // This repository is the self-hosted edition and cannot build another, so that is the default
   // rather than something every command has to remember to pass.
   //
