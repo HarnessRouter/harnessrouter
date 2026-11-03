@@ -7920,8 +7920,9 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
         _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key,
                                         _turn_route({"google_native": True, "model": model,
                                                      "native_model": native_model, **_turn_effort(),
-                                                     "google_own": (urllib.parse.urlsplit(host_root).hostname or "").lower()
-                                                     == "generativelanguage.googleapis.com",
+                                                     **({"google_own": True}
+                                                        if (urllib.parse.urlsplit(host_root).hostname or "").lower()
+                                                        == "generativelanguage.googleapis.com" else {}),
                                                      **_route_trace_flag()}))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 

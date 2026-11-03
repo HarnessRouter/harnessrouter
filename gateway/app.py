@@ -7662,7 +7662,9 @@ _VENDOR_MODELS["vercel"] = {c: _VERCEL_RESLUG.get(c, v) for c, v in _SHARED_SLUG
 # the model it ran and fails the turn as a substitution; Google's OpenAI-compatible surface echoes
 # the id it was asked for, so every other base would have run 3.8 under the 3.7 name. TokenRouter,
 # Vercel and OpenRouter still serve it as itself.
-_GOOGLE_ANSWERS_AS_ANOTHER = {"gemini-3.7-flash"}
+# gemini-3.5-flash the same way: Google answers it with gemini-3.6-flash (measured 2026-11-03, `modelVersion` on
+# generateContent for all nine ids of this table; the other seven come back as themselves).
+_GOOGLE_ANSWERS_AS_ANOTHER = {"gemini-3.7-flash", "gemini-3.5-flash"}
 _VENDOR_MODELS["google"] = {m: m for m in ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview")
                             if m not in _GOOGLE_ANSWERS_AS_ANOTHER}
 
