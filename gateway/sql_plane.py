@@ -41,6 +41,26 @@ class SqlError(Exception):
     it is safe to: 'column "revenu" does not exist' is exactly what the agent needs to fix it."""
 
 
+def _refuse_local_files() -> None:
+    """A MySQL server can answer any statement by asking the client for a file by name, and aiomysql 0.2.0 sends
+    it: local_infile=False only stops the client offering the feature, the reply is never checked. Whoever
+    connects a database names its server, so a server of their own would get anything this process can read, its
+    environment and every secret in it. Replaced at the one method every connection reaches, so no caller can
+    forget: the socket is closed and nothing is sent."""
+    try:
+        from aiomysql.connection import MySQLResult
+    except ModuleNotFoundError:                                        # pragma: no cover
+        return
+
+    async def refused(self, first_packet):
+        self.connection.close()
+        raise SqlError("The database asked this service for a local file, which is refused.")
+    MySQLResult._read_load_local_packet = refused
+
+
+_refuse_local_files()
+
+
 class SqlRefused(SqlError):
     """The statement was refused before it reached the database."""
 
