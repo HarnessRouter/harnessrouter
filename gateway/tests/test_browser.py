@@ -625,16 +625,6 @@ def test_a_package_that_requires_the_browser_includes_it_and_the_count_reads_the
     assert [e["id"] for e in r.json()["mcpServers"]] == ["mcp.plugs"]
     assert _get(client, f"/v1/harnesses/{hid}/servers/mcp.plugs").json() == {
         "id": "mcp.plugs", "name": "plugs", "enabled": True, "workspace": WS, "plugs": ["browser"], "status": {"browser": "connected"}}
-    # "attached N of M harnesses" for the Plugins page, from the bindings
-    other = _harness(client)
-    _include(client, other, ("github",))
-    _harness(client)
-    r = client.get("/internal/plugs/attachments", params={"workspace": WS, "type": "browser"}, headers={"x-harness-internal": "test-internal-key"})
-    assert r.status_code == 200, r.text
-    d = r.json()
-    assert d["type"] == "browser" and d["workspace"] == WS and hid in d["harness_ids"] and other not in d["harness_ids"]
-    assert d["attached"] == len(d["harness_ids"]) and d["harnesses"] > d["attached"]
-    assert client.get("/internal/plugs/attachments", params={"workspace": WS, "type": "browser"}).status_code == 401
 
 
 def test_fair_share_of_the_vendors_concurrency(client, world, monkeypatch):

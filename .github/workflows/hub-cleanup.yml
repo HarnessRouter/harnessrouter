@@ -18,6 +18,8 @@ on:
         description: Comma-separated release-candidate tags to delete (each must contain "-rc.")
         required: true
         type: string
+permissions: {}
+
 jobs:
   delete:
     runs-on: ubuntu-latest

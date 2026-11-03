@@ -179,6 +179,9 @@ jobs:
             echo "$LINE" | grep -q "$b" || { echo "::error::$b did not install on ${{ matrix.arch }}"; exit 1; }
           done
           docker exec smoke ls /opt/harnessrouter/kits
+          # Root never runs what the product user can change, read off the running container.
+          docker exec --privileged -i smoke sh < scripts/check-root-boundary.sh \
+            || { echo "::error::root runs something the product user can change on ${{ matrix.arch }}"; exit 1; }
           # The architecture is asserted, not assumed: a QEMU fallback would otherwise pass here
           # silently and ship an emulated image under the native manifest.
           GOT=$(docker image inspect "$REF" --format '{{.Architecture}}')

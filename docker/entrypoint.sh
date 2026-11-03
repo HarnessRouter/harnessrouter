@@ -24,36 +24,63 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 PRODUCT=agent
-AS_PRODUCT="setpriv --reuid=$PRODUCT --regid=$PRODUCT --init-groups"
+# Root must never read or run anything the product user can change, or a bug in the gateway or the
+# console (which run as that user) becomes root at the next start (reported privately,
+# GHSA-mm72-wr37-26pv). So: the image's /app is root's; root has its own HOME, where npm, pip and
+# Python look for their settings; the python root runs is -I, so neither its current directory nor
+# the environment can add a module; and on the volume, below, what root keeps is root's, in a
+# directory where the product can create its own files but cannot move anyone else's.
+export HOME=/root
+AS_PRODUCT="env HOME=/home/agent setpriv --reuid=$PRODUCT --regid=$PRODUCT --init-groups"
 
 DATA_DIR="${HR_DATA_DIR:-/data}"
 mkdir -p "$DATA_DIR"
+
+# A directory root keeps on the volume. A link or a file in its place was put there by the product,
+# on this image or an older one, and is removed rather than followed. Only ever called before the
+# product's first process starts, so nothing can change it between the check and the use.
+root_dir() {
+  if [ -L "$1" ] || { [ -e "$1" ] && [ ! -d "$1" ]; }; then rm -f -- "$1"; fi
+  mkdir -p "$1"
+  chown root:root "$1"
+}
+# The same for a file root reads or writes there: root's own regular file, with no other name, or nothing.
+root_file() {
+  if [ -L "$1" ] || [ -e "$1" ]; then
+    if [ -L "$1" ] || [ ! -f "$1" ] || [ "$(stat -c %u "$1")" != 0 ] || [ "$(stat -c %h "$1")" != 1 ]; then rm -rf -- "$1"; fi
+  fi
+}
 
 # Session workspaces live on the volume so a restart doesn't discard work in flight. Created HERE
 # rather than in the image: /data is a volume mount, and Docker only seeds a volume from the image
 # when the volume is empty — so an image-time mkdir is invisible on every existing install.
 export HARNESS_WORKSPACE="${HARNESS_WORKSPACE:-$DATA_DIR/workspaces}"
-mkdir -p "$HARNESS_WORKSPACE"
+root_dir "$HARNESS_WORKSPACE"
 # Which checkpoint each workspace holds, on the volume beside them: in /tmp a restart forgot it, and
 # the next turn restored the last checkpoint over a workspace that had survived (#505). Beside the
 # workspace root, not in it: the idle-workspace reaper treats every directory there as a session.
 # The runner's own (root), like the markers it writes.
 export HR_WS_MARKER_DIR="${HR_WS_MARKER_DIR:-$DATA_DIR/ws-markers}"
-mkdir -p "$HR_WS_MARKER_DIR"
+root_dir "$HR_WS_MARKER_DIR"
 chmod 700 "$HR_WS_MARKER_DIR"
 
 # The write-wall, in file modes. Idempotent and non-recursive, so it costs nothing on a volume
 # that already has it and repairs one that predates it. Session directories themselves are owned
 # by their session's uid (0700); the runner sets that as it allocates them.
-chown "$PRODUCT:$PRODUCT" "$DATA_DIR" "$HARNESS_WORKSPACE"
-chmod 751 "$DATA_DIR" "$HARNESS_WORKSPACE"        # traversable by sessions, neither listable nor writable
+# The volume's top level is root's and the product's group's, with the sticky bit: the product makes
+# its databases and its stores here, and cannot rename or replace what it does not own (the tools,
+# the environments, the workspaces, all of which root acts on). Sessions can pass through and no more.
+chown "root:$PRODUCT" "$DATA_DIR"
+chmod 1771 "$DATA_DIR"
+chmod 751 "$HARNESS_WORKSPACE"                    # traversable by sessions, neither listable nor writable
 # Environments (runner/environments.py): project layers built once and read by the sessions that
 # name one. Root's, each environment readable by its own group and writable by none: that ownership
 # is the read-only guarantee, so nothing here is handed to $PRODUCT. Both directories are
 # traversable, not listable: a session reaches the environment it was told and enumerates none.
 # /env holds the links sessions are told.
 export HR_ENV_ROOT="${HR_ENV_ROOT:-$DATA_DIR/environments}"
-mkdir -p "$HR_ENV_ROOT" /env
+root_dir "$HR_ENV_ROOT"
+mkdir -p /env
 chmod 751 "$HR_ENV_ROOT" /env
 # A login shell (`bash -lc`, which codex uses for its commands) runs /etc/profile, and Debian's
 # sets PATH from scratch, which dropped the environment's venv and node_modules/.bin that the runner
@@ -72,12 +99,12 @@ if [ -n "$HR_ENVIRONMENT" ]; then
 fi
 PROFILE
 chmod 644 /etc/profile.d/hr-environment.sh
-for f in "$DATA_DIR"/*.db "$DATA_DIR"/*.db-* "$DATA_DIR"/selfhost-auth.json; do
-  if [ -e "$f" ]; then chown "$PRODUCT:$PRODUCT" "$f"; chmod 600 "$f"; fi
-done
-for d in "$DATA_DIR/blobs" "$DATA_DIR/secrets"; do
-  if [ -d "$d" ]; then chown "$PRODUCT:$PRODUCT" "$d"; chmod 700 "$d"; fi
-done
+# These are the product's, in a directory it can write, so a name here can be a link to anything, or
+# a second name for a file of root's: chown and chmod would follow the one and reach the other. Only
+# a real file with one name, and only a real directory, is handed over.
+find "$DATA_DIR" -maxdepth 1 -type f -links 1 \( -name '*.db' -o -name '*.db-*' -o -name selfhost-auth.json \) \
+  -exec chown "$PRODUCT:$PRODUCT" {} + -exec chmod 600 {} +
+find "$DATA_DIR" -maxdepth 1 -type d \( -name blobs -o -name secrets \) -exec chown "$PRODUCT:$PRODUCT" {} + -exec chmod 700 {} +
 # Shared scratch stays USABLE. Sessions get their own TMPDIR inside their workspace (see turn()
 # in the runner), but a machine's scratch directories are a convention that tools hardcode, and a
 # tool that cannot write /tmp does not fall back: LibreOffice puts its UNO pipe there and dies with
@@ -133,7 +160,7 @@ export HARNESS_CODEX_APPSERVER="${HARNESS_CODEX_APPSERVER:-1}"
 # The gateway signs its own internal calls. Generated per container if not supplied, so a
 # default install has no shared secret and nothing to leak; it never leaves this process tree.
 if [ -z "${HARNESS_INTERNAL_KEY:-}" ]; then
-  export HARNESS_INTERNAL_KEY="$("$PY" -c 'import secrets; print(secrets.token_hex(32))')"
+  export HARNESS_INTERNAL_KEY="$("$PY" -I -c 'import secrets; print(secrets.token_hex(32))')"
 fi
 
 # The console reaches the gateway over loopback; it is the only process that can, since only
@@ -161,7 +188,7 @@ export HR_AUTH_STORE="${HR_AUTH_STORE:-/data/selfhost-auth.json}"
 # changing credentials restarts the console (below) instead of taking effect in place.
 hr_session_key() {
   if [ -f "$HR_AUTH_STORE" ]; then
-    "$PY" - "$HR_AUTH_STORE" <<'PYEOF' 2>/dev/null && return 0
+    "$PY" -I - "$HR_AUTH_STORE" <<'PYEOF' 2>/dev/null && return 0
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
@@ -178,7 +205,7 @@ PYEOF
 
 hr_stored_user() {
   [ -f "$HR_AUTH_STORE" ] || { printf '%s\n' "$HR_AUTH_USER"; return 0; }
-  "$PY" -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["user"])' "$HR_AUTH_STORE" 2>/dev/null \
+  "$PY" -I -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["user"])' "$HR_AUTH_STORE" 2>/dev/null \
     || printf '%s\n' "$HR_AUTH_USER"
 }
 
@@ -187,9 +214,10 @@ hr_stored_user() {
 # instance whose credentials were never set gets a random password at its first boot, kept where only root and
 # the operator (docker exec) can read it, and the log says where, not what.
 HR_INITIAL_PASSWORD_FILE="$DATA_DIR/selfhost-initial-password"
+root_file "$HR_INITIAL_PASSWORD_FILE"
 if [ "${HR_AUTH_DISABLED:-}" != "1" ] && [ ! -f "$HR_AUTH_STORE" ] && [ "$HR_AUTH_PASSWORD" = "harnessrouter" ]; then
   if [ ! -s "$HR_INITIAL_PASSWORD_FILE" ]; then
-    ( umask 077; "$PY" -c 'import secrets; print(secrets.token_urlsafe(18))' > "$HR_INITIAL_PASSWORD_FILE" )
+    ( umask 077; "$PY" -I -c 'import secrets; print(secrets.token_urlsafe(18))' > "$HR_INITIAL_PASSWORD_FILE" )
     chmod 600 "$HR_INITIAL_PASSWORD_FILE"
   fi
   HR_AUTH_PASSWORD="$(cat "$HR_INITIAL_PASSWORD_FILE")"
@@ -222,6 +250,20 @@ export HOSTNAME=0.0.0.0
 # to install one backend is not fatal: the others still work, and the gateway's catalog is what
 # the UI offers, so an unavailable backend simply isn't listed.
 TOOLS="$DATA_DIR/agent-tools"
+# Root installs these and runs their version checks at every start, and every session runs them, so
+# they are root's and written by nobody else. A volume from before this was the product's in places.
+# One pass, and the mark is believed only inside a directory that is already root's: the product
+# could have written one into an older volume's, but not into this.
+root_dir_tools() {
+  local was; was="$(stat -c %u "$TOOLS" 2>/dev/null || echo none)"
+  root_dir "$TOOLS"
+  if [ "$was" != 0 ] || [ ! -e "$TOOLS/.root-owned" ]; then
+    chown -hR root:root "$TOOLS"
+    chmod -R go-w,a+rX "$TOOLS"
+    : > "$TOOLS/.root-owned"
+  fi
+}
+root_dir_tools
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
 # The four added in this batch are in the DEFAULT set rather than opt-in, for the reason

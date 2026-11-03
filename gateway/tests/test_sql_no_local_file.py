@@ -142,3 +142,39 @@ def test_the_refusal_is_on_the_driver_method_it_replaces():
     """A driver upgrade that renames the method would leave this silently off; the stub tests above would then fail too."""
     from aiomysql.connection import MySQLResult
     assert MySQLResult._read_load_local_packet.__module__ == sql_plane.__name__
+
+
+def test_a_server_that_refuses_the_read_only_session_gets_no_query(monkeypatch):
+    """It used to be tolerated, leaving the statement check as the only guard on that connection."""
+    import aiomysql
+    ran = []
+
+    class Cursor:
+        description = None
+
+        async def execute(self, sql):
+            ran.append(sql)
+            if sql.startswith("SET SESSION TRANSACTION"):
+                raise RuntimeError("unsupported")
+
+        async def fetchmany(self, n):
+            return []
+
+    class Conn:
+        async def cursor(self, *a):
+            return Cursor()
+
+        def close(self):
+            pass
+
+    async def connect(**kw):
+        return Conn()
+
+    async def no_vet(conn):
+        return None
+
+    monkeypatch.setattr(aiomysql, "connect", connect)
+    monkeypatch.setattr(sql_plane, "_vet_peer", no_vet)
+    with pytest.raises(sql_plane.SqlError, match="read-only session"):
+        asyncio.run(sql_plane._mysql_query("mysql://u:p@db.example:3306/d", "SELECT 1", 5, 10))
+    assert ran == ["SET SESSION TRANSACTION READ ONLY"], "the query itself must not have run"

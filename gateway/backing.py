@@ -942,9 +942,11 @@ class CheckpointWorkspaceFiles:
                 sub = _tar_subdir(tf)
                 for name in ([f"{sub}/{member}", f"./{sub}/{member}"] if sub else []) + [member, f"./{member}"]:
                     try:
-                        f = tf.extractfile(name)
+                        m = tf.getmember(name)
                     except KeyError:
                         continue
+                    # extractfile follows a link, and a link in the archive is the agent's to point
+                    f = tf.extractfile(m) if m.isreg() else None
                     if f:
                         return f.read()
             return None
@@ -983,7 +985,11 @@ class CheckpointWorkspaceFiles:
                             # where it is, or — a new file — in a folder the agent already has, which
                             # adoption would not move a root copy into
                             target = f"{sub}/{member}"
+                        parents = {target.rsplit("/", i)[0] for i in range(1, target.count("/") + 1)}
                         for m, name in zip(members, names):
+                            if name in parents and not m.isdir():
+                                # `link/x` looks ordinary, and the next turn's unpacking writes it wherever the link goes
+                                raise ValueError("the path goes through something that is not a folder")
                             if name == target:
                                 continue          # replaced below
                             f = src.extractfile(m) if m.isfile() else None
