@@ -98,3 +98,13 @@ def test_only_roots_own_single_file_survives_as_a_file_root_uses(tmp_path):
 def test_the_gateways_signatures_never_use_a_constant_anyone_can_read():
     src = (ROOT / "gateway" / "app.py").read_text()
     assert "dev-insecure" not in src
+
+
+def test_the_tools_are_sealed_after_the_installers_as_well_as_before():
+    """A mark written before the installers ran let a fresh install keep its archives' owners and modes: the release gate found 7351 such paths."""
+    text = pathlib.Path(__file__).resolve().parents[2].joinpath("docker", "entrypoint.sh").read_text()
+    calls = [m.start() for m in re.finditer(r"^seal_tools\b(?!\(\))", text, re.M)]
+    start = re.search(r"^install_backends$", text, re.M).start()
+    assert len(calls) == 2 and calls[0] < start < calls[1], calls
+    assert ".root-owned" not in text, "no mark: the walk decides from what is on disk"
+    assert text.index("uvicorn server:app") > calls[1], "nothing runs a tool for a session before the second seal"

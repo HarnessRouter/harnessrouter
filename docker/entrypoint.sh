@@ -251,19 +251,17 @@ export HOSTNAME=0.0.0.0
 # the UI offers, so an unavailable backend simply isn't listed.
 TOOLS="$DATA_DIR/agent-tools"
 # Root installs these and runs their version checks at every start, and every session runs them, so
-# they are root's and written by nobody else. A volume from before this was the product's in places.
-# One pass, and the mark is believed only inside a directory that is already root's: the product
-# could have written one into an older volume's, but not into this.
-root_dir_tools() {
-  local was; was="$(stat -c %u "$TOOLS" 2>/dev/null || echo none)"
+# they are root's and written by nobody else. A volume from before this was the product's in places,
+# and an installer leaves what its archive says: tar as root keeps the packer's uid and modes. So this
+# runs at every start, before anything here runs a tool, and again when the installers are done.
+# It changes only what is wrong, so on a settled volume it is one walk of the tree. There is no mark to
+# trust: a mark written before the installers ran is how a fresh install kept its archives' modes.
+seal_tools() {
   root_dir "$TOOLS"
-  if [ "$was" != 0 ] || [ ! -e "$TOOLS/.root-owned" ]; then
-    chown -hR root:root "$TOOLS"
-    chmod -R go-w,a+rX "$TOOLS"
-    : > "$TOOLS/.root-owned"
-  fi
+  find "$TOOLS" -xdev \( ! -user root -o ! -group root \) -exec chown -h root:root {} +
+  find "$TOOLS" -xdev ! -type l \( -perm /022 -o ! -perm -444 -o \( -type d ! -perm -111 \) \) -exec chmod go-w,a+rX {} +
 }
-root_dir_tools
+seal_tools
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
 # The four added in this batch are in the DEFAULT set rather than opt-in, for the reason
@@ -1827,6 +1825,7 @@ PYEOF
 }
 
 install_backends
+seal_tools    # nothing else is running yet: the runner and the gateway start below
 if wanted hermes; then verify_hermes_bedrock; fi
 
 pids=()
