@@ -5964,6 +5964,9 @@ def _finish_reason_in(data: bytes) -> str:
     return hits[-1].decode().replace("-", "_") if hits else ""
 
 
+_RELAY_TOKEN_IN_URL = re.compile(r"^https?://[^/]+/(hr-relay-[0-9a-f]+)(?:/|$)")
+
+
 def _turn_relay_flags(env: dict) -> dict:
     """The flags of this turn's chat route, {} when the turn did not ride the relay. The route is
     found by the placeholder bearer the CLI was handed, whichever variable the backend keeps it in.
@@ -5975,10 +5978,15 @@ def _turn_relay_flags(env: dict) -> dict:
     it asked one and the image model after. Rule 2 of docs/harness-verification.md reads the
     second as a substitution, a finding invented out of nothing."""
     for v in env.values():
-        if isinstance(v, str) and v.startswith("hr-relay-"):
-            route = _HERMES_RELAY["routes"].get(v)
-            if route and not (route[2] or {}).get("aux"):
-                return route[2] or {}
+        if not isinstance(v, str):
+            continue
+        # The placeholder itself, or a base address that carries it as its first segment (Claude Code on
+        # Bedrock or Vertex sends no credential, so the route's token is in its base).
+        m = _RELAY_TOKEN_IN_URL.match(v)
+        tok = v if v.startswith("hr-relay-") else (m.group(1) if m else "")
+        route = _HERMES_RELAY["routes"].get(tok) if tok else None
+        if route and not (route[2] or {}).get("aux"):
+            return route[2] or {}
     return {}
 
 
@@ -7117,7 +7125,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 print(f"[relay] vertex: {e}", flush=True)
                 self._cloud_refuse(502, kind, str(e))
                 return
-        self._cloud_send(url, headers, body, kind)
+        self._cloud_send(url, headers, body, kind, flags)
 
     def _cloud_refuse(self, status: int, kind: str, message: str) -> None:
         """An answer the relay gives itself on a cloud route, in that provider's error shape, so the
@@ -7139,7 +7147,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         except OSError:
             self.close_connection = True
 
-    def _cloud_send(self, url: str, headers: dict, body: bytes | None, kind: str) -> None:
+    def _cloud_send(self, url: str, headers: dict, body: bytes | None, kind: str, flags: dict | None = None) -> None:
         """Send one cloud model call and relay the answer: status, the content type, the provider's
         own x-amz*/retry-after headers (an AWS SDK reads the error's name and the request id there),
         and the body byte for byte. An event stream (Bedrock's binary eventstream, Vertex's SSE), or
@@ -7147,6 +7155,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         provider's answer and is not followed (_RELAY_OPENER), and its Location is not passed on."""
         req = urllib.request.Request(url, data=body if self.command == "POST" else None,
                                      method=self.command, headers=headers)
+        if flags is not None:
+            flags.pop("last_refusal", None)     # a new call: an earlier call's refusal is not this one's
         try:
             resp = _RELAY_OPENER.open(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
         except urllib.error.HTTPError as e:
@@ -7169,6 +7179,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             except (http.client.HTTPException, TimeoutError, OSError) as e:
                 self._cloud_refuse(502, kind, f"the provider stopped answering mid-body: {type(e).__name__}")
                 return
+            if status >= 400:
+                # In the provider's words, for the turn's reason, as on every other route. A Bedrock
+                # permission refusal reached a hermes turn as "ended the turn without a final answer and
+                # gave no reason" (measured against real AWS, 2026-11-03).
+                words = _refusal_words(status, data)
+                if flags is not None:
+                    flags["last_refusal"] = words
+                print(f"[relay] {kind} refused {urllib.parse.urlsplit(url).path[:160]}: {words[:300]}", flush=True)
             try:
                 self.send_response(status)
                 for k, v in keep:
