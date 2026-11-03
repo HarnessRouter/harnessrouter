@@ -59,6 +59,7 @@ credentials. The document MUST NOT contain anything principal-specific.
     "harness_management": true,
     "harness_retirement": false,
     "input_history": false,
+    "input_requests": true,
     "session_sharing": true,
     "idempotency": true,
     "harness_idempotency": true,
@@ -113,15 +114,21 @@ A task moves through these states. `status` on the response object carries the c
 | `in_progress` | Accepted and running | no |
 | `completed` | The harness finished the work and produced a result | yes |
 | `failed` | The task could not be completed; `error` explains why | yes |
-| `incomplete` | The harness stopped at a budget — step limit or time limit — with partial output | yes |
+| `incomplete` | The harness stopped short of finishing, with partial output: at a budget — step limit or time limit — or on a question for the person ([Tasks §3.2](tasks.md#32-asking-the-person)) | yes |
 | `cancelled` | The client cancelled it; partial output MAY be present | yes |
 
 Rules:
 
 - A server MUST NOT transition out of a terminal state. Once a client has seen `completed`, later
   reads of that response MUST return `completed`.
-- `incomplete` MUST be used when a budget stopped the work, and MUST NOT be used for errors. The
-  distinction matters to a client: `incomplete` is usually worth continuing, `failed` usually is not.
+- `incomplete` MUST be used when a budget stopped the work, or when the harness ended its turn on a
+  question for the person, and MUST NOT be used for errors. The distinction matters to a client:
+  `incomplete` is usually worth continuing — a question always is, its answer continues it — and
+  `failed` usually is not.
+- An `incomplete` response says why in `incomplete_details.reason`: `max_steps`, `timeout`,
+  `input_required` ([Tasks §3.2](tasks.md#32-asking-the-person)), or a server's own word for another
+  cause, such as `interrupted` for a turn a restart cut short. `incomplete_details` is `null` on every
+  other status.
 - A `cancelled` task MUST report `cancelled`, not `failed`. A client that asked for a stop did not
   experience an error.
 - Terminal responses MUST retain whatever output was produced before they became terminal. Discarding

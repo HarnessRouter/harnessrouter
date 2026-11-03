@@ -32,6 +32,10 @@ If `previous_response_id` names an unknown response, the server MUST fail with `
 `code: "session_expired"` — a client can retry the first from scratch, and should not retry the
 second.
 
+A task chained on a response that ended on a question for the person
+([Tasks §3.2](tasks.md#32-asking-the-person)) carries either the answer, as an `input_response`
+item, or anything else, which passes the question over; the server says which happened.
+
 > **Why chain on the response id rather than the session id?**
 > Because the response id is what the client already has: it comes back from the task it just ran.
 > Chaining on it also names an exact point in the conversation, which leaves room for a server to
