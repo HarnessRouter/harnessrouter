@@ -231,7 +231,7 @@ def test_dsh_job_keeps_a_stdio_server(tmp_path):
     servers = [{"name": "probe", "command": "/ws/.launch-probe.sh", "args": ["--data", "/d"], "plugin": "hr-probe"},
                {"name": "remote", "url": "https://mcp.example.invalid/mcp"}]
     cmd = rn._build_dsh("deepseek", rn.Auth(api_key="k", base_url="https://api.deepseek.com"), "deepseek-v4-pro", "x", str(tmp_path), env, mcp_servers=servers)
-    job = json.loads(cmd[2])
+    job = json.loads(env["HR_DRIVER_JOB"])
     assert [s["name"] for s in job["mcp_servers"]] == ["probe", "remote"]
 
 

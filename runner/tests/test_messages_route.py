@@ -119,7 +119,7 @@ def test_openhands_on_an_anthropic_endpoint_takes_litellms_anthropic_route_at_th
     d = tempfile.mkdtemp(); env: dict = {}
     cmd = _build_openhands("anthropic", Auth(api_key="sk-real", base_url="https://api.anthropic.com/v1"),
                            "claude-sonnet-5", "hi", d, env)
-    job = json.loads(cmd[-1])
+    job = json.loads(env["HR_DRIVER_JOB"])
     assert job["model"] == "anthropic/claude-sonnet-5"
     pe = job["provider_env"]
     assert pe["ANTHROPIC_API_KEY"].startswith("hr-relay-") and env["ANTHROPIC_API_KEY"] == pe["ANTHROPIC_API_KEY"]
@@ -128,7 +128,8 @@ def test_openhands_on_an_anthropic_endpoint_takes_litellms_anthropic_route_at_th
     assert "LITELLM_PROXY_API_KEY" not in env and "sk-real" not in json.dumps(env) and "sk-real" not in cmd[-1]
     # the OpenAI route is unchanged
     env2: dict = {}
-    job2 = json.loads(_build_openhands("openai-api", Auth(api_key="sk-real", base_url="https://up.example/v1"), "gpt-5.4", "hi", tempfile.mkdtemp(), env2)[-1])
+    _build_openhands("openai-api", Auth(api_key="sk-real", base_url="https://up.example/v1"), "gpt-5.4", "hi", tempfile.mkdtemp(), env2)
+    job2 = json.loads(env2["HR_DRIVER_JOB"])
     assert job2["model"] == "litellm_proxy/gpt-5.4" and job2["provider_env"]["LITELLM_PROXY_API_BASE"] == job2["base_url"]
     assert env2["LITELLM_PROXY_API_KEY"] == job2["api_key"]
 

@@ -64,7 +64,9 @@ jobs:
       # (they skip without it), and it resolves beside the runner's own pins (pip check is clean).
       # Qoder's SDK the same way: the qoder driver imports it (the image pins it in its own venv),
       # and the driver's tests run it as a subprocess against a stub Managed API.
-      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.4.0" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
+      # boto3 (botocore inside): the relay signs Bedrock calls itself, and its tests check every signature
+      # against botocore's own for the same request; without it they skip.
+      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx boto3 "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.4.0" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
       - run: python -m pytest runner/tests -q
 
   conformance:

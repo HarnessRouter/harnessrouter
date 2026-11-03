@@ -559,7 +559,7 @@ def _run_turn(base: str, ws_base: str, key: str, cid: str, prompt: str, state: d
 
 
 def main() -> int:
-    job = json.loads(sys.argv[1])
+    job = json.loads(sys.argv[1] if len(sys.argv) > 1 else os.environ.pop("HR_DRIVER_JOB"))
     cwd = job.get("cwd") or os.getcwd()
     os.chdir(cwd)
     home = pathlib.Path(cwd, ".harness", "openhands")

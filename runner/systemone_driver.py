@@ -263,10 +263,11 @@ def _blank_step() -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 1:
-        print("usage: systemone_driver.py '<job json>'", file=sys.stderr)
+    raw = argv[0] if len(argv) == 1 else os.environ.pop("HR_DRIVER_JOB", "") if not argv else ""
+    if not raw:
+        print("usage: systemone_driver.py '<job json>' (or the job in HR_DRIVER_JOB)", file=sys.stderr)
         return 2
-    job = json.loads(argv[0])
+    job = json.loads(raw)
     try:
         result = run_turn(job)
     except Exception as exc:  # noqa: BLE001 - a crash is a failed turn with its reason, never a silent exit

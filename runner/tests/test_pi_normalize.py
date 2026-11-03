@@ -160,11 +160,17 @@ def _cmdline(tmp_path, provider="anthropic", base_url=None, model="claude-sonnet
                      **kw), env
 
 
-def test_build_native_anthropic_sets_env_not_models_json(tmp_path):
+def test_a_direct_anthropic_key_goes_through_the_relay_not_the_environment(tmp_path):
+    """pi's native anthropic provider reads its key from ANTHROPIC_API_KEY, the agent's to read (#615): a key
+    with no base goes to Anthropic's own endpoint through the custom provider, behind the relay."""
+    import server
     cmd, env = _cmdline(tmp_path)
-    assert env["ANTHROPIC_API_KEY"] == "k-test"
-    assert "--provider" in cmd and cmd[cmd.index("--provider") + 1] == "anthropic"
-    assert not (tmp_path / "home" / ".pi" / "agent" / "models.json").exists()
+    assert "ANTHROPIC_API_KEY" not in env and "k-test" not in json.dumps(env)
+    assert "--provider" in cmd and cmd[cmd.index("--provider") + 1] == "hr"
+    hr = json.loads((tmp_path / "home" / ".pi" / "agent" / "models.json").read_text())["providers"]["hr"]
+    assert hr["api"] == "anthropic-messages" and hr["apiKey"].startswith("hr-relay-")
+    assert hr["baseUrl"].startswith("http://127.0.0.1:") and not hr["baseUrl"].endswith("/v1")   # pi appends /v1/messages
+    assert server._HERMES_RELAY["routes"][hr["apiKey"]][:2] == ("https://api.anthropic.com/v1", "k-test")
     assert "--approve" in cmd and "--no-extensions" in cmd
     assert cmd[-1] == "do it"
 
@@ -174,8 +180,11 @@ def test_build_tokenrouter_claude_family_uses_anthropic_messages(tmp_path):
     mj = json.loads((tmp_path / "home" / ".pi" / "agent" / "models.json").read_text())
     hr = mj["providers"]["hr"]
     assert hr["api"] == "anthropic-messages"
-    assert hr["baseUrl"] == "https://tr.example"   # /v1 stripped: pi appends /v1/messages itself
-    assert hr["apiKey"] == "k-test"
+    # the relay's origin (pi appends /v1/messages itself) and a placeholder; the route reaches the stored base
+    assert hr["baseUrl"].startswith("http://127.0.0.1:") and not hr["baseUrl"].endswith("/v1")
+    import server
+    assert hr["apiKey"].startswith("hr-relay-")
+    assert server._HERMES_RELAY["routes"][hr["apiKey"]][:2] == ("https://tr.example/v1", "k-test")
 
 
 def test_build_tokenrouter_gpt5_uses_openai_responses(tmp_path):

@@ -4061,7 +4061,30 @@ def _broker_path_allowed(suffix: str) -> bool:
 
 
 _BROKER_HOP = ("host", "content-length", "connection", "keep-alive", "transfer-encoding",
-               "authorization", "api-key", "x-api-key")
+               "authorization", "api-key", "x-api-key", "x-goog-api-key")
+# OUR headers, never a provider's: the console signs its calls with x-harness-internal (HARNESS_INTERNAL_KEY) and
+# names the workspace in x-harness-*, and a browser sends its session cookies. A connection may point at any
+# address its owner typed, so the broker forwards none of them, and no header whose value holds one of this
+# process's own secrets, whatever it is called (the hosted service sent its internal key this way, 2026-11-02).
+_RELAY_OURS_PREFIX = ("x-harness-", "x-hr-")
+_RELAY_OURS = frozenset({"x-internal-key", "cookie", "proxy-authorization", "forwarded", "x-forwarded-for",
+                         "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port", "x-real-ip",
+                         "cf-connecting-ip", "true-client-ip", "x-client-ip"})
+
+
+def _relay_out_headers(incoming) -> dict:
+    """The caller's headers that may go on to a provider: never the hop or auth names (the connection's own
+    credential replaces them), never ours, never one carrying this process's own secret."""
+    own = [v for v in (INTERNAL_KEY, os.environ.get("HR_SECRET_KEY", "")) if len(v) >= 12]
+    out = {}
+    for k, val in incoming.items():
+        lk = k.lower()
+        if lk in _BROKER_HOP or lk in _RELAY_OURS or lk.startswith(_RELAY_OURS_PREFIX):
+            continue
+        if any(o in val for o in own):
+            continue
+        out[k] = val
+    return out
 
 
 # What the broker removes from a request, by request shape and by key, and nothing else:
@@ -4698,7 +4721,7 @@ async def llm_broker(path: str, request: Request):
     if request.url.query:
         url = f"{url}?{request.url.query}"
 
-    headers = {k: val for k, val in request.headers.items() if k.lower() not in _BROKER_HOP}
+    headers = _relay_out_headers(request.headers)
     key = str(conn.get("api_key") or "")
     provider = str(conn.get("provider") or "")
     # Present the real credential the way THIS provider expects it.
@@ -6369,11 +6392,23 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
         cfg = {k: v for k, v in (i.get("config") or {}).items() if v not in (None, "")}
         # The client never sees secrets (sentinel) — carry stored values through unchanged edits.
         prior_cfg = (stored.get(name) or {}).get("config") or {}
+        carried = []
         for k in _INTEGRATION_SECRET_FIELDS:
             if cfg.get(k) == _SECRET_SENTINEL:
                 if not prior_cfg.get(k):
                     raise HTTPException(400, f"integration '{name}': missing {k}")
                 cfg[k] = prior_cfg[k]
+                carried.append(k)
+        # A stored key goes only where it was typed for. A save that kept it while changing the address (or the
+        # provider) sent the key on to wherever the new one pointed, read by nobody but spent by its new owner: the
+        # hosted service refuses it, and so does this one. The address compared is the effective one, the
+        # catalog's own filled in where the form sends none.
+        if carried:
+            prior_provider = str((stored.get(name) or {}).get("provider") or "").lower()
+            def _addr(c: dict, prov: str) -> str:
+                return str(c.get("base_url") or (_PROVIDER_CATALOG.get(prov) or {}).get("base_url") or "").strip().rstrip("/")
+            if prior_provider != provider or _addr(cfg, provider) != _addr(prior_cfg, prior_provider):
+                raise HTTPException(400, f"integration '{name}': its address changed, so type its key again to save it.")
         # How the connection signs in: an API key (nothing said, as before) or Microsoft Entra.
         how = str(cfg.get("auth") or "").strip().lower()
         if how in ("", "key", "api_key"):

@@ -159,7 +159,7 @@ def _install_skills(home: pathlib.Path, cwd: str) -> list[str]:
 
 
 def main() -> int:
-    job = json.loads(sys.argv[1])
+    job = json.loads(sys.argv[1] if len(sys.argv) > 1 else os.environ.pop("HR_DRIVER_JOB"))
     # The runner's relay and this turn's route on it (server.py, _build_dsh). Neither is a
     # credential: the key stays in the runner, and the placeholder opens only this turn's route.
     relay_base = os.environ.pop("HR_DSH_RELAY_BASE", "")

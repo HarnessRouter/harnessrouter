@@ -582,8 +582,9 @@ class _Argv(list):
 
 def _fab(*a, **kw) -> _Argv:
     cmd = _build_fast_agent(*a, **kw)
-    assert cmd[1] == FAST_AGENT_DRIVER, cmd[:2]
-    job = json.loads(cmd[2])
+    assert cmd[1] == FAST_AGENT_DRIVER and len(cmd) == 2, cmd[:2]       # the job rides the env, not argv
+    env = kw["env"] if "env" in kw else a[5]
+    job = json.loads(env["HR_DRIVER_JOB"])
     argv = _Argv(job["argv"])
     argv.job = job
     return argv

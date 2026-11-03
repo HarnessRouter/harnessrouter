@@ -249,7 +249,7 @@ def verdict(messages: list, completions: int, notices: list[str], budget_hit: bo
 
 
 def main() -> int:
-    job = json.loads(sys.argv[1])
+    job = json.loads(sys.argv[1] if len(sys.argv) > 1 else os.environ.pop("HR_DRIVER_JOB"))
     cwd = job.get("cwd") or os.getcwd()
     os.chdir(cwd)
     home = pathlib.Path(os.environ.get("HOME") or pathlib.Path.home())

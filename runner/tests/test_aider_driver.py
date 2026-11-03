@@ -210,7 +210,7 @@ def _build(**kw):
     env: dict = {}
     cmd = _build_aider("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
                        "gemini-2.5-pro", "do it", d, env, **kw)
-    return cmd, d, env, json.loads(cmd[-1])
+    return cmd, d, env, json.loads(env["HR_DRIVER_JOB"])
 
 
 def test_the_model_id_is_prefixed_so_aiders_alias_table_cannot_rewrite_it():

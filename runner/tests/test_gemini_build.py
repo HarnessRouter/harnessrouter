@@ -48,12 +48,15 @@ def test_no_resume_flag_on_a_fresh_turn():
     assert "--resume" not in cmd
 
 
-def test_auth_is_environment_only_no_relay():
-    """Unlike qwen, gemini has no OpenAI-compatible mode to ride a loopback relay through — the
-    real key goes straight into GEMINI_API_KEY. (Whether/how this gets brokered in hosted mode is
-    a gateway-side decision — see gateway's _BROKERABLE_PROVIDERS comment.)"""
+def test_googles_own_api_rides_the_native_relay_and_the_key_stays_in_the_runner():
+    """gemini on Google's own API got the real key in GEMINI_API_KEY, the agent's to read with `env` (#615).
+    It rides the same native relay route as a TokenRouter connection: rooted at the endpoint the CLI used
+    by default, the key in x-goog-api-key, the model under its own name."""
     _, d, env = _argv()
-    assert env["GEMINI_API_KEY"] == "AIza-t"
+    assert env["GEMINI_API_KEY"].startswith("hr-relay-") and "AIza-t" not in repr(env)
+    assert env["GOOGLE_GEMINI_BASE_URL"].startswith("http://127.0.0.1:")
+    base, key, flags = _HERMES_RELAY["routes"][env["GEMINI_API_KEY"]]
+    assert (base, key) == ("https://generativelanguage.googleapis.com", "AIza-t") and flags["google_native"] is True
     st = pathlib.Path(d, ".harness", "home", ".gemini", "settings.json").read_text()
     assert "AIza-t" not in st
 
@@ -269,7 +272,11 @@ def test_a_tokenrouter_connection_points_the_cli_at_the_relay_which_names_the_mo
     assert cfg["modelConfigs"]["modelIdResolutions"]["gemini-3.8-flash"] == {"default": "gemini-3.8-flash", "contexts": []}
     d2 = tempfile.mkdtemp(); env2: dict = {}
     _build_gemini("google", Auth(api_key="AIza-t", base_url="https://generativelanguage.googleapis.com/v1beta/openai"), "gemini-3.8-flash", "hi", d2, env2)
-    assert "GOOGLE_GEMINI_BASE_URL" not in env2 and env2["GEMINI_API_KEY"] == "AIza-t"      # Google direct, as before
+    # Google direct: the same native relay, rooted at Google's own endpoint, the model under its own name (#615)
+    assert env2["GOOGLE_GEMINI_BASE_URL"].startswith("http://127.0.0.1:") and env2["GEMINI_API_KEY"] != "AIza-t"
+    base2, key2, flags2 = _HERMES_RELAY["routes"][env2["GEMINI_API_KEY"]]
+    assert (base2, key2) == ("https://generativelanguage.googleapis.com", "AIza-t")
+    assert flags2 == {"google_native": True, "model": "gemini-3.8-flash", "native_model": ""}
 
 
 def test_a_hosted_connection_points_the_cli_at_the_relay_rooted_at_the_provider_door():

@@ -182,12 +182,25 @@ hr_stored_user() {
     || printf '%s\n' "$HR_AUTH_USER"
 }
 
+# A published password is no password, and the console is reachable from more than the network: every agent
+# turn runs in this container and can open 127.0.0.1:3000 (GHSA-r37g). So the default is never accepted. An
+# instance whose credentials were never set gets a random password at its first boot, kept where only root and
+# the operator (docker exec) can read it, and the log says where, not what.
+HR_INITIAL_PASSWORD_FILE="$DATA_DIR/selfhost-initial-password"
+if [ "${HR_AUTH_DISABLED:-}" != "1" ] && [ ! -f "$HR_AUTH_STORE" ] && [ "$HR_AUTH_PASSWORD" = "harnessrouter" ]; then
+  if [ ! -s "$HR_INITIAL_PASSWORD_FILE" ]; then
+    ( umask 077; "$PY" -c 'import secrets; print(secrets.token_urlsafe(18))' > "$HR_INITIAL_PASSWORD_FILE" )
+    chmod 600 "$HR_INITIAL_PASSWORD_FILE"
+  fi
+  HR_AUTH_PASSWORD="$(cat "$HR_INITIAL_PASSWORD_FILE")"
+  export HR_AUTH_PASSWORD
+  echo "[harnessrouter] the default password is not accepted. Sign in as '$HR_AUTH_USER' with the password in $HR_INITIAL_PASSWORD_FILE (docker exec <container> cat $HR_INITIAL_PASSWORD_FILE), then change it from the profile page, or set HR_AUTH_PASSWORD."
+fi
+
 if [ "${HR_AUTH_DISABLED:-}" = "1" ]; then
   echo "[harnessrouter] WARNING: login is DISABLED (HR_AUTH_DISABLED=1) — anyone who can reach this port has full control"
 elif [ -f "$HR_AUTH_STORE" ]; then
   echo "[harnessrouter] sign in as '$(hr_stored_user)' (credentials set from the profile page)"
-elif [ "$HR_AUTH_PASSWORD" = "harnessrouter" ]; then
-  echo "[harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD, or change it from the profile page, before exposing this instance."
 fi
 export PORT="${PORT:-3000}"
 # Next binds to $HOSTNAME, and Docker sets that to the container id, which resolves to ONE of the

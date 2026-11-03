@@ -472,7 +472,7 @@ def test_nanobot_job_puts_the_session_store_inside_the_checkpointed_tree():
     cmd = _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
                          resume_session_id="hr-1")
     assert cmd[1].endswith("nanobot_driver.py")
-    job = json.loads(cmd[2])
+    job = json.loads(env["HR_DRIVER_JOB"])
     assert job["session_key"] == "hr-1"
     # Sessions live beside the CONFIG file (get_data_dir() is get_config_path().parent), so the
     # config goes in .harness/: checkpointed, and out of the produced-files list.

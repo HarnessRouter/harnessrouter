@@ -47,8 +47,9 @@ def test_the_builder_hands_the_driver_a_placeholder_never_the_key():
                                   mcp_servers=[{"name": "desk", "url": "https://x/mcp"}, {"name": "bad"}],
                                   tools_disabled=["ship"], max_turns=7, timeout_seconds=30, agent_doc="be quick")
     assert cmd[0] == server.SYSTEMONE_PYTHON and cmd[1].endswith("systemone_driver.py")
-    job = json.loads(cmd[2])
-    assert job["api_key"].startswith("hr-relay-") and "sk-or-real" not in cmd[2]
+    assert len(cmd) == 2                                         # the job rides the env: argv is every uid's to read
+    job = json.loads(env["HR_DRIVER_JOB"])
+    assert job["api_key"].startswith("hr-relay-") and "sk-or-real" not in json.dumps(cmd) + json.dumps(env)
     assert job["base_url"].endswith("/v1") and job["provider"] == "openrouter"
     assert env["SYSTEMONE_API_KEY"] == job["api_key"]          # the taps find the route by it
     assert job["mcp_servers"] == [{"name": "desk", "url": "https://x/mcp"}]   # an entry with no target is dropped

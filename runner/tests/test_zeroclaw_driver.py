@@ -169,7 +169,7 @@ def test_the_key_rides_the_relay_and_is_never_written_to_the_config():
     # without it a custom endpoint gets prompt-guided tools: calls written as text, arguments lost
     assert cfg["providers"]["models"]["custom"]["hr"]["native_tools"] is True
     assert srv._relay_served_model(env) == ""   # found by the placeholder in env; nothing served yet
-    job = json.loads(cmd[2])
+    job = json.loads(env["HR_DRIVER_JOB"])
     assert cmd[:2] == [sys.executable, srv.ZEROCLAW_DRIVER]
     assert job["config_dir"] == str(pathlib.Path(d) / ".harness" / "zeroclaw") and job["cwd"] == d
 

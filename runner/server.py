@@ -12,8 +12,10 @@ single canonical schema (Claude Code `stream-json`) so everything downstream is 
 Backends + providers (registry-driven — pi was added as exactly that one entry):
   backend "claude" (Claude Code CLI), providers:
     - anthropic   : ANTHROPIC_API_KEY (+ optional ANTHROPIC_BASE_URL)
-    - bedrock     : CLAUDE_CODE_USE_BEDROCK=1 + AWS creds/bearer + region
-    - vertex      : CLAUDE_CODE_USE_VERTEX=1 + project/region + SA-JSON
+    - bedrock     : CLAUDE_CODE_USE_BEDROCK=1 + region; the AWS key pair or API key stays in the
+                    runner's relay, which signs (SigV4) each call (ANTHROPIC_BEDROCK_BASE_URL)
+    - vertex      : CLAUDE_CODE_USE_VERTEX=1 + project/region; the service account stays in the
+                    relay, which mints the access tokens (ANTHROPIC_VERTEX_BASE_URL)
     - tokenrouter : ANTHROPIC_BASE_URL=<router> + ANTHROPIC_AUTH_TOKEN
   backend "codex" (OpenAI Codex CLI), providers (config.toml [model_providers.*]):
     - openai      : api.openai.com/v1, OPENAI_API_KEY
@@ -22,7 +24,8 @@ Backends + providers (registry-driven — pi was added as exactly that one entry
   backend "hermes" (NousResearch hermes-agent CLI; events tailed from its state.db —
   multi-family: runs any frontier model through the matching provider connection):
     - azure-foundry : AZURE_FOUNDRY_API_KEY + AZURE_FOUNDRY_BASE_URL (gpt family)
-    - bedrock       : AWS_BEARER_TOKEN_BEDROCK (or key pair) + AWS_REGION (claude family)
+    - bedrock       : AWS_REGION; boto3 and AnthropicBedrock pointed at the relay with placeholder
+                      credentials (claude family), the real ones stay in the runner
     - anthropic     : ANTHROPIC_API_KEY (+ optional ANTHROPIC_BASE_URL)
   backend "dsh" (DeepSeek Harness; official Python SDK drives the bundled JSON-RPC
   runtime — runner/dsh_driver.py re-emits its session.events as NDJSON):
@@ -61,6 +64,8 @@ import shlex
 import shutil
 import signal
 import sys
+import contextlib
+import ctypes
 import socket
 import sqlite3
 import subprocess
@@ -141,8 +146,12 @@ if _SESSION_UIDS:
         print(f"[runner] environments: {_secured} older environment(s) now readable by their own group only", flush=True)
 # Names an agent process must never inherit from the runner's environment. The turn sets the
 # credential it needs explicitly (see turn()); everything else secret-shaped is the product's.
+# A Bedrock API key (AWS_BEARER_TOKEN_BEDROCK) does not end in _TOKEN, and a service-account key file
+# is named by GOOGLE_APPLICATION_CREDENTIALS: both are cloud credentials the turn never inherits (a
+# bedrock or vertex turn reaches its provider through the relay, see _bedrock_relay_route).
 _SECRET_ENV = re.compile(r"^(HARNESS_INTERNAL_KEY|HR_AUTH_.*|HR_SECRET_KEY|HR_SESSION_KEY|HR_POOL_.*)$"
-                         r"|_API_KEY$|_SECRET(_|$)|_TOKEN$|PASSWORD", re.I)
+                         r"|_API_KEY$|_SECRET(_|$)|_TOKEN$|PASSWORD"
+                         r"|^AWS_BEARER_TOKEN_|^GOOGLE_APPLICATION_CREDENTIALS$", re.I)
 _INTERNAL_KEY = os.environ.get("HARNESS_INTERNAL_KEY", "")
 _uid_lock = threading.Lock()
 
@@ -264,18 +273,48 @@ def _ensure_passwd(uid: int, home: str) -> None:
         pass
 
 
+_LIBC = ctypes.CDLL(None, use_errno=True) if sys.platform.startswith("linux") else None
+
+
+@contextlib.contextmanager
+def _fs_as(uid: int | None):
+    """File operations on THIS thread checked as the session's uid instead of root's.
+
+    The runner writes into a session's tree as root (its configs, skills, plugins, input files, the git ignore
+    list), and that tree is the agent's: a link it planted there between turns led a root write, or a root
+    rmtree, anywhere on the box (GHSA-m479 Parts B and C). Linux keeps a filesystem uid per thread; while it is
+    the session's, every open, write, mkdir and unlink this thread makes is judged as the session, and root's
+    filesystem capabilities are off, so a planted link can lead nowhere the session could not write itself,
+    whatever it points at and whenever it was swapped in. Other threads (other sessions' requests) keep root's.
+    A no-op without the write-wall or off Linux."""
+    if uid is None or _LIBC is None or os.geteuid() != 0:
+        yield
+        return
+    prev_gid = _LIBC.setfsgid(uid)               # each returns the PREVIOUS value: restored on the way out, so a
+    prev_uid = _LIBC.setfsuid(uid)               # scope inside another (_git_ensure in a turn's) leaves the outer one
+    try:
+        if _LIBC.setfsuid(uid) != uid:          # called again, it says what holds now
+            raise RuntimeError("the runner could not take the session's filesystem identity")
+        yield
+    finally:
+        _LIBC.setfsuid(prev_uid)
+        _LIBC.setfsgid(prev_gid)
+
+
 def _own_tree(root: str, uid: int, from_uids: set[int]) -> None:
     """chown everything under root that currently belongs to one of from_uids. Only those: a
     session can plant a hard link to a file it does not own, and chowning by position rather
     than by current owner would hand it that file. Symlinks are re-owned as links, never
     followed."""
-    for dirpath, dirnames, filenames in os.walk(root):
+    # Walked by directory descriptor (fwalk opens each directory without following a link) and changed relative
+    # to it: a full path re-resolves every component, so a session process that swapped a walked directory for a
+    # link between the look and the chown had a root-owned file handed to it (GHSA-m479 Part D).
+    for _dirpath, dirnames, filenames, dirfd in os.fwalk(root, follow_symlinks=False):
         for name in dirnames + filenames:
-            path = os.path.join(dirpath, name)
             try:
-                st = os.lstat(path)
+                st = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
                 if st.st_uid in from_uids and not (stat.S_ISREG(st.st_mode) and st.st_nlink > 1):
-                    os.lchown(path, uid, uid)
+                    os.chown(name, uid, uid, dir_fd=dirfd, follow_symlinks=False)
             except OSError:
                 continue
 
@@ -761,6 +800,14 @@ def _redact_answer(out: dict, secrets: list[str] | None) -> dict:
     return root
 
 
+def _driver_cmd(python: str, driver: str, job: dict, env: dict) -> list[str]:
+    """A driver's command line, with its job in its environment. Every uid can read every process's command
+    line (/proc/<pid>/cmdline), and a job carries the turn's relay token and its MCP servers' credentials; a
+    process's environment is readable by its own uid only, the session's own."""
+    env["HR_DRIVER_JOB"] = json.dumps(job)
+    return [python, driver]
+
+
 def _child_env() -> dict:
     """The environment an agent process starts from: the runner's, minus anything secret-shaped.
     On the self-hosted box the runner's environment is the container's, and that carried the
@@ -1077,7 +1124,7 @@ def _start_sidecar(sid: str, collab_url: str, room: str, token: str = "") -> Non
             pathlib.Path(file).parent.mkdir(parents=True, exist_ok=True)
             if not pathlib.Path(file).exists():
                 pathlib.Path(file).write_text("")
-            env = {**os.environ, "COLLAB_URL": collab_url, "ROOM": room,
+            env = {**_child_env(), "COLLAB_URL": collab_url, "ROOM": room,
                    "BLACKBOARD_FILE": file, "COLLAB_TOKEN": token or ""}
             logf = open(os.path.join(ws, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
             entry.update(proc=subprocess.Popen(["node", _SIDECAR_JS], cwd=ws, env=env,
@@ -1101,9 +1148,17 @@ def _ver(cmd: list[str]) -> str:
 
 
 # ── git-backed workspace (hydrate at turn start, checkpoint at turn end) ───────────
+# Git runs as the session's uid, inside a .git the agent can write: it starts from _child_env, never the runner's
+# environment (which holds HARNESS_INTERNAL_KEY), and runs no hook and no fsmonitor command the agent left there.
+# The runner's own environment reached every git the checkpoint and the produced list ran, so a post-commit hook
+# (or a process of the agent's still running, reading /proc/<git>/environ) had the internal key, and with it
+# every session and every key on the box (2026-11-02).
+_GIT_SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+
+
 def _git(ws: str, *args: str, check: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", ws, *args], capture_output=True, text=True,
-                          env={**os.environ, **_GIT_ENV, **(env or {})}, check=check, **_as_session(ws))
+    return subprocess.run(["git", "-C", ws, *_GIT_SAFE, *args], capture_output=True, text=True,
+                          env={**_child_env(), **_GIT_ENV, **(env or {})}, check=check, **_as_session(ws))
 
 
 # Config the runner rewrites every turn and that can carry MCP credentials (see CHECKPOINT_EXCLUDE).
@@ -1128,7 +1183,42 @@ def _git_ensure(ws: str) -> None:
     (#193, 2026-09-16)."""
     p = pathlib.Path(ws)
     p.mkdir(parents=True, exist_ok=True)
-    (p / ".gitignore").write_text("\n".join([
+    gi = p / ".gitignore"
+    with _fs_as(_session_uid(ws)):              # as the session: a link it planted here leads nowhere it can't write
+        if gi.is_symlink():
+            gi.unlink()                         # never written through (GHSA-m479 Part B)
+        _write_gitignore(gi)
+    if not (p / ".git").exists():
+        _git(ws, "init", "-q")
+        _git(ws, "config", "user.email", _GIT_ENV["GIT_AUTHOR_EMAIL"])
+        _git(ws, "config", "user.name", _GIT_ENV["GIT_AUTHOR_NAME"])
+    else:
+        # An ignore rule does not release what an earlier checkpoint already committed: a
+        # tracked path is re-added by every `git add -A` regardless of .gitignore, so a session
+        # hydrated from before this rule would keep growing exactly as before. Drop the CLI
+        # home from the index (not from disk); from then on the ignore rule holds.
+        # The same for the per-turn config files: a session checkpointed before they were ignored
+        # tracks them, and an ignore rule alone would keep committing each turn's credentials.
+        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *_PER_TURN_CONFIG)
+        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *_STATE_DIRS)
+        tracked = bool(_git(ws, "ls-files", "--", ".harness/home").stdout.strip())
+        if tracked:
+            _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
+        # Untracking releases the index, not .git/objects: every copy the old checkpoints
+        # committed stays reachable from those commits and rides in every later tarball of the
+        # session (722 MB of the 1.4 GB in #193). The gate is the index or the tip's tree, both
+        # O(1): before the rule every checkpoint re-added the home with `add -A`, so a history
+        # that holds it also holds it at the tip (the one gap, the index released but the tip
+        # not yet rewritten, is a crash between the two calls above and below, and the tip
+        # covers it). A walk of the history (`rev-list -- .harness/home`) would find the same
+        # repos and cost 130 ms per call at a thousand commits, four calls a turn, for the life
+        # of every session. Once per session: the shed leaves no home in either tree it keeps.
+        if tracked or _git(ws, "rev-parse", "-q", "--verify", "HEAD:.harness/home").returncode == 0:
+            _git_shed_cli_home_history(ws)
+
+
+def _write_gitignore(gi: pathlib.Path) -> None:
+    gi.write_text("\n".join([
         "# harness: never persist secrets/scratch in the session checkpoint",
         "tmp/", ".gcp-sa.json", ".codex/", ".credentials.json", ".harness/**/.credentials.json",
         ".harness/home/.hermes/.env", ".harness/home/.hermes/auth.json",
@@ -1159,33 +1249,7 @@ def _git_ensure(ws: str) -> None:
         *_STATE_DIRS,
         "",
     ]))
-    if not (p / ".git").exists():
-        _git(ws, "init", "-q")
-        _git(ws, "config", "user.email", _GIT_ENV["GIT_AUTHOR_EMAIL"])
-        _git(ws, "config", "user.name", _GIT_ENV["GIT_AUTHOR_NAME"])
-    else:
-        # An ignore rule does not release what an earlier checkpoint already committed: a
-        # tracked path is re-added by every `git add -A` regardless of .gitignore, so a session
-        # hydrated from before this rule would keep growing exactly as before. Drop the CLI
-        # home from the index (not from disk); from then on the ignore rule holds.
-        # The same for the per-turn config files: a session checkpointed before they were ignored
-        # tracks them, and an ignore rule alone would keep committing each turn's credentials.
-        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *_PER_TURN_CONFIG)
-        _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *_STATE_DIRS)
-        tracked = bool(_git(ws, "ls-files", "--", ".harness/home").stdout.strip())
-        if tracked:
-            _git(ws, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".harness/home")
-        # Untracking releases the index, not .git/objects: every copy the old checkpoints
-        # committed stays reachable from those commits and rides in every later tarball of the
-        # session (722 MB of the 1.4 GB in #193). The gate is the index or the tip's tree, both
-        # O(1): before the rule every checkpoint re-added the home with `add -A`, so a history
-        # that holds it also holds it at the tip (the one gap, the index released but the tip
-        # not yet rewritten, is a crash between the two calls above and below, and the tip
-        # covers it). A walk of the history (`rev-list -- .harness/home`) would find the same
-        # repos and cost 130 ms per call at a thousand commits, four calls a turn, for the life
-        # of every session. Once per session: the shed leaves no home in either tree it keeps.
-        if tracked or _git(ws, "rev-parse", "-q", "--verify", "HEAD:.harness/home").returncode == 0:
-            _git_shed_cli_home_history(ws)
+
 
 
 def _git_shed_cli_home_history(ws: str) -> None:
@@ -1267,6 +1331,17 @@ def _is_produced_noise(path: str) -> bool:
     if any(seg in _NOISE_SEG for seg in path.split("/")):
         return True
     return path.lower().endswith(_NOISE_EXT)
+
+
+def _inside_session(cwd: str, p: pathlib.Path) -> bool:
+    """Whether p, every link resolved, is inside the session's own directory. _safe_join holds a path to its
+    base, but it resolves the base too, so a base the agent replaced with a link (a skills root pointing at
+    another session's workspace) moved the whole check there (GHSA-m479 Part C)."""
+    try:
+        p.resolve().relative_to(pathlib.Path(cwd).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def _safe_join(cwd: str, rel: str) -> pathlib.Path | None:
@@ -1709,7 +1784,7 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
                 continue
             for rootrel in rootrels:
                 dest = _safe_join(str(pathlib.Path(cwd) / rootrel / name), rel)
-                if dest is None:
+                if dest is None or not _inside_session(cwd, dest):
                     continue
                 try:
                     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1739,7 +1814,9 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
                 continue
             for rootrel in rootrels:
                 d = _safe_join(str(pathlib.Path(cwd) / rootrel), old)
-                if d is not None and d.is_dir() and not d.is_symlink():
+                # inside the session first: a path the agent linked elsewhere is not even looked at, since
+                # under the session's identity a look into another owner's directory is itself refused
+                if d is not None and _inside_session(cwd, d) and d.is_dir() and not d.is_symlink():
                     shutil.rmtree(d, ignore_errors=True)
         try:
             ledger.parent.mkdir(parents=True, exist_ok=True)
@@ -2246,9 +2323,11 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     block = "\n".join(lines).rstrip("\n") + "\n" + _AGENTS_END + "\n"
     body = ((base + "\n\n") if base else "") + block
     try:
-        # minimax's file lives in the CLI's home, which does not exist before its first turn.
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(body if body.endswith("\n") else body + "\n")
+        # As the session: a link it planted at the doc's name leads nowhere it could not write itself.
+        with _fs_as(_session_uid(cwd)):
+            # minimax's file lives in the CLI's home, which does not exist before its first turn.
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body if body.endswith("\n") else body + "\n")
     except Exception:  # noqa: BLE001
         pass
 
@@ -2824,8 +2903,14 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
     env.update(_claude_thinking_env(model))
     if p == "anthropic":
         if auth.api_key:
-            env["ANTHROPIC_API_KEY"] = auth.api_key
-        if auth.base_url:
+            # Through the relay, as hermes's anthropic route: the CLI gets the relay's origin and a
+            # placeholder in ANTHROPIC_API_KEY, the real key stays in the runner (#615: an agent read it
+            # with `env`). The CLI appends /v1/messages itself, so it is handed the origin, and the
+            # route's base keeps the /v1 the relay joins /messages onto.
+            relay_base, relay_tok = _hermes_relay_route(auth.base_url or "https://api.anthropic.com/v1", auth.api_key)
+            env["ANTHROPIC_API_KEY"] = relay_tok
+            env["ANTHROPIC_BASE_URL"] = _relay_origin(relay_base)
+        elif auth.base_url:
             # The CLI appends /v1/messages itself, so a base that carries the "/v1" the broker and
             # the catalog use (https://api.anthropic.com/v1) doubled it and the CLI answered "you
             # may not have access to it" (2026-09-06, measured on the self-hosted instance). The
@@ -2833,38 +2918,72 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
             env["ANTHROPIC_BASE_URL"] = auth.base_url.rstrip("/").removesuffix("/v1")
     elif p == "bedrock":
         env["CLAUDE_CODE_USE_BEDROCK"] = "1"
-        if auth.aws_region:
+        if _bedrock_has_credential(auth):
+            # Through the relay (_bedrock_relay_route): the CLI gets the relay as its Bedrock base and
+            # no AWS credential at all. Under CLAUDE_CODE_SKIP_BEDROCK_AUTH it signs nothing and sends
+            # no Authorization, so the route's token is the base's first path segment. Claude Code
+            # 2.1.280 joins /model/<id>/invoke-with-response-stream onto that base (the id's colon
+            # raw), and the AWS SDK clients it builds beside it take the same base as their endpoint:
+            # CountTokens (/model/<id>/count-tokens) is a model call and is forwarded, and
+            # ListInferenceProfiles (GET /inference-profiles, the control plane) is answered 404 by
+            # the relay, on which the CLI falls back to its own model table (measured 2026-11-02 with
+            # the 2.1.280 binary against a stub; the turn's own --model is unaffected).
+            region, origin, tok = _bedrock_turn_route(auth, env)
+            env["AWS_REGION"] = env["AWS_DEFAULT_REGION"] = region
+            env["ANTHROPIC_BEDROCK_BASE_URL"] = f"{origin}/{tok}"
+            env["CLAUDE_CODE_SKIP_BEDROCK_AUTH"] = "1"
+        elif auth.aws_region:
+            # No credential of the connection's own: the CLI's AWS credential chain (an instance
+            # role), as before.
             env["AWS_REGION"] = env["AWS_DEFAULT_REGION"] = auth.aws_region
-        if auth.aws_bearer_token:
-            env["AWS_BEARER_TOKEN_BEDROCK"] = auth.aws_bearer_token
-        if auth.aws_access_key_id:
-            env["AWS_ACCESS_KEY_ID"] = auth.aws_access_key_id
-        if auth.aws_secret_access_key:
-            env["AWS_SECRET_ACCESS_KEY"] = auth.aws_secret_access_key
-        if auth.aws_session_token:
-            env["AWS_SESSION_TOKEN"] = auth.aws_session_token
     elif p == "vertex":
         env["CLAUDE_CODE_USE_VERTEX"] = "1"
-        if auth.gcp_project:
-            env["ANTHROPIC_VERTEX_PROJECT_ID"] = auth.gcp_project
-        if auth.gcp_region:
-            env["CLOUD_ML_REGION"] = auth.gcp_region
+        # A service-account file an older runner wrote here is the whole credential; it goes before
+        # anything runs (turn() removes it at every turn's start too).
+        _remove_stale_sa_file(cwd)
         if auth.gcp_sa_json:
-            sa = pathlib.Path(cwd) / ".gcp-sa.json"
-            sa.write_text(auth.gcp_sa_json)
-            env["GOOGLE_APPLICATION_CREDENTIALS"] = str(sa)
+            # Through the relay (_vertex_relay_route), which mints the access tokens: the CLI gets the
+            # relay as its Vertex base and no Google credential. Under CLAUDE_CODE_SKIP_VERTEX_AUTH it
+            # sends no Authorization, so the route's token is the base's first path segment; the base
+            # carries the /v1 Claude Code's own default base has, and it joins
+            # /projects/<p>/locations/<r>/publishers/anthropic/models/<m>:streamRawPredict onto it.
+            region = (auth.gcp_region or "us-east5").strip().lower()
+            try:
+                project = auth.gcp_project or str(json.loads(auth.gcp_sa_json).get("project_id") or "")
+            except (ValueError, AttributeError):
+                project = auth.gcp_project or ""
+            origin, tok = _vertex_relay_route(auth.gcp_sa_json, region, project)
+            env.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+            if project:
+                env["ANTHROPIC_VERTEX_PROJECT_ID"] = project
+            env["CLOUD_ML_REGION"] = region
+            env["ANTHROPIC_VERTEX_BASE_URL"] = f"{origin}/{tok}/v1"
+            env["CLAUDE_CODE_SKIP_VERTEX_AUTH"] = "1"
+        else:
+            # No service account of the connection's own: the CLI's application default credentials
+            # (a metadata server), as before.
+            if auth.gcp_project:
+                env["ANTHROPIC_VERTEX_PROJECT_ID"] = auth.gcp_project
+            if auth.gcp_region:
+                env["CLOUD_ML_REGION"] = auth.gcp_region
     elif p == "tokenrouter":
         # tokenrouter speaks Anthropic on the claude backend. A custom integration with
         # api_format=openai cannot be served here — the CLI only speaks Anthropic Messages.
         if auth.api_format == "openai":
             raise HTTPException(400, "claude backend cannot serve an OpenAI-format custom integration "
                                  "(use a backend that supports openai-api, like hermes or opencode)")
-        if auth.base_url:
+        if auth.base_url and auth.api_key:
+            # Through the relay: the CLI's bearer (ANTHROPIC_AUTH_TOKEN) is a placeholder and the real
+            # key stays in the runner (#615). Claude Code appends /v1/messages itself, so it gets the
+            # relay's origin; the route's base keeps the /v1 a stored base carries (the OpenAI-compat
+            # form), which is what the relay joins /messages onto.
+            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
+            env["ANTHROPIC_BASE_URL"] = _relay_origin(relay_base)
+            env["ANTHROPIC_AUTH_TOKEN"] = relay_tok
+        elif auth.base_url:
             # Claude Code appends /v1/messages itself — a base_url stored with /v1 (the
             # OpenAI-compat form) would double the segment and 404 every call.
             env["ANTHROPIC_BASE_URL"] = auth.base_url.rstrip("/").removesuffix("/v1")
-        if auth.api_key:
-            env["ANTHROPIC_AUTH_TOKEN"] = auth.api_key
     cmd = ["claude", "-p", prompt, "--output-format", "stream-json",
            "--verbose", "--dangerously-skip-permissions", "--max-turns", str(max_turns)]
     if partial:   # token-level streaming: emit content_block_delta events (see _claude_passthrough)
@@ -3387,7 +3506,7 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
         else:
             api = "openai-completions"
         job["llm"] = {"api": api, "vision": vision}
-    return [DSH_PYTHON, DSH_DRIVER, json.dumps(job)]
+    return _driver_cmd(DSH_PYTHON, DSH_DRIVER, job, env)
 
 
 def _dsh_tool_result_text(msg: dict) -> tuple[str, str, bool]:
@@ -3515,6 +3634,30 @@ PI_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 _PI_CLAUDE_MODEL = re.compile(r"(?:^|/)(?:us\.anthropic\.)?claude", re.I)
 
 
+# pi's and omp's native providers read their key from the environment; with a key and no base the turn
+# goes to the vendor's own endpoint through the custom provider instead, where the relay can stand.
+_PI_DEFAULT_BASE = {"anthropic": "https://api.anthropic.com/v1", "openai": "https://api.openai.com/v1"}
+
+
+def _pi_relayed(auth: "Auth", api: str) -> "Auth":
+    """pi's and omp's custom provider with the key behind the loopback relay: models.json / models.yml
+    (and the CLI) hold the relay and a placeholder, never the connection's key (#615). Every upstream
+    URL is the one the CLI built before the relay stood in: an anthropic-messages client appends
+    /v1/messages to a base stripped of its /v1, so the route's base is that base plus /v1 joined
+    exactly; a custom endpoint keeps its own version path (…/api/coding/v3), joined exactly; an
+    OpenAI-shape catalog endpoint takes the relay's usual /v1 rule."""
+    if not auth.api_key or not auth.base_url:
+        return auth
+    base = auth.base_url.rstrip("/")
+    if api == "anthropic-messages":
+        rb, rt = _hermes_relay_route(base.removesuffix("/v1") + "/v1", auth.api_key, exact_base=True)
+    elif auth.api_format:
+        rb, rt = _hermes_relay_route(base, auth.api_key, exact_base=True)
+    else:
+        rb, rt = _hermes_relay_route(base, auth.api_key)
+    return auth.model_copy(update={"base_url": rb, "api_key": rt})
+
+
 def _pi_models_json(api: str, base_url: str, api_key: str, model: str,
                     vision: bool = True, custom_openai: bool = False) -> str:
     """A one-provider ~/.pi/agent/models.json ("hr") for a custom endpoint. Pi's anthropic client
@@ -3598,6 +3741,8 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
     # Provider: native env for the two vendors pi speaks natively WITHOUT a base_url override;
     # everything else (and any base_url override) goes through a models.json custom provider,
     # because that is the only place pi accepts an endpoint from.
+    if auth.api_key and not auth.base_url and pr in _PI_DEFAULT_BASE:
+        auth = auth.model_copy(update={"base_url": _PI_DEFAULT_BASE[pr]})
     use_custom = bool(auth.base_url) or pr in ("azure", "openai-api", "tokenrouter")
     if use_custom:
         if not auth.base_url:
@@ -3614,23 +3759,16 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
             api = "openai-responses"
         else:
             api = "openai-completions"
-        if api in ("openai-completions", "openai-responses") and auth.api_key and not auth.api_format:
-            # An OpenAI-shape turn rides the loopback relay, as every qwen and cline turn does: the
-            # relay repairs the request shape in flight (Google's OpenAI-compatible endpoint refuses
-            # OpenAI's optional fields, measured 2026-09-06) and the key never lands in the
-            # workspace's models.json, which is checkpointed. A custom endpoint keeps its own URL.
-            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
-            auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+        # Every shape rides the loopback relay, as every qwen and cline turn does: the relay repairs
+        # the request shape in flight (Google's OpenAI-compatible endpoint refuses OpenAI's optional
+        # fields, measured 2026-09-06) and the key never lands in models.json or the CLI (#615).
+        auth = _pi_relayed(auth, api)
         (home / ".pi" / "agent" / "models.json").write_text(
             _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision,
                             custom_openai=bool(auth.api_format)))
         pname = "hr"
     else:
-        pname = pr
-        if pr == "anthropic" and auth.api_key:
-            env["ANTHROPIC_API_KEY"] = auth.api_key
-        elif pr == "openai" and auth.api_key:
-            env["OPENAI_API_KEY"] = auth.api_key
+        pname = pr             # a native provider with no key (a key goes the custom way, above)
 
     cmd = ["pi", "-p", "--mode", "json", "--provider", pname, "--model", model,
            # The sandbox is the trust boundary (one Hyper-V-isolated box per session), so
@@ -3882,6 +4020,8 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     env.pop("OMP_PROFILE", None)
     env.pop("PI_PROFILE", None)
 
+    if auth.api_key and not auth.base_url and pr in _PI_DEFAULT_BASE:
+        auth = auth.model_copy(update={"base_url": _PI_DEFAULT_BASE[pr]})
     use_custom = bool(auth.base_url) or pr in ("azure", "openai-api", "tokenrouter")
     if use_custom:
         if not auth.base_url:
@@ -3896,13 +4036,10 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
             api = "openai-responses"
         else:
             api = "openai-completions"
-        if api in ("openai-completions", "openai-responses") and auth.api_key and not auth.api_format:
-            # An OpenAI-shape turn rides the loopback relay, as pi's and qwen's do: the relay repairs
-            # the request shape in flight (Gemini 3's thought signatures, TokenRouter's schema subset,
-            # Azure's max_tokens), and the real key never lands in the workspace's models.yml. A
-            # custom endpoint keeps its own URL.
-            relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
-            auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+        # Every shape rides the loopback relay, as pi's and qwen's do: the relay repairs the request
+        # shape in flight (Gemini 3's thought signatures, TokenRouter's schema subset, Azure's
+        # max_tokens), and the real key never lands in models.yml or the CLI (#615).
+        auth = _pi_relayed(auth, api)
         models_content = _pi_models_json(api, auth.base_url, auth.api_key or "", model, vision=vision,
                                           custom_openai=bool(auth.api_format))
         # omp reads custom providers from models.yml (its README's file; YAML takes the JSON as is);
@@ -3911,11 +4048,7 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
         (omp_agent_dir / "models.yml").write_text(models_content)
         pname = "hr"
     else:
-        pname = pr
-        if pr == "anthropic" and auth.api_key:
-            env["ANTHROPIC_API_KEY"] = auth.api_key
-        elif pr == "openai" and auth.api_key:
-            env["OPENAI_API_KEY"] = auth.api_key
+        pname = pr             # a native provider with no key (a key goes the custom way, above)
 
     cmd = ["omp", "-p", "--mode", "json",
            "--model", f"{pname}/{model}" if pname == "hr" else model,
@@ -5938,6 +6071,46 @@ def _upstream_is_local_server(base: str) -> bool:
             or (addr.version == 4 and addr in ipaddress.ip_network("100.64.0.0/10")))
 
 
+def _relay_trace_headers(headers: dict, flags: dict) -> None:
+    """The turn's trace context on a relayed request, as a child of it: the same trace id, a new span
+    id (this hop is a span of its own), the sampled flag kept. The client's own header is replaced,
+    not left beside it — two traceparents would leave the provider unable to say which span is which.
+    A turn with no trace context sends none of its own, and the client's headers go upstream exactly
+    as they did before: the relay changes nothing it was not asked to change.
+
+    The turn's context is the trace's root here: the caller's trace id is never taken from the
+    client. A CLI that read TRACEPARENT from its environment has already made a child of the caller's
+    span, and the provider's request belongs under THAT span — so the CLI's own header is the parent
+    when it carries the caller's trace id, and is ignored otherwise."""
+    parent = str(flags.get("traceparent") or "")
+    inbound = next((v for k, v in headers.items() if k.lower() == "traceparent"), "")
+    if parent:
+        if tracecontext.trace_id(inbound) and tracecontext.trace_id(inbound) == tracecontext.trace_id(parent):
+            parent = inbound
+        child = tracecontext.child(parent)
+        if child:
+            for _k in [k for k in headers if k.lower() == "traceparent"]:
+                del headers[_k]
+            headers["traceparent"] = child
+            state = str(flags.get("tracestate") or "")
+            for _k in [k for k in headers if k.lower() == "tracestate"]:
+                del headers[_k]
+            if state:
+                headers["tracestate"] = state
+
+
+class _RelayNoRedirect(urllib.request.HTTPRedirectHandler):
+    """The relay never follows a redirect: the request it would repeat carries the connection's real key, and a
+    provider host that answers a path the agent chose with a 30x to another host would hand that key on. The 30x
+    goes back to the client as the provider's answer."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_RELAY_OPENER = urllib.request.build_opener(_RelayNoRedirect)
+
+
 class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -5947,10 +6120,32 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             tok = (self.headers.get("x-goog-api-key") or "").strip()     # gemini-cli's header for its key
         if not tok:
             tok = (self.headers.get("x-api-key") or "").strip()          # an Anthropic Messages client's header
-        return _HERMES_RELAY["routes"].get(tok)
+        route = _HERMES_RELAY["routes"].get(tok)
+        if route is None:
+            # An AWS SDK signs with the placeholder key pair it was handed (hermes's boto3 and its
+            # Anthropic Bedrock client): the placeholder access key id is the token, and it travels
+            # in the signature's credential scope. Only a Bedrock route is found this way.
+            m = _SIGV4_CREDENTIAL.search(self.headers.get("authorization") or "")
+            found = _HERMES_RELAY["routes"].get(m.group(1)) if m else None
+            if found and (found[2] or {}).get("cloud") == "bedrock":
+                route = found
+        return route
+
+    def _route(self) -> tuple[tuple | None, str]:
+        """The route this request is for, and its path with the token taken off when the path names
+        it. A client that sends no credential of its own at all (Claude Code under
+        CLAUDE_CODE_SKIP_BEDROCK_AUTH / CLAUDE_CODE_SKIP_VERTEX_AUTH, and the AWS SDK clients it
+        builds beside its model client) is handed <relay>/<token> as its base, so the token is the
+        path's first segment. Only a route registered for it is found by its path."""
+        m = _PATH_TOKEN.match(self.path)
+        if m:
+            found = _HERMES_RELAY["routes"].get(m.group(1))
+            if found and (found[2] or {}).get("path_token"):
+                return found, self.path[m.end():]
+        return self._upstream(), self.path
 
     def _forward(self, body: bytes | None) -> None:
-        route = self._upstream()
+        route, path = self._route()
         if not route:
             self.send_response(401)
             data = b'{"error": "unknown relay token"}'
@@ -5960,6 +6155,9 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         base, key, flags = route
+        if flags.get("cloud"):
+            self._cloud(base, key, flags, path, body)
+            return
         if self.command == "DELETE" and not flags.get("passthrough"):
             # DELETE is a remote runtime's (its own objects, deleted through its API). A model
             # provider's route stays GET and POST: a sandbox must not delete what the org's key owns
@@ -5973,36 +6171,23 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         tail = self.path.removeprefix("/v1") if self.path.startswith("/v1/") else self.path
+        # The request target joins the route's base as a PATH. One that does not start with "/" made
+        # "https://api.tokenrouter.com" + ".evil.com/x" another host, and the real key went there with the
+        # request (2026-11-02): a target is a path or nothing.
+        if not tail.startswith("/"):
+            data = b'{"error": "the request target must be a path"}'
+            self.send_response(400)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         drop = {"host", "content-length", "authorization", "x-goog-api-key", "x-api-key", "connection",
                 "accept-encoding", "transfer-encoding", "baggage"}
         headers = {k: v for k, v in self.headers.items() if k.lower() not in drop}
         headers["authorization"] = f"Bearer {key}"
         headers.setdefault("accept", "*/*")
-        # The turn's trace context, as a child of it: the same trace id, a new span id (this hop is
-        # a span of its own), the sampled flag kept. The client's own header is replaced, not left
-        # beside it — two traceparents would leave the provider unable to say which span is which.
-        # A turn with no trace context sends none of its own, and the client's headers go upstream
-        # exactly as they did before: the relay changes nothing it was not asked to change.
-        #
-        # The turn's context is the trace's root here: the caller's trace id is never taken from
-        # the client. A CLI that read TRACEPARENT from its environment has already made a child of
-        # the caller's span, and the provider's request belongs under THAT span — so the CLI's own
-        # header is the parent when it carries the caller's trace id, and is ignored otherwise.
-        parent = str(flags.get("traceparent") or "")
-        inbound = next((v for k, v in headers.items() if k.lower() == "traceparent"), "")
-        if parent:
-            if tracecontext.trace_id(inbound) and tracecontext.trace_id(inbound) == tracecontext.trace_id(parent):
-                parent = inbound
-            child = tracecontext.child(parent)
-            if child:
-                for _k in [k for k in headers if k.lower() == "traceparent"]:
-                    del headers[_k]
-                headers["traceparent"] = child
-                state = str(flags.get("tracestate") or "")
-                for _k in [k for k in headers if k.lower() == "tracestate"]:
-                    del headers[_k]
-                if state:
-                    headers["tracestate"] = state
+        _relay_trace_headers(headers, flags)
         if flags.get("passthrough"):
             self._passthrough(base, key, tail, headers, body)
             return
@@ -6015,6 +6200,12 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        # Anthropic itself reads the key from x-api-key on EVERY path (/v1/messages/count_tokens too), and a
+        # bearer there is an OAuth token it refuses; the claude CLI on a direct key rides this relay.
+        anthropic_host = (urllib.parse.urlsplit(base).hostname or "").lower() == "api.anthropic.com"
+        if anthropic_host and not flags.get("bedrock_anthropic") and tail.split("?", 1)[0] != "/messages":
+            headers["x-api-key"] = key
+            headers.pop("authorization", None)
         if tail.split("?", 1)[0] == "/messages" and not flags.get("bedrock_anthropic"):
             # An Anthropic Messages call (goose's and hermes's anthropic providers, litellm's
             # anthropic/ route, the claude CLI on a custom endpoint). Anthropic reads the key from
@@ -6167,7 +6358,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             req = urllib.request.Request(base.rstrip("/") + tail, data=body,
                                          method=self.command, headers=headers)
             try:
-                resp = urllib.request.urlopen(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
+                resp = _RELAY_OPENER.open(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
                 # Answered: this call's own refusal was repaired (its retry without stream_options,
                 # an unknown field, a level), and a turn that fails later fails for another reason,
                 # which the refusal must not be read as (_relay_refusal_unsaid, #612).
@@ -6681,7 +6872,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         The connection simply closes, and the driver resumes from its last event id."""
         req = urllib.request.Request(base.rstrip("/") + tail, data=body, method=self.command, headers=headers)
         try:
-            resp = urllib.request.urlopen(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
+            resp = _RELAY_OPENER.open(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
         except urllib.error.HTTPError as e:
             data = e.read()
             self.send_response(e.code)
@@ -6793,7 +6984,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                                                   "content-type": "application/json",
                                                   "accept": "*/*"})
             try:
-                resp = urllib.request.urlopen(req, timeout=600)
+                resp = _RELAY_OPENER.open(req, timeout=600)
                 break
             except urllib.error.HTTPError as e:
                 data = e.read()
@@ -6841,6 +7032,143 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             emit(b"event: " + ev_type.encode() + b"\ndata: " + ev_raw + b"\n\n")
         self.wfile.write(b"0\r\n\r\n")
 
+    def _cloud(self, base: str, cred, flags: dict, path: str, body: bytes | None) -> None:
+        """A model call on a Bedrock or Vertex route (_bedrock_relay_route, _vertex_relay_route): the
+        client's request with the connection's credential put on it here, the answer back as the
+        provider wrote it (_cloud_send). Whatever the client sent as a credential (the placeholder,
+        a signature made with it) is taken off first. Only model calls are forwarded."""
+        kind = flags.get("cloud")
+        resource = path.split("?", 1)[0]
+        location = ""
+        if kind == "bedrock":
+            if resource.startswith("/v1/"):   # a base handed with the relay's /v1 joins as one without
+                path, resource = path[3:], resource[3:]
+            allowed = self.command == "POST" and bool(_BEDROCK_MODEL_CALL.match(resource))
+        else:
+            m = _VERTEX_MODEL_CALL.match(resource)
+            allowed = self.command == "POST" and bool(m)
+            location = m.group(1).lower() if m else ""
+        if not allowed:
+            self._cloud_refuse(404, kind, "this connection forwards model calls only")
+            return
+        headers = {k.lower(): v for k, v in self.headers.items()
+                   if k.lower() not in _CLOUD_DROP_HEADERS and not k.lower().startswith("x-amz-")}
+        headers.setdefault("accept", "*/*")
+        _relay_trace_headers(headers, flags)
+        if kind == "bedrock":
+            url = base.rstrip("/") + path
+            if cred.bearer:
+                headers["authorization"] = f"Bearer {cred.bearer}"
+            else:
+                signed = {"content-type": headers["content-type"]} if "content-type" in headers else {}
+                headers.update(_sigv4_sign(self.command, url, signed, body or b"", region=str(flags.get("region")),
+                                           service="bedrock", access_key_id=cred.access_key_id,
+                                           secret_access_key=cred.secret_access_key,
+                                           session_token=cred.session_token))
+        else:
+            # The host the call's own location is served on (Claude Code names each model's region in
+            # the path, VERTEX_REGION_CLAUDE_* included); the route's own when it is the route's region.
+            origin = base if location == flags.get("region") or not _CLOUD_REGION.match(location) \
+                else _vertex_origin(location)
+            url = origin.rstrip("/") + path
+            try:
+                headers["authorization"] = f"Bearer {cred.access_token()}"
+            except _CloudAuthError as e:
+                print(f"[relay] vertex: {e}", flush=True)
+                self._cloud_refuse(502, kind, str(e))
+                return
+        self._cloud_send(url, headers, body, kind)
+
+    def _cloud_refuse(self, status: int, kind: str, message: str) -> None:
+        """An answer the relay gives itself on a cloud route, in that provider's error shape, so the
+        client's SDK reads it as it reads the provider's own (an AWS SDK names the error by
+        x-amzn-errortype)."""
+        if kind == "bedrock":
+            data = json.dumps({"message": message}).encode()
+        else:
+            data = json.dumps({"error": {"code": status, "message": message,
+                                         "status": _GOOGLE_STATUS.get(status, "UNKNOWN")}}).encode()
+        try:
+            self.send_response(status)
+            if kind == "bedrock":
+                self.send_header("x-amzn-errortype", _AWS_ERROR_TYPE.get(status, "InternalServerException"))
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except OSError:
+            self.close_connection = True
+
+    def _cloud_send(self, url: str, headers: dict, body: bytes | None, kind: str) -> None:
+        """Send one cloud model call and relay the answer: status, the content type, the provider's
+        own x-amz*/retry-after headers (an AWS SDK reads the error's name and the request id there),
+        and the body byte for byte. An event stream (Bedrock's binary eventstream, Vertex's SSE), or
+        any body of no stated length, goes down as it arrives, never buffered. A redirect is the
+        provider's answer and is not followed (_RELAY_OPENER), and its Location is not passed on."""
+        req = urllib.request.Request(url, data=body if self.command == "POST" else None,
+                                     method=self.command, headers=headers)
+        try:
+            resp = _RELAY_OPENER.open(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
+        except urllib.error.HTTPError as e:
+            resp = e     # a refusal, or a redirect left unfollowed: the provider's answer either way
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
+            reason = f"{type(e).__name__}: {e}"[:300]
+            print(f"[relay] {kind} did not answer {urllib.parse.urlsplit(url).path[:160]}: {reason}", flush=True)
+            timed_out = isinstance(e, TimeoutError) or "timed out" in str(e)
+            self._cloud_refuse(504 if timed_out else 502, kind, f"the provider did not answer: {reason}")
+            return
+        status = getattr(resp, "status", None) or getattr(resp, "code", 502)
+        ctype = resp.headers.get("content-type") or ""
+        keep = [(k, v) for k, v in resp.headers.items()
+                if k.lower() in ("content-type", "retry-after") or k.lower().startswith(("x-amzn-", "x-amz-"))]
+        streamed = (resp.headers.get("content-length") is None or "event-stream" in ctype.lower()
+                    or "eventstream" in ctype.lower())
+        if not streamed:
+            try:
+                data = resp.read()
+            except (http.client.HTTPException, TimeoutError, OSError) as e:
+                self._cloud_refuse(502, kind, f"the provider stopped answering mid-body: {type(e).__name__}")
+                return
+            try:
+                self.send_response(status)
+                for k, v in keep:
+                    self.send_header(k, v)
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except OSError:
+                self.close_connection = True
+            return
+        try:
+            self.send_response(status)
+            for k, v in keep:
+                self.send_header(k, v)
+            self.send_header("transfer-encoding", "chunked")
+            self.end_headers()
+        except OSError:
+            self.close_connection = True
+            return
+        while True:
+            try:
+                chunk = resp.read1(65536)
+            except (http.client.HTTPException, TimeoutError, OSError, ValueError) as e:
+                # the stream stopped: the connection closes, nothing is narrated into the provider's framing
+                print(f"[relay] {kind} stream stopped: {type(e).__name__}: {e}"[:300], flush=True)
+                self.close_connection = True
+                return
+            if not chunk:
+                break
+            try:
+                self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                self.wfile.flush()
+            except OSError:
+                self.close_connection = True
+                return
+        try:
+            self.wfile.write(b"0\r\n\r\n")
+        except OSError:
+            self.close_connection = True
+
     def do_POST(self):  # noqa: N802
         self._forward(self.rfile.read(int(self.headers.get("content-length") or 0)))
 
@@ -6875,6 +7203,23 @@ def _qoder_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
 
+def _image_relay_route(base_url: str, api_key: str) -> tuple[str, str]:
+    """Register a turn's image provider as a pass-through route; → (relay base, placeholder).
+
+    The imagegen skill calls the OpenAI SDK's images.generate and images.edit (a multipart upload) on
+    HR_IMAGE_BASE_URL: both go up verbatim, joined onto the base as stored, the way the SDK would join
+    them onto the provider's own. A helper route (aux): what it serves is not the turn's model."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = ((base_url or "").rstrip("/"), api_key,
+                                        {"passthrough": True, "aux": True, **_route_trace_flag()})
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
+
+
 def _bedrock_anthropic_route(origin: str, api_key: str) -> tuple[str, str]:
     """Register a Bedrock-Anthropic adapter route; -> (relay base_url, placeholder bearer)."""
     with _HERMES_RELAY["lock"]:
@@ -6902,6 +7247,337 @@ def _adapt_custom_auth(auth):
         return auth
     base, tok = _bedrock_anthropic_route(f"https://{host}", auth.api_key)
     return auth.model_copy(update={"base_url": base, "api_key": tok})
+
+
+# ── AWS Bedrock and Google Vertex through the relay ──────────────────────────────────────────────
+# A bedrock or vertex connection's credential stays in this process, as every other connection's key
+# does: the CLI is handed the relay and a placeholder, and the relay puts the real credential on each
+# model call: a SigV4 signature for an AWS key pair, the Bedrock API key as a bearer, or an OAuth2
+# access token it mints from a Google service account. Before 2026-11-02, claude and hermes got the AWS
+# key pair or the Bedrock API key in their environment, and claude on Vertex got the whole
+# service-account JSON as <cwd>/.gcp-sa.json, where the agent could read it.
+#
+# The routes forward MODEL CALLS only (_BEDROCK_MODEL_CALL, _VERTEX_MODEL_CALL); anything else is
+# answered 404 here. The identity behind the credential can usually do more than call models (a
+# service account's cloud-platform scope reaches Vertex training jobs, endpoints and datasets), and a
+# sandbox must not reach that through the relay that holds it.
+_CLOUD_REGION = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+# A route's token as the path's first segment (see _HermesRelayHandler._route).
+_PATH_TOKEN = re.compile(r"^/(hr-relay-[0-9a-f]{32})(?=/|$)")
+# The access key id of a SigV4 Authorization header: "AWS4-HMAC-SHA256 Credential=<id>/<scope>, ...".
+_SIGV4_CREDENTIAL = re.compile(r"\bCredential=([^/,\s]+)/")
+# bedrock-runtime's model operations, on the path as the client sends it (the model id is one
+# percent-encoded segment: "us.anthropic.claude-...-v1%3A0", an ARN's slashes as %2F; Anthropic's
+# Python SDK leaves the colon raw).
+_BEDROCK_MODEL_CALL = re.compile(r"^/model/(?!\.\.?/)[^/]+/(?:invoke|invoke-with-response-stream|converse|converse-stream"
+                                 r"|count-tokens)$")
+# Vertex's publisher-model methods; group 1 is the location.
+_VERTEX_MODEL_CALL = re.compile(r"^/v1(?:beta1)?/projects/[^/]+/locations/([^/]+)/publishers/[^/]+/models/[^/:]+"
+                                r":(?:rawPredict|streamRawPredict|predict|serverStreamingPredict|generateContent"
+                                r"|streamGenerateContent|countTokens)$")
+# The client's headers that never go up a cloud route: hop-by-hop ones, the client's own credential
+# (the placeholder, or a signature made with it; every x-amz-* header is dropped as well), and the
+# billing project a Google client may name, which is the connection's to decide.
+_CLOUD_DROP_HEADERS = frozenset({"host", "content-length", "connection", "keep-alive", "proxy-authorization",
+                                 "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade",
+                                 "accept-encoding", "authorization", "x-api-key", "x-goog-api-key",
+                                 "x-goog-user-project", "baggage", "date"})
+_AWS_ERROR_TYPE = {401: "UnrecognizedClientException", 403: "AccessDeniedException", 404: "UnknownOperationException",
+                   502: "ServiceUnavailableException", 504: "ServiceUnavailableException"}
+_GOOGLE_STATUS = {401: "UNAUTHENTICATED", 403: "PERMISSION_DENIED", 404: "NOT_FOUND", 502: "UNAVAILABLE",
+                  504: "DEADLINE_EXCEEDED"}
+# Headers a SigV4 signature never covers: botocore's SIGNED_HEADERS_BLACKLIST (1.43), hop-by-hop
+# headers and the ones a proxy or tracer may rewrite on the way, and the Authorization it replaces.
+_SIGV4_UNSIGNED = frozenset({"authorization", "baggage", "connection", "expect", "keep-alive", "proxy-authenticate",
+                             "proxy-authorization", "te", "traceparent", "tracestate", "trailer", "transfer-encoding",
+                             "upgrade", "user-agent", "x-amzn-trace-id"})
+_VERTEX_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+_VERTEX_TOKEN_URI = "https://oauth2.googleapis.com/token"
+_VERTEX_TOKEN_EARLY_S = 300      # an access token is minted afresh this long before it expires
+_VERTEX_JWT_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+
+
+class _CloudAuthError(Exception):
+    """The relay could not get the credential a cloud call needs. The message names what failed and
+    never carries key material."""
+
+
+class _BedrockCred:
+    """A Bedrock connection's credential as the relay holds it: an API key (a bearer), or an access
+    key pair with its session token. Its repr names nothing, so a route printed in a log or a
+    traceback carries no secret."""
+    __slots__ = ("bearer", "access_key_id", "secret_access_key", "session_token")
+
+    def __init__(self, bearer: str = "", access_key_id: str = "", secret_access_key: str = "",
+                 session_token: str = ""):
+        self.bearer = bearer or ""
+        self.access_key_id = access_key_id or ""
+        self.secret_access_key = secret_access_key or ""
+        self.session_token = session_token or ""
+
+    def __repr__(self) -> str:
+        return "<bedrock credential>"
+
+    __str__ = __repr__
+
+
+class _VertexCred:
+    """A Google service account as the relay holds it: the parsed signing key and the access token it
+    last minted, kept until _VERTEX_TOKEN_EARLY_S before it expires. Its repr names nothing."""
+    __slots__ = ("client_email", "key_id", "private_key", "token_uri", "_token", "_expires", "_lock")
+
+    def __init__(self, client_email: str, key_id: str, private_key, token_uri: str):
+        self.client_email, self.key_id, self.private_key, self.token_uri = client_email, key_id, private_key, token_uri
+        self._token, self._expires, self._lock = "", 0.0, threading.Lock()
+
+    def __repr__(self) -> str:
+        return "<vertex credential>"
+
+    __str__ = __repr__
+
+    def access_token(self, now: float | None = None) -> str:
+        """The current access token, minted when there is none or it expires within five minutes.
+        One mint at a time: concurrent calls on the route wait for it rather than each minting."""
+        with self._lock:
+            t = time.time() if now is None else now
+            if self._token and t < self._expires - _VERTEX_TOKEN_EARLY_S:
+                return self._token
+            token, ttl = _vertex_mint(self, int(t))
+            self._token, self._expires = token, t + ttl
+            return token
+
+
+def _b64url(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _vertex_assertion(cred: _VertexCred, now: int) -> str:
+    """The signed JWT a service account trades for an access token (RFC 7523, Google's
+    service-account flow): RS256 over {iss, scope, aud=token_uri, iat, exp}, kid the key's id."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    header = {"alg": "RS256", "typ": "JWT", **({"kid": cred.key_id} if cred.key_id else {})}
+    claims = {"iss": cred.client_email, "scope": _VERTEX_SCOPE, "aud": cred.token_uri,
+              "iat": now, "exp": now + 3600}
+    signing_input = (_b64url(json.dumps(header, separators=(",", ":")).encode()) + "."
+                     + _b64url(json.dumps(claims, separators=(",", ":")).encode()))
+    sig = cred.private_key.sign(signing_input.encode(), padding.PKCS1v15(), hashes.SHA256())
+    return signing_input + "." + _b64url(sig)
+
+
+def _vertex_mint(cred: _VertexCred, now: int) -> tuple[str, float]:
+    """Trade a fresh assertion for an access token at the service account's token endpoint;
+    → (token, seconds it lives). Errors name the endpoint's own words, never the assertion."""
+    form = urllib.parse.urlencode({"grant_type": _VERTEX_JWT_GRANT,
+                                   "assertion": _vertex_assertion(cred, now)}).encode()
+    req = urllib.request.Request(cred.token_uri, data=form, method="POST",
+                                 headers={"content-type": "application/x-www-form-urlencoded",
+                                          "accept": "application/json"})
+    try:
+        with _RELAY_OPENER.open(req, timeout=30) as resp:
+            doc = json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read() or b"{}")
+        except ValueError:
+            err = {}
+        words = ": ".join(str(err.get(k))[:200] for k in ("error", "error_description")
+                          if isinstance(err, dict) and err.get(k))
+        raise _CloudAuthError(f"the service account's token request was refused (HTTP {e.code}"
+                              f"{': ' + words if words else ''})") from None
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as e:
+        raise _CloudAuthError(f"the service account's token endpoint did not answer ({type(e).__name__})") from None
+    token = doc.get("access_token") if isinstance(doc, dict) else None
+    if not isinstance(token, str) or not token:
+        raise _CloudAuthError("the service account's token endpoint answered without an access token")
+    try:
+        ttl = float(doc.get("expires_in") or 3600)
+    except (TypeError, ValueError):
+        ttl = 3600.0
+    return token, ttl
+
+
+def _aws_path(path: str) -> str:
+    """A request path the way SigV4 canonicalises it before encoding (botocore's normalize_url_path):
+    "." and ".." segments resolved, empty segments dropped, a trailing slash kept."""
+    if not path:
+        return "/"
+    out: list[str] = []
+    for seg in path.split("/"):
+        if seg and seg != ".":
+            if seg == "..":
+                if out:
+                    out.pop()
+            else:
+                out.append(seg)
+    last = "/" if path.endswith("/") and out else ""
+    return ("/" if path.startswith("/") else "") + "/".join(out) + last
+
+
+def _sigv4_sign(method: str, url: str, headers: dict, body: bytes, *, region: str, service: str,
+                access_key_id: str, secret_access_key: str, session_token: str = "",
+                now: datetime.datetime | None = None) -> dict:
+    """AWS Signature Version 4 for one request, with hashlib and hmac alone (the runner's environment
+    has no botocore). Signs `headers` plus host, x-amz-date, x-amz-content-sha256 (the payload's
+    hash) and, with a session token, x-amz-security-token; → the headers to add, Authorization
+    and host among them. The canonical request is botocore's (SigV4Auth): the path as sent, dot
+    segments resolved and percent-encoded once more ("%3A" is signed as "%253A", as AWS expects of
+    every service but S3), the query's pairs sorted as they stand, header values trimmed."""
+    when = (now or datetime.datetime.now(datetime.timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    day = when[:8]
+    payload = hashlib.sha256(body or b"").hexdigest()
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    if parts.port is not None and parts.port != {"http": 80, "https": 443}.get(parts.scheme):
+        host = f"{host}:{parts.port}"
+    added = {"host": host, "x-amz-date": when, "x-amz-content-sha256": payload}
+    if session_token:
+        added["x-amz-security-token"] = session_token
+    to_sign: dict[str, list[str]] = {}
+    for k, v in headers.items():
+        lk = k.lower()
+        if lk not in _SIGV4_UNSIGNED and lk not in added and lk != "date":
+            to_sign.setdefault(lk, []).append(str(v))
+    for k, v in added.items():
+        to_sign[k] = [v]
+    names = sorted(to_sign)
+    canonical_headers = "".join(f"{n}:{','.join(' '.join(v.split()) for v in to_sign[n])}\n" for n in names)
+    signed_headers = ";".join(names)
+    pairs = [p.partition("=")[::2] for p in parts.query.split("&")] if parts.query else []
+    canonical_query = "&".join(f"{k}={v}" for k, v in sorted(pairs))
+    canonical = "\n".join([method.upper(), urllib.parse.quote(_aws_path(parts.path), safe="/~"), canonical_query,
+                           canonical_headers, signed_headers, payload])
+    scope = f"{day}/{region}/{service}/aws4_request"
+    to_sign_str = "\n".join(["AWS4-HMAC-SHA256", when, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    key = hmac.new(f"AWS4{secret_access_key}".encode(), day.encode(), hashlib.sha256).digest()
+    for part in (region, service, "aws4_request"):
+        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(key, to_sign_str.encode(), hashlib.sha256).hexdigest()
+    added["authorization"] = (f"AWS4-HMAC-SHA256 Credential={access_key_id}/{scope}, "
+                              f"SignedHeaders={signed_headers}, Signature={signature}")
+    return added
+
+
+def _bedrock_runtime_origin(region: str) -> str:
+    return f"https://bedrock-runtime.{region}.amazonaws.com{'.cn' if region.startswith('cn-') else ''}"
+
+
+def _vertex_origin(location: str) -> str:
+    """Vertex's host for a location, as Claude Code's own client names it."""
+    if location == "global":
+        return "https://aiplatform.googleapis.com"
+    if location in ("us", "eu"):
+        return f"https://aiplatform.{location}.rep.googleapis.com"
+    return f"https://{location}-aiplatform.googleapis.com"
+
+
+def _cloud_route(upstream: str, cred, flags: dict) -> tuple[str, str]:
+    """Register a cloud route; → (the relay's origin, the route's token)."""
+    with _HERMES_RELAY["lock"]:
+        if _HERMES_RELAY["server"] is None:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HermesRelayHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            _HERMES_RELAY["server"], _HERMES_RELAY["port"] = srv, srv.server_address[1]
+        tok = "hr-relay-" + uuid.uuid4().hex
+        _HERMES_RELAY["routes"][tok] = (upstream, cred, _turn_route({**flags, "path_token": True,
+                                                                     **_route_trace_flag()}))
+    return f"http://127.0.0.1:{_HERMES_RELAY['port']}", tok
+
+
+def _bedrock_relay_route(region: str, bearer: str | None = None, access_key_id: str | None = None,
+                         secret_access_key: str | None = None,
+                         session_token: str | None = None) -> tuple[str, str]:
+    """Register a Bedrock connection with the relay; → (the relay's origin, placeholder token).
+
+    The route's upstream is bedrock-runtime in the connection's region. With an API key the relay
+    sends it as the bearer; with a key pair it signs each call (SigV4, service "bedrock", the
+    route's region). The client finds the route by any of: the token as the path's first segment
+    (<origin>/<token>, for a client that sends no credential), the token as a bearer, or the token as
+    the access key id of the SigV4 signature an AWS SDK makes with placeholder keys."""
+    region = (region or "us-east-1").strip().lower()
+    if not _CLOUD_REGION.match(region):
+        raise HTTPException(400, "the Bedrock connection's region is not an AWS region name")
+    if not (bearer or (access_key_id and secret_access_key)):
+        raise HTTPException(400, "a Bedrock connection needs an API key or an access key pair")
+    cred = (_BedrockCred(bearer=bearer) if bearer else
+            _BedrockCred(access_key_id=access_key_id, secret_access_key=secret_access_key,
+                         session_token=session_token or ""))
+    return _cloud_route(_bedrock_runtime_origin(region), cred, {"cloud": "bedrock", "region": region})
+
+
+def _vertex_relay_route(sa_json: str, region: str = "", project: str = "") -> tuple[str, str]:
+    """Register a Vertex connection with the relay; → (the relay's origin, placeholder token).
+
+    The service account is parsed here, once: a JSON or key that cannot be read fails the turn now,
+    with a reason, rather than every model call later. The relay mints its access tokens itself
+    (JWT bearer grant, RS256, scope cloud-platform, at the account's token_uri) and caches each until
+    five minutes before it expires. The upstream is aiplatform in the connection's region; the route
+    is found by its token as the path's first segment (<origin>/<token>/v1 is the client's base)."""
+    try:
+        sa = json.loads(sa_json or "")
+    except ValueError:
+        sa = None
+    if not isinstance(sa, dict) or not sa.get("client_email") or not sa.get("private_key"):
+        raise HTTPException(400, "the Vertex connection's service account JSON needs client_email and private_key")
+    token_uri = str(sa.get("token_uri") or _VERTEX_TOKEN_URI)
+    tu = urllib.parse.urlsplit(token_uri)
+    if not (tu.scheme == "https" or (tu.scheme == "http" and tu.hostname in ("127.0.0.1", "localhost", "::1"))):
+        raise HTTPException(400, "the Vertex connection's service account names a token_uri that is not https")
+    region = (region or "us-east5").strip().lower()
+    if not _CLOUD_REGION.match(region):
+        raise HTTPException(400, "the Vertex connection's region is not a Google Cloud location")
+    try:
+        from cryptography.hazmat.primitives import serialization
+        key = serialization.load_pem_private_key(str(sa["private_key"]).encode(), password=None)
+    except Exception:  # noqa: BLE001 — the reason names no key material
+        raise HTTPException(400, "the Vertex connection's service account private key could not be read") from None
+    cred = _VertexCred(str(sa["client_email"]), str(sa.get("private_key_id") or ""), key, token_uri)
+    return _cloud_route(_vertex_origin(region), cred,
+                        {"cloud": "vertex", "region": region, "project": project or str(sa.get("project_id") or "")})
+
+
+# Every name an AWS SDK reads a credential (or where to find one) from. A bedrock turn whose
+# connection carries its own credential gets the relay's placeholder and none of these: a stray one
+# from the runner's environment would be a second credential the agent could read, or would make the
+# SDK sign with it instead of the placeholder the relay knows.
+_AWS_CREDENTIAL_ENV = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN",
+                       "AWS_BEARER_TOKEN_BEDROCK", "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_SHARED_CREDENTIALS_FILE",
+                       "AWS_CONFIG_FILE", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN",
+                       "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                       "AWS_CONTAINER_AUTHORIZATION_TOKEN", "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE")
+
+
+def _bedrock_has_credential(auth: Auth) -> bool:
+    return bool(auth.aws_bearer_token or (auth.aws_access_key_id and auth.aws_secret_access_key))
+
+
+def _bedrock_turn_route(auth: Auth, env: dict) -> tuple[str, str, str]:
+    """The relay route of a bedrock turn whose connection carries a credential, with the runner's own
+    AWS credential names cleared from the turn's environment; → (region, relay origin, token)."""
+    region = (auth.aws_region or "us-east-1").strip().lower()
+    origin, tok = _bedrock_relay_route(region, bearer=auth.aws_bearer_token,
+                                       access_key_id=auth.aws_access_key_id,
+                                       secret_access_key=auth.aws_secret_access_key,
+                                       session_token=auth.aws_session_token)
+    for name in _AWS_CREDENTIAL_ENV:
+        env.pop(name, None)
+    return region, origin, tok
+
+
+def _remove_stale_sa_file(*dirs: str) -> None:
+    """Delete the .gcp-sa.json an older runner wrote into a workspace for a claude turn on Vertex: the
+    whole service account, readable by the agent. Removed itself, never followed if it is a link."""
+    for d in dict.fromkeys(x for x in dirs if x):
+        p = os.path.join(d, ".gcp-sa.json")
+        try:
+            os.unlink(p)
+            print(f"[vertex] removed a stale service-account file from {d}", flush=True)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            print(f"[vertex] could not remove the stale service-account file in {d}: {e.strerror}", flush=True)
 
 
 # How long the relay waits for the provider on ONE upstream call, and how long an answer already
@@ -7253,6 +7929,11 @@ def _hermes_resolve_provider(provider: str | None, auth: Auth) -> str:
     return "anthropic" if _anthropic_native(p, auth) else p
 
 
+# The base a hermes provider's key goes to when the connection names none: the vendor's own, behind the relay.
+_HERMES_DEFAULT_BASE = {"anthropic": "https://api.anthropic.com/v1", "openai-api": "https://api.openai.com/v1",
+                        "openrouter": "https://openrouter.ai/api/v1"}
+
+
 def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
                         model: str = "", max_turns: int | None = None,
                         mcp_servers: list[dict] | None = None,
@@ -7310,8 +7991,20 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
         vp = str(vision_auth.get("provider") or "").lower()
         vision: dict = {"provider": vp, "model": str(vision_auth["model"])}
         vkey, vbase = vision_auth.get("api_key") or "", vision_auth.get("base_url") or ""
-        if vp == "openai-api" and vkey and vbase:
-            vbase, vkey = _hermes_relay_route(vbase, vkey, aux=True)
+        # Every vision provider's key rides the relay, not only an OpenAI-compatible one's: an
+        # anthropic, openrouter or azure-foundry vision connection put its real key (often another
+        # connection's than the turn's) in HR_VISION_API_KEY (#615). An anthropic client appends
+        # /v1/messages itself and is handed the relay's origin, as the chat route below; azure's
+        # base is its own deployment path, joined exactly. A key with nowhere to go is not handed over.
+        vbase = vbase or _HERMES_DEFAULT_BASE.get(vp, "")
+        if vkey and vbase:
+            if vp == "anthropic":
+                rb, vkey = _hermes_relay_route(vbase, vkey, aux=True)
+                vbase = _relay_origin(rb)
+            else:
+                vbase, vkey = _hermes_relay_route(vbase, vkey, aux=True, exact_base=(vp == "azure-foundry"))
+        elif vkey:
+            vkey = ""
         if vbase:
             vision["base_url"] = vbase
         if vkey:
@@ -7331,7 +8024,10 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
             env["ANTHROPIC_API_KEY"] = relay_tok
             env["ANTHROPIC_BASE_URL"] = _relay_origin(relay_base)
         elif auth.api_key:
-            env["ANTHROPIC_API_KEY"] = auth.api_key
+            # No base: Anthropic's own, still through the relay (#615: the key sat in the CLI's env).
+            relay_base, relay_tok = _hermes_relay_route(_HERMES_DEFAULT_BASE["anthropic"], auth.api_key)
+            env["ANTHROPIC_API_KEY"] = relay_tok
+            env["ANTHROPIC_BASE_URL"] = _relay_origin(relay_base)
     elif p == "azure-foundry":  # Azure OpenAI (gpt family) — OpenAI-style endpoint + key
         if auth.api_key and auth.base_url:
             # Through the relay, as every other hermes route. This one called Azure directly with the
@@ -7344,9 +8040,8 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
             # max_completion_tokens spelling, which hermes also infers from a gpt-5 name).
             env["AZURE_FOUNDRY_BASE_URL"], env["AZURE_FOUNDRY_API_KEY"] = _hermes_relay_route(
                 auth.base_url, auth.api_key, exact_base=True)
-        elif auth.api_key:
-            env["AZURE_FOUNDRY_API_KEY"] = auth.api_key
         elif auth.base_url:
+            # An Azure key with no endpoint cannot be used by anything; it is not handed over (#615).
             env["AZURE_FOUNDRY_BASE_URL"] = auth.base_url
     elif p == "openrouter":  # OpenRouter aggregator (vendor/model ids)
         if auth.api_key:
@@ -7371,21 +8066,34 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
             env["OPENAI_BASE_URL"], env["OPENAI_API_KEY"] = _hermes_relay_route(
                 auth.base_url, auth.api_key)
         elif auth.api_key:
-            env["OPENAI_API_KEY"] = auth.api_key
+            # No base: OpenAI's own, still through the relay (#615: the key sat in the CLI's env).
+            env["OPENAI_BASE_URL"], env["OPENAI_API_KEY"] = _hermes_relay_route(
+                _HERMES_DEFAULT_BASE["openai-api"], auth.api_key)
         elif auth.base_url:
             env["OPENAI_BASE_URL"] = auth.base_url
     else:  # bedrock — bearer-token (Bedrock API key) or the standard AWS credential chain
         region = auth.aws_region or "us-east-1"
+        if _bedrock_has_credential(auth):
+            # Through the relay (_bedrock_relay_route): the real credential stays here and hermes gets
+            # placeholders the relay recognises. hermes 0.19.0 calls Bedrock two ways, both pointed at
+            # the relay's origin: boto3's bedrock-runtime client (Converse; the context-length probe),
+            # which reads AWS_ENDPOINT_URL_BEDROCK_RUNTIME, and, for a Claude model when no bearer is
+            # set, Anthropic's AnthropicBedrock client, which reads ANTHROPIC_BEDROCK_BASE_URL.
+            #   - an API key: AWS_BEARER_TOKEN_BEDROCK is the token. hermes then takes Converse for
+            #     every model (runtime_provider.py), and boto3 sends it as the bearer.
+            #   - a key pair: AWS_ACCESS_KEY_ID is the token and the secret a fixed placeholder. Both
+            #     clients sign with them (SigV4), the relay finds the route by the signature's access
+            #     key id, drops that signature and signs again with the real pair.
+            region, origin, tok = _bedrock_turn_route(auth, env)
+            env["AWS_ENDPOINT_URL_BEDROCK_RUNTIME"] = origin
+            env["ANTHROPIC_BEDROCK_BASE_URL"] = origin
+            if auth.aws_bearer_token:
+                env["AWS_BEARER_TOKEN_BEDROCK"] = tok
+            else:
+                env["AWS_ACCESS_KEY_ID"] = tok
+                env["AWS_SECRET_ACCESS_KEY"] = "hr-relay-placeholder"
         env["AWS_REGION"] = region
         env["AWS_DEFAULT_REGION"] = region
-        if auth.aws_bearer_token:
-            env["AWS_BEARER_TOKEN_BEDROCK"] = auth.aws_bearer_token
-        if auth.aws_access_key_id:
-            env["AWS_ACCESS_KEY_ID"] = auth.aws_access_key_id
-        if auth.aws_secret_access_key:
-            env["AWS_SECRET_ACCESS_KEY"] = auth.aws_secret_access_key
-        if auth.aws_session_token:
-            env["AWS_SESSION_TOKEN"] = auth.aws_session_token
     mcp = _hermes_mcp_section(mcp_servers)
     if mcp:
         cfg["mcp_servers"] = mcp
@@ -8328,7 +9036,7 @@ def _build_aider(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
            # aider takes the budget as Coder.max_reflections, set in the driver: it has no CLI flag
            # for it, and only an in-process driver holds the object.
            "max_turns": max_turns}
-    return [AIDER_PYTHON, AIDER_DRIVER, json.dumps(job)]
+    return _driver_cmd(AIDER_PYTHON, AIDER_DRIVER, job, env)
 
 
 # ── cheetahclaws ────────────────────────────────────────────────────────────────
@@ -8403,7 +9111,7 @@ def _build_cheetahclaws(provider: str, auth: Auth, model: str, prompt: str, cwd:
            # the loop has no step limit of its own; the driver stops it through run()'s
            # cancel_check once this many model calls have been made
            "max_turns": max_turns}
-    return [CHEETAHCLAWS_PYTHON, CHEETAHCLAWS_DRIVER, json.dumps(job)]
+    return _driver_cmd(CHEETAHCLAWS_PYTHON, CHEETAHCLAWS_DRIVER, job, env)
 
 
 
@@ -8412,8 +9120,8 @@ def _build_cheetahclaws(provider: str, auth: Auth, model: str, prompt: str, cwd:
 # OpenAI-compatible mode at all (that is a qwen-fork-only addition — see QWEN_PROVIDERS above),
 # so there is no loopback-relay trick that lets any generic OpenAI/Anthropic-shaped integration
 # drive this backend. A Vertex AI provider (service account) belongs here too in principle — the
-# runner-side env is the same GOOGLE_APPLICATION_CREDENTIALS/GOOGLE_CLOUD_PROJECT/
-# GOOGLE_CLOUD_LOCATION triple _build_claude's vertex branch already writes — but it is left OUT
+# runner-side env would be a GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION pair, with the service
+# account kept in the relay as _build_claude's vertex branch keeps it — but it is left OUT
 # of this set until the gateway side decides how (or whether) to broker it; see the gateway's
 # _BROKERABLE_PROVIDERS comment for bedrock/vertex.
 GEMINI_PROVIDERS = {"google"}
@@ -8541,7 +9249,12 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
         env["GOOGLE_GEMINI_BASE_URL"] = relay_base
         env["GEMINI_API_KEY"] = relay_tok
     else:
-        env["GEMINI_API_KEY"] = auth.api_key
+        # Google's own API, through the same native relay route: the CLI talked to it directly with the
+        # real key in GEMINI_API_KEY (#615). The route's root is the endpoint the CLI used by default,
+        # the key rides x-goog-api-key, and the model keeps its own name.
+        relay_base, relay_tok = _gemini_relay_route("https://generativelanguage.googleapis.com", auth.api_key, model, "")
+        env["GOOGLE_GEMINI_BASE_URL"] = relay_base
+        env["GEMINI_API_KEY"] = relay_tok
     _gemini_settings(home, mcp_servers, model)
     cmd = ["gemini", "-p", prompt, "-o", "stream-json", "-m", model,
            # Load-bearing, same risk class as qwen's --yolo: gemini-cli gates tool use behind a
@@ -8979,12 +9692,28 @@ def _opencode_has_session(env: dict, session_id: str, share: str = "opencode") -
     return False
 
 
+_KEYED_DEFAULT_BASE = {"anthropic": "https://api.anthropic.com/v1", "openai": "https://api.openai.com/v1",
+                       "openai-api": "https://api.openai.com/v1"}
+
+
+def _keyed_base(pr: str, auth: "Auth") -> "Auth":
+    """A keyed connection with no base, for the bases that relay only a connection that names one
+    (opencode, kilo, mimo): the vendor's own endpoint where there is one, so the key rides the relay;
+    otherwise the turn is refused rather than the key put in the CLI's environment (#615)."""
+    if not auth.api_key or auth.base_url:
+        return auth
+    if pr in _KEYED_DEFAULT_BASE:
+        return auth.model_copy(update={"base_url": _KEYED_DEFAULT_BASE[pr]})
+    raise HTTPException(400, f"this connection ({pr}) has a key but no base URL; set its base URL")
+
+
 def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                     resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                     skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "openai-api"
     if pr not in OPENCODE_PROVIDERS:
         raise HTTPException(400, f"unknown opencode provider '{pr}' (one of {sorted(OPENCODE_PROVIDERS)})")
+    auth = _keyed_base(pr, auth)
     if auth.base_url and auth.api_key:
         # EVERY keyed turn rides the relay, the Messages shape included. It was left off the relay
         # when the relay read only a bearer; it reads x-api-key now and sends Anthropic's own API
@@ -9091,6 +9820,7 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     if pr not in MIMO_PROVIDERS:
         raise HTTPException(400, f"unknown mimo provider '{pr}' (one of {sorted(MIMO_PROVIDERS)})")
     npm = _mimo_npm(auth, model, pr)
+    auth = _keyed_base(pr, auth)
     if auth.base_url and auth.api_key:
         # EVERY keyed turn rides the relay, the Messages shape included, as opencode's do: the relay
         # reads x-api-key and sends Anthropic the key that way (#352). The real key never reaches
@@ -9408,6 +10138,7 @@ def _build_kilo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     pr = provider or "openai-api"
     if pr not in KILO_PROVIDERS:
         raise HTTPException(400, f"unknown kilo provider '{pr}' (one of {sorted(KILO_PROVIDERS)})")
+    auth = _keyed_base(pr, auth)
     if auth.base_url and auth.api_key:
         # EVERY keyed turn rides the relay, the Messages shape included. It was left off the relay
         # when the relay read only a bearer; it reads x-api-key now and sends Anthropic's own API
@@ -10289,7 +11020,7 @@ def _build_qoder(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
            "input_files": list(input_files or []),
            "skills": list(skills or []),
            "effort": effort if effort in QODER_EFFORTS else ""}
-    return [QODER_PYTHON, QODER_DRIVER, json.dumps(job)]
+    return _driver_cmd(QODER_PYTHON, QODER_DRIVER, job, env)
 
 
 # A reasoning model behind a Qoder id can leave its thinking markers in the text Qoder streams: on
@@ -10452,7 +11183,7 @@ def _build_systemone(provider: str, auth: Auth, model: str, prompt: str, cwd: st
            "tools_disabled": list(tools_disabled or []),
            "max_turns": max_turns, "timeout_seconds": timeout_seconds,
            "agent_doc": agent_doc or "", "metadata": metadata or None}
-    return [SYSTEMONE_PYTHON, SYSTEMONE_DRIVER, json.dumps(job)]
+    return _driver_cmd(SYSTEMONE_PYTHON, SYSTEMONE_DRIVER, job, env)
 
 
 def _openhands_mcp_config(mcp_servers: list[dict] | None) -> dict:
@@ -10578,7 +11309,7 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
            # the server's own default is 500 iterations per run; an operator's budget that the
            # backend drops is the quiet lie kimi shipped at 1000 steps
            "max_turns": max_turns}
-    return [OPENHANDS_PYTHON, OPENHANDS_DRIVER, json.dumps(job)]
+    return _driver_cmd(OPENHANDS_PYTHON, OPENHANDS_DRIVER, job, env)
 
 
 def _kimi_to_claude(obj: dict, state: dict) -> list[dict]:
@@ -11737,7 +12468,7 @@ def _build_nanobot(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
     job = {"config_path": str(cfg_path), "workspace": str(work), "model": model, "prompt": prompt,
            "session_key": resume_session_id or ("hr-" + uuid.uuid4().hex[:12]),
            "tools_disabled": list(tools_disabled or [])}
-    return [NANOBOT_PYTHON, NANOBOT_DRIVER, json.dumps(job)]
+    return _driver_cmd(NANOBOT_PYTHON, NANOBOT_DRIVER, job, env)
 
 
 # ── zeroclaw (zeroclaw-labs/zeroclaw, Apache-2.0, a Rust binary) ─────────────────────────────────
@@ -11952,7 +12683,7 @@ def _build_zeroclaw(provider: str, auth: Auth, model: str, prompt: str, cwd: str
     cfg_dir = _zeroclaw_config(auth.base_url, model, cwd, mcp_servers, tools_disabled, max_turns, shell_keys)
     job = {"zeroclaw": ZEROCLAW_BIN, "config_dir": str(cfg_dir), "cwd": cwd, "model": model,
            "prompt": prompt, "resume_session_id": resume_session_id or ""}
-    return [sys.executable, ZEROCLAW_DRIVER, json.dumps(job)]
+    return _driver_cmd(sys.executable, ZEROCLAW_DRIVER, job, env)
 
 
 
@@ -13435,7 +14166,7 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
            # A cap of its own, under the runner's, so a turn that never answers is reported as the
            # limit rather than as an unexplained failure.
            "timeout": MAX_TURN_SECONDS}
-    return [DCODE_PYTHON, DCODE_DRIVER, json.dumps(job, separators=(",", ":"))]
+    return _driver_cmd(DCODE_PYTHON, DCODE_DRIVER, job, env)
 
 
 
@@ -13838,7 +14569,7 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
            # The client runs the agent's shell commands only when the shell is on at all.
            "terminal": "bash" not in disabled,
            "timeout": MAX_TURN_SECONDS}
-    return [FAST_AGENT_PYTHON, FAST_AGENT_DRIVER, json.dumps(job, separators=(",", ":"))]
+    return _driver_cmd(FAST_AGENT_PYTHON, FAST_AGENT_DRIVER, job, env)
 
 
 
@@ -15158,7 +15889,8 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
             pass
         finally:
             try:
-                os.unlink(usage_path)
+                with _fs_as(_session_uid(cwd)):   # in the session's tmp/: a swapped folder leads it nowhere else
+                    os.unlink(usage_path)
             except OSError:
                 pass
     # -z prints ONLY the final text on stdout — authoritative there; chat runs read the DB
@@ -15358,7 +16090,7 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         if nbytes:
             with open(spool_path, "rb") as tar_in:
                 proc = subprocess.run(["tar", "xzf", "-", "-C", ws], stdin=tar_in, capture_output=True,
-                                      **_as_session(ws))
+                                      env=_child_env(), **_as_session(ws))
             if proc.returncode != 0:
                 raise HTTPException(500, f"untar failed: {proc.stderr.decode(errors='replace')[:300]}")
             restored = True
@@ -15971,46 +16703,56 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         # would be a turn in another session's identity.
         raise HTTPException(400, "cwd is decided by the session identifier")
     os.makedirs(cwd, exist_ok=True)
-    input_files = _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
-    try:
-        _collected_at_turn_start(_ws(identifier))
-    except Exception as e:  # noqa: BLE001 — the cursor is collection's; a turn never waits on it
-        print(f"[produced] cursor not set at turn start: {str(e)[:160]}", flush=True)
-    # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
-    # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers
-    # from req.skills, so this filter is a parity guard: never write a skill whose name is suppressed.
-    _skip = set(req.skills_suppressed or [])
-    # Installed plugin packages, whole, at their roots; then every stdio server a plugin declares
-    # becomes a launcher every backend writer below already knows how to hand to its CLI.
-    plugin_roots = _write_plugins(cwd, req.plugins)
-    req.mcp_servers = _sse_bridges(cwd, _plugin_launchers(cwd, req.mcp_servers), req.backend)
-    # A package that is also a Claude Code plugin reaches the claude CLI whole through
-    # --plugin-dir, which loads its skills/ itself; folding those skills into the skills
-    # directory too would offer each one twice.
-    claude_native = {pathlib.Path(d).name for d in plugin_roots
-                     if (pathlib.Path(d) / ".claude-plugin" / "plugin.json").is_file()} if backend == "claude" else set()
-    installed_skills = _write_skills(
-        cwd, [s for s in (req.skills or []) if (s.get("name") or s.get("id")) not in _skip
-              and _mcp_name(str(s.get("plugin") or "")) not in claude_native], backend,
-    )   # materialize enabled skills for this backend (minus suppressed built-ins)
-    # Seed the agent's instruction file (AGENTS.md/CLAUDE.md) from the harness doc + installed skills.
-    # The model's system prompt stays the CLI default; persistent instructions live in this file.
-    #
-    # Disabled tools, by what each CLI can actually enforce:
-    #   claude — a `permissions.deny` list in settings.json, a hard block (see _build_claude). The
-    #     agent reports having no such tool. NOT `--disallowedTools`: that belongs to the permission
-    #     prompt system, which --dangerously-skip-permissions turns off.
-    #   codex, hermes — no per-tool switch exists. Codex has none at all; hermes only disables whole
-    #     TOOLSETS, which is a different granularity from the per-tool names a harness configures.
-    #     Both read the agent doc, so both get the same instruction. It is a request to the model,
-    #     not a guarantee — verified reaching the agent on both, and verified as a request: hermes
-    #     complied, codex used the tool anyway. That is why the console calls it a request rather
-    #     than a block. Written here once rather than as two divergent branches — hermes previously
-    #     had neither, and silently ignored every disabled tool.
-    #   gemini — same tier, no confirmed per-tool switch in headless mode (see _BASE_CATALOG's
-    #     "gemini" entry). UHP §4.3 requires this be conveyed as a standing instruction rather than
-    #     silently dropped wherever it can't be a hard block, so it goes in this set rather than
-    #     being left out of it — the same class of gap this comment already names for hermes.
+    # An older runner wrote a Vertex service account into the workspace for claude; whatever base this
+    # turn runs, the agent must not find it there.
+    # The session's uid before anything is written into its tree, and every write below made AS that uid (_fs_as):
+    # the tree is the agent's, and a link it planted there led the runner's root writes and its skill cleanup
+    # anywhere on the box (GHSA-m479 Parts B and C). The environment is resolved and read outside these scopes,
+    # since its folders are readable by its own group only.
+    _isolate_session(cwd)
+    fs_uid = _session_uid(cwd)
+    with _fs_as(fs_uid):
+        _remove_stale_sa_file(cwd, _ws(identifier))
+        input_files = _write_input_files(cwd, req.files)   # land caller-attached files in the workspace pre-run
+        try:
+            _collected_at_turn_start(_ws(identifier))
+        except Exception as e:  # noqa: BLE001 — the cursor is collection's; a turn never waits on it
+            print(f"[produced] cursor not set at turn start: {str(e)[:160]}", flush=True)
+        # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
+        # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers
+        # from req.skills, so this filter is a parity guard: never write a skill whose name is suppressed.
+        _skip = set(req.skills_suppressed or [])
+        # Installed plugin packages, whole, at their roots; then every stdio server a plugin declares
+        # becomes a launcher every backend writer below already knows how to hand to its CLI.
+        plugin_roots = _write_plugins(cwd, req.plugins)
+        req.mcp_servers = _sse_bridges(cwd, _plugin_launchers(cwd, req.mcp_servers), req.backend)
+        # A package that is also a Claude Code plugin reaches the claude CLI whole through
+        # --plugin-dir, which loads its skills/ itself; folding those skills into the skills
+        # directory too would offer each one twice.
+        claude_native = {pathlib.Path(d).name for d in plugin_roots
+                         if (pathlib.Path(d) / ".claude-plugin" / "plugin.json").is_file()} if backend == "claude" else set()
+        installed_skills = _write_skills(
+            cwd, [s for s in (req.skills or []) if (s.get("name") or s.get("id")) not in _skip
+                  and _mcp_name(str(s.get("plugin") or "")) not in claude_native], backend,
+        )   # materialize enabled skills for this backend (minus suppressed built-ins)
+        # Seed the agent's instruction file (AGENTS.md/CLAUDE.md) from the harness doc + installed skills.
+        # The model's system prompt stays the CLI default; persistent instructions live in this file.
+        #
+        # Disabled tools, by what each CLI can actually enforce:
+        #   claude — a `permissions.deny` list in settings.json, a hard block (see _build_claude). The
+        #     agent reports having no such tool. NOT `--disallowedTools`: that belongs to the permission
+        #     prompt system, which --dangerously-skip-permissions turns off.
+        #   codex, hermes — no per-tool switch exists. Codex has none at all; hermes only disables whole
+        #     TOOLSETS, which is a different granularity from the per-tool names a harness configures.
+        #     Both read the agent doc, so both get the same instruction. It is a request to the model,
+        #     not a guarantee — verified reaching the agent on both, and verified as a request: hermes
+        #     complied, codex used the tool anyway. That is why the console calls it a request rather
+        #     than a block. Written here once rather than as two divergent branches — hermes previously
+        #     had neither, and silently ignored every disabled tool.
+        #   gemini — same tier, no confirmed per-tool switch in headless mode (see _BASE_CATALOG's
+        #     "gemini" entry). UHP §4.3 requires this be conveyed as a standing instruction rather than
+        #     silently dropped wherever it can't be a hard block, so it goes in this set rather than
+        #     being left out of it — the same class of gap this comment already names for hermes.
     agent_doc = req.agent_doc or ""
     # opensquilla is in this set for the same reason gemini is: `--permissions` picks a posture
     # (restricted / bypass / full) and there is no per-tool deny list anywhere on its agent CLI, so
@@ -16052,11 +16794,18 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # Image generation. Deliberately NOT the OPENAI_* names: on a codex harness those already
     # point at the CHAT connection, which is often a different provider, and one env pair can
     # only carry one credential. The imagegen skill's wrapper reads these and passes them to the
-    # SDK explicitly, so images work the same on every base. The value is a per-turn broker
-    # credential, never a provider key.
+    # SDK explicitly, so images work the same on every base. The key never reaches the turn: the
+    # turn gets a relay route to the image provider and its placeholder. On a self-hosted box the
+    # gateway hands the runner the integration's REAL key here, and every turn of every base had it
+    # in its environment (measured on 0.37.14, 2026-11-02: the image integration's key in all 26
+    # bases' env and in their shells').
     if req.image_auth:
-        for k, v in (("HR_IMAGE_BASE_URL", req.image_auth.get("base_url")),
-                     ("HR_IMAGE_KEY", req.image_auth.get("api_key")),
+        ibase, ikey = req.image_auth.get("base_url"), req.image_auth.get("api_key")
+        if ibase and ikey:
+            ibase, ikey = _image_relay_route(str(ibase), str(ikey))
+        elif ikey:
+            ikey = None          # a key with nowhere to relay it to is not handed over
+        for k, v in (("HR_IMAGE_BASE_URL", ibase), ("HR_IMAGE_KEY", ikey),
                      ("HR_IMAGE_MODEL", req.image_auth.get("model"))):
             if v:
                 env[k] = str(v)
@@ -16072,14 +16821,16 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # after a sandbox recycled (every follow-up on an older session failed). Redirect $HOME INTO the
     # checkpointed workspace so the transcript travels in the tarball and resume works WITH history.
     home = os.path.join(cwd, ".harness", "home")
-    os.makedirs(home, exist_ok=True)
+    with _fs_as(fs_uid):                  # the session's own, so the builders below can write inside it
+        os.makedirs(home, exist_ok=True)
     env["HOME"] = home
     if _SESSION_UIDS:
         # The shared scratch directories are closed to session uids, so the session's own scratch
         # (checkpoint- and collection-excluded by design) is what tempfile, os.tmpdir() and the
         # CLIs' temp files use.
         scratch = os.path.join(cwd, "tmp")
-        os.makedirs(scratch, exist_ok=True)
+        with _fs_as(fs_uid):
+            os.makedirs(scratch, exist_ok=True)
         env["TMPDIR"] = env["TMP"] = env["TEMP"] = scratch
     # PWD must agree with the cwd the process is spawned in. _child_env copies the runner's own
     # environment, whose PWD is /app/runner; Popen(cwd=...) changes the directory but not the
@@ -16089,229 +16840,230 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     # removing or correcting PWD alone flips the turn from failing to passing.
     env["PWD"] = cwd
     environments.apply_env(env, turn_environment)
-    auth = _adapt_custom_auth(req.auth or Auth())
-    model = req.model or spec["default_model"]
-    use_appserver = backend == "codex" and bool(req.codex_appserver)
-    cmd = None
-    codex_note = ""
-    hermes_provider = ""
-    hermes_mcp: list[str] = []
-    if backend == "codex":
-        model = model or CODEX_DEFAULT_MODEL
-        mcp_toml = _codex_mcp_toml(req.mcp_servers)
-        if use_appserver:
-            _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml, resume=bool(req.resume_session_id),
-                               tools_disabled=req.tools_disabled)   # config.toml + CODEX_HOME + auth
-        else:
-            cmd, codex_note = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
-                                           mcp_toml=mcp_toml, resume_session_id=req.resume_session_id, tools_disabled=req.tools_disabled)
-    elif backend == "hermes":
-        model = model or HERMES_DEFAULT_MODEL
-        hermes_provider = _hermes_resolve_provider(req.provider, auth)
-        hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
-                                         max_turns=req.max_turns, mcp_servers=req.mcp_servers,
-                                         vision_auth=req.vision_auth)
-    elif backend == "dsh":
-        model = model or DSH_DEFAULT_MODEL
-        cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
-                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                         vision=bool(req.vision))
-    elif backend == "pi":
-        model = model or PI_DEFAULT_MODEL
-        cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
-                        resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                        tools_disabled=req.tools_disabled, vision=bool(req.vision))
-    elif backend == "omp":
-        model = model or OMP_DEFAULT_MODEL
-        cmd = _build_omp(req.provider, auth, model, req.prompt, cwd, env,
-                         resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                         tools_disabled=req.tools_disabled, vision=bool(req.vision))
-    elif backend == "qwen":
-        model = model or QWEN_DEFAULT_MODEL
-        cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
-                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
-    elif backend == "kimi":
-        model = model or KIMI_DEFAULT_MODEL
-        # _write_skills has already run, so the directory is on disk and can simply be named:
-        # --skills-dir "Overrides default discovery", the opencode shape, so there is no per-CLI
-        # home directory to guess here.
-        kimi_skills = os.path.join(cwd, ".harness", "skills") if installed_skills else None
-        cmd = _build_kimi(req.provider, auth, model, req.prompt, cwd, env,
-                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                          skills_dir=kimi_skills, tools_disabled=req.tools_disabled,
-                          max_turns=req.max_turns)
-    elif backend == "minimax":
-        model = model or MINIMAX_DEFAULT_MODEL
-        # Skills are already on disk in the home _write_skills chose, which the CLI discovers itself;
-        # the agent doc is its global AGENTS.md (see _agent_doc_path).
-        cmd = _build_minimax(req.provider, auth, model, req.prompt, cwd, env,
+    with _fs_as(fs_uid):              # the builders write the CLI's configuration into the session's tree
+        auth = _adapt_custom_auth(req.auth or Auth())
+        model = req.model or spec["default_model"]
+        use_appserver = backend == "codex" and bool(req.codex_appserver)
+        cmd = None
+        codex_note = ""
+        hermes_provider = ""
+        hermes_mcp: list[str] = []
+        if backend == "codex":
+            model = model or CODEX_DEFAULT_MODEL
+            mcp_toml = _codex_mcp_toml(req.mcp_servers)
+            if use_appserver:
+                _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml, resume=bool(req.resume_session_id),
+                                   tools_disabled=req.tools_disabled)   # config.toml + CODEX_HOME + auth
+            else:
+                cmd, codex_note = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
+                                               mcp_toml=mcp_toml, resume_session_id=req.resume_session_id, tools_disabled=req.tools_disabled)
+        elif backend == "hermes":
+            model = model or HERMES_DEFAULT_MODEL
+            hermes_provider = _hermes_resolve_provider(req.provider, auth)
+            hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
+                                             max_turns=req.max_turns, mcp_servers=req.mcp_servers,
+                                             vision_auth=req.vision_auth)
+        elif backend == "dsh":
+            model = model or DSH_DEFAULT_MODEL
+            cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                             tools_disabled=req.tools_disabled, max_turns=req.max_turns)
-    elif backend == "grok":
-        model = model or GROK_DEFAULT_MODEL
-        # Skills are already on disk under $GROK_HOME/skills (_write_skills), where grok's loader
-        # looks; nothing names them here.
-        cmd = _build_grok(req.provider, auth, model, req.prompt, cwd, env,
-                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                          tools_disabled=req.tools_disabled, max_turns=req.max_turns,
-                          partial=bool(req.partial_messages))
-    elif backend == "aider":
-        model = model or AIDER_DEFAULT_MODEL
-        # aider has no skill loader and no instruction-file convention: the driver puts the agent
-        # doc into aider's system message (the Model's system_prompt_prefix, aider's own hook). The
-        # agent doc alone goes through it. Its
-        # skills block names each installed skill with its description and folder, and the model
-        # reaches a skill's files ON DEMAND through the one tool surface it has, a shell command
-        # (`cat <folder>/SKILL.md`), whose output the driver feeds back in the same turn, or by
-        # naming a tracked file, which aider adds to the chat itself. That is the door every base
-        # without a loader uses (dsh reads them with its file tools). The PR read EVERY file of every
-        # bundle on every turn: measured on hr-test 2026-09-18, the three built-in bundles are 27
-        # files and 264 KB, licences and a PNG among them, and "Reply with exactly: …" cost 45,030
-        # input tokens. A skill's content is loaded when a task calls for it, never as a tax on
-        # every turn.
-        aider_read: list[str] = []
-        doc = _agent_doc_path(cwd, backend)
-        if doc.exists():
-            aider_read.append(str(doc))
-        cmd = _build_aider(req.provider, auth, model, req.prompt, cwd, env,
-                           mcp_servers=req.mcp_servers, tools_disabled=req.tools_disabled,
-                           skills_read=aider_read, max_turns=req.max_turns)
-    elif backend == "cheetahclaws":
-        model = model or CHEETAHCLAWS_DEFAULT_MODEL
-        # Skills are already in <cwd>/.cheetahclaws/skills (_write_skills) and the agent doc in
-        # CLAUDE.md, both where the CLI's own loaders look; the builder adds the model, the relay,
-        # MCP and the tool policy.
-        cmd = _build_cheetahclaws(req.provider, auth, model, req.prompt, cwd, env,
-                                  resume_session_id=req.resume_session_id,
-                                  mcp_servers=req.mcp_servers,
-                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns)
-    elif backend == "openhands":
-        model = model or OPENHANDS_DEFAULT_MODEL
-        cmd = _build_openhands(req.provider, auth, model, req.prompt, cwd, env,
-                               resume_session_id=req.resume_session_id,
-                               mcp_servers=req.mcp_servers,
-                               tools_disabled=req.tools_disabled, max_turns=req.max_turns)
-    elif backend == "agentzero":
-        model = model or AGENTZERO_DEFAULT_MODEL
-        cmd = _build_agentzero(req.provider, auth, model, req.prompt, cwd, env,
-                               resume_session_id=req.resume_session_id,
-                               mcp_servers=req.mcp_servers,
-                               tools_disabled=req.tools_disabled, max_turns=req.max_turns)
-    elif backend == "qoder":
-        model = model or QODER_DEFAULT_MODEL
-        # The agent doc becomes the remote Agent's system prompt; the skill folders _write_skills
-        # staged are published by the driver; the input files the runner landed are uploaded and
-        # mounted by it. Nothing on this box is read by the runtime.
-        cmd = _build_qoder(req.provider, auth, model, req.prompt, cwd, env,
-                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                           tools_disabled=req.tools_disabled, agent_doc=agent_doc,
-                           input_files=input_files,
-                           skills=[{"name": s["name"], "dir": os.path.dirname(os.path.join(cwd, s["entry"]))}
-                                   for s in installed_skills])
-    elif backend == "systemone":
-        model = model or SYSTEMONE_DEFAULT_MODEL
-        cmd = _build_systemone(req.provider, auth, model, req.prompt, cwd, env,
-                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                               tools_disabled=req.tools_disabled, max_turns=req.max_turns,
-                               timeout_seconds=req.timeout_seconds, agent_doc=agent_doc,
-                               metadata=req.metadata)
-    elif backend == "gemini":
-        model = model or GEMINI_DEFAULT_MODEL
-        cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
+                             vision=bool(req.vision))
+        elif backend == "pi":
+            model = model or PI_DEFAULT_MODEL
+            cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
                             resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                            native_model=req.native_model)
-    elif backend == "cline":
-        model = model or CLINE_DEFAULT_MODEL
-        cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
-                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
-    elif backend == "goose":
-        model = model or GOOSE_DEFAULT_MODEL
-        cmd = _build_goose(req.provider, auth, model, req.prompt, cwd, env,
-                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                           tools_disabled=req.tools_disabled, max_turns=req.max_turns)
-    elif backend == "opencode":
-        model = model or OPENCODE_DEFAULT_MODEL
-        # _write_skills already ran for this backend, so the directory it produced is on disk and
-        # can simply be named in opencode.json (its `skills` key takes arbitrary paths).
-        skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
-        cmd = _build_opencode(req.provider, auth, model, req.prompt, cwd, env,
-                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                              skills_dir=skills_dir, tools_disabled=req.tools_disabled)
-    elif backend == "kilo":
-        model = model or KILO_DEFAULT_MODEL
-        skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
-        cmd = _build_kilo(req.provider, auth, model, req.prompt, cwd, env,
-                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                          skills_dir=skills_dir, tools_disabled=req.tools_disabled)
-    elif backend == "mimo":
-        model = model or MIMO_DEFAULT_MODEL
-        # Same door as opencode's: the `skills` key takes arbitrary paths, so the directory
-        # _write_skills has already produced is named in mimo.json.
-        skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
-        cmd = _build_mimo(req.provider, auth, model, req.prompt, cwd, env,
-                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                          skills_dir=skills_dir, tools_disabled=req.tools_disabled)
-    elif backend == "jcode":
-        model = model or JCODE_DEFAULT_MODEL
-        cmd = _build_jcode(req.provider, auth, model, req.prompt, cwd, env,
-                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                           tools_disabled=req.tools_disabled)
-    elif backend == "opensquilla":
-        model = model or OPENSQUILLA_DEFAULT_MODEL
-        cmd = _build_opensquilla(req.provider, auth, model, req.prompt, cwd, env,
-                                 resume_session_id=req.resume_session_id,
-                                 mcp_servers=req.mcp_servers,
-                                 tools_disabled=req.tools_disabled, max_turns=req.max_turns)
-    elif backend == "fast-agent":
-        model = model or FAST_AGENT_DEFAULT_MODEL
-        cmd = _build_fast_agent(req.provider, auth, model, req.prompt, cwd, env,
-                                resume_session_id=req.resume_session_id,
-                                mcp_servers=req.mcp_servers,
-                                tools_disabled=req.tools_disabled, max_turns=req.max_turns,
-                                vision=bool(req.vision))
-    elif backend == "dcode":
-        model = model or DCODE_DEFAULT_MODEL
-        cmd = _build_dcode(req.provider, auth, model, req.prompt, cwd, env,
-                           resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                           tools_disabled=req.tools_disabled, max_turns=req.max_turns)
-    elif backend == "docker-agent":
-        model = model or DOCKER_AGENT_DEFAULT_MODEL
-        cmd = _build_docker_agent(req.provider, auth, model, req.prompt, cwd, env,
-                                  resume_session_id=req.resume_session_id,
-                                  mcp_servers=req.mcp_servers,
-                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns)
-    elif backend == "vibe":
-        model = model or VIBE_DEFAULT_MODEL
-        # Skills are already under $VIBE_HOME/skills, one of its own global roots, so there is
-        # nothing to name on the command line (pi's and omp's arrangement).
-        cmd = _build_vibe(req.provider, auth, model, req.prompt, cwd, env,
-                          resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                          tools_disabled=req.tools_disabled, max_turns=req.max_turns)
-    elif backend == "nanobot":
-        model = model or NANOBOT_DEFAULT_MODEL
-        cmd = _build_nanobot(req.provider, auth, model, req.prompt, cwd, env,
+                            tools_disabled=req.tools_disabled, vision=bool(req.vision))
+        elif backend == "omp":
+            model = model or OMP_DEFAULT_MODEL
+            cmd = _build_omp(req.provider, auth, model, req.prompt, cwd, env,
                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                             tools_disabled=req.tools_disabled, max_turns=req.max_turns,
-                             # the harness's own variables and the platform's HR_ ones a turn carries
-                             caller_keys=[*_caller_env(req.env),
-                                          *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
-    elif backend == "zeroclaw":
-        model = model or ZEROCLAW_DEFAULT_MODEL
-        cmd = _build_zeroclaw(req.provider, auth, model, req.prompt, cwd, env,
+                             tools_disabled=req.tools_disabled, vision=bool(req.vision))
+        elif backend == "qwen":
+            model = model or QWEN_DEFAULT_MODEL
+            cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
+                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+        elif backend == "kimi":
+            model = model or KIMI_DEFAULT_MODEL
+            # _write_skills has already run, so the directory is on disk and can simply be named:
+            # --skills-dir "Overrides default discovery", the opencode shape, so there is no per-CLI
+            # home directory to guess here.
+            kimi_skills = os.path.join(cwd, ".harness", "skills") if installed_skills else None
+            cmd = _build_kimi(req.provider, auth, model, req.prompt, cwd, env,
+                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                              skills_dir=kimi_skills, tools_disabled=req.tools_disabled,
+                              max_turns=req.max_turns)
+        elif backend == "minimax":
+            model = model or MINIMAX_DEFAULT_MODEL
+            # Skills are already on disk in the home _write_skills chose, which the CLI discovers itself;
+            # the agent doc is its global AGENTS.md (see _agent_doc_path).
+            cmd = _build_minimax(req.provider, auth, model, req.prompt, cwd, env,
+                                 resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                                 tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+        elif backend == "grok":
+            model = model or GROK_DEFAULT_MODEL
+            # Skills are already on disk under $GROK_HOME/skills (_write_skills), where grok's loader
+            # looks; nothing names them here.
+            cmd = _build_grok(req.provider, auth, model, req.prompt, cwd, env,
                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                               tools_disabled=req.tools_disabled, max_turns=req.max_turns,
-                              caller_keys=[*_caller_env(req.env),
-                                           *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
-    else:
-        mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
-        # Only a package that is ALSO a Claude Code plugin gets --plugin-dir; an Agent Plugins
-        # package without .claude-plugin/plugin.json would make the CLI refuse the flag.
-        plugin_dirs = [d for d in plugin_roots
-                       if (pathlib.Path(d) / ".claude-plugin" / "plugin.json").is_file()]
-        cmd = _build_claude(req.provider, auth, model, req.prompt, req.max_turns, cwd, env,
-                            resume_session_id=req.resume_session_id, mcp_config=mcp_config,
-                            disallowed_tools=req.tools_disabled, partial=bool(req.partial_messages),
-                            plugin_dirs=plugin_dirs)
+                              partial=bool(req.partial_messages))
+        elif backend == "aider":
+            model = model or AIDER_DEFAULT_MODEL
+            # aider has no skill loader and no instruction-file convention: the driver puts the agent
+            # doc into aider's system message (the Model's system_prompt_prefix, aider's own hook). The
+            # agent doc alone goes through it. Its
+            # skills block names each installed skill with its description and folder, and the model
+            # reaches a skill's files ON DEMAND through the one tool surface it has, a shell command
+            # (`cat <folder>/SKILL.md`), whose output the driver feeds back in the same turn, or by
+            # naming a tracked file, which aider adds to the chat itself. That is the door every base
+            # without a loader uses (dsh reads them with its file tools). The PR read EVERY file of every
+            # bundle on every turn: measured on hr-test 2026-09-18, the three built-in bundles are 27
+            # files and 264 KB, licences and a PNG among them, and "Reply with exactly: …" cost 45,030
+            # input tokens. A skill's content is loaded when a task calls for it, never as a tax on
+            # every turn.
+            aider_read: list[str] = []
+            doc = _agent_doc_path(cwd, backend)
+            if doc.exists():
+                aider_read.append(str(doc))
+            cmd = _build_aider(req.provider, auth, model, req.prompt, cwd, env,
+                               mcp_servers=req.mcp_servers, tools_disabled=req.tools_disabled,
+                               skills_read=aider_read, max_turns=req.max_turns)
+        elif backend == "cheetahclaws":
+            model = model or CHEETAHCLAWS_DEFAULT_MODEL
+            # Skills are already in <cwd>/.cheetahclaws/skills (_write_skills) and the agent doc in
+            # CLAUDE.md, both where the CLI's own loaders look; the builder adds the model, the relay,
+            # MCP and the tool policy.
+            cmd = _build_cheetahclaws(req.provider, auth, model, req.prompt, cwd, env,
+                                      resume_session_id=req.resume_session_id,
+                                      mcp_servers=req.mcp_servers,
+                                      tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+        elif backend == "openhands":
+            model = model or OPENHANDS_DEFAULT_MODEL
+            cmd = _build_openhands(req.provider, auth, model, req.prompt, cwd, env,
+                                   resume_session_id=req.resume_session_id,
+                                   mcp_servers=req.mcp_servers,
+                                   tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+        elif backend == "agentzero":
+            model = model or AGENTZERO_DEFAULT_MODEL
+            cmd = _build_agentzero(req.provider, auth, model, req.prompt, cwd, env,
+                                   resume_session_id=req.resume_session_id,
+                                   mcp_servers=req.mcp_servers,
+                                   tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+        elif backend == "qoder":
+            model = model or QODER_DEFAULT_MODEL
+            # The agent doc becomes the remote Agent's system prompt; the skill folders _write_skills
+            # staged are published by the driver; the input files the runner landed are uploaded and
+            # mounted by it. Nothing on this box is read by the runtime.
+            cmd = _build_qoder(req.provider, auth, model, req.prompt, cwd, env,
+                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled, agent_doc=agent_doc,
+                               input_files=input_files,
+                               skills=[{"name": s["name"], "dir": os.path.dirname(os.path.join(cwd, s["entry"]))}
+                                       for s in installed_skills])
+        elif backend == "systemone":
+            model = model or SYSTEMONE_DEFAULT_MODEL
+            cmd = _build_systemone(req.provider, auth, model, req.prompt, cwd, env,
+                                   resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                                   tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                                   timeout_seconds=req.timeout_seconds, agent_doc=agent_doc,
+                                   metadata=req.metadata)
+        elif backend == "gemini":
+            model = model or GEMINI_DEFAULT_MODEL
+            cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
+                                resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                                native_model=req.native_model)
+        elif backend == "cline":
+            model = model or CLINE_DEFAULT_MODEL
+            cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
+                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+        elif backend == "goose":
+            model = model or GOOSE_DEFAULT_MODEL
+            cmd = _build_goose(req.provider, auth, model, req.prompt, cwd, env,
+                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+        elif backend == "opencode":
+            model = model or OPENCODE_DEFAULT_MODEL
+            # _write_skills already ran for this backend, so the directory it produced is on disk and
+            # can simply be named in opencode.json (its `skills` key takes arbitrary paths).
+            skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
+            cmd = _build_opencode(req.provider, auth, model, req.prompt, cwd, env,
+                                  resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                                  skills_dir=skills_dir, tools_disabled=req.tools_disabled)
+        elif backend == "kilo":
+            model = model or KILO_DEFAULT_MODEL
+            skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
+            cmd = _build_kilo(req.provider, auth, model, req.prompt, cwd, env,
+                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                              skills_dir=skills_dir, tools_disabled=req.tools_disabled)
+        elif backend == "mimo":
+            model = model or MIMO_DEFAULT_MODEL
+            # Same door as opencode's: the `skills` key takes arbitrary paths, so the directory
+            # _write_skills has already produced is named in mimo.json.
+            skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
+            cmd = _build_mimo(req.provider, auth, model, req.prompt, cwd, env,
+                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                              skills_dir=skills_dir, tools_disabled=req.tools_disabled)
+        elif backend == "jcode":
+            model = model or JCODE_DEFAULT_MODEL
+            cmd = _build_jcode(req.provider, auth, model, req.prompt, cwd, env,
+                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled)
+        elif backend == "opensquilla":
+            model = model or OPENSQUILLA_DEFAULT_MODEL
+            cmd = _build_opensquilla(req.provider, auth, model, req.prompt, cwd, env,
+                                     resume_session_id=req.resume_session_id,
+                                     mcp_servers=req.mcp_servers,
+                                     tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+        elif backend == "fast-agent":
+            model = model or FAST_AGENT_DEFAULT_MODEL
+            cmd = _build_fast_agent(req.provider, auth, model, req.prompt, cwd, env,
+                                    resume_session_id=req.resume_session_id,
+                                    mcp_servers=req.mcp_servers,
+                                    tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                                    vision=bool(req.vision))
+        elif backend == "dcode":
+            model = model or DCODE_DEFAULT_MODEL
+            cmd = _build_dcode(req.provider, auth, model, req.prompt, cwd, env,
+                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+        elif backend == "docker-agent":
+            model = model or DOCKER_AGENT_DEFAULT_MODEL
+            cmd = _build_docker_agent(req.provider, auth, model, req.prompt, cwd, env,
+                                      resume_session_id=req.resume_session_id,
+                                      mcp_servers=req.mcp_servers,
+                                      tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+        elif backend == "vibe":
+            model = model or VIBE_DEFAULT_MODEL
+            # Skills are already under $VIBE_HOME/skills, one of its own global roots, so there is
+            # nothing to name on the command line (pi's and omp's arrangement).
+            cmd = _build_vibe(req.provider, auth, model, req.prompt, cwd, env,
+                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                              tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+        elif backend == "nanobot":
+            model = model or NANOBOT_DEFAULT_MODEL
+            cmd = _build_nanobot(req.provider, auth, model, req.prompt, cwd, env,
+                                 resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                                 tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                                 # the harness's own variables and the platform's HR_ ones a turn carries
+                                 caller_keys=[*_caller_env(req.env),
+                                              *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
+        elif backend == "zeroclaw":
+            model = model or ZEROCLAW_DEFAULT_MODEL
+            cmd = _build_zeroclaw(req.provider, auth, model, req.prompt, cwd, env,
+                                  resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                                  tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                                  caller_keys=[*_caller_env(req.env),
+                                               *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
+        else:
+            mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
+            # Only a package that is ALSO a Claude Code plugin gets --plugin-dir; an Agent Plugins
+            # package without .claude-plugin/plugin.json would make the CLI refuse the flag.
+            plugin_dirs = [d for d in plugin_roots
+                           if (pathlib.Path(d) / ".claude-plugin" / "plugin.json").is_file()]
+            cmd = _build_claude(req.provider, auth, model, req.prompt, req.max_turns, cwd, env,
+                                resume_session_id=req.resume_session_id, mcp_config=mcp_config,
+                                disallowed_tools=req.tools_disabled, partial=bool(req.partial_messages),
+                                plugin_dirs=plugin_dirs)
     resume_lost = _resume_lost(backend, cmd, req.resume_session_id, cwd)
     _isolate_session(cwd)   # everything the runner just wrote into the session is the session's now
     turn_id = "turn" + uuid.uuid4().hex
@@ -16388,8 +17140,9 @@ def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
     relay_base, relay_tok = _qoder_relay_route(base, auth.api_key)
     job = {"purge": True, "cwd": ws, "base_url": relay_base, "api_key": relay_tok}
     try:
-        proc = subprocess.run([QODER_PYTHON, QODER_DRIVER, json.dumps(job)], capture_output=True, text=True,
-                              timeout=180, **_as_session(ws))
+        penv = _child_env()
+        proc = subprocess.run(_driver_cmd(QODER_PYTHON, QODER_DRIVER, job, penv), capture_output=True, text=True,
+                              env=penv, timeout=180, **_as_session(ws))
     except Exception as e:  # noqa: BLE001
         print(f"[workspace] {ws}: remote purge did not run: {type(e).__name__}: {e}", flush=True)
         return {"backend": "qoder", "purged": False, "reason": f"purge did not run: {e}"[:300]}

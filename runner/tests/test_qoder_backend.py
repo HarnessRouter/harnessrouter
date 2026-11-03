@@ -955,9 +955,10 @@ def test_the_builder_hands_the_driver_the_relay_and_a_placeholder_never_the_key(
     tok = None
     try:
         assert cmd[0] == rs.QODER_PYTHON and cmd[1] == rs.QODER_DRIVER
-        job = json.loads(cmd[2])
+        assert len(cmd) == 2                                     # the job rides the env: argv is every uid's to read
+        job = json.loads(env["HR_DRIVER_JOB"])
         tok = job["api_key"]
-        assert tok.startswith("hr-relay-") and "pat-secret" not in cmd[2] and "pat-secret" not in json.dumps(env)
+        assert tok.startswith("hr-relay-") and "pat-secret" not in json.dumps(cmd) and "pat-secret" not in json.dumps(env)
         assert job["base_url"].startswith("http://127.0.0.1:") and job["base_url"].endswith("/v1")
         assert rs._HERMES_RELAY["routes"][tok][0] == rs.QODER_DEFAULT_BASE and rs._HERMES_RELAY["routes"][tok][1] == "pat-secret"
         assert rs._HERMES_RELAY["routes"][tok][2].get("passthrough") is True

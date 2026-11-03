@@ -214,7 +214,7 @@ def _build(**kw):
                 model="some-model", prompt="hi", cwd=d, env=env)
     args.update(kw)
     cmd = _build_cheetahclaws(**args)
-    return cmd, d, env, json.loads(cmd[2])
+    return cmd, d, env, json.loads(args["env"]["HR_DRIVER_JOB"])
 
 
 def test_the_real_key_never_reaches_the_cli():

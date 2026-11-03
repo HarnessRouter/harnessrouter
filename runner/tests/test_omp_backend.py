@@ -38,11 +38,15 @@ def test_omp_argv_native_provider():
 
     assert cmd[:3] == ["omp", "-p", "--mode"]
     assert cmd[3] == "json"
-    assert "--model" in cmd and "claude-sonnet-4.6" in cmd
+    assert "--model" in cmd and "hr/claude-sonnet-4.6" in cmd     # the custom provider: the key rides the relay (#615)
     assert "--auto-approve" in cmd
     assert "--no-extensions" in cmd
     assert cmd[-1] == "hello world"
-    assert env.get("ANTHROPIC_API_KEY") == "sk-ant-test"
+    assert "ANTHROPIC_API_KEY" not in env and "sk-ant-test" not in json.dumps(env)
+    yml = (pathlib.Path(d) / ".omp" / "agent" / "models.yml").read_text()
+    assert "sk-ant-test" not in yml
+    from server import _HERMES_RELAY
+    assert _HERMES_RELAY["routes"][json.loads(yml)["providers"]["hr"]["apiKey"]][:2] == ("https://api.anthropic.com/v1", "sk-ant-test")
     assert env.get("PI_CODING_AGENT_DIR") == str(pathlib.Path(d) / ".omp" / "agent")
 
 
@@ -60,7 +64,10 @@ def test_an_openai_shape_turn_rides_the_loopback_relay_and_a_custom_endpoint_kee
     d2 = tempfile.mkdtemp()
     _build_omp("openai-api", Auth(api_key="sk-test", base_url="https://relay.example/v1", api_format="openai"), "gpt-5.4", "do work", d2, {"HOME": d2})
     cfg2 = json.loads((pathlib.Path(d2) / ".omp" / "agent" / "models.yml").read_text())
-    assert cfg2["providers"]["hr"]["baseUrl"] == "https://relay.example/v1"
+    # a custom endpoint rides the relay too (#615), and the route reaches its own URL, joined exactly
+    from server import _HERMES_RELAY
+    assert cfg2["providers"]["hr"]["baseUrl"].startswith("http://127.0.0.1:") and "sk-test" not in json.dumps(cfg2)
+    assert _HERMES_RELAY["routes"][cfg2["providers"]["hr"]["apiKey"]][:2] == ("https://relay.example/v1", "sk-test")
 
 
 def test_the_served_model_rides_the_result_and_a_substitution_fails_the_turn():
@@ -92,7 +99,9 @@ def test_omp_argv_custom_provider_writes_models_json():
     assert cfg_path.exists()
     cfg = json.loads(cfg_path.read_text())
     assert "hr" in cfg["providers"]
-    assert cfg["providers"]["hr"]["baseUrl"] == "https://relay.example/v1"
+    from server import _HERMES_RELAY
+    assert cfg["providers"]["hr"]["baseUrl"].startswith("http://127.0.0.1:")          # the relay (#615)
+    assert _HERMES_RELAY["routes"][cfg["providers"]["hr"]["apiKey"]][:2] == ("https://relay.example/v1", "sk-test")
     assert cfg["providers"]["hr"]["api"] == "openai-completions"
     assert cfg["providers"]["hr"]["models"][0]["id"] == "gpt-5.4"
 
