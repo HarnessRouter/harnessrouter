@@ -858,3 +858,32 @@ def test_a_provider_refusal_on_a_cloud_route_is_the_turns_reason(relay):
         assert "last_refusal" not in flags
     finally:
         up.close()
+
+
+def _gemini_call(relay, host_root):
+    up = _Stub(_json_reply({"candidates": []}))
+    try:
+        origin_base, tok = rs._gemini_relay_route(host_root, "real-google-key", "gemini-x", "")
+        _upstream_to(relay, tok, up.base)
+        origin = origin_base.removesuffix("/v1")
+        conn, resp = _call(origin, "/v1beta/models/gemini-x:generateContent", b'{"contents":[]}',
+                           {"x-goog-api-key": tok, "content-type": "application/json"})
+        assert resp.status == 200, resp.read()[:200]
+        resp.read(); conn.close()
+        return up.requests[0]["headers"]
+    finally:
+        up.close()
+
+
+def test_google_own_api_gets_the_key_as_its_header_and_no_bearer(relay):
+    """Google reads a bearer beside the key as an OAuth token and refuses the call, so every gemini turn on Google's
+    own API failed 401 with a good key (0.37.15, measured 2026-11-03). A test that only asked for the right header passed."""
+    seen = _gemini_call(relay, "https://generativelanguage.googleapis.com")
+    assert seen["x-goog-api-key"] == "real-google-key"
+    assert "authorization" not in seen
+
+
+def test_a_gateway_serving_googles_api_keeps_what_it_was_measured_with(relay):
+    seen = _gemini_call(relay, "https://gateway.example")
+    assert seen["x-goog-api-key"] == "real-google-key"
+    assert seen["authorization"] == "Bearer real-google-key"

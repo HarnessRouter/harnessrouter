@@ -6277,6 +6277,12 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             if m and nm and nm != m:
                 tail = tail.replace(f"/models/{m}:", f"/models/{nm}:", 1)
             headers["x-goog-api-key"] = key
+            # Google's own API takes the key here and nowhere else. A bearer beside it is read as an OAuth
+            # token and the call is refused 401 ("Expected OAuth 2 access token"), a good key or not
+            # (measured 2026-11-03: 200 with the header alone, 401 through the relay with the same key).
+            # A gateway that serves this API may want the bearer; those keep it, as measured.
+            if flags.get("google_own"):
+                headers.pop("authorization", None)
         # Compare the PATH only: anthropic clients append query strings (claude-code sends
         # /v1/messages?beta=true on streaming requests), and matching the raw tail let those
         # fall through to a generic forward against a host with no such route.
@@ -7914,6 +7920,8 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
         _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key,
                                         _turn_route({"google_native": True, "model": model,
                                                      "native_model": native_model, **_turn_effort(),
+                                                     "google_own": (urllib.parse.urlsplit(host_root).hostname or "").lower()
+                                                     == "generativelanguage.googleapis.com",
                                                      **_route_trace_flag()}))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
