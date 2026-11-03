@@ -10540,6 +10540,8 @@ async def create_response(body: CreateResponseBody, request: Request):
     # The project layer this task reads: the request's, else the harness's. Resolved and checked
     # here, before anything is allocated, so a missing or unbuilt environment is a 4xx and not a
     # failed turn.
+    if (getattr(body, "metadata", None) or {}).get("environment"):     # a harness's own was checked when it was set
+        await _environment_in_reach(org, _task_environment_ref(body, hv), principal)
     environment = await _environment_for_turn(org, _task_environment_ref(body, hv))
     if environment and not _backend_takes_environments(_backend_of_harness(hv) or _backend_of_builtin(harness_id or "")):
         # The layer is mounted in THIS sandbox; a remote runtime sees none of it. Refused in words
@@ -19578,9 +19580,22 @@ async def _environment_vertex(org: str, env_id: str) -> dict | None:
     return v
 
 
-async def _environment_check_ref(org: str, env_id: str | None) -> None:
+async def _environment_check_ref(org: str, env_id: str | None, principal: dict | None = None) -> None:
     """A harness may name an environment of its own org, or none."""
     if env_id and not await _environment_vertex(org, env_id):
+        raise uhp_error(404, "environment_not_found", "No environment with that id.", "environment")
+    await _environment_in_reach(org, env_id, principal)
+
+
+async def _environment_in_reach(org: str, env_id: str | None, principal: dict | None) -> None:
+    """The workspace rule the environment routes hold (_owned_environment), at the other two places a caller
+    names an environment: a task's metadata and a harness's field. Checking only the organization let a
+    workspace's key mount another workspace's project files. None of a caller's workspace to compare: passes."""
+    ws = str((principal or {}).get("workspace") or "")
+    if not env_id or not ws:
+        return
+    v = await _environment_vertex(org, env_id)
+    if v and not _workspace_keep(str(v.get("workspace") or ""), ws, bool((principal or {}).get("workspace_default"))):
         raise uhp_error(404, "environment_not_found", "No environment with that id.", "environment")
 
 
@@ -20541,7 +20556,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     await _require_offered_model(org, body.base, body.default_model)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
-    await _environment_check_ref(org, body.environment)
+    await _environment_check_ref(org, body.environment, p)
     body.plugins = await _plugins_prepare(body, org)
     hid = _rid("chrn")
     now = str(int(time.time() * 1000))
@@ -20644,7 +20659,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
-    await _environment_check_ref(org, body.environment)
+    await _environment_check_ref(org, body.environment, _caller)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(cur))
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
     # AFTER the write: _harness_props can still refuse this save (an unsupported base), and a
@@ -20886,7 +20901,7 @@ async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
     try:
         body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
         body.skills = await _skills_prepare(body.skills)
-        await _environment_check_ref(org, body.environment)
+        await _environment_check_ref(org, body.environment, p)
         body.plugins = await _plugins_prepare(body, org)
         now = str(int(time.time() * 1000))
         props = {"org": org, "member": member, "workspace": str(p.get("workspace") or ""),
@@ -21666,7 +21681,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
     body.skills = await _skills_prepare(body.skills)
     # The hosted entries launch attaches below (a kit's database, the media server) are names a
     # plugin's own servers must not take, so they count as the harness's here.
-    await _environment_check_ref(org, body.environment)
+    await _environment_check_ref(org, body.environment, p)
     body.plugins = await _plugins_prepare(body, org, reserved_mcp=tuple(
         str(d["name"]) for d in (decl, media_decl) if d and d.get("name")))
     hid = _rid("chrn")
@@ -22455,7 +22470,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
     body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
-    await _environment_check_ref(org, body.environment)
+    await _environment_check_ref(org, body.environment, _p)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(v))
     await _vg_upsert("Harness", hid, {**_harness_props(body), "updated_at": str(int(time.time() * 1000))})
     # AFTER the write: see update_harness.

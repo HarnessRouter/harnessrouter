@@ -385,9 +385,14 @@ async def _allowed(s: Session, url: str) -> str | None:
         return why
     if own:
         return None
-    if host not in s.host_cache:
-        s.host_cache[host] = await resolves_private(host)
-    return "a private or local address" if s.host_cache[host] else None
+    # Only a refusal is remembered. A public answer is asked again each time: kept, it let a host answer
+    # with a public address once and a private one ever after.
+    if s.host_cache.get(host):
+        return "a private or local address"
+    if await resolves_private(host):
+        s.host_cache[host] = True
+        return "a private or local address"
+    return None
 
 
 async def open_session(sid: str, hid: str, org: str, workspace: str, allow: list[str], deny: list[str],
