@@ -225,6 +225,25 @@ if [ "${HR_AUTH_DISABLED:-}" != "1" ] && [ ! -f "$HR_AUTH_STORE" ] && [ "$HR_AUT
   echo "[harnessrouter] the default password is not accepted. Sign in as '$HR_AUTH_USER' with the password in $HR_INITIAL_PASSWORD_FILE (docker exec <container> cat $HR_INITIAL_PASSWORD_FILE), then change it from the profile page, or set HR_AUTH_PASSWORD."
 fi
 
+# Secrets at rest (#624). The secret store encrypts only under HR_SECRET_KEY, and nothing set it:
+# an install that followed the README kept its provider keys and MCP tokens in plain text under
+# /data/secrets, behind a file mode. So an instance given no key gets one at its first boot, kept
+# like the initial password: root's, 0600, on the volume. An operator who sets HR_SECRET_KEY keeps
+# the key apart from the data, which this cannot do, and the guide says so; one who set it once
+# keeps setting it, since the records are sealed under it. The gateway re-encrypts what was
+# stored before the key existed at its start.
+HR_SECRET_KEY_FILE="$DATA_DIR/secret-key"
+root_file "$HR_SECRET_KEY_FILE"
+if [ -z "${HR_SECRET_KEY:-}" ]; then
+  if [ ! -s "$HR_SECRET_KEY_FILE" ]; then
+    ( umask 077; "$PY" -I -c 'import secrets; print(secrets.token_urlsafe(32))' > "$HR_SECRET_KEY_FILE" )
+    chmod 600 "$HR_SECRET_KEY_FILE"
+    echo "[harnessrouter] stored secrets are encrypted under a key generated now and kept in $HR_SECRET_KEY_FILE; set HR_SECRET_KEY to keep the key away from the data"
+  fi
+  HR_SECRET_KEY="$(cat "$HR_SECRET_KEY_FILE")"
+  export HR_SECRET_KEY
+fi
+
 if [ "${HR_AUTH_DISABLED:-}" = "1" ]; then
   echo "[harnessrouter] WARNING: login is DISABLED (HR_AUTH_DISABLED=1) — anyone who can reach this port has full control"
 elif [ -f "$HR_AUTH_STORE" ]; then

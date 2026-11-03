@@ -654,9 +654,11 @@ Then `my-postgres:5432` works as a host in the connection string. A database on 
 rather than in a container is reachable at `host.docker.internal` on Docker Desktop, or via
 `--add-host=host.docker.internal:host-gateway` on Linux.
 
-**Set `HR_SECRET_KEY`.** Connection strings are encrypted at rest under a key derived from it,
-and without it the server refuses to store one rather than writing your production credential to
-disk in plaintext:
+**The connection string is encrypted at rest**, like every stored credential, under a key derived
+from `HR_SECRET_KEY`. An instance given none generates one at its first start and keeps it in
+`/data/secret-key` (root's, mode 600) — that protects a copy of `/data/secrets`, not a copy of the
+whole volume, since the key sits beside the data. To keep the two apart, set the key yourself,
+and keep setting the same one, since the stored records are sealed under it:
 
 ```bash
 -e HR_SECRET_KEY=a-long-random-passphrase

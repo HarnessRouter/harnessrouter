@@ -503,6 +503,41 @@ class FileSecretStore:
                 self._p(tenant, name).unlink()
         await asyncio.to_thread(_do)
 
+    async def reencrypt_plaintext(self) -> int:
+        """Every record written before the key existed, written again under it; → how many.
+
+        An install that ran without HR_SECRET_KEY has provider keys and MCP tokens in the clear
+        under the store's root (#624). The entrypoint now gives every install a key at first
+        start, and this is what brings the records that predate it under it: once, at the
+        gateway's start, in place, same mode. Nothing to do without a key, and a record that is
+        already sealed is left as it is. A file that cannot be rewritten is skipped and counted
+        nowhere; the next start tries again."""
+        if self._key is None:
+            return 0
+
+        def _do() -> int:
+            n = 0
+            if not self._root.is_dir():
+                return 0
+            for tdir in sorted(self._root.iterdir()):
+                if not tdir.is_dir():
+                    continue
+                for f in sorted(tdir.iterdir()):
+                    if not f.is_file():
+                        continue
+                    try:
+                        raw = f.read_text()
+                        if raw.startswith(self._MAGIC):
+                            continue
+                        f.write_text(self._seal(raw))
+                        with contextlib.suppress(OSError):
+                            f.chmod(0o600)
+                        n += 1
+                    except Exception:  # noqa: BLE001 — unreadable or unwritable: left for the next start
+                        continue
+            return n
+        return await asyncio.to_thread(_do)
+
     async def blank(self) -> list[tuple[str, str]]:
         """Every stored secret whose value is empty, as (tenant, name). Before 0.32.0 a removed
         credential was overwritten with nothing rather than deleted; the retention sweep removes
