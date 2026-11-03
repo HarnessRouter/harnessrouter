@@ -71,9 +71,9 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website', siteName: 'HarnessRouter', url: SITE,
     title: 'HarnessRouter, one API for every coding agent', description: DESC,
-    images: ['/icon.png'],
+    images: ['/share-mark.png'],
   },
-  twitter: { card: 'summary', title: 'HarnessRouter', description: DESC, images: ['/icon.png'] },
+  twitter: { card: 'summary', title: 'HarnessRouter', description: DESC, images: ['/share-mark.png'] },
   robots: SELF_HOSTED ? { index: false, follow: false } : { index: true, follow: true },
 };
 
