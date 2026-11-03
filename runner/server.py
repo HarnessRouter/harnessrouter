@@ -90,6 +90,7 @@ from pydantic import BaseModel
 import environments   # the read-only project layer a turn may name (runner/environments.py)
 import reasoning      # how much a model thinks on a turn: levels and what sets them (runner/reasoning.py)
 import tracecontext   # the caller's W3C trace context: its checks and a child for the relay (#473)
+import ask_user_mcp   # the `ask_user` tool a base asks the person through, and what its arguments mean (#476)
 
 app = FastAPI(title="harness-runner")
 
@@ -749,7 +750,7 @@ def _turn_secrets(env: dict, names: list | None) -> list[str]:
 # gateway reads the transcript by) or a role, and erase its own transcript from the trace (reported
 # privately, GHSA-7pwj-vv9r-rh2m). The turn's own fields are kept by POSITION, not by name anywhere:
 # a tool's input is an arbitrary map, and a "type" inside it is the agent's content.
-_ANSWER_CONTENT = ("result", "error", "reason", "handoff", "events", "error_detail")
+_ANSWER_CONTENT = ("result", "error", "reason", "handoff", "events", "error_detail", "input_request")
 _ANSWER_KEEP = {
     "event": frozenset({"type", "subtype", "session_id", "uuid", "parent_tool_use_id", "model", "usage", "modelUsage",
                         "stop_reason"}),
@@ -14964,6 +14965,54 @@ _GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "qwen", "gemini", "cline",
                         "opencode", "mimo", "kilo", "qoder"}
 
 
+# ── a question for the person ends the turn (UHP Tasks §3.2, #476) ──────────────────────────────
+# The base gets `ask_user` as one more MCP server (ask_user_mcp.py), and the runner watches the
+# stream for its call: the call's arguments are the question, and its result is the moment the
+# turn ends — not the call, so the base's own transcript holds the call and its answer as a pair,
+# which is what its resume continues from (measured on Claude Code 2.1.289: killed at the result
+# and resumed with the answer as the next prompt, the task went on). The process is stopped the
+# way the step budget stops one, and the turn's result is `incomplete` with the reason
+# `input_required` and the question beside it, which the gateway turns into the response's
+# `input_request` item.
+_ASK_SERVER_NAME = "harnessrouter"
+
+
+def _ask_user_server() -> dict:
+    """The stdio MCP server that serves `ask_user`, in the shape every MCP config writer takes."""
+    return {"name": _ASK_SERVER_NAME, "command": sys.executable,
+            "args": [str(pathlib.Path(__file__).with_name("ask_user_mcp.py"))]}
+
+
+def _is_ask_tool(name: str) -> bool:
+    """Whether a tool_use is the ask tool, bare or under a base's own MCP prefix
+    (claude-family bases name an MCP tool `mcp__<server>__<tool>`)."""
+    return name == ask_user_mcp.TOOL_NAME or name.endswith("__" + ask_user_mcp.TOOL_NAME)
+
+
+def _ask_question_seen(ev: dict, state: dict) -> None:
+    """An assistant event's ask-tool calls, kept by id until their results arrive."""
+    blocks = (ev.get("message") or {}).get("content")
+    for b in blocks if isinstance(blocks, list) else []:
+        if isinstance(b, dict) and b.get("type") == "tool_use" and _is_ask_tool(str(b.get("name") or "")):
+            req, _why = ask_user_mcp.validate_request(b.get("input"))
+            if req is not None:
+                state.setdefault("_asked", {})[str(b.get("id") or "")] = req
+
+
+def _ask_question_answered(ev: dict, state: dict) -> dict | None:
+    """The question whose tool result this user event carries, if it carries one and the tool did
+    not refuse it (a refused call goes back to the model, which asks again properly)."""
+    asked = state.get("_asked") or {}
+    if not asked:
+        return None
+    blocks = (ev.get("message") or {}).get("content")
+    for b in blocks if isinstance(blocks, list) else []:
+        if (isinstance(b, dict) and b.get("type") == "tool_result" and not b.get("is_error")
+                and str(b.get("tool_use_id") or "") in asked):
+            return asked[str(b.get("tool_use_id"))]
+    return None
+
+
 def _record_cli_session_id(rec: dict, ev: dict) -> None:
     """Remember the CLI's own conversation id from an `init` event: it is what the gateway sends
     back as the next turn's resume id, and therefore what every `--resume` is built from.
@@ -15046,6 +15095,12 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             # The turn ended at its budget. What the CLI says while it is stopped (a remote
             # runtime's cancel, with its charge) is still the turn's account, but not its verdict.
             ev.update(subtype="error_max_turns", is_error=False)
+        if state.get("_stop") == "input_required":
+            # The turn ended at the model's question: a result the CLI wrote before the stop
+            # landed (the whole turn in one write, or a model that went on after the call) is the
+            # turn's account, and the question is its verdict.
+            ev.update(subtype="incomplete", is_error=False, reason="input_required",
+                      input_request=state.get("_input_request"))
         if not ev.get("model"):
             # The CLI did not say what ran; the relay saw the provider say it. Set before
             # the event is visible, so the gateway never reads it unlabelled.
@@ -15129,6 +15184,14 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 if (step_cap and not state.get("_stop") and ev.get("type") == "assistant"
                         and _count_tool_calls(ev, state) > step_cap):
                     state["_stop"] = "max_turns"
+                if ev.get("type") == "assistant":
+                    _ask_question_seen(ev, state)
+                elif ev.get("type") == "user" and not state.get("_stop"):
+                    question = _ask_question_answered(ev, state)
+                    if question is not None:
+                        # The ask tool answered: the turn ends here, with the question (#476).
+                        state["_stop"] = "input_required"
+                        state["_input_request"] = question
             if state.get("_stop") and not state.get("_stopped") and proc.poll() is None:
                 # The turn went past its budget (a CLI with no step limit of its own, counted above
                 # or by its translator): the process is stopped here, the way a cancel stops it, so a
@@ -15159,12 +15222,14 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
             # The SAME capture the streaming loop does, because a base whose stream carries nothing
             # emits its init HERE (see _record_cli_session_id for what it cost to learn that).
             _record_cli_session_id(rec, ev)
-    if result_ev is None and state.get("_stop") == "max_turns":
-        # Stopped at its budget before the CLI said anything terminal (codex's turn.completed
-        # never comes once it is killed): the turn's result is the budget's, with what its
-        # translator or the relay counted, and no usage at all where nothing counted it.
-        result_ev = {"type": "result", "subtype": "error_max_turns", "is_error": False,
-                     "result": state.get("final", "")}
+    if result_ev is None and state.get("_stop") in ("max_turns", "input_required"):
+        # Stopped at its budget, or at the model's question (#476), before the CLI said anything
+        # terminal (codex's turn.completed never comes once it is killed; a killed claude writes
+        # no result): the turn's result is the budget's, or the question's with its reason
+        # (_settle), with what its translator or the relay counted, and no usage at all where
+        # nothing counted it.
+        result_ev = {"type": "result", "is_error": False, "result": state.get("final", ""),
+                     "subtype": "error_max_turns" if state["_stop"] == "max_turns" else "incomplete"}
         if _running_usage(state):
             result_ev["usage"] = _running_usage(state)   # the translator's count so far (pi, dsh)
         _settle(result_ev)
@@ -15186,6 +15251,9 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
     # rides the status body beside the reason so the gateway can report it without the trace.
     _ho = (result_ev or {}).get("handoff")
     rec["handoff"] = _ho if isinstance(_ho, dict) else None
+    # The question a turn ended on (#476), beside its reason `input_required`; None otherwise.
+    _iq = (result_ev or {}).get("input_request")
+    rec["input_request"] = _iq if isinstance(_iq, dict) else None
     # Never leave a failure opaque: surface the captured CLI stderr (and result-event error) so the
     # gateway/trace shows WHY it failed (throttling, model error, etc.) instead of an empty string.
     if rec["status"] in ("failed", "error", "timeout"):
@@ -16740,6 +16808,7 @@ class TurnReq(BaseModel):
                                            # which knows it when the base here is a broker's; unset = read it off the base
     traceparent: str | None = None          # the caller's W3C trace context (#473); unset = the turn has none
     tracestate: str | None = None           # its vendor state for that trace; never `baggage`
+    input_requests: bool = False            # claude: serve `ask_user`, and end the turn at its call (#476)
 
 
 @app.post("/turn")
@@ -17138,14 +17207,22 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                   caller_keys=[*_caller_env(req.env),
                                                *(k for k in (req.env or {}) if isinstance(k, str) and k.startswith("HR_"))])
         else:
-            mcp_config = _write_mcp_config_claude(cwd, req.mcp_servers)
+            claude_servers = list(req.mcp_servers or [])
+            claude_tools_off = list(req.tools_disabled or [])
+            if req.input_requests:
+                # The question tool (#476), as one more MCP server; and the CLI's own
+                # AskUserQuestion is denied, so a question goes through the tool that ends the
+                # turn rather than one that waits on a terminal nobody is at.
+                claude_servers.append(_ask_user_server())
+                claude_tools_off.append("AskUserQuestion")
+            mcp_config = _write_mcp_config_claude(cwd, claude_servers)
             # Only a package that is ALSO a Claude Code plugin gets --plugin-dir; an Agent Plugins
             # package without .claude-plugin/plugin.json would make the CLI refuse the flag.
             plugin_dirs = [d for d in plugin_roots
                            if (pathlib.Path(d) / ".claude-plugin" / "plugin.json").is_file()]
             cmd = _build_claude(req.provider, auth, model, req.prompt, req.max_turns, cwd, env,
                                 resume_session_id=req.resume_session_id, mcp_config=mcp_config,
-                                disallowed_tools=req.tools_disabled, partial=bool(req.partial_messages),
+                                disallowed_tools=claude_tools_off, partial=bool(req.partial_messages),
                                 plugin_dirs=plugin_dirs)
     resume_lost = _resume_lost(backend, cmd, req.resume_session_id, cwd)
     _isolate_session(cwd)   # everything the runner just wrote into the session is the session's now
@@ -17329,6 +17406,8 @@ def _turn_answer(turn_id: str, rec: dict, since: int, held: bool) -> dict:
            "error": rec.get("error"), "backend": rec["backend"], "model": rec["model"],
            "session_id": rec.get("session_id"), "reason": rec.get("reason") or "",
            "handoff": rec.get("handoff"),
+           # The question the turn ended on, with reason `input_required` (#476); None otherwise.
+           "input_request": rec.get("input_request"),
            # The harness's own account of a failure (#504): the base, the tool that failed and the
            # exception and stack frames it printed. The gateway puts the base and the tool in the
            # response's error.detail; the trace carries the rest.
