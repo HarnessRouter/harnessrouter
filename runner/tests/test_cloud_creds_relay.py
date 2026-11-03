@@ -830,3 +830,60 @@ def test_a_vertex_turn_with_an_unreadable_key_writes_nothing(relay, monkeypatch,
     assert e.value.status_code == 400 and "FAKEFAKE" not in e.value.detail
     assert _leaks(("FAKEFAKE",), env, [], str(cwd)) == []
     assert list(cwd.rglob(".gcp-sa.json")) == []
+
+
+def test_a_provider_refusal_on_a_cloud_route_is_the_turns_reason(relay):
+    """A refused cloud call kept nothing on the route, so a hermes turn that AWS refused said "gave no reason"
+    (measured on real AWS 2026-11-03). The next call starts clean: an earlier refusal is not its reason."""
+    words = "User: arn:aws:iam::123456789012:user/x is not authorized to perform: bedrock:InvokeModel"
+    refuse, fine = _json_reply({"message": words}, status=403), _json_reply({"ok": 1})
+    answers = [refuse, fine]
+    up = _Stub(lambda h, req: answers.pop(0)(h, req))
+    try:
+        origin, tok = rs._bedrock_relay_route("us-east-1", bearer=BEARER)
+        _upstream_to(relay, tok, up.base)
+        flags = relay["routes"][tok][2]
+        conn, resp = _call(origin, f"/{tok}/model/m/invoke", b"{}", {"content-type": "application/json"})
+        assert resp.status == 403 and words in resp.read().decode()      # byte for byte to the client, as before
+        conn.close()
+        assert flags["last_refusal"] == "403: " + words
+        # the turn finds it from the base address Claude Code was handed, and from hermes's placeholder
+        assert rs._turn_relay_flags({"ANTHROPIC_BEDROCK_BASE_URL": f"{origin}/{tok}"}) is flags
+        assert rs._turn_relay_flags({"AWS_BEARER_TOKEN_BEDROCK": tok}) is flags
+        assert rs._turn_relay_flags({"ANTHROPIC_VERTEX_BASE_URL": f"{origin}/{tok}/v1"}) is flags
+        assert rs._turn_relay_flags({"PATH": "/usr/bin", "X": "https://example.com/not-a-route"}) == {}
+        conn, resp = _call(origin, f"/{tok}/model/m/invoke", b"{}", {"content-type": "application/json"})
+        assert resp.status == 200
+        resp.read(); conn.close()
+        assert "last_refusal" not in flags
+    finally:
+        up.close()
+
+
+def _gemini_call(relay, host_root):
+    up = _Stub(_json_reply({"candidates": []}))
+    try:
+        origin_base, tok = rs._gemini_relay_route(host_root, "real-google-key", "gemini-x", "")
+        _upstream_to(relay, tok, up.base)
+        origin = origin_base.removesuffix("/v1")
+        conn, resp = _call(origin, "/v1beta/models/gemini-x:generateContent", b'{"contents":[]}',
+                           {"x-goog-api-key": tok, "content-type": "application/json"})
+        assert resp.status == 200, resp.read()[:200]
+        resp.read(); conn.close()
+        return up.requests[0]["headers"]
+    finally:
+        up.close()
+
+
+def test_google_own_api_gets_the_key_as_its_header_and_no_bearer(relay):
+    """Google reads a bearer beside the key as an OAuth token and refuses the call, so every gemini turn on Google's
+    own API failed 401 with a good key (0.37.15, measured 2026-11-03). A test that only asked for the right header passed."""
+    seen = _gemini_call(relay, "https://generativelanguage.googleapis.com")
+    assert seen["x-goog-api-key"] == "real-google-key"
+    assert "authorization" not in seen
+
+
+def test_a_gateway_serving_googles_api_keeps_what_it_was_measured_with(relay):
+    seen = _gemini_call(relay, "https://gateway.example")
+    assert seen["x-goog-api-key"] == "real-google-key"
+    assert seen["authorization"] == "Bearer real-google-key"

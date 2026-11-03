@@ -23,3 +23,14 @@ export function publicShareResponseHeaders(upstream: Headers, artifact: boolean)
   // Do not forward Set-Cookie, CORS grants, or Content-Length (fetch may decompress bytes).
   return out;
 }
+
+/** The policy for what a same-origin relay passes on from the gateway (/api/harness/*,
+ *  /data/workspaces/*): a file an agent wrote, a media clip, an API body. None of it is the console's
+ *  own page, and /api/harness takes the session cookie, so a link to an HTML or SVG file there ran
+ *  with the console's origin and the visitor's session. Every response is sandboxed, PDF alone
+ *  excepted: a sandboxed document cannot open the browser's PDF viewer, and a PDF cannot run script on
+ *  this origin. Both stay unframable, and an upstream policy is kept beside ours (separate policies intersect). */
+export function relayContentSecurityPolicy(upstream: string | null, contentType: string): string {
+  const local = /^application\/pdf\b/i.test(contentType.trim()) ? "frame-ancestors 'none'" : PUBLIC_ARTIFACT_CSP;
+  return upstream ? `${upstream}, ${local}` : local;
+}

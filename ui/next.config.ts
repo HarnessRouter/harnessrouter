@@ -2,6 +2,10 @@ import path from "node:path";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Nothing here uses next/image, so the image optimizer is off: it would decode whatever image a request
+  // names, a shared file or an agent's among them, with no sign-in, and it has been the road to two remote
+  // code execution bugs in its image library (GHSA-2464-fhr4-w9xw, GHSA-2xp9-vwfh-vxw4).
+  images: { unoptimized: true },
   // This repository is the self-hosted edition and cannot build another, so that is the default
   // rather than something every command has to remember to pass.
   //
@@ -34,9 +38,10 @@ const nextConfig: NextConfig = {
     ];
     return [
       {
-        // Public artifact proxies set their own stricter CSP and referrer policy. Next's
-        // configured headers can overwrite route response headers, so exclude them here.
-        source: "/((?!api/share/|kits/|[^/]+/[^/]+/workspace/).*)",
+        // Public artifact proxies set their own stricter CSP and referrer policy, and the relays of
+        // gateway content (/api/harness, /data/workspaces) their own sandbox. Next's configured
+        // headers can overwrite route response headers, so exclude them here.
+        source: "/((?!api/share/|api/harness/|data/workspaces/|kits/|[^/]+/[^/]+/workspace/).*)",
         headers: [
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
@@ -49,6 +54,10 @@ const nextConfig: NextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           ...baseline.filter(({ key }) => key !== "Referrer-Policy"),
         ],
+      })),
+      ...["/api/harness/:path*", "/data/workspaces/:path*"].map((source) => ({
+        source,
+        headers: [{ key: "X-Frame-Options", value: "DENY" }, ...baseline],
       })),
       {
         // A kit's own app, shown inside its Shop try page: framed by the console itself and by

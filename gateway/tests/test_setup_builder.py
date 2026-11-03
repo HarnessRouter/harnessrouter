@@ -153,7 +153,7 @@ def env(monkeypatch):
     async def offered(org, base, model, previous=""):
         rec["offered"].append((org, base, model))
 
-    async def env_ref(org, env_id):
+    async def env_ref(org, env_id, principal=None):
         if env_id and env_id not in {e["id"] for e in ENVS.get(org, [])}:
             raise gw.uhp_error(404, "environment_not_found", "No environment with that id.", "environment")
 

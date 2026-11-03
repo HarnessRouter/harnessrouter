@@ -4157,10 +4157,30 @@ def _hermes_mcp_section(servers: list[dict] | None) -> dict:
 # enters the CLI's env, its state.db, or anything it could checkpoint.
 #
 # One shared server, routes resolved from the placeholder bearer token: hermes is spawned per
-# turn with a fresh env, so each turn registers its upstream and the entry simply outlives the
-# turn (a few dozen bytes per turn, process lifetime — the sandbox recycles long before this
-# matters).
-_HERMES_RELAY: dict = {"server": None, "port": 0, "routes": {}, "lock": threading.Lock(),
+# turn with a fresh env, so each turn registers its upstream, and the route leaves with the turn.
+#
+# It used to outlive the turn ("a few dozen bytes per turn"). A route holds the connection's key, so
+# that was a spending right with no end: a process the agent left running kept a working route until
+# the runner restarted, on a key the operator had since removed (measured 2026-11-03: a real Vertex
+# route still answering 200 after its turn).
+#
+# The tokens of the routes the turn being built has registered. Its own variable and not a field of
+# _TURN_THINKING, which is part of the turn's result: a route's token is what spends the key.
+_TURN_ROUTE_TOKENS: contextvars.ContextVar[list | None] = contextvars.ContextVar("hr_turn_route_tokens", default=None)
+
+
+class _RelayRoutes(dict):
+    """The relay's routes. Every registrar stores here, so a registrar added later belongs to its
+    turn without having to know about any of this."""
+
+    def __setitem__(self, tok, route):
+        held = _TURN_ROUTE_TOKENS.get()
+        if held is not None:
+            held.append(tok)
+        super().__setitem__(tok, route)
+
+
+_HERMES_RELAY: dict = {"server": None, "port": 0, "routes": _RelayRoutes(), "lock": threading.Lock(),
                        # A route's totals (`usage`, `reasoning_tokens`) are folded in by the relay's
                        # request threads, one per call, and a CLI can have two calls in flight on one
                        # route (a background call beside the main one, parallel subagents) while the
@@ -4195,6 +4215,26 @@ def _route_trace_flag() -> dict:
         return {}
     return {"traceparent": trace["traceparent"],
             **({"tracestate": trace["tracestate"]} if trace.get("tracestate") else {})}
+
+
+def _relay_forget(tokens: list | None) -> None:
+    """These routes are over: a later call on one is refused like any unknown token, and the key it
+    held is gone from the table. A call already being forwarded finishes. The route's flags stay with
+    the turn's record, which reads its usage and served model from them after the turn."""
+    if tokens:
+        with _HERMES_RELAY["lock"]:
+            for tok in tokens:
+                _HERMES_RELAY["routes"].pop(tok, None)
+
+
+def _routes_end_with_turn(run, tokens: list | None):
+    """A turn's runner, whose routes leave when it returns, however it returns."""
+    def runner(*args, **kwargs):
+        try:
+            return run(*args, **kwargs)
+        finally:
+            _relay_forget(tokens)
+    return runner
 
 
 def _turn_route(flags: dict) -> dict:
@@ -5924,6 +5964,9 @@ def _finish_reason_in(data: bytes) -> str:
     return hits[-1].decode().replace("-", "_") if hits else ""
 
 
+_RELAY_TOKEN_IN_URL = re.compile(r"^https?://[^/]+/(hr-relay-[0-9a-f]+)(?:/|$)")
+
+
 def _turn_relay_flags(env: dict) -> dict:
     """The flags of this turn's chat route, {} when the turn did not ride the relay. The route is
     found by the placeholder bearer the CLI was handed, whichever variable the backend keeps it in.
@@ -5935,10 +5978,15 @@ def _turn_relay_flags(env: dict) -> dict:
     it asked one and the image model after. Rule 2 of docs/harness-verification.md reads the
     second as a substitution, a finding invented out of nothing."""
     for v in env.values():
-        if isinstance(v, str) and v.startswith("hr-relay-"):
-            route = _HERMES_RELAY["routes"].get(v)
-            if route and not (route[2] or {}).get("aux"):
-                return route[2] or {}
+        if not isinstance(v, str):
+            continue
+        # The placeholder itself, or a base address that carries it as its first segment (Claude Code on
+        # Bedrock or Vertex sends no credential, so the route's token is in its base).
+        m = _RELAY_TOKEN_IN_URL.match(v)
+        tok = v if v.startswith("hr-relay-") else (m.group(1) if m else "")
+        route = _HERMES_RELAY["routes"].get(tok) if tok else None
+        if route and not (route[2] or {}).get("aux"):
+            return route[2] or {}
     return {}
 
 
@@ -6229,6 +6277,12 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             if m and nm and nm != m:
                 tail = tail.replace(f"/models/{m}:", f"/models/{nm}:", 1)
             headers["x-goog-api-key"] = key
+            # Google's own API takes the key here and nowhere else. A bearer beside it is read as an OAuth
+            # token and the call is refused 401 ("Expected OAuth 2 access token"), a good key or not
+            # (measured 2026-11-03: 200 with the header alone, 401 through the relay with the same key).
+            # A gateway that serves this API may want the bearer; those keep it, as measured.
+            if flags.get("google_own"):
+                headers.pop("authorization", None)
         # Compare the PATH only: anthropic clients append query strings (claude-code sends
         # /v1/messages?beta=true on streaming requests), and matching the raw tail let those
         # fall through to a generic forward against a host with no such route.
@@ -7077,7 +7131,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                 print(f"[relay] vertex: {e}", flush=True)
                 self._cloud_refuse(502, kind, str(e))
                 return
-        self._cloud_send(url, headers, body, kind)
+        self._cloud_send(url, headers, body, kind, flags)
 
     def _cloud_refuse(self, status: int, kind: str, message: str) -> None:
         """An answer the relay gives itself on a cloud route, in that provider's error shape, so the
@@ -7099,7 +7153,7 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         except OSError:
             self.close_connection = True
 
-    def _cloud_send(self, url: str, headers: dict, body: bytes | None, kind: str) -> None:
+    def _cloud_send(self, url: str, headers: dict, body: bytes | None, kind: str, flags: dict | None = None) -> None:
         """Send one cloud model call and relay the answer: status, the content type, the provider's
         own x-amz*/retry-after headers (an AWS SDK reads the error's name and the request id there),
         and the body byte for byte. An event stream (Bedrock's binary eventstream, Vertex's SSE), or
@@ -7107,6 +7161,8 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         provider's answer and is not followed (_RELAY_OPENER), and its Location is not passed on."""
         req = urllib.request.Request(url, data=body if self.command == "POST" else None,
                                      method=self.command, headers=headers)
+        if flags is not None:
+            flags.pop("last_refusal", None)     # a new call: an earlier call's refusal is not this one's
         try:
             resp = _RELAY_OPENER.open(req, timeout=HR_RELAY_UPSTREAM_TIMEOUT_S)
         except urllib.error.HTTPError as e:
@@ -7129,6 +7185,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
             except (http.client.HTTPException, TimeoutError, OSError) as e:
                 self._cloud_refuse(502, kind, f"the provider stopped answering mid-body: {type(e).__name__}")
                 return
+            if status >= 400:
+                # In the provider's words, for the turn's reason, as on every other route. A Bedrock
+                # permission refusal reached a hermes turn as "ended the turn without a final answer and
+                # gave no reason" (measured against real AWS, 2026-11-03).
+                words = _refusal_words(status, data)
+                if flags is not None:
+                    flags["last_refusal"] = words
+                print(f"[relay] {kind} refused {urllib.parse.urlsplit(url).path[:160]}: {words[:300]}", flush=True)
             try:
                 self.send_response(status)
                 for k, v in keep:
@@ -7856,6 +7920,9 @@ def _gemini_relay_route(host_root: str, api_key: str, model: str = "", native_mo
         _HERMES_RELAY["routes"][tok] = (host_root.rstrip("/"), api_key,
                                         _turn_route({"google_native": True, "model": model,
                                                      "native_model": native_model, **_turn_effort(),
+                                                     **({"google_own": True}
+                                                        if (urllib.parse.urlsplit(host_root).hostname or "").lower()
+                                                        == "generativelanguage.googleapis.com" else {}),
                                                      **_route_trace_flag()}))
     return f"http://127.0.0.1:{_HERMES_RELAY['port']}/v1", tok
 
@@ -16677,6 +16744,22 @@ class TurnReq(BaseModel):
 
 @app.post("/turn")
 def turn(req: TurnReq, identifier: str = "") -> dict:
+    """Start a turn. Its routes leave when its runner thread returns (_routes_end_with_turn), or here
+    when none started: a builder that refused the turn, or a retry answered by the turn already
+    running, may have registered routes that nothing would ever use."""
+    tokens: list[str] = []
+    _TURN_ROUTE_TOKENS.set(tokens)
+    started = False
+    try:
+        out = _start_turn(req, identifier)
+        started = not out.get("deduplicated")
+        return out
+    finally:
+        if not started:
+            _relay_forget(tokens)
+
+
+def _start_turn(req: TurnReq, identifier: str = "") -> dict:
     """Start a turn asynchronously and return immediately. Poll GET /turn/{id} for progress —
     a turn may run seconds to the 6h cap, far beyond a synchronous HTTP request.
 
@@ -17093,17 +17176,17 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         if key:
             _turn_by_key[key] = turn_id
     if use_appserver:
-        threading.Thread(target=_run_codex_appserver_bg,
+        threading.Thread(target=_routes_end_with_turn(_run_codex_appserver_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds,
                                req.max_turns),
                          daemon=True).start()
     elif backend == "hermes":
-        threading.Thread(target=_run_hermes_bg,
+        threading.Thread(target=_routes_end_with_turn(_run_hermes_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cwd, env, model, hermes_provider, req.prompt,
                                req.resume_session_id, req.timeout_seconds, hermes_mcp),
                          daemon=True).start()
     else:
-        threading.Thread(target=_run_turn_bg,
+        threading.Thread(target=_routes_end_with_turn(_run_turn_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
                          kwargs={"max_turns": req.max_turns, "prompt": req.prompt or "",
@@ -17146,6 +17229,8 @@ def _remote_purge(ws: str, auth: Auth | None) -> dict | None:
     except Exception as e:  # noqa: BLE001
         print(f"[workspace] {ws}: remote purge did not run: {type(e).__name__}: {e}", flush=True)
         return {"backend": "qoder", "purged": False, "reason": f"purge did not run: {e}"[:300]}
+    finally:
+        _relay_forget([relay_tok])
     report: dict = {}
     for line in (proc.stdout or "").splitlines():
         try:

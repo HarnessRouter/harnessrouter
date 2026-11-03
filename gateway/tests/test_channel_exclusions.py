@@ -15,10 +15,11 @@ def test_vercel_does_not_offer_nemotron_lightning_and_openrouter_does():
     assert "nemotron-3-super" in gw._integration_models({"provider": "vercel"})
 
 
-def test_google_does_not_offer_gemini_3_7_flash_and_the_aggregators_do():
-    assert "gemini-3.7-flash" not in gw._integration_models({"provider": "google"})
-    for p in ("vercel", "openrouter", "tokenrouter"):
-        assert "gemini-3.7-flash" in gw._integration_models({"provider": p}), p
+def test_google_does_not_offer_the_ids_it_answers_with_another_model_and_the_aggregators_do():
+    for model in ("gemini-3.7-flash", "gemini-3.5-flash"):
+        assert model not in gw._integration_models({"provider": "google"})
+        for p in ("vercel", "openrouter", "tokenrouter"):
+            assert model in gw._integration_models({"provider": p}), (p, model)
 
 
 def test_the_map_routes_each_to_a_channel_that_serves_it(monkeypatch):

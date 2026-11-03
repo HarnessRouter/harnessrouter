@@ -41,15 +41,41 @@ class SqlError(Exception):
     it is safe to: 'column "revenu" does not exist' is exactly what the agent needs to fix it."""
 
 
+def _refuse_local_files() -> None:
+    """A MySQL server can answer any statement by asking the client for a file by name, and aiomysql 0.2.0 sends
+    it: local_infile=False only stops the client offering the feature, the reply is never checked. Whoever
+    connects a database names its server, so a server of their own would get anything this process can read, its
+    environment and every secret in it. Replaced at the one method every connection reaches, so no caller can
+    forget: the socket is closed and nothing is sent."""
+    try:
+        from aiomysql.connection import MySQLResult
+    except ModuleNotFoundError:                                        # pragma: no cover
+        return
+
+    async def refused(self, first_packet):
+        self.connection.close()
+        raise SqlError("The database asked this service for a local file, which is refused.")
+    MySQLResult._read_load_local_packet = refused
+
+
+_refuse_local_files()
+
+
 class SqlRefused(SqlError):
     """The statement was refused before it reached the database."""
 
 
 # ── the read-only gate ────────────────────────────────────────────────────────────
 
-_LINE_COMMENT = re.compile(r"--[^\n]*")
-_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-_STRING = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|`[^`]*`")
+# One pass, left to right, whichever starts first, because that is how the database reads it. Comments used
+# to be removed before strings, in separate passes, so `SELECT '--' INTO OUTFILE '/x'` lost the rest of its line
+# to the "comment" and passed with INTO unseen. MySQL also needs whitespace after `--`: to it `1--1 INTO OUTFILE`
+# is arithmetic and a statement, not a comment. An unknown engine reads as MySQL does, which at worst refuses more.
+_QUOTED = r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|`[^`]*`"
+_LEX_POSTGRES = re.compile(rf"(?P<block>/\*.*?\*/)|(?P<line>--[^\n]*)|(?P<text>{_QUOTED})|(?P<stray>/\*|['\"`])", re.S)
+_LEX_MYSQL = re.compile(rf"(?P<block>/\*.*?\*/)|(?P<line>--(?=\s|$)[^\n]*)|(?P<text>{_QUOTED})|(?P<stray>/\*|['\"`])", re.S)
+_DOLLAR_QUOTE = re.compile(r"\$[A-Za-z_]*\$")
+_QUOTE_AFTER_BACKSLASH = re.compile(r"\\['\"`]")
 
 # Anywhere in the statement, not just at its start. Postgres allows a data-modifying CTE —
 # `WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x` starts with WITH and deletes your rows —
@@ -65,22 +91,44 @@ _FORBIDDEN = (
 )
 
 
-def _strip(sql: str) -> str:
-    """Comments and string/identifier literals removed, so keyword matching cannot be fooled by a
-    column called `update_time` or a literal 'please delete me'."""
-    s = _BLOCK_COMMENT.sub(" ", sql)
-    s = _LINE_COMMENT.sub(" ", s)
-    s = _STRING.sub(" '' ", s)
-    return s
+def _scan(sql: str, engine: str = "") -> tuple[str, str]:
+    """The statement with comments and string/identifier literals removed, so keyword matching cannot be
+    fooled by a column called `update_time` or a literal 'please delete me'; and why it cannot be read this
+    way, "" when it can. What the database and this reading could take differently is refused, not guessed."""
+    why = [""]
+
+    def one(m: re.Match) -> str:
+        if m.lastgroup == "text":
+            return " '' "
+        if m.lastgroup == "stray":
+            why[0] = why[0] or "Its quotes or comments do not balance, so it cannot be checked."
+            return " "
+        if m.group(0).startswith(("/*!", "/*M!")):      # MySQL and MariaDB run what is inside these
+            why[0] = why[0] or "It contains a comment the database would run as part of the statement. Remove it."
+        return " "
+    if _QUOTE_AFTER_BACKSLASH.search(sql):              # a quote some databases read as text and others as the end of it
+        why[0] = "A backslash before a quote reads differently across databases, so it cannot be checked. Rewrite it without one."
+    if _DOLLAR_QUOTE.search(sql):                       # Postgres's other string quote; the quotes inside it would read as quotes
+        why[0] = why[0] or "Dollar-quoted text cannot be checked here. Use ordinary quotes."
+    bare = (_LEX_POSTGRES if engine == "postgres" else _LEX_MYSQL).sub(one, sql)
+    if engine == "mysql" and "#" in bare:               # a comment to MySQL: a quote after it would pair differently here
+        why[0] = why[0] or "A # comment cannot be checked here. Remove it."
+    return bare, why[0]
 
 
-def check_readonly(sql: str) -> str:
+def _strip(sql: str, engine: str = "") -> str:
+    return _scan(sql, engine)[0]
+
+
+def check_readonly(sql: str, engine: str = "") -> str:
     """The statement, or SqlRefused naming what was wrong. Returns the trimmed statement."""
     raw = (sql or "").strip().rstrip(";").strip()
     if not raw:
         raise SqlRefused("The query is empty.")
 
-    bare = _strip(raw)
+    bare, why = _scan(raw, engine)
+    if why:
+        raise SqlRefused(why)
 
     # One statement. `SELECT 1; DROP TABLE users` is two, and the second is the interesting one.
     if ";" in bare.strip().rstrip(";"):
@@ -298,7 +346,7 @@ async def run_query(engine: str, dsn: str, sql: str, *, timeout: float = DEFAULT
     """Check, cap, execute. The only way a statement reaches a customer database from here."""
     if engine not in ENGINES:
         raise SqlRefused(f"Unsupported database: {engine}. This build supports {', '.join(ENGINES)}.")
-    checked = check_readonly(sql)
+    checked = check_readonly(sql, engine)
     # One row past the cap is asked for, so _rows_out can see that there was more and say
     # `truncated`; with LIMIT max_rows the database never returns the row that would tell it.
     capped, added = with_limit(checked, max_rows + 1)

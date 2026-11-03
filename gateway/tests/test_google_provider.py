@@ -10,11 +10,13 @@ import app as gw  # noqa: E402
 def test_google_serves_the_catalog_gemini_by_its_own_id():
     table = gw._vendor_models("google")
     # the Gemini chat family, each served by Google under its plain id (read from /v1beta/models 2026-09-06),
-    # but not an id Google answers with another model (gemini-3.7-flash comes back as 3.8, 2026-10-08)
-    assert set(table) == {"gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+    # but not an id Google answers with another model (gemini-3.7-flash comes back as 3.8, 2026-10-08;
+    # gemini-3.5-flash as 3.6, 2026-11-03)
+    assert set(table) == {"gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash",
                           "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview",
                           "gemini-3-flash-preview"}
-    assert "gemini-3.7-flash" not in gw._integration_models({"provider": "google"})
+    for answered_as_another in ("gemini-3.7-flash", "gemini-3.5-flash"):
+        assert answered_as_another not in gw._integration_models({"provider": "google"})
     assert all(k == v for k, v in table.items())
     assert gw._integration_models({"provider": "google"}) == gw._vendor_models("google")
 

@@ -19,6 +19,7 @@ import type { NextRequest } from 'next/server';
 import { Agent } from 'undici';
 import { LOCAL_MEMBER, LOCAL_ORG, SELF_HOSTED } from '@/lib/edition';
 import { AUTH_DISABLED, SESSION_COOKIE, sessionValid } from '@/lib/selfhost-auth';
+import { relayContentSecurityPolicy } from '@/lib/public-artifact-response';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 3700; // a synchronous turn may run for the gateway's full hour; this hop must outlast it
@@ -47,7 +48,9 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
   // key beside any bearer: they are not forwarded there at all. (A self-hosted box is its owner's:
   // the signed-in operator may call them, and the gateway refuses any that arrives with a bearer.)
   if (!SELF_HOSTED && (path || [])[0] === 'internal') {
-    return new Response(JSON.stringify({ detail: 'not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({ detail: 'not found' }), { status: 404, headers: {
+      'content-type': 'application/json', 'x-content-type-options': 'nosniff',
+      'content-security-policy': relayContentSecurityPolicy(null, 'application/json') } });
   }
   const target = `${GATEWAY.replace(/\/$/, '')}/${(path || []).join('/')}${req.nextUrl.search}`;
   const headers: Record<string, string> = {};
@@ -126,6 +129,9 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
   try {
     const res = await fetch(target, init);
     const ctType = res.headers.get('content-type') || 'application/json';
+    // What comes back is the gateway's, not the console's own page, and this route takes the session
+    // cookie: an agent's HTML or SVG file opened here must never run with the console's origin.
+    const csp = relayContentSecurityPolicy(res.headers.get('content-security-policy'), ctType);
     // Stream SSE through without buffering (live deltas).
     if (ctType.includes('text/event-stream') && res.body) {
       const sse: Record<string, string> = {
@@ -133,6 +139,8 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
         'cache-control': 'no-cache, no-transform',
         connection: 'keep-alive',
         'x-accel-buffering': 'no',
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': csp,
       };
       const uhpV = res.headers.get('uhp-version');
       if (uhpV) sse['uhp-version'] = uhpV;
@@ -143,7 +151,8 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     // arrayBuffer()) was a per-request materialization. Pass res.body through byte-exact so peak
     // BFF memory stays O(chunk) regardless of payload size. content-length/disposition are
     // preserved when present so downloads still name + size correctly.
-    const out: Record<string, string> = { 'content-type': ctType };
+    const out: Record<string, string> = { 'content-type': ctType, 'x-content-type-options': 'nosniff',
+      'content-security-policy': csp };
     // content-range is NOT optional on a 206: a partial response without it is malformed, and a
     // browser given one stops playing rather than seeking. Generated video is served from this
     // proxy, so dropping these turned a correct ranged route into a file that Safari refuses to
@@ -165,7 +174,8 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     console.error(`harness proxy: ${req.method} /${(path || []).join('/')} failed after `
       + `${((Date.now() - started) / 1000).toFixed(1)} s: ${msg}`);
     return new Response(JSON.stringify({ detail: `harness-gateway unreachable: ${msg}` }), {
-      status: 502, headers: { 'content-type': 'application/json' },
+      status: 502, headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff',
+        'content-security-policy': relayContentSecurityPolicy(null, 'application/json') },
     });
   }
 }

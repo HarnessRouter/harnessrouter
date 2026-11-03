@@ -15,6 +15,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 - [The Unified Harness Protocol](#the-unified-harness-protocol)
 - [Configuration](#configuration)
 - [Using the API](#using-the-api)
+- [Running on a cloud VM](#running-on-a-cloud-vm)
 - [Putting it on a public URL](#putting-it-on-a-public-url)
 - [Moving to the hosted service](#moving-to-the-hosted-service)
 - [Architecture](#architecture)
@@ -1229,6 +1230,16 @@ Use your current Console credentials, not the initial defaults if you changed th
 you do not need `HR_AUTH_DISABLED=1` to integrate your backend.
 
 </details>
+
+## Running on a cloud VM
+
+An agent runs real shell commands, and every process on a cloud VM can reach the provider's metadata address, `169.254.169.254`, by default. If the VM has an instance role or a managed identity, an agent or anything that reaches it, such as a prompt injection, can ask that address for the role's credentials. Nothing inside the container can stop this, so block it on the host:
+
+```bash
+sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+```
+
+Make the rule permanent the way your distribution does (for example `netfilter-persistent save`), and don't give the VM a role it doesn't need. Bedrock or Vertex through an instance role also goes over this path: with the block in place, give the connection its own credential instead, which the relay holds for the turn.
 
 ## Putting it on a public URL
 

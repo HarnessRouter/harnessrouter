@@ -276,7 +276,7 @@ def test_a_tokenrouter_connection_points_the_cli_at_the_relay_which_names_the_mo
     assert env2["GOOGLE_GEMINI_BASE_URL"].startswith("http://127.0.0.1:") and env2["GEMINI_API_KEY"] != "AIza-t"
     base2, key2, flags2 = _HERMES_RELAY["routes"][env2["GEMINI_API_KEY"]]
     assert (base2, key2) == ("https://generativelanguage.googleapis.com", "AIza-t")
-    assert flags2 == {"google_native": True, "model": "gemini-3.8-flash", "native_model": ""}
+    assert flags2 == {"google_native": True, "model": "gemini-3.8-flash", "native_model": "", "google_own": True}
 
 
 def test_a_hosted_connection_points_the_cli_at_the_relay_rooted_at_the_provider_door():
