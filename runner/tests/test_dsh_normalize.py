@@ -192,7 +192,8 @@ def test_build_dsh_stages_creds_out_of_argv(tmp_path):
     base, key, flags = _route(env)
     assert (base, key) == ("https://tr.example/v1", "k-secret")
     assert flags["tool_call_deltas_no_empty"] is True
-    job = json.loads(cmd[2])
+    assert len(cmd) == 2                                         # the job (MCP credentials too) is not on argv
+    job = json.loads(env["HR_DRIVER_JOB"])
     assert job["session_id"] == "sid-9"
     assert job["mcp_servers"][0]["url"] == "https://mcp.example/mcp"
     assert "system_prompt" not in job
@@ -203,7 +204,7 @@ def test_build_dsh_routes_by_family_not_provider(tmp_path):
     claude/gpt/other families ride the pi-ai route with the api the pi backend proved."""
     env = {"HOME": str(tmp_path)}
     a = Auth(api_key="k", base_url="https://tr.example/v1")
-    j = lambda cmd: json.loads(cmd[2])
+    j = lambda cmd: json.loads(env["HR_DRIVER_JOB"])            # the job rides the env, not argv
     assert "llm" not in j(_build_dsh("tokenrouter", a, "deepseek/deepseek-v4-pro", "x", str(tmp_path), env))
     assert j(_build_dsh("tokenrouter", a, "claude-haiku-4-5", "x", str(tmp_path), env))["llm"]["api"] == "anthropic-messages"
     assert j(_build_dsh("tokenrouter", a, "gpt-5.4-mini", "x", str(tmp_path), env))["llm"]["api"] == "openai-responses"

@@ -209,7 +209,7 @@ async def _run(job: dict) -> int:
 def main() -> int:
     _quiet()
     try:
-        job = json.loads(sys.argv[1])
+        job = json.loads(sys.argv[1] if len(sys.argv) > 1 else os.environ.pop("HR_DRIVER_JOB"))
     except Exception as e:  # noqa: BLE001
         print(f"nanobot driver: bad job: {e}", file=sys.stderr)
         return 2

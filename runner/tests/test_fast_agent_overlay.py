@@ -42,7 +42,7 @@ def _turn(model: str, vision: bool, ws: str | None = None):
     env: dict = {}
     cmd = _build_fast_agent("openai-api", Auth(base_url=UP, api_key="k"), model, "hi", ws, env, vision=vision)
     assert cmd[1] == FAST_AGENT_DRIVER
-    argv = json.loads(cmd[2])["argv"]
+    argv = json.loads(env["HR_DRIVER_JOB"])["argv"]
     route = server._HERMES_RELAY["routes"][env["GENERIC_API_KEY"]]
     path = _fast_agent_home(ws) / "model-overlays" / server._FA_OVERLAY_FILE
     doc = json.loads(path.read_text()) if path.exists() else None

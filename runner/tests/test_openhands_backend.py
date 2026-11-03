@@ -176,7 +176,7 @@ def test_the_relay_token_rides_the_turns_environment_so_the_served_model_and_usa
     d = tempfile.mkdtemp(); env: dict = {}
     cmd = _build_openhands("openai-api", Auth(api_key="sk-real", base_url="https://up.example/v1"),
                            "gpt-5.4", "hi", d, env)
-    job = json.loads(cmd[-1])
+    job = json.loads(env["HR_DRIVER_JOB"])
     assert env["LITELLM_PROXY_API_KEY"].startswith("hr-relay-") and env["LITELLM_PROXY_API_KEY"] == job["api_key"]
     assert env["LITELLM_PROXY_API_BASE"] == job["base_url"]
     # the pair litellm reads for a litellm_proxy/ id on both its paths; the OpenAI pair is read by
@@ -194,7 +194,7 @@ def test_the_model_id_rides_the_litellm_proxy_prefix_so_a_vendor_slug_survives_t
         d = tempfile.mkdtemp(); env: dict = {}
         cmd = _build_openhands("tokenrouter", Auth(api_key="sk-real", base_url="https://api.tokenrouter.com/v1"),
                                pid, "hi", d, env)
-        job = json.loads(cmd[-1])
+        job = json.loads(env["HR_DRIVER_JOB"])
         assert job["model"] == f"litellm_proxy/{pid}"
         assert not job["model"].startswith("openai/")
         assert env["LITELLM_PROXY_API_BASE"] == job["base_url"] and env["LITELLM_PROXY_API_KEY"] == job["api_key"]

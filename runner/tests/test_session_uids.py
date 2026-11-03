@@ -67,7 +67,11 @@ def test_own_tree_only_reowns_the_listed_owners_and_never_hard_links(tmp_path, m
     os.link(root / "planted", root / "link2")            # nlink == 2 on both names
     os.symlink("/etc/hostname", root / "sym")
     calls: list[tuple[str, int, int]] = []
-    monkeypatch.setattr(server.os, "lchown", lambda p, u, g: calls.append((os.path.basename(p), u, g)))
+
+    def chown(p, u, g, *, dir_fd=None, follow_symlinks=True):
+        assert dir_fd is not None and follow_symlinks is False      # by directory descriptor, never through a link
+        calls.append((os.path.basename(p), u, g))
+    monkeypatch.setattr(server.os, "chown", chown)
     me = os.getuid()
     server._own_tree(str(root), 31337, {me})
     names = {c[0] for c in calls}

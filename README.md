@@ -113,12 +113,16 @@ If the browser refuses the connection, retry after a few seconds while the Conso
 
 ### 3. Open the console
 
-Open [http://localhost:3000](http://localhost:3000), or your chosen host port, and sign in:
+Open [http://localhost:3000](http://localhost:3000), or your chosen host port, and sign in as `harnessrouter`. Your instance made its own password at first start; read it with:
 
-<table><tbody><tr><th scope="row">Username</th><td><code>harnessrouter</code></td></tr><tr><th scope="row">Password</th><td><code>harnessrouter</code></td></tr></tbody></table>
+```bash
+docker exec harnessrouter cat /data/selfhost-initial-password
+```
+
+If you set `HR_AUTH_PASSWORD` when you started the container, sign in with that instead.
 
 > [!WARNING]
-> **Change the default password in Profile.** Keep the instance local until you change it. Saving briefly restarts the Console and signs out other browsers.
+> **Set your own password in Profile.** Keep the instance local until you do. Saving briefly restarts the Console and signs out other browsers.
 
 <details>
 <summary>See the sign-in screen</summary>

@@ -38,6 +38,7 @@ WHAT THIS DRIVER OWES THE TURN, and where each answer comes from:
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -248,7 +249,7 @@ def _reap(proc: subprocess.Popen) -> None:
 
 def main() -> int:
     try:
-        job = json.loads(sys.argv[1])
+        job = json.loads(sys.argv[1] if len(sys.argv) > 1 else os.environ.pop("HR_DRIVER_JOB"))
     except Exception as e:  # noqa: BLE001
         print(f"zeroclaw driver: bad job: {e}", file=sys.stderr)
         return 2

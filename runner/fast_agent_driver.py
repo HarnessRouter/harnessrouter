@@ -49,7 +49,7 @@ def _tool_name(title: str, kind: str) -> str:
 
 
 def main() -> int:
-    job = json.loads(sys.argv[1])
+    job = json.loads(sys.argv[1] if len(sys.argv) > 1 else os.environ.pop("HR_DRIVER_JOB"))
     # resolved as --workspace is, so the session the agent opens and the shell's directory are the same path
     cwd = os.path.realpath(str(job["cwd"]))
     env = {**os.environ, **{str(k): str(v) for k, v in (job.get("env") or {}).items()}}

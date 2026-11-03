@@ -43,12 +43,13 @@ _WS = tempfile.mkdtemp(prefix="dcode-argv-tests-")
 
 def _job(**kw):
     ws = kw.pop("cwd", None) or _WS
+    env = kw.pop("env", {})
     cmd = _build_dcode(kw.pop("provider", "openai-api"),
                        Auth(base_url="https://up.example/v1", api_key="k"),
-                       kw.pop("model", "gpt-5.4"), kw.pop("prompt", "hi"), ws, kw.pop("env", {}),
+                       kw.pop("model", "gpt-5.4"), kw.pop("prompt", "hi"), ws, env,
                        **kw)
-    assert cmd[1].endswith("dcode_driver.py"), cmd
-    return json.loads(cmd[2])
+    assert cmd[1].endswith("dcode_driver.py") and len(cmd) == 2, cmd      # the job rides the env, not argv
+    return json.loads(env["HR_DRIVER_JOB"])
 
 
 # ── the argv ──────────────────────────────────────────────────────────────────────────────────
@@ -491,8 +492,11 @@ def test_the_driver_is_told_whether_the_store_holds_the_thread(tmp_path):
     import sqlite3
     ws = tmp_path / "ws"
     (ws / ".harness" / "home").mkdir(parents=True)
-    build = lambda: json.loads(rs._build_dcode("openai-api", rs.Auth(base_url="https://up.example/v1", api_key=""),
-                                                "gpt-5.4", "hi", str(ws), {}, resume_session_id="t-1")[-1])
+    def build():
+        env = {}
+        rs._build_dcode("openai-api", rs.Auth(base_url="https://up.example/v1", api_key=""),
+                        "gpt-5.4", "hi", str(ws), env, resume_session_id="t-1")
+        return json.loads(env["HR_DRIVER_JOB"])
     assert build()["resume_known"] is False                      # no store at all
     db = rs._dcode_state_db(str(ws)); db.parent.mkdir(parents=True)
     con = sqlite3.connect(db); con.execute("CREATE TABLE checkpoints (thread_id TEXT)"); con.commit()

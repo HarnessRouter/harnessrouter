@@ -11,7 +11,9 @@ services:
     # Use this instead of `image:` to build locally:
     # build: .
     ports:
-      - "3000:3000"
+      # This machine only. To reach it from elsewhere, put it behind TLS and a password you chose
+      # (see docs/self-hosting-guide.md) and change this to "3000:3000".
+      - "127.0.0.1:3000:3000"
     env_file:
       - .env
     volumes:

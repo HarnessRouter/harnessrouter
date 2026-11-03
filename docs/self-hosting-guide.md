@@ -177,11 +177,12 @@ line, retry after a few seconds while its server finishes starting.
 `backends available:` lists what actually installed, so a backend that failed is named rather than
 silently missing, and the others still work.
 
-You will also see this line, and it comes back on every start until you change the password in step
-4. On a loopback-only instance it is a reminder rather than a problem:
+If you did not set `HR_AUTH_PASSWORD`, you will also see this line. The instance made its own password at
+first start, and the published default is never accepted, because every agent the instance runs can reach
+the console from inside the container:
 
 ```
-[harnessrouter] WARNING: using the DEFAULT password. Set HR_AUTH_PASSWORD, or change it from the profile page, before exposing this instance.
+[harnessrouter] the default password is not accepted. Sign in as 'harnessrouter' with the password in /data/selfhost-initial-password (docker exec <container> cat /data/selfhost-initial-password), then change it from the profile page, or set HR_AUTH_PASSWORD.
 ```
 
 The enabled agent CLIs are fetched from upstream on first start rather than bundled in the image.
@@ -193,20 +194,19 @@ instance's catalog reflects the backends that are actually available.
 
 ### 4. Sign in
 
-Open <http://localhost:3000>, or the host port you chose in step 2, and sign in with:
+Open <http://localhost:3000>, or the host port you chose in step 2, and sign in as `harnessrouter`
+with the password your instance made at first start:
 
-| | |
-|---|---|
-| Username | `harnessrouter` |
-| Password | `harnessrouter` |
+```bash
+docker exec harnessrouter cat /data/selfhost-initial-password
+```
 
 ![The sign-in screen](images/01-login.png)
 
-**Change the password now**, from **Profile** in the account menu. Saving briefly restarts
+**Set your own password now**, from **Profile** in the account menu. Saving briefly restarts
 the Console.
 
-If you set `HR_AUTH_USER` or `HR_AUTH_PASSWORD` at `docker run`, sign in with those instead — the
-defaults are then refused.
+If you set `HR_AUTH_USER` or `HR_AUTH_PASSWORD` at `docker run`, sign in with those instead.
 
 These credentials sign you into the Console. You do not need a HarnessRouter API key to run tasks
 there. Create one later when [integrating your product backend](#using-the-api).
