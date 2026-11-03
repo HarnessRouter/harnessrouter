@@ -1390,8 +1390,8 @@ def _visible_root(ws: str) -> str:
     # relpath below became "../../.." and nothing was stripped. The returned path is therefore
     # built from ws as the caller spelled it.
     #
-    # The marker sits in the session's own tree, so the agent and a caller's PUT can both write it,
-    # and every file route reads through what it says, as root on a self-hosted box. Only the one
+    # The marker sits in the session's own tree, so the agent can write it, and every file route
+    # reads through what it says, as root on a self-hosted box. Only the one
     # value the runner ever writes counts. An absolute path used to pass here: _safe_join strips the
     # leading slash while os.path.join below does not, so `/proc/self` made GET /file serve the
     # runner's environment and `/etc` served /etc/shadow.

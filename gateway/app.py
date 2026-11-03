@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import posixpath
 import os
 import re
 import urllib.parse
@@ -11876,6 +11877,12 @@ _WS_HIDE_PREFIXES = (".git/", ".harness/", ".claude/", ".codex/", "tmp/",
 _WS_HIDE_NAMES = {".gitignore", "AGENTS.md", "CLAUDE.md"}
 
 
+def _ws_machinery(path: str) -> bool:
+    """Is this the runner's own state in a session? Never a person's file: the listing hides it and a
+    write is refused there, so a live read by path doesn't serve it either, however the path is spelled."""
+    return posixpath.normpath("/" + (path or "")).lstrip("/").split("/", 1)[0] == ".harness"
+
+
 def _ws_visible(path: str) -> bool:
     """User-visible workspace file? Hides VCS/agent-internal/scratch paths (same families the
     produced-file collector excludes) so the listing reads like the agent's actual deliverables."""
@@ -12510,6 +12517,8 @@ async def read_session_file(sid: str, path: str, request: Request) -> Response:
     half-written deck is better than no deck, and the next read gets the rest.
     """
     await _owned_session(request, sid)
+    if _ws_machinery(path):
+        raise uhp_error(404, "file_not_found", f"No file '{path}' in this session's workspace.", "path")
     data = await BACKING.workspace.read(sid, path)
     if data is None:
         # FALL BACK TO THE DURABLE COPY. The live workspace is reaped after HR_WORKSPACE_TTL_HOURS,
