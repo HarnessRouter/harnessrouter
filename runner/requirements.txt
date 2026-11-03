@@ -9,7 +9,7 @@ pyyaml==6.0.2
 # rather than a shipped one, caught before the tag. The version matches the hosted runner image
 # (docker/runner.Dockerfile.reference). It requires pydantic 2.11, which is why the pin above
 # moved: gateway and runner share one environment in this image.
-mcp==1.28.1
+mcp==1.30.0
 # RS256 for the Vertex relay route: the runner signs the service account's token request itself
 # (_vertex_assertion), so the account's key never reaches the agent. The gateway's pin, since both
 # install into one environment in this image.

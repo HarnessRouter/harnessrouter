@@ -230,6 +230,8 @@ def _ws(identifier: str = "") -> str:
     if _SANDBOX_PER_SESSION:
         return WORKSPACE_ROOT
     sid = _SID_SAFE.sub("_", (identifier or "").strip())[:120] or "_default"
+    if sid in (".", ".."):   # the safe set takes dots, and these two name the root and its parent, not a session
+        raise HTTPException(400, "invalid session identifier")
     return os.path.join(WORKSPACE_ROOT, sid)
 def _session_uid(ws: str) -> int | None:
     """The uid this session's processes run as, or None when the write-wall is off or the
@@ -1387,7 +1389,13 @@ def _visible_root(ws: str) -> str:
     # /var is one — a resolved root does not share a prefix with the ws it came from, so the
     # relpath below became "../../.." and nothing was stripped. The returned path is therefore
     # built from ws as the caller spelled it.
-    if not sub or _safe_join(ws, sub) is None:
+    #
+    # The marker sits in the session's own tree, so the agent and a caller's PUT can both write it,
+    # and every file route reads through what it says, as root on a self-hosted box. Only the one
+    # value the runner ever writes counts. An absolute path used to pass here: _safe_join strips the
+    # leading slash while os.path.join below does not, so `/proc/self` made GET /file serve the
+    # runner's environment and `/etc` served /etc/shadow.
+    if sub != _NANOBOT_WS or _safe_join(ws, sub) is None:
         return ws
     d = os.path.join(ws, sub)
     return d if os.path.isdir(d) else ws
@@ -15420,11 +15428,16 @@ def _run_codex_appserver_bg(turn_id: str, cwd: str, env: dict, model: str, promp
     resume_thread = None
     if resume_session_id:
         cfg_dir = pathlib.Path(env.get("CODEX_HOME") or (pathlib.Path(env.get("HOME") or cwd) / ".codex"))
-        resume_thread = _codex_resume_thread_id(cfg_dir, resume_session_id)
+        # This thread starts outside the turn's scope, and the home is the agent's: read and rewritten
+        # as root, a rollout it swapped for a link wrote its chosen lines into any file on the box.
+        with _fs_as(_session_uid(cwd)):
+            resume_thread = _codex_resume_thread_id(cfg_dir, resume_session_id)
+            c = {}
+            if resume_thread:
+                import glob as _glob
+                c = _sanitize_codex_rollout(_glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True),
+                                            content_only=env.get("HR_CODEX_ACCOUNT_CHANGED") != "0")
         if resume_thread:
-            import glob as _glob
-            c = _sanitize_codex_rollout(_glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True),
-                                        content_only=env.get("HR_CODEX_ACCOUNT_CHANGED") != "0")
             print(f"[resume] codex app-server: thread {resume_thread}{' (newest rollout, wanted ' + resume_session_id + ')' if resume_thread != resume_session_id else ''}; "
                   f"dropped {c['reasoning']} reasoning blob(s), de-referenced {c['deref']} id(s)", flush=True)
         else:
@@ -15942,7 +15955,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
                  "output_tokens": max(0, int(post.get("output_tokens") or 0) - int((pre or {}).get("output_tokens") or 0))}
     if not use_chat:
         try:
-            with open(usage_path) as f:
+            with _fs_as(_session_uid(cwd)), open(usage_path) as f:   # as its deletion below: the folder is the session's
                 u = json.load(f)
             run_failed = bool(u.get("failed"))
             if not usage["input_tokens"] and u.get("input_tokens"):
@@ -16374,15 +16387,21 @@ def produced_ack(identifier: str = "") -> dict:
 def get_file(path: str, identifier: str = "") -> Response:
     """Raw bytes of a workspace file (for downloading turn-produced container files)."""
     ws = _ws(identifier)
-    # the visible root first, because that is how /produced named it; the session root second, so a
-    # path written before the agent's workspace existed still downloads.
-    dest = _safe_join(_visible_root(ws), path)
-    if dest is None or not dest.is_file():
-        dest = _safe_join(ws, path)
-    if dest is None or not dest.is_file():
-        raise HTTPException(404, "file not found")
-    media = mimetypes.guess_type(str(dest))[0] or "application/octet-stream"
-    return Response(content=dest.read_bytes(), media_type=media)
+    # As the session: a process it left running can swap a checked path for a link before the read,
+    # and read as root that link reaches anything on the box.
+    with _fs_as(_session_uid(ws)):
+        # the visible root first, because that is how /produced named it; the session root second, so a
+        # path written before the agent's workspace existed still downloads.
+        dest = _safe_join(_visible_root(ws), path)
+        if dest is None or not dest.is_file():
+            dest = _safe_join(ws, path)
+        if dest is None or not dest.is_file():
+            raise HTTPException(404, "file not found")
+        media = mimetypes.guess_type(str(dest))[0] or "application/octet-stream"
+        try:
+            return Response(content=dest.read_bytes(), media_type=media)
+        except OSError:
+            raise HTTPException(404, "file not found")
 
 
 _DIR_NOFOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW

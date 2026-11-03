@@ -52,7 +52,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     NEXT_TELEMETRY_DISABLED=1 \
-    HOME=/home/agent \
     HARNESS_WORKSPACE=/data/workspaces \
     HR_DATA_DIR=/data
 
@@ -185,21 +184,22 @@ COPY --from=ui /ui/public           /app/ui/public
 # The CLIs refuse to run as root anyway (they gate their own permission bypass on it), and they
 # never do.
 #
-# The `rm -rf /home/agent/.npm` is not tidying. HOME is already /home/agent while the kit apps are
-# built above, and those builds run as root — so npm leaves ~1600 root-owned files in the cache
-# the RUNTIME user then cannot write to. First start-up installs the agent CLIs into the data
-# volume as `agent`, npm hits EACCES on its own cache, and the install fails. Its output is
-# discarded (entrypoint.sh: `|| true`), so the only symptom is one WARN line and then every turn
-# on Claude Code or Codex failing. Hermes survives because it installs through pip, into a venv.
+# The `rm -rf` of the npm caches is not tidying: root-owned build-time files in a cache a runtime
+# user reads made every install fail with EACCES on a fresh volume, and its output is discarded
+# (entrypoint.sh: `|| true`). The cache has no runtime value, so it is deleted rather than chowned.
 #
-# That made two of the three backends unusable on any fresh volume — which is EVERY new install of
-# this image. It was invisible here because a long-lived volume keeps CLIs installed before the
-# fault existed. The cache is build-time garbage with no runtime value, so it is deleted rather
-# than chowned: nothing can inherit ownership of something that is not there.
+# Everything under /app is root's, and `agent` owns only what it keeps: root runs the entrypoint and
+# the runner from here, and a product user that can write them is root at the next start (reported
+# privately, GHSA-mm72-wr37-26pv). The gateway's and the console's own code are root's too: neither
+# writes there at run time but for Next's cache, and code that cannot change itself cannot keep a
+# compromise across a restart. Compiled here because `agent` cannot write __pycache__.
 RUN useradd -m -u 10001 agent \
     && rm -rf /home/agent/.npm /root/.npm \
-    && mkdir -p /data \
-    && chown -R agent:agent /data /app /home/agent \
+    && mkdir -p /data /app/ui/.next/cache \
+    && chown -R root:root /app \
+    && chmod -R go-w,a+rX /app \
+    && python -m compileall -q /app/gateway /app/runner \
+    && chown -R agent:agent /data /home/agent /app/ui/.next/cache \
     && chmod -R a+rX /opt/harnessrouter/skills /opt/harnessrouter/kits
 
 EXPOSE 3000

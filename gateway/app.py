@@ -346,6 +346,14 @@ _CONC_ENV_TENANT = os.environ.get("HARNESS_TENANT_CONCURRENCY", "").strip()
 # /v1/responses with X-Harness-Internal == this key + X-Harness-Org/X-Harness-Member, so it doesn't
 # need a user-minted API key. Public callers use Authorization: Bearer sk-hr-... (per-org API keys).
 INTERNAL_KEY = os.environ.get("HARNESS_INTERNAL_KEY", "")
+_UNSET_KEY_FALLBACK = os.urandom(32).hex()
+
+
+def _signing_key() -> bytes:
+    """What the gateway's own signatures (calibration links, sign-in state, database references) are made with.
+    With no internal key set they used a constant anyone can read in this file, so anyone could forge them."""
+    return (INTERNAL_KEY or _UNSET_KEY_FALLBACK).encode()
+
 # LIVE-B: verified identity on the internal path. The org/member headers used to be TRUSTED
 # verbatim behind the internal key — but the BFF forwards them from the BROWSER, so any caller of
 # the web app could self-assert another org's identity. Fix: when a platform login JWT (engine-
@@ -1127,7 +1135,7 @@ _CALIBRATION_TTL_S = int(os.environ.get("HR_CALIBRATION_TTL_S", str(3 * 3600)))
 def _mint_calibration_token(sid: str, org: str, inner: str, ttl_s: int) -> str:
     exp = str(int(time.time()) + max(int(ttl_s), 60))
     body = f"{sid}|{org}|{inner}|{exp}"
-    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"calibration|" + body.encode(),
+    sig = hmac.new(_signing_key(), b"calibration|" + body.encode(),
                    hashlib.sha256).hexdigest()
     return "hrc_" + base64.urlsafe_b64encode(body.encode()).decode().rstrip("=") + "." + sig
 
@@ -1137,7 +1145,7 @@ def _verify_calibration_token(tok: str) -> dict | None:
     try:
         raw, sig = tok[len("hrc_"):].split(".", 1)
         body = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode()
-        want = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"calibration|" + body.encode(),
+        want = hmac.new(_signing_key(), b"calibration|" + body.encode(),
                         hashlib.sha256).hexdigest()
         if not hmac.compare_digest(want, sig):
             return None
@@ -1210,7 +1218,7 @@ def _mint_turn_cred(sid: str, conn_name: str, level: str = "") -> str:
     from the credential itself. A turn that asked for none carries the credential it always did."""
     exp = str(int(time.time()) + _BROKER_TTL_S)
     body = f"{sid}|{conn_name}|{exp}" + (f"|{level}" if level else "")
-    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
+    sig = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
     return f"hrt_{base64.urlsafe_b64encode(body.encode()).decode().rstrip('=')}.{sig}"
 
 
@@ -1224,7 +1232,7 @@ def _verify_turn_cred(tok: str) -> tuple[str, str] | None:
         sid, conn_name, exp = body.split("|")[:3]
     except Exception:  # noqa: BLE001 — malformed token is simply invalid
         return None
-    good = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
+    good = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, good) or int(exp) < int(time.time()):
         return None
     return sid, conn_name
@@ -8238,7 +8246,7 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # stops it is this product's own write-wall rather than a defect: gjc's native lock helper walks
 # from / down to the path it is locking and opens EVERY ancestor with
 # O_RDONLY|O_DIRECTORY|O_NOFOLLOW (pi-natives, open_parent_no_follow), which needs READ on each
-# ancestor rather than traverse, and docker/entrypoint.sh sets /data and /data/workspaces to 751
+# ancestor rather than traverse, and docker/entrypoint.sh sets /data to 1771 and /data/workspaces to 751
 # — "traversable by sessions, neither listable nor writable" — so a session uid gets EACCES and
 # the turn dies before its first model call. MEASURED both ways on a real instance (2026-10-03):
 # at 755 a turn completed in 4.6 s, back at 751 it failed again with the same error. The
@@ -10950,7 +10958,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                 await bus_emit(ev)
             obj = tr._response_obj(status)
     except Exception as e:  # noqa: BLE001
-        tr.error = {"type": "server_error", "code": "unhandled_exception", "message": str(e)[:300]}
+        # The exception's text can name internal addresses. It goes to this log; the caller gets the fact.
+        print(f"[responses] a turn stopped on {type(e).__name__}: {str(e)[:300]}", flush=True)
+        tr.error = {"type": "server_error", "code": "unhandled_exception", "message": "The turn stopped on an internal error. Try again."}
         obj = tr._response_obj("failed")
         status = "failed"
     await persist(status)
@@ -13072,32 +13082,10 @@ async def _internal_target(host: str, port: int) -> str | None:
     metadata lives), RFC1918, CGNAT, IPv6 private, reserved — so a name whose second A record is
     internal is refused on the strength of that second record.
 
-    WHAT IT DOES NOT DO, because a comment claiming otherwise is worse than no comment: it does not
-    survive a DNS rebind. This resolves the name; httpx then resolves it AGAIN when it opens the
-    socket, so a TTL-0 name that answers 93.184.216.34 here can answer 10.0.0.5 a millisecond
-    later and this check will have passed. Closing that means pinning the address we classified
-    into the connection itself, which is a different piece of work and is not what this does. What
-    it buys is the multi-A case and every literal internal address, and that is the whole of it.
-
-    Shared by MCP URLs, database hosts and provider-supplied file URLs because it is one question,
-    not three: each is a target somebody else names and this server then opens a socket to. A
-    second copy of this rule would be a second thing to remember to fix.
-
-    A LOOKUP THAT DID NOT ANSWER IS NOT AN ANSWER. This used to take an `allow_unresolvable` flag,
-    on the reasoning that a name which does not resolve is not internal and cannot be reached
-    anyway — and its `except Exception` swallowed a resolver timeout, an EAI_AGAIN under load and
-    a resolver that was down along with the genuine NXDOMAIN. Our lookup failing says nothing
-    about what the socket does a millisecond later: the caller resolves again, from its own
-    resolver, in a cluster where `.svc` is a search domain. So there is no allow branch at all —
-    an address this server could not classify is one it does not open a socket to.
-
-    The two failures are still told apart, because the operator reading the log needs them apart:
-    one of them is a bad URL and the other is a broken resolver.
-
-    ASYNC BECAUSE getaddrinfo BLOCKS. It is a synchronous C call and it can sit for the resolver's
-    whole timeout; run on the event loop it stops the entire process, not one request. Measured: a
-    1.01 s lookup let ZERO other tasks run. Every provider file URL is classified on every poll, so
-    one relay naming a slow-resolving host froze the gateway for everybody, ten seconds apart.
+    This answers for a name at one moment, so on its own it does not stop a DNS rebind: a client that
+    opens its own connection resolves the name again. Anything that connects to a name a caller gave
+    goes through `_CheckedNetwork` or a pin made from `_classify_target`, which connect to the very
+    addresses they classified (GHSA-mx6c-8c42-fw44).
     """
     return (await _classify_target(host, port))[1]
 
@@ -14019,7 +14007,7 @@ def _mint_hosted_cred(hid: str, sid: str, key: str) -> str:
     """
     exp = str(int(time.time()) + _BROKER_TTL_S)
     body = f"{hid}|{sid}|{key}|{exp}"
-    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
+    sig = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
     return f"hrs_{base64.urlsafe_b64encode(body.encode()).decode().rstrip('=')}.{sig}"
 
 
@@ -14033,7 +14021,7 @@ def _verify_hosted_cred(tok: str) -> tuple[str, str, str] | None:
         hid, sid, key, exp = body.split("|")
     except Exception:  # noqa: BLE001 — a malformed token is simply invalid
         return None
-    good = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
+    good = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, good) or int(exp) < int(time.time()):
         return None
     return hid, sid, key
@@ -17160,8 +17148,12 @@ def _plug_safe(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
 
 
-def _plug_vid(workspace: str, plug_type: str) -> str:
-    return f"plug.{_plug_safe(workspace)}.{_plug_safe(plug_type)}"
+def _plug_vid(org: str, workspace: str, plug_type: str, rec: dict | None = None) -> str:
+    """A plug row's id. It carries the organization: every organization has a workspace called
+    "default", and an id without one was one row for all of them, so the second to connect a plug
+    overwrote the first's (reported privately, GHSA-gf7m-w8pf-6f68). A row written before this keeps
+    the id it has: reads find a row by workspace and type within the organization, not by id."""
+    return str((rec or {}).get("id") or "") or f"plug.{_plug_safe(org)}.{_plug_safe(workspace)}.{_plug_safe(plug_type)}"
 
 
 def _plug_domains_ok(names, param: str) -> list[str]:
@@ -17295,13 +17287,14 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         status, attention, config = await _m365_connect(org, config, refs, body.secrets or {})
     version = int((prev or {}).get("version") or 0) + 1
     now = int(time.time() * 1000)
-    await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plug_type),
+    vid = _plug_vid(org, workspace, plug_type, prev)
+    await _vg_upsert(_PLUG_LABEL, vid,
                      {"org": org, "workspace": workspace, "type": plug_type, "status": status, "source": form["source"],
                       "config": json.dumps(config, separators=(",", ":")),
                       "key_refs": json.dumps([{"field": f, "ref": r} for f, r in refs.items()], separators=(",", ":")),
                       "attention": attention,
                       "version": str(version), "updated_at": str(now)})
-    _plug_fields_cache.pop(_plug_vid(workspace, plug_type), None)
+    _plug_fields_cache.pop(vid, None)
     status2, rec = await _plug_lookup_local(org, workspace, plug_type)
     print(f"[plugs] {workspace}: {plug_type} {status2} (v{version})", flush=True)
     return _plug_public(org, workspace, plug_type, rec, status2)
@@ -17319,7 +17312,7 @@ _M365_STATE_TTL_S = 15 * 60
 
 def _m365_state_sign(payload: dict) -> str:
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"m365|" + body.encode(), hashlib.sha256).hexdigest()
+    sig = hmac.new(_signing_key(), b"m365|" + body.encode(), hashlib.sha256).hexdigest()
     return "hrm_" + base64.urlsafe_b64encode(body.encode()).decode().rstrip("=") + "." + sig
 
 
@@ -17327,7 +17320,7 @@ def _m365_state_verify(tok: str) -> dict | None:
     try:
         raw, sig = str(tok or "")[len("hrm_"):].split(".", 1)
         body = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode()
-        want = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"m365|" + body.encode(), hashlib.sha256).hexdigest()
+        want = hmac.new(_signing_key(), b"m365|" + body.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(want, sig):
             return None
         st = json.loads(body)
@@ -17449,12 +17442,13 @@ async def microsoft_complete(body: MicrosoftCompleteBody, request: Request) -> d
                         "id": str(who.get("id") or ""), "signed_in_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     config["accounts"] = accounts
     version = int(rec.get("version") or 0) + 1
-    await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plugs_plane.MICROSOFT365),
+    vid = _plug_vid(org, workspace, plugs_plane.MICROSOFT365, rec)
+    await _vg_upsert(_PLUG_LABEL, vid,
                      {"org": org, "workspace": workspace, "type": plugs_plane.MICROSOFT365, "status": "connected", "source": "local",
                       "config": json.dumps(config, separators=(",", ":")),
                       "key_refs": json.dumps([{"field": f, "ref": r} for f, r in refs.items()], separators=(",", ":")),
                       "attention": "", "version": str(version), "updated_at": str(int(time.time() * 1000))})
-    _plug_fields_cache.pop(_plug_vid(workspace, plugs_plane.MICROSOFT365), None)
+    _plug_fields_cache.pop(vid, None)
     print(f"[plugs] {workspace}: microsoft365 sign-in for {member} ({accounts[member]['upn']})", flush=True)
     status2, rec2 = await _plug_lookup_local(org, workspace, plugs_plane.MICROSOFT365)
     return _plug_public(org, workspace, plugs_plane.MICROSOFT365, rec2, status2)
@@ -17487,12 +17481,13 @@ async def microsoft_signout(request: Request) -> dict:
     if delegated and not accounts and status == "connected":
         status, attention = "needs_auth", _M365_SIGNIN_ATTENTION
     version = int(rec.get("version") or 0) + 1
-    await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plugs_plane.MICROSOFT365),
+    vid = _plug_vid(org, workspace, plugs_plane.MICROSOFT365, rec)
+    await _vg_upsert(_PLUG_LABEL, vid,
                      {"org": org, "workspace": workspace, "type": plugs_plane.MICROSOFT365, "status": status, "source": "local",
                       "config": json.dumps(config, separators=(",", ":")),
                       "key_refs": json.dumps([{"field": f, "ref": r} for f, r in refs.items()], separators=(",", ":")),
                       "attention": attention, "version": str(version), "updated_at": str(int(time.time() * 1000))})
-    _plug_fields_cache.pop(_plug_vid(workspace, plugs_plane.MICROSOFT365), None)
+    _plug_fields_cache.pop(vid, None)
     status2, rec2 = await _plug_lookup_local(org, workspace, plugs_plane.MICROSOFT365)
     return _plug_public(org, workspace, plugs_plane.MICROSOFT365, rec2, status2)
 
@@ -17546,8 +17541,9 @@ async def delete_plug(plug_type: str, request: Request) -> dict:
     for r in rec.get("key_refs") or []:
         if isinstance(r, dict) and r.get("ref"):
             await _vault_delete(org, str(r["ref"]))
-    await BACKING.graph.delete(_plug_vid(workspace, plug_type), _PLUG_LABEL)
-    _plug_fields_cache.pop(_plug_vid(workspace, plug_type), None)
+    vid = _plug_vid(org, workspace, plug_type, rec)
+    await BACKING.graph.delete(vid, _PLUG_LABEL)
+    _plug_fields_cache.pop(vid, None)
     print(f"[plugs] {workspace}: {plug_type} removed", flush=True)
     return {"type": plug_type, "workspace": workspace, "removed": True}
 
@@ -18089,25 +18085,6 @@ async def _browser_reaper_start() -> None:
                         await _browser_close(str(rec["sid"]), why)
                 await browser_plane.sweep_attachments()
     asyncio.get_running_loop().create_task(loop())
-
-
-@app.get("/internal/plugs/attachments", dependencies=[Depends(_internal_only)])
-async def plug_attachments(workspace: str, type: str) -> dict:
-    """How many of a workspace's harnesses include one plug type, for the Plugins page's
-    "attached N of M harnesses": M is the workspace's harnesses, N those whose plugs binding
-    names the type. Read from the bindings, never guessed."""
-    rows = _plugs_harness_rows(None, workspace, await BACKING.graph.find("Harness", {"workspace": workspace})
-                               + (await BACKING.graph.find("Harness", {"workspace": ""}) if not PLUGS_REGISTRY_URL else []))
-    attached = []
-    for r in rows:
-        hid = str(r.get("id") or "")
-        entry = next((e for e in _mcp_list(r) if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None)
-        if not entry:
-            continue
-        rec = await _hosted_record(str(r.get("org") or ""), _vault_key(entry.get("auth")))
-        if rec and rec.get("harness") == hid and type in (rec.get("plugs") or []):
-            attached.append(hid)
-    return {"workspace": workspace, "type": type, "harnesses": len(rows), "attached": len(attached), "harness_ids": attached}
 
 
 @app.get("/internal/plugs/pricing", dependencies=[Depends(_internal_only)])
