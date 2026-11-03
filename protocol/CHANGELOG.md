@@ -2,6 +2,42 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.10.19.post5 (2026-11-03)
+
+T-13 and T-14 check the addition below on a server that reports `input_requests`. T-13 asks the
+harness, through the `ask_user` tool §3.2 names, for a choice between two options, and requires the
+task to end `incomplete` with reason `input_required`, the question as an `input_request` item and
+in the last message's text; then an answer outside the options is `422 input_response_invalid`, an
+answer to a request the response does not hold is `409 input_not_pending`, the answer that fits
+continues the task to a terminal status that is not `failed`, and the same answer again is `409`.
+T-14 asks for a `secret`, answers with a nonce, and requires the nonce in nothing a client reads:
+the response to the answer, both responses read back, and the task's `input_items`. A model that
+never asked measured nothing, so both skip; a server without the capability skips, so no verdict it
+had changes. The packaged schema is regenerated from the OpenAPI document, which now carries
+`harness_idempotency` as the hand-edited copy already did, and `incomplete_details` is typed.
+
+## 2026-10-19, addition: a task can end by asking the person (capability `input_requests`)
+
+A harness that needs one answer — a choice, a confirmation, a value it must not guess, a secret it
+must not invent — ends its turn on the question ([Tasks §3.2](versions/2026-10-19/tasks.md#32-asking-the-person)).
+The response ends `incomplete` with `incomplete_details.reason` `input_required`, the question is
+its last `input_request` item (`kind` is `choice`, `confirm`, `free_text` or `secret`; `options[]`
+carry `{id, label}`; `expires_at` is optional) and its last message's text, and the answer is an
+`input_response` item on the next task, chained on the response that asked — a normal continuation,
+the way a `function_call_output` answers a `function_call`. Nothing waits: the turn is over, and
+the question stands until it is answered, passed over by another task (named in
+`metadata.voided_input_requests`) or expires. Three refusals, one per remedy: `409
+input_not_pending`, `410 input_request_expired`, `422 input_response_invalid`, after which the
+request stays pending. A `secret` answer reaches the harness outside the conversation and appears
+nowhere a client reads. A base without a question tool of its own is given one named `ask_user`.
+`incomplete` widens from "a budget stopped it" to "stopped short, with a reason"
+([Lifecycle §3](versions/2026-10-19/lifecycle.md#3-task-lifecycle)), and `incomplete_details` joins
+the response's field table it was missing from. Under [VERSIONING](VERSIONING.md) a new capability,
+a new output item type a client already tolerates, and an input item a server without the
+capability never sees fit within a version; the three codes are unprefixed on the precedent of
+`idempotency_key_reused`, as codes this specification now covers. Issue #476, with #479's typed
+request.
+
 ## Conformance suite 2026.10.19.post4 (2026-10-29)
 
 F-10 checks the addition below on a server that reports `harness_idempotency`: a repeat of a
