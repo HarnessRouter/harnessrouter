@@ -19,6 +19,7 @@ jest.mock('../setup/settingsModel', () => ({
 
 import { harnessFetch } from '@/lib/hfetch';
 import { MemoriesPage } from './MemoriesPage';
+import { Art } from './parts';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root; let el: HTMLElement;
@@ -198,5 +199,23 @@ describe('the cards', () => {
     expect(figures(b)).toEqual(['Records —', 'Setups —']);
     expect(a.querySelector('.mm-cp')?.textContent).toBe('Kept by Graphiti');
     expect(b.querySelector('.mm-cd')?.textContent).toBe('No description yet.');
+  });
+});
+
+describe('a card draws what is kept', () => {
+  const dots = (records: number) => {
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    act(() => root.render(<Art s={null} w={300} h={150} records={records} />));
+    const out = { filled: host.querySelectorAll('circle[fill="var(--faint)"]').length, ring: host.querySelectorAll('circle[fill="none"]').length };
+    act(() => root.unmount());
+    return out;
+  };
+  test('one dot a record where there is no schema, never more than fit', () => {
+    expect(dots(4)).toEqual({ filled: 4, ring: 0 });
+    expect(dots(400)).toEqual({ filled: 15, ring: 0 });
+  });
+  test('an empty memory stays an empty ring, so it does not read as one with records', () => {
+    expect(dots(0)).toEqual({ filled: 0, ring: 1 });
   });
 });

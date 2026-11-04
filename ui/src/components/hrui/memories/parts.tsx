@@ -37,8 +37,23 @@ export function Dot({ color, icon, size = 11 }: { color: string; icon: string; s
 }
 
 /** A schema, small: its types where they sit and the relations between them. No types: an empty ring. */
-export function Art({ s, w, h }: { s: LSchema | null | undefined; w: number; h: number }) {
+/** How many dots a memory with no schema draws: enough to tell a few from many. */
+const ART_DOTS = 15, ART_COLS = 5;
+export function Art({ s, w, h, records = 0 }: { s: LSchema | null | undefined; w: number; h: number; records?: number }) {
   const T = s?.types || [];
+  if (!T.length && records > 0) {
+    // no schema to draw, so the shape of what is kept: one dot a record, and an empty memory stays an empty ring
+    const n = Math.min(records, ART_DOTS), gap = 26;
+    const rows = Math.ceil(n / ART_COLS), y0 = h / 2 - ((rows - 1) * gap) / 2;
+    return (
+      <svg className="mm-art-svg" viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
+        {Array.from({ length: n }, (_, i) => {
+          const row = Math.floor(i / ART_COLS), inRow = Math.min(ART_COLS, n - row * ART_COLS);
+          return <circle key={i} cx={w / 2 + ((i % ART_COLS) - (inRow - 1) / 2) * gap} cy={y0 + row * gap} r="4.5" fill="var(--faint)" />;
+        })}
+      </svg>
+    );
+  }
   if (!T.length) {
     return <svg className="mm-art-svg" viewBox={`0 0 ${w} ${h}`} aria-hidden="true"><circle cx={w / 2} cy={h / 2} r="16" fill="none" stroke="var(--line)" strokeWidth="2" strokeDasharray="4 4" /></svg>;
   }

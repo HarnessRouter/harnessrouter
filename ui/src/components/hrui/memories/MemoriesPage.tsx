@@ -114,7 +114,7 @@ export function MemoriesPage() {
           const p = providerOf(m.provider), f = facts[m.id], us = setupsFor(m);
           return (
             <Link key={m.id} href={`/memories/${enc(m.id)}`} className="card mm-card">
-              <span className="mm-art"><Art s={f?.schema} w={300} h={150} /></span>
+              <span className="mm-art"><Art s={f?.schema} w={300} h={150} records={m.records?.count ?? 0} /></span>
               <span className="mm-cb">
                 <span className="mm-ct"><b>{m.name}</b></span>
                 <span className="mm-cp">{`Kept by ${vendorName(m.provider)}`}{p && !p.connected ? ' · not connected' : ''}</span>
