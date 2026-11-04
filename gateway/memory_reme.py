@@ -13,8 +13,9 @@ here was read off a server running on 2026-11-04.
       here, so an agent can read back what it just wrote.
   observe  = the turn as an episode file, then POST /auto_memory: ReMe's agent writes a note about it into
       the shared `daily` folder, which is moved at once into this memory's folder. `derivation: agent`.
-  recall   = POST /search. Words (BM25) by default; with embeddings configured on the server it's hybrid,
-      which the answer's counts say, so a `query` by meaning is reported `degraded` only when it wasn't.
+  recall   = POST /search. Words (BM25) by default; with embeddings configured on the server it's hybrid.
+      The server's health says which and the capability document follows it, and a `query` is reported
+      `degraded` whenever a search's own counts show it ran on words.
   revise   = the file rewritten. ReMe keeps no versions, so the earlier ones are kept beside it under
       .history/, which nothing indexes: `emulated`, and said in the capability document.
   forget   = frontmatter `hr_status: forgotten`, checked on every read. erase = the file, its history and
@@ -43,6 +44,7 @@ SEARCH_WIDTH = 100
 # Tests set an httpx transport here so every call is exercised without a server.
 transport: httpx.BaseTransport | None = None
 _SAFE = re.compile(r"[^A-Za-z0-9 _.-]+")
+_MEANING: dict[str, tuple[float, bool]] = {}
 
 
 class ReMeUnavailable(mp.MemoryError):
@@ -76,14 +78,14 @@ def _folder(attrs: dict) -> str:
 class ReMe(mp.Provider):
     id = "reme"
 
-    def __init__(self, base_url: str = "", api_key: str = ""):
-        self.base, self.key = base_url.rstrip("/"), api_key
+    def __init__(self, base_url: str = "", api_key: str = "", by_meaning: bool = False):
+        self.base, self.key, self.by_meaning = base_url.rstrip("/"), api_key, by_meaning
         self._recent: dict[str, list[tuple[float, str]]] = {}
 
     def capabilities(self) -> dict:
         return {"id": self.id, "isolation": "enforced_filter", "derivation": "agent", "layout": "files",
                 "observe": {"keeps_episodes": True, "answers": "records"},
-                "recall": {"signals": ["text", "filters"], "abstain": False,
+                "recall": {"signals": ["query", "text", "filters"] if self.by_meaning else ["text", "filters"], "abstain": False,
                            "filters": {"native": [], "applied_after_ranking": "every filter"}},
                 "history": {"content": "versions", "structure": "none", "emulated": True}, "as_of": "one record",
                 "revise": "native", "forget": "emulated", "erase": {"unreachable": "none"},
@@ -96,7 +98,23 @@ class ReMe(mp.Provider):
         base = str((fields or {}).get("base_url") or "").strip().rstrip("/")
         if not base:
             raise mp.MemoryError(503, "memory_unavailable", "ReMe is not connected for this workspace: connect it with your server's address.")
-        return ReMe(base, str((fields or {}).get("api_key") or ""))
+        bound = ReMe(base, str((fields or {}).get("api_key") or ""))
+        bound.by_meaning = await bound._searches_by_meaning()
+        return bound
+
+    async def _searches_by_meaning(self) -> bool:
+        """ReMe's embeddings are off unless its config turns them on, so this server's answer decides what
+        is declared. Read at most once a minute: `bind` runs on every call."""
+        hit = _MEANING.get(self.base)
+        if hit and time.time() - hit[0] < 60:
+            return hit[1]
+        try:
+            d = await self._call("health_check", timeout=10)
+        except mp.MemoryError:
+            return hit[1] if hit else False
+        on = bool((((d.get("metadata") or {}).get("health") or {}).get("components") or {}).get("embedding_store"))
+        _MEANING[self.base] = (time.time(), on)
+        return on
 
     # ── the wire: every route is a POST that answers {answer, success, metadata} ──────────────
     async def _call(self, route: str, body: dict | None = None, timeout: float = TIMEOUT_S) -> dict:
@@ -392,7 +410,10 @@ class ReMe(mp.Provider):
         asked = f"{query} {text}".strip()
         d = await self._call("search", {"query": asked, "limit": max(limit * 5, SEARCH_WIDTH)})
         meta = d.get("metadata") or {}
-        if query and not (meta.get("counts") or {}).get("hybrid"):
+        # its `hybrid` count is false when only vectors matched, so that isn't what says words. A server with
+        # embeddings that found words and no vectors had them fail for this search.
+        n = meta.get("counts") or {}
+        if query and not n.get("vector") and (n.get("keyword") or not self.by_meaning):
             degraded.append("query:searched_as_words")
         prefix = self._dir(mid) + "/"
         results, seen = [], set()

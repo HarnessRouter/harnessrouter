@@ -111,6 +111,14 @@ def test_a_search_by_label_is_scoped_at_the_vendor_and_says_nothing_was_lost(wir
     assert out["degraded"] == [] and out["results"][0]["record"]["attributes"]["labels"] == ["Company"]
 
 
+def test_a_label_filters_a_read_with_no_question_too(wired):
+    wired(memory_hindsight, _hs)
+    h = memory_hindsight.Hindsight("http://vendor.test")
+    flt = lambda v: {"field": "attributes.labels", "op": "contains", "value": v}   # noqa: E731
+    assert len(run(h.recall("m", {"filters": flt("Company")}))["results"]) == 1
+    assert run(h.recall("m", {"filters": flt("Person")}))["results"] == []
+
+
 def test_any_other_filter_is_said_to_run_after_the_ranking(wired):
     wired(memory_hindsight, _hs)
     out = run(memory_hindsight.Hindsight("http://vendor.test").recall("m", {"query": "who", "filters": {"field": "attributes.kind", "op": "eq", "value": "nope"}}))
@@ -262,6 +270,34 @@ def test_an_id_that_isnt_ours_is_no_path(wired, rid):
     w = wired(memory_reme, lambda *a: {"success": True})
     assert run(memory_reme.ReMe("http://vendor.test")._path_of("hmem_a", rid)) is None
     assert w.calls == [], "nothing is asked of the server for a made-up id"
+
+
+@pytest.mark.parametrize("store,signals", [({}, ["text", "filters"]), ({"default": {"is_started": True}}, ["query", "text", "filters"])])
+def test_search_by_meaning_is_declared_from_what_this_server_says(wired, monkeypatch, store, signals):
+    """Its embeddings are off unless its config turns them on, so a vendor's name can't say."""
+    async def creds(org, ws, pid):
+        return {"base_url": f"http://vendor.test/{len(store)}"}
+    monkeypatch.setattr(mp, "CREDENTIALS", creds)
+    monkeypatch.setattr(memory_reme, "_MEANING", {})
+    w = wired(memory_reme, lambda *a: {"answer": "ReMe - healthy", "success": True, "metadata": {"health": {"healthy": True, "components": {"embedding_store": store}}}})
+    bound = run(memory_reme.ReMe().bind(ORG, "default"))
+    assert bound.capabilities()["recall"]["signals"] == signals
+    run(memory_reme.ReMe().bind(ORG, "default"))
+    assert len(w.calls) == 1, "bind runs on every call, so the answer is kept for a minute"
+
+
+@pytest.mark.parametrize("by_meaning,counts,said", [
+    (False, {"vector": 0, "keyword": 1, "hybrid": False}, True),       # no embeddings on this server
+    (False, {"vector": 0, "keyword": 0, "hybrid": False}, True),
+    (True, {"vector": 3, "keyword": 0, "hybrid": False}, False),       # measured: only vectors matched, and hybrid is false
+    (True, {"vector": 3, "keyword": 1, "hybrid": True}, False),
+    (True, {"vector": 0, "keyword": 1, "hybrid": False}, True),        # embeddings failed for this search
+    (True, {"vector": 0, "keyword": 0, "hybrid": False}, False),       # nothing there at all
+])
+def test_a_search_by_meaning_says_when_it_ran_on_words(wired, by_meaning, counts, said):
+    wired(memory_reme, lambda *a: {"success": True, "metadata": {"counts": counts, "results": []}})
+    out = run(memory_reme.ReMe("http://vendor.test", "", by_meaning).recall("hmem_a", {"query": "exercise habits"}))
+    assert ("query:searched_as_words" in out["degraded"]) is said
 
 
 # ── mem0 on your own server: one memory is one user, checked on every read ────────────────────

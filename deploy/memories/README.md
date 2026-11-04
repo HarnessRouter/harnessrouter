@@ -7,7 +7,7 @@ HarnessRouter keeps no memory of its own. A memory lives with a vendor you conne
 | [mem0](https://github.com/mem0ai/mem0) | Apache-2.0 | Short facts drawn from what was said | By meaning | None |
 | [Graphiti](https://github.com/getzep/graphiti), the open engine behind Zep | Apache-2.0 | A graph of things and how they relate, over time | Meaning and words | Types, properties and relations |
 | [Hindsight](https://github.com/vectorize-io/hindsight) | MIT | Facts and the things they involve, consolidated in the background | Meaning and words | Labels on facts |
-| [ReMe](https://github.com/agentscope-ai/ReMe) | Apache-2.0 | Markdown files in folders, with links | Words, and meaning once embeddings are set | None |
+| [ReMe](https://github.com/agentscope-ai/ReMe) | Apache-2.0 | Markdown files in folders, with links | Meaning and words here, words alone on its defaults | None |
 
 Each is its own project under its own licence. This folder runs their published images or builds from their source, and ships none of their code. The small server in `graphiti/` is ours, because Graphiti is a library and its own server doesn't accept types.
 
@@ -51,7 +51,8 @@ A schema is only worth having where something reads it. So what you can set foll
 
 - **A turn that corrects memory isn't recorded.** When an agent revises or forgets something, that conversation is left out, whichever vendor it is. Otherwise a vendor would learn the forgotten thing again from the request to forget it. Whatever else the agent wants kept from that turn, it has to remember itself.
 - **mem0 and history.** Its server records only text changes, so an earlier version can't keep the time it was true. It doesn't declare facts that hold one value, and the answer says so.
-- **ReMe's search is shared.** Its search has no folder scope, so HarnessRouter checks every result against the memory's folder. It also reads words only until embeddings are set, and the answer says so when a search by meaning ran on words.
+- **ReMe's search is shared.** Its search has no folder scope, so HarnessRouter checks every result against the memory's folder.
+- **ReMe searches words alone by default.** `reme/config.yaml` here turns on search by meaning. If you run ReMe with its own defaults, it's declared as words only, and an answer says so when a search by meaning ran on words.
 - **ReMe's search is a few seconds behind.** It indexes about six seconds after a write. What was just written is matched directly until then.
 - **Hindsight's single facts.** It can't delete one derived fact, only the document it came from, so erasing one takes it out of search and reports that it's still stored.
 

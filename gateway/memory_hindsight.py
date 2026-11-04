@@ -465,7 +465,7 @@ class Hindsight(mp.Provider):
             degraded.append("filters:applied_after_ranking")
         if not query and not text:
             listed = await self.list(mid, {"types": req.get("types"), "limit": max(limit, 50), "include": req.get("include")})
-            rows = [x for x in listed["records"] if all(mp.matches(x, f) for f in later)]
+            rows = [x for x in listed["records"] if all(mp.matches(x, f) for f in later) and (not label or mp.matches(x, flt))]
             return {"results": [{"record": x, "memory_id": mid, "score": 1.0, "why": ["filters"]} for x in rows[:limit]], "degraded": degraded, "abstain": False}
         body: dict = {"query": f"{query} {text}".strip(), "budget": "mid", "max_tokens": 4096}
         types = [t for t in (req.get("types") or []) if t]

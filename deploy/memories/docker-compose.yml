@@ -99,15 +99,18 @@ services:
     <<: *restart
     profiles: [reme]
     image: ghcr.io/agentscope-ai/reme:main@sha256:5fc0ff360b2574220cd16c3565e4d596b7df91abc7ab5c9bc9a152513bcd63d2
-    # its default answer length is more than this model allows, and it won't start a note without this
-    command: ["start", "components.as_llm.default.parameters.max_tokens=16000"]
+    command: ["start"]
     environment:
+      REME_CONFIG: /etc/reme/config.yaml
       LLM_API_KEY: ${OPENAI_API_KEY:-}
       LLM_BASE_URL: https://api.openai.com/v1
       LLM_MODEL_NAME: ${MEMORY_MODEL:-gpt-4o-mini}
       EMBEDDING_API_KEY: ${OPENAI_API_KEY:-}
       EMBEDDING_BASE_URL: https://api.openai.com/v1
-    volumes: [reme:/data]
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL:-text-embedding-3-small}
+    volumes:
+      - reme:/data
+      - ./reme/config.yaml:/etc/reme/config.yaml:ro
 
 volumes:
   falkordb:
