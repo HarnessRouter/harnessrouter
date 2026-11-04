@@ -72,10 +72,11 @@ def test_the_errors_own_detail_is_kept_where_the_turn_has_one():
 
 # ── the whole path, from the runner's answer to the response and the trace ─────────────────────
 
-def _drive_a_failed_turn(monkeypatch):
+def _drive_a_failed_turn(monkeypatch, start=None):
     """Run _resp_execute against a runner that answers a failed turn the way the runner answers
     one now: its own account of the failure (the base, the tool, the exception) beside the one
-    line of reason. Returns (status, the record, the translator, the events written to the trace).
+    line of reason. `start` answers the call that starts the turn instead, for one that never does.
+    Returns (status, the record, the translator, the events written to the trace).
     """
     detail = {"base": "claude", "tool": "Bash",
               "exception": "ValueError: the tool blew up\n  File \"/app/tools.py\", line 42, in run"}
@@ -83,6 +84,8 @@ def _drive_a_failed_turn(monkeypatch):
 
     async def _sandbox_json(path, sid, method="POST", body=None, **kw):
         if path == "/turn":
+            if start is not None:
+                raise start
             return {"turn_id": "t1", "status": "running"}
         if path.startswith("/turn/"):
             return {"done": True, "status": "failed", "error": "the CLI own sentence",
@@ -152,6 +155,25 @@ def test_the_whole_path_names_the_base_and_the_tool_and_keeps_the_exception(monk
     result_ev = [ev for ev in traced if ev.get("type") == "result"]
     assert result_ev and "ValueError: the tool blew up" in result_ev[-1]["error_detail"]["exception"]
     assert 'line 42, in run' in result_ev[-1]["error_detail"]["exception"]
+
+
+def test_a_turn_the_runner_never_took_does_not_blame_the_connections(monkeypatch):
+    """The connection was usable and the runner failed every try. With no status on its entry this read as
+    a connection skipped: "No connection on this account serves <model>", after five minutes (0.38.0)."""
+    status, rec, tr, _ = _drive_a_failed_turn(monkeypatch, RuntimeError(
+        "sandbox /turn failed after 28 of 28 tries (HTTP 500, 21B body)"))
+    assert status == "failed"
+    said = gw._turn_failure_message(rec)
+    assert said.startswith("The turn failed: it couldn't start here.") and "Try again" in said
+    assert "No connection" not in said and "sandbox" not in said and "HTTP 500" not in said
+    assert not rec.get("error_message")           # not read as the provider refusing the key
+
+
+def test_a_session_tree_verdict_reaches_the_person_as_said(monkeypatch):
+    why = "a file in this task's workspace can't be written, so it can't go on. Start a new task."
+    status, rec, tr, _ = _drive_a_failed_turn(monkeypatch, gw._SandboxRefused("sandbox /turn failed", 409, why))
+    assert status == "failed" and gw._turn_failure_message(rec) == f"The turn failed: {why}"
+    assert not rec.get("error_message")
 
 
 def test_a_result_with_the_failure_as_error_adds_no_answer():

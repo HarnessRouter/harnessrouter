@@ -9,11 +9,13 @@ session (Part D). These run as root on Linux, where the wall exists; elsewhere t
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import threading
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server  # noqa: E402
@@ -155,3 +157,56 @@ def test_a_scope_inside_another_leaves_the_outer_one_in_force(monkeypatch):
         with pytest.raises(PermissionError):
             victim.write_text("still the session")             # the inner scope's exit did not hand back root
     victim.write_text("root again")
+
+
+GROUP_ZERO_PROBE = """
+import os, pathlib, sys
+os.setgroups([0])                        # root's list in a container, whatever this test process was given
+sys.path.insert(0, sys.argv[2])
+import server
+print("groups", os.getgroups())
+try:
+    with server._fs_as(int(sys.argv[3])):
+        pathlib.Path(sys.argv[1]).write_text("planted")
+    print("written")
+except PermissionError:
+    print("refused")
+"""
+
+
+def test_the_wall_leaves_a_session_scope_no_group_zero(tmp_path):
+    """_fs_as changes the filesystem uid and gid and leaves the supplementary groups, so with root's group 0 a link
+    the session planted still reached what group 0 could write. The wall drops them when the runner starts."""
+    d = tempfile.mkdtemp(prefix="hrgroup-")
+    os.chmod(d, 0o755)
+    victim = pathlib.Path(d) / "victim"
+    victim.write_text("root's own")
+    os.chown(victim, 0, 0)
+    os.chmod(victim, 0o664)
+    runner = str(pathlib.Path(__file__).resolve().parents[1])
+    env = {**os.environ, "HR_SESSION_UIDS": "1", "HARNESS_WORKSPACE": str(tmp_path)}
+    out = subprocess.run([sys.executable, "-c", GROUP_ZERO_PROBE, str(victim), runner, str(UID)],
+                         env=env, cwd=runner, capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr[-800:]
+    assert "groups []" in out.stdout and "refused" in out.stdout, out.stdout[-300:]
+    assert victim.read_text() == "root's own"
+
+
+def test_a_planted_link_refuses_the_turn_at_once(monkeypatch):
+    """A verdict the gateway does not wait out, and nothing written through the link."""
+    root = tempfile.mkdtemp(prefix="hrroot-")
+    os.chmod(root, 0o755)
+    monkeypatch.setattr(server, "WORKSPACE_ROOT", root)
+    monkeypatch.setattr(server, "_SESSION_UIDS", True)
+    _, victim = _victim()
+    ws = pathlib.Path(root) / "hsessplanted"
+    (ws / ".harness").mkdir(parents=True)
+    link = ws / ".harness" / "mcp.json"
+    link.symlink_to(victim)
+    for p in (ws, ws / ".harness", link):
+        os.lchown(p, UID, UID)
+    req = server.TurnReq(prompt="x", provider="anthropic", input_requests=True, auth=server.Auth(api_key="k"))
+    with pytest.raises(HTTPException) as e:
+        server.turn(req, "hsessplanted")
+    assert e.value.status_code == 409 and root not in e.value.detail
+    assert victim.read_text() == "root's own"

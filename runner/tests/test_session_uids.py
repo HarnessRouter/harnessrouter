@@ -1,11 +1,14 @@
 """The session write-wall (HR_SESSION_UIDS): what it changes when declared, and that it changes
 nothing when it is not. The uid switch itself needs root and is exercised live on a self-hosted
 box; these pin the parts a test process can reach."""
+import errno
 import os
+import pathlib
 import sys
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -178,3 +181,44 @@ def test_each_cli_gets_skills_where_its_own_loader_looks(tmp_path):
         d = tmp_path / backend
         server._write_skills(str(d), sk, backend)
         assert (d / where).exists(), backend
+
+
+def _turn_meets(monkeypatch, tmp_path, make_error):
+    """server.turn with _start_turn answering make_error(the session's directory)."""
+    ws = str(tmp_path / "hsess1")
+    monkeypatch.setattr(server, "_ws", lambda identifier="": ws)
+
+    def start(req, identifier=""):
+        raise make_error(ws)
+    monkeypatch.setattr(server, "_start_turn", start)
+    return server.turn(server.TurnReq(prompt="x"), "hsess1")
+
+
+@pytest.mark.parametrize("make_error", [
+    lambda ws: PermissionError(errno.EACCES, "denied", f"{ws}/.harness/mcp.json"),
+    lambda ws: IsADirectoryError(errno.EISDIR, "a directory", f"{ws}/.harness/mcp.json"),
+    lambda ws: NotADirectoryError(errno.ENOTDIR, "not a directory", f"{ws}/.harness/home/x"),
+    lambda ws: FileExistsError(errno.EEXIST, "exists", f"{ws}/.harness"),
+    lambda ws: FileNotFoundError(errno.ENOENT, "gone", f"{ws}/.harness/mcp.json"),
+    lambda ws: OSError(errno.ELOOP, "too many links", f"{ws}/.harness/mcp.json"),
+    lambda ws: PermissionError(errno.EACCES, "denied", pathlib.Path(ws) / ".harness" / "mcp.json"),
+])
+def test_what_a_session_did_to_its_own_tree_is_a_verdict(monkeypatch, tmp_path, make_error):
+    """No wait changes it, so it is no 5xx for the gateway to retry over minutes, and the person is told why."""
+    with pytest.raises(HTTPException) as e:
+        _turn_meets(monkeypatch, tmp_path, make_error)
+    assert e.value.status_code == 409 and "Start a new task" in e.value.detail
+    assert str(tmp_path) not in e.value.detail
+
+
+@pytest.mark.parametrize("make_error", [
+    lambda ws: OSError(errno.ENOSPC, "no space", f"{ws}/.harness/mcp.json"),      # may pass
+    lambda ws: OSError(errno.EMFILE, "too many open files", f"{ws}/.harness/mcp.json"),
+    lambda ws: PermissionError(errno.EACCES, "denied", "/app/runner/x"),          # not the session's to have done
+    lambda ws: PermissionError(errno.EACCES, "denied", ws + "-another/x"),
+    lambda ws: PermissionError(errno.EACCES, "denied"),
+    lambda ws: PermissionError(errno.EACCES, "denied", 7),                        # a descriptor, no name
+])
+def test_anything_else_stays_the_failure_it_was(monkeypatch, tmp_path, make_error):
+    with pytest.raises(OSError):
+        _turn_meets(monkeypatch, tmp_path, make_error)
