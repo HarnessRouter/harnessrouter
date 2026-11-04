@@ -61,10 +61,10 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
-test('the rail has the five places of this console and the letter, and nothing a self-hosted instance does not have', async () => {
+test('the rail has the six places of this console and the letter, and nothing a self-hosted instance does not have', async () => {
   await mount();
   const places = Array.from(el.querySelectorAll('.rail a.rail-btn')).map((a) => a.getAttribute('href'));
-  expect(places).toEqual(['/start', '/studio', '/shop', '/extensions', '/keys', '/letter']);
+  expect(places).toEqual(['/start', '/studio', '/memories', '/shop', '/extensions', '/keys', '/letter']);
   expect(el.querySelector('.rail a.rail-btn[aria-current="page"]')?.getAttribute('href')).toBe('/studio');
   // the letter sits last, right above the account button
   expect(el.querySelector('.rail .rail-letter')?.nextElementSibling?.classList.contains('rail-me')).toBe(true);

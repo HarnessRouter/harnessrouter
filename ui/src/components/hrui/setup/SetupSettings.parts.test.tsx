@@ -334,8 +334,8 @@ describe('the arrow keys', () => {
     await keyOn(el.querySelector('.cap-tabs [role=tab][aria-selected=true]') as Element, 'ArrowRight');
     expect(on('.cap-tabs')).toBe('Skills 3');
     await keyOn(el.querySelector('.ly-list [role=tab][aria-selected=true]') as Element, 'ArrowDown');
-    expect(on('.ly-list')).toContain('Environment & limits');
-    expect(document.activeElement?.textContent).toContain('Environment & limits');
+    expect(on('.ly-list')).toContain('Memory');
+    expect(document.activeElement?.textContent).toContain('Memory');
   });
 });
 
