@@ -289,6 +289,12 @@ async def del_group(group: str) -> dict:
     return {"deleted": group}
 
 
+@app.get("/check", dependencies=[Depends(auth)])
+async def check() -> dict:
+    """A connection is tried here before it is kept, so a wrong key is refused then and not at the first write."""
+    return {"ok": True}
+
+
 @app.get("/healthz")
 async def healthz() -> dict:
     return {"ok": True}

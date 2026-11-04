@@ -47,7 +47,7 @@ async def check(api_key: str, base_url: str = "") -> str:
         return "Graphiti needs the address of your server."
     try:
         async with httpx.AsyncClient(timeout=20, transport=transport) as c:
-            r = await c.get(base_url.rstrip("/") + "/healthz")
+            r = await c.get(base_url.rstrip("/") + "/check", headers={"Authorization": f"Bearer {api_key}"} if api_key else {})
     except httpx.HTTPError as e:
         return f"Graphiti could not be reached at that address: {type(e).__name__}."
     return "" if r.status_code == 200 else f"Graphiti refused the connection (HTTP {r.status_code})."
