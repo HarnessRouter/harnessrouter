@@ -4328,8 +4328,7 @@ def _mcp_through_relay(servers: list[dict] | None) -> list[dict]:
             continue
         with _MCP_RELAY["lock"]:
             if _MCP_RELAY["server"] is None:
-                srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _McpRelayHandler)
-                srv.daemon_threads = True
+                srv = _QuietHTTPServer(("127.0.0.1", 0), _McpRelayHandler)
                 threading.Thread(target=srv.serve_forever, daemon=True).start()
                 _MCP_RELAY["server"], _MCP_RELAY["port"] = srv, srv.server_address[1]
             tok = "hr-mcp-" + uuid.uuid4().hex
@@ -4339,6 +4338,14 @@ def _mcp_through_relay(servers: list[dict] | None) -> list[dict]:
         out.append({k: v for k, v in s.items() if k not in ("url", "auth", "headers")}
                    | {"url": f"http://127.0.0.1:{port}/{tok}/{'sse' if sse else 'mcp'}"})
     return out
+
+
+class _QuietHTTPServer(http.server.ThreadingHTTPServer):
+    """A client that goes away mid-call is ordinary here, and a traceback is not a place to risk a url."""
+    daemon_threads = True
+
+    def handle_error(self, request, client_address) -> None:
+        return
 
 
 class _McpRelayHandler(http.server.BaseHTTPRequestHandler):

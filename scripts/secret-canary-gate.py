@@ -245,6 +245,14 @@ def _model_body(path: str, body: dict) -> tuple[str, bytes]:
         "data: [DONE]\n\n"])
 
 
+class QuietServer(http.server.ThreadingHTTPServer):
+    """A CLI that hangs up mid-answer is ordinary here."""
+    daemon_threads = True
+
+    def handle_error(self, request, client_address) -> None:
+        return
+
+
 class StandHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -453,7 +461,7 @@ def main() -> int:
     table.add("instance:api-key", tok)
     api = {"authorization": f"Bearer {tok}"}
 
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), StandHandler)
+    srv = QuietServer(("127.0.0.1", 0), StandHandler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     stand = f"http://127.0.0.1:{srv.server_address[1]}"
 

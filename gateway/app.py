@@ -13963,7 +13963,7 @@ async def _mcp_migrate(org: str, hid: str, v: dict | None) -> dict | None:
     if sealed != listed:
         await _vg_upsert("Harness", hid, {"mcp_servers": json.dumps(sealed)})
         v = {**v, "mcp_servers": json.dumps(sealed)}
-        print(f"[migrate] {hid}: tokens written on the harness moved to the secret store", flush=True)
+        print("[migrate] tokens written on a harness moved to the secret store", flush=True)
     # Parsed ONCE. Two _mcp_list calls return two sets of dicts parsed from the same JSON, so the
     # replacement below would match nothing and leave both entries on the harness.
     servers = _mcp_list(v)

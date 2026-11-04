@@ -1,3 +1,4 @@
+/** @jest-environment jsdom */
 import { fireEvent, render, screen } from '@testing-library/react';
 import { inputRequestOf, type InputRequest } from '@/lib/conversation';
 import { incompleteWhy } from './AgentTurns';
