@@ -3574,6 +3574,11 @@ async def _start_secrets_at_rest() -> None:
         return
     if n:
         print(f"[secrets] {n} record(s) stored before this install had a key are now encrypted", flush=True)
+    unopenable = getattr(BACKING.secrets, "unopenable", None)
+    bad = await unopenable() if unopenable else 0
+    if bad:
+        print(f"[secrets] {bad} record(s) cannot be opened with the current HR_SECRET_KEY: they were stored "
+              "under a different key. Set it back to that key, or enter those credentials again.", flush=True)
 
 
 @app.on_event("startup")
@@ -4961,6 +4966,15 @@ def validation_error_body(exc) -> dict:
 @app.exception_handler(RequestValidationError)
 async def _uhp_validation_error(request: Request, exc: RequestValidationError):
     return JSONResponse(validation_error_body(exc), status_code=422, headers={"UHP-Version": UHP_VERSION})
+
+
+@app.exception_handler(backing.SecretsNotConfigured)
+async def _secrets_not_configured(request: Request, exc: backing.SecretsNotConfigured):
+    """A stored credential that cannot be opened says why, rather than a bare 500."""
+    err = uhp_error(501, "secrets_not_configured", str(exc)).detail
+    err = {k: err.get(k) for k in ("type", "code", "message", "param", "detail")}
+    return JSONResponse({"error": err, "detail": err["message"]}, status_code=501,
+                        headers={"UHP-Version": UHP_VERSION})
 
 
 @app.exception_handler(HTTPException)

@@ -656,15 +656,17 @@ rather than in a container is reachable at `host.docker.internal` on Docker Desk
 
 **The connection string is encrypted at rest**, like every stored credential, under a key derived
 from `HR_SECRET_KEY`. An instance given none generates one at its first start and keeps it in
-`/data/secret-key` (root's, mode 600) — that protects a copy of `/data/secrets`, not a copy of the
-whole volume, since the key sits beside the data. To keep the two apart, set the key yourself,
-and keep setting the same one, since the stored records are sealed under it:
+`/data/secret-key` (root's, mode 600). That protects a copy of `/data/secrets`, not a copy of the
+whole volume, since the key sits beside the data. To keep the two apart on an instance that is
+already running, set `HR_SECRET_KEY` to the value in that file and delete the file. On a new
+instance, set your own before the first start:
 
 ```bash
 -e HR_SECRET_KEY=a-long-random-passphrase
 ```
 
-Keep it. Change it and the stored connections can no longer be decrypted, and you reconnect them.
+Keep it. A different value can't open what is already stored: the log says how many records it
+can't open, and you enter those credentials again.
 
 **Use a read-only database account.** Every statement is checked and only `SELECT` is allowed,
 non-`SELECT`, multiple statements and data-modifying CTEs are refused, and on PostgreSQL the
@@ -1305,9 +1307,8 @@ Cloud. See the [Cloud authentication](https://harnessrouter.ai/docs/authenticati
 This is a manual, one-way upload. Later uploads replace the same hosted copy in that destination,
 so they can overwrite changes made in Cloud. Cloud edits are not pulled back into the local copy.
 
-Destination API keys are stored encrypted on your local instance for repeat uploads. Set
-`HR_SECRET_KEY` before connecting a destination, and preserve the same key across restarts and
-upgrades. You can remove a saved destination when it is no longer needed. See
+Destination API keys are stored encrypted on your local instance for repeat uploads. If you set
+`HR_SECRET_KEY`, keep the same value across restarts and upgrades. You can remove a saved destination when it is no longer needed. See
 [restarts, upgrades, and backups](#restarts-upgrades-and-backups) before changing container settings.
 
 ## Architecture

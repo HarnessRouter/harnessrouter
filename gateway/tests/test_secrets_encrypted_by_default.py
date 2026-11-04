@@ -15,6 +15,8 @@ import json
 import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -126,13 +128,70 @@ def test_health_says_whether_secrets_are_encrypted(api, monkeypatch):
 
 # ── the entrypoint ────────────────────────────────────────────────────────────────────────────
 
+def _key_block(ep: str) -> str:
+    start = ep.index('HR_SECRET_KEY_FILE="$DATA_DIR/secret-key"')
+    return ep[start:ep.index("unset HR_SECRET_KEY\n", start) + len("unset HR_SECRET_KEY\n")]
+
+
+def _run_block(tmp_path, *, operator_key: str = "") -> tuple[str, str]:
+    """The entrypoint's block, run for real, with stand-ins so it behaves as root does: chown
+    makes a file root's, which stat then reports. Returns (the gateway's key, what a child sees)."""
+    ep = (ROOT / "docker" / "entrypoint.sh").read_text()
+    start = ep.index("root_file() {")
+    helper = ep[start:ep.index("\n}\n", start) + 3]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    real_stat = shutil.which("stat")
+    (bin_dir / "chown").write_text('#!/bin/sh\nexit 0\n')
+    (bin_dir / "stat").write_text(f'#!/bin/sh\nif [ "$2" = "%u" ]; then echo 0; else exec {real_stat} "$@"; fi\n')
+    for f in ("chown", "stat"):
+        (bin_dir / f).chmod(0o755)
+    script = tmp_path / "block.sh"
+    script.write_text('set -euo pipefail\n' + helper + _key_block(ep)
+                      + 'printf "%s\\n" "$GATEWAY_SECRET_KEY"\nprintf "%s\\n" "$(printenv HR_SECRET_KEY || echo absent)"\n')
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "DATA_DIR": str(tmp_path), "PY": sys.executable}
+    env.pop("HR_SECRET_KEY", None)
+    if operator_key:
+        env["HR_SECRET_KEY"] = operator_key
+    out = subprocess.run(["bash", str(script)], check=True, env=env, capture_output=True, text=True).stdout.splitlines()
+    return out[-2], out[-1]
+
+
+@pytest.mark.skipif(shutil.which("stat") is None or sys.platform == "darwin", reason="GNU stat")
+def test_no_child_of_the_entrypoint_is_given_the_key(tmp_path):
+    key, child = _run_block(tmp_path)
+    assert len(key) > 30 and child == "absent"
+    key, child = _run_block(tmp_path, operator_key="the-operators")
+    assert key == "the-operators" and child == "absent"
+    ep = (ROOT / "docker" / "entrypoint.sh").read_text()
+    assert ep.index("unset HR_SECRET_KEY") < ep.index("\ninstall_backends\n")
+    assert 'export HR_SECRET_KEY="$GATEWAY_SECRET_KEY" && exec $AS_PRODUCT' in ep
+    assert ep.count("export HR_SECRET_KEY") == 1, "the gateway's launch is the only place it is handed over"
+
+
+@pytest.mark.skipif(shutil.which("stat") is None or sys.platform == "darwin", reason="GNU stat")
+def test_a_restored_key_file_is_kept_and_a_link_or_second_name_is_not(tmp_path):
+    keyfile = tmp_path / "secret-key"
+    keyfile.write_text("restored-key\n")           # another owner's, as a restore without owners leaves it
+    key, _ = _run_block(tmp_path)
+    assert key == "restored-key" and keyfile.read_text() == "restored-key\n"
+    keyfile.unlink()
+    outside = tmp_path / "outside"
+    outside.write_text("not a key")
+    keyfile.symlink_to(outside)
+    key, _ = _run_block(tmp_path)
+    assert key != "not a key" and not keyfile.is_symlink() and outside.read_text() == "not a key"
+    keyfile.unlink()
+    os.link(outside, keyfile)                        # a second name for someone else's file
+    key, _ = _run_block(tmp_path)
+    assert key != "not a key" and outside.read_text() == "not a key"
+
+
 def test_the_entrypoint_gives_an_install_with_no_key_one_at_first_start():
     ep = (ROOT / "docker" / "entrypoint.sh").read_text()
-    block = ep[ep.index('HR_SECRET_KEY_FILE="$DATA_DIR/secret-key"'):]
-    block = block[:block.index("\nfi\n") + 4]
-    assert re.search(r'if \[ -z "\$\{HR_SECRET_KEY:-\}" \]', block), "an operator's key must win"
+    block = _key_block(ep)
+    assert 'GATEWAY_SECRET_KEY="${HR_SECRET_KEY:-}"' in block, "an operator's key must win"
     assert "umask 077" in block and "token_urlsafe(32)" in block and 'chmod 600 "$HR_SECRET_KEY_FILE"' in block
-    assert "export HR_SECRET_KEY" in block
     # root reads and writes the file only once it is root's own regular file (0.37.17): a link or a
     # file the product left at that name on an older volume is removed, not followed
     assert block.index('root_file "$HR_SECRET_KEY_FILE"') < block.index('[ ! -s "$HR_SECRET_KEY_FILE" ]')
@@ -142,3 +201,47 @@ def test_the_entrypoint_gives_an_install_with_no_key_one_at_first_start():
     assert ep.index('HR_SECRET_KEY_FILE="$DATA_DIR/secret-key"') < ep.index("uvicorn app:app")
     # the runner never gets it: it is the product's, not the agents' (unchanged)
     assert "-u HR_SECRET_KEY" in ep
+
+
+# ── what the store does with a record ─────────────────────────────────────────────────────────
+
+def test_a_failed_migration_leaves_the_record_as_it_was(monkeypatch):
+    store = _store(monkeypatch, "k")
+    p = store._p("org-a", "harness-conn-x")
+    p.parent.mkdir(parents=True)
+    p.write_text("plain-value")
+
+    def full_disk(*_a, **_k):
+        raise OSError("no space left on device")
+    monkeypatch.setattr(backing.os, "replace", full_disk)
+    assert asyncio.run(store.reencrypt_plaintext()) == 0
+    assert p.read_text() == "plain-value", "the credential must survive a write that failed"
+    assert [f.name for f in p.parent.iterdir()] == [p.name], "no half-written file is left beside it"
+
+
+def test_a_write_is_private_from_the_start_and_a_link_is_not_a_record(monkeypatch, tmp_path):
+    store = _store(monkeypatch, "k")
+    asyncio.run(store.put("org-a", "harness-conn-x", "value"))
+    p = store._p("org-a", "harness-conn-x")
+    assert p.stat().st_mode & 0o777 == 0o600
+    outside = tmp_path / "outside"
+    outside.write_text("not a record")
+    (p.parent / "harness-conn-link").symlink_to(outside)
+    assert asyncio.run(store.reencrypt_plaintext()) == 0
+    assert outside.read_text() == "not a record"
+
+
+def test_the_wrong_key_says_so_and_names_no_value(api, monkeypatch, capsys):
+    store = _store(monkeypatch, "first-key")
+    asyncio.run(store.put("org-a", "harness-conn-anthropic",
+                          json.dumps({"name": "anthropic", "backend": "claude", "api_key": "sk-ant-x"})))
+    other = _store(monkeypatch, "second-key")
+    other._root = store._root
+    assert asyncio.run(other.unopenable()) == 1
+    r = api.get("/v1/orgs/org-a/connections/anthropic", headers=INTERNAL)
+    assert r.status_code == 501, r.text
+    err = r.json()["error"]
+    assert err["code"] == "secrets_not_configured" and "different HR_SECRET_KEY" in err["message"]
+    assert "sk-ant-x" not in r.text
+    asyncio.run(gw._start_secrets_at_rest())
+    assert "1 record(s) cannot be opened" in capsys.readouterr().out

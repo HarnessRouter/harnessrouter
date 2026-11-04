@@ -233,16 +233,27 @@ fi
 # keeps setting it, since the records are sealed under it. The gateway re-encrypts what was
 # stored before the key existed at its start.
 HR_SECRET_KEY_FILE="$DATA_DIR/secret-key"
+# A volume restored without its owners brings this file back as someone else's, and it is the only
+# copy of the key the records were sealed under: removing it would lose every stored credential. So
+# a real file with one name is taken, and what it holds only ever becomes the gateway's key, which
+# the product has anyway. A link or a second name is still removed by root_file, never followed.
+if [ -f "$HR_SECRET_KEY_FILE" ] && [ ! -L "$HR_SECRET_KEY_FILE" ] && [ "$(stat -c %h "$HR_SECRET_KEY_FILE")" = 1 ]; then
+  chown root:root "$HR_SECRET_KEY_FILE"
+  chmod 600 "$HR_SECRET_KEY_FILE"
+fi
 root_file "$HR_SECRET_KEY_FILE"
-if [ -z "${HR_SECRET_KEY:-}" ]; then
+GATEWAY_SECRET_KEY="${HR_SECRET_KEY:-}"
+if [ -z "$GATEWAY_SECRET_KEY" ]; then
   if [ ! -s "$HR_SECRET_KEY_FILE" ]; then
     ( umask 077; "$PY" -I -c 'import secrets; print(secrets.token_urlsafe(32))' > "$HR_SECRET_KEY_FILE" )
     chmod 600 "$HR_SECRET_KEY_FILE"
     echo "[harnessrouter] stored secrets are encrypted under a key generated now and kept in $HR_SECRET_KEY_FILE; set HR_SECRET_KEY to keep the key away from the data"
   fi
-  HR_SECRET_KEY="$(cat "$HR_SECRET_KEY_FILE")"
-  export HR_SECRET_KEY
+  GATEWAY_SECRET_KEY="$(cat "$HR_SECRET_KEY_FILE")"
 fi
+# Only the gateway opens the store, so only the gateway is handed the key, at its launch below. The
+# installers, the runner and the console start from this environment and never need it.
+unset HR_SECRET_KEY
 
 if [ "${HR_AUTH_DISABLED:-}" = "1" ]; then
   echo "[harnessrouter] WARNING: login is DISABLED (HR_AUTH_DISABLED=1) — anyone who can reach this port has full control"
@@ -1872,7 +1883,7 @@ pids+=($!)
 
 # gateway (loopback only), as the product. umask 077: what it creates on the volume (databases,
 # blobs, the secret store) is its alone.
-( cd /app/gateway && exec $AS_PRODUCT sh -c 'umask 077; exec "$0" -m uvicorn app:app --host 127.0.0.1 --port 8080 --log-level warning' "$PY" ) &
+( cd /app/gateway && export HR_SECRET_KEY="$GATEWAY_SECRET_KEY" && exec $AS_PRODUCT sh -c 'umask 077; exec "$0" -m uvicorn app:app --host 127.0.0.1 --port 8080 --log-level warning' "$PY" ) &
 pids+=($!)
 
 # Wait for the gateway before the UI starts serving, so a first page load never races a
