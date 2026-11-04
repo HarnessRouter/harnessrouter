@@ -9,10 +9,8 @@ The process ends after `turn/completed`; thread history stays in the workspace.
 
 Use an OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter,
 or custom **Responses** connection. This adapter uses Roder's custom Responses
-provider `hr`, preserving the requested model id. It does not select Roder's Codex OAuth provider. The catalog
-includes the current GPT, Claude, Gemini, Grok, DeepSeek, Kimi, Qwen, and other
-model families, with `gpt-6.1-sol` as the default. Availability depends on the
-selected connection; each provider serves its own subset. Anthropic Messages
+provider `hr`, preserving the requested model id. The initial catalog contains only
+`gpt-6.1-sol`, pending live qualification. Anthropic Messages
 and Chat Completions custom endpoints are not offered by this adapter.
 
 Every provider call uses the existing loopback relay. Roder receives a relay
@@ -21,10 +19,13 @@ collects provider-reported model and usage independently of the CLI.
 
 ## Installation
 
-Include `roder` in `HR_BACKENDS` (it is included by default). The entrypoint installs
-the Linux binary from Roder's `latest` release when it is missing, then verifies
-it against the release's published `SHA256SUMS`, following the jcode installer
-pattern. Existing installations are reused. No auto-update runs inside a turn.
+Roder is opt-in until its live provider column is measured. Add `roder` to
+`HR_BACKENDS` to install the MIT-licensed `roder/v0.4.8` release. The installer
+checks the installed version and verifies its Linux archive against a SHA256
+committed in `docker/entrypoint.sh` before replacing the binary.
+
+To select another release, set `HR_RODER_VERSION` (without the `roder/v` prefix)
+and `HR_RODER_SHA256` to that architecture's trusted archive checksum.
 
 `HR_RODER_BIN` can select an existing binary for development and process tests.
 
@@ -36,7 +37,11 @@ pattern. Existing installations are reused. No auto-update runs inside a turn.
 - Every `turn/start` carries the requested model and provider, including resumed
   threads. Missing history emits `system/resume_lost` before starting a new thread.
 - The harness instruction file is `AGENTS.md`; the driver sends its current contents
-  as `turn/start.developerContext` on every turn. Skills are installed under
+  once through `turn/start.developerContext`. The pinned app-server does not load
+  AGENTS.md automatically. This volatile field is part of the
+  [0.4.8 protocol](https://github.com/RoderAI/roder/blob/roder/v0.4.8/crates/roder-protocol/src/lib.rs#L979),
+  and the process suite checks that the instruction reaches inference exactly once.
+  Skills are installed under
   `.harness/home/.codex/skills`, Roder's user skill root, keeping bundles outside
   produced files.
 - Disabled native tools are withheld using Roder's runtime `tools.allowlist` on
@@ -75,3 +80,6 @@ rendering parity, the family tour, or the benchmark dimension. Run
 `scripts/support-matrix` and its custom-harness scenario on an isolated instance
 before publishing a verified provider column. Roder is included in that suite's
 base list; no existing provider results have been copied or marked passing.
+
+This new base targets the next minor release after live qualification, rather than
+the 0.37.x maintenance line.

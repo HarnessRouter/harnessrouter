@@ -8851,9 +8851,8 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
 # only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
 # relay so its served model stays readable — see _build_jcode.)
-# Roder's Responses provider preserves model ids across families. Offer the maintained
-# cross-provider catalog; live verification results remain specific to Roder.
-_MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+# Roder is opt-in pending its own live column. Start with one model for qualification.
+_MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": ["gpt-6.1-sol"]}
 # vibe (mistral-vibe) is the same shape: its `generic` backend is an OpenAI chat/completions
 # client and every keyed turn rides the relay, so its wire reach is kimi's. MEASURED on it so far
 # (2026-10-14/15, an OpenAI-compatible gateway through a recording proxy): claude-haiku-5.5 and
@@ -9268,6 +9267,10 @@ _CHANNEL_REFUSES[("harnessrouter", "dcode")] = frozenset({
     "gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
     "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview"})
 
+
+# Roder uses the same Responses routes; these are channel refusals, not Roder measurements.
+for _channel in ("tokenrouter", "harnessrouter"):
+    _CHANNEL_REFUSES[(_channel, "roder")] = _CHANNEL_REFUSES[(_channel, "dcode")]
 
 def _channel_refuses(provider: str, backend: str, model: str) -> bool:
     """Whether a connection of `provider` refuses `model` for `backend` (_CHANNEL_REFUSES)."""

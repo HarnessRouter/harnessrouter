@@ -102,3 +102,6 @@ public image; hermes-agent's publisher declared no license before 0.19.0. Instal
 agent CLIs at first start keeps that decision — and each tool's terms — with the operator.
 Review each tool's license before enabling its backend. Set HR_BACKENDS to control which
 are installed.
+
+  Roder 0.4.8                MIT (RoderAI/roder, tag roder/v0.4.8). Installed only when
+                            explicitly enabled, from versioned archives pinned by SHA256.

@@ -30,17 +30,19 @@ class Rpc:
     async def read(self):
         error = RuntimeError("Roder app-server closed its output before turn/completed")
         try:
-            while line := await self.process.stdout.readline():
-                msg = json.loads(line)
-                if "id" in msg and not msg.get("method"):
-                    future = self.pending.pop(msg["id"], None)
-                    if future and not future.done():
-                        if msg.get("error"):
-                            future.set_exception(RpcError(msg["error"]))
-                        else:
-                            future.set_result(msg.get("result") or {})
-                else:
-                    await self.events.put(msg)
+            buffer = bytearray()
+            while chunk := await self.process.stdout.read(65536):
+                buffer.extend(chunk)
+                while (end := buffer.find(b"\n")) >= 0:
+                    line = bytes(buffer[:end])
+                    del buffer[:end + 1]
+                    try:
+                        msg = json.loads(line)
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+                    if not isinstance(msg, dict):
+                        continue
+                    self.dispatch(msg)
         except Exception:
             error = RuntimeError("Roder app-server emitted an invalid JSON-RPC stream")
         finally:
@@ -48,6 +50,17 @@ class Rpc:
                 if not future.done():
                     future.set_exception(error)
             await self.events.put(None)
+
+    def dispatch(self, msg):
+        if "id" in msg and not msg.get("method"):
+            future = self.pending.pop(msg["id"], None)
+            if future and not future.done():
+                if msg.get("error"):
+                    future.set_exception(RpcError(msg["error"]))
+                else:
+                    future.set_result(msg.get("result") or {})
+        else:
+            self.events.put_nowait(msg)
 
     async def request(self, method, params):
         self.seq += 1
@@ -156,8 +169,8 @@ async def run(job):
                     except Exception:
                         result = {"output": "MCP tool call failed", "isError": True}
                     await rpc.request("tools/resolve", {"requestId": p["requestId"], **result})
-                elif method in ("thread/userInputRequested", "thread/planExitRequested"):
-                    raise RuntimeError("Roder requested interactive input in a non-interactive turn")
+                elif method in ("thread/approvalRequested", "thread/userInputRequested", "thread/planExitRequested"):
+                    raise RuntimeError("Roder requested approval or interactive input in a non-interactive turn")
                 else:
                     for event in events.notification(method, p):
                         emit(event)

@@ -5510,7 +5510,7 @@ claude-sonnet-5 made it red, gemini-3.8-flash made the title bold at 40 pt, gemi
 Gemini model after another) and gpt-5.4 set every bullet to 20 pt. The deck was read back with each change in it.
 
 
-## Roder — adapter qualification
+## Roder adapter qualification
 
 The native app-server adapter is documented in [roder.md](roder.md). Its deterministic
 process suite covers the released binary's Responses and JSON-RPC contracts. Live provider

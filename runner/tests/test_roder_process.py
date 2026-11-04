@@ -162,7 +162,7 @@ def test_native_skill_loader_and_agent_instructions_reach_the_model(endpoint, tm
     assert events[-1]["subtype"] == "success", events
     body = json.dumps(endpoint.requests[-1])
     assert "QUALIFICATION-SKILL-419" in body
-    assert "AGENT-INSTRUCTION-419" in body
+    assert body.count("AGENT-INSTRUCTION-419") == 1
 
 
 def test_unavailable_mcp_is_reported_without_leaking_its_credentials(endpoint, tmp_path):
