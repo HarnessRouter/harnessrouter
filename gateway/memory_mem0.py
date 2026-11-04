@@ -131,7 +131,7 @@ class Mem0(mp.Provider):
     async def _call(self, method: str, path: str, *, body=None, params=None, ok=(200,)) -> httpx.Response:
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
-                r = await c.request(method, API + path, json=body, params=params,
+                r = await c.request(method, API + mp.vendor_path(path), json=body, params=params,
                                     headers={"Authorization": f"Token {self.key}", "Accept": "application/json"})
         except httpx.HTTPError as e:
             raise Mem0Unavailable(type(e).__name__)
@@ -454,7 +454,7 @@ class Mem0Server(Mem0):
     async def _call(self, method, path, *, body=None, params=None, ok=(200,)):
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
-                r = await c.request(method, self.base + path, json=body, params=params,
+                r = await c.request(method, self.base + mp.vendor_path(path), json=body, params=params,
                                     headers={"X-API-Key": self.key, "Accept": "application/json"} if self.key else {"Accept": "application/json"})
         except httpx.HTTPError as e:
             raise Mem0Unavailable(type(e).__name__)

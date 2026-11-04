@@ -267,6 +267,19 @@ def field_of(record: dict, field: str):
     return cur
 
 
+_VENDOR_PATH = re.compile(r"[A-Za-z0-9_\-./]*")
+
+
+def vendor_path(path: str) -> str:
+    """A path on a vendor's server, checked as the one place every id on its way there passes. Record ids
+    come from callers and agents and go into these paths. A vendor's router happens to refuse `..` today,
+    but a proxy in front of it may resolve it or decode `%2e`, and that would be a way into another
+    memory. So anything but plain id characters is no record at all, and nothing is sent."""
+    if not _VENDOR_PATH.fullmatch(path or "") or ".." in path:
+        raise MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+    return path
+
+
 def matches(record: dict, flt) -> bool:
     """One record against a protocol filter: {"field", "op", "value"}, {"and": [...]}, {"or": [...]}.
     A provider that cannot express a filter itself applies it here and says so in `degraded`."""

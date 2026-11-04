@@ -87,7 +87,7 @@ class Graphiti(mp.Provider):
         headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
-                r = await c.request(method, self.base + path, json=body, params=params, headers=headers)
+                r = await c.request(method, self.base + mp.vendor_path(path), json=body, params=params, headers=headers)
         except httpx.HTTPError as e:
             raise GraphitiUnavailable(type(e).__name__)
         if r.status_code in ok or r.status_code == 404:

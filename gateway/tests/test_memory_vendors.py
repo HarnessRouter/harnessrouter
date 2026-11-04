@@ -268,6 +268,39 @@ def test_an_address_picks_the_self_hosted_server_and_no_address_picks_the_platfo
     assert type(bound) is memory_mem0.Mem0
 
 
+# ── an id is an id: nothing a caller sends becomes a walk on a vendor's server ───────────────
+WALKS = ["../../hmem_b/documents/hrec_x", "hrec_../../hmem_b/documents/hrec_x", "node_../../hmem_b/nodes/x", "..%2f..%2fhmem_b", ".%2e/hmem_b", "x?user_id=hmem_b", "x#y", "x y", "x\\y"]
+
+
+@pytest.mark.parametrize("rid", WALKS)
+@pytest.mark.parametrize("module,make", [
+    (memory_hindsight, lambda: memory_hindsight.Hindsight("http://vendor.test")),
+    (memory_graphiti, lambda: memory_graphiti.Graphiti("http://vendor.test", "", ORG)),
+    (memory_mem0, lambda: memory_mem0.Mem0Server("k", "http://vendor.test")),
+    (memory_mem0, lambda: memory_mem0.Mem0("k")),
+], ids=["hindsight", "graphiti", "mem0-server", "mem0-platform"])
+def test_a_walk_in_a_record_id_never_reaches_the_vendor(wired, module, make, rid):
+    w = wired(module, lambda *a: {"id": "x", "uuid": "x", "memory": "stolen", "user_id": "hmem_a", "original_text": "stolen"})
+    p = make()
+    for act in (lambda: p.get("hmem_a", rid), lambda: p.history("hmem_a", rid),
+                lambda: p.revise("hmem_a", rid, {"content": [{"type": "text", "text": "x"}]}, WRITER), lambda: p.forget("hmem_a", rid, WRITER)):
+        before = len(w.calls)
+        try:
+            out = run(act())
+        except mp.MemoryError as e:
+            assert e.status in (404, 422), str(e)
+            out = None
+        sent = [c["path"] for c in w.calls[before:]]
+        assert not any(".." in x or "%" in x or "hmem_b" in x for x in sent), sent
+        assert "stolen" not in json.dumps(out or {}), "an id that is no id reads nothing"
+
+
+def test_a_plain_id_still_goes_through():
+    assert mp.vendor_path("/v1/default/banks/hmem_a/documents/hrec_0a") == "/v1/default/banks/hmem_a/documents/hrec_0a"
+    assert mp.vendor_path("/groups/hmem_a/nodes/abda90f0-c7a1-4e1d") == "/groups/hmem_a/nodes/abda90f0-c7a1-4e1d"
+    assert mp.vendor_path("/v1/memories/9b9208a9-ca7a-43fb/history/") == "/v1/memories/9b9208a9-ca7a-43fb/history/"
+
+
 # ── what the capability document promises is what the routes do ───────────────────────────────
 @pytest.mark.parametrize("cls,mode", [(memory_hindsight.Hindsight, "labels"), (memory_graphiti.Graphiti, "guides"),
                                       (memory_reme.ReMe, "none"), (memory_mem0.Mem0, "none"), (memory_mem0.Mem0Server, "none")])
