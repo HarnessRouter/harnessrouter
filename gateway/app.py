@@ -60,7 +60,10 @@ import memory_routes        # the Harness Memories sub-protocol (tree, access, p
 import memory_plane
 import memory_tools
 import memory_local
+import memory_graphiti
+import memory_hindsight
 import memory_mem0
+import memory_reme
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
 import setup_compose         # New setup: the rules every built configuration is held to
 import setup_builder         # New setup: the built-in builder, saving into the person's workspace
@@ -17505,7 +17508,12 @@ _PLUG_FORMS: dict[str, dict] = {
     # A memory provider: the workspace's own account at a memory service, connected the way every
     # plug is (its key in the secret store, never on the record). It offers an agent no tools of
     # its own: memories kept there are attached to a harness through /v1/harnesses/{id}/memories.
-    "mem0": {"secrets": ["api_key"], "config": [], "source": "local", "kind": "memory"},
+    # A key where the service has one; the address of your own server where it runs on your machines
+    # (mem0's own service needs only a key, and an address means your mem0 server instead).
+    "mem0": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "source": "local", "kind": "memory"},
+    "graphiti": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "requires": ["base_url"], "source": "local", "kind": "memory"},
+    "hindsight": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "requires": ["base_url"], "source": "local", "kind": "memory"},
+    "reme": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "requires": ["base_url"], "source": "local", "kind": "memory"},
 }
 
 
@@ -17638,13 +17646,23 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         config.setdefault("deny_domains", [])
         config["proxy"] = False
     refs = {str(r.get("field")): str(r.get("ref")) for r in ((prev or {}).get("key_refs") or []) if isinstance(r, dict)}
-    if form.get("kind") == "memory" and str((body.secrets or {}).get("api_key") or "").strip():
-        # A memory engine's key is tried at the engine BEFORE it is kept. One it refuses is refused
-        # here, with the engine's reason, and whatever key was working stays: the memories on it
-        # must not go dark because someone pasted a wrong key.
-        refusal = await _MEMORY_CHECKS[plug_type](str(body.secrets["api_key"]).strip())
+    if form.get("kind") == "memory" and (str((body.secrets or {}).get("api_key") or "").strip() or str(config.get("base_url") or "").strip()):
+        # A memory engine's key and address are tried at the engine BEFORE they are kept. What it
+        # refuses is refused here, with the engine's reason, and whatever was working stays: the
+        # memories on it must not go dark because someone pasted a wrong key.
+        base_url = str(config.get("base_url") or "").strip()
+        if base_url:
+            if await _ssrf_check(base_url):
+                raise uhp_error(422, "memory_invalid", "That address can't be used here: it must be https, on a public address.", "config.base_url")
+            own = _own_service_address(base_url)
+            if own:
+                raise uhp_error(422, "memory_invalid", f"That address can't be used: {own}.", "config.base_url")
+        given = str((body.secrets or {}).get("api_key") or "").strip()
+        if not given and "api_key" in refs:
+            given = await _vault_get(org, refs["api_key"]) or ""
+        refusal = await _MEMORY_CHECKS[plug_type](given, base_url)
         if refusal:
-            raise uhp_error(422, "memory_invalid", refusal, "secrets.api_key")
+            raise uhp_error(422, "memory_invalid", refusal, "secrets.api_key" if given else "config.base_url")
     for field, value in (body.secrets or {}).items():
         if field not in form["secrets"]:
             raise uhp_error(400, "invalid_input", f"{plug_type} takes no secret {field!r}.", "secrets")
@@ -17653,7 +17671,8 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         ref = f"plug-{_plug_safe(workspace)}-{_plug_safe(plug_type)}-{_plug_safe(field)}"
         await _vault_put_credential(org, ref, value.strip(), "secrets")
         refs[field] = ref
-    missing = [f for f in form["secrets"] if f not in refs]
+    missing = [f for f in form["secrets"] if f not in refs and f not in form.get("optional", ())]
+    missing += [f for f in form.get("requires", ()) if not str(config.get(f) or "").strip()]
     status = "disabled" if not body.enabled else ("needs_auth" if missing else "connected")
     attention = ""
     if plug_type == plugs_plane.MICROSOFT365 and body.enabled and not missing:
@@ -19896,8 +19915,21 @@ async def _memory_file_bytes(org: str, file_id: str) -> bytes | None:
 
 memory_routes.install(app, _principal, uhp_error, BACKING.graph, _memory_file_meta, _memory_file_bytes,
                       on_grant=lambda org, principal: _memories_on_grant(org, principal))
-memory_plane.PROVIDERS["mem0"] = memory_mem0.Mem0()
-_MEMORY_CHECKS = {"mem0": memory_mem0.check}
+memory_plane.PROVIDERS.update({"mem0": memory_mem0.Mem0(), "graphiti": memory_graphiti.Graphiti(),
+                               "hindsight": memory_hindsight.Hindsight(), "reme": memory_reme.ReMe()})
+_MEMORY_CHECKS = {"mem0": memory_mem0.check, "graphiti": memory_graphiti.check,
+                  "hindsight": memory_hindsight.check, "reme": memory_reme.check}
+
+
+def _own_service_address(url: str) -> str:
+    """Why this address is this instance's own gateway or runner, which is not a memory service."""
+    try:
+        u = urllib.parse.urlsplit(url)
+    except ValueError:
+        return "it is not a valid address"
+    if (u.hostname or "") in ("localhost", "127.0.0.1", "::1") and (u.port or 0) in (3000, 8080, 8081):
+        return "it is this instance itself"
+    return ""
 
 
 async def _memory_credentials(org: str, workspace: str, provider: str) -> dict | None:
@@ -19906,7 +19938,7 @@ async def _memory_credentials(org: str, workspace: str, provider: str) -> dict |
     status, rec = await _plug_lookup(org, workspace, provider)
     if status != "connected" or not rec:
         return None
-    return await _plug_fields(rec)
+    return {**(rec.get("config") or {}), **await _plug_fields(rec)}
 
 
 memory_plane.CREDENTIALS = _memory_credentials
@@ -20049,8 +20081,9 @@ async def _harness_memories_out(hid: str, org: str, v: dict) -> dict:
 @app.get("/v1/harnesses/{hid}/memories")
 async def harness_memories(hid: str, request: Request) -> dict:
     """What this harness's agent may reach, read off its grants, and its two settings."""
-    org, _ = await _pub_org_member(request)
-    return await _harness_memories_out(hid, org, await _harness_for_route(hid, org))
+    caller = await _pub_principal(request)
+    org = str(caller.get("org") or "")
+    return await _harness_memories_out(hid, org, await _harness_for_route(hid, caller))
 
 
 @app.put("/v1/harnesses/{hid}/memories")
@@ -20062,7 +20095,7 @@ async def set_harness_memories(hid: str, request: Request) -> dict:
     org = p.get("org", "")
     if not org:
         raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
-    v = await _harness_for_route(hid, org)
+    v = await _harness_for_route(hid, p)
     try:
         body = await request.json()
     except ValueError:
@@ -20084,7 +20117,7 @@ async def set_harness_memories(hid: str, request: Request) -> dict:
             raise uhp_error(422, "memory_invalid", "`observe` is true or false.", "observe")
         patch["observe"] = body["observe"]
     await _memories_ensure(org, hid, v, patch)
-    return await _harness_memories_out(hid, org, await _harness_for_route(hid, org))
+    return await _harness_memories_out(hid, org, await _harness_for_route(hid, p))
 
 
 @app.post("/v1/mcp/memories")

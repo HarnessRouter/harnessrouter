@@ -212,6 +212,9 @@ def probes(w: World):
             yield (name, "n/a", "declared")
             continue
         code, d = c(method, f"/v1/memories/{i['kid']}/consolidations/{run}{path}", {} if method == "POST" else None)
+        if path == "/revert" and str(caps.get("consolidate")) == "trigger" and code == 422 and _code(d) == "memory_unsupported":
+            yield (name, "n/a", "declared: this provider's runs can be started and read, not undone")
+            continue
         yield (name,) + _ok(code == 200, f"HTTP {code} {_code(d)}")
 
     code, d = c("DELETE", f"/v1/memories/{i['kid']}/records/{i['fact']}")

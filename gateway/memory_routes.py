@@ -129,8 +129,47 @@ async def _answer(org, m, pr, res: dict, places: dict | None = None) -> dict:
 @router.get("/v1/memories/providers")
 @guarded
 async def providers(request: Request) -> dict:
-    await _who(request)
-    return {"object": "list", "data": [p.capabilities() for _, p in sorted(mp.PROVIDERS.items())]}
+    """What each provider can do, as this workspace reaches it: a connection can change the answer
+    (mem0's own service and a mem0 server differ), and `connected` says whether it can be used yet."""
+    org, _, ws, _ = await _who(request)
+    out = []
+    for pid, p in sorted(mp.PROVIDERS.items()):
+        try:
+            bound, connected = await p.bind(org, ws or "default"), True
+        except mp.MemoryError:
+            bound, connected = p, False
+        out.append({**bound.capabilities(), "connected": connected})
+    return {"object": "list", "data": out}
+
+
+@router.get("/v1/memories/{mid}/schema")
+@guarded
+async def get_schema(mid: str, request: Request) -> dict:
+    org, _, _, pr = await _who(request)
+    m, _ = await mp.need(org, mid, pr, "read")
+    prov = await mp.provider_of(m)
+    return {"object": "memory.schema", "memory_id": mid, "applies": prov.capabilities().get("schema") or {"mode": "none"}, **mp.schema_of(m)}
+
+
+@router.put("/v1/memories/{mid}/schema")
+@guarded
+async def put_schema(mid: str, request: Request) -> dict:
+    """A memory's types and the relations between them. Only where something reads it: a provider that
+    declares none refuses, because a schema nothing reads would look like it was doing something."""
+    org, _, _, pr = await _who(request)
+    m, _ = await mp.need(org, mid, pr, "write")
+    prov = await mp.provider_of(m)
+    applies = prov.capabilities().get("schema") or {"mode": "none"}
+    if applies.get("mode", "none") == "none":
+        raise mp.MemoryError(422, "memory_unsupported", "This memory's provider keeps no schema: nothing it does would read one.", "schema")
+    clean = mp.schema_clean(await _json(request))
+    if applies.get("properties") is False and any(t.get("properties") for t in clean["types"]):
+        raise mp.MemoryError(422, "memory_unsupported", "This memory's provider reads type names, not their properties.", "types")
+    if applies.get("relations") is False and clean["relations"]:
+        raise mp.MemoryError(422, "memory_unsupported", "This memory's provider reads type names, not relations between them.", "relations")
+    await mp.GRAPH.upsert("Memory", mid, {"schema": json.dumps(clean), "updated_at": mp._now_ms()}, raise_on_fail=True)
+    await prov.apply_schema(mid, clean)
+    return {"object": "memory.schema", "memory_id": mid, "applies": applies, **clean}
 
 
 @router.get("/v1/memories/types")
@@ -262,6 +301,7 @@ async def remember(mid: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "write")
     prov, rec_in = await mp.provider_of(m), mp._record_in(await _json(request))
+    mp.check_against_schema(m, rec_in)
     await mp.settle_files(org, rec_in["content"], prov)
 
     async def write():

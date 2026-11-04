@@ -89,6 +89,11 @@ class Provider:
     async def job(self, mid: str, job_id: str) -> dict | None:
         return None
 
+    async def apply_schema(self, mid: str, schema: dict) -> None:
+        """A schema was stored for this memory: a provider that reads one where it isn't handed one on
+        each write is told here. Declared by `schema` in the capability document."""
+        return None
+
     def _no(self, what: str):
         raise MemoryError(422, "memory_unsupported", f"This memory's provider does not {what}.")
 
@@ -185,6 +190,65 @@ class Provider:
 
     async def revert_consolidation(self, mid: str, run: str, writer: dict) -> dict:
         self._no("revert a consolidation")
+
+
+PROPERTY_TYPES = ("text", "choice", "date", "number", "yesno")
+
+
+def schema_clean(raw: dict | None) -> dict:
+    """A memory's schema as stored: {types: [{name, description, properties: [{name, type, description, options}]}],
+    relations: [{name, description, from, to}]}. Refused in words, whole."""
+    raw = raw if isinstance(raw, dict) else {}
+    types, seen = [], set()
+    for t in raw.get("types") or []:
+        name = str((t or {}).get("name") or "").strip()
+        if not name.isidentifier():
+            raise MemoryError(422, "memory_invalid", f"A type's name must be one word of letters and digits: {name!r}.", "types")
+        if name in seen:
+            raise MemoryError(422, "memory_invalid", f"Two types are called {name}.", "types")
+        seen.add(name)
+        props = []
+        for p in t.get("properties") or []:
+            pn = str((p or {}).get("name") or "").strip()
+            pt = str((p or {}).get("type") or "text")
+            if not pn.isidentifier() or pt not in PROPERTY_TYPES:
+                raise MemoryError(422, "memory_invalid", f"{name}: a property needs a one-word name and a type of {', '.join(PROPERTY_TYPES)}.", "types")
+            props.append({"name": pn, "type": pt, "description": str(p.get("description") or ""), **({"options": [str(x) for x in p["options"]]} if p.get("options") else {})})
+        types.append({"name": name, "description": str(t.get("description") or ""), "properties": props, **({k: t[k] for k in ("color", "icon", "x", "y", "caption") if k in t})})
+    rels = []
+    for r in raw.get("relations") or []:
+        rn = str((r or {}).get("name") or "").strip()
+        if not rn.replace("_", "").isalnum():
+            raise MemoryError(422, "memory_invalid", f"A relation's name must be one word: {rn!r}.", "relations")
+        if str(r.get("from")) not in seen or str(r.get("to")) not in seen:
+            raise MemoryError(422, "memory_invalid", f"{rn} must join two types of this schema.", "relations")
+        rels.append({"name": rn, "description": str(r.get("description") or ""), "from": str(r["from"]), "to": str(r["to"])})
+    return {"types": types, "relations": rels}
+
+
+def schema_of(memory: dict) -> dict:
+    try:
+        return json.loads(memory.get("schema") or "{}") or {"types": [], "relations": []}
+    except (TypeError, ValueError):
+        return {"types": [], "relations": []}
+
+
+def check_against_schema(memory: dict, record: dict) -> None:
+    """A stated record that names a schema type is held to it, whichever provider keeps it. A type the
+    schema doesn't name passes, and so does a field it doesn't list: a schema says what is known, not all there is."""
+    want = str((record.get("attributes") or {}).get("entity_type") or "")
+    t = next((x for x in schema_of(memory).get("types") or [] if x["name"] == want), None)
+    if not t:
+        return
+    attrs = record.get("attributes") or {}
+    for p in t.get("properties") or []:
+        v = attrs.get(p["name"])
+        if v is None:
+            continue
+        bad = (p["type"] == "number" and (isinstance(v, bool) or not isinstance(v, (int, float)))) or (p["type"] == "yesno" and not isinstance(v, bool)) or \
+              (p["type"] == "choice" and p.get("options") and str(v) not in p["options"])
+        if bad:
+            raise MemoryError(422, "memory_invalid", f"{want}.{p['name']} must be a {p['type']}" + (f": one of {', '.join(p['options'])}." if p["type"] == "choice" and p.get("options") else "."), f"attributes.{p['name']}")
 
 
 async def provider_of(memory: dict) -> Provider:

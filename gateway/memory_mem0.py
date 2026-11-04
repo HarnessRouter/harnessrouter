@@ -1,4 +1,5 @@
-"""mem0 (Platform API) as a memory provider.
+"""mem0 as a memory provider: its Platform API, and the open-source REST server when the connection
+names an address (Mem0Server, at the end of this file; each mapping there was measured the same way).
 
 Every shape here was read off the live API on 2026-10-04, with a workspace's own key, and the
 adapter claims only what that showed:
@@ -69,8 +70,15 @@ class Mem0Unavailable(mp.MemoryError):
         super().__init__(502, "memory_unavailable", f"mem0 did not answer: {why}"[:300])
 
 
-async def check(api_key: str) -> str:
+async def check(api_key: str, base_url: str = "") -> str:
     """'' when mem0 accepts the key, else why not, in a sentence for the person connecting it."""
+    if base_url:
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+                r = await c.get(base_url.rstrip("/") + "/configure", headers={"X-API-Key": api_key} if api_key else {})
+        except httpx.HTTPError as e:
+            return f"mem0 could not be reached at that address: {type(e).__name__}."
+        return "" if r.status_code == 200 else f"mem0 refused the connection (HTTP {r.status_code})."
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
             r = await c.get(API + "/v1/ping/", headers={"Authorization": f"Token {api_key}"})
@@ -106,11 +114,14 @@ class Mem0(mp.Provider):
                 "history": {"content": "versions", "structure": "none"}, "as_of": "one record",
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
                 "prime": False, "consolidate": False, "queries": {"named": False, "free": None},
-                "types": False, "content": {"media": ["text/*"], "describes": []}}
+                "types": False, "schema": {"mode": "none"}, "content": {"media": ["text/*"], "describes": []}}
 
     async def bind(self, org: str, workspace: str) -> "Mem0":
         fields = await mp.CREDENTIALS(org, workspace, self.id) if mp.CREDENTIALS else None
         key = str((fields or {}).get("api_key") or "")
+        base = str((fields or {}).get("base_url") or "").strip().rstrip("/")
+        if base:
+            return Mem0Server(key, base)
         if not key:
             raise mp.MemoryError(503, "memory_unavailable",
                                  "mem0 is not connected for this workspace: connect it with its API key.")
@@ -412,3 +423,230 @@ class Mem0(mp.Provider):
                 continue                    # not one of the memories asked: never returned, whatever mem0 said
             results.append({"record": rec, "memory_id": str(item["user_id"]), "score": item.get("score"), "why": why})
         return {"results": results[:limit], "degraded": degraded, "abstain": False}
+
+
+class Mem0Server(Mem0):
+    """The open-source mem0 REST server (mem0ai/mem0, server/). Every shape here was read off a server
+    running on 2026-11-04, and it differs from the Platform in what matters to a memory:
+
+      add      = POST /memories. It answers when it is done, inferred or not, so `observe` answers the
+          records it derived and there is no job.
+      recall   = POST /search: by meaning, with one score. No words on their own, so `text` is searched
+          as the query and said in `degraded`. Filters are equality on metadata, one memory per request.
+      list     = GET /memories, with no pages, so pages are cut here.
+      erase    = DELETE, and as on the Platform the history is still served by id, so every erased id
+          is reported `unreachable`.
+
+    Same on both: one memory is one user_id with the check on every read, metadata carries the
+    protocol's fields, history is read from mem0's own events. A schema has no place here: what mem0
+    derives is free text, and nothing it does reads a type."""
+
+    def __init__(self, api_key: str = "", base_url: str = ""):
+        super().__init__(api_key)
+        self.base = base_url.rstrip("/")
+
+    def capabilities(self) -> dict:
+        c = super().capabilities()
+        return {**c, "observe": {"keeps_episodes": False, "answers": "records"},
+                "recall": {"signals": ["query", "filters"], "abstain": False,
+                           "filters": {"native": ["eq on type and attributes.*"], "applied_after_ranking": "every other filter"}}}
+
+    async def _call(self, method, path, *, body=None, params=None, ok=(200,)):
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+                r = await c.request(method, self.base + path, json=body, params=params,
+                                    headers={"X-API-Key": self.key, "Accept": "application/json"} if self.key else {"Accept": "application/json"})
+        except httpx.HTTPError as e:
+            raise Mem0Unavailable(type(e).__name__)
+        if r.status_code in ok or r.status_code == 404:
+            return r
+        if r.status_code in (401, 403):
+            raise mp.MemoryError(503, "memory_unavailable", "mem0 refused this workspace's key: reconnect it.")
+        raise Mem0Unavailable(f"HTTP {r.status_code}")
+
+    async def _owned(self, mid, rid):
+        r = await self._call("GET", f"/memories/{rid}")
+        item = r.json() if r.status_code == 200 else None
+        return item if isinstance(item, dict) and str(item.get("user_id") or "") == mid else None
+
+    async def _all(self, mid: str, expired: bool = False) -> list[dict]:
+        r = await self._call("GET", "/memories", params={"user_id": mid, "top_k": 1000, "show_expired": "true" if expired else "false"})
+        return ((r.json() or {}).get("results") or []) if r.status_code == 200 else []
+
+    async def drop(self, mid):
+        await self._call("DELETE", "/memories", params={"user_id": mid})
+        self._counts.pop(mid, None)
+
+    async def count(self, mid):
+        hit = self._counts.get(mid)
+        if hit and time.time() - hit[0] < 30:
+            return hit[1]
+        n = len(await self._all(mid))
+        self._counts[mid] = (time.time(), n)
+        return n
+
+    async def remember(self, mid, record, writer):
+        text = mp.said(record)
+        r = await self._call("POST", "/memories", body={
+            "user_id": mid, "infer": False, "messages": [{"role": "user", "content": text}],
+            "metadata": self._meta(record, writer)})
+        made = (r.json() or {}).get("results") or []
+        if r.status_code != 200 or not made:
+            raise Mem0Unavailable("the memory was not stored")
+        self._counts.pop(mid, None)
+        return self._out((await self._owned(mid, str(made[0]["id"]))) or
+                         {"id": made[0]["id"], "memory": text, "metadata": self._meta(record, writer)})
+
+    async def observe(self, mid, episodes, writer):
+        records = []
+        for e in episodes:
+            msgs = [{"role": p.get("role") if p.get("role") in ("user", "assistant", "system") else "user", "content": p["text"]}
+                    for p in e.get("content") or [] if p.get("text")]
+            meta = self._meta({"type": "fact", "attributes": e.get("attributes") or {}}, {"kind": "provider", "id": "mem0"})
+            meta[_RESERVED + "observed_by"] = f"{writer.get('kind')}:{writer.get('id')}"
+            r = await self._call("POST", "/memories", body={"user_id": mid, "messages": msgs, "metadata": meta, "infer": True})
+            if r.status_code != 200:
+                raise Mem0Unavailable("the episode was not taken")
+            for x in (r.json() or {}).get("results") or []:
+                item = await self._owned(mid, str(x.get("id") or ""))
+                if item:
+                    records.append(self._out(item))
+        self._counts.pop(mid, None)
+        return {"records": records, "job": None}
+
+    async def job(self, mid, job_id):
+        return None
+
+    async def revise(self, mid, rid, patch, writer):
+        item = await self._owned(mid, rid)
+        if not item or self._out(item)["status"] != "active":
+            raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+        cur = self._out(item)
+        merged = {"type": cur["type"], "title": patch.get("title", cur["title"]), "content": patch.get("content", cur["content"]),
+                  "attributes": {**cur["attributes"], **(patch.get("attributes") or {})},
+                  "references": patch.get("references", cur["references"]),
+                  "time": {**{k: cur["time"][k] for k in ("valid_from", "valid_to")}, **(patch.get("time") or {})}}
+        r = await self._call("PUT", f"/memories/{rid}", body={"text": mp.said(merged), "metadata": self._meta(merged, writer, cur["version"] + 1)})
+        if r.status_code != 200:
+            raise Mem0Unavailable("the revision was not stored")
+        out = self._out(await self._owned(mid, rid) or item)
+        out["supersedes"] = cur["version"]
+        return out
+
+    async def forget(self, mid, rid, writer):
+        item = await self._owned(mid, rid)
+        if not item or self._out(item)["status"] != "active":
+            raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+        meta = {**(item.get("metadata") or {}), _RESERVED + "forgotten_by": f"{writer.get('kind')}:{writer.get('id')}"}
+        r = await self._call("PUT", f"/memories/{rid}", body={
+            "text": item.get("memory") or "", "metadata": meta, "expiration_date": (_today() - _dt.timedelta(days=1)).isoformat()})
+        if r.status_code != 200:
+            raise Mem0Unavailable("the record was not closed")
+        self._counts.pop(mid, None)
+        return self._out(await self._owned(mid, rid) or item)
+
+    async def erase(self, mid, rids):
+        erased = []
+        for rid in rids:
+            if await self._owned(mid, rid):
+                r = await self._call("DELETE", f"/memories/{rid}")
+                if r.status_code == 200:
+                    erased.append(rid)
+        self._counts.pop(mid, None)
+        return {"erased": erased, "unreachable": list(erased)}
+
+    async def history(self, mid, rid):
+        item = await self._owned(mid, rid)
+        if not item:
+            raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+        r = await self._call("GET", f"/memories/{rid}/history")
+        events = sorted(r.json() if r.status_code == 200 else [], key=lambda e: str(e.get("updated_at") or ""))
+        head, versions = self._out(item), []
+        for e in events:
+            if e.get("event") != "ADD" and e.get("old_memory") == e.get("new_memory"):
+                continue
+            vt, vb = _split(e.get("new_memory") or "", bool(head["title"]))
+            versions.append({**head, "attributes": {k: v for k, v in head["attributes"].items() if k != "revision_reason"},
+                             "title": vt, "content": [{"type": "text", "text": vb}] if vb else [], "version": len(versions) + 1,
+                             "status": "superseded", "supersedes": len(versions) or None,
+                             "time": {**head["time"], "written_at": _utc(e.get("updated_at")), "invalidated_at": None}})
+        if not versions:
+            return [head]
+        for a, b in zip(versions, versions[1:]):
+            a["time"]["invalidated_at"] = b["time"]["written_at"]
+        versions[-1].update(status=head["status"], attributes=head["attributes"])
+        versions[-1]["time"]["invalidated_at"] = head["time"]["invalidated_at"]
+        return versions
+
+    @staticmethod
+    def _flat(mid: str, req: dict, degraded: list[str]) -> tuple[dict, list]:
+        """(what the server is asked, what is left to apply here). It takes equality on metadata."""
+        flat: dict = {"user_id": mid}
+        later: list = []
+        types = [t for t in (req.get("types") or []) if t]
+        if len(types) == 1:
+            flat[_RESERVED + "type"] = types[0]
+        elif types:
+            later.append({"or": [{"field": "type", "op": "eq", "value": t} for t in types]})
+
+        def walk(f):
+            if not f:
+                return
+            if "and" in f:
+                for x in f["and"]:
+                    walk(x)
+                return
+            field, op, val = str(f.get("field") or ""), f.get("op", "eq"), f.get("value")
+            if "or" not in f and op == "eq" and field.startswith("attributes.") and "." not in field[11:]:
+                flat[field[11:]] = val
+            elif "or" not in f and op == "eq" and field == "type":
+                flat[_RESERVED + "type"] = val
+            else:
+                later.append(f)
+        walk(req.get("filters"))
+        if later:
+            degraded.append("filters:applied_after_ranking")
+        return flat, later
+
+    async def list(self, mid, req):
+        if req.get("as_of"):
+            raise mp.MemoryError(422, "memory_unsupported", "This memory's provider does not list a memory as of a past time.")
+        degraded: list[str] = []
+        flat, later = self._flat(mid, req, degraded)
+        rows = [self._out(i) for i in await self._all(mid, expired=req.get("include") == "all")]
+        checks = [{"field": "type", "op": "eq", "value": flat[_RESERVED + "type"]}] if _RESERVED + "type" in flat else []
+        checks += [{"field": f"attributes.{k}", "op": "eq", "value": v} for k, v in flat.items() if k not in ("user_id", _RESERVED + "type")]
+        rows = [x for x in rows if all(mp.matches(x, f) for f in [*checks, *later])]
+        rows.sort(key=lambda x: str(x["time"]["written_at"] or ""), reverse=True)
+        at, size = int(req.get("cursor") or 0), int(req.get("limit") or 50)
+        return {"records": rows[at:at + size], "next": str(at + size) if at + size < len(rows) else None}
+
+    async def recall(self, mid, req):
+        degraded: list[str] = []
+        if req.get("as_of"):
+            degraded.append("as_of:not_supported")
+        query, text = str(req.get("query") or "").strip(), str(req.get("text") or "").strip()
+        flat, later = self._flat(mid, req, degraded)
+        limit = int(req.get("limit") or 8)
+        if not query and not text:
+            listed = await self.list(mid, {**req, "limit": limit, "cursor": None})
+            return {"results": [{"record": x, "memory_id": mid, "score": 1.0, "why": ["filters"]} for x in listed["records"]],
+                    "degraded": degraded, "abstain": False}
+        if text:
+            degraded.append("text:searched_with_the_query")
+        filters = {k: v for k, v in flat.items() if k != "user_id"}
+        r = await self._call("POST", "/search", body={
+            "query": f"{query} {text}".strip(), "user_id": mid, "top_k": limit * (3 if later else 1), **({"filters": {"user_id": mid, **filters}} if filters else {})})
+        results = []
+        for item in (r.json() or {}).get("results") or [] if r.status_code == 200 else []:
+            if str(item.get("user_id") or "") != mid:
+                continue
+            rec = self._out(item)
+            if rec["status"] != "active" or not all(mp.matches(rec, f) for f in later):
+                continue
+            results.append({"record": rec, "memory_id": mid, "score": item.get("score"),
+                            "why": [w for w, on in (("query", True), ("filters", bool(req.get("filters")))) if on]})
+        return {"results": results[:limit], "degraded": degraded, "abstain": False}
+
+    async def recall_many(self, mids, req):
+        return await mp.Provider.recall_many(self, mids, req)
