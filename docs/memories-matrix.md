@@ -1,6 +1,6 @@
 # Memories: what was measured
 
-Measured on 2026-11-04 against a self-hosted image built from this branch, with each vendor running from [`deploy/memories`](../deploy/memories/README.md). The Mem0 Platform was reached with a workspace's own key. Models for the vendors' own extraction: `gpt-4o-mini` and `text-embedding-3-small`.
+Measured on 2026-11-04 against a self-hosted image built from this branch, with each vendor running from [`deploy/memories`](../deploy/memories/README.md). The Mem0 Platform was reached with one workspace's own key, and a second workspace held the self-hosted Mem0, so both ran side by side on one instance. Models for the vendors' own extraction: `gpt-4o-mini` and `text-embedding-3-small`.
 
 The runners are in [`scripts/support-matrix/memories/`](../scripts/support-matrix/memories/). What the raw results hold is in [`memories-matrix-results.json`](memories-matrix-results.json).
 
@@ -75,6 +75,8 @@ The runners are in [`scripts/support-matrix/memories/`](../scripts/support-matri
 
 | vendor | base | model | remember | recall | subtree | reach | revise | graph | forget | task_memory | viewer | observe |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Mem0, self-hosted | claude-code | claude-sonnet-5.5 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| Mem0, self-hosted | codex | gpt-6.1-sol | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
 | Mem0 Platform | claude-code | claude-sonnet-5.5 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
 | Mem0 Platform | codex | gpt-6.1-sol | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
 | Graphiti | claude-code | claude-sonnet-5.5 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
@@ -138,6 +140,7 @@ The memory tools are the same on every vendor, and what differs by base is how e
 | Asked to correct a title, Graphiti learned the old one again from the very turn that corrected it | A turn in which the agent revises or forgets isn't observed |
 | Asked to forget, an agent closed everything it could find except the raw conversation, which still held the words | Forgetting a fact closes the conversation that taught it. What else it taught stays |
 | Graphiti refused to forget an episode, and read its words back as context for the next extraction | An episode can be forgotten, and its words leave what extraction reads |
+| A key held to one workspace could name another in a header and spend that workspace's vendor account. The routes also disagreed with the plug routes about which workspace a call meant | One rule for both, and a key stays in its workspace |
 | Hindsight's list showed only facts, which also hid conversations from this check, and its count read zero for minutes | Its list holds all three kinds, and its count comes from them |
 | Setting ReMe's embedding key turned nothing on: a search for "exercise habits" didn't find "the gym" | The compose setup turns search by meaning on, and what's declared follows each server's own health |
 | Asked to keep a person, a company and how they relate, an agent wrote facts and no entity | The remember tool's description lists `entity` and says how a fact names its `subject` and `object` |

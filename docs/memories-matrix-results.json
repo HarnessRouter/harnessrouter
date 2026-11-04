@@ -1173,6 +1173,144 @@
   ],
   "rows": [
    {
+    "engine": "mem0-self-hosted",
+    "base": "claude-code",
+    "model": "claude-sonnet-5.5",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "revise": {
+      "ok": true,
+      "why": "revised in place, version 2",
+      "s": 20
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 26
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 21
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 159
+   },
+   {
+    "engine": "mem0-self-hosted",
+    "base": "codex",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "revise": {
+      "ok": true,
+      "why": "revised in place, version 2",
+      "s": 21
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 18
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 150
+   },
+   {
     "engine": "mem0",
     "base": "claude-code",
     "model": "claude-sonnet-5.5",
