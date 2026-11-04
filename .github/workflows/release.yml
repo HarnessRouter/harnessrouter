@@ -180,6 +180,12 @@ jobs:
             echo "$LINE" | grep -q "$b" || { echo "::error::$b did not install on ${{ matrix.arch }}"; exit 1; }
           done
           docker exec smoke ls /opt/harnessrouter/kits
+          docker exec smoke test -s /app/NOTICE || { echo "::error::the image doesn't carry NOTICE on ${{ matrix.arch }}"; exit 1; }
+          docker exec smoke test -s /app/LICENSE || { echo "::error::the image doesn't carry LICENSE on ${{ matrix.arch }}"; exit 1; }
+          # NOTICE says what the image carries, and this console's build leaves sharp's LGPL library out.
+          if docker exec smoke sh -c 'find /app/ui/node_modules -path "*sharp-libvips*" -print -quit' | grep -q .; then
+            echo "::error::the console's build carries sharp's LGPL library again on ${{ matrix.arch }}"; exit 1
+          fi
           # Root never runs what the product user can change, read off the running container.
           docker exec --privileged -i smoke sh < scripts/check-root-boundary.sh \
             || { echo "::error::root runs something the product user can change on ${{ matrix.arch }}"; exit 1; }

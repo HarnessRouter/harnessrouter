@@ -45,6 +45,8 @@ jobs:
       # jsonschema is test-only: test_response_error_envelope.py validates failed Responses
       # against the spec schema. It stays out of requirements.txt so it never ships in the image.
       - run: pip install -r gateway/requirements.txt pytest pytest-asyncio jsonschema
+      - name: What ships stays under permissive licences
+        run: python scripts/check-licenses.py --python
       - run: python -m pytest gateway/tests -q
       # the benchmark suite's rules are pinned by its tests; they read the gateway's vendor tables
       # from source (scripts/support-matrix/samemodel.py) and need nothing the gateway job lacks
@@ -98,6 +100,8 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       # Mirrors the Dockerfile's install: .npmrc carries legacy-peer-deps, without which npm
       # refuses the tree (several deps still declare React 18 peers while the app runs 19).
+      - name: What ships stays under permissive licences
+        run: python3 ../scripts/check-licenses.py --js
       - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
       - run: npm run type-check
       # The console has no jest tests yet, and bare `jest` exits 1 on "No tests found" — which

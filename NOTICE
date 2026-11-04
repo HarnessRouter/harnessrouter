@@ -9,8 +9,11 @@ are unaffected by ours.
 
 THIRD-PARTY DEPENDENCIES
 ------------------------
-The published container image bundles the following third-party software. All are
-permissive licenses, and their notices are preserved here as those licenses require.
+The published container image bundles the following third-party software, under the licenses
+named beside each, and their notices are preserved here as those licenses require. Everything
+listed is under a permissive license unless its entry says otherwise. Code under any other
+license is used only as the whole, unchanged package named here; none is copied into this project.
+`scripts/check-licenses.py` holds this in the project's tests.
 
   Python
     FastAPI              MIT
@@ -22,6 +25,9 @@ permissive licenses, and their notices are preserved here as those licenses requ
     redis-py             MIT
     PyJWT                MIT
     PyYAML               MIT
+    certifi              MPL-2.0: Mozilla's root certificates, unchanged (github.com/certifi/python-certifi)
+    Pyphen               Offered under GPL-2.0+, LGPL-2.1+ or MPL-1.1; used under MPL-1.1, unchanged, for
+                         WeasyPrint (github.com/Kozea/Pyphen)
 
   JavaScript
     Next.js              MIT
@@ -30,6 +36,10 @@ permissive licenses, and their notices are preserved here as those licenses requ
     highlight.js         BSD-3-Clause
     Mermaid              MIT
     Apache ECharts       Apache-2.0
+
+  Operating system
+    The image is built on Debian. Its system packages, some under copyleft licenses such as the
+    GPL and LGPL, are unchanged and carry their own terms in /usr/share/doc.
 
 AGENT RUNTIMES — NOT REDISTRIBUTED
 ----------------------------------

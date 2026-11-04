@@ -44,6 +44,7 @@
     "rehype-sanitize": "^6.0.0",
     "reifyui": "^0.18.1",
     "remark-gfm": "^4.0.1",
+    "sharp": "file:./vendor/no-sharp",
     "tailwindcss": "^3.4.1",
     "undici": "^6.28.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
@@ -76,6 +77,7 @@
     "postcss": "^8.5.26",
     "jest-junit": {
       "uuid": "^11.1.1"
-    }
+    },
+    "sharp": "$sharp"
   }
 }

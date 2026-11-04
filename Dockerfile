@@ -35,6 +35,7 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends git ca-certi
 # .npmrc matters at THIS layer: it carries legacy-peer-deps, without which npm refuses the
 # tree (several deps still declare React 18 peers while the app runs 19).
 COPY ui/package.json ui/package-lock.json* ui/.npmrc ./
+COPY ui/vendor ./vendor
 RUN npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund
 COPY ui/ ./
 # Inlined into the client bundle at build time, so a self-hosted image can never present a
@@ -176,6 +177,8 @@ RUN chmod +x /app/entrypoint.sh /usr/local/bin/hr-retention
 COPY --from=ui /ui/.next/standalone /app/ui/
 COPY --from=ui /ui/.next/static     /app/ui/.next/static
 COPY --from=ui /ui/public           /app/ui/public
+# Apache-2.0 asks that these travel with a copy, and NOTICE is what says what this image carries.
+COPY LICENSE NOTICE /app/
 
 # `agent` is the PRODUCT's user: the gateway and the console run as it and it owns the data
 # volume. The container itself starts as root and the entrypoint drops privileges per process,
