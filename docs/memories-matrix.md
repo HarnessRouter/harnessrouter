@@ -1,114 +1,145 @@
 # Memories: what was measured
 
-Two runners in `scripts/support-matrix/memories/` (see its README) against one instance, the
-self-hosted image built from `feat/memories` as a release candidate (a test build, not a published
-version), with Mem0 connected on the workspace's
-own key. 2026-10-05.
+Measured on 2026-11-04 against a self-hosted image built from this branch, with each vendor running from [`deploy/memories`](../deploy/memories/README.md). The Mem0 Platform was reached with a workspace's own key. Models for the vendors' own extraction: `gpt-4o-mini` and `text-embedding-3-small`.
 
-## Every route, on Mem0
+The runners are in [`scripts/support-matrix/memories/`](../scripts/support-matrix/memories/). What the raw results hold is in [`memories-matrix-results.json`](memories-matrix-results.json).
 
-`interface.py`: each route of the Memories chapter called once. `n/a` is a route Mem0 does not
-serve, refused in the chapter's words and declared in its capability document.
+## Every route, on every vendor
 
-| route | mem0 |
-|---|---|
-| GET providers | pass |
-| GET types | pass |
-| POST memories | pass |
-| POST memories (child) | pass |
-| GET memories | pass |
-| GET memories?parent | pass |
-| GET memory | pass |
-| PUT memory | pass |
-| POST grants | pass |
-| GET grants | pass |
-| GET harness memories | pass |
-| PUT harness memories | pass |
-| POST records | pass |
-| POST records (entity, fact) | pass |
-| GET record | pass |
-| GET records | pass |
-| GET records?type | pass |
-| PATCH record | pass |
-| GET history | pass |
-| POST recall (subtree) | pass |
-| POST recall (depth 0) | pass |
-| POST recall (text) | pass |
-| POST graph | pass |
-| POST observe | pass |
-| GET job | pass |
-| PUT query | n/a |
-| GET queries | pass |
-| POST query (named) | n/a |
-| POST query (free) | n/a |
-| POST operation | n/a |
-| POST snapshots | pass |
-| GET snapshots | pass |
-| POST consolidations | n/a |
-| GET consolidations | n/a |
-| GET consolidation | n/a |
-| GET consolidation changes | n/a |
-| POST consolidation revert | n/a |
-| DELETE record (forget) | pass |
-| POST erase | pass |
-| GET record (erased) | pass |
-| DELETE grant | pass |
-| GET harness memories (revoked) | pass |
-| GET memory (unknown) | pass |
-| DELETE memory | pass |
+`interface.py` calls each route of the Memories chapter once. `n/a` is a route the vendor doesn't serve, refused in the chapter's words and declared in its capability document.
 
-mem0: 35 pass, 9 not served and declared, 0 fail, of 44 calls.
+| route | Mem0, self-hosted | Mem0 Platform | Graphiti | Hindsight | ReMe |
+|---|---|---|---|---|---|
+| GET providers | pass | pass | pass | pass | pass |
+| GET types | pass | pass | pass | pass | pass |
+| POST memories | pass | pass | pass | pass | pass |
+| POST memories (child) | pass | pass | pass | pass | pass |
+| GET memories | pass | pass | pass | pass | pass |
+| GET memories?parent | pass | pass | pass | pass | pass |
+| GET memory | pass | pass | pass | pass | pass |
+| PUT memory | pass | pass | pass | pass | pass |
+| POST grants | pass | pass | pass | pass | pass |
+| GET grants | pass | pass | pass | pass | pass |
+| GET harness memories | pass | pass | pass | pass | pass |
+| PUT harness memories | pass | pass | pass | pass | pass |
+| POST records | pass | pass | pass | pass | pass |
+| POST records (entity, fact) | pass | pass | pass | pass | pass |
+| POST records (retried with its key) | pass | pass | pass | pass | pass |
+| GET record | pass | pass | pass | pass | pass |
+| GET records | pass | pass | pass | pass | pass |
+| GET records?type | pass | pass | pass | pass | pass |
+| PATCH record | pass | pass | pass | pass | pass |
+| GET history | pass | pass | pass | pass | pass |
+| POST recall (subtree) | pass | pass | pass | pass | pass |
+| POST recall (depth 0) | pass | pass | pass | pass | pass |
+| POST recall (text) | pass | pass | pass | pass | pass |
+| POST graph | pass | pass | pass | pass | pass |
+| POST observe | pass | pass | pass | pass | pass |
+| GET job | n/a | pass | n/a | pass | n/a |
+| PUT query | n/a | n/a | n/a | n/a | n/a |
+| GET queries | pass | pass | pass | pass | pass |
+| POST query (named) | n/a | n/a | n/a | n/a | n/a |
+| POST query (free) | n/a | n/a | n/a | n/a | n/a |
+| POST operation | n/a | n/a | n/a | n/a | n/a |
+| POST snapshots | pass | pass | pass | pass | pass |
+| GET snapshots | pass | pass | pass | pass | pass |
+| POST consolidations | n/a | n/a | n/a | pass | n/a |
+| GET consolidations | n/a | n/a | n/a | pass | n/a |
+| GET consolidation | n/a | n/a | n/a | pass | n/a |
+| GET consolidation changes | n/a | n/a | n/a | pass | n/a |
+| POST consolidation revert | n/a | n/a | n/a | n/a | n/a |
+| DELETE record (forget) | pass | pass | pass | pass | pass |
+| POST erase | pass | pass | pass | pass | pass |
+| GET record (erased) | pass | pass | pass | pass | pass |
+| DELETE grant | pass | pass | pass | pass | pass |
+| GET harness memories (revoked) | pass | pass | pass | pass | pass |
+| GET memory (unknown) | pass | pass | pass | pass | pass |
+| DELETE memory | pass | pass | pass | pass | pass |
+| **total** | 35 pass, 10 n/a, 0 fail | 36 pass, 9 n/a, 0 fail | 35 pass, 10 n/a, 0 fail | 40 pass, 5 n/a, 0 fail | 35 pass, 10 n/a, 0 fail |
 
-## Agents, on Mem0
+## The chapter's conformance checks
 
-`matrix.py`: nineteen harness bases, each on its default model, ten scenarios each, every scenario
-one real task in a session of its own. A failed scenario was retried once. (Claude Code's `revise`
-first failed for a reason outside memory: the instance's Anthropic key had stopped being accepted.
-It passed once the key was replaced.)
+`uhp-conformance --only ME-01,...,ME-13`.
 
-### mem0
+| Vendor | Passed | Skipped |
+|---|---|---|
+| Mem0, self-hosted | 12 of 13 | ME-11, declared: its server records only text changes, so it doesn't declare `holds` |
+| Mem0 Platform | 12 of 13 | ME-11, as above |
+| Graphiti | 13 of 13 | |
+| Hindsight | 13 of 13 | |
+| ReMe | 13 of 13 | |
 
-| base | model | remember | recall | subtree | reach | revise | graph | forget | task_memory | viewer | observe | seconds |
-|---|---|---|---|---|---|---|---|---|---|---|---|---:|
-| codex | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 371 |
-| claude-code | claude-sonnet-4.6 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 610 |
-| hermes | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 1255 |
-| pi | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 253 |
-| omp | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 581 |
-| dsh | deepseek-v4-pro | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 708 |
-| goose | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 357 |
-| opencode | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 318 |
-| kilo | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 517 |
-| aider | gpt-5.4 | pass | FAIL | FAIL | pass | pass | pass | pass | pass | pass | pass | 1365 |
-| kimi | kimi-k3 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 560 |
-| minimax | minimax-m3 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 549 |
-| grok | grok-4.6 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 771 |
-| openhands | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 673 |
-| cheetahclaws | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 565 |
-| agentzero | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 395 |
-| qwen | qwen3.7-max | FAIL | pass | pass | pass | pass | pass | pass | pass | pass | pass | 1061 |
-| gemini | gemini-3.8-flash | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 982 |
-| cline | gpt-5.4 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass | 294 |
+## Agents, on every vendor
 
-17 of 19 bases pass every scenario on mem0.
+`matrix.py` gives an agent a task in plain words, in a session of its own, then checks what the service holds afterwards. The prompts name no tool. Each cell is real turns on a real model.
 
-### What is still failing
+| vendor | base | model | remember | recall | subtree | reach | revise | graph | forget | task_memory | viewer | observe |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Mem0 Platform | claude-code | claude-sonnet-5.5 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| Mem0 Platform | codex | gpt-6.1-sol | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| Graphiti | claude-code | claude-sonnet-5.5 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| Graphiti | codex | gpt-6.1-sol | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| Hindsight | claude-code | claude-sonnet-5.5 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| Hindsight | codex | gpt-6.1-sol | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| ReMe | claude-code | claude-sonnet-5.5 | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| ReMe | codex | gpt-6.1-sol | pass | pass | pass | pass | pass | pass | pass | pass | pass | pass |
 
-- **aider, recall**: answered without the title: 'thin your reach.\n\nSo I can’t reliably tell you the working title from memory based on that result. If you want, I can help search a broader memory scope next.\n\n'
-- **aider, subtree**: answered without the shelf label: 'le memory contains a record matching “archive shelf label,” so I can’t identify either the shelf label or the memory it’s kept in from the available memories.\n\n'
-- **qwen, remember**: no record holds the title after the task (tools: none); answered 'ons.\n\nSaved. The working title **LAUNCH-3A86D0** is now in project memory and will be available in future conversations.'
+The `asset` and `document` scenarios need agents to be offered a file to keep, which this instance doesn't do, so they weren't asked.
 
-Read as:
+## Every agent base, on one vendor
 
-- **aider, recall and subtree**: the agent searched and reported nothing found, on the model and
-  the records with which the other bases found the answer.
-- **qwen, remember**: the agent answered "saved" from a memory feature of its own and wrote nothing
-  through the memory tools, with the instruction not to do so in its Memory section.
+The memory tools are the same on every vendor, and what differs by base is how each wires them up. So every base ran the three scenarios that exercise that, on Graphiti, the vendor that found the most. System One is left out because it chooses among offered actions and has no tools to call.
 
-### What the matrix found on the way, and what was changed
+| base | model | remember | recall | forget |
+|---|---|---|---|---|
+| agentzero | gpt-6.1-sol | pass | pass | pass |
+| aider | gpt-6.1-sol | pass | pass | pass |
+| cheetahclaws | gpt-5.4 | pass | pass | pass (after the fix below) |
+| claude-code | claude-sonnet-5.5 | pass | pass | pass |
+| cline | gpt-5.4 | pass | pass | pass (after the fix below) |
+| codex | gpt-6.1-sol | pass | pass | pass |
+| dcode | gpt-6.1-sol | pass | pass | pass |
+| docker-agent | gpt-5.4 | pass | pass | pass (after the fix below) |
+| dsh | deepseek-v4-pro | pass | pass | pass |
+| fast-agent | gpt-5.4 | pass | pass | pass |
+| gemini | gemini-3.8-flash | pass | pass | pass |
+| goose | gpt-6.1-sol | pass | pass | pass |
+| grok | grok-4.6 | pass | pass | pass |
+| hermes | gpt-6.1-sol | pass | pass | pass |
+| jcode | gpt-5.4 | pass | pass | pass |
+| kilo | gpt-6.1-sol | pass | pass | pass |
+| kimi | kimi-k3 | pass | pass | pass |
+| mimo | gpt-6.1-sol | pass | pass | pass |
+| minimax | minimax-m3 | pass | pass | pass |
+| nanobot | gpt-5.4 | pass | pass | pass (after the fix below) |
+| omp | gpt-6.1-sol | pass | pass | pass |
+| opencode | gpt-6.1-sol | pass | pass | pass |
+| openhands | gpt-5.4 | pass | pass | pass |
+| opensquilla | gpt-5.4 | pass | pass | pass |
+| pi | gpt-6.1-sol | pass | pass | pass |
+| qoder |  | FAIL | FAIL | FAIL |
+| qwen | qwen3.7-max | pass | pass | pass |
+| vibe | gpt-5.4 | pass | pass | pass |
+| zeroclaw | gpt-5.4 | pass | pass | pass (after the fix below) |
+
+28 of 29 bases pass. Qoder has no key on this instance, so it says nothing either way.
+
+## What this doesn't show
+
+- Not every base on every vendor. That would be about a thousand turns, for tools that are the same on each.
+- How well any vendor recalls. This is whether the integration is right, not a benchmark, and we make no claim about which is best.
+- The schema findings in the [vendor guide](../deploy/memories/README.md) come from a few paragraphs, repeated, not a corpus.
+
+## What the matrix found on the way, and what was changed
 
 | Found | Changed |
 |---|---|
+| A finished answer sat 5 to 7 seconds before completing, on a vendor that extracts before it answers | The turn no longer waits for its memory to take the episode: 0.3 to 0.4 s after the last words |
+| Asked to correct a title, Graphiti learned the old one again from the very turn that corrected it | A turn in which the agent revises or forgets isn't observed |
+| Asked to forget, an agent closed everything it could find except the raw conversation, which still held the words | Forgetting a fact closes the conversation that taught it. What else it taught stays |
+| Graphiti refused to forget an episode, and read its words back as context for the next extraction | An episode can be forgotten, and its words leave what extraction reads |
+| Hindsight's list showed only facts, which also hid conversations from this check, and its count read zero for minutes | Its list holds all three kinds, and its count comes from them |
+| Setting ReMe's embedding key turned nothing on: a search for "exercise habits" didn't find "the gym" | The compose setup turns search by meaning on, and what's declared follows each server's own health |
 | Asked to keep a person, a company and how they relate, an agent wrote facts and no entity | The remember tool's description lists `entity` and says how a fact names its `subject` and `object` |
 | The agent kept its graph in a child memory and the graph asked at the root was empty | A memory's graph covers the memory and what is below it, as a search does (chapter §6.6) |
 | Three bases kept what they were told in a notes or memory feature of their own | The Memory section of an agent's instructions says these tools are the memory to use. Two of the three now pass |
