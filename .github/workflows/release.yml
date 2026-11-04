@@ -161,7 +161,8 @@ jobs:
           REF="${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
           docker rm -f smoke 2>/dev/null || true
           docker volume rm smoke-data 2>/dev/null || true
-          docker run -d --name smoke -v smoke-data:/data -e HR_SECRET_KEY=ci-smoke "$REF"
+          # No HR_SECRET_KEY: the image gets one at its first start, the way a new install does.
+          docker run -d --name smoke -v smoke-data:/data "$REF"
           # A fresh volume installs every default base before it prints this line. Five minutes was
           # enough for twenty bases and no longer is: from the four added in #448 on, amd64 was still
           # installing when the wait ended, and the gate then blamed the first base it checked
@@ -182,6 +183,14 @@ jobs:
           # Root never runs what the product user can change, read off the running container.
           docker exec --privileged -i smoke sh < scripts/check-root-boundary.sh \
             || { echo "::error::root runs something the product user can change on ${{ matrix.arch }}"; exit 1; }
+          # Nothing left to read in a session: a canary in every credential, one turn per base, and each
+          # looked for in the session's processes and files, on the volume and in what a client reads. One
+          # architecture is enough: where a credential goes doesn't depend on the CPU.
+          if [ "${{ matrix.arch }}" = amd64 ]; then
+            docker cp scripts/secret-canary-gate.py smoke:/tmp/secret-canary-gate.py
+            docker exec --privileged smoke python3 -I /tmp/secret-canary-gate.py --jobs 4 \
+              || { echo "::error::a credential reached a session, or the gate could not see one"; exit 1; }
+          fi
           # The architecture is asserted, not assumed: a QEMU fallback would otherwise pass here
           # silently and ship an emulated image under the native manifest.
           GOT=$(docker image inspect "$REF" --format '{{.Architecture}}')

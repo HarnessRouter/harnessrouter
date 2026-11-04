@@ -3969,7 +3969,11 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
         if token:
             entry["auth"] = token
         if isinstance(s.get("headers"), dict):
-            entry["headers"] = {k: _sub_headers(str(vv), _hvals) for k, vv in s["headers"].items()}
+            entry["headers"] = {}
+            for k, vv in s["headers"].items():     # a value kept in the store is resolved the way auth is
+                val = await _resolve_mcp_auth(org, _sub_headers(str(vv), _hvals))
+                if val:
+                    entry["headers"][k] = val
         mcp_out.append(entry)
 
     # Skill manifest = the harness's own skills MERGED with its base builtin's defaults (a custom
@@ -11599,6 +11603,10 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
                       # and why, when the record knows (error.detail.reason: "interrupted", "timeout")
                       "error_reason": ((((rec.get("error") or {}).get("detail") or {}).get("reason") or None)
                                        if isinstance(rec.get("error"), dict) and isinstance(rec["error"].get("detail"), dict) else None),
+                      # a question still the person's to answer, so a reopened task can still ask it
+                      **({"input_request": next((o for o in reversed(rec.get("output") or [])
+                                                 if isinstance(o, dict) and o.get("type") == "input_request"), None)}
+                         if isinstance(rec.get("_pending_input"), dict) and rec["_pending_input"].get("state") == "pending" else {}),
                       "incomplete_reason": ((rec.get("incomplete_details") or {}).get("reason")
                                             or None),
                       "handoff": ((rec.get("incomplete_details") or {}).get("handoff") or None),
@@ -13948,6 +13956,14 @@ async def _mcp_migrate(org: str, hid: str, v: dict | None) -> dict | None:
     # The HARNESS's org, not the caller's: this writes a record that belongs to the harness, and
     # only the vertex knows whose tenant that is.
     org = str(v.get("org") or org)
+    # A token written on a harness before its record stopped holding them goes to the secret store
+    # here, the same once-and-in-place as below. A harness nothing reads keeps it until something does.
+    listed = _mcp_list(v)
+    sealed = await _mcp_seal_literals(org, listed)
+    if sealed != listed:
+        await _vg_upsert("Harness", hid, {"mcp_servers": json.dumps(sealed)})
+        v = {**v, "mcp_servers": json.dumps(sealed)}
+        print(f"[migrate] {hid}: tokens written on the harness moved to the secret store", flush=True)
     # Parsed ONCE. Two _mcp_list calls return two sets of dicts parsed from the same JSON, so the
     # replacement below would match nothing and leave both entries on the harness.
     servers = _mcp_list(v)
@@ -19724,6 +19740,38 @@ def _mcp_servers_prepare(incoming: list | None) -> list[dict]:
     return out
 
 
+def _mcp_is_literal(value) -> bool:
+    """A value written on the harness itself: not a reference, and not a caller's per-request header."""
+    return isinstance(value, str) and bool(value) and not value.startswith("vault:") and "$headers." not in value
+
+
+async def _mcp_seal_literals(org: str, servers: list[dict]) -> list[dict]:
+    """A token or header value written on a harness goes to the secret store, and the record keeps
+    only the reference, the shape the console already writes. A harness record is a row in a
+    database, in the clear, and #624's promise is about every stored credential. A store that can't
+    encrypt is left as it was: there is nowhere better to put the value."""
+    if getattr(BACKING.secrets, "encrypts", True) is False or not _org_tenant(org):
+        return servers
+    out: list[dict] = []
+    for s in servers:
+        e = dict(s) if isinstance(s, dict) else s
+        if isinstance(e, dict):
+            if _mcp_is_literal(e.get("auth")):
+                e["auth"] = (await _mcp_secret_store(org, f"literal-{uuid.uuid4().hex}", e["auth"]))["ref"]
+            if isinstance(e.get("headers"), dict):
+                hdrs = dict(e["headers"])
+                for k, v in hdrs.items():
+                    if _mcp_is_literal(v):
+                        hdrs[k] = (await _mcp_secret_store(org, f"literal-{uuid.uuid4().hex}", v))["ref"]
+                e["headers"] = hdrs
+        out.append(e)
+    return out
+
+
+async def _mcp_servers_stored(org: str, incoming: list | None) -> list[dict]:
+    return await _mcp_seal_literals(org, _mcp_servers_prepare(incoming))
+
+
 async def _skills_prepare(skills: list | None) -> list:
     """Validate + normalize harness skills at config time (HRP-008).
 
@@ -20853,7 +20901,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     # a key held to a workspace stamps its own, whatever header it sends; any other caller names it
     workspace = _key_scope(p) or request.headers.get("x-harness-workspace", "")
     await _require_offered_model(org, body.base, body.default_model)
-    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, p)
     body.plugins = await _plugins_prepare(body, org)
@@ -20956,7 +21004,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     body.base = str(cur.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(cur.get("default_model") or ""))
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
-    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _caller)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(cur))
@@ -21198,7 +21246,7 @@ async def _harness_create_as(p: dict, body: HarnessBody, hid: str | None = None,
         if first is not None:
             return _harness_out(first)
     try:
-        body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
+        body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
         body.skills = await _skills_prepare(body.skills)
         await _environment_check_ref(org, body.environment, p)
         body.plugins = await _plugins_prepare(body, org)
@@ -21976,7 +22024,7 @@ async def launch_kit(kit_id: str, request: Request, body_in: KitLaunchBody | Non
                        # second needs more steps than a document does. Absent, the base's default.
                        max_step=spec.get("max_step"),
                        timeout_seconds=spec.get("timeout_seconds"))
-    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     # The hosted entries launch attaches below (a kit's database, the media server) are names a
     # plugin's own servers must not take, so they count as the harness's here.
@@ -22771,7 +22819,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
                         "base", {"base": v.get("base")})
     body.base = str(v.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
-    body.mcp_servers = _mcp_servers_prepare(body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _p)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(v))
