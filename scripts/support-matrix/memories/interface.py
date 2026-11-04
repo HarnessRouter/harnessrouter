@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 import sys
 import time
@@ -279,7 +280,7 @@ def render(result: dict) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", required=True)
-    ap.add_argument("--api-key", required=True)
+    ap.add_argument("--api-key", default=os.environ.get("UHP_API_KEY", ""), help="or set UHP_API_KEY, which keeps it out of the process list")
     ap.add_argument("--engines", default="mem0")
     ap.add_argument("--workspace", default="default")
     ap.add_argument("--keep", action="store_true")

@@ -599,7 +599,7 @@ def render(rows: list[dict], wanted: list[str], meta: dict) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", required=True)
-    ap.add_argument("--api-key", required=True)
+    ap.add_argument("--api-key", default=os.environ.get("UHP_API_KEY", ""), help="or set UHP_API_KEY, which keeps it out of the process list")
     ap.add_argument("--engines", default="mem0")
     ap.add_argument("--bases", default="all")
     ap.add_argument("--model", default="")
