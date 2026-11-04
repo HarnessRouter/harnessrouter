@@ -163,10 +163,10 @@ async def put_schema(mid: str, request: Request) -> dict:
     if applies.get("mode", "none") == "none":
         raise mp.MemoryError(422, "memory_unsupported", "This memory's provider keeps no schema: nothing it does would read one.", "schema")
     clean = mp.schema_clean(await _json(request))
-    if applies.get("properties") is False and any(t.get("properties") for t in clean["types"]):
-        raise mp.MemoryError(422, "memory_unsupported", "This memory's provider reads type names, not their properties.", "types")
-    if applies.get("relations") is False and clean["relations"]:
-        raise mp.MemoryError(422, "memory_unsupported", "This memory's provider reads type names, not relations between them.", "relations")
+    if not applies.get("properties") and any(t.get("properties") for t in clean["types"]):
+        raise mp.MemoryError(422, "memory_unsupported", "This memory's provider reads names, not properties.", "types")
+    if not applies.get("relations") and clean["relations"]:
+        raise mp.MemoryError(422, "memory_unsupported", "This memory's provider reads names, not relations between them.", "relations")
     await mp.GRAPH.upsert("Memory", mid, {"schema": json.dumps(clean), "updated_at": mp._now_ms()}, raise_on_fail=True)
     await prov.apply_schema(mid, clean)
     return {"object": "memory.schema", "memory_id": mid, "applies": applies, **clean}

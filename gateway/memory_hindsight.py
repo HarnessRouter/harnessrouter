@@ -19,8 +19,11 @@ shape here was read off a server running on 2026-11-04.
   forget   = the facts' state set invalid, which takes them out of search. The document stays.
   erase    = DELETE the document, with its facts. A single derived fact has no delete of its own, since
       Hindsight would have to delete what it came from, so it is invalidated and reported `unreachable`.
-  schema   = the bank's `entity_labels`: names and descriptions the extraction chooses from. No properties
-      and no relations, because nothing in Hindsight would read them. Declared `guides`.
+  schema   = the bank's `entity_labels`: a vocabulary its extraction tags each derived fact with. Measured:
+      `type:Company` arrives as an entity on the fact and, with `tag`, as a tag recall can scope to. So it
+      classifies facts and not entities, which is `labels` rather than `guides`: no properties, no relations,
+      and the label nodes are shown as a fact's `attributes.labels`, never as entities. A stated record is
+      kept word for word without the extraction, so only what an episode derives gets labels.
 """
 from __future__ import annotations
 
@@ -36,6 +39,10 @@ import memory_plane as mp
 TIMEOUT_S = 90
 PREFIX = "hrec_"
 ENTITY = "ent_"
+LABEL = "type:"     # how Hindsight names a label of the group we keep: never an entity of the graph
+# The wording matters more than any other setting. Measured three times each on one text: this one labelled
+# what each fact mentions and left an unrelated fact bare; "What this fact is about." labelled nothing at all.
+LABEL_ASK = "Every kind of thing this fact mentions. Choose all that apply, or none if nothing fits."
 STATED = "hr_stated"
 MAX_KEPT_VERSIONS = 50
 ACTIVE = "valid"
@@ -83,12 +90,12 @@ class Hindsight(mp.Provider):
         return {"id": self.id, "isolation": "container", "derivation": "background",
                 "observe": {"keeps_episodes": True, "answers": "job"},
                 "recall": {"signals": ["query", "text", "filters"], "abstain": False,
-                           "filters": {"native": ["type"], "applied_after_ranking": "every other filter"}},
+                           "filters": {"native": ["type", "attributes.labels"], "applied_after_ranking": "every other filter"}},
                 "history": {"content": "versions", "structure": "none", "emulated": True}, "as_of": "one record",
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
                 "prime": True, "consolidate": "trigger", "holds": True, "queries": {"named": False, "free": None},
                 "types": False, "graph": {"entities": "derived"},
-                "schema": {"mode": "guides", "properties": False, "relations": False},
+                "schema": {"mode": "labels"},
                 "content": {"media": ["text/*"], "describes": []}}
 
     async def bind(self, org, workspace):
@@ -194,12 +201,17 @@ class Hindsight(mp.Provider):
         if unit.get("document_id"):
             refs.append({"rel": "derived_from", "memory_id": mid, "record_id": str(unit["document_id"])})
         kind = unit.get("fact_type") or unit.get("type")
+        labels = sorted(str(n)[len(LABEL):] for n in names if self._is_label(n))
         return {"id": str(unit["id"]), "type": "fact", "title": "", "content": [{"type": "text", "text": str(unit.get("text") or "")}],
-                "attributes": {"kind": kind} if kind else {}, "references": refs, "version": 1,
+                "attributes": {**({"kind": kind} if kind else {}), **({"labels": labels} if labels else {})}, "references": refs, "version": 1,
                 "status": "active" if active else "forgotten", "supersedes": None,
                 "time": {"valid_from": unit.get("occurred_start"), "valid_to": unit.get("occurred_end"),
                          "written_at": unit.get("mentioned_at") or unit.get("date"), "invalidated_at": unit.get("invalidated_at")},
                 "written_by": {"kind": "provider", "id": self.id}}
+
+    @staticmethod
+    def _is_label(name) -> bool:
+        return str(name or "").startswith(LABEL)
 
     def _entity_out(self, e: dict) -> dict:
         return {"id": ENTITY + str(e["id"]), "type": "entity", "title": str(e.get("canonical_name") or ""), "content": [],
@@ -213,7 +225,7 @@ class Hindsight(mp.Provider):
         if hit and time.time() - hit[0] < 30:
             return hit[1]
         r = await self._call("GET", self._bank(mid) + "/entities", params={"limit": 500})
-        names = {str(e.get("canonical_name")): str(e["id"]) for e in ((r.json() or {}).get("items") or [])} if r.status_code == 200 else {}
+        names = {str(e.get("canonical_name")): str(e["id"]) for e in ((r.json() or {}).get("items") or []) if not self._is_label(e.get("canonical_name"))} if r.status_code == 200 else {}
         self._entities[mid] = (time.time(), names)
         return names
 
@@ -357,7 +369,7 @@ class Hindsight(mp.Provider):
     async def get(self, mid, rid, as_of=None):
         if rid.startswith(ENTITY):
             r = await self._call("GET", self._bank(mid) + f"/entities/{rid[len(ENTITY):]}")
-            return self._entity_out(r.json()) if r.status_code == 200 else None
+            return self._entity_out(r.json()) if r.status_code == 200 and not self._is_label(r.json().get("canonical_name")) else None
         if rid.startswith(PREFIX):
             doc = await self._doc(mid, rid)
             if not doc:
@@ -417,7 +429,7 @@ class Hindsight(mp.Provider):
         if types == ["entity"]:
             r = await self._call("GET", self._bank(mid) + "/entities", params={"limit": size, "offset": at})
             doc = r.json() if r.status_code == 200 else {}
-            rows = [self._entity_out(e) for e in doc.get("items") or []]
+            rows = [self._entity_out(e) for e in doc.get("items") or [] if not self._is_label(e.get("canonical_name"))]
             return {"records": rows, "next": str(at + size) if at + size < int(doc.get("total") or 0) else None}
         if types == ["episode"]:
             r = await self._call("GET", self._bank(mid) + "/documents", params={"tags": "t:episode", "limit": size, "offset": at})
@@ -446,7 +458,9 @@ class Hindsight(mp.Provider):
             degraded.append("as_of:not_supported")
         query, text = str(req.get("query") or "").strip(), str(req.get("text") or "").strip()
         limit = int(req.get("limit") or 8)
-        later = [req["filters"]] if req.get("filters") else []
+        flt = req.get("filters") or None
+        label = str(flt["value"]) if isinstance(flt, dict) and flt.get("field") == "attributes.labels" and flt.get("op") == "contains" else ""
+        later = [flt] if flt and not label else []
         if later:
             degraded.append("filters:applied_after_ranking")
         if not query and not text:
@@ -455,8 +469,13 @@ class Hindsight(mp.Provider):
             return {"results": [{"record": x, "memory_id": mid, "score": 1.0, "why": ["filters"]} for x in rows[:limit]], "degraded": degraded, "abstain": False}
         body: dict = {"query": f"{query} {text}".strip(), "budget": "mid", "max_tokens": 4096}
         types = [t for t in (req.get("types") or []) if t]
-        if types:
-            body["tags"] = [f"t:{t}" for t in types]
+        if "episode" in types:
+            degraded.append("types:episodes_are_not_searched")    # recall reads the facts, not what they came from
+        if label:
+            body.update(tags=[LABEL + label], tags_match="any_strict")
+        elif types:
+            # a fact an episode derives carries the episode's tag, so a search for facts reads both
+            body.update(tags=[f"t:{t}" for t in types] + (["t:episode"] if "fact" in types else []), tags_match="any_strict")
         r = await self._call("POST", self._bank(mid) + "/memories/recall", body=body)
         if r.status_code != 200:
             if r.status_code == 404:
@@ -466,7 +485,7 @@ class Hindsight(mp.Provider):
         seen, results = set(), []
         for u in (r.json() or {}).get("results") or []:
             x = self._fact_out(mid, {**u, "fact_type": u.get("type"), "state": ACTIVE}, names)
-            if x["id"] in seen or not all(mp.matches(x, f) for f in later):
+            if x["id"] in seen or (types and x["type"] not in types) or not all(mp.matches(x, f) for f in later):
                 continue
             seen.add(x["id"])
             s = u.get("scores") or {}
@@ -475,12 +494,12 @@ class Hindsight(mp.Provider):
             results.append({"record": x, "memory_id": mid, "score": s.get("final"), "why": why})
         return {"results": results[:limit], "degraded": degraded, "abstain": False}
 
-    # ── its schema: names the extraction chooses from ─────────────────────────────────────────
+    # ── its labels: a vocabulary the extraction tags each derived fact with ───────────────────
     async def apply_schema(self, mid, schema):
         await self._ensure(mid)
         values = [{"value": str(t.get("name") or ""), "description": str(t.get("description") or "")}
                   for t in schema.get("types") or [] if t.get("name")]
-        labels = {"attributes": [{"key": "type", "description": "What kind of thing this is.", "type": "value", "values": values}]} if values else None
+        labels = {"attributes": [{"key": LABEL[:-1], "description": LABEL_ASK, "type": "multi-values", "optional": True, "tag": True, "values": values}]} if values else None
         r = await self._call("PATCH", self._bank(mid) + "/config", body={"updates": {"entity_labels": labels}})
         if r.status_code != 200:
             raise HindsightUnavailable("the labels were not stored")
