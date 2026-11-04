@@ -140,7 +140,6 @@
 #hrui .mm-cr{color:var(--muted);font-size:13px;flex:none;max-width:200px;overflow:hidden;text-overflow:ellipsis}#hrui .mm-cr:hover{color:var(--fg)}
 #hrui .mm-crs{color:var(--line);flex:none}
 #hrui .mm-saved{font-size:12.5px;color:var(--faint);white-space:nowrap;margin-right:4px}
-#hrui .mm-dtog,#hrui .mm-ctog,#hrui .mm-cclose{display:none}
 #hrui .mm-doc-scroll{flex:1;min-height:0;overflow:auto}
 #hrui .mm-doc-col{max-width:720px;margin:0 auto;padding:40px 48px 96px}
 #hrui .mm-title{font-family:var(--display);font-size:34px;font-weight:650;letter-spacing:-.6px;line-height:1.15;margin:0;outline:none;word-break:break-word}
@@ -164,7 +163,7 @@
 #hrui .mm-doc-foot{display:flex;justify-content:flex-end;gap:16px;height:34px;align-items:center;padding:0 16px;border-top:1px solid var(--line);font-size:12px;color:var(--faint);flex:none}
 #hrui .mm-doc-empty{margin:auto;max-width:400px;text-align:center;padding:24px}
 #hrui .mm-doc-empty h2{font-size:20px;font-weight:600;margin:0 0 8px}#hrui .mm-doc-empty p{font-size:14px;color:var(--muted);line-height:1.6;margin:0 0 16px}
-#hrui .mm-conn{display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--line);background:var(--bg)}
+#hrui .mm-conn{display:flex;flex-direction:column;min-height:0;background:var(--bg)}
 #hrui .mm-conn-bar{display:flex;align-items:center;gap:10px;height:52px;flex:none;padding:0 14px 0 18px;border-bottom:1px solid var(--line)}
 #hrui .mm-conn-bar b{font-size:14px;font-weight:600;flex:1}
 #hrui .mm-cgw{flex:none;--mm-bg:var(--surface);background-color:var(--surface);background-image:radial-gradient(var(--line) 1px,transparent 1.2px);background-size:18px 18px;border-bottom:1px solid var(--line)}
@@ -186,7 +185,6 @@
 #hrui .mm-vr.cur{background:var(--surface)}
 #hrui .mm-vr span{flex:1;min-width:0}#hrui .mm-vr small{display:block;font-size:12px;color:var(--muted)}#hrui .mm-vr em{font-style:normal;font-size:11.5px;font-weight:600;color:var(--ok)}
 #hrui .mm-mv{display:flex;flex-direction:column;gap:6px;padding:6px 8px;font-size:12px;color:var(--faint)}
-#hrui .mm-scrim{display:none;position:absolute;inset:0;background:var(--scrim);z-index:15}
 
 /* ---- the Memory layer in Settings ---- */
 #hrui .mm-hr .grow b{display:flex;align-items:center;gap:8px}
@@ -213,19 +211,9 @@
 
 /* ---- narrow ---- */
 @media (max-width:1180px){
-  #hrui .mm-data{grid-template-columns:260px minmax(0,1fr)}
-  #hrui .mm-conn{position:absolute;top:0;right:0;bottom:0;width:min(380px,92%);z-index:20;transform:translateX(105%);transition:transform .2s;box-shadow:-20px 0 40px rgba(0,0,0,.12)}
-  #hrui .mm-data.conn-open .mm-conn{transform:none}
-  #hrui .mm-data.conn-open .mm-scrim{display:block}
-  #hrui .mm-ctog,#hrui .mm-cclose{display:inline-flex}
   #hrui .mm-schema{grid-template-columns:minmax(0,1fr) 340px}
 }
 @media (max-width:860px){
-  #hrui .mm-data{grid-template-columns:minmax(0,1fr)}
-  #hrui .mm-tree{position:absolute;top:0;left:0;bottom:0;width:min(300px,88%);z-index:20;transform:translateX(-105%);transition:transform .2s;box-shadow:20px 0 40px rgba(0,0,0,.12)}
-  #hrui .mm-data.tree-open .mm-tree{transform:none}
-  #hrui .mm-data.tree-open .mm-scrim{display:block}
-  #hrui .mm-dtog{display:inline-flex}
   #hrui .mm-doc-bar{padding:0 10px}
   #hrui .mm-crumbs{display:none}
   #hrui .mm-doc-bar .mm-saved{margin-left:auto}
@@ -308,7 +296,6 @@
 #hrui .mm-lt.off{color:var(--faint);cursor:default}
 #hrui .mm-lrel{font-family:var(--mono);margin-left:16px}
 /* the tree: no connections column where there would be nothing in it */
-#hrui .mm-data.no-conn{grid-template-columns:280px minmax(0,1fr)}
 #hrui .mm-more{display:block;padding:8px 10px}
 #hrui .mm-tree-note{padding:6px 12px 10px;margin:0}
 #hrui .mm-tf-new{min-height:38px}
@@ -320,17 +307,7 @@
 #hrui select.mm-acc{padding-right:30px}
 
 /* a drawer casts its shadow only while it is open, and nothing past the edge shows or scrolls */
-@media (max-width:1180px){
-  #hrui .mm-data{overflow:hidden}
-  #hrui .mm-data.no-conn{grid-template-columns:260px minmax(0,1fr)}
-  /* hidden as well as moved aside, or the keyboard walks through a drawer nobody can see */
-  #hrui .mm-conn{box-shadow:none;visibility:hidden;transition:transform .2s,visibility 0s .2s}
-  #hrui .mm-data.conn-open .mm-conn{box-shadow:-20px 0 40px rgba(0,0,0,.12);visibility:visible;transition:transform .2s}
-}
 @media (max-width:860px){
-  #hrui .mm-data.no-conn{grid-template-columns:minmax(0,1fr)}
-  #hrui .mm-tree{box-shadow:none;visibility:hidden;transition:transform .2s,visibility 0s .2s}
-  #hrui .mm-data.tree-open .mm-tree{box-shadow:20px 0 40px rgba(0,0,0,.12);visibility:visible;transition:transform .2s}
   #hrui .mm-schema{overflow:hidden}
   #hrui .mm-panel{box-shadow:none}
   #hrui .mm-schema.has-sel .mm-panel{box-shadow:0 -20px 40px rgba(0,0,0,.12)}
