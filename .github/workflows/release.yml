@@ -180,6 +180,14 @@ jobs:
             echo "$LINE" | grep -q "$b" || { echo "::error::$b did not install on ${{ matrix.arch }}"; exit 1; }
           done
           docker exec smoke ls /opt/harnessrouter/kits
+          # What this image actually holds, not what a lockfile asked for: a build once copied an LGPL library in
+          # that nobody had asked for by name, and NOTICE said otherwise for three months.
+          for f in NOTICE LICENSE THIRD-PARTY-console.txt; do
+            docker exec smoke test -s "/app/$f" || { echo "::error::the image doesn't carry $f on ${{ matrix.arch }}"; exit 1; }
+          done
+          docker cp scripts/check-licenses.py smoke:/tmp/check-licenses.py
+          docker exec smoke python3 -I /tmp/check-licenses.py --image \
+            || { echo "::error::the image holds something not under a permissive licence on ${{ matrix.arch }}"; exit 1; }
           # Root never runs what the product user can change, read off the running container.
           docker exec --privileged -i smoke sh < scripts/check-root-boundary.sh \
             || { echo "::error::root runs something the product user can change on ${{ matrix.arch }}"; exit 1; }
