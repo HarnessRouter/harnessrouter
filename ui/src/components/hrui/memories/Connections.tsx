@@ -98,7 +98,8 @@ export function Connections({ record, graph, failed, retry, hops, setHops, schem
               if (ca > 0.35) { lx = rad + 6; ly = 4; an = 'start'; } else if (ca < -0.35) { lx = -rad - 6; ly = 4; an = 'end'; } else if (sa < 0) ly = -rad - 7;
             }
             // a label beside its node has only the room up to the panel's edge
-            const room = an === 'end' ? p[0] - rad - 6 : an === 'start' ? W - p[0] - rad - 6 : W;
+            const toEdge = an === 'start' ? W - p[0] : p[0];
+            const room = an === 'middle' ? W : toEdge - rad - 6;
             const fit = Math.min(mx, Math.max(4, Math.floor(room / 6)));
             const lab = full.length > fit ? `${full.slice(0, fit - 1).trim()}…` : full;
             return (
