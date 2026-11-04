@@ -10015,7 +10015,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         except Exception:  # noqa: BLE001
             pass
     if status == "completed" and harness_id and "memories" in rec:
-        await _memories_observe(org, harness_id, sid, hv, rec, _translator_answer(translator))
+        # Not awaited: the turn isn't complete until this returns, and some vendors extract with a model
+        # before they answer. Measured on real turns: 5.5 s on Graphiti and 7.2 s on ReMe after the last words.
+        _t = asyncio.create_task(_memories_observe(org, harness_id, sid, hv, rec, _translator_answer(translator)))
+        _inflight.add(_t)
+        _t.add_done_callback(_inflight.discard)
     return status, produced, rec
 
 
@@ -20180,7 +20184,7 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
     """After a completed turn: what was asked and what was answered, sent as one episode to the
     memory the harness writes by default. No model runs here; what the provider derives from it,
     and when, is the provider's. Best-effort: a memory that cannot take the episode never fails
-    the turn it describes."""
+    the turn it describes, and a slow one never holds it: the turn doesn't wait for this."""
     try:
         if ((await _memories_settings(hid, org, hv)) or {}).get("observe", True) is False:
             return

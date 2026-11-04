@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -272,3 +273,78 @@ def test_another_organization_running_the_harness_gets_the_run_and_not_the_owner
     assert refused.value.status_code == 404 and refused.value.detail["code"] == "memory_not_found"
     # in its own organization everything is as before
     assert [e["memory_id"] for e in asyncio.run(gw._harness_memories(hid, ORG, hv))] == [world["company"]]
+
+
+def test_a_slow_memory_never_holds_up_the_turn_it_describes(world, monkeypatch):
+    """Some vendors extract with a model before they answer an episode. The answer is already written, so
+    the person must not wait for that: the turn completes and the episode arrives afterwards."""
+    async def nothing(*a, **kw):
+        return None
+
+    async def sandbox(path, sid, method="POST", body=None, **kw):
+        if path == "/turn":
+            return {"turn_id": "t1", "status": "running"}
+        if path.startswith("/turn/"):
+            return {"done": True, "status": "done", "n_total": 1, "events": [{"type": "result", "subtype": "success", "result": "Done."}]}
+        return {}
+
+    async def connection(org, name):
+        return ({"provider": "anthropic", "base_url": "https://proxy.example/v1"}, "tenant-1")
+
+    async def plugins(*a, **kw):
+        return ([], [], [], [], [])
+
+    async def env(*a, **kw):
+        return ({}, [])
+
+    async def harness_vertex(hid):
+        return {"id": hid, "tenant": ORG}
+
+    async def memories(hid, org, hv, sid=""):
+        return [{"memory_id": world["notes"], "default": True, "access": "write"}]
+
+    async def not_cancelled(*a, **kw):
+        return False
+
+    async def nothing_produced(*a, **kw):
+        return []
+
+    async def flushed(*a, **kw):
+        return True
+
+    for name, fn in (("_sandbox_json", sandbox), ("_vertex_get", nothing), ("_vertex_upsert", nothing), ("_hydrate", nothing),
+                     ("_harness_plugins", plugins), ("_harness_env", env), ("_image_auth", nothing), ("_get_connection", connection),
+                     ("_auth_from_conn", lambda *a, **kw: {"token": "t", "base_url": "https://proxy.example/v1"}),
+                     ("_turn_cancelled", not_cancelled), ("_collect_produced", nothing_produced), ("_blob_put", nothing),
+                     ("_checkpoint", nothing), ("_trace_finalize", nothing), ("_browser_close", nothing),
+                     ("_recover_trace_cursor", nothing), ("_trace_flush", flushed), ("_harness_memories", memories),
+                     ("_harness_vertex", harness_vertex)):
+        monkeypatch.setattr(gw, name, fn)
+    monkeypatch.setattr(gw, "RESP_POLL_S", 0)
+    monkeypatch.setattr(gw.control_store, "enabled", lambda: False)
+
+    async def section(local):
+        return "## Memory", 3
+    monkeypatch.setattr(gw.memory_tools, "doc_section", section)
+    began = []
+
+    async def takes_forever(org, hid, sid, hv, rec, answer):
+        began.append((hid, sid))
+        await asyncio.sleep(3600)
+    monkeypatch.setattr(gw, "_memories_observe", takes_forever)
+
+    async def turn():
+        tr = gw._RespTranslator("resp_slow", "m", None, True, time.time())
+        out = await asyncio.wait_for(gw._resp_execute(
+            tr, org=ORG, member="me@local", sid="sess_slow", backend="claude", chain=["anthropic"], prompt="hi", files_in=[], resume=None,
+            harness_id=world["hid"], emit=lambda ev: asyncio.sleep(0)), 10)
+        await asyncio.sleep(0)           # the episode has been started by the time anyone reads the answer
+        assert out[0] == "completed", out[2].get("tried")
+        pending = [t for t in list(gw._inflight) if not t.done()]
+        assert began == [(world["hid"], "sess_slow")] and pending, "it must still run, kept alive and drained at shutdown"
+        for t in pending:
+            t.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        return out
+    status, _produced, rec = asyncio.run(turn())
+    assert status == "completed" and "memories" in rec, rec.get("tried")
