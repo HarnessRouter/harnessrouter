@@ -51,6 +51,9 @@ A schema is only worth having where something reads it. So what you can set foll
 
 - **Forgetting a fact closes the conversation that taught it.** Its words are in that conversation too. What else the conversation taught stays.
 - **A turn that corrects memory isn't recorded.** When an agent revises or forgets something, that conversation is left out, whichever vendor it is. Otherwise a vendor would learn the forgotten thing again from the request to forget it. Whatever else the agent wants kept from that turn, it has to remember itself.
+- **Graphiti keeps its graph in [LadybugDB](https://github.com/LadybugDB/ladybug) (MIT), inside its server.** Each memory is one file on the `graphiti` volume, so that's what to back up, and erasing a memory removes its file. The eight used most recently stay open, about 60 MB each, and the rest open when they're next used. `GRAPHITI_OPEN_MAX` changes that.
+- **Graphiti's driver for this store is marked deprecated upstream.** It was written for Kuzu, which LadybugDB continues. It's pinned here with the store (`graphiti/Dockerfile`), so run the suites again if you move either one.
+- **After a hard stop, a memory's search by words is rebuilt** the next time it's opened. A store that stopped cleanly doesn't need that.
 - **Mem0 and history.** Its server records only text changes, so an earlier version can't keep the time it was true. It doesn't declare facts that hold one value, and the answer says so.
 - **ReMe's search is shared.** Its search has no folder scope, so HarnessRouter checks every result against the memory's folder.
 - **ReMe searches words alone by default.** `reme/config.yaml` here turns on search by meaning. If you run ReMe with its own defaults, it's declared as words only, and an answer says so when a search by meaning ran on words.

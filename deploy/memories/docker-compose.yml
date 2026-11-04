@@ -22,16 +22,9 @@ services:
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       MODEL_NAME: ${MEMORY_MODEL:-gpt-4o-mini}
-      FALKORDB_HOST: falkordb
-      FALKORDB_PORT: "6379"
       GRAPHITI_API_KEY: ${GRAPHITI_API_KEY:-}
-    depends_on: [falkordb]
-
-  falkordb:
-    <<: *restart
-    profiles: [graphiti]
-    image: falkordb/falkordb:latest@sha256:725b74d400124862c9e0f318c56bfb3c55b97cd7f301d9dfe8685980fb3c8195
-    volumes: [falkordb:/data]
+    # one file per memory, in a database that runs inside this server
+    volumes: [graphiti:/data]
 
   # Address: http://hindsight:8888
   hindsight:
@@ -113,7 +106,7 @@ services:
       - ./reme/config.yaml:/etc/reme/config.yaml:ro
 
 volumes:
-  falkordb:
+  graphiti:
   postgres:
   mem0-history:
   reme:

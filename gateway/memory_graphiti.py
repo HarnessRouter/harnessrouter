@@ -5,7 +5,7 @@ true and when it stopped. It is a library and its own REST server takes no entit
 the small server in deploy/memories/graphiti, which is the same library. Everything here was measured
 against that server on 2026-11-04.
 
-  one memory = one graph (FalkorDB database). `container`.
+  one memory = one database file in the server's store (LadybugDB). `container`.
   observe  = an episode, with this memory's schema as the types to extract. It answers when done, with
       what it found. `derivation: write_time`, and the episode stays, so `keeps_episodes`.
   a derived record = a fact (`edge_<uuid>`, type `fact`), an entity (`node_<uuid>`, type `entity`, labelled
