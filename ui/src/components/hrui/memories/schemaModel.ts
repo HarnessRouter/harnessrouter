@@ -4,6 +4,7 @@
 // API draws as well as one drawn here. Writing leaves out what the provider does not read.
 import type { MemorySchema, PropType, Provider, SchemaProperty } from '@/lib/memories';
 import { hasProperties, hasRelations, schemaLabels } from './caps';
+import { arrive, footprint, initialLayout, type Pos } from './graph/layout';
 
 export const MM_COLORS = ['#4f46e5', '#8b5cf6', '#a78bfa', '#3b82f6', '#0ea5e9', '#14b8a6', '#22a35a', '#f59e0b', '#ef4444', '#ec4899', '#64748b', '#1f2937'];
 export const MM_ICONS: Record<string, string> = {
@@ -25,7 +26,7 @@ export const VB: [number, number] = [940, 640];
 
 export interface LProp { id: string; name: string; type: PropType; description: string; options: string }
 export interface LType { id: string; name: string; description: string; properties: LProp[]; color: string; icon: string; x: number; y: number; caption: string }
-export interface LRel { id: string; name: string; description: string; from: string; to: string }
+export interface LRel { id: string; name: string; description: string; from: string; to: string; color?: string }
 export interface LSchema { types: LType[]; relations: LRel[] }
 
 let seq = 0;
@@ -56,19 +57,39 @@ export function freeSpot(s: LSchema): [number, number] {
 const num = (v: unknown, or: number) => (typeof v === 'number' && Number.isFinite(v) ? v : or);
 const propIn = (p: SchemaProperty): LProp => ({ id: uid('p'), name: p.name, type: p.type, description: p.description || '', options: (p.options || []).join(', ') });
 
+/** A type with a saved place keeps it. Those without one go where the graph's layout puts them: all of them from the
+ *  arrangement, around the middle of the canvas, or around what they relate to among the ones placed. */
+function seatUnplaced(types: LType[], relations: LRel[]) {
+  const missing = types.filter((t) => !Number.isFinite(t.x) || !Number.isFinite(t.y));
+  if (!missing.length) return;
+  const nodes = types.map((t) => ({ id: t.id, ...footprint(typeLabel(t.name), 38) }));
+  const edges = relations.map((r) => ({ source: r.from, target: r.to }));
+  let at: Pos;
+  if (missing.length === types.length) {
+    at = initialLayout(nodes, edges, { spread: 1.7 }).pos;
+    for (const p of at.values()) { p.x = Math.round(p.x + VB[0] / 2); p.y = Math.round(p.y + VB[1] / 2); }
+  } else {
+    const known: Pos = new Map(types.filter((t) => !missing.includes(t)).map((t) => [t.id, { x: t.x, y: t.y }]));
+    at = arrive(nodes, edges, known);
+  }
+  for (const t of missing) { const p = at.get(t.id); t.x = Math.round(p?.x ?? VB[0] / 2); t.y = Math.round(p?.y ?? VB[1] / 2); }
+}
+
 export function schemaIn(doc: Partial<MemorySchema> | null | undefined): LSchema {
   const raw = doc?.types || [];
-  const spots = circle(raw.length);
   const types: LType[] = raw.map((t, i) => ({
     id: uid('t'), name: t.name, description: t.description || '', properties: (t.properties || []).map(propIn),
-    color: t.color || MM_COLORS[i % MM_COLORS.length], icon: t.icon && MM_ICONS[t.icon] ? t.icon : 'tag',
-    x: num(t.x, spots[i][0]), y: num(t.y, spots[i][1]), caption: t.caption || 'title',
+    // whatever icon and caption it was stored with: any name in the catalogue, any field
+    color: t.color || MM_COLORS[i % MM_COLORS.length], icon: t.icon || 'tag',
+    x: num(t.x, NaN), y: num(t.y, NaN), caption: t.caption || 'title',
   }));
   const idOf = (name: string) => types.find((t) => t.name === name)?.id;
   const relations: LRel[] = (doc?.relations || []).flatMap((r) => {
     const from = idOf(r.from), to = idOf(r.to);
-    return from && to ? [{ id: uid('r'), name: r.name, description: r.description || '', from, to }] : [];
+    const color = (r as { color?: string }).color;
+    return from && to ? [{ id: uid('r'), name: r.name, description: r.description || '', from, to, ...(color ? { color } : {}) }] : [];
   });
+  seatUnplaced(types, relations);
   return { types, relations };
 }
 
@@ -85,7 +106,7 @@ export function schemaOut(s: LSchema, p: Provider | null | undefined): MemorySch
         ...(x.type === 'choice' ? { options: choicesOf(x.options) } : {}),
       })) : [],
     })),
-    relations: rels ? s.relations.map((r) => ({ name: r.name, description: r.description, from: nameOf(r.from), to: nameOf(r.to) })) : [],
+    relations: rels ? s.relations.map((r) => ({ name: r.name, description: r.description, from: nameOf(r.from), to: nameOf(r.to), ...(r.color ? { color: r.color } : {}) })) : [],
   };
 }
 export const choicesOf = (o: string) => o.split(',').map((x) => x.trim()).filter(Boolean);

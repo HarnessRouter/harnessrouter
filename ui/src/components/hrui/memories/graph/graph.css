@@ -1,0 +1,176 @@
+/* The graph view's own look, from the original stylesheets, held inside .mgv so nothing here reaches the rest of the console. */
+#hrui .mgv { --r-input: 8px; --r-card: 12px; font-size: 13px; color: var(--fg); position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; height: 100%; }
+#hrui .mgv .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+#hrui .mgv .pill .dot { width:6px; height:6px; border-radius: 999px; background: currentColor; }
+#hrui .mgv .btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--r-input); font-size: 13px; font-weight: 500; color: var(--muted); background: var(--bg); border: 1px solid var(--line); cursor: pointer; font-family: inherit; white-space: nowrap; }
+#hrui .mgv .btn:hover { border-color: #CBD0DA; }
+#hrui .mgv .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+#hrui .mgv .btn.primary:hover { background: var(--accent-hover); }
+#hrui .mgv .btn.sm { height: 26px; padding: 0 8px; font-size: 12px; }
+#hrui .mgv .btn:disabled, #hrui .mgv .btn[disabled] { opacity: .5; cursor: not-allowed; pointer-events: none; }
+#hrui .mgv .btn:disabled:hover, #hrui .mgv .btn[disabled]:hover { border-color: var(--line); }
+#hrui .mgv .btn.primary:disabled, #hrui .mgv .btn.primary[disabled] { background: var(--accent); border-color: var(--accent); }
+#hrui .mgv .input { width:100%; font-family: inherit; font-size: 13px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-input); padding: 8px 10px; }
+#hrui .mgv .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+#hrui .mgv .input.sm { padding: 6px 8px; font-size: 12px; }
+#hrui .mgv .card { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 1px 2px rgba(17,24,39,.06); }
+#hrui .mgv .av { width: 32px; height: 32px; border-radius: 999px; background: #42309C; color: var(--bg); font-size: 12px; font-weight: 600; display:inline-flex; align-items:center; justify-content:center; flex-shrink: 0; }
+#hrui .mgv .hr { height: 1px; background: var(--line); margin: 12px 0; border: 0; }
+#hrui .mgv .stat-lbl { font-size: 12px; color: var(--muted); }
+#hrui .mgv .ap-app .mono { font-family: var(--mono); }
+#hrui .mgv .filt-row .filt-chip .dot { width: 6px; height: 6px; border-radius: 99px; }
+#hrui .mgv .pane-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--muted); cursor: pointer; transition: color 120ms, border-color 120ms, background 120ms; }
+#hrui .mgv .pane-btn:hover { color: var(--accent); border-color: var(--accent); }
+#hrui .mgv .pane-btn.active { color: var(--accent-hover); background: var(--accent-soft); border-color: var(--accent); }
+#hrui .mgv .dg-canvas { position: relative; }
+#hrui .mgv .dg-canvas-tools { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10; display: flex; align-items: center; gap: 6px; pointer-events: none; }
+#hrui .mgv .dg-canvas-tools > * { pointer-events: auto; }
+#hrui .mgv .dg-body { flex: 1; min-height: 0; min-width: 0; display: flex; position: relative; }
+#hrui .mgv .dg-canvas { flex: 1; min-width: 0; min-height: 0; position: relative; background: var(--surface); overflow: hidden; }
+#hrui .mgv .dg-canvas-hint { position: absolute; left: 14px; bottom: 14px; font-size: 10px; color: var(--muted); background: var(--bg); border: 1px dashed var(--line); border-radius: 6px; padding: 4px 10px; z-index: 3; }
+#hrui .mgv .dg-detail { width: clamp(260px, 55%, 400px); flex-shrink: 0; background: var(--bg); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+#hrui .mgv .dg-detail.compact { position: absolute; top: 0; right: 0; bottom: 0; left: auto; width: min(400px, 85%); max-width: 85%; border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(15,23,42,.12); z-index: 9; }
+#hrui .mgv .dg-detail-h { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+#hrui .mgv .dg-detail-close { flex-shrink: 0; align-self: flex-start; }
+#hrui .mgv .dg-detail-b { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
+#hrui .mgv .dg-detail-f { padding: 10px 14px; border-top: 1px solid var(--line); background: var(--surface); display: flex; align-items: center; gap: 6px; }
+#hrui .mgv .prop-table { display: flex; flex-direction: column; margin: 0 -14px; }
+#hrui .mgv .prop-head { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.1fr) 36px 36px; gap: 8px; padding: 4px 14px 6px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; border-bottom: 1px solid var(--line); }
+#hrui .mgv .prop-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.1fr) 36px 36px; gap: 8px; align-items: center; padding: 6px 14px; border-bottom: 1px solid var(--line); }
+#hrui .mgv .prop-row .input.sm { height: 28px; padding: 4px 8px; font-size: 11px; min-width: 0; }
+#hrui .mgv .prop-row select.input.sm { padding-right: 22px; }
+#hrui .mgv .dg-field-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+#hrui .mgv .dg-inline-input { width: 100%; padding: 4px 6px; background: transparent; border: 1px solid transparent; border-radius: 6px; font-family: inherit; color: inherit; outline: none; resize: none; }
+#hrui .mgv .dg-inline-input:hover:not(:disabled) { background: var(--surface); }
+#hrui .mgv .dg-inline-input:focus:not(:disabled) { background: var(--bg); border-color: var(--line); box-shadow: 0 0 0 3px var(--accent-soft); }
+#hrui .mgv .dg-inline-input:disabled { color: var(--fg); -webkit-text-fill-color: var(--fg); cursor: default; }
+#hrui .mgv .icon-combo { position: relative; }
+#hrui .mgv .icon-combo-trigger { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 12px; color: var(--fg); text-align: left; }
+#hrui .mgv .icon-combo-trigger:hover { border-color: var(--accent); }
+#hrui .mgv .icon-combo-glyph { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); flex-shrink: 0; }
+#hrui .mgv .icon-combo-name { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hrui .mgv .icon-combo-caret { font-size: 10px; color: var(--muted); }
+#hrui .mgv .icon-combo-popover { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 50; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(15,23,42,.12); overflow: hidden; display: flex; flex-direction: column; }
+#hrui .mgv .icon-combo-search { width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--line); outline: 0; font: inherit; font-size: 12px; }
+#hrui .mgv .icon-combo-list { max-height: 240px; overflow-y: auto; padding: 4px 0; }
+#hrui .mgv .icon-combo-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 10px; background: transparent; border: 0; text-align: left; cursor: pointer; font: inherit; }
+#hrui .mgv .icon-combo-item:hover { background: var(--surface); }
+#hrui .mgv .icon-combo-item.active { background: var(--accent-soft); color: var(--accent-hover); }
+#hrui .mgv .icon-combo-item .icon-combo-glyph { color: var(--muted); }
+#hrui .mgv .icon-combo-item.active .icon-combo-glyph { color: var(--accent-hover); }
+#hrui .mgv .icon-combo-empty { padding: 16px 12px; font-size: 12px; color: var(--muted); }
+#hrui .mgv .endpoint-table { display: flex; flex-direction: column; margin: 0 -14px; }
+#hrui .mgv .endpoint-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px; gap: 8px; padding: 4px 14px 6px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; border-bottom: 1px solid var(--line); }
+#hrui .mgv .endpoint-head > :last-child { text-align: center; }
+#hrui .mgv .endpoint-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px; gap: 8px; align-items: center; padding: 6px 14px; font-size: 11px; border-bottom: 1px solid var(--line); }
+#hrui .mgv .endpoint-row .mono { font-family: var(--mono); }
+#hrui .mgv .endpoint-row select.input.sm { padding-right: 22px; min-width: 0; }
+#hrui .mgv .endpoint-row .dg-conn-x { justify-self: center; }
+#hrui .mgv .endpoint-add .endpoint-add-btn { color: var(--accent-hover); border-color: var(--accent-soft); background: var(--bg); font-size: 16px; line-height: 1; }
+#hrui .mgv .endpoint-add .endpoint-add-btn:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
+#hrui .mgv .dg-conn-row .mono { font-family: var(--mono); }
+#hrui .mgv .dg-conn-row select.input.sm { padding-right: 22px; min-width: 0; flex: 1; }
+#hrui .mgv .dg-conn-x { margin-left: auto; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer; color: var(--muted); }
+#hrui .mgv .dg-conn-x:hover { color: #B91C1C; border-color: #FECACA; background: #FEF2F2; }
+#hrui .mgv .dg-conn-x:disabled { opacity: .3; cursor: not-allowed; }
+#hrui .mgv .dg-prop-list { display: flex; flex-direction: column; }
+#hrui .mgv .dg-prop-item { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+#hrui .mgv .dg-prop-item:last-child { border-bottom: 0; }
+#hrui .mgv .dg-prop-name { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+#hrui .mgv .dg-prop-val { color: var(--fg); }
+#hrui .mgv .sbar { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; flex: 1; min-width: 0; max-width: 380px; position: relative; }
+#hrui .mgv .sbar.is-open { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+#hrui .mgv .sbar-input { flex: 1; min-width: 0; border: 0; outline: 0; font-family: inherit; font-size: 12px; background: transparent; padding: 4px 0; }
+#hrui .mgv .sb-drop { position: absolute; left: 0; right: 0; top: calc(100% + 6px); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px -12px rgba(17,24,39,.12),0 2px 6px rgba(17,24,39,.08); z-index: 10; padding: 6px; max-height: 360px; overflow-y: auto; min-width: 320px; }
+#hrui .mgv .sb-drop-h { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; color: var(--muted); padding: 6px 8px 4px; }
+#hrui .mgv .sb-drop-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border-radius: 6px; border: 0; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; font-size: 12px; }
+#hrui .mgv .sb-drop-item:hover, #hrui .mgv .sb-drop-item.active { background: var(--surface); }
+#hrui .mgv .cy-ctx-menu { min-width: 180px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06); padding: 4px; font-size: 13px; user-select: none; }
+#hrui .mgv .cy-ctx-item { position: relative; display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 6px 10px; background: transparent; border: 0; border-radius: 6px; color: var(--fg); cursor: pointer; text-align: left; white-space: nowrap; }
+#hrui .mgv .cy-ctx-item:hover, #hrui .mgv .cy-ctx-item.open { background: var(--surface); }
+#hrui .mgv .cy-ctx-has-sub { padding-right: 22px; }
+#hrui .mgv .cy-ctx-chev { color: var(--muted); font-size: 14px; line-height: 1; margin-left: 8px; }
+#hrui .mgv .cy-ctx-sub { position: absolute; top: -4px; left: 100%; margin-left: 2px; min-width: 240px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06); padding: 4px; }
+#hrui .mgv .cy-ctx-empty { padding: 6px 10px; color: var(--muted); font-size: 12px; }
+#hrui .mgv .cy-ctx-leaf { display: grid; grid-template-columns: auto auto auto 1fr; gap: 6px; align-items: center; padding-right: 10px; }
+#hrui .mgv .cy-ctx-edge-pill { font-size: 10px; font-weight: 600; color: var(--bg); padding: 1px 6px; border-radius: 4px; letter-spacing: 0.2px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#hrui .mgv .cy-ctx-arrow { font-size: 13px; line-height: 1; opacity: 0.9; }
+#hrui .mgv .cy-ctx-node-chip { width: 18px; height: 18px; border-radius: 99px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 18px; }
+#hrui .mgv .cy-ctx-target-label { font-size: 12px; color: var(--fg); }
+#hrui .mgv .cy-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--bg); font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--bg); z-index: 5; }
+#hrui .mgv .dg-eh-pop { position: absolute; z-index: 7; width: 252px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 28px rgba(15,23,42,.16); padding: 12px; }
+#hrui .mgv .dg-eh-pop-ends { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; min-width: 0; }
+#hrui .mgv .dg-eh-pop-end { font-size: 11px; font-weight: 600; color: var(--bg); padding: 2px 8px; border-radius: 999px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+#hrui .mgv .dg-eh-pop-arrow { color: var(--faint); flex: 0 0 auto; display: inline-flex; }
+#hrui .mgv .dg-canvas-blank { position: absolute; inset: 0; pointer-events: none; z-index: 1; display: flex; align-items: center; justify-content: center; background-image: radial-gradient(circle, rgba(17, 24, 39, .07) 1px, transparent 1.3px); background-size: 22px 22px; }
+#hrui .mgv .dg-canvas-blank-hint { font-size: 13.5px; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 8px 18px; box-shadow: 0 1px 2px rgba(17,24,39,.06); }
+#hrui .mgv .dg-blank-quiet { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 320px; padding: 0 24px; text-align: center; }
+#hrui .mgv .dg-blank-quiet-glyph { color: var(--faint); opacity: .55; }
+#hrui .mgv .dg-blank-quiet-line { font-size: 13px; line-height: 1.55; color: var(--muted); }
+#hrui .mgv .dg-blank-quiet .btn { pointer-events: auto; margin-top: 2px; }
+#hrui .mgv .dg-prop-actions { display: inline-flex; align-items: center; gap: 4px; justify-self: end; }
+#hrui .mgv .dg-prop-actions .dg-row-btn.danger { margin-left: 8px; }
+#hrui .mgv .dg-row-btn { width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+#hrui .mgv .dg-row-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--faint); }
+#hrui .mgv .dg-row-btn:disabled { opacity: .35; cursor: not-allowed; }
+#hrui .mgv .dg-row-btn.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+#hrui .mgv .dg-row-btn.on:hover:not(:disabled) { color: var(--bg); }
+#hrui .mgv .dg-row-btn.confirm { color: var(--bg); background: #16A34A; border-color: #16A34A; }
+#hrui .mgv .dg-row-btn.confirm:hover:not(:disabled) { color: var(--bg); background: #15803D; border-color: #15803D; }
+#hrui .mgv .dg-row-btn.danger:hover:not(:disabled) { color: #B91C1C; border-color: #FECACA; background: #FEF2F2; }
+#hrui .mgv .dg-danger-btn { color: #B91C1C; border-color: #FECACA; background: var(--bg); }
+#hrui .mgv .dg-danger-btn:hover:not(:disabled) { background: #FEF2F2; border-color: #FCA5A5; }
+#hrui .mgv .dg-danger-btn:disabled { opacity: .5; cursor: not-allowed; }
+#hrui .mgv .sp-graph-addtype-wrap { position: absolute; top: 12px; left: 12px; z-index: 20; }
+#hrui .mgv .sp-graph-addtype { width: 240px; padding: 14px; box-shadow: 0 12px 32px rgba(15,23,42,.14); }
+#hrui .mgv .sp-explore-bar { position: absolute; top: 12px; left: 16px; right: 16px; z-index: 12; display: flex; align-items: center; gap: 6px; pointer-events: none; }
+#hrui .mgv .sp-explore-bar > * { pointer-events: auto; }
+#hrui .mgv .sp-explore-bar .sbar { flex: 1; max-width: none; }
+#hrui .mgv .dg-canvas-tools .pane-btn, #hrui .mgv .dg-canvas-tools .btn, #hrui .mgv .sp-explore-bar .pane-btn, #hrui .mgv .sp-explore-bar .btn, #hrui .mgv .sp-explore-bar .sbar { height: 32px; box-sizing: border-box; }
+#hrui .mgv .dg-canvas-tools .pane-btn, #hrui .mgv .sp-explore-bar .pane-btn { width: 32px; }
+#hrui .mgv .sp-explore-bar .sbar { padding-top: 0; padding-bottom: 0; }
+
+/* What this page adds */
+#hrui .mgv .dg-body, #hrui .mgv.mgv .dg-canvas { min-height: 0; }
+#hrui .mgv.is-max { position: fixed; inset: 0; z-index: 60; background: var(--bg); }
+#hrui .mgv .btn { box-sizing: border-box; }
+#hrui .mgv .input, #hrui .mgv select { box-sizing: border-box; min-width: 0; }
+#hrui .mgv .input:disabled, #hrui .mgv select:disabled { color: var(--muted); -webkit-text-fill-color: var(--muted); background: var(--surface); opacity: 1; cursor: default; }
+#hrui .mgv .icon-combo-trigger:disabled { background: var(--surface); cursor: default; color: var(--muted); }
+#hrui .mgv .dg-detail-b { font-size: 13px; }
+#hrui .mgv .dg-detail-f { flex-wrap: wrap; }
+#hrui .mgv .mgv-ell { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#hrui .mgv .mgv-text { margin: 0 0 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+#hrui .mgv .mgv-link { display: flex; flex-direction: column; gap: 3px; padding: 7px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+#hrui .mgv .mgv-link:last-child { border-bottom: 0; }
+#hrui .mgv .mgv-link .mm-lt { flex: none; max-width: 100%; }
+#hrui .mgv .mm-lt.off { color: var(--faint); cursor: default; }
+#hrui .mgv .mgv-sentence { text-align: left; font-size: 13px; line-height: 1.4; color: var(--fg); overflow-wrap: anywhere; }
+#hrui .mgv .mgv-sentence:hover { color: var(--accent); }
+#hrui .mgv .mgv-sic { color: var(--muted); display: inline-flex; flex: none; }
+#hrui .mgv .sp-explore-bar { left: 10px; right: 10px; top: 10px; flex-wrap: wrap; }
+#hrui .mgv .sp-explore-bar .sbar { min-width: 140px; flex: 1 1 140px; background: var(--bg); }
+#hrui .mgv .mgv-depth { box-shadow: 0 1px 2px rgba(17,24,39,.08); background: var(--bg); border: 1px solid var(--line); flex: none; }
+#hrui .mgv .mgv-depth button { padding: 3px 9px; font-size: 12.5px; }
+#hrui .mgv .mgv-depth button:disabled { opacity: .45; cursor: not-allowed; }
+#hrui .mgv .mgv-under { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 6; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; pointer-events: none; }
+#hrui .mgv .mgv-under > * { pointer-events: auto; }
+#hrui .mgv .mgv-note { margin: 0; font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; }
+#hrui .mgv .mgv-legend { display: flex; flex-wrap: wrap; gap: 4px; }
+#hrui .mgv .mgv-legend button { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+#hrui .mgv .mgv-legend button small { color: var(--faint); font-size: 11px; }
+#hrui .mgv .mgv-legend button.off { opacity: .5; text-decoration: line-through; }
+/* Up beside the search, so a detail rising from the bottom never covers them. */
+#hrui .mgv .mgv-zoom { position: absolute; right: 10px; top: 54px; z-index: 6; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+#hrui .mgv .mgv-zoom .pane-btn { background: var(--bg); font-size: 15px; }
+#hrui .mgv .mgv-live { z-index: 3; }
+#hrui .mgv .dg-canvas-blank .btn, #hrui .mgv .dg-canvas-blank button { pointer-events: auto; }
+#hrui .mgv .dg-eh-pop { max-width: calc(100% - 20px); }
+#hrui .mgv .dg-canvas-tools { flex-wrap: wrap; justify-content: center; }
+#hrui .mgv .mm-foot .mm-hint { white-space: normal; }
+/* In the graph's column the detail rises from the bottom, so the graph it is about stays in view. */
+#hrui .mgv-explorer .dg-detail.compact { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-width: none; max-height: 56%; border-left: 0; border-top: 1px solid var(--line); border-radius: 12px 12px 0 0; box-shadow: 0 -8px 24px rgba(15,23,42,.12); }
+@media (max-width: 480px) {
+  #hrui .mgv .sp-graph-addtype { width: min(240px, calc(100vw - 48px)); }
+}
+
