@@ -844,7 +844,7 @@ async def children(org: str, mid: str, principals: list[str]) -> list[dict]:
 # which of the two is a property of the member (`type`), never a kind. A group is a set of members.
 # The provider is the engine itself, which writes and holds no grant. Anything else is `x.`.
 ACTOR_KINDS = ("member", "group", "provider")
-_PRINCIPAL = re.compile(r"(member|group|x\.[a-z0-9_.-]+):[A-Za-z0-9_.@:+\-]{1,160}")
+_PRINCIPAL = re.compile(r"(member|group|x\.[a-z0-9_.-]{1,64}):[A-Za-z0-9_.@:+\-]{1,160}")
 
 
 async def grants(org: str, mid: str, principals: list[str]) -> list[dict]:

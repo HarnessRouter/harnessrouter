@@ -397,6 +397,14 @@ def test_a_plain_id_still_goes_through():
     assert mp.vendor_path("/v1/memories/9b9208a9-ca7a-43fb/history/") == "/v1/memories/9b9208a9-ca7a-43fb/history/"
 
 
+def test_a_principal_is_read_in_time_bounded_by_what_a_real_one_can_be():
+    import time
+    assert mp._PRINCIPAL.fullmatch("x.acme.team:someone@example.com")
+    t0 = time.time()
+    assert mp._PRINCIPAL.fullmatch("x." * 200000) is None and mp._PRINCIPAL.fullmatch("x." + "a" * 65 + ":b") is None
+    assert time.time() - t0 < 0.2
+
+
 # ── what the capability document promises is what the routes do ───────────────────────────────
 @pytest.mark.parametrize("cls,mode", [(memory_hindsight.Hindsight, "labels"), (memory_graphiti.Graphiti, "guides"),
                                       (memory_reme.ReMe, "none"), (memory_mem0.Mem0, "none"), (memory_mem0.Mem0Server, "none")])
