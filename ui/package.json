@@ -58,6 +58,7 @@
     "rehype-sanitize": "^6.0.0",
     "reifyui": "^0.18.1",
     "remark-gfm": "^4.0.1",
+    "sharp": "file:./vendor/no-sharp",
     "tailwindcss": "^3.4.1",
     "turndown": "^7.2.0",
     "undici": "^6.28.1",
@@ -95,6 +96,7 @@
     "postcss": "^8.5.26",
     "jest-junit": {
       "uuid": "^11.1.1"
-    }
+    },
+    "sharp": "$sharp"
   }
 }
