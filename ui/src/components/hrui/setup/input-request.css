@@ -1,6 +1,7 @@
 /* The question a task ended on, above the composer. Wraps rather than squeezes at any width. */
 #hrui .input-request { display: flex; flex-direction: column; gap: 8px; margin: 0 0 8px; padding: 10px 12px;
   border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+#hrui .input-request-lead { margin: 0; font-size: 13px; font-weight: 500; color: var(--fg); }
 #hrui .input-request-choices { display: flex; flex-wrap: wrap; gap: 8px; }
 #hrui .input-request-field { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 #hrui .input-request-field input { flex: 1 1 200px; min-width: 0; padding: 6px 10px; border: 1px solid var(--line);

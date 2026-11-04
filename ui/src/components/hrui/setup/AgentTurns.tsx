@@ -38,7 +38,10 @@ export function harnessMark(base: string | null | undefined): { mark: ReactNode;
  *  open, and that thought would read "Thinking" in motion under a finished answer. It reads done,
  *  with its duration only when both its ends were seen. */
 export function viewTurn(asst: AsstMsg | null, user: TurnUser | null): Turn {
-  const t = asst ? turnFromMessage(asst, asst.clock || null, user) : turnFromMessage({ status: 'done', blocks: [] }, null, user);
+  // A turn that ended on a question did what it should: nothing stopped it. Its form says what's next.
+  const asked = asst?.status === 'incomplete' && asst.incompleteReason === 'input_required';
+  const shown = asked && asst ? { ...asst, status: 'done' as const } : asst;
+  const t = shown ? turnFromMessage(shown, shown.clock || null, user) : turnFromMessage({ status: 'done', blocks: [] }, null, user);
   if (t.status === 'running' || !t.items.some((x) => x.kind === 'thinking' && x.open)) return t;
   return { ...t, items: t.items.map((x) => (x.kind === 'thinking' && x.open ? { ...x, open: false } : x)) };
 }

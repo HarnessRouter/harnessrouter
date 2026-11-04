@@ -77,7 +77,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b": alive\n\n")
             self.wfile.flush()
 
-    do_GET = do_POST = do_DELETE = _handle  # noqa: N815
+    do_GET = do_POST = do_DELETE = do_HEAD = do_OPTIONS = _handle  # noqa: N815
 
 
 @pytest.fixture()
@@ -160,6 +160,12 @@ def test_a_route_is_that_server_and_no_other_path(upstream, tokens):
 def test_a_method_the_protocol_does_not_use_is_refused(upstream, tokens):
     s = _one(f"{upstream}/{PATH_SECRET}/mcp")
     assert _call(s["url"], method="PUT", body=None)[0] == 501
+
+
+def test_a_probe_reaches_the_server_rather_than_being_refused_here(upstream, tokens):
+    s = _one(f"{upstream}/{PATH_SECRET}/mcp")
+    assert _call(s["url"], method="OPTIONS", body=None)[0] != 501
+    assert _call(s["url"], method="HEAD", body=None)[0] != 501
 
 
 def test_a_route_stops_with_the_turn_and_holds_nothing_after(upstream, tokens):

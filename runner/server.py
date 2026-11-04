@@ -4496,7 +4496,8 @@ class _McpRelayHandler(http.server.BaseHTTPRequestHandler):
                     return sent, b"", False, False
             return sent + event + sep + pending, b"", False, True
 
-    do_GET = do_POST = do_DELETE = do_HEAD = _forward   # noqa: N815
+    # OPTIONS as well: a client probes with it, and "unsupported method" from here is not the server's answer.
+    do_GET = do_POST = do_DELETE = do_HEAD = do_OPTIONS = _forward   # noqa: N815
 
 
 def _turn_route(flags: dict) -> dict:
