@@ -236,8 +236,9 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
     try { localStorage.setItem(storeKey(mid), JSON.stringify({ ...(loadStored(mid) || {}), v: 1, positions })); } catch { /* private window */ }
   }, [mid]);
 
-  // What is open, in the middle of the part of the canvas that can be seen: under the search, and above the
-  // detail where that lies over the canvas.
+  // What is open, brought into the part of the canvas that can be seen: under the search, and above the detail where
+  // that lies over the canvas. Only if it isn't there already: a graph that fits stays whole, with nothing pushed off
+  // the edge of a narrow column to make one record the middle of it.
   const centerOn = useCallback((id) => {
     const cy = canvas.current?.getCy?.();
     const el = id && cy ? cy.getElementById(id) : null;
@@ -245,6 +246,8 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
     const sheet = body.current?.querySelector('.dg-detail.compact');
     const bottom = cy.height() - (sheet ? sheet.getBoundingClientRect().height : 0);
     const top = Math.min(56, bottom / 3);
+    const seen = el.renderedBoundingBox ? el.renderedBoundingBox() : null;
+    if (seen && seen.x1 >= 8 && seen.x2 <= cy.width() - 8 && seen.y1 >= top && seen.y2 <= bottom - 8) return;
     const p = el.isNode() ? el.position() : el.midpoint();
     const z = cy.zoom();
     const pan = { x: cy.width() / 2 - p.x * z, y: (top + bottom) / 2 - p.y * z };
