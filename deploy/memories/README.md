@@ -4,7 +4,7 @@ HarnessRouter keeps no memory of its own. A memory lives with a vendor you conne
 
 | Vendor | Licence | A memory is | Search | Schema |
 |---|---|---|---|---|
-| [mem0](https://github.com/mem0ai/mem0) | Apache-2.0 | Short facts drawn from what was said | By meaning | None |
+| [Mem0](https://github.com/mem0ai/mem0) | Apache-2.0 | Short facts drawn from what was said | By meaning | None |
 | [Graphiti](https://github.com/getzep/graphiti), the open engine behind Zep | Apache-2.0 | A graph of things and how they relate, over time | Meaning and words | Types, properties and relations |
 | [Hindsight](https://github.com/vectorize-io/hindsight) | MIT | Facts and the things they involve, consolidated in the background | Meaning and words | Labels on facts |
 | [ReMe](https://github.com/agentscope-ai/ReMe) | Apache-2.0 | Markdown files in folders, with links | Meaning and words here, words alone on its defaults | None |
@@ -23,12 +23,12 @@ Use any of the profiles `mem0`, `graphiti`, `hindsight` and `reme`, one or sever
 
 | Vendor | Address | Key |
 |---|---|---|
-| mem0 | `http://mem0:8000` | `MEM0_ADMIN_API_KEY` |
+| Mem0 | `http://mem0:8000` | `MEM0_ADMIN_API_KEY` |
 | Graphiti | `http://graphiti:8000` | `GRAPHITI_API_KEY`, if you set one |
 | Hindsight | `http://hindsight:8888` | None |
 | ReMe | `http://reme:2333` | None |
 
-The mem0 Platform also works: connect it with its key and no address.
+The Mem0 Platform also works: connect it with its key and no address.
 
 Nothing here publishes a port, and most of these servers take no key, so keep them on this network. A connection is tried before it's kept, so a wrong address or key is refused then, with the reason.
 
@@ -45,12 +45,12 @@ A schema is only worth having where something reads it. So what you can set foll
 
 **Hindsight reads labels.** They classify a fact and not a thing, and a search can be scoped to one. It applies them only to what it extracts from a conversation. A record you state is kept word for word, with no extraction.
 
-**mem0 and ReMe read none.** mem0 keeps free text, and in ReMe the folders, frontmatter and links are the structure. Setting a schema on either is refused, because it would look like it was doing something.
+**Mem0 and ReMe read none.** Mem0 keeps free text, and in ReMe the folders, frontmatter and links are the structure. Setting a schema on either is refused, because it would look like it was doing something.
 
 ## Worth knowing
 
 - **A turn that corrects memory isn't recorded.** When an agent revises or forgets something, that conversation is left out, whichever vendor it is. Otherwise a vendor would learn the forgotten thing again from the request to forget it. Whatever else the agent wants kept from that turn, it has to remember itself.
-- **mem0 and history.** Its server records only text changes, so an earlier version can't keep the time it was true. It doesn't declare facts that hold one value, and the answer says so.
+- **Mem0 and history.** Its server records only text changes, so an earlier version can't keep the time it was true. It doesn't declare facts that hold one value, and the answer says so.
 - **ReMe's search is shared.** Its search has no folder scope, so HarnessRouter checks every result against the memory's folder.
 - **ReMe searches words alone by default.** `reme/config.yaml` here turns on search by meaning. If you run ReMe with its own defaults, it's declared as words only, and an answer says so when a search by meaning ran on words.
 - **ReMe's search is a few seconds behind.** It indexes about six seconds after a write. What was just written is matched directly until then.

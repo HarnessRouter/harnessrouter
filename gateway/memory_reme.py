@@ -22,6 +22,8 @@ here was read off a server running on 2026-11-04.
       its source conversation, so nothing is unreachable.
   schema   = none. The folders, the frontmatter and the links are the structure, and nothing in ReMe reads
       a type.
+  consolidate = none. ReMe's own auto_dream merges the shared daily folder across the whole workspace, which
+      would mix memories that are kept apart here, so it isn't offered.
 """
 from __future__ import annotations
 

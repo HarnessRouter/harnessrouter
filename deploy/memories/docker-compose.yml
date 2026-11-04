@@ -52,7 +52,7 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
 
-  # Address: http://mem0:8000. Key: MEM0_ADMIN_API_KEY. Or connect the mem0 Platform with only its key.
+  # Address: http://mem0:8000. Key: MEM0_ADMIN_API_KEY. Or connect the Mem0 Platform with only its key.
   mem0:
     <<: *restart
     profiles: [mem0]
