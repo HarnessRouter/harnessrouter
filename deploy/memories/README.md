@@ -1,0 +1,57 @@
+# Memory vendors
+
+HarnessRouter keeps no memory of its own. A memory lives with a vendor you connect, and agents reach it through the same tools whichever one it is. These are four open source ones to run yourself, each with a different idea of what a memory is.
+
+| Vendor | Licence | A memory is | Search | Schema |
+|---|---|---|---|---|
+| [mem0](https://github.com/mem0ai/mem0) | Apache-2.0 | Short facts drawn from what was said | By meaning | None |
+| [Graphiti](https://github.com/getzep/graphiti), the open engine behind Zep | Apache-2.0 | A graph of things and how they relate, over time | Meaning and words | Types, properties and relations |
+| [Hindsight](https://github.com/vectorize-io/hindsight) | MIT | Facts and the things they involve, consolidated in the background | Meaning and words | Labels on facts |
+| [ReMe](https://github.com/agentscope-ai/ReMe) | Apache-2.0 | Markdown files in folders, with links | Words, and meaning once embeddings are set | None |
+
+Each is its own project under its own licence. This folder runs their published images or builds from their source, and ships none of their code. The small server in `graphiti/` is ours, because Graphiti is a library and its own server doesn't accept types.
+
+## Run them
+
+```sh
+cp .env.example .env     # then fill it in
+docker compose --profile graphiti up -d
+docker network connect harnessrouter-memories <your HarnessRouter container>
+```
+
+Use any of the profiles `mem0`, `graphiti`, `hindsight` and `reme`, one or several. Then in the console, go to **Memories**, connect the vendor, and give it its address:
+
+| Vendor | Address | Key |
+|---|---|---|
+| mem0 | `http://mem0:8000` | `MEM0_ADMIN_API_KEY` |
+| Graphiti | `http://graphiti:8000` | `GRAPHITI_API_KEY`, if you set one |
+| Hindsight | `http://hindsight:8888` | None |
+| ReMe | `http://reme:2333` | None |
+
+The mem0 Platform also works: connect it with its key and no address.
+
+Nothing here publishes a port, and most of these servers take no key, so keep them on this network. A connection is tried before it's kept, so a wrong address or key is refused then, with the reason.
+
+## Does a memory need a schema?
+
+A schema is only worth having where something reads it. So what you can set follows what the vendor does, and the console offers only that.
+
+**Graphiti reads a whole schema when it extracts.** We measured what it does with one:
+
+- Types work for things with a name, like people, companies and products. Concepts such as an issue or a fix were not picked up as things, even with a type for them.
+- Properties fill in: a `seats` property came back as 40 and 12 on the right companies.
+- A relation you name replaces the word Graphiti would have chosen, so "uses" came back as `BUYS`. A fact that fits none may come back as `RELATES_TO`, with its sentence kept. Name every kind you care about.
+- With types and no relations, its own words stay, such as `SIGNED_UP_FOR` and `REPORTS_TO`. Leaving relations out is a fair choice.
+
+**Hindsight reads labels.** They classify a fact and not a thing, and a search can be scoped to one. It applies them only to what it extracts from a conversation. A record you state is kept word for word, with no extraction.
+
+**mem0 and ReMe read none.** mem0 keeps free text, and in ReMe the folders, frontmatter and links are the structure. Setting a schema on either is refused, because it would look like it was doing something.
+
+## Worth knowing
+
+- **mem0 and history.** Its server records only text changes, so an earlier version can't keep the time it was true. It doesn't declare facts that hold one value, and the answer says so.
+- **ReMe's search is shared.** Its search has no folder scope, so HarnessRouter checks every result against the memory's folder. It also reads words only until embeddings are set, and the answer says so when a search by meaning ran on words.
+- **ReMe's search is a few seconds behind.** It indexes about six seconds after a write. What was just written is matched directly until then.
+- **Hindsight's single facts.** It can't delete one derived fact, only the document it came from, so erasing one takes it out of search and reports that it's still stored.
+
+Scores these projects publish are their own, on their own setups, and aren't comparable. We make no claim about which is best.

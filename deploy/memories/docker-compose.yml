@@ -1,0 +1,120 @@
+# Memory vendors beside HarnessRouter. Run the ones you want, each under its own profile:
+#
+#   cp .env.example .env        # then fill it in
+#   docker compose --profile graphiti --profile reme up -d
+#   docker network connect harnessrouter-memories <your HarnessRouter container>
+#
+# Then connect each one in the console under Memories, with the address its section below names.
+#
+# Nothing here publishes a port. Most of these servers take no key, so keep them on this network.
+# Images are pinned to what the conformance suite passed against; move them on purpose.
+name: harnessrouter-memories
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # Address: http://graphiti:8000. Graphiti is a library, so this is a small server around it.
+  graphiti:
+    <<: *restart
+    profiles: [graphiti]
+    build: ./graphiti
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MODEL_NAME: ${MEMORY_MODEL:-gpt-4o-mini}
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: "6379"
+      GRAPHITI_API_KEY: ${GRAPHITI_API_KEY:-}
+    depends_on: [falkordb]
+
+  falkordb:
+    <<: *restart
+    profiles: [graphiti]
+    image: falkordb/falkordb:latest@sha256:725b74d400124862c9e0f318c56bfb3c55b97cd7f301d9dfe8685980fb3c8195
+    volumes: [falkordb:/data]
+
+  # Address: http://hindsight:8888
+  hindsight:
+    <<: *restart
+    profiles: [hindsight]
+    image: ghcr.io/vectorize-io/hindsight:latest-slim@sha256:c7d494c309fde53d07e79158be08d7a61f3f309b23cc417c7e4b0b8fc8adc77a
+    environment:
+      HINDSIGHT_API_LLM_PROVIDER: openai
+      HINDSIGHT_API_LLM_API_KEY: ${OPENAI_API_KEY:-}
+      HINDSIGHT_API_LLM_MODEL: ${MEMORY_MODEL:-gpt-4o-mini}
+      HINDSIGHT_API_EMBEDDINGS_PROVIDER: openai
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      HINDSIGHT_API_RERANKER_PROVIDER: rrf
+      HINDSIGHT_API_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-}@postgres:5432/hindsight
+      HINDSIGHT_ENABLE_UI: "false"
+      HINDSIGHT_ENABLE_CP: "false"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  # Address: http://mem0:8000. Key: MEM0_ADMIN_API_KEY. Or connect the mem0 Platform with only its key.
+  mem0:
+    <<: *restart
+    profiles: [mem0]
+    build: https://github.com/mem0ai/mem0.git#753496cf1435d76c3a711f3af51303f7fdcb6420:server
+    entrypoint: ["sh", "-c", "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port 8000"]
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_COLLECTION_NAME: memories
+      APP_DB_NAME: mem0_app
+      ADMIN_API_KEY: ${MEM0_ADMIN_API_KEY:-}
+      JWT_SECRET: ${MEM0_JWT_SECRET:-}
+      AUTH_DISABLED: "false"
+      MEM0_TELEMETRY: "false"
+      MEM0_DEFAULT_LLM_MODEL: ${MEMORY_MODEL:-gpt-4o-mini}
+      MEM0_DEFAULT_EMBEDDER_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+    # a record's history is kept here, so it needs its own volume to survive an upgrade
+    volumes: [mem0-history:/app/history]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  postgres:
+    <<: *restart
+    profiles: [mem0, hindsight]
+    image: pgvector/pgvector:pg17@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      # over TCP: while it creates the databases it listens only on its socket
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 5s
+      retries: 20
+
+  # Address: http://reme:2333
+  reme:
+    <<: *restart
+    profiles: [reme]
+    image: ghcr.io/agentscope-ai/reme:main@sha256:5fc0ff360b2574220cd16c3565e4d596b7df91abc7ab5c9bc9a152513bcd63d2
+    # its default answer length is more than this model allows, and it won't start a note without this
+    command: ["start", "components.as_llm.default.parameters.max_tokens=16000"]
+    environment:
+      LLM_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_BASE_URL: https://api.openai.com/v1
+      LLM_MODEL_NAME: ${MEMORY_MODEL:-gpt-4o-mini}
+      EMBEDDING_API_KEY: ${OPENAI_API_KEY:-}
+      EMBEDDING_BASE_URL: https://api.openai.com/v1
+    volumes: [reme:/data]
+
+volumes:
+  falkordb:
+  postgres:
+  mem0-history:
+  reme:
+
+networks:
+  default:
+    name: harnessrouter-memories
