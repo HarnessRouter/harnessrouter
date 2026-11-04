@@ -7273,12 +7273,19 @@ async def _input_response_accept(org: str, prev_id: str, prev_rec: dict | None, 
 def _answer_prompt(acc: dict, secret_env: str | None) -> str:
     """The answer as the next turn's user message, carrying the question back with it, so the
     turn does not depend on the ask surviving in the base's transcript. A secret is never in the
-    message: the harness is told where in its environment the value is."""
-    q = acc.get("prompt") or ""
+    message: the harness is told where in its environment the value is.
+
+    The question and a choice's option ids are the model's own words, written after whatever it read
+    in the task, and this message reaches it as the person's. So they come back as quoted strings
+    that can't close their quotes or start a line of their own. What a person typed stays as typed."""
+    q = json.dumps(_import_text(acc.get("prompt")), ensure_ascii=False)
     if secret_env:
-        return (f'Answer to your question "{q}": a secret, in the environment variable {secret_env}. '
+        return (f'Answer to your question {q}: a secret, in the environment variable {secret_env}. '
                 "Read it from there when you need it; never print, repeat or store it.")
-    return f'Answer to your question "{q}": {acc.get("answer")}'
+    answer = acc.get("answer")
+    if acc.get("kind") in ("choice", "confirm"):
+        answer = json.dumps(_import_text(answer), ensure_ascii=False)
+    return f'Answer to your question {q}: {answer}'
 
 
 # ── a new task's earlier turns (Tasks §2.1, capability input_history) ───────────────────────────
@@ -9791,7 +9798,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             rec["tried"].append({"connection": name, "tenant": src, "status": e.status, "error": e.detail})
             continue
         except Exception as e:  # noqa: BLE001
-            rec["tried"].append({"connection": name, "tenant": src, "error": str(e)[:200]})
+            # The connection was usable and the runner never took the turn. With no status this read as a
+            # connection skipped: "No connection on this account serves <model>", after five minutes of tries.
+            print(f"[turn] {sid}: the turn never started on {name}: {str(e)[:200]}", flush=True)
+            rec["tried"].append({"connection": name, "tenant": src, "status": 503,
+                                 "error": "it couldn't start here. Try again, and start a new task if it keeps failing."})
             continue
         rt = started.get("turn_id")
         rec.update(connection=name, runner_turn_id=rt, status="running")

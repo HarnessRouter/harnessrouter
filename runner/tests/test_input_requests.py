@@ -179,9 +179,15 @@ def test_validate_a_confirm_gets_yes_and_no():
     assert req["options"] == [{"id": "yes", "label": "Yes"}, {"id": "no", "label": "No"}]
 
 
+def test_validate_a_confirm_keeps_the_two_answers_it_names():
+    req, _ = ask_user_mcp.validate_request({"kind": "confirm", "prompt": "Ship it?", "options": ["ship", "hold"]})
+    assert [o["id"] for o in req["options"]] == ["ship", "hold"]
+
+
 def test_validate_refuses_what_cannot_be_asked():
     bad = [({"kind": "choice", "prompt": "x", "options": ["a"]}, "two options"),
            ({"kind": "choice", "prompt": "x", "options": ["a", "a"]}, "distinct"),
+           ({"kind": "confirm", "prompt": "Delete it?", "options": ["yes"]}, "both answers"),
            ({"kind": "free_text", "prompt": "x", "options": ["a", "b"]}, "no options"),
            ({"kind": "poll", "prompt": "x"}, "kind must be"),
            ({"kind": "secret", "prompt": ""}, "prompt"),
