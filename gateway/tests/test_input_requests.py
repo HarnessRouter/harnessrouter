@@ -300,6 +300,31 @@ def test_other_input_voids_the_question_and_the_response_says_so(api, monkeypatc
     assert r.status_code == 409 and r.json()["error"]["detail"]["state"] == "voided"
 
 
+def test_a_task_naming_only_the_session_passes_the_question_over(api, monkeypatch):
+    """Tasks §3.2: a later task voids the question however it names the session. An answer that
+    arrives after it is refused, and runs nothing: a stale `confirm` must not be acted on."""
+    fake = _FakeRunner()
+    monkeypatch.setattr(gw, "_resp_execute", fake)
+    hid = _harness(api)
+    first = api.post("/v1/responses", json={"input": "ask me which language", "metadata": {"harness_id": hid}}).json()
+    item = first["output"][-1]
+    sid = first.get("session_id") or first["metadata"]["session_id"]
+    r = api.post("/v1/responses", json={"input": "something else", "metadata": {"harness_id": hid, "session_id": sid}})
+    assert r.status_code == 200, r.text
+    assert r.json()["metadata"]["voided_input_requests"] == [item["id"]]
+    r = api.post("/v1/responses", json={"previous_response_id": first["id"], "input": [
+        {"type": "input_response", "input_request_id": item["id"], "answer": "zh"}]})
+    assert r.status_code == 409, r.text
+    assert len(fake.calls) == 2, "the stale answer ran no turn"
+
+
+def test_an_answer_is_not_in_the_stored_request_hash():
+    def body(answer, rid="q1"):
+        return gw.CreateResponseBody(input=[{"type": "input_response", "input_request_id": rid, "answer": answer}])
+    assert gw._req_hash(body("123456")) == gw._req_hash(body("654321"))
+    assert gw._req_hash(body("123456")) != gw._req_hash(body("123456", "q2"))
+
+
 def test_a_secret_answer_reaches_the_harness_and_nothing_a_client_reads(api, monkeypatch):
     fake = _FakeRunner()
     monkeypatch.setattr(gw, "_resp_execute", fake)

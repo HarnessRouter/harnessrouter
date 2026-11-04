@@ -739,7 +739,9 @@ def _turn_secrets(env: dict, names: list | None) -> list[str]:
     vals: set[str] = set()
     for n in names or []:
         v = env.get(n) if isinstance(n, str) else None
-        if v and len(str(v)) >= _SCRUB_MIN:
+        # An answer to a `secret` question (HR_INPUT_*) is scrubbed at any length: a six digit code is
+        # exactly what the person is asked for, and nothing else in the record is that value's reason to stay.
+        if v and (len(str(v)) >= _SCRUB_MIN or str(n).startswith("HR_INPUT_")):
             v = str(v)
             vals.update((v, json.dumps(v)[1:-1], json.dumps(v, ensure_ascii=False)[1:-1]))
     return sorted(vals, key=len, reverse=True)
@@ -14992,9 +14994,9 @@ def _ask_user_server() -> dict:
 
 
 def _is_ask_tool(name: str) -> bool:
-    """Whether a tool_use is the ask tool, bare or under a base's own MCP prefix
-    (claude-family bases name an MCP tool `mcp__<server>__<tool>`)."""
-    return name == ask_user_mcp.TOOL_NAME or name.endswith("__" + ask_user_mcp.TOOL_NAME)
+    """Whether a tool_use is the ask tool the runner served: the server's own name, not any tool
+    called ask_user (a customer's MCP server may have one, and it must not end the turn)."""
+    return name == f"mcp__{_ASK_SERVER_NAME}__{ask_user_mcp.TOOL_NAME}"
 
 
 def _ask_question_seen(ev: dict, state: dict) -> None:
@@ -15192,7 +15194,9 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                 if (step_cap and not state.get("_stop") and ev.get("type") == "assistant"
                         and _count_tool_calls(ev, state) > step_cap):
                     state["_stop"] = "max_turns"
-                if ev.get("type") == "assistant":
+                if not rec.get("asks"):
+                    pass
+                elif ev.get("type") == "assistant":
                     _ask_question_seen(ev, state)
                 elif ev.get("type") == "user" and not state.get("_stop"):
                     question = _ask_question_answered(ev, state)
@@ -17276,7 +17280,9 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                            # the flags of every route the turn registered (see _turn_route)
                            "routes": turn_thinking["routes"],
                            # the values the record may not carry (see get_turn)
-                           "secrets": _turn_secrets(_caller_env(req.env), req.env_secret)}
+                           "secrets": _turn_secrets(req.env or {}, req.env_secret),
+                           # served `ask_user` on this turn, so its result ends the turn (#476)
+                           "asks": bool(req.input_requests) and backend == "claude"}
         if codex_note:   # the follow-up's Codex history was not here: the transcript says so first
             _turns[turn_id]["events"].append({"type": "assistant", "_ts": time.time(),
                                               "message": {"content": [{"type": "text", "text": codex_note}]}})

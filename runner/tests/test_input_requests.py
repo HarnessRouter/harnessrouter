@@ -15,6 +15,8 @@ import sys
 import time
 import uuid
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import ask_user_mcp  # noqa: E402
 import server as rs  # noqa: E402
@@ -53,12 +55,12 @@ def _script(events: list[dict], then: str = "hang") -> str:
     return "\n".join(lines) + "\n"
 
 
-def _run(tmp_path, script: str) -> dict:
+def _run(tmp_path, script: str, asks: bool = True) -> dict:
     turn_id = "ask-" + uuid.uuid4().hex
     path = tmp_path / "stream.py"
     path.write_text(script)
     _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
-                       "started": time.time(), "backend": "claude", "model": "m"}
+                       "started": time.time(), "backend": "claude", "model": "m", "asks": asks}
     try:
         _run_turn_bg(turn_id, [sys.executable, str(path)], os.environ.copy(), str(tmp_path),
                      rs._claude_passthrough, "m", timeout_seconds=30)
@@ -122,8 +124,31 @@ def test_a_result_the_cli_wrote_before_the_stop_is_still_the_questions(tmp_path)
 
 
 def test_the_bare_tool_name_counts_too():
-    assert rs._is_ask_tool("ask_user") and rs._is_ask_tool("mcp__harnessrouter__ask_user")
+    assert rs._is_ask_tool("mcp__harnessrouter__ask_user")
+    # a customer's tool with the same name is theirs: it must not end the turn
+    assert not rs._is_ask_tool("ask_user") and not rs._is_ask_tool("mcp__helpdesk__ask_user")
     assert not rs._is_ask_tool("AskUserQuestion") and not rs._is_ask_tool("ask_user_question")
+
+
+def test_a_turn_that_was_not_served_the_tool_is_not_ended_by_one(tmp_path):
+    rec = _run(tmp_path, _script([_ev_tool_use(1, ASK, QUESTION),
+                                  _ev_tool_result(1, json.dumps({"status": "input_required"}))], then="finished"),
+               asks=False)
+    assert rec["status"] == "done" and rec["result"] == "finished" and not rec.get("input_request")
+
+
+def test_a_secret_answer_is_scrubbed_at_any_length_and_the_record_is_given_it():
+    vals = rs._turn_secrets({"HR_INPUT_a": "123456", "OTHER": "short"}, ["HR_INPUT_a", "OTHER"])
+    assert "123456" in vals and "short" not in vals
+    # The record's list comes from the turn's whole environment: _caller_env drops HR_ names, which
+    # left a secret answer unscrubbed in everything a client reads while the agent echoed it.
+    src = pathlib.Path(rs.__file__).read_text()
+    assert '"secrets": _turn_secrets(req.env or {}, req.env_secret)' in src
+
+
+@pytest.mark.parametrize("ttl", [float("inf"), float("-inf"), float("nan")])
+def test_an_expiry_that_is_not_a_number_is_refused(ttl):
+    assert ask_user_mcp.validate_request({"kind": "free_text", "prompt": "x", "expires_in_seconds": ttl})[0] is None
 
 
 def test_the_poll_body_carries_the_question_and_redacts_a_secret_in_it():

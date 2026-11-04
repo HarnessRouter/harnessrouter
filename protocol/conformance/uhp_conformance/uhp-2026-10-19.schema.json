@@ -109,7 +109,7 @@
         },
         "harness_idempotency": {
           "type": "boolean",
-          "description": "`POST /v1/harnesses` honours an `Idempotency-Key`: a repeat answers with the harness the\nfirst request created, and a repeat carrying a different request is refused\n`idempotency_key_reused`. See Harnesses §5.1. Optional at every class.\n"
+          "description": "`POST /v1/harnesses` honours an `Idempotency-Key`: a repeat within 24 hours answers with\nthe harness the first request created. See Harnesses §5.1. Optional at every class.\n"
         },
         "input_requests": {
           "type": "boolean",

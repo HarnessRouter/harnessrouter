@@ -19,6 +19,7 @@ runner's environment is not the agent's, and the protocol needed here is three m
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 
@@ -97,7 +98,7 @@ def validate_request(inp, now: float | None = None) -> tuple[dict | None, str]:
         return None, f"a {kind} question takes no options"
     ttl = inp.get("expires_in_seconds")
     if ttl is not None:
-        if not isinstance(ttl, (int, float)) or isinstance(ttl, bool) or ttl < 1:
+        if not isinstance(ttl, (int, float)) or isinstance(ttl, bool) or not math.isfinite(ttl) or ttl < 1:
             return None, "expires_in_seconds must be a positive number"
         req["expires_at"] = int((now if now is not None else time.time()) + ttl)
     return req, ""

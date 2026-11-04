@@ -649,11 +649,16 @@ def _idem_sha(key: str) -> str:
 def _req_hash(body: "CreateResponseBody") -> str:
     """Stable hash of the semantically-meaningful request fields (used to detect a
     reused idempotency key carrying a DIFFERENT request → 409). Excludes `stream`
-    (a streaming vs non-streaming retry is the same request) and the idempotency
-    key itself inside metadata."""
+    (a streaming vs non-streaming retry is the same request), the idempotency key itself
+    inside metadata, and the answer of an input_response: it can be a secret, and this
+    unsalted hash is stored, and a six digit code can be read back out of it."""
     meta = dict(body.metadata or {})
     meta.pop("idempotency_key", None)
-    canon = {"model": body.model, "input": body.input, "instructions": body.instructions,
+    given = body.input
+    if isinstance(given, list):
+        given = [{k: v for k, v in it.items() if k != "answer"}
+                 if isinstance(it, dict) and it.get("type") == "input_response" else it for it in given]
+    canon = {"model": body.model, "input": given, "instructions": body.instructions,
              "previous_response_id": body.previous_response_id, "backend": body.backend,
              "tools": body.tools, "max_output_tokens": body.max_output_tokens,
              "max_step": body.max_step, "metadata": meta,
@@ -3276,6 +3281,9 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             # too large to attach (complete), so that paragraph is carried over onto the record
             note = translator.note_item
             stored["output"] = full_output + ([note] if note and note not in full_output else [])
+            if _status == "incomplete" and translator.input_request:
+                # ...and so is the question: its message and its item are the gateway's as well (§3.2)
+                stored["output"] += translator.output[-2:]
         await _resp_put(resp_id, stored, org, sid, None, _status, translator.created_at, True)
     except Exception:  # noqa: BLE001
         pass
@@ -10946,10 +10954,22 @@ async def create_response(body: CreateResponseBody, request: Request):
     extra_secret: list[str] = []
     voided: list[str] = []
     claimed: tuple[str, dict] | None = None
-    if body.previous_response_id:
-        _prev = await _resp_get(body.previous_response_id)
+    # A later task passes the question over however it names the session (§3.2), so what a task
+    # chains on is the session's newest response when it names no response of its own.
+    _newest = ""
+    if answer is not None or (not body.previous_response_id and str(meta.get("session_id") or "").strip()):
+        with contextlib.suppress(Exception):
+            _newest = str((await _session_turns_data(sid)).get("last_response_id") or "")
+    _chained = body.previous_response_id or _newest
+    if _chained:
+        _prev = await _resp_get(_chained)
         _pend = (_prev or {}).get("_pending_input") if isinstance(_prev, dict) else None
         if answer is not None:
+            if _newest and _newest != body.previous_response_id:
+                # a later task already ran: the question it passed over is no longer pending
+                raise uhp_error(409, "input_not_pending", "A later task passed that input request over.",
+                                "input.input_request_id",
+                                {"input_request_id": str(answer.get("input_request_id") or ""), "state": "voided"})
             acc = await _input_response_accept(org, body.previous_response_id, _prev, answer)
             claimed = (body.previous_response_id, _prev or {})
             secret_env = None
@@ -10962,7 +10982,7 @@ async def create_response(body: CreateResponseBody, request: Request):
             user_text = f"{line}\n\n{user_text}" if user_text else line
             input_items = [{**answer, **({"answer": "[redacted]"} if secret_env else {})}, *input_items]
         elif isinstance(_pend, dict) and _pend.get("state") == "pending":
-            await _input_request_settle(org, body.previous_response_id, _prev, "voided")
+            await _input_request_settle(org, _chained, _prev, "voided")
             voided = [str(_pend.get("id") or "")]
     # Bill the harness OWNER's org (resolved above), not the caller's — stamp it on the in-process
     # session trace so trace-finalize meters usage against the same org the gate admitted. The turn
