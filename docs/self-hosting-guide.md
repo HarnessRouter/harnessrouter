@@ -10,6 +10,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 - [What an agent can read](#what-an-agent-can-read)
 - [Starter kits](#starter-kits)
 - [Plugins](#plugins)
+- [Memories](#memories)
 - [Environments](#environments)
 - [What it is](#what-it-is)
 - [Why self-host](#why-self-host)
@@ -864,6 +865,23 @@ instance keeps no ledger, and the price shown on the Plugins page is the vendor'
 no markup, read from the same table the hosted service bills from. Every call and every session is
 written down on the task's trace (event type `plug`, plug `browser`, with the minutes and the
 vendor's figure on the session row).
+
+## Memories
+
+Agents can keep what they learn and read what you tell them, across sessions. HarnessRouter keeps no memory of its own: a memory lives with a vendor you connect, and agents reach it through the same tools whichever one it is.
+
+Four open source vendors can run beside your instance, each with one compose profile. From a clone of this repository:
+
+```sh
+cd deploy/memories
+cp .env.example .env     # then fill it in
+docker compose --profile graphiti up -d
+docker network connect harnessrouter-memories <your HarnessRouter container>
+```
+
+Then open **Memories** in the console, connect the vendor with the address the [vendor guide](../deploy/memories/README.md) gives, and create a memory. A connection is tried before it's kept. Run the `docker network connect` line again whenever you recreate the HarnessRouter container.
+
+Vendors differ in what a memory is, and the console shows only what the one you chose can do. A schema, for one, appears only where something reads it. The [vendor guide](../deploy/memories/README.md) says what each does and what we measured.
 
 ## Environments
 
