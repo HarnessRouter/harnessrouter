@@ -1,61 +1,45 @@
 'use client';
-// The Data tab (the design's mmDataHtml, mmTreeHtml): the records on the left, the open record in the
-// middle, what it links to on the right. The tree follows the provider: real folders where it keeps
-// files, one group per kind of record everywhere else. On a narrow window the two sides are drawers.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// A memory's data, in three columns you can drag: everything it holds on the left, the open record in the middle as
+// a document people edit together, and the graph of what connects to what on the right. Under 900 px they become tabs.
+import dynamic from 'next/dynamic';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  bodyOf, graphAround, labelOf, recall, reviseRecord,
-  type GraphEdge, type Memory, type MemoryGraph, type MemoryRecord, type Provider, type RecallFilter,
+  bodyOf, getRecord, graphAround, reviseRecord,
+  type GraphEdge, type Memory, type MemoryGraph, type MemoryRecord, type Provider,
 } from '@/lib/memories';
 import { plain } from '../setup/settingsModel';
 import { toast } from '../toast';
-import {
-  canEdit, connectionsHidden, coreKindsToWrite, hasFolders, hasRelations, hasSchema, keepsLinks, kindOf, labelsOf, recordTypeOfSchemaKind, schemaGuides, schemaLabels,
-} from './caps';
+import { canEdit, connectionsHidden, hasFolders, hasRelations, hasSchema, keepsLinks, kindOf, schemaGuides } from './caps';
 import { Connections, type LinkOption } from './Connections';
-import { Dot, FILTER, FOLDER, FOLDER_OPEN, MmIco, PLUS, SEARCH, useDismiss, X } from './parts';
-import { RecordDoc } from './RecordDoc';
+import { PLUS } from './parts';
+import { ResizableColumns } from './ResizableColumns';
 import { typeLabel, type LSchema } from './schemaModel';
-import { allFolders, folderName, folderOf, folderTree, groupsOf, kindInfo, type FolderNode } from './tree';
+import { allFolders, folderTree } from './tree';
+import { MemoryTree } from './tree/MemoryTree';
+import { recordOfKind } from './tree/treeModel';
+
+// Client only: the live document's library is the server's too, and a second copy of it in the same process warns and misbehaves.
+const RecordDoc = dynamic(() => import('./RecordDoc').then((m) => m.RecordDoc), { ssr: false });
+const MemoryGraphView = dynamic(() => import('./graph/MemoryGraph').then((m) => m.MemoryGraph), { ssr: false, loading: () => <p className="mm-muted mm-cpad">Drawing the graph…</p> });
 
 export interface RecordsRead {
   records: MemoryRecord[] | null; failed: boolean; retry: () => void; more: (() => void) | null;
   put: (r: MemoryRecord) => void; drop: (id: string) => void;
 }
-const hit = (r: MemoryRecord, q: string) => !q || labelOf(r).toLowerCase().includes(q) || bodyOf(r).toLowerCase().includes(q);
-/** The filter that finds a fact by one of its labels. */
-export const labelFilter = (value: string): RecallFilter => ({ field: 'attributes.labels', op: 'contains', value });
+export { labelFilter } from './tree/treeModel';
 
-export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, onOpenRecord, onSchema, onOtherMemory, onChanged }: {
+export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, onOpenRecord, onSchema, onOtherMemory, onChanged, liveTick, pulse }: {
   memory: Memory; provider: Provider | null; schema: LSchema | null; read: RecordsRead; setups: Map<string, string> | null;
   typeFilter: string; initialRecord: string; onOpenRecord: (id: string) => void; onSchema: () => void;
-  onOtherMemory: (memoryId: string, recordId: string) => void; onChanged: () => void;
+  onOtherMemory: (memoryId: string, recordId: string) => void; onChanged: () => void; liveTick: number; pulse: string[];
 }) {
   const write = !!memory.privileges?.includes('write');
-  const folders = hasFolders(provider);
-  const labelled = schemaLabels(provider);
   // a record's kind comes from a schema of types; labels are a vocabulary on facts, not kinds of record
   const kinds = schemaGuides(provider) ? schema : null;
   const [sel, setSel] = useState(initialRecord);
   const [draft, setDraft] = useState<MemoryRecord | null>(null);
-  const [q, setQ] = useState('');
-  const [filter, setFilter] = useState(typeFilter);
-  const [label, setLabel] = useState('');
-  const [labelHits, setLabelHits] = useState<MemoryRecord[] | null>(null);
-  const [closed, setClosed] = useState<Record<string, boolean>>({});
-  const [made, setMade] = useState<string[]>([]);
-  const [folderSel, setFolderSel] = useState('');
-  const [newFolder, setNewFolder] = useState(false);
-  const [pop, setPop] = useState<'' | 'new' | 'filter'>('');
-  const [treeOpen, setTreeOpen] = useState(false);
-  const [connOpen, setConnOpen] = useState(false);
-  const [hops, setHops] = useState(1);
-  const newWrap = useRef<HTMLSpanElement | null>(null);
-  const filterWrap = useRef<HTMLSpanElement | null>(null);
-  const closePop = useCallback(() => setPop(''), []);
-  useDismiss(pop === 'new', newWrap, closePop);
-  useDismiss(pop === 'filter', filterWrap, closePop);
-  useEffect(() => { setFilter(typeFilter); }, [typeFilter]);
+  const [outside, setOutside] = useState<MemoryRecord | null>(null);    // open, but not in the list: forgotten, or past a page
+  const [tab, setTab] = useState('doc');
   useEffect(() => { onOpenRecord(sel); }, [sel, onOpenRecord]);
 
   const all = useMemo(() => read.records || [], [read.records]);
@@ -66,51 +50,37 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
     if (first) setSel(first.id);
   }, [read.records, sel, draft]);
 
-  // a label filters what the service finds. Whatever it answers, only a record that carries the label is
-  // listed: a read that lists everything is never shown as what the label holds
+  const listed = all.find((r) => r.id === sel) || null;
   useEffect(() => {
-    setLabelHits(null);
-    if (!label) return;
+    if (!sel || listed || !read.records) { setOutside(null); return undefined; }
     let live = true;
-    const words = q.trim();
-    const signals = provider?.recall?.signals || [];
-    const asked = words ? (signals.includes('query') ? { query: words } : signals.includes('text') ? { text: words } : {}) : {};
-    const t = setTimeout(() => {
-      recall(memory.id, { filters: labelFilter(label), limit: 100, ...asked })
-        .then((d) => { if (live) setLabelHits(d.results.map((x) => x.record)); })
-        .catch(() => { if (live) setLabelHits([]); });
-    }, words ? 300 : 0);
-    return () => { live = false; clearTimeout(t); };
-  }, [label, q, memory.id, provider]);
+    getRecord(memory.id, sel).then((r) => { if (live) setOutside(r); }).catch(() => { if (live) setOutside(null); });
+    return () => { live = false; };
+  }, [sel, listed, read.records, memory.id]);
+  const record = draft || listed || outside;
 
-  const needle = q.trim().toLowerCase();
-  const shown = useMemo(() => {
-    if (label) {
-      const byId = new Map<string, MemoryRecord>();
-      [...all, ...(labelHits || [])].forEach((r) => byId.set(r.id, r));
-      return [...byId.values()].filter((r) => labelsOf(r).includes(label) && hit(r, needle));
-    }
-    return all.filter((r) => hit(r, needle) && (!filter || kindOf(r) === filter));
-  }, [all, labelHits, label, needle, filter]);
+  const open = useCallback((rid: string, mid?: string) => {
+    if (mid && mid !== memory.id) { onOtherMemory(mid, rid); return; }
+    setDraft(null); setSel(rid); setTab('doc');
+  }, [memory.id, onOtherMemory]);
 
-  const record = draft || all.find((r) => r.id === sel) || labelHits?.find((r) => r.id === sel) || null;
-
-  // ── what a record links to ────────────────────────────────────────────────────────────────
+  // ── what the open record links to ─────────────────────────────────────────────────────────
   const links = keepsLinks(provider);
   const [graph, setGraph] = useState<MemoryGraph | null>(null);
   const [graphFailed, setGraphFailed] = useState(false);
-  const rid = record?.id || '';
+  // a record forgotten while it's open stays readable here, and has nothing left to ask about
+  const rid = record && record.status === 'active' ? record.id : '';
   const version = record?.version || 0;
   const readGraph = useCallback(() => {
     setGraphFailed(false);
     if (!rid || !links) { setGraph(null); return () => {}; }
     let live = true;
-    graphAround(memory.id, rid, hops)
+    graphAround(memory.id, rid, 1)
       .then((g) => { if (live) setGraph(g); })
       .catch(() => { if (live) { setGraph(null); setGraphFailed(true); } });
     return () => { live = false; };
-  }, [rid, hops, links, memory.id]);
-  useEffect(() => readGraph(), [readGraph, version]);
+  }, [rid, links, memory.id]);
+  useEffect(() => readGraph(), [readGraph, version, liveTick]);
 
   const edges = useMemo(() => (graph?.edges || []).filter((e) => e.from.record_id === rid || e.to.record_id === rid), [graph, rid]);
   const linkCount = links ? edges.length : (record?.references?.length || 0);
@@ -146,182 +116,63 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
     const kept = refsOf(h).filter((x) => !(x.record_id === e.to.record_id && x.rel === (e.rel || 'related')));
     reviseRecord(memory.id, h.id, { references: kept }).then(savedLink).catch((x) => toast(plain(x, 'That link was not removed. Try again.')));
   };
-  const hideConn = connectionsHidden(provider, linkCount, !!options?.length);
+  const hideLinks = connectionsHidden(provider, linkCount, !!options?.length);
 
-  // ── the tree ──────────────────────────────────────────────────────────────────────────────
-  const tree = useMemo(() => (folders ? folderTree(shown, needle || filter || label ? [] : made) : null), [folders, shown, made, needle, filter, label]);
-  const groups = useMemo(() => (folders ? [] : groupsOf(shown, kinds)), [folders, shown, kinds]);
-  const everyFolder = useMemo(() => (folders ? allFolders(folderTree(all, made)) : []), [folders, all, made]);
-  const openRecord = (id: string) => { setDraft(null); setSel(id); setTreeOpen(false); setPop(''); };
-  const row = (r: MemoryRecord, d: number) => {
-    const k = kindInfo(kindOf(r), kinds), on = r.id === record?.id;
-    return (
-      <button key={r.id} type="button" className={`mm-tr mm-trr${on ? ' on' : ''}`} style={{ '--d': d } as React.CSSProperties} aria-current={on ? 'true' : undefined} onClick={() => openRecord(r.id)}>
-        <span className="mm-car" /><span className="mm-ti" style={{ color: k.color }}><MmIco k={k.icon} size={14} /></span><span className="mm-tt">{labelOf(r) || 'Untitled'}</span>
-      </button>
-    );
-  };
-  const folderRows = (n: FolderNode, d: number): React.ReactNode => (
-    <>
-      {n.folders.map((f) => {
-        const isOpen = !!needle || !!filter || !closed[f.path];
-        return (
-          <div key={f.path}>
-            <button type="button" className={`mm-tr mm-tf${folderSel === f.path ? ' sel' : ''}`} style={{ '--d': d } as React.CSSProperties} aria-expanded={isOpen}
-              onClick={() => { setFolderSel(f.path); setClosed((c) => ({ ...c, [f.path]: isOpen })); }}>
-              <span className="mm-car">{isOpen ? '▾' : '▸'}</span>{isOpen ? FOLDER_OPEN : FOLDER}<span className="mm-tt">{f.name}</span><small>{f.total}</small>
-            </button>
-            {isOpen ? folderRows(f, d + 1) : null}
-          </div>
-        );
-      })}
-      {n.records.map((r) => row(r, d))}
-    </>
-  );
+  // ── a new record, not made until its author leaves it ─────────────────────────────────────
+  const startNew = useCallback((kind: string, folder?: string) => {
+    const made = recordOfKind(kind, provider, schema);
+    setDraft({
+      id: '', object: 'memory.record', memory_id: memory.id, type: made.type, title: '', content: [],
+      attributes: { ...made.attributes, ...(folder ? { folder } : {}) }, version: 0, status: 'active', supersedes: null,
+      time: { valid_from: null, valid_to: null, written_at: null, invalidated_at: null },
+      written_by: { kind: 'member', id: '' }, references: [], trust: 'untrusted',
+    });
+    setSel(''); setTab('doc');
+  }, [memory.id, provider, schema]);
+  const everyFolder = useMemo(() => (hasFolders(provider) ? allFolders(folderTree(all, [])) : []), [provider, all]);
 
-  // ── new ───────────────────────────────────────────────────────────────────────────────────
-  const blank = (type: string, attributes: Record<string, unknown>): MemoryRecord => ({
-    id: '', object: 'memory.record', memory_id: memory.id, type, title: '', content: [],
-    attributes: { ...attributes, ...(folders && folderSel ? { folder: folderSel } : {}) }, version: 0, status: 'active', supersedes: null,
-    time: { valid_from: null, valid_to: null, written_at: null, invalidated_at: null },
-    written_by: { kind: 'member', id: '' }, references: [], trust: 'untrusted',
-  });
-  const startDraft = (r: MemoryRecord) => { setDraft(r); setSel(''); setPop(''); setFilter(''); setLabel(''); setQ(''); setTreeOpen(false); };
-  const typedKinds = schemaGuides(provider) ? schema?.types || [] : [];
-  const coreKinds = coreKindsToWrite(provider);
-  const newMenu = (
-    <div className="mm-pop mm-pop-new" role="menu">
-      <div className="mm-pop-h">{`New record${folderSel ? ` in ${folderSel.split('/').pop()}` : ''}`}</div>
-      {typedKinds.map((t) => (
-        <button key={t.id} type="button" className="mm-mi row" role="menuitem" onClick={() => startDraft(blank(recordTypeOfSchemaKind(provider), { entity_type: t.name }))}>
-          <Dot color={t.color} icon={t.icon} />{typeLabel(t.name)}
-        </button>
-      ))}
-      {coreKinds.map((k) => {
-        const c = kindInfo(k, null);
-        return <button key={k} type="button" className="mm-mi row" role="menuitem" onClick={() => startDraft(blank(k, {}))}><Dot color={c.color} icon={c.icon} />{c.one}</button>;
-      })}
-      {folders ? (
+  const tree = <MemoryTree memory={memory} provider={provider} schema={kinds} read={read} activeId={record?.id || ''} pulse={pulse} filterKind={typeFilter} onOpen={open} onNew={startNew} onChanged={onChanged} />;
+  const doc = (
+    <main className="mm-doc">
+      {record ? (
+        <RecordDoc key={record.id || 'draft'} memory={memory} provider={provider} record={record} schema={kinds} setups={setups} links={linkCount} folders={everyFolder}
+          onSaved={(r) => { read.put(r); if (draft) { setDraft(null); setSel(r.id); onChanged(); } }}
+          onGone={(id) => { read.drop(id); setSel(''); onChanged(); }} />
+      ) : (
         <>
-          <div className="mm-pop-sep" />
-          <button type="button" className="mm-mi row" role="menuitem" onClick={() => { setPop(''); setNewFolder(true); }}><span className="mm-dot plain">{FOLDER}</span>Folder</button>
+          <div className="mm-doc-bar"><span className="grow" /></div>
+          {read.records ? (
+            <div className="mm-doc-empty">
+              <h2>{all.length ? 'Pick a record' : 'Nothing kept yet'}</h2>
+              <p>{all.length ? 'Choose one from the list or the graph to read it.' : `Add the first record, or give ${memory.name} to a setup and let it write.`}</p>
+              {!all.length && write ? <button type="button" className="btn primary small" onClick={() => startNew(kinds?.types[0]?.name || 'note')}>{PLUS}New record</button> : null}
+              {!all.length && schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>Set what it should look for first</button></p> : null}
+            </div>
+          ) : null}
         </>
-      ) : null}
-    </div>
-  );
-  const addFolder = (v: string) => {
-    setNewFolder(false);
-    const name = folderName(v.trim());
-    if (!name) return;
-    const path = folderSel ? `${folderSel}/${name}` : name;
-    setMade((m) => (m.includes(path) ? m : [...m, path]));
-    setFolderSel(path);
-  };
-
-  // ── filter ────────────────────────────────────────────────────────────────────────────────
-  const kindsHere = useMemo(() => groupsOf(all, kinds).map((g) => g.kind), [all, kinds]);
-  const labelsHere = useMemo(() => {
-    const seen = new Set<string>(schema?.types.map((t) => t.name) || []);
-    all.forEach((r) => labelsOf(r).forEach((l) => seen.add(l)));
-    return [...seen].sort();
-  }, [all, schema]);
-  const filterKinds = labelled ? [] : kindsHere;
-  const canFilter = labelled ? labelsHere.length > 0 : kindsHere.length > 1;
-  const chip = label ? { name: typeLabel(label), color: schema?.types.find((t) => t.name === label)?.color || '#64748b' }
-    : filter ? { name: kindInfo(filter, kinds).one, color: kindInfo(filter, kinds).color } : null;
-
-  const recordRows = read.failed ? (
-    <p className="mm-muted mm-tree-none" role="alert">The records could not be read just now. <button type="button" className="link-q inl" onClick={read.retry}>Try again</button></p>
-  ) : !read.records ? <p className="mm-muted mm-tree-none">Loading…</p> : (
-    <>
-      {draft ? (
-        <button type="button" className="mm-tr mm-trr on" style={{ '--d': 0 } as React.CSSProperties} aria-current="true"><span className="mm-car" /><span className="mm-tt">Untitled</span></button>
-      ) : null}
-      {folders && tree ? folderRows(tree, 0) : groups.map((g) => {
-        const isOpen = !!needle || !closed[g.kind.key];
-        return (
-          <div key={g.kind.key}>
-            <button type="button" className="mm-tr mm-tf" style={{ '--d': 0 } as React.CSSProperties} aria-expanded={isOpen} onClick={() => setClosed((c) => ({ ...c, [g.kind.key]: isOpen }))}>
-              <span className="mm-car">{isOpen ? '▾' : '▸'}</span><span className="mm-ti" style={{ color: g.kind.color }}><MmIco k={g.kind.icon} size={14} /></span><span className="mm-tt">{g.kind.many}</span><small>{g.records.length}</small>
-            </button>
-            {isOpen ? g.records.map((r) => row(r, 1)) : null}
-          </div>
-        );
-      })}
-      {!shown.length && !draft && !(folders && tree?.folders.length) ? <p className="mm-muted mm-tree-none">{needle || filter || label ? 'Nothing matches.' : 'No records yet.'}</p> : null}
-      {read.more ? <button type="button" className="link-q mm-more" onClick={read.more}>Show more</button> : null}
-    </>
-  );
-
-  return (
-    <div className={`mm-data${treeOpen ? ' tree-open' : ''}${connOpen ? ' conn-open' : ''}${hideConn ? ' no-conn' : ''}`}>
-      <aside className="mm-tree" aria-label="Records">
-        <div className="mm-tree-top">
-          <label className="mm-find">{SEARCH}<input value={q} placeholder={`Find in ${memory.name}`} aria-label={`Find in ${memory.name}`} autoComplete="off" onChange={(e) => setQ(e.target.value)} /></label>
-          {canFilter ? (
-            <span className="mm-newwrap" ref={filterWrap}>
-              <button type="button" className="icon-btn sm mm-plus" aria-label={labelled ? 'Filter by label' : 'Filter by type'} title={labelled ? 'Filter by label' : 'Filter by type'} aria-haspopup="menu" aria-expanded={pop === 'filter'} onClick={() => setPop(pop === 'filter' ? '' : 'filter')}>{FILTER}</button>
-              {pop === 'filter' ? (
-                <div className="mm-pop" role="menu">
-                  <div className="mm-pop-h">{labelled ? 'Label' : 'Type'}</div>
-                  {labelled ? labelsHere.map((l) => (
-                    <button key={l} type="button" className={`mm-mi row${label === l ? ' on' : ''}`} role="menuitem" onClick={() => { setLabel(l); setPop(''); }}>{typeLabel(l)}</button>
-                  )) : filterKinds.map((k) => (
-                    <button key={k.key} type="button" className={`mm-mi row${filter === k.key ? ' on' : ''}`} role="menuitem" onClick={() => { setFilter(k.key); setPop(''); }}><Dot color={k.color} icon={k.icon} />{k.one}</button>
-                  ))}
-                </div>
-              ) : null}
-            </span>
-          ) : null}
-          {write ? (
-            <span className="mm-newwrap" ref={newWrap}>
-              <button type="button" className="icon-btn sm mm-plus" aria-label="New" title={folders ? 'New record or folder' : 'New record'} aria-haspopup="menu" aria-expanded={pop === 'new'} onClick={() => setPop(pop === 'new' ? '' : 'new')}>{PLUS}</button>
-              {pop === 'new' ? newMenu : null}
-            </span>
-          ) : null}
-        </div>
-        {chip ? (
-          <div className="mm-filt"><span className="mm-chip"><span className="mm-dot sm" style={{ background: chip.color }} />{chip.name}
-            <button type="button" aria-label={labelled ? 'Show every label' : 'Show every type'} onClick={() => { setFilter(''); setLabel(''); }}>{X}</button></span></div>
-        ) : null}
-        {newFolder ? (
-          <div className="mm-tr mm-tf-new">{FOLDER}
-            <input className="set-in slim" autoFocus placeholder="Folder name" aria-label="Folder name"
-              onKeyDown={(e) => { if (e.key === 'Enter') addFolder(e.currentTarget.value); if (e.key === 'Escape') setNewFolder(false); }}
-              onBlur={(e) => addFolder(e.currentTarget.value)} />
-          </div>
-        ) : null}
-        <div className="mm-tree-list">{recordRows}</div>
-        {folders && made.some((m) => !all.some((r) => folderOf(r) === m)) ? <p className="set-help mm-tree-note">A folder is kept once a record is in it.</p> : null}
-      </aside>
-      <div className="mm-scrim" onClick={() => { setTreeOpen(false); setConnOpen(false); }} />
-      <main className="mm-doc">
-        {record ? (
-          <RecordDoc key={record.id || 'draft'} memory={memory} provider={provider} record={record} schema={kinds} setups={setups} links={linkCount} folders={everyFolder}
-            onSaved={(r) => { read.put(r); if (draft) { setDraft(null); setSel(r.id); onChanged(); } }}
-            onGone={(id) => { read.drop(id); setLabelHits((h) => h?.filter((x) => x.id !== id) || null); setSel(''); onChanged(); }}
-            onTree={() => { setTreeOpen(true); setConnOpen(false); }} onConn={() => { setConnOpen(true); setTreeOpen(false); }} connShown={!hideConn} />
-        ) : (
-          <>
-            <div className="mm-doc-bar"><button type="button" className="btn small line mm-dtog" onClick={() => setTreeOpen(true)}>Records</button><span className="grow" /></div>
-            {read.records ? (
-              <div className="mm-doc-empty">
-                <h2>{all.length ? 'Pick a record' : 'Nothing kept yet'}</h2>
-                <p>{all.length ? 'Choose one on the left to read it.' : `Add the first record, or give ${memory.name} to a setup and let it write.`}</p>
-                {!all.length && write ? <button type="button" className="btn primary small" onClick={() => { setTreeOpen(true); setPop('new'); }}>{PLUS}New record</button> : null}
-                {!all.length && schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>Design the schema</button></p> : null}
-              </div>
-            ) : null}
-          </>
-        )}
-      </main>
-      {hideConn ? null : (
-        <aside className="mm-conn" aria-label="Connections">
-          <Connections record={record} graph={graph} failed={graphFailed} retry={readGraph} hops={hops} setHops={setHops} schema={kinds} options={options} candidates={candidates} provider={provider}
-            onOpen={(id, mid) => { if (mid && mid !== memory.id) onOtherMemory(mid, id); else { openRecord(id); setConnOpen(false); } }}
-            onLink={link} onUnlink={unlink} canUnlink={canUnlink} onClose={() => setConnOpen(false)} />
-        </aside>
       )}
+    </main>
+  );
+  const right = (
+    <aside className="mm-conn" aria-label="Graph">
+      <div className="mm-graphbox">
+        <MemoryGraphView memory={memory} provider={provider} schema={kinds} activeRecordId={rid} refreshKey={liveTick} changed={pulse} onOpenRecord={open} />
+      </div>
+      {hideLinks || !record?.id ? null : (
+        <div className="mm-linksbox">
+          <Connections record={record} graph={graph} failed={graphFailed} retry={readGraph} schema={kinds} options={options} candidates={candidates} provider={provider}
+            onOpen={open} onLink={link} onUnlink={unlink} canUnlink={canUnlink} />
+        </div>
+      )}
+    </aside>
+  );
+  return (
+    <div className="mm-data">
+      <ResizableColumns storageKey="hr.memory.columns" tab={tab} onTab={setTab} panes={[
+        { id: 'tree', label: 'Records', min: 220, initial: 280, node: tree },
+        { id: 'doc', label: 'Record', min: 380, initial: 640, grow: true, node: doc },
+        { id: 'graph', label: 'Graph', min: 280, initial: 440, node: right },
+      ]} />
     </div>
   );
 }

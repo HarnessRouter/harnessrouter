@@ -32,8 +32,8 @@ const PLACES: Place[] = [
   { key: 'start', href: '/start', label: 'Start', icon: Ic.start, nav: 'start' },
   { key: 'studio', href: '/studio', label: 'Studio', icon: Ic.studio, aria: 'Harness Studio', nav: 'agents' },
   { key: 'memories', href: '/memories', label: 'Memories', icon: Ic.memories, nav: 'memories' },
-  { key: 'shop', href: '/shop', label: 'Shop', icon: Ic.shop, nav: 'harbor' },
   { key: 'extensions', href: '/extensions', label: 'Add-ons', icon: Ic.extensions, nav: 'library' },   // 'Extensions' was too long for the rail (Richard, 10-21)
+  { key: 'shop', href: '/shop', label: 'Shop', icon: Ic.shop, nav: 'harbor' },
   { key: 'keys', href: '/keys', label: 'API Keys', icon: Ic.keys, nav: 'keys' },
 ];
 

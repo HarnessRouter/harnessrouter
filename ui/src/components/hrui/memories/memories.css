@@ -111,7 +111,7 @@
 #hrui .mm-holds{display:flex}#hrui .mm-holds button{flex:1}
 
 /* ---- data ---- */
-#hrui .mm-data{flex:1;min-height:0;display:grid;grid-template-columns:280px minmax(0,1fr) 360px;position:relative}
+#hrui .mm-data{flex:1;min-height:0;display:flex;position:relative}
 #hrui .mm-tree{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line);background:var(--bg)}
 #hrui .mm-tree-top{display:flex;align-items:center;gap:6px;padding:12px 12px 8px}
 #hrui .mm-find{flex:1;min-width:0;display:flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid var(--line);border-radius:10px;color:var(--faint)}
@@ -344,3 +344,15 @@
   #hrui .mm-labrow.mm-prh{display:none}
   #hrui .mm-labrow{padding-bottom:8px;border-bottom:1px solid var(--line)}
 }
+
+#hrui .mm-conn{height:100%}
+#hrui .mm-graphbox{flex:1;min-height:220px;position:relative;display:flex;flex-direction:column}
+#hrui .mm-linksbox{flex:none;max-height:40%;overflow:auto;border-top:1px solid var(--line)}
+#hrui .mm-clist-h{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px}
+#hrui .mm-doc{height:100%}
+#hrui .mm-live{margin-top:20px}
+#hrui .mm-peers{display:inline-flex;margin-right:8px;flex:none}
+#hrui .mm-peer{width:22px;height:22px;border-radius:50%;color:#fff;font-size:11px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;margin-left:-4px;border:2px solid var(--bg)}
+#hrui .mm-peer:first-child{margin-left:0}
+#hrui .mm-peer.agent{border-radius:6px}
+@media (max-width:720px){#hrui .mm-doc-col{padding:24px 20px 72px}}

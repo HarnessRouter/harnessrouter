@@ -1,9 +1,11 @@
 'use client';
-// One record (the design's mmDocHtml): its title, properties and text, its version, and who wrote it.
-// What a person can change follows caps.ts: a record a provider found reads as found, and an action the
-// provider does not serve is not drawn. A change is written when the field is left, not on each key:
-// every write is a new version, and a provider may read the whole record again.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+// One record (the design's mmDocHtml): its title, properties and text, its version, and who wrote it. What a person
+// can change follows caps.ts: a record a provider found reads as found, and an action the provider does not serve is
+// not drawn. An open record is a live document: everyone who has it open edits it together and sees what an agent
+// writes as it lands, and it's written back to the memory, as a new version, in the pauses. A record not made yet is
+// plain fields until its author leaves them. Its properties are written as they change.
+import dynamic from 'next/dynamic';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { LOCAL_MEMBER } from '@/lib/edition';
@@ -20,9 +22,14 @@ import {
   canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, kindOf, labelsOf, readOnlyNote, recordTypeOfSchemaKind, relText, schemaGuides, sentenceFirst,
 } from './caps';
 import { DOTS, HISTORY, Dot, whenOf } from './parts';
+import { LiveTitle } from './editor/LiveTitle';
+import { useLiveRecord, useLiveText } from './editor/liveRecord';
+import { peerColor } from './editor/presence';
 import { typeLabel, choicesOf, type LSchema } from './schemaModel';
 import { folderOf, kindInfo } from './tree';
 import { vendorName } from './vendors';
+
+const DocEditor = dynamic(() => import('./editor/DocEditor').then((m) => m.DocEditor), { ssr: false, loading: () => <p className="mm-muted">Opening…</p> });
 
 /** The record's fields a person does not read as a field of their own. */
 const NOT_A_ROW = new Set(['entity_type', 'folder', 'labels', 'predicate']);
@@ -46,10 +53,9 @@ const contentWith = (r: MemoryRecord, text: string): ContentPart[] => [
   ...(r.content || []).filter((p) => p.type !== 'text'),
 ];
 
-export function RecordDoc({ memory, provider, record, schema, setups, links, folders, onSaved, onGone, onTree, onConn, connShown }: {
+export function RecordDoc({ memory, provider, record, schema, setups, links, folders, onSaved, onGone }: {
   memory: Memory; provider: Provider | null; record: MemoryRecord; schema: LSchema | null; setups: Map<string, string> | null;
   links: number; folders: string[]; onSaved: (r: MemoryRecord) => void; onGone: (id: string) => void;
-  onTree: () => void; onConn: () => void; connShown: boolean;
 }) {
   const isNew = !record.id;
   const open = isNew || canEdit(record, provider, memory);
@@ -76,6 +82,9 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
   const [busy, setBusy] = useState(false);
   const [refused, setRefused] = useState('');
   const [leftover, setLeftover] = useState(false);
+  const { live, state } = useLiveRecord(memory.id, isNew ? '' : record.id, peerColor);
+  const member = getSession()?.member;
+  const me = useMemo(() => ({ id: member?.id || member?.email || LOCAL_MEMBER, name: member?.name || member?.email || 'Operator' }), [member?.id, member?.email, member?.name]);
   const titleEl = useRef<HTMLHeadingElement | null>(null);
   const toBody = useRef(false);
   const bodyEl = useRef<HTMLTextAreaElement | null>(null);
@@ -170,8 +179,13 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
   const move = (path: string) => { setPop(''); void write({ attributes: { folder: path } }); toast(path ? `Moved to ${path}` : `Moved to ${memory.name}`); };
 
   const sentence = sentenceFirst({ type: record.type, title });
+  const writable = open && (isNew || (!!state?.canWrite && !state?.gone));
+  const liveText = useLiveText(live);
+  const savedWord = saving || state?.saving === 'saving' ? 'Saving…' : isNew ? 'Not saved yet'
+    : state?.link === 'lost' ? 'Reconnecting…' : state?.saving === 'unsaved' ? 'Not saved yet, trying again' : state?.saving === 'refused' ? 'Not saved'
+      : `Saved · v${state?.version ?? record.version}`;
   const note = readOnlyNote(record);
-  const words = body.split(/\s+/).filter(Boolean).length;
+  const counted = !isNew && live && state?.synced ? liveText : body;
   const when = whenOf(record.time?.written_at);
   const who = writerOf(record, setups);
   const extra = Object.entries(attrs).filter(([k, v]) => !NOT_A_ROW.has(k) && !props.some((p) => p.name === k) && v != null && v !== '');
@@ -180,7 +194,13 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
   const files = (record.content || []).map((p, i) => [p, i] as const).filter(([p]) => p.type === 'file');
   const crumbs = folderOf({ attributes: attrs });
 
-  const bodyBlock = open ? (
+  const bodyBlock = !isNew ? (
+    live && state?.synced ? (
+      <div className={sentence ? 'mm-live mm-sentence' : 'mm-live'}>
+        <DocEditor doc={live.doc} provider={live} currentUser={me} readOnly={!writable} placeholder={writable ? 'Write it down, or press / for commands. Setups read all of it.' : ''} />
+      </div>
+    ) : state?.denied ? <p className="mm-err" role="alert">{state.denied}</p> : <div className={`mm-body${sentence ? ' mm-sentence' : ''}`}>{body ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown> : null}</div>
+  ) : open ? (
     editing ? (
       <textarea ref={bodyEl} className={`mm-bodyed${sentence ? ' mm-sentence' : ''}`} aria-label="Text" autoFocus value={body} placeholder="Write it down. Setups read all of it."
         onFocus={(e) => { const n = e.currentTarget.value.length; e.currentTarget.setSelectionRange(n, n); }} onChange={(e) => setBody(e.target.value)} onBlur={saveBody} />
@@ -197,12 +217,16 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
   return (
     <>
       <div className="mm-doc-bar" ref={barPops}>
-        <button type="button" className="btn small line mm-dtog" onClick={onTree}>Records</button>
         <div className="mm-crumbs">
           <span className="mm-cr">{memory.name}</span>
           {crumbs.split('/').filter(Boolean).map((c, i) => <span key={i} className="mm-crw"><span className="mm-crs">/</span><span className="mm-cr">{c}</span></span>)}
         </div>
-        <span className="mm-saved">{saving ? 'Saving…' : isNew ? 'Not saved yet' : `Saved · v${record.version}`}</span>
+        {state?.people.length ? (
+          <span className="mm-peers" aria-label={`Also here: ${state.people.map((p) => p.name).join(', ')}`}>
+            {state.people.slice(0, 5).map((p) => <span key={p.id} className={`mm-peer${p.agent ? ' agent' : ''}`} style={{ background: p.color }} title={p.name}>{p.name.slice(0, 1).toUpperCase()}</span>)}
+          </span>
+        ) : null}
+        <span className="mm-saved" role="status">{savedWord}</span>
         {history ? (
           <span className="mm-popw">
             <button type="button" className="icon-btn sm" aria-label="Versions" title="Versions" aria-expanded={pop === 'hist'} onClick={() => void openHistory()}>{HISTORY}</button>
@@ -253,15 +277,17 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
             ) : null}
           </span>
         ) : null}
-        {connShown ? <button type="button" className="btn small line mm-ctog" onClick={onConn}>Connections</button> : null}
       </div>
       <div className="mm-doc-scroll">
         <article className="mm-doc-col">
-          {sentence ? bodyBlock : open ? (
+          {state?.gone ? <p className="mm-ronote" role="status">This record was forgotten. What it said stays here until you leave.</p> : null}
+          {sentence ? bodyBlock : !isNew && live && state?.synced ? (
+            <LiveTitle key={record.id} text={live.doc.getText('title')} readOnly={!writable} className="mm-title" placeholder="Untitled" />
+          ) : open ? (
             <h1 key={record.id} ref={titleEl} className="mm-title" contentEditable="plaintext-only" suppressContentEditableWarning spellCheck={false} role="textbox" aria-label="Title" data-ph="Untitled"
               onBlur={(e) => { saveTitle(e.relatedTarget); toBody.current = false; }} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); toBody.current = true; (e.currentTarget as HTMLElement).blur(); setEditing(true); } }}>{record.title}</h1>
           ) : <h1 className="mm-title">{record.title}</h1>}
-          {err ? <p className="mm-err" role="alert">{err}</p> : null}
+          {err || state?.refused ? <p className="mm-err" role="alert">{err || state?.refused}</p> : null}
           <div className={`mm-props${sentence ? ' after-sentence' : ''}`}>
             <div className="mm-prow">
               <label>Type</label>
@@ -322,7 +348,7 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
         </article>
       </div>
       <div className="mm-doc-foot">
-        <span>{plural(links, 'link')}</span><span>{plural(words, 'word')}</span><span>{`${body.length.toLocaleString('en-US')} characters`}</span>
+        <span>{plural(links, 'link')}</span><span>{plural(counted.split(/\s+/).filter(Boolean).length, 'word')}</span><span>{`${counted.length.toLocaleString('en-US')} characters`}</span>
       </div>
       {confirm === 'forget' ? (
         <ConfirmSheet id="mmFg" title={`Forget ${short(record) || 'this record'}?`} confirmLabel="Forget" busy={busy} refused={refused || undefined}

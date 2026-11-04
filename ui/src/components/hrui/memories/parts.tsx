@@ -1,6 +1,7 @@
 'use client';
 // The small pieces the Memories pages share: the design's icons, a type's coloured dot, the card's
 // picture of a schema, and the reads more than one page makes.
+import { IconByName } from './graph/graphIcons';
 import { useCallback, useEffect, useState, type RefObject } from 'react';
 import { listCustom } from '@/lib/harness';
 import { listProviders, type Grant, type Provider } from '@/lib/memories';
@@ -8,6 +9,7 @@ import { inVendorOrder } from './vendors';
 import { MM_ICONS, type LSchema } from './schemaModel';
 
 export function MmIco({ k, size = 16, color }: { k: string; size?: number; color?: string }) {
+  if (k && !MM_ICONS[k]) return <IconByName name={k} size={size} color={color} />;   // any icon a schema names, from the full catalogue
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color || 'currentColor'} strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d={MM_ICONS[k] || MM_ICONS.note} />

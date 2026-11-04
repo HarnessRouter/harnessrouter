@@ -1,12 +1,14 @@
 'use client';
-// One memory (the design's memoryView): back, its name and who keeps it, its id with Copy, "Used by N
-// setups", and the tabs, at the right end as on every bar of this console. The tabs are the provider's: Schema where a schema guides it, Labels where it applies
-// labels, and no tabs at all where nothing reads one, just Data.
+// One memory (the design's memoryView): back, its name and who keeps it, its id with Copy, "Used by N setups", and
+// the tabs, at the right end as on every bar of this console. Data is the three columns. Schema is the provider's:
+// types to edit where a schema guides it, labels where it applies them, and where it decides for itself, what it holds.
+// Whatever changes in the memory while this is open, by anyone, comes in on its event stream.
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  deleteMemory, getHarnessMemories, getMemory, listGrants, listRecords, MemoryApiError,
+  deleteMemory, getHarnessMemories, getMemory, getRecord, listGrants, listRecords, MemoryApiError,
   type Grant, type Memory, type MemoryRecord,
 } from '@/lib/memories';
 import { ConfirmSheet } from '../Sheet';
@@ -14,17 +16,20 @@ import { Skel, SkHead, SkRows } from '../Skel';
 import { plain, plural } from '../setup/settingsModel';
 import { tabKeys } from '../tabKeys';
 import { toast } from '../toast';
-import { hasSchema, kindOf, schemaLabels, schemaTab, schemaWord } from './caps';
+import { hasSchema, kindOf, schemaTab } from './caps';
 import { DataTab, type RecordsRead } from './DataTab';
-import { BACK_IC, COPY, DOTS, setupsOf, useDismiss, useProviders, useSetupNames } from './parts';
-import { LabelsTab, SchemaTab } from './SchemaTab';
+import { BACK_IC, DOTS, setupsOf, useDismiss, useProviders, useSetupNames } from './parts';
 import { ConnectSheet, RenameSheet } from './sheets';
+import { useMemoryEvents, type MemoryEvent } from './editor/useMemoryEvents';
 import { useSchemaDoc } from './useSchemaDoc';
 import { vendorName } from './vendors';
 import './memories.css';
 
+const SchemaEditor = dynamic(() => import('./graph/SchemaEditor').then((m) => m.SchemaEditor), { ssr: false, loading: () => <p className="mm-muted mm-cpad">Drawing the schema…</p> });
+
 const enc = encodeURIComponent;
 const PAGE = 200;
+const PULSE_MS = 2500;
 
 function useRecords(mid: string): RecordsRead {
   const [records, setRecords] = useState<MemoryRecord[] | null>(null);
@@ -68,11 +73,36 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
   // the tab: Schema only where a schema is read; with none asked for, a memory with nothing in it opens
   // on its schema and any other on its data
   const empty = (memory?.records?.count ?? 1) === 0;
-  const tab: 'schema' | 'data' = guided && (tabParam === 'schema' || tabParam === 'labels' || (!tabParam && empty)) ? 'schema' : 'data';
+  const tab: 'schema' | 'data' = tabParam === 'schema' || tabParam === 'labels' || (guided && !tabParam && empty) ? 'schema' : 'data';
   const [typeFilter, setTypeFilter] = useState('');
   // going to Schema and back opens the record that was open
   const openRecord = useRef(recordParam || '');
   const keepOpen = useCallback((rid: string) => { openRecord.current = rid; }, []);
+
+  // what changes while the page is open: the tree and the graph read it again, and what changed shows for a moment
+  const [liveTick, setLiveTick] = useState(0);
+  const [pulse, setPulse] = useState<string[]>([]);
+  const lit = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    setPulse((p) => [...new Set([...p, ...ids])]);
+    setTimeout(() => setPulse((p) => p.filter((x) => !ids.includes(x))), PULSE_MS);
+  }, []);
+  useMemoryEvents(id, (e: MemoryEvent) => {
+    if (e.type === 'schema.changed') { doc.retry(); return; }
+    setLiveTick((n) => n + 1);
+    if (e.type === 'record.created' || e.type === 'record.revised') {
+      const rid = e.record_id || '';
+      if (rid) getRecord(id, rid).then((r) => { read.put(r); lit([rid]); }).catch(() => undefined);
+    } else if (e.type === 'record.forgotten') {
+      if (e.record_id) read.drop(e.record_id);
+    } else if (e.type === 'records.erased') {
+      (e.record_ids || []).forEach((x) => read.drop(x));
+    } else {
+      read.retry();
+      lit(e.record_ids || []);
+    }
+    if (e.type !== 'record.revised') readMemory();
+  });
 
   // "Used by": grants to setups; none of it is drawn when the grants could not be read
   const [grants, setGrants] = useState<Grant[] | null>(null);
@@ -117,7 +147,6 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
   }
 
   const m = memory;
-  const line = [guided && doc.schema ? plural(doc.schema.types.length, schemaWord(provider)) : '', m.records?.count != null ? plural(m.records.count, 'record') : ''].filter(Boolean).join(' · ');
   const copy = async () => {
     try { await navigator.clipboard.writeText(m.id); toast('Memory ID copied'); }
     catch { toast('Text selected. Press Cmd or Ctrl + C.'); }
@@ -133,11 +162,6 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
           <Link className="ag-back" href="/memories" aria-label="Back to Memories" title="Memories">{BACK_IC}</Link>
           <div className="ag-ident">
             <div className="ag-l1"><h1 className="ag-name" title={m.name}>{m.name}</h1><span className="pill neutral">{vendorName(m.provider)}</span></div>
-            <div className="ag-l2">
-              {line ? <span className="mm-l2d">{line}</span> : null}
-              {line ? <span className="sep sep-id" aria-hidden="true">·</span> : null}
-              <span className="hid ag-hid"><span className="mono">{m.id}</span><button type="button" className="icon-btn xs" aria-label="Copy memory ID" title="Copy memory ID" onClick={() => void copy()}>{COPY}</button></span>
-            </div>
           </div>
         </div>
         <div className="ag-right mm-rights">
@@ -155,19 +179,20 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
               ) : null}
             </div>
           ) : null}
-          {canRename || canDelete ? (
+          {(
             <span className="mm-popw" ref={moreWrap}>
               <button type="button" className="icon-btn sm" aria-label="More" title="More" aria-expanded={pop === 'more'} onClick={() => setPop(pop === 'more' ? '' : 'more')}>{DOTS}</button>
               {pop === 'more' ? (
                 <div className="mm-pop mm-pop-r" role="menu">
+                  <button type="button" className="mm-mi" role="menuitem" onClick={() => { setPop(''); void copy(); }}><b>Copy memory ID</b></button>
                   {canRename ? <button type="button" className="mm-mi" role="menuitem" onClick={() => { setPop(''); setSheet('rename'); }}><b>Rename and describe</b></button> : null}
                   {canDelete ? <button type="button" className="mm-mi bad" role="menuitem" onClick={() => { setPop(''); setRefused(''); setSheet('delete'); }}><b>Delete memory</b></button> : null}
                 </div>
               ) : null}
             </span>
-          ) : null}
+          )}
         </div>
-        {guided ? (
+        {provider ? (
           <div className="tabs inline ag-tabs" role="tablist" onKeyDown={(e) => tabKeys(e, tabs.map(([k]) => k), tab, onTab)}>
             {tabs.map(([k, label]) => <button key={k} type="button" role="tab" aria-selected={tab === k} tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => onTab(k)}>{label}</button>)}
           </div>
@@ -180,13 +205,10 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
         </div>
       ) : null}
       {tab === 'schema' && provider ? (
-        schemaLabels(provider) ? <LabelsTab provider={provider} doc={doc} ro={ro} /> : (
-          <SchemaTab memory={m} provider={provider} doc={doc} ro={ro} countOf={countOf}
-            onOpenData={(t) => { setTypeFilter(t); onTab('data'); }} />
-        )
+        <SchemaEditor memory={m} provider={provider} doc={doc} ro={ro} countOf={countOf} onOpenData={(t: string) => { setTypeFilter(t); onTab('data'); }} />
       ) : (
         <DataTab memory={m} provider={provider} schema={doc.schema} read={read} setups={names} typeFilter={typeFilter} initialRecord={openRecord.current} onOpenRecord={keepOpen}
-          onSchema={() => onTab('schema')} onOtherMemory={(mid, rid) => router.push(`/memories/${enc(mid)}?tab=data&record=${enc(rid)}`)} onChanged={readMemory} />
+          onSchema={() => onTab('schema')} onOtherMemory={(mid, rid) => router.push(`/memories/${enc(mid)}?tab=data&record=${enc(rid)}`)} onChanged={readMemory} liveTick={liveTick} pulse={pulse} />
       )}
       {sheet === 'rename' ? <RenameSheet m={m} onClose={() => setSheet('')} onDone={(x) => { setMemory({ ...m, ...x }); setSheet(''); toast('Saved'); }} /> : null}
       {sheet === 'delete' ? (

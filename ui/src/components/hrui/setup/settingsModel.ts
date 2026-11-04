@@ -118,6 +118,7 @@ export function brickLayer(tw: string): LayerKey | null {
   if (tw === 'b-runtime' || tw === 'model') return 'harness';
   if (tw === 'task') return 'instructions';
   if (tw === 'skill' || tw === 'plugin' || tw === 'mcp') return 'caps';
+  if (tw === 'memory') return 'memory';
   if (tw === 'env' || tw === 'backend' || /^b-/.test(tw)) return 'runtime';
   return null;
 }

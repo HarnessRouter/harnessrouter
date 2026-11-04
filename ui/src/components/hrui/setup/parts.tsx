@@ -4,7 +4,8 @@
 // the Agent stack column beside the work, its 56 px head on the same line as every other column's.
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { isoSvg, LAYERS, PARTS, SUBS, type Drops } from '../tower';
+import { isoSvg, LAYERS, PARTS, SUBS, withMemories, type Drops } from '../tower';
+import { useHarnessMemories } from './harnessMemories';
 import { partIcon } from '../bricks';
 import { tabKeys } from '../tabKeys';
 import { ago, healthOf, type SetupRow } from '../setups';
@@ -149,10 +150,10 @@ export function useSideOff(): [boolean, () => void] {
   return [off, toggle];
 }
 
-const PART_FAM: Record<string, string> = { plugin: 'plugin', skill: 'skill', mcp: 'mcp', env: 'tool' };
+const PART_FAM: Record<string, string> = { plugin: 'plugin', skill: 'skill', mcp: 'mcp', env: 'tool', memory: 'memory' };
 
 /** The Agent stack column (the design's full towerHtml): status, the tower with every brick named,
- *  the four optional parts by colour, and what each zone is (HarnessRouter, agent harness, model).
+ *  the five optional parts by colour, and what each zone is (HarnessRouter, agent harness, model).
  *  Every brick, part and zone is a way into the Settings layer it is.
  *  `live`: the bricks a test's turn on this page is working through now (stackLive), so each layer
  *  lights as the turn reaches it; without one, a running task lights the layers it uses.
@@ -165,7 +166,9 @@ export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
   off: boolean; onToggle: () => void; focus?: LayerKey;
   now?: React.ReactNode; drops?: Drops | null;
 }) {
-  const tower = live ? liveTower(r.tower, live) : r.tower;
+  const memories = useHarnessMemories(r.h.id);
+  const set = memories ? withMemories(r.tower, memories.length) : r.tower;
+  const tower = live ? liveTower(set, live) : set;
   const st = tower.st;
   const built = LAYERS.filter((L) => st[L.key] === 'built' || st[L.key] === 'run').length;
   const running = runningNames(tower, !!live);
@@ -178,6 +181,7 @@ export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
     plugin: recordNames(r.added.plugins) || [],
     mcp: r.added.tools.filter((x) => x.on).map((x) => x.name),
     env: [],
+    memory: memories || [],
   };
   const logo = harnessLogoSrc(r.h.base);
   const zr = (z: string, kick: string, val: React.ReactNode, cls: string, tw: string) => (
@@ -202,7 +206,7 @@ export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
           many are on, never a built-in skill or tool; a part with none added says none yet */}
       <div className="parts" role="group" aria-label="Parts">
         {PARTS.map(([k, label]) => {
-          const n = r.tower.parts[k];
+          const n = set.parts[k];
           return n ? (
             <button key={k} type="button" className="part built" data-tw={k} title={names[k].length === n ? names[k].join(', ') : undefined}>
               <span className="part-ic" dangerouslySetInnerHTML={{ __html: partIcon('built', PART_FAM[k]) }} />
@@ -210,7 +214,7 @@ export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
             </button>
           ) : (
             <button key={k} type="button" className="part locked" data-partlock={k} title="Add it in Settings" aria-label={`${label}, none yet`}>
-              <span className="part-ic" dangerouslySetInnerHTML={{ __html: partIcon('empty', '') }} />
+              <span className="part-ic" dangerouslySetInnerHTML={{ __html: partIcon('empty', k === 'memory' ? 'memory' : '') }} />
               <span className="part-n">{label}</span>
             </button>
           );

@@ -2,12 +2,12 @@
 // The sheets Settings opens (docs/uxuidesign/console-79: delAgentHtml, popHtml's env picker), plus
 // the ones the design has no drawing for but the setup needs: a copy on another agent harness (the
 // design hands this to its New setup sheet) and an installed plugin package.
+import { isServiceEntry } from './setupParts';
 import Link from 'next/link';
 import { useRef, useState } from 'react';
 import { strToU8, zipSync } from 'fflate';
 import {
-  createCustom, deleteCustom, getPluginFiles, getSkillFiles, offeredOob, oobById, oobDefaultModel, oobModels, modelAvailability, setHarnessPlugs, useModelCatalogRead, PLUGS_ENTRY_ID,
-  type BaseInfo, type CustomHarness, type HarnessPlugin, type HarnessPlugs,
+  createCustom, deleteCustom, getPluginFiles, getSkillFiles, offeredOob, oobById, oobDefaultModel, oobModels, modelAvailability, setHarnessPlugs, useModelCatalogRead, type BaseInfo, type CustomHarness, type HarnessPlugin, type HarnessPlugs,
 } from '@/lib/harness';
 import type { Environment } from '@/lib/environments';
 import { Sheet, SheetTop } from '../Sheet';
@@ -158,7 +158,7 @@ export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
   const notes = [
     !takesSkills && ownSkills.length ? `${o?.name || base} takes no skills, so the copy has none.` : '',
     !takesEnv && h.environment ? `${o?.name || base} can’t open an environment, so the copy has none.` : '',
-    (h.mcpServers || []).some((m) => m.id !== PLUGS_ENTRY_ID) || Object.keys(h.env || {}).length
+    (h.mcpServers || []).some((m) => !isServiceEntry(m)) || Object.keys(h.env || {}).length
       ? 'Its MCP servers and environment variables are not copied: add them in the copy’s Settings.' : '',
   ].filter(Boolean);
 

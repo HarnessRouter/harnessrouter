@@ -2833,7 +2833,6 @@
 #hrui .iso .lbl-card:where(:not(.hrui-legacy *)){letter-spacing:-.01em}
 /* four optional parts under the Agent stack share the width instead of a fixed 88px each */
 #hrui .parts:where(:not(.hrui-legacy *)){gap:2px}#hrui .parts .part:where(:not(.hrui-legacy *)){width:auto;flex:1 1 0;min-width:0;padding:6px 4px 5px}#hrui .parts .part small:where(:not(.hrui-legacy *)){text-wrap:balance;text-align:center}
-@media (max-width:1399px){#hrui .agent-side .parts:where(:not(.hrui-legacy *)){display:grid;grid-template-columns:repeat(2,1fr);row-gap:4px}}
 
 /* ==== Start, side by side (Oct 17): question, box, then three equal ways in one strip split by hairlines ==== */
 #hrui .sg5:where(:not(.hrui-legacy *)){max-width:1180px;margin:0 auto;padding:clamp(28px,6.4vh,72px) 40px 64px}
@@ -3160,11 +3159,10 @@
 @media (max-width:700px){#hrui .cap-head:where(:not(.hrui-legacy *)){border-bottom:0}#hrui .cap-head .cap-tabs:where(:not(.hrui-legacy *)){flex-basis:100%;border-bottom:1px solid var(--line)}#hrui .cap-find input:where(:not(.hrui-legacy *)){max-width:none}}
 
 /* the four part slots: one even grid, names on one baseline; an empty slot is just its grey brick and its name */
-#hrui .agent-side .parts:where(:not(.hrui-legacy *)){display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;align-items:start;justify-items:stretch}
+#hrui .agent-side .parts:where(:not(.hrui-legacy *)){display:grid;grid-template-columns:repeat(5,auto);justify-content:space-between;gap:0;align-items:start;justify-items:stretch}
 #hrui .agent-side .parts .part:where(:not(.hrui-legacy *)){width:auto;padding:6px 2px 5px}
 #hrui .agent-side .part-n:where(:not(.hrui-legacy *)){white-space:nowrap;font-size:13px}
 #hrui .agent-side .part.locked .part-n:where(:not(.hrui-legacy *)){color:var(--muted);font-weight:500}
-@media (max-width:1399px){#hrui .agent-side .parts:where(:not(.hrui-legacy *)){grid-template-columns:repeat(2,minmax(0,1fr));row-gap:4px}}
 
 /* going live: confetti, the stack turns into a little house on the same spot, and back. About three seconds, nothing else moves */
 #hrui .h-wall:where(:not(.hrui-legacy *)){--b-top:#e3e9ff;--b-left:#c9d5ff;--b-right:#aebfff;--b-line:#7e93ec}

@@ -6,6 +6,7 @@
 //
 // The isometric helper is the same geometry as tower.ts's (not exported there).
 import { useState } from 'react';
+import { memoryDrum } from './memoryBrick';
 
 function Iso(u: number, zh: number) {
   const c = 0.866, zH = zh, bb = { x0: 1e9, y0: 1e9, x1: -1e9, y1: -1e9 };
@@ -31,9 +32,10 @@ function Iso(u: number, zh: number) {
 }
 
 export type PartState = 'empty' | 'next' | 'built' | 'run';
-/** One small brick in a family's colour: `mcp` a tool, `skill`, `plugin`, `tool` an environment. */
+/** One small brick in a family's colour: `mcp` a tool, `skill`, `plugin`, `tool` an environment. `memory` is its own
+ *  shape, not a brick of another colour. */
 export function partIcon(state: PartState, fam: string): string {
-  const K = Iso(8, 0.9), g = K.box(0, 0, 0, 2, 2, 1) + K.stud(1, 1, 1, 2);
+  const K = Iso(8, 0.9), g = fam === 'memory' ? memoryDrum(K.P, 8, 1, 1, 0, 1) : K.box(0, 0, 0, 2, 2, 1) + K.stud(1, 1, 1, 2);
   const wr = K.wrap('<g class="bk f-' + (fam || 'parts') + ' ' + state + '">' + g + '</g>', 2);
   return '<svg class="iso" viewBox="0 0 ' + wr.w.toFixed(0) + ' ' + wr.h.toFixed(0) + '" width="100%" aria-hidden="true">' + wr.svg + '</svg>';
 }
