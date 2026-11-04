@@ -67,6 +67,21 @@ async def check(api_key: str, base_url: str = "") -> str:
     return "" if r.status_code == 200 else f"Hindsight refused the connection (HTTP {r.status_code})."
 
 
+def _sentence(text) -> tuple[str, dict]:
+    """Hindsight writes a fact as "<what> | When: … | Where: … | Involving: … | <why>", and only the first part
+    is the sentence, which is how its own consolidation reads it too. The rest comes back as attributes, except
+    who is involved: those are the fact's references already."""
+    what, *rest = str(text or "").split(" | ")
+    more: dict = {}
+    for part in rest:
+        key, sep, val = part.partition(": ")
+        if sep and key in ("When", "Where"):
+            more[key.lower()] = val
+        elif not (sep and key == "Involving") and part.strip():
+            more["why"] = part.strip()
+    return what, more
+
+
 def _now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{_dt.datetime.now(_dt.timezone.utc).microsecond // 1000:03d}Z"
 
@@ -203,10 +218,17 @@ class Hindsight(mp.Provider):
             refs.append({"rel": "derived_from", "memory_id": mid, "record_id": str(unit["document_id"])})
         kind = unit.get("fact_type") or unit.get("type")
         labels = sorted(str(n)[len(LABEL):] for n in names if self._is_label(n))
-        return {"id": str(unit["id"]), "type": "fact", "title": "", "content": [{"type": "text", "text": str(unit.get("text") or "")}],
-                "attributes": {**({"kind": kind} if kind else {}), **({"labels": labels} if labels else {})}, "references": refs, "version": 1,
+        said, more = _sentence(unit.get("text"))
+        if unit.get("occurred_start"):
+            more.pop("when", None)             # the time says it, as a date
+        return {"id": str(unit["id"]), "type": "fact", "title": "", "content": [{"type": "text", "text": said}],
+                # `world` is its word for a plain fact. Only what sets one apart is worth a reader's attention.
+                "attributes": {**({"kind": kind} if kind and kind != "world" else {}), **more, **({"labels": labels} if labels else {})},
+                "references": refs, "version": 1,
                 "status": "active" if active else "forgotten", "supersedes": None,
-                "time": {"valid_from": unit.get("occurred_start"), "valid_to": unit.get("occurred_end"),
+                # the end of one event is when it happened, not when the fact stopped being true
+                "time": {"valid_from": unit.get("occurred_start"),
+                         "valid_to": unit.get("occurred_end") if unit.get("occurred_end") != unit.get("occurred_start") else None,
                          "written_at": unit.get("mentioned_at") or unit.get("date"), "invalidated_at": unit.get("invalidated_at")},
                 "written_by": {"kind": "provider", "id": self.id}}
 

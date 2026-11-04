@@ -92,12 +92,15 @@ export function Connections({ record, graph, failed, retry, hops, setHops, schem
             const rad = me ? 17 : far ? 8 : 11, mx = me ? 24 : far ? 13 : 17;
             const cap = schema?.types.find((t) => t.name === kindOf(n.record))?.caption;
             const full = (cap && cap !== 'title' ? String(n.record.attributes?.[cap] || '') : '') || labelOf(n.record) || 'Untitled';
-            const lab = full.length > mx ? `${full.slice(0, mx - 1).trim()}…` : full;
             const ca = Math.cos(p[2]), sa = Math.sin(p[2]);
             let lx = 0, ly = rad + 14, an: 'middle' | 'start' | 'end' = 'middle';
             if (!me && !far && hops === 1) {
               if (ca > 0.35) { lx = rad + 6; ly = 4; an = 'start'; } else if (ca < -0.35) { lx = -rad - 6; ly = 4; an = 'end'; } else if (sa < 0) ly = -rad - 7;
             }
+            // a label beside its node has only the room up to the panel's edge
+            const room = an === 'end' ? p[0] - rad - 6 : an === 'start' ? W - p[0] - rad - 6 : W;
+            const fit = Math.min(mx, Math.max(4, Math.floor(room / 6)));
+            const lab = full.length > fit ? `${full.slice(0, fit - 1).trim()}…` : full;
             return (
               <g key={id} className={`mm-cn${me ? ' me' : ''}`} transform={`translate(${p[0].toFixed(1)} ${p[1].toFixed(1)})`} onClick={() => onOpen(id, n.memory.id)}>
                 <circle r={rad + 5} className="mm-cnh" /><circle r={rad} fill={k.color} />

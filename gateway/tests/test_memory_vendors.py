@@ -83,6 +83,20 @@ def test_a_label_is_on_the_fact_and_never_an_entity(wired):
     assert about == ["ent_e1"], "a label must not become an edge of the graph"
 
 
+def test_a_fact_says_its_sentence_and_nothing_else_is_passed_off_as_it():
+    """Measured: "<what> | When: … | Where: … | Involving: … | <why>", which read as a title on the page."""
+    h = memory_hindsight.Hindsight("http://vendor.test")
+    x = h._fact_out("m", {"id": "u", "state": "valid", "text": "Acme signed up | When: on October 28, 2026 | Where: Lisbon | Involving: Acme | they needed seats",
+                          "occurred_start": "2026-10-28", "occurred_end": "2026-10-28", "fact_type": "world"}, {})
+    assert x["content"][0]["text"] == "Acme signed up"
+    assert x["attributes"] == {"where": "Lisbon", "why": "they needed seats"}, "a date is in the time, and who is in the references"
+    assert x["time"]["valid_from"] == "2026-10-28" and x["time"]["valid_to"] is None, "one event's end isn't when a fact stopped being true"
+    y = h._fact_out("m", {"id": "u", "state": "valid", "text": "Dana worked there | When: for years", "occurred_start": "2019-01-01", "occurred_end": "2021-01-01", "fact_type": "observation"}, {})
+    assert y["time"]["valid_to"] == "2021-01-01" and y["attributes"] == {"kind": "observation"}
+    z = h._fact_out("m", {"id": "u", "state": "valid", "text": "Dana runs it | When: every Tuesday"}, {})
+    assert z["attributes"] == {"when": "every Tuesday"}, "with no date, its words are all there is"
+
+
 def test_a_labels_entity_cant_be_read_by_its_id(wired):
     wired(memory_hindsight, _hs)
     assert run(memory_hindsight.Hindsight("http://vendor.test").get("m", "ent_e2")) is None
