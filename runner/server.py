@@ -142,6 +142,11 @@ if _SESSION_UIDS and os.geteuid() != 0:
     raise RuntimeError("HR_SESSION_UIDS=1 requires the runner to run as root (it switches to a "
                        "per-session uid for every agent process); refusing to start on a shared uid")
 if _SESSION_UIDS:
+    # _fs_as changes a thread's filesystem uid and gid. Supplementary groups stay the process's, and root's hold
+    # group 0, so inside that scope a link the session planted still reached whatever group 0 could write. Root
+    # needs none of them (its capabilities decide outside the scope), and every session process is given its own
+    # list (_as_session).
+    os.setgroups([])
     _secured = environments.secure_store()   # environments from before per-environment groups
     if _secured:
         print(f"[runner] environments: {_secured} older environment(s) now readable by their own group only", flush=True)
@@ -17100,6 +17105,17 @@ class TurnReq(BaseModel):
     input_requests: bool = False            # claude: serve `ask_user`, and end the turn at its call (#476)
 
 
+def _session_tree_refused(e: OSError, ws: str) -> bool:
+    """Whether a turn could not start because of what is at a name in its own session's tree. The tree is the
+    agent's, so a link, a file where a directory goes or a changed mode stays until someone changes it, and a retry
+    meets it again. Anything else (a full disk, too many open files) is the runner's, and may pass."""
+    if not isinstance(e, (PermissionError, IsADirectoryError, NotADirectoryError, FileExistsError,
+                          FileNotFoundError)) and e.errno != errno.ELOOP:
+        return False
+    name = os.fspath(e.filename) if isinstance(e.filename, os.PathLike) else e.filename
+    return isinstance(name, str) and (name == ws or name.startswith(ws.rstrip("/") + "/"))
+
+
 @app.post("/turn")
 def turn(req: TurnReq, identifier: str = "") -> dict:
     """Start a turn. Its routes leave when its runner thread returns (_routes_end_with_turn), or here
@@ -17112,6 +17128,13 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         out = _start_turn(req, identifier)
         started = not out.get("deduplicated")
         return out
+    except OSError as e:
+        if not _session_tree_refused(e, req.cwd or _ws(identifier)):
+            raise
+        print(f"[turn] {identifier}: the session's tree refused a write: {type(e).__name__} {e.filename}", flush=True)
+        # A verdict, not a 500: the gateway waits a 5xx out over minutes, and no wait changes this.
+        raise HTTPException(409, "a file in this task's workspace can't be written, so it can't go on. "
+                                 "Start a new task.") from e
     finally:
         if not started:
             _relay_forget(tokens)

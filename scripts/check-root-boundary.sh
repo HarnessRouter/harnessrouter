@@ -17,6 +17,9 @@ pid_of() { ps -eo pid,args | awk -v p="$1" 'index($0, p) && !/awk/ {print $1; ex
 [ "$(home_of 1)" != "/home/agent" ] || fail "PID 1 has the product user's HOME"
 [ "$(home_of "$(pid_of 'uvicorn server:app')")" = "/root" ] || fail "the runner's HOME is $(home_of "$(pid_of 'uvicorn server:app')")"
 [ "$(home_of "$(pid_of 'uvicorn app:app')")" = "/home/agent" ] || fail "the gateway's HOME is $(home_of "$(pid_of 'uvicorn app:app')")"
+# A session scope changes the filesystem uid and gid, not these: with group 0 here a planted link reaches what group 0 can write.
+g=$(sed -n 's/^Groups:[[:space:]]*//p' "/proc/$(pid_of 'uvicorn server:app')/status" | tr -d ' ')
+[ -z "$g" ] || fail "the runner keeps supplementary groups: $g"
 
 for t in /app/x /app/ui/json.py /app/runner/x /app/gateway/x /data/agent-tools/x; do
   if su -s /bin/sh agent -c "touch '$t'" 2>/dev/null; then rm -f "$t"; fail "the product user can write $t"; fi
