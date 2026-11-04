@@ -229,7 +229,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 # did not opt into is a row that fails on its first turn with no explanation. Disk is the
 # trade — jcode is a ~127 MB static Rust binary and the two Python bases bring their own venvs —
 # and an operator who wants them out sets HR_BACKENDS.
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode,roder}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -1048,26 +1048,29 @@ install_mimo() {
   fi
 }
 
-# Roder publishes checksums beside its Linux binaries, like jcode below.
+# Pin the release archives independently of the download host's checksum files.
+RODER_PIN="${HR_RODER_VERSION:-0.4.8}"
 install_roder() {
   case "$(uname -m)" in
-    x86_64) rd_arch="x86_64" ;;
-    aarch64|arm64) rd_arch="aarch64" ;;
+    x86_64) rd_arch="x86_64"; rd_expected="de6a8a642894164004d4fd434c6a6f44ec08657083bf2b1420a97f7f4fd00a31" ;;
+    aarch64|arm64) rd_arch="aarch64"; rd_expected="978a84c872d22301036dd6f3d707559d1b9648bd9e6aa4149dd52c6456c68af5" ;;
     *) echo "unsupported architecture for Roder: $(uname -m)"; return 1 ;;
   esac
-  rd_base="https://github.com/RoderAI/roder/releases/download/latest"
+  # An operator selecting a different release must supply that archive's trusted checksum.
+  if [ "$RODER_PIN" != "0.4.8" ]; then rd_expected="${HR_RODER_SHA256:-}"; fi
+  if [[ ! "$rd_expected" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Roder: set HR_RODER_SHA256 for version $RODER_PIN"; return 1
+  fi
   rd_asset="roder-$rd_arch-unknown-linux-gnu"
   rd_tmp="$(mktemp -d)"
-  curl -fsSL "$rd_base/$rd_asset" -o "$rd_tmp/roder" || { rm -rf "$rd_tmp"; return 1; }
-  curl -fsSL "$rd_base/SHA256SUMS" -o "$rd_tmp/SHA256SUMS" || { rm -rf "$rd_tmp"; return 1; }
-  rd_want="$(awk -v asset="$rd_asset" '$2 == asset {print $1}' "$rd_tmp/SHA256SUMS")"
-  rd_have="$(sha256sum "$rd_tmp/roder" | awk '{print $1}')"
-  if [ -z "$rd_want" ] || [ "$rd_want" != "$rd_have" ]; then
-    echo "Roder: checksum mismatch for $rd_asset (want ${rd_want:-none}, have $rd_have)"
-    rm -rf "$rd_tmp"; return 1
+  rd_base="https://github.com/RoderAI/roder/releases/download/roder/v$RODER_PIN"
+  curl -fsSL "$rd_base/$rd_asset.tar.gz" -o "$rd_tmp/archive.tar.gz" || { rm -rf "$rd_tmp"; return 1; }
+  rd_have="$(sha256sum "$rd_tmp/archive.tar.gz" | awk '{print $1}')"
+  if [ "$rd_expected" != "$rd_have" ]; then
+    echo "Roder: checksum mismatch for $rd_asset"; rm -rf "$rd_tmp"; return 1
   fi
-  mkdir -p "$TOOLS/bin"
-  install -m 755 "$rd_tmp/roder" "$TOOLS/bin/roder" || { rm -rf "$rd_tmp"; return 1; }
+  tar -xzf "$rd_tmp/archive.tar.gz" -C "$rd_tmp" "$rd_asset/roder" || { rm -rf "$rd_tmp"; return 1; }
+  install -m 755 "$rd_tmp/$rd_asset/roder" "$TOOLS/bin/roder" || { rm -rf "$rd_tmp"; return 1; }
   rm -rf "$rd_tmp"
 }
 
@@ -1607,8 +1610,8 @@ install_backends() {
     try_install "MiMo Code" install_mimo || true
   fi
 
-  if wanted roder && [ ! -x "$(backend_bin roder)" ]; then
-    echo "[harnessrouter] installing Roder (Apache-2.0)…"
+  if wanted roder && [ "$("$(backend_bin roder)" --version 2>/dev/null | awk '{print $2}')" != "$RODER_PIN" ]; then
+    echo "[harnessrouter] installing Roder $RODER_PIN (MIT, version-pinned)…"
     try_install "Roder" install_roder || true
   fi
 

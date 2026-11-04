@@ -25,8 +25,11 @@ def test_roder_offers_current_model_families_and_default():
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "runner"))
     import roder_backend
     assert A._MODEL_CATALOG["roder"]["default"] == roder_backend.DEFAULT_MODEL == "gpt-6.1-sol"
-    assert {"gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
-            "claude-fable-5-1", "claude-opus-5.5", "gemini-4-argon",
-            "grok-4.6", "deepseek-v4.1-flash", "kimi-k3", "qwen3.8-max"} <= set(models)
+    assert models == ["gpt-6.1-sol"]
     for provider in ("openrouter", "vercel", "llmtr", "tokenrouter", "harnessrouter"):
         assert A._INTEGRATION_WIRING[(provider, "roder")] == "tokenrouter"
+
+
+def test_roder_inherits_responses_channel_refusals():
+    for channel in ("tokenrouter", "harnessrouter"):
+        assert A._CHANNEL_REFUSES[(channel, "roder")] == A._CHANNEL_REFUSES[(channel, "dcode")]
