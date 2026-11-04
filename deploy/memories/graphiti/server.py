@@ -169,13 +169,21 @@ async def search(b: SearchIn) -> dict:
     return {"edges": [edge_out(e) for e in res.edges], "nodes": [node_out(n) for n in res.nodes], "episodes": [episode_out(x) for x in res.episodes]}
 
 
+async def mentioned_in(g, group: str) -> dict[str, list[str]]:
+    rows, _, _ = await g.driver.execute_query(
+        "MATCH (e:Episodic)-[:MENTIONS]->(n:Entity) WHERE e.group_id = $group RETURN n.uuid AS uuid, collect(e.uuid) AS episodes", group=group)
+    return {r["uuid"]: r["episodes"] for r in rows}
+
+
 @app.get("/groups/{group}/nodes", dependencies=[Depends(auth)])
 async def nodes(group: str, limit: int = 100) -> list[dict]:
     g = await ready(group)
     try:
-        return [node_out(n) for n in await EntityNode.get_by_group_ids(g.driver, [group], limit=limit)]
+        found = await EntityNode.get_by_group_ids(g.driver, [group], limit=limit)
     except GroupsNodesNotFoundError:
         return []
+    mentioned = await mentioned_in(g, group)
+    return [{**node_out(n), "episodes": mentioned.get(n.uuid, [])} for n in found]
 
 
 @app.get("/groups/{group}/edges", dependencies=[Depends(auth)])
@@ -223,7 +231,7 @@ async def forget_episode(group: str, uid: str, b: EpisodeForget) -> dict:
 async def node(group: str, uid: str) -> dict:
     g = await ready(group)
     try:
-        return node_out(await EntityNode.get_by_uuid(g.driver, uid))
+        return {**node_out(await EntityNode.get_by_uuid(g.driver, uid)), "episodes": (await mentioned_in(g, group)).get(uid, [])}
     except Exception:  # noqa: BLE001 -- graphiti raises its own error for a miss
         raise HTTPException(404, "no such node") from None
 

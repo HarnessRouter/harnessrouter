@@ -323,13 +323,14 @@
 @media (max-width:1180px){
   #hrui .mm-data{overflow:hidden}
   #hrui .mm-data.no-conn{grid-template-columns:260px minmax(0,1fr)}
-  #hrui .mm-conn{box-shadow:none}
-  #hrui .mm-data.conn-open .mm-conn{box-shadow:-20px 0 40px rgba(0,0,0,.12)}
+  /* hidden as well as moved aside, or the keyboard walks through a drawer nobody can see */
+  #hrui .mm-conn{box-shadow:none;visibility:hidden;transition:transform .2s,visibility 0s .2s}
+  #hrui .mm-data.conn-open .mm-conn{box-shadow:-20px 0 40px rgba(0,0,0,.12);visibility:visible;transition:transform .2s}
 }
 @media (max-width:860px){
   #hrui .mm-data.no-conn{grid-template-columns:minmax(0,1fr)}
-  #hrui .mm-tree{box-shadow:none}
-  #hrui .mm-data.tree-open .mm-tree{box-shadow:20px 0 40px rgba(0,0,0,.12)}
+  #hrui .mm-tree{box-shadow:none;visibility:hidden;transition:transform .2s,visibility 0s .2s}
+  #hrui .mm-data.tree-open .mm-tree{box-shadow:20px 0 40px rgba(0,0,0,.12);visibility:visible;transition:transform .2s}
   #hrui .mm-schema{overflow:hidden}
   #hrui .mm-panel{box-shadow:none}
   #hrui .mm-schema.has-sel .mm-panel{box-shadow:0 -20px 40px rgba(0,0,0,.12)}

@@ -77,7 +77,7 @@ def test_a_label_is_on_the_fact_and_never_an_entity(wired):
     wired(memory_hindsight, _hs)
     h = memory_hindsight.Hindsight("http://vendor.test")
     assert [x["title"] for x in run(h.list("m", {"types": ["entity"]}))["records"]] == ["Globex"]
-    fact = run(h.list("m", {"limit": 10}))["records"][0]
+    fact = next(x for x in run(h.list("m", {"limit": 10}))["records"] if x["type"] == "fact")
     assert fact["attributes"]["labels"] == ["Company", "Product"]
     about = [r["record_id"] for r in fact["references"] if r["rel"] == "about"]
     assert about == ["ent_e1"], "a label must not become an edge of the graph"
@@ -142,6 +142,20 @@ def test_a_stated_record_is_kept_word_for_word_under_an_id_we_chose(wired):
     assert item["content"] == "Refunds take 30 days." and "t:fact" in item["tags"]
     bank = w.to("/config")[0]["body"]["updates"]["retain_strategies"][memory_hindsight.STATED]
     assert bank == {"retain_extraction_mode": "chunks"}, "words are kept only with no extraction"
+
+
+def test_a_memorys_count_is_what_its_lists_hold(wired):
+    """Its /stats route stayed at zero for minutes while facts were there to read."""
+    def answer(method, path, params, body):
+        if path == BANK + "/stats":
+            return {"total_nodes": 0}
+        if path == BANK + "/memories/list":
+            return {"items": [], "total": 3}
+        if path == BANK + "/documents":
+            return {"items": [], "total": 1}
+        return _hs(method, path, params, body)
+    wired(memory_hindsight, answer)
+    assert run(memory_hindsight.Hindsight("http://vendor.test").count("m")) == 5, "3 facts, 1 episode, 1 entity, and a label is not an entity"
 
 
 def test_erasing_a_derived_fact_reports_it_stays_stored(wired):
@@ -236,6 +250,13 @@ def test_graphitis_check_tries_the_key_not_just_the_address(wired, status, ok):
 ])
 def test_a_folder_named_by_a_writer_stays_inside_the_memory(given, kept):
     assert memory_reme._folder({"folder": given}) == kept
+
+
+def test_an_episode_is_kept_in_plain_words(wired):
+    """A person reads this title in the tree, and markdown there reads as stray asterisks."""
+    w = wired(memory_reme, lambda *a: {"success": True, "metadata": {}})
+    run(memory_reme.ReMe("http://vendor.test").observe("hmem_a", [{"content": [{"type": "text", "text": "hello", "role": "user"}]}], WRITER))
+    assert "user: hello" in w.to("/save")[0]["body"]["content"] and "**" not in w.to("/save")[0]["body"]["content"]
 
 
 def test_remember_never_writes_outside_the_memorys_folder(wired):
@@ -442,6 +463,81 @@ def test_a_schema_is_refused_whole_and_in_words(client, bad, word):
     assert r.status_code == 422 and word in r.json()["error"]["message"], r.text
     assert len(mp.PROVIDERS["vguides"].applied) == before
     assert client.get(f"/v1/memories/{mid}/schema", headers=ADA).json()["types"] == []
+
+
+# ── what is forgotten stays forgotten ─────────────────────────────────────────────────────────
+def _episode_and_fact(client, provider="vguides"):
+    mid = _memory(client, provider)
+    ep = client.post(f"/v1/memories/{mid}/records", headers=ADA, json={"type": "episode", "content": "user: the title is Wren. also Dana runs it."}).json()["id"]
+    mk = lambda text: client.post(f"/v1/memories/{mid}/records", headers=ADA, json={"type": "fact", "content": text, "references": [{"rel": "derived_from", "record_id": ep}]}).json()["id"]   # noqa: E731
+    return mid, ep, mk("The title is Wren."), mk("Dana runs it.")
+
+
+def test_forgetting_a_fact_closes_the_conversation_that_taught_it_and_nothing_else(client):
+    """Its words are in that conversation, and an agent can't be relied on to know: real turns left just this."""
+    mid, ep, title, other = _episode_and_fact(client)
+    assert client.delete(f"/v1/memories/{mid}/records/{title}", headers=ADA).status_code == 200
+    read = lambda rid: client.get(f"/v1/memories/{mid}/records/{rid}", headers=ADA).json()["status"]   # noqa: E731
+    assert read(title) == "forgotten" and read(ep) == "forgotten"
+    assert read(other) == "active", "what else it taught stays"
+    # forgetting another fact it taught finds it already closed, and that is no error
+    assert client.delete(f"/v1/memories/{mid}/records/{other}", headers=ADA).status_code == 200
+
+
+def test_a_fact_with_no_conversation_behind_it_closes_alone(client):
+    mid = _memory(client, "vguides")
+    a = client.post(f"/v1/memories/{mid}/records", headers=ADA, json={"type": "fact", "content": "A"}).json()["id"]
+    note = client.post(f"/v1/memories/{mid}/records", headers=ADA, json={"type": "note", "content": "B"}).json()["id"]
+    b = client.post(f"/v1/memories/{mid}/records", headers=ADA, json={"type": "fact", "content": "C", "references": [{"rel": "derived_from", "record_id": note}]}).json()["id"]
+    assert client.delete(f"/v1/memories/{mid}/records/{a}", headers=ADA).status_code == 200
+    assert client.delete(f"/v1/memories/{mid}/records/{b}", headers=ADA).status_code == 200
+    assert client.get(f"/v1/memories/{mid}/records/{note}", headers=ADA).json()["status"] == "active", "only a conversation closes this way"
+
+
+def test_hindsights_conversation_closes_without_taking_what_it_taught(wired):
+    doc = {"id": "hrec_d", "tags": ["t:episode"], "document_metadata": {}, "original_text": "the title is Wren"}
+    patched = []
+
+    def answer(method, path, params, body):
+        if path == BANK + "/documents/hrec_d":
+            if method == "PATCH":
+                patched.append(("doc", body))
+                doc["tags"] = body["tags"]
+            return doc
+        if path.startswith(BANK + "/memories/"):
+            patched.append(("fact", path))
+        return {}
+    wired(memory_hindsight, answer)
+    h = memory_hindsight.Hindsight("http://vendor.test")
+    run(h.close_episode("m", "hrec_d", WRITER))
+    assert patched == [("doc", {"tags": ["t:episode", "forgotten"]})], "its facts aren't touched"
+    assert run(h.get("m", "hrec_d"))["status"] == "forgotten"
+    run(h.close_episode("m", "hrec_d", WRITER))
+    assert len(patched) == 1, "already closed"
+
+
+def test_hindsight_lists_everything_a_person_has_to_see_to_forget_it(wired):
+    """Facts alone hid the conversations and the entities, from the console's tree and from an agent."""
+    def answer(method, path, params, body):
+        if path == BANK + "/documents":
+            return {"items": [{"id": "hrec_ep", "tags": ["t:episode"]}], "total": 1}
+        if path == BANK + "/documents/hrec_ep":
+            return {"id": "hrec_ep", "tags": ["t:episode"], "document_metadata": {}, "original_text": "said"}
+        return _hs(method, path, params, body)
+    wired(memory_hindsight, answer)
+    h = memory_hindsight.Hindsight("http://vendor.test")
+    rows = run(h.list("m", {"limit": 50}))["records"]
+    assert [r["type"] for r in rows] == ["episode", "entity", "fact"]
+    # the cursor is a position across all three, and pages don't repeat
+    first = run(h.list("m", {"limit": 2}))
+    assert [r["type"] for r in first["records"]] == ["episode", "entity"] and first["next"] == "2"
+    assert [r["type"] for r in run(h.list("m", {"limit": 2, "cursor": first["next"]}))["records"]][-1] == "fact"
+
+
+def test_a_graphiti_entity_names_the_conversations_that_mention_it():
+    g = memory_graphiti.Graphiti("http://vendor.test", "", ORG)
+    x = g._node_out("m", {"uuid": "n1", "name": "Acme", "labels": ["Entity"], "attributes": {}, "episodes": ["ep1"]})
+    assert {"rel": "derived_from", "memory_id": "m", "record_id": "ep_ep1"} in x["references"]
 
 
 # ── facts that change, and disagreements ──────────────────────────────────────────────────────

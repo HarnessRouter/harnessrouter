@@ -348,7 +348,7 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
 async def forget(mid: str, rid: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "write")
-    return await mp.present(org, mid, await (await mp.provider_of(m)).forget(mid, rid, mp.writer_of(member)), pr)
+    return await mp.present(org, mid, await mp.forget(await mp.provider_of(m), mid, rid, mp.writer_of(member)), pr)
 
 
 @router.post("/v1/memories/{mid}/erase")

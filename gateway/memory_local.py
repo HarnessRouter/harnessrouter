@@ -123,7 +123,7 @@ class Local:
     async def forget(self, mid, rid):
         async def go():
             prov, _ = await self._prov(mid, "write")
-            return await prov.forget(mid, rid, self.writer)
+            return await mp.forget(prov, mid, rid, self.writer)
         return await self._do(go())
 
     async def run_query(self, mid, name, params):

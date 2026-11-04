@@ -112,8 +112,9 @@ class Graphiti(mp.Provider):
         attrs = js("hr_attributes", "{}") if stated else {**plain, **({"entity_type": label} if label else {})}
         rtype = str(a.get("hr_type") or "entity")
         body = str(n.get("summary") or "")
+        refs = js("hr_refs", "[]") + [{"rel": "derived_from", "memory_id": mid, "record_id": EPISODE + str(x)} for x in n.get("episodes") or []]
         return {"id": NODE + str(n["uuid"]), "type": rtype, "title": str(a.get("hr_title") if stated else n.get("name") or "") or "",
-                "content": [{"type": "text", "text": body}] if body else [], "attributes": attrs, "references": js("hr_refs", "[]"), "version": version,
+                "content": [{"type": "text", "text": body}] if body else [], "attributes": attrs, "references": refs, "version": version,
                 "status": status, "supersedes": version - 1 if version > 1 else None,
                 "time": {"valid_from": a.get("hr_valid_from"), "valid_to": a.get("hr_valid_to"), "written_at": a.get("hr_written_at") or n.get("created_at"),
                          "invalidated_at": a.get("hr_written_at") if status != "active" else None},

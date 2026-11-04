@@ -184,9 +184,10 @@ class Hindsight(mp.Provider):
             parts = json.loads(meta.get("hr_parts") or "[]")
         except ValueError:
             pass
+        closed = "forgotten" in tags
         return {"id": str(doc["id"]), "type": "episode", "title": "", "content": parts or [{"type": "text", "text": str(doc.get("original_text") or "")}],
-                "attributes": json.loads(meta.get("hr_attributes") or "{}"), "references": [], "version": 1, "status": "active", "supersedes": None,
-                "time": {"valid_from": None, "valid_to": None, "written_at": doc.get("created_at"), "invalidated_at": None},
+                "attributes": json.loads(meta.get("hr_attributes") or "{}"), "references": [], "version": 1, "status": "forgotten" if closed else "active", "supersedes": None,
+                "time": {"valid_from": None, "valid_to": None, "written_at": doc.get("created_at"), "invalidated_at": doc.get("updated_at") if closed else None},
                 "written_by": json.loads(meta.get("hr_writer") or '{"kind":"provider","id":"hindsight"}')}
 
     def _fact_out(self, mid: str, unit: dict, entities: dict[str, str]) -> dict:
@@ -247,8 +248,16 @@ class Hindsight(mp.Provider):
         self._entities.pop(mid, None)
 
     async def count(self, mid):
-        r = await self._call("GET", self._bank(mid) + "/stats")
-        return int((r.json() or {}).get("total_nodes") or 0) if r.status_code == 200 else None
+        """What the tree holds, from the lists themselves. Its /stats route stayed at zero for minutes while
+        facts were there to read, and a memory that reads as empty opens on the wrong tab."""
+        facts = await self._call("GET", self._bank(mid) + "/memories/list", params={"limit": 1, "state": ACTIVE})
+        if facts.status_code == 404:
+            return 0
+        if facts.status_code != 200:
+            return None
+        eps = await self._call("GET", self._bank(mid) + "/documents", params={"tags": "t:episode", "limit": 1})
+        return int((facts.json() or {}).get("total") or 0) + len(await self._entity_ids(mid)) + \
+            (int((eps.json() or {}).get("total") or 0) if eps.status_code == 200 else 0)
 
     # ── writes ────────────────────────────────────────────────────────────────────────────────
     async def remember(self, mid, record, writer):
@@ -349,6 +358,12 @@ class Hindsight(mp.Provider):
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
         return self._fact_out(mid, {**r.json(), "state": "invalidated", "fact_type": r.json().get("type")}, {})
 
+    async def close_episode(self, mid, rid, writer):
+        """Only the conversation: its `forget` above invalidates every fact it taught, and these stay."""
+        doc = await self._doc(mid, rid)
+        if doc and "forgotten" not in (doc.get("tags") or []):
+            await self._call("PATCH", self._bank(mid) + f"/documents/{rid}", body={"tags": [*(doc.get("tags") or []), "forgotten"]})
+
     async def erase(self, mid, rids):
         erased, unreachable = [], []
         for rid in rids:
@@ -435,7 +450,14 @@ class Hindsight(mp.Provider):
             r = await self._call("GET", self._bank(mid) + "/documents", params={"tags": "t:episode", "limit": size, "offset": at})
             doc = r.json() if r.status_code == 200 else {}
             rows = [self._doc_out(mid, await self._doc(mid, str(d["id"])) or d) for d in doc.get("items") or []]
+            if req.get("include") != "all":
+                rows = [x for x in rows if x["status"] == "active"]
             return {"records": rows, "next": str(at + size) if at + size < int(doc.get("total") or 0) else None}
+        if not types:
+            return await self._list_all(mid, req, at, size)
+        return await self._list_facts(mid, req, at, size, types)
+
+    async def _list_facts(self, mid, req, at, size, types):
         params = {"limit": size, "offset": at}
         if req.get("include") != "all":
             params["state"] = ACTIVE
@@ -451,6 +473,32 @@ class Hindsight(mp.Provider):
             rows.append(x)
         total = int(doc.get("total") or 0)
         return {"records": rows, "next": str(at + size) if at + size < total else None}
+
+    async def _list_all(self, mid, req, at, size):
+        """Every kind in one list, which Hindsight keeps in three places: conversations, then entities, then
+        facts, with the cursor a position across them. Facts alone would hide what a person or an agent has
+        to be able to see to forget it."""
+        rows: list[dict] = []
+        start = 0
+        for kind in (["episode"], ["entity"], ["fact"]):
+            total = await self._kind_total(mid, kind[0])
+            end = start + total
+            if at + size > start and at < end and len(rows) < size:
+                offset, room = max(at - start, 0), size - len(rows)
+                page = (await self._list_facts(mid, req, offset, room, None) if kind == ["fact"] else
+                        await self.list(mid, {**req, "types": kind, "limit": room, "cursor": str(offset)}))
+                rows += page["records"]
+            start = end
+        return {"records": rows, "next": str(at + size) if at + size < start else None}
+
+    async def _kind_total(self, mid, kind) -> int:
+        if kind == "entity":
+            r = await self._call("GET", self._bank(mid) + "/entities", params={"limit": 1})
+        elif kind == "episode":
+            r = await self._call("GET", self._bank(mid) + "/documents", params={"tags": "t:episode", "limit": 1})
+        else:
+            r = await self._call("GET", self._bank(mid) + "/memories/list", params={"limit": 1, "state": ACTIVE})
+        return int((r.json() or {}).get("total") or 0) if r.status_code == 200 else 0
 
     async def recall(self, mid, req):
         degraded: list[str] = []

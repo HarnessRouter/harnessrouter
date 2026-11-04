@@ -144,6 +144,11 @@ class Provider:
     async def forget(self, mid: str, rid: str, writer: dict) -> dict:
         self._no("forget a record")
 
+    async def close_episode(self, mid: str, rid: str, writer: dict) -> None:
+        """A conversation closed because something it taught was forgotten, and nothing else with it. Where
+        a provider's `forget` of an episode takes what it taught along too, it says otherwise here."""
+        await self.forget(mid, rid, writer)
+
     async def erase(self, mid: str, rids: list[str]) -> dict:
         self._no("erase")
 
@@ -680,6 +685,26 @@ async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict
     if placing:
         made = {**made, "closed": [str(o["id"]) for o in closes], "conflicts": conflicts}
     return made
+
+
+async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
+    """A record closed, for a person's request and an agent's tool alike. The words of what a conversation
+    taught are still in that conversation, and an agent asked to forget something can't be relied on to know
+    that: real turns left exactly this behind. So the conversation closes with it. What else it taught stays."""
+    before = await prov.get(mid, rid)
+    out = await prov.forget(mid, rid, writer)
+    by_server = {"kind": "provider", "id": prov.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}
+    for ref in (before or {}).get("references") or []:
+        src = str(ref.get("record_id") or "")
+        if ref.get("rel") != "derived_from" or str(ref.get("memory_id") or mid) != mid or not src:
+            continue
+        try:
+            source = await prov.get(mid, src)
+            if source and source.get("type") == "episode" and source.get("status") == "active":
+                await prov.close_episode(mid, src, by_server)
+        except MemoryError:
+            continue      # the record asked about is closed; a source that can't close is no reason to say otherwise
+    return out
 
 
 async def keep_on_both_ends(prov: Provider, mid: str, record: dict, writer: dict) -> None:

@@ -255,7 +255,7 @@ class ReMe(mp.Provider):
         for e in episodes:
             rid = "hrec_" + uuid.uuid4().hex
             parts = [p for p in e.get("content") or [] if p.get("text")]
-            body = "\n\n".join(f"**{p.get('role')}:** {p['text']}" if p.get("role") else str(p["text"]) for p in parts)
+            body = "\n\n".join(f"{p.get('role')}: {p['text']}" if p.get("role") else str(p["text"]) for p in parts)
             on_behalf = {"kind": "provider", "id": self.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}
             front = self._front(rid, {"type": "episode", "attributes": e.get("attributes") or {}, "content": [{"type": "text", "text": body}]}, on_behalf, 1)
             path = f"{self._dir(mid)}/episodes/{rid}.md"
