@@ -42,6 +42,7 @@ import { recordedFile, replaySpeed, type RecordedRun } from '../start/replay';
 import { forkFiles, forkInput, forkOffered, importedFirst, inputHistory, noteFork } from '../start/fork';
 import { AgentConversation, AgentComposer } from 'reifyui/agent-chat';
 import { AgentTurns, harnessMark } from './AgentTurns';
+import { InputRequestCard } from './InputRequestCard';
 import { FileCards, filesOf, type OpenFile } from './TurnFiles';
 import { workingNow } from './stackLive';
 import { sec } from './fmt';
@@ -310,18 +311,26 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
 
   // the composer (leanComposer): the box, attach, the model in its bar, send. A recorded run where this
   // server cannot continue one has a bar in its place: what it is, and Follow up (a task of yours)
+  // The question the last turn ended on, while it is the person's to answer (Tasks 3.2). Writing in
+  // the composer instead passes it over, which the server records.
+  const last = conv.msgs[conv.msgs.length - 1];
+  const asking = !recorded && !conv.busy && last?.role === 'assistant' && last.status === 'incomplete' ? last.inputRequest : undefined;
+  const answerCard = asking ? (
+    <InputRequestCard key={asking.id} request={asking} disabled={conv.busy || hold}
+      onAnswer={(answer, shown) => { void conv.send(shown, [], { input: [{ type: 'input_response', input_request_id: asking.id, answer }] }); }} />
+  ) : null;
   const composer = (ph: string) => (recorded && !offerFork ? (
     <div className="readonly"><span>Recorded task</span>
       {onFollowUp ? <button type="button" className="btn small" onClick={onFollowUp}>Follow up</button> : null}
     </div>
   ) : (
-    <AgentComposer value={input} onChange={setInput} onSend={send} onStop={playing ? undefined : () => conv.stop()}
+    <>{answerCard}<AgentComposer value={input} onChange={setInput} onSend={send} onStop={playing ? undefined : () => conv.stop()}
       running={conv.busy} stopping={conv.stopping} sendDisabled={!canGo}
       placeholder={ph} runningPlaceholder="Working on it. Write your next message here."
       ariaLabel={ph.replace(/…$/, '')} inputId="input" inputRef={ta}
       attachments={att ? [{ name: att.name, src: att.dataUri }] : []} onRemoveAttachment={() => setAtt(null)}
       onAttachFiles={(fl) => void pick(fl[0])} accept={ACCEPT} left={pgOpts()}
-      labels={{ send: 'Run task' }} />
+      labels={{ send: 'Run task' }} /></>
   ));
   const { mark, motion } = harnessMark(r.h.base);
   const asked = conv.msgs.filter((m) => m.role === 'user').length;

@@ -22,6 +22,7 @@ export function incompleteWhy(reason?: string, detail?: string): string {
     // a runtime limit: which one, and the field in this setup's Settings that raises it
     case 'max_steps': case 'timeout': return limitStopWhy(reason, SETUP_LIMITS) || '';
     case 'interrupted': return 'Interrupted before it finished. No limit was hit.';
+    case 'input_required': return 'Waiting for your answer.';
     default: return detail || '';
   }
 }
