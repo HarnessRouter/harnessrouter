@@ -307,7 +307,7 @@ Power agentic features in your product with agent harnesses, including knowledge
 
 **Start:** Open **Shop** in the Console, pick a kit, and select a harness and model supported by your connected providers.
 
-**Dashboards:** use a reachable database and a read-only database account. Set `HR_SECRET_KEY` to encrypt stored connections, and review the sample-row setting before connecting.
+**Dashboards:** use a reachable database and a read-only database account, and review the sample-row setting before connecting. Stored connections are encrypted at rest; set `HR_SECRET_KEY` to keep the key apart from the data volume.
 
 **Licensing:** Starter Kits use [different terms](https://github.com/HarnessRouter/starter-kit#licensing) from Community Edition.
 
@@ -342,7 +342,7 @@ Choose **HarnessRouter Cloud** for managed deployment, maintenance, and scaling,
 |---|---|
 | Bring a custom harness you’ve configured locally.<br>[Follow the upload guide →](docs/self-hosting-guide.md#moving-to-the-hosted-service) | Create and run harnesses without a local deployment.<br>[Open HarnessRouter Cloud →](https://harnessrouter.ai) |
 
-**For local uploads:** set `HR_SECRET_KEY` on your local instance to encrypt the saved destination key. Save your custom harness in **Settings**, select **Upload to Cloud**, then connect a destination using its Cloud workspace API key.
+**For local uploads:** save your custom harness in **Settings**, select **Upload to Cloud**, then connect a destination using its Cloud workspace API key. The saved destination key is encrypted at rest like every stored credential (set `HR_SECRET_KEY` to keep the key apart from the data volume).
 
 Uploads copy harness configuration, not provider keys, sessions, or generated files. Uploading again replaces that destination’s hosted copy.
 

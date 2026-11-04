@@ -59,15 +59,18 @@ on:
         description: 'Name of the repository secret holding that value'
         default: 'UHP_MEASURE_SERVER_SECRET'
 
+# This job runs a third party's `setup` and `start`, so it holds no write access and no secret but the
+# ones it was asked to measure with, and those only by a name starting UHP_: `secrets[inputs.x]` would
+# otherwise hand any secret of this repository to that code. Recording the report is a second job that
+# runs none of it.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   measure:
     runs-on: ubuntu-latest
+    if: ${{ startsWith(inputs.bearer_secret, 'UHP_') && startsWith(inputs.header_secret, 'UHP_') && startsWith(inputs.server_env_secret, 'UHP_') }}
     env:
-      OPEN_PR_APP_ID: ${{ secrets.OPEN_PR_APP_ID }}
       SLUG: ${{ inputs.slug }}
       LABEL: ${{ inputs.label }}
       CLASS: ${{ inputs.class }}
@@ -79,6 +82,8 @@ jobs:
       HEADER_VALUE: ${{ secrets[inputs.header_secret] }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -132,6 +137,30 @@ jobs:
           print("verdict:", "conformant" if r["conformant"] else "conformant with skips" if r["conformant_with_skips"] else "not conformant at the requested class",
                 "| highest class fully passed:", r["highest_class_passed"])
           PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conformance-report
+          path: report.json
+          retention-days: 7
+
+  record:
+    needs: measure
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      OPEN_PR_APP_ID: ${{ secrets.OPEN_PR_APP_ID }}
+      SLUG: ${{ inputs.slug }}
+      LABEL: ${{ inputs.label }}
+      CLASS: ${{ inputs.class }}
+      BASE_URL: ${{ inputs.base_url || 'http://127.0.0.1:8787' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: conformance-report
 
       - id: app
         if: ${{ env.OPEN_PR_APP_ID != '' }}

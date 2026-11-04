@@ -288,14 +288,13 @@ async def _mysql_query(dsn: str, sql: str, timeout: float, max_rows: int) -> dic
         # bound it. And it is never closed: closing an unbuffered cursor reads the rest of the
         # result off the wire. Closing the connection (below) drops the rest instead.
         cur = await conn.cursor(aiomysql.SSCursor)
-        # MySQL has no read-only transaction that survives a plain connection cleanly, so the
-        # session is set read-only where the server supports it and the parser carries the
-        # rest. Documented, not pretended.
-        with_suppress = "SET SESSION TRANSACTION READ ONLY"
+        # The database's own guard, under the statement check: with autocommit on, this applies to
+        # each statement. A server that won't take it gets no query, rather than one with only the
+        # check standing in front of whatever the connected user may do.
         try:
-            await cur.execute(with_suppress)
-        except Exception:
-            pass
+            await cur.execute("SET SESSION TRANSACTION READ ONLY")
+        except Exception as e:
+            raise SqlError("This database would not open a read-only session, so the query was not run.") from e
 
         async def first_rows():
             await cur.execute(sql)

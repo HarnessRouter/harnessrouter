@@ -37,6 +37,7 @@ import re
 import shutil
 import sqlite3
 import tarfile
+import tempfile
 import time
 import uuid
 import weakref
@@ -457,9 +458,31 @@ class FileSecretStore:
             raise SecretsNotConfigured(
                 "This secret is encrypted but HR_SECRET_KEY is not set. Set it to the passphrase "
                 "used when the secret was stored.")
+        from cryptography.exceptions import InvalidTag
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         blob = base64.b64decode(raw[len(self._MAGIC):])
-        return AESGCM(self._key).decrypt(blob[:12], blob[12:], None).decode()
+        try:
+            return AESGCM(self._key).decrypt(blob[:12], blob[12:], None).decode()
+        except InvalidTag:
+            raise SecretsNotConfigured(
+                "This secret was stored under a different HR_SECRET_KEY. Set HR_SECRET_KEY back to the "
+                "passphrase used when it was stored, or enter the credential again.") from None
+
+    @staticmethod
+    def _write(p: Path, body: str) -> None:
+        """The old record or the new one, never half of either: a plain write empties the file
+        first, so a full disk or a crash there would lose the credential. 0600 from the start."""
+        fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=f".{p.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(body)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, p)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
 
     @staticmethod
     def _env_key(tenant: str, name: str) -> str:
@@ -492,9 +515,7 @@ class FileSecretStore:
         def _do():
             p = self._p(tenant, name)
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(body)
-            with contextlib.suppress(OSError):
-                p.chmod(0o600)              # belt to the encryption's braces
+            self._write(p, body)
         await asyncio.to_thread(_do)
 
     async def delete(self, tenant: str, name: str) -> None:
@@ -502,6 +523,62 @@ class FileSecretStore:
             with contextlib.suppress(OSError):
                 self._p(tenant, name).unlink()
         await asyncio.to_thread(_do)
+
+    async def reencrypt_plaintext(self) -> int:
+        """Every record written before the key existed, written again under it; → how many.
+
+        An install that ran without HR_SECRET_KEY has provider keys and MCP tokens in the clear
+        under the store's root (#624). The entrypoint now gives every install a key at first
+        start, and this is what brings the records that predate it under it: once, at the
+        gateway's start, one record at a time, mode 600. Nothing to do without a key, and a record
+        that is already sealed is left as it is. A file that cannot be rewritten stays as it was
+        and is counted nowhere; the next start tries again. A link is not a record."""
+        if self._key is None:
+            return 0
+
+        def _do() -> int:
+            n = 0
+            if not self._root.is_dir():
+                return 0
+            for tdir in sorted(self._root.iterdir()):
+                if not tdir.is_dir():
+                    continue
+                for f in sorted(tdir.iterdir()):
+                    if f.is_symlink() or not f.is_file() or f.name.endswith(".tmp"):
+                        continue
+                    try:
+                        raw = f.read_text()
+                        if raw.startswith(self._MAGIC):
+                            continue
+                        self._write(f, self._seal(raw))
+                        n += 1
+                    except Exception:  # noqa: BLE001 — unreadable or unwritable: left for the next start
+                        continue
+            return n
+        return await asyncio.to_thread(_do)
+
+    async def unopenable(self) -> int:
+        """How many records the current key cannot open, for the log at the gateway's start: an
+        operator who sets a new HR_SECRET_KEY over a generated one should hear why every stored
+        credential stopped working, and from the first line."""
+        def _do() -> int:
+            n = 0
+            if not self._root.is_dir():
+                return 0
+            for tdir in sorted(self._root.iterdir()):
+                if not tdir.is_dir():
+                    continue
+                for f in sorted(tdir.iterdir()):
+                    if f.is_symlink() or not f.is_file() or f.name.endswith(".tmp"):
+                        continue
+                    try:
+                        self._open(f.read_text())
+                    except SecretsNotConfigured:
+                        n += 1
+                    except Exception:  # noqa: BLE001 — unreadable is a different problem
+                        continue
+            return n
+        return await asyncio.to_thread(_do)
 
     async def blank(self) -> list[tuple[str, str]]:
         """Every stored secret whose value is empty, as (tenant, name). Before 0.32.0 a removed
@@ -942,9 +1019,11 @@ class CheckpointWorkspaceFiles:
                 sub = _tar_subdir(tf)
                 for name in ([f"{sub}/{member}", f"./{sub}/{member}"] if sub else []) + [member, f"./{member}"]:
                     try:
-                        f = tf.extractfile(name)
+                        m = tf.getmember(name)
                     except KeyError:
                         continue
+                    # extractfile follows a link, and a link in the archive is the agent's to point
+                    f = tf.extractfile(m) if m.isreg() else None
                     if f:
                         return f.read()
             return None
@@ -983,7 +1062,11 @@ class CheckpointWorkspaceFiles:
                             # where it is, or — a new file — in a folder the agent already has, which
                             # adoption would not move a root copy into
                             target = f"{sub}/{member}"
+                        parents = {target.rsplit("/", i)[0] for i in range(1, target.count("/") + 1)}
                         for m, name in zip(members, names):
+                            if name in parents and not m.isdir():
+                                # `link/x` looks ordinary, and the next turn's unpacking writes it wherever the link goes
+                                raise ValueError("the path goes through something that is not a folder")
                             if name == target:
                                 continue          # replaced below
                             f = src.extractfile(m) if m.isfile() else None

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import localFont from 'next/font/local';
 
 // Unified with the HarnessRouter marketing landing: paper theme + accent blue (#285AFF)
@@ -59,6 +59,9 @@ const DESC = SELF_HOSTED
   : 'One API routes your app to coding agents like Codex, Claude Code, Hermes, and Pi: '
     + 'run tasks, stream results, and pay per use with credits.';
 
+// The console is light whatever the system's appearance: its design is drawn for one palette (Richard, 2026-11-03).
+export const viewport: Viewport = { colorScheme: 'light' };
+
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),
   title: { default: 'HarnessRouter: one API for every coding agent', template: '%s · HarnessRouter' },
@@ -68,9 +71,9 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website', siteName: 'HarnessRouter', url: SITE,
     title: 'HarnessRouter, one API for every coding agent', description: DESC,
-    images: ['/icon.png'],
+    images: ['/share-mark.png'],
   },
-  twitter: { card: 'summary', title: 'HarnessRouter', description: DESC, images: ['/icon.png'] },
+  twitter: { card: 'summary', title: 'HarnessRouter', description: DESC, images: ['/share-mark.png'] },
   robots: SELF_HOSTED ? { index: false, follow: false } : { index: true, follow: true },
 };
 

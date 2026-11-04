@@ -654,15 +654,19 @@ Then `my-postgres:5432` works as a host in the connection string. A database on 
 rather than in a container is reachable at `host.docker.internal` on Docker Desktop, or via
 `--add-host=host.docker.internal:host-gateway` on Linux.
 
-**Set `HR_SECRET_KEY`.** Connection strings are encrypted at rest under a key derived from it,
-and without it the server refuses to store one rather than writing your production credential to
-disk in plaintext:
+**The connection string is encrypted at rest**, like every stored credential, under a key derived
+from `HR_SECRET_KEY`. An instance given none generates one at its first start and keeps it in
+`/data/secret-key` (root's, mode 600). That protects a copy of `/data/secrets`, not a copy of the
+whole volume, since the key sits beside the data. To keep the two apart on an instance that is
+already running, set `HR_SECRET_KEY` to the value in that file and delete the file. On a new
+instance, set your own before the first start:
 
 ```bash
 -e HR_SECRET_KEY=a-long-random-passphrase
 ```
 
-Keep it. Change it and the stored connections can no longer be decrypted, and you reconnect them.
+Keep it. A different value can't open what is already stored: the log says how many records it
+can't open, and you enter those credentials again.
 
 **Use a read-only database account.** Every statement is checked and only `SELECT` is allowed,
 non-`SELECT`, multiple statements and data-modifying CTEs are refused, and on PostgreSQL the
@@ -1197,7 +1201,7 @@ All paths below are relative to the API base above and use the same Bearer key.
 | Stream progress | Set `"stream": true` on the response request for server-sent events |
 | Read session history | `GET /v1/sessions/{session_id}/turns` |
 | Upload inputs or retrieve outputs | `POST /v1/files`; `GET /v1/sessions/{session_id}/files` |
-| Read or change one workspace file between turns | `GET`, `PUT` or `DELETE /v1/sessions/{session_id}/files/{path}` (`PUT` takes `{"content": "..."}` or `{"content_b64": "..."}`; `DELETE` removes a folder with everything in it); `POST /v1/sessions/{session_id}/files/{path}:mkdir` makes a folder and its parents (`created: false` when it was already there); `POST /v1/sessions/{session_id}/files/{path}:move` with `{"to": "<path>"}` renames a file or folder and never overwrites (409 `file_exists`). The next turn sees each change. All but `GET` answer 409 `session_busy` while a turn runs, and every one refuses a path that leaves the workspace; `DELETE`, `:mkdir` and `:move` also refuse the agent's own files (`.git`, `.harness`, a base's skills and memory) |
+| Read or change one workspace file between turns | `GET`, `PUT` or `DELETE /v1/sessions/{session_id}/files/{path}` (`PUT` takes `{"content": "..."}` or `{"content_b64": "..."}`; `DELETE` removes a folder with everything in it); `POST /v1/sessions/{session_id}/files/{path}:mkdir` makes a folder and its parents (`created: false` when it was already there); `POST /v1/sessions/{session_id}/files/{path}:move` with `{"to": "<path>"}` renames a file or folder and never overwrites (409 `file_exists`). The next turn sees each change. All but `GET` answer 409 `session_busy` while a turn runs, and every one refuses a path that leaves the workspace; `DELETE`, `:mkdir` and `:move` also refuse the agent's own files (`.git`, `.harness`, a base's skills and memory) A path with any segment that starts with a dot is refused on all of these, and so is a link that lands on one: those hold the runner's and the agent's own state. |
 | Cancel work | `POST /v1/responses/{response_id}/cancel` |
 | Delete | `DELETE /v1/sessions/{session_id}`, `DELETE /v1/responses/{response_id}`, `DELETE /v1/harnesses/{harness_id}`, `DELETE /v1/files/{file_id}`, `DELETE /v1/mcp-secrets/{ref}`; what each removes and when is in [What a delete removes, and when](#what-a-delete-removes-and-when) |
 | Describe the API | `GET /v1/openapi.json`, the surface above as an OpenAPI document, readable without a login |
@@ -1303,9 +1307,8 @@ Cloud. See the [Cloud authentication](https://harnessrouter.ai/docs/authenticati
 This is a manual, one-way upload. Later uploads replace the same hosted copy in that destination,
 so they can overwrite changes made in Cloud. Cloud edits are not pulled back into the local copy.
 
-Destination API keys are stored encrypted on your local instance for repeat uploads. Set
-`HR_SECRET_KEY` before connecting a destination, and preserve the same key across restarts and
-upgrades. You can remove a saved destination when it is no longer needed. See
+Destination API keys are stored encrypted on your local instance for repeat uploads. If you set
+`HR_SECRET_KEY`, keep the same value across restarts and upgrades. You can remove a saved destination when it is no longer needed. See
 [restarts, upgrades, and backups](#restarts-upgrades-and-backups) before changing container settings.
 
 ## Architecture

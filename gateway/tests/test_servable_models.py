@@ -127,3 +127,12 @@ async def test_the_refused_connection_does_not_turn_into_no_restriction(monkeypa
     `return None`, which means "offer everything" — the original bug this file records."""
     _patch(monkeypatch, chain=["g"], conn_provider="google")
     assert await A._servable_models("org", "goose") is not None
+
+
+def test_a_claude_turn_with_no_model_runs_sonnet_5_5():
+    """Every vendor table that serves the old default serves this one too, so moving it strands no connection."""
+    assert A._MODEL_CATALOG["claude"]["default"] == "claude-sonnet-5.5"
+    assert "claude-sonnet-5.5" in A._MODEL_CATALOG["claude"]["models"]
+    for table in A._VENDOR_MODELS.values():
+        if "claude-sonnet-4.6" in table:
+            assert "claude-sonnet-5.5" in table

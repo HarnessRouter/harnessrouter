@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import posixpath
 import os
 import re
 import urllib.parse
@@ -346,6 +347,14 @@ _CONC_ENV_TENANT = os.environ.get("HARNESS_TENANT_CONCURRENCY", "").strip()
 # /v1/responses with X-Harness-Internal == this key + X-Harness-Org/X-Harness-Member, so it doesn't
 # need a user-minted API key. Public callers use Authorization: Bearer sk-hr-... (per-org API keys).
 INTERNAL_KEY = os.environ.get("HARNESS_INTERNAL_KEY", "")
+_UNSET_KEY_FALLBACK = os.urandom(32).hex()
+
+
+def _signing_key() -> bytes:
+    """What the gateway's own signatures (calibration links, sign-in state, database references) are made with.
+    With no internal key set they used a constant anyone can read in this file, so anyone could forge them."""
+    return (INTERNAL_KEY or _UNSET_KEY_FALLBACK).encode()
+
 # LIVE-B: verified identity on the internal path. The org/member headers used to be TRUSTED
 # verbatim behind the internal key — but the BFF forwards them from the BROWSER, so any caller of
 # the web app could self-assert another org's identity. Fix: when a platform login JWT (engine-
@@ -1001,6 +1010,23 @@ async def _vault_put(tenant: str, name: str, value: str) -> None:
     await BACKING.secrets.put(tenant, name, value)
 
 
+async def _vault_put_credential(tenant: str, name: str, value: str, param: str | None = None) -> None:
+    """A credential — a provider key, an MCP token, a plug's secret — stored only where it can be
+    stored encrypted (#624). A provider key used to go through _vault_put like a model map, and
+    on an install without HR_SECRET_KEY that wrote it to disk in the clear; database connections
+    already refused that (_hosted_put). The entrypoint gives every self-hosted install a key at
+    first start, so this refuses nothing there; a deployment that runs without one is told what to
+    set, 501 secrets_not_configured, rather than given a plaintext file nobody knew about."""
+    # The refusal is decided here, on what the store says it can do, and the write goes through
+    # _vault_put as every write does: a keyed file store seals every record, a vault seals all of
+    # them, and a file store with no key is the one case that is refused.
+    if getattr(BACKING.secrets, "encrypts", True) is False:
+        raise uhp_error(501, "secrets_not_configured",
+                        "Refusing to store this credential: HR_SECRET_KEY is not set, so it could only be "
+                        "written to disk in plaintext. Set HR_SECRET_KEY to a passphrase and restart.", param)
+    await _vault_put(tenant, name, value)
+
+
 async def _vault_delete(tenant: str, name: str) -> None:
     await BACKING.secrets.delete(tenant, name)
 
@@ -1127,7 +1153,7 @@ _CALIBRATION_TTL_S = int(os.environ.get("HR_CALIBRATION_TTL_S", str(3 * 3600)))
 def _mint_calibration_token(sid: str, org: str, inner: str, ttl_s: int) -> str:
     exp = str(int(time.time()) + max(int(ttl_s), 60))
     body = f"{sid}|{org}|{inner}|{exp}"
-    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"calibration|" + body.encode(),
+    sig = hmac.new(_signing_key(), b"calibration|" + body.encode(),
                    hashlib.sha256).hexdigest()
     return "hrc_" + base64.urlsafe_b64encode(body.encode()).decode().rstrip("=") + "." + sig
 
@@ -1137,7 +1163,7 @@ def _verify_calibration_token(tok: str) -> dict | None:
     try:
         raw, sig = tok[len("hrc_"):].split(".", 1)
         body = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode()
-        want = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"calibration|" + body.encode(),
+        want = hmac.new(_signing_key(), b"calibration|" + body.encode(),
                         hashlib.sha256).hexdigest()
         if not hmac.compare_digest(want, sig):
             return None
@@ -1210,7 +1236,7 @@ def _mint_turn_cred(sid: str, conn_name: str, level: str = "") -> str:
     from the credential itself. A turn that asked for none carries the credential it always did."""
     exp = str(int(time.time()) + _BROKER_TTL_S)
     body = f"{sid}|{conn_name}|{exp}" + (f"|{level}" if level else "")
-    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
+    sig = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
     return f"hrt_{base64.urlsafe_b64encode(body.encode()).decode().rstrip('=')}.{sig}"
 
 
@@ -1224,7 +1250,7 @@ def _verify_turn_cred(tok: str) -> tuple[str, str] | None:
         sid, conn_name, exp = body.split("|")[:3]
     except Exception:  # noqa: BLE001 — malformed token is simply invalid
         return None
-    good = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
+    good = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, good) or int(exp) < int(time.time()):
         return None
     return sid, conn_name
@@ -3540,6 +3566,27 @@ async def _reconcile_sweep() -> int:
 
 
 @app.on_event("startup")
+async def _start_secrets_at_rest() -> None:
+    """Records written before this install had a key, brought under it (#624): once, in place.
+    The file store is the one that can have been without a key; a vault never was."""
+    reencrypt = getattr(BACKING.secrets, "reencrypt_plaintext", None)
+    if reencrypt is None:
+        return
+    try:
+        n = await reencrypt()
+    except Exception as e:  # noqa: BLE001 — the store still reads both forms; not a reason not to start
+        print(f"[secrets] could not re-encrypt stored records ({e}); they are read as before", flush=True)
+        return
+    if n:
+        print(f"[secrets] {n} record(s) stored before this install had a key are now encrypted", flush=True)
+    unopenable = getattr(BACKING.secrets, "unopenable", None)
+    bad = await unopenable() if unopenable else 0
+    if bad:
+        print(f"[secrets] {bad} record(s) cannot be opened with the current HR_SECRET_KEY: they were stored "
+              "under a different key. Set it back to that key, or enter those credentials again.", flush=True)
+
+
+@app.on_event("startup")
 async def _start_media_policy() -> None:
     """The operator's media preference, published to the plane before the first turn can arrive.
     Without this the order they chose applies only after something else happens to write it."""
@@ -4939,6 +4986,15 @@ async def _uhp_validation_error(request: Request, exc: RequestValidationError):
     return JSONResponse(validation_error_body(exc), status_code=422, headers={"UHP-Version": UHP_VERSION})
 
 
+@app.exception_handler(backing.SecretsNotConfigured)
+async def _secrets_not_configured(request: Request, exc: backing.SecretsNotConfigured):
+    """A stored credential that cannot be opened says why, rather than a bare 500."""
+    err = uhp_error(501, "secrets_not_configured", str(exc)).detail
+    err = {k: err.get(k) for k in ("type", "code", "message", "param", "detail")}
+    return JSONResponse({"error": err, "detail": err["message"]}, status_code=501,
+                        headers={"UHP-Version": UHP_VERSION})
+
+
 @app.exception_handler(HTTPException)
 async def _uhp_http_exception(request: Request, exc: HTTPException):
     d = exc.detail
@@ -4997,7 +5053,10 @@ def uhp_discovery() -> dict:
 def healthz(bus: int = 0) -> dict:
     if bus:
         return {"ok": True, "redis_configured": bool(REDIS_URL), **_redis_ok}
-    return {"ok": True, "pool": bool(POOL_ENDPOINT), "vault": bool(VAULT_URL)}
+    # secrets_encrypted: whether what the secret store writes is encrypted at rest — a vault
+    # always, the file store only with a key (#624; every self-hosted start now has one).
+    return {"ok": True, "pool": bool(POOL_ENDPOINT), "vault": bool(VAULT_URL),
+            "secrets_encrypted": bool(getattr(BACKING.secrets, "encrypts", True))}
 
 
 @app.get("/readyz")
@@ -5803,7 +5862,7 @@ class ConnBody(BaseModel):
 @app.put("/v1/orgs/{org}/connections/{name}", dependencies=[Depends(_internal_only)])
 async def put_connection(org: str, name: str, body: ConnBody) -> dict:
     conn = {"name": name, **{k: v for k, v in body.model_dump().items() if v is not None}}
-    await _vault_put(org, f"harness-conn-{name}", json.dumps(conn))
+    await _vault_put_credential(org, f"harness-conn-{name}", json.dumps(conn), "api_key")
     return {"ok": True, "org": org, "connection": _conn_public(conn)}
 
 
@@ -6534,12 +6593,12 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     # "everything is gone" into a "restore the last one", which is the whole difference.
     prior = await _vault_get(GLOBAL_TENANT, _INTEGRATIONS_KEY)
     if prior:
-        await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, prior)
+        await _vault_put_credential(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, prior, "integrations")
         prior_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_KEY)
         await _vault_put(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY, prior_mm or "{}")
         prior_imm = await _vault_get(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY)
         await _vault_put(GLOBAL_TENANT, _IMAGE_MODEL_MAP_PREV_KEY, prior_imm or "{}")
-    await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, json.dumps(out))
+    await _vault_put_credential(GLOBAL_TENANT, _INTEGRATIONS_KEY, json.dumps(out), "integrations")
     if mm is not None:
         await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, json.dumps(mm))
     if imm is not None:
@@ -6582,9 +6641,9 @@ async def admin_integrations_restore(request: Request) -> dict:
     prev_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY) or "{}"
     cur = await _vault_get(GLOBAL_TENANT, _INTEGRATIONS_KEY) or "[]"
     cur_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_KEY) or "{}"
-    await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, prev)
+    await _vault_put_credential(GLOBAL_TENANT, _INTEGRATIONS_KEY, prev, "integrations")
     await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, prev_mm)
-    await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, cur)
+    await _vault_put_credential(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, cur, "integrations")
     await _vault_put(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY, cur_mm)
     return {"ok": True, "integrations": [_integration_public(i) for i in json.loads(prev)],
             "model_map": json.loads(prev_mm)}
@@ -8023,7 +8082,7 @@ _MODEL_CATALOG: dict[str, dict] = {
     # claude-opus-5 is now wired in both _ANTHROPIC_CLAUDE and _BEDROCK_CLAUDE (ids read off
     # Anthropic's models overview and AWS's own model card), so it routes directly instead of
     # falling through to the unmapped default it used at launch.
-    "claude": {"default": "claude-sonnet-4.6",
+    "claude": {"default": "claude-sonnet-5.5",
                "models": ["claude-opus-5.5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5",
                           "claude-opus-4.7", "claude-sonnet-4.6", "claude-haiku-5.5", "claude-haiku-4.5"]},
     # hermes (NousResearch hermes-agent) is multi-family — it runs any frontier model through
@@ -8405,7 +8464,7 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # stops it is this product's own write-wall rather than a defect: gjc's native lock helper walks
 # from / down to the path it is locking and opens EVERY ancestor with
 # O_RDONLY|O_DIRECTORY|O_NOFOLLOW (pi-natives, open_parent_no_follow), which needs READ on each
-# ancestor rather than traverse, and docker/entrypoint.sh sets /data and /data/workspaces to 751
+# ancestor rather than traverse, and docker/entrypoint.sh sets /data to 1771 and /data/workspaces to 751
 # — "traversable by sessions, neither listable nor writable" — so a session uid gets EACCES and
 # the turn dies before its first model call. MEASURED both ways on a real instance (2026-10-03):
 # at 755 a turn completed in 4.6 s, back at 751 it failed again with the same error. The
@@ -9183,7 +9242,7 @@ _OUTPUT_EXCLUDE_NAMES = {"AGENTS.md", "CLAUDE.md", "QWEN.md", "GEMINI.md"}
 
 
 def _is_internal_output(name: str) -> bool:
-    return name in _OUTPUT_EXCLUDE_NAMES or name.startswith(".harness/") or "/.harness/" in name
+    return name in _OUTPUT_EXCLUDE_NAMES or not _ws_path_allowed(name)
 
 
 # ── output (container) file collection: produced-this-turn files → blobs + citations ────
@@ -11175,7 +11234,9 @@ async def create_response(body: CreateResponseBody, request: Request):
                 await bus_emit(ev)
             obj = tr._response_obj(status)
     except Exception as e:  # noqa: BLE001
-        tr.error = {"type": "server_error", "code": "unhandled_exception", "message": str(e)[:300]}
+        # The exception's text can name internal addresses. It goes to this log; the caller gets the fact.
+        print(f"[responses] a turn stopped on {type(e).__name__}: {str(e)[:300]}", flush=True)
+        tr.error = {"type": "server_error", "code": "unhandled_exception", "message": "The turn stopped on an internal error. Try again."}
         obj = tr._response_obj("failed")
         status = "failed"
     await persist(status)
@@ -12091,12 +12152,27 @@ _WS_HIDE_PREFIXES = (".git/", ".harness/", ".claude/", ".codex/", "tmp/",
 _WS_HIDE_NAMES = {".gitignore", "AGENTS.md", "CLAUDE.md"}
 
 
+def _ws_path_allowed(path: str) -> bool:
+    """THE check on any path a route takes into a session's files. Default deny, so nothing depends on
+    knowing the name of what must be protected: every segment that starts with a dot is refused, which
+    is the runner's state, git's, every CLI's, a credential file, and `.` and `..`.
+
+    Each segment is read as written and nothing is cleaned first, so there is no spelling to get past
+    it. A segment with space around it is refused too, because the workspace backing strips the path
+    it is given: ` .git/config` passes a dot check here and is read as `.git/config` there. Where a
+    symlink lands can't be read from a string, so the runner checks that again after resolving it."""
+    p = str(path or "").lstrip("/")
+    if not p or "\\" in p or any(ord(c) < 32 or ord(c) == 127 for c in p):
+        return False
+    return all(s and s == s.strip() and not s.startswith(".") for s in p.split("/"))
+
+
 def _ws_visible(path: str) -> bool:
     """User-visible workspace file? Hides VCS/agent-internal/scratch paths (same families the
     produced-file collector excludes) so the listing reads like the agent's actual deliverables."""
     if not path or path.endswith("/"):
         return False
-    if path in _WS_HIDE_NAMES or path.startswith("."):
+    if path in _WS_HIDE_NAMES or not _ws_path_allowed(path):
         return False
     return not any(path.startswith(p) or f"/{p}" in path for p in _WS_HIDE_PREFIXES)
 
@@ -12451,7 +12527,7 @@ async def _reapply_app_writes(sid: str) -> int:
         return 0
     n = 0
     for name, (cid, from_app) in caps.items():
-        if not from_app:
+        if not from_app or not _ws_path_allowed(name):    # an app's write of this kind from before the rule stays out
             continue
         try:
             got = await _container_file_bytes(sid, cid)
@@ -12507,6 +12583,8 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
             media, fname = m.get("media_type", media), m.get("filename", fname)
         except Exception:  # noqa: BLE001
             pass
+    if fname != file_id and not _ws_path_allowed(posixpath.normpath(str(fname))):   # a capture from before this rule, by its id
+        return None
     return data, media, fname
 
 
@@ -12527,7 +12605,7 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
         if blob:
             try:
                 doc = json.loads(blob) or {}
-                items = doc.get("files") or []
+                items = [it for it in (doc.get("files") or []) if _ws_visible(str(it.get("path") or ""))]
                 produced_n = int(doc.get("produced") or 0)
             except Exception:  # noqa: BLE001
                 items = []
@@ -12645,7 +12723,9 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                 asked = 0
                 for it in items[:200]:
                     fid, path = it.get("file_id"), it.get("path")
-                    if not (fid and path):
+                    # A name from before the rule is left out, not refused: no route serves it, so it isn't
+                    # part of the turn's output, and refusing would take the whole zip with it.
+                    if not (fid and path) or not _ws_visible(str(path)):
                         continue
                     asked += 1
                     got = await _container_file_bytes(sid, fid)
@@ -12725,6 +12805,8 @@ async def read_session_file(sid: str, path: str, request: Request) -> Response:
     half-written deck is better than no deck, and the next read gets the rest.
     """
     await _owned_session(request, sid)
+    if not _ws_path_allowed(path):
+        raise uhp_error(404, "file_not_found", f"No file '{path}' in this session's workspace.", "path")
     data = await BACKING.workspace.read(sid, path)
     if data is None:
         # FALL BACK TO THE DURABLE COPY. The live workspace is reaped after HR_WORKSPACE_TTL_HOURS,
@@ -12788,6 +12870,10 @@ async def write_session_file(sid: str, path: str, body: WorkspaceWrite, request:
     # this shipped broken: it compared v["org"], but a session vertex carries the owner in
     # `tenant`, so every write 404'd on a session the caller could plainly read.
     _org, v = await _owned_session(request, sid)
+    if not _ws_path_allowed(path):
+        raise uhp_error(400, "write_failed",
+                        "Could not write that path. It must be inside the session workspace, and not "
+                        "one of the agent's own files.")
     _refuse_if_busy(v)
 
     if body.content_b64 is not None:
@@ -13297,32 +13383,10 @@ async def _internal_target(host: str, port: int) -> str | None:
     metadata lives), RFC1918, CGNAT, IPv6 private, reserved — so a name whose second A record is
     internal is refused on the strength of that second record.
 
-    WHAT IT DOES NOT DO, because a comment claiming otherwise is worse than no comment: it does not
-    survive a DNS rebind. This resolves the name; httpx then resolves it AGAIN when it opens the
-    socket, so a TTL-0 name that answers 93.184.216.34 here can answer 10.0.0.5 a millisecond
-    later and this check will have passed. Closing that means pinning the address we classified
-    into the connection itself, which is a different piece of work and is not what this does. What
-    it buys is the multi-A case and every literal internal address, and that is the whole of it.
-
-    Shared by MCP URLs, database hosts and provider-supplied file URLs because it is one question,
-    not three: each is a target somebody else names and this server then opens a socket to. A
-    second copy of this rule would be a second thing to remember to fix.
-
-    A LOOKUP THAT DID NOT ANSWER IS NOT AN ANSWER. This used to take an `allow_unresolvable` flag,
-    on the reasoning that a name which does not resolve is not internal and cannot be reached
-    anyway — and its `except Exception` swallowed a resolver timeout, an EAI_AGAIN under load and
-    a resolver that was down along with the genuine NXDOMAIN. Our lookup failing says nothing
-    about what the socket does a millisecond later: the caller resolves again, from its own
-    resolver, in a cluster where `.svc` is a search domain. So there is no allow branch at all —
-    an address this server could not classify is one it does not open a socket to.
-
-    The two failures are still told apart, because the operator reading the log needs them apart:
-    one of them is a bad URL and the other is a broken resolver.
-
-    ASYNC BECAUSE getaddrinfo BLOCKS. It is a synchronous C call and it can sit for the resolver's
-    whole timeout; run on the event loop it stops the entire process, not one request. Measured: a
-    1.01 s lookup let ZERO other tasks run. Every provider file URL is classified on every poll, so
-    one relay naming a slow-resolving host froze the gateway for everybody, ten seconds apart.
+    This answers for a name at one moment, so on its own it does not stop a DNS rebind: a client that
+    opens its own connection resolves the name again. Anything that connects to a name a caller gave
+    goes through `_CheckedNetwork` or a pin made from `_classify_target`, which connect to the very
+    addresses they classified (GHSA-mx6c-8c42-fw44).
     """
     return (await _classify_target(host, port))[1]
 
@@ -13507,7 +13571,7 @@ async def _mcp_secret_store(org: str, ref: str, token: str) -> dict:
     # vault key names allow only [a-z0-9-] (same charset as harness-conn-/harness-policy- keys)
     safe = re.sub(r"[^a-z0-9]+", "-", ref.lower()).strip("-") or "mcp"
     key = f"{_MCP_SECRET_PREFIX}{safe}"
-    await _vault_put(tenant, key, token)
+    await _vault_put_credential(tenant, key, token, "token")
     return {"ref": f"vault:{key}", "tenant": tenant}
 
 
@@ -14244,7 +14308,7 @@ def _mint_hosted_cred(hid: str, sid: str, key: str) -> str:
     """
     exp = str(int(time.time()) + _BROKER_TTL_S)
     body = f"{hid}|{sid}|{key}|{exp}"
-    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
+    sig = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
     return f"hrs_{base64.urlsafe_b64encode(body.encode()).decode().rstrip('=')}.{sig}"
 
 
@@ -14258,7 +14322,7 @@ def _verify_hosted_cred(tok: str) -> tuple[str, str, str] | None:
         hid, sid, key, exp = body.split("|")
     except Exception:  # noqa: BLE001 — a malformed token is simply invalid
         return None
-    good = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), body.encode(), hashlib.sha256).hexdigest()
+    good = hmac.new(_signing_key(), body.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, good) or int(exp) < int(time.time()):
         return None
     return hid, sid, key
@@ -17385,8 +17449,12 @@ def _plug_safe(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
 
 
-def _plug_vid(workspace: str, plug_type: str) -> str:
-    return f"plug.{_plug_safe(workspace)}.{_plug_safe(plug_type)}"
+def _plug_vid(org: str, workspace: str, plug_type: str, rec: dict | None = None) -> str:
+    """A plug row's id. It carries the organization: every organization has a workspace called
+    "default", and an id without one was one row for all of them, so the second to connect a plug
+    overwrote the first's (reported privately, GHSA-gf7m-w8pf-6f68). A row written before this keeps
+    the id it has: reads find a row by workspace and type within the organization, not by id."""
+    return str((rec or {}).get("id") or "") or f"plug.{_plug_safe(org)}.{_plug_safe(workspace)}.{_plug_safe(plug_type)}"
 
 
 def _plug_domains_ok(names, param: str) -> list[str]:
@@ -17511,7 +17579,7 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         if not isinstance(value, str) or not value.strip():
             continue
         ref = f"plug-{_plug_safe(workspace)}-{_plug_safe(plug_type)}-{_plug_safe(field)}"
-        await _vault_put(org, ref, value.strip())
+        await _vault_put_credential(org, ref, value.strip(), "secrets")
         refs[field] = ref
     missing = [f for f in form["secrets"] if f not in refs]
     status = "disabled" if not body.enabled else ("needs_auth" if missing else "connected")
@@ -17520,13 +17588,14 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         status, attention, config = await _m365_connect(org, config, refs, body.secrets or {})
     version = int((prev or {}).get("version") or 0) + 1
     now = int(time.time() * 1000)
-    await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plug_type),
+    vid = _plug_vid(org, workspace, plug_type, prev)
+    await _vg_upsert(_PLUG_LABEL, vid,
                      {"org": org, "workspace": workspace, "type": plug_type, "status": status, "source": form["source"],
                       "config": json.dumps(config, separators=(",", ":")),
                       "key_refs": json.dumps([{"field": f, "ref": r} for f, r in refs.items()], separators=(",", ":")),
                       "attention": attention,
                       "version": str(version), "updated_at": str(now)})
-    _plug_fields_cache.pop(_plug_vid(workspace, plug_type), None)
+    _plug_fields_cache.pop(vid, None)
     status2, rec = await _plug_lookup_local(org, workspace, plug_type)
     print(f"[plugs] {workspace}: {plug_type} {status2} (v{version})", flush=True)
     return _plug_public(org, workspace, plug_type, rec, status2)
@@ -17544,7 +17613,7 @@ _M365_STATE_TTL_S = 15 * 60
 
 def _m365_state_sign(payload: dict) -> str:
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-    sig = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"m365|" + body.encode(), hashlib.sha256).hexdigest()
+    sig = hmac.new(_signing_key(), b"m365|" + body.encode(), hashlib.sha256).hexdigest()
     return "hrm_" + base64.urlsafe_b64encode(body.encode()).decode().rstrip("=") + "." + sig
 
 
@@ -17552,7 +17621,7 @@ def _m365_state_verify(tok: str) -> dict | None:
     try:
         raw, sig = str(tok or "")[len("hrm_"):].split(".", 1)
         body = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode()
-        want = hmac.new((INTERNAL_KEY or "dev-insecure").encode(), b"m365|" + body.encode(), hashlib.sha256).hexdigest()
+        want = hmac.new(_signing_key(), b"m365|" + body.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(want, sig):
             return None
         st = json.loads(body)
@@ -17666,7 +17735,7 @@ async def microsoft_complete(body: MicrosoftCompleteBody, request: Request) -> d
         who = me.json() if me.status_code < 400 else {}
     field = plugs_plane.m365_person_field(member)
     ref = f"plug-{_plug_safe(workspace)}-{_plug_safe(plugs_plane.MICROSOFT365)}-{_plug_safe(field)}"
-    await _vault_put(org, ref, rt)
+    await _vault_put_credential(org, ref, rt)
     refs = {str(x.get("field")): str(x.get("ref")) for x in (rec.get("key_refs") or []) if isinstance(x, dict)}
     refs[field] = ref
     accounts = dict(config.get("accounts") or {})
@@ -17674,12 +17743,13 @@ async def microsoft_complete(body: MicrosoftCompleteBody, request: Request) -> d
                         "id": str(who.get("id") or ""), "signed_in_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     config["accounts"] = accounts
     version = int(rec.get("version") or 0) + 1
-    await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plugs_plane.MICROSOFT365),
+    vid = _plug_vid(org, workspace, plugs_plane.MICROSOFT365, rec)
+    await _vg_upsert(_PLUG_LABEL, vid,
                      {"org": org, "workspace": workspace, "type": plugs_plane.MICROSOFT365, "status": "connected", "source": "local",
                       "config": json.dumps(config, separators=(",", ":")),
                       "key_refs": json.dumps([{"field": f, "ref": r} for f, r in refs.items()], separators=(",", ":")),
                       "attention": "", "version": str(version), "updated_at": str(int(time.time() * 1000))})
-    _plug_fields_cache.pop(_plug_vid(workspace, plugs_plane.MICROSOFT365), None)
+    _plug_fields_cache.pop(vid, None)
     print(f"[plugs] {workspace}: microsoft365 sign-in for {member} ({accounts[member]['upn']})", flush=True)
     status2, rec2 = await _plug_lookup_local(org, workspace, plugs_plane.MICROSOFT365)
     return _plug_public(org, workspace, plugs_plane.MICROSOFT365, rec2, status2)
@@ -17712,12 +17782,13 @@ async def microsoft_signout(request: Request) -> dict:
     if delegated and not accounts and status == "connected":
         status, attention = "needs_auth", _M365_SIGNIN_ATTENTION
     version = int(rec.get("version") or 0) + 1
-    await _vg_upsert(_PLUG_LABEL, _plug_vid(workspace, plugs_plane.MICROSOFT365),
+    vid = _plug_vid(org, workspace, plugs_plane.MICROSOFT365, rec)
+    await _vg_upsert(_PLUG_LABEL, vid,
                      {"org": org, "workspace": workspace, "type": plugs_plane.MICROSOFT365, "status": status, "source": "local",
                       "config": json.dumps(config, separators=(",", ":")),
                       "key_refs": json.dumps([{"field": f, "ref": r} for f, r in refs.items()], separators=(",", ":")),
                       "attention": attention, "version": str(version), "updated_at": str(int(time.time() * 1000))})
-    _plug_fields_cache.pop(_plug_vid(workspace, plugs_plane.MICROSOFT365), None)
+    _plug_fields_cache.pop(vid, None)
     status2, rec2 = await _plug_lookup_local(org, workspace, plugs_plane.MICROSOFT365)
     return _plug_public(org, workspace, plugs_plane.MICROSOFT365, rec2, status2)
 
@@ -17771,8 +17842,9 @@ async def delete_plug(plug_type: str, request: Request) -> dict:
     for r in rec.get("key_refs") or []:
         if isinstance(r, dict) and r.get("ref"):
             await _vault_delete(org, str(r["ref"]))
-    await BACKING.graph.delete(_plug_vid(workspace, plug_type), _PLUG_LABEL)
-    _plug_fields_cache.pop(_plug_vid(workspace, plug_type), None)
+    vid = _plug_vid(org, workspace, plug_type, rec)
+    await BACKING.graph.delete(vid, _PLUG_LABEL)
+    _plug_fields_cache.pop(vid, None)
     print(f"[plugs] {workspace}: {plug_type} removed", flush=True)
     return {"type": plug_type, "workspace": workspace, "removed": True}
 
@@ -18314,25 +18386,6 @@ async def _browser_reaper_start() -> None:
                         await _browser_close(str(rec["sid"]), why)
                 await browser_plane.sweep_attachments()
     asyncio.get_running_loop().create_task(loop())
-
-
-@app.get("/internal/plugs/attachments", dependencies=[Depends(_internal_only)])
-async def plug_attachments(workspace: str, type: str) -> dict:
-    """How many of a workspace's harnesses include one plug type, for the Plugins page's
-    "attached N of M harnesses": M is the workspace's harnesses, N those whose plugs binding
-    names the type. Read from the bindings, never guessed."""
-    rows = _plugs_harness_rows(None, workspace, await BACKING.graph.find("Harness", {"workspace": workspace})
-                               + (await BACKING.graph.find("Harness", {"workspace": ""}) if not PLUGS_REGISTRY_URL else []))
-    attached = []
-    for r in rows:
-        hid = str(r.get("id") or "")
-        entry = next((e for e in _mcp_list(r) if str(e.get("id") or "") == _PLUGS_ENTRY["id"]), None)
-        if not entry:
-            continue
-        rec = await _hosted_record(str(r.get("org") or ""), _vault_key(entry.get("auth")))
-        if rec and rec.get("harness") == hid and type in (rec.get("plugs") or []):
-            attached.append(hid)
-    return {"workspace": workspace, "type": type, "harnesses": len(rows), "attached": len(attached), "harness_ids": attached}
 
 
 @app.get("/internal/plugs/pricing", dependencies=[Depends(_internal_only)])

@@ -1,7 +1,7 @@
 /* What the console needs around the design's own stylesheet (hrui.css, generated): the frame fills
    the window, links read like the design's buttons, and a page not yet redesigned scrolls in the
    frame with its old look (.hrui-legacy, which the design's rules and reset skip). */
-#hrui{position:fixed;inset:0;overflow:hidden}
+#hrui{position:fixed;inset:0;overflow:hidden;color-scheme:light}
 #hrui a:where(:not(.hrui-legacy *)){color:inherit;text-decoration:none}
 #hrui .rail-logo img.hr-mark{display:block;width:24px;height:24px;margin:0}
 #hrui .me-star:where(:not(.hrui-legacy *)){display:inline-flex;align-items:center;gap:4px}
