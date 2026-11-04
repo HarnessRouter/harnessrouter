@@ -100,5 +100,7 @@ def test_an_older_record_is_moved_on_the_first_read(store, monkeypatch):
 
 def test_every_writer_goes_through_it():
     src = (pathlib.Path(gw.__file__)).read_text()
-    assert src.count("await _mcp_servers_stored(org, body.mcp_servers)") == 5
+    # a create has nothing stored, and an update hands over what is, so the server's own entry stays (_is_memories_entry)
+    assert src.count("await _mcp_servers_stored(org, body.mcp_servers)") == 3
+    assert src.count("await _mcp_servers_stored(org, body.mcp_servers, cur)") + src.count("await _mcp_servers_stored(org, body.mcp_servers, v)") == 2
     assert src.count("_mcp_servers_prepare(body.mcp_servers)") == 0

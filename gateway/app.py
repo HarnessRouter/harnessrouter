@@ -19711,9 +19711,10 @@ def _harness_out(v: dict) -> dict:
             "baseLabel": v.get("base_label") or v.get("base"),
             "defaultModel": v.get("default_model") or "",
             "systemPrompt": v.get("system_prompt") or "",
-            # Verbatim: what a client reads is what is stored, for every entry, which is the
-            # ordinary contract and the only one there now is.
-            "mcpServers": _mcp_list(v), "skills": _parse(v.get("skills")),
+            # Verbatim: what a client reads is what is stored, for every entry but the one that gives an
+            # agent its memories. That one is the server's (_is_memories_entry): nothing a client does
+            # with it could be right, and its address is nobody's business.
+            "mcpServers": [s for s in _mcp_list(v) if not _is_memories_entry(s)], "skills": _parse(v.get("skills")),
             # Derived by the server from each package on every write, never copied into the two
             # lists above: a client that PUTs back what it read cannot install a plugin twice.
             "plugins": _plugins_of(v),
@@ -19840,8 +19841,22 @@ async def _mcp_seal_literals(org: str, servers: list[dict]) -> list[dict]:
     return out
 
 
-async def _mcp_servers_stored(org: str, incoming: list | None) -> list[dict]:
-    return await _mcp_seal_literals(org, _mcp_servers_prepare(incoming))
+async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None = None) -> list[dict]:
+    """What a write of a harness's servers stores. `cur` is the harness as it stands; a new one has none.
+
+    The rule that a server the caller didn't send is gone has one exception, and it isn't a kept-if-omitted
+    list: the entry that gives an agent its memories isn't the caller's. It follows from the agent's grants,
+    so it's taken from what's stored, whatever a client sends in its place, and nothing a client sends can
+    become it. A copy of a harness made by reading one and writing another brings nothing of it along."""
+    kept = [s for s in _mcp_list(cur) if _is_memories_entry(s)]
+    sent = [s for s in incoming or [] if not (isinstance(s, dict) and _is_memories_entry(s))]
+    names = {_mcp_name(str(s.get("name") or "mcp")) for s in kept}
+    for s in sent:
+        if isinstance(s, dict) and _mcp_name(str(s.get("name") or "mcp")) in names:
+            raise uhp_error(400, "invalid_mcp_server",
+                            f"'{s.get('name')}' is the name this agent's memories go by. Give this server another name.",
+                            "mcp_servers")
+    return await _mcp_seal_literals(org, _mcp_servers_prepare(sent + kept))
 
 
 async def _skills_prepare(skills: list | None) -> list:
@@ -19967,6 +19982,11 @@ _MEMORIES_SERVER = "memories"
 _MEMORIES_ENTRY = {"name": "memories", "id": "mcp.memories"}
 
 
+def _is_memories_entry(s: dict) -> bool:
+    """The server entry that gives an agent its memories: by its id, or by saying it's our memories server."""
+    return str(s.get("id") or "") == _MEMORIES_ENTRY["id"] or _hosted_server_name(s) == _MEMORIES_SERVER
+
+
 def _memories_go_with(hv: dict | None, org: str) -> bool:
     """Whether a turn run in `org` on this harness is given the agent's memories. ONLY when the
     harness is that organization's own.
@@ -20052,15 +20072,25 @@ async def _memories_ensure(org: str, hid: str, v: dict, patch: dict | None = Non
         raise uhp_error(501, "gateway_address_not_configured",
                         "This server has no address an agent could reach it on — set HARNESS_PUBLIC_BASE_URL.", "memories")
     cur = _mcp_list(v)
-    prev = next((x for x in cur if str(x.get("id") or "") == _MEMORIES_ENTRY["id"]), None)
-    prev_key = _vault_key((prev or {}).get("auth"))
-    key = prev_key if prev_key.startswith(_HOSTED_SECRET_PREFIX) else _hosted_secret_key(hid, _MEMORIES_ENTRY["id"])
+    others = [x for x in cur if not _is_memories_entry(x)]
+    # this harness's own record, never the one an entry names: an entry copied from another harness names that
+    # harness's, and re-addressing it here would take the first agent's memories away from it
+    key = _hosted_secret_key(hid, _MEMORIES_ENTRY["id"])
     await _hosted_put_record(org, key, {"server": _MEMORIES_SERVER, "harness": hid, "updated_at": int(time.time() * 1000)},
                              secret=False, param="memories")
-    if prev is None:
-        await _mcp_write(hid, cur + [{"id": _MEMORIES_ENTRY["id"], "name": _MEMORIES_ENTRY["name"],
-                                      "url": origins[0] + _HOSTED_MCP_PREFIX + _MEMORIES_SERVER, "transport": "http",
-                                      "auth": f"vault:{key}", "enabled": True}])
+    # two servers of one name are one server to the agent, and the last wins: a server a person already called
+    # memories keeps its name, and this one takes the next
+    taken = {_mcp_name(str(x.get("name") or "mcp")) for x in others}
+    taken |= {_mcp_name(str(x.get("name") or "mcp")) for p in _plugins_of(v or {}) for x in (p.get("mcpServers") or []) if isinstance(x, dict)}
+    name, n = _MEMORIES_ENTRY["name"], 1
+    while _mcp_name(name) in taken:
+        n += 1
+        name = f"{_MEMORIES_ENTRY['name']}_{n}"
+    # exactly this, whatever it was left as: nothing else should be able to change it, and it has no switch to find
+    want = {"id": _MEMORIES_ENTRY["id"], "name": name, "url": origins[0] + _HOSTED_MCP_PREFIX + _MEMORIES_SERVER,
+            "transport": "http", "auth": f"vault:{key}", "enabled": True}
+    if cur != [*others, want]:
+        await _mcp_write(hid, [*others, want])
     props = {}
     if "default_memory_id" in (patch or {}):
         props["memory_default"] = str(patch["default_memory_id"] or "")
@@ -21400,7 +21430,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     body.base = str(cur.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(cur.get("default_model") or ""))
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, cur)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _caller)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(cur))
@@ -23215,7 +23245,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
                         "base", {"base": v.get("base")})
     body.base = str(v.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, v)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _p)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(v))

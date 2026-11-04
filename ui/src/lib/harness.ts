@@ -710,6 +710,8 @@ export interface Plug {
   attention?: string;
 }
 export const PLUGS_ENTRY_ID = 'mcp.plugs';
+/** The server entry that gives an agent its memories: the service's, not one of the setup's own servers. */
+export const MEMORIES_ENTRY_ID = 'mcp.memories';
 
 /** Connect a plugin for the workspace, change its settings, or turn it off. */
 export function setPlug(type: string, body: { enabled: boolean; config?: Record<string, unknown>; secrets?: Record<string, string> }): Promise<Plug> {
