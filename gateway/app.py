@@ -1010,6 +1010,23 @@ async def _vault_put(tenant: str, name: str, value: str) -> None:
     await BACKING.secrets.put(tenant, name, value)
 
 
+async def _vault_put_credential(tenant: str, name: str, value: str, param: str | None = None) -> None:
+    """A credential — a provider key, an MCP token, a plug's secret — stored only where it can be
+    stored encrypted (#624). A provider key used to go through _vault_put like a model map, and
+    on an install without HR_SECRET_KEY that wrote it to disk in the clear; database connections
+    already refused that (_hosted_put). The entrypoint gives every self-hosted install a key at
+    first start, so this refuses nothing there; a deployment that runs without one is told what to
+    set, 501 secrets_not_configured, rather than given a plaintext file nobody knew about."""
+    # The refusal is decided here, on what the store says it can do, and the write goes through
+    # _vault_put as every write does: a keyed file store seals every record, a vault seals all of
+    # them, and a file store with no key is the one case that is refused.
+    if getattr(BACKING.secrets, "encrypts", True) is False:
+        raise uhp_error(501, "secrets_not_configured",
+                        "Refusing to store this credential: HR_SECRET_KEY is not set, so it could only be "
+                        "written to disk in plaintext. Set HR_SECRET_KEY to a passphrase and restart.", param)
+    await _vault_put(tenant, name, value)
+
+
 async def _vault_delete(tenant: str, name: str) -> None:
     await BACKING.secrets.delete(tenant, name)
 
@@ -3544,6 +3561,27 @@ async def _reconcile_sweep() -> int:
 
 
 @app.on_event("startup")
+async def _start_secrets_at_rest() -> None:
+    """Records written before this install had a key, brought under it (#624): once, in place.
+    The file store is the one that can have been without a key; a vault never was."""
+    reencrypt = getattr(BACKING.secrets, "reencrypt_plaintext", None)
+    if reencrypt is None:
+        return
+    try:
+        n = await reencrypt()
+    except Exception as e:  # noqa: BLE001 — the store still reads both forms; not a reason not to start
+        print(f"[secrets] could not re-encrypt stored records ({e}); they are read as before", flush=True)
+        return
+    if n:
+        print(f"[secrets] {n} record(s) stored before this install had a key are now encrypted", flush=True)
+    unopenable = getattr(BACKING.secrets, "unopenable", None)
+    bad = await unopenable() if unopenable else 0
+    if bad:
+        print(f"[secrets] {bad} record(s) cannot be opened with the current HR_SECRET_KEY: they were stored "
+              "under a different key. Set it back to that key, or enter those credentials again.", flush=True)
+
+
+@app.on_event("startup")
 async def _start_media_policy() -> None:
     """The operator's media preference, published to the plane before the first turn can arrive.
     Without this the order they chose applies only after something else happens to write it."""
@@ -4930,6 +4968,15 @@ async def _uhp_validation_error(request: Request, exc: RequestValidationError):
     return JSONResponse(validation_error_body(exc), status_code=422, headers={"UHP-Version": UHP_VERSION})
 
 
+@app.exception_handler(backing.SecretsNotConfigured)
+async def _secrets_not_configured(request: Request, exc: backing.SecretsNotConfigured):
+    """A stored credential that cannot be opened says why, rather than a bare 500."""
+    err = uhp_error(501, "secrets_not_configured", str(exc)).detail
+    err = {k: err.get(k) for k in ("type", "code", "message", "param", "detail")}
+    return JSONResponse({"error": err, "detail": err["message"]}, status_code=501,
+                        headers={"UHP-Version": UHP_VERSION})
+
+
 @app.exception_handler(HTTPException)
 async def _uhp_http_exception(request: Request, exc: HTTPException):
     d = exc.detail
@@ -4988,7 +5035,10 @@ def uhp_discovery() -> dict:
 def healthz(bus: int = 0) -> dict:
     if bus:
         return {"ok": True, "redis_configured": bool(REDIS_URL), **_redis_ok}
-    return {"ok": True, "pool": bool(POOL_ENDPOINT), "vault": bool(VAULT_URL)}
+    # secrets_encrypted: whether what the secret store writes is encrypted at rest — a vault
+    # always, the file store only with a key (#624; every self-hosted start now has one).
+    return {"ok": True, "pool": bool(POOL_ENDPOINT), "vault": bool(VAULT_URL),
+            "secrets_encrypted": bool(getattr(BACKING.secrets, "encrypts", True))}
 
 
 @app.get("/readyz")
@@ -5794,7 +5844,7 @@ class ConnBody(BaseModel):
 @app.put("/v1/orgs/{org}/connections/{name}", dependencies=[Depends(_internal_only)])
 async def put_connection(org: str, name: str, body: ConnBody) -> dict:
     conn = {"name": name, **{k: v for k, v in body.model_dump().items() if v is not None}}
-    await _vault_put(org, f"harness-conn-{name}", json.dumps(conn))
+    await _vault_put_credential(org, f"harness-conn-{name}", json.dumps(conn), "api_key")
     return {"ok": True, "org": org, "connection": _conn_public(conn)}
 
 
@@ -6525,12 +6575,12 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
     # "everything is gone" into a "restore the last one", which is the whole difference.
     prior = await _vault_get(GLOBAL_TENANT, _INTEGRATIONS_KEY)
     if prior:
-        await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, prior)
+        await _vault_put_credential(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, prior, "integrations")
         prior_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_KEY)
         await _vault_put(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY, prior_mm or "{}")
         prior_imm = await _vault_get(GLOBAL_TENANT, _IMAGE_MODEL_MAP_KEY)
         await _vault_put(GLOBAL_TENANT, _IMAGE_MODEL_MAP_PREV_KEY, prior_imm or "{}")
-    await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, json.dumps(out))
+    await _vault_put_credential(GLOBAL_TENANT, _INTEGRATIONS_KEY, json.dumps(out), "integrations")
     if mm is not None:
         await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, json.dumps(mm))
     if imm is not None:
@@ -6573,9 +6623,9 @@ async def admin_integrations_restore(request: Request) -> dict:
     prev_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY) or "{}"
     cur = await _vault_get(GLOBAL_TENANT, _INTEGRATIONS_KEY) or "[]"
     cur_mm = await _vault_get(GLOBAL_TENANT, _MODEL_MAP_KEY) or "{}"
-    await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_KEY, prev)
+    await _vault_put_credential(GLOBAL_TENANT, _INTEGRATIONS_KEY, prev, "integrations")
     await _vault_put(GLOBAL_TENANT, _MODEL_MAP_KEY, prev_mm)
-    await _vault_put(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, cur)
+    await _vault_put_credential(GLOBAL_TENANT, _INTEGRATIONS_PREV_KEY, cur, "integrations")
     await _vault_put(GLOBAL_TENANT, _MODEL_MAP_PREV_KEY, cur_mm)
     return {"ok": True, "integrations": [_integration_public(i) for i in json.loads(prev)],
             "model_map": json.loads(prev_mm)}
@@ -13296,7 +13346,7 @@ async def _mcp_secret_store(org: str, ref: str, token: str) -> dict:
     # vault key names allow only [a-z0-9-] (same charset as harness-conn-/harness-policy- keys)
     safe = re.sub(r"[^a-z0-9]+", "-", ref.lower()).strip("-") or "mcp"
     key = f"{_MCP_SECRET_PREFIX}{safe}"
-    await _vault_put(tenant, key, token)
+    await _vault_put_credential(tenant, key, token, "token")
     return {"ref": f"vault:{key}", "tenant": tenant}
 
 
@@ -17304,7 +17354,7 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         if not isinstance(value, str) or not value.strip():
             continue
         ref = f"plug-{_plug_safe(workspace)}-{_plug_safe(plug_type)}-{_plug_safe(field)}"
-        await _vault_put(org, ref, value.strip())
+        await _vault_put_credential(org, ref, value.strip(), "secrets")
         refs[field] = ref
     missing = [f for f in form["secrets"] if f not in refs]
     status = "disabled" if not body.enabled else ("needs_auth" if missing else "connected")
@@ -17460,7 +17510,7 @@ async def microsoft_complete(body: MicrosoftCompleteBody, request: Request) -> d
         who = me.json() if me.status_code < 400 else {}
     field = plugs_plane.m365_person_field(member)
     ref = f"plug-{_plug_safe(workspace)}-{_plug_safe(plugs_plane.MICROSOFT365)}-{_plug_safe(field)}"
-    await _vault_put(org, ref, rt)
+    await _vault_put_credential(org, ref, rt)
     refs = {str(x.get("field")): str(x.get("ref")) for x in (rec.get("key_refs") or []) if isinstance(x, dict)}
     refs[field] = ref
     accounts = dict(config.get("accounts") or {})

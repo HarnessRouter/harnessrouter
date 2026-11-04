@@ -225,6 +225,36 @@ if [ "${HR_AUTH_DISABLED:-}" != "1" ] && [ ! -f "$HR_AUTH_STORE" ] && [ "$HR_AUT
   echo "[harnessrouter] the default password is not accepted. Sign in as '$HR_AUTH_USER' with the password in $HR_INITIAL_PASSWORD_FILE (docker exec <container> cat $HR_INITIAL_PASSWORD_FILE), then change it from the profile page, or set HR_AUTH_PASSWORD."
 fi
 
+# Secrets at rest (#624). The secret store encrypts only under HR_SECRET_KEY, and nothing set it:
+# an install that followed the README kept its provider keys and MCP tokens in plain text under
+# /data/secrets, behind a file mode. So an instance given no key gets one at its first boot, kept
+# like the initial password: root's, 0600, on the volume. An operator who sets HR_SECRET_KEY keeps
+# the key apart from the data, which this cannot do, and the guide says so; one who set it once
+# keeps setting it, since the records are sealed under it. The gateway re-encrypts what was
+# stored before the key existed at its start.
+HR_SECRET_KEY_FILE="$DATA_DIR/secret-key"
+# A volume restored without its owners brings this file back as someone else's, and it is the only
+# copy of the key the records were sealed under: removing it would lose every stored credential. So
+# a real file with one name is taken, and what it holds only ever becomes the gateway's key, which
+# the product has anyway. A link or a second name is still removed by root_file, never followed.
+if [ -f "$HR_SECRET_KEY_FILE" ] && [ ! -L "$HR_SECRET_KEY_FILE" ] && [ "$(stat -c %h "$HR_SECRET_KEY_FILE")" = 1 ]; then
+  chown root:root "$HR_SECRET_KEY_FILE"
+  chmod 600 "$HR_SECRET_KEY_FILE"
+fi
+root_file "$HR_SECRET_KEY_FILE"
+GATEWAY_SECRET_KEY="${HR_SECRET_KEY:-}"
+if [ -z "$GATEWAY_SECRET_KEY" ]; then
+  if [ ! -s "$HR_SECRET_KEY_FILE" ]; then
+    ( umask 077; "$PY" -I -c 'import secrets; print(secrets.token_urlsafe(32))' > "$HR_SECRET_KEY_FILE" )
+    chmod 600 "$HR_SECRET_KEY_FILE"
+    echo "[harnessrouter] stored secrets are encrypted under a key generated now and kept in $HR_SECRET_KEY_FILE; set HR_SECRET_KEY to keep the key away from the data"
+  fi
+  GATEWAY_SECRET_KEY="$(cat "$HR_SECRET_KEY_FILE")"
+fi
+# Only the gateway opens the store, so only the gateway is handed the key, at its launch below. The
+# installers, the runner and the console start from this environment and never need it.
+unset HR_SECRET_KEY
+
 if [ "${HR_AUTH_DISABLED:-}" = "1" ]; then
   echo "[harnessrouter] WARNING: login is DISABLED (HR_AUTH_DISABLED=1) — anyone who can reach this port has full control"
 elif [ -f "$HR_AUTH_STORE" ]; then
@@ -1853,7 +1883,7 @@ pids+=($!)
 
 # gateway (loopback only), as the product. umask 077: what it creates on the volume (databases,
 # blobs, the secret store) is its alone.
-( cd /app/gateway && exec $AS_PRODUCT sh -c 'umask 077; exec "$0" -m uvicorn app:app --host 127.0.0.1 --port 8080 --log-level warning' "$PY" ) &
+( cd /app/gateway && export HR_SECRET_KEY="$GATEWAY_SECRET_KEY" && exec $AS_PRODUCT sh -c 'umask 077; exec "$0" -m uvicorn app:app --host 127.0.0.1 --port 8080 --log-level warning' "$PY" ) &
 pids+=($!)
 
 # Wait for the gateway before the UI starts serving, so a first page load never races a
