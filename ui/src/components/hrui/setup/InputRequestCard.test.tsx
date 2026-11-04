@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import { fireEvent, render, screen } from '@testing-library/react';
 import { inputRequestOf, type InputRequest } from '@/lib/conversation';
-import { incompleteWhy } from './AgentTurns';
+import { incompleteWhy, viewTurn } from './AgentTurns';
 import { InputRequestCard, requestExpired } from './InputRequestCard';
 
 const ask = (over: Partial<InputRequest>): InputRequest => ({ id: 'inreq_1', kind: 'free_text', prompt: 'Which one?', ...over });
@@ -49,6 +49,17 @@ describe('the question a task ended on', () => {
     render(<InputRequestCard request={ask({ expires_at: 1 })} onAnswer={jest.fn()} />);
     expect(screen.getByRole('status').textContent).toContain('expired');
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('does not read as a failure: a turn that asked is finished, and one a limit stopped is not', () => {
+    const msg = (incompleteReason: string) => ({ role: 'assistant', blocks: [], files: [], status: 'incomplete', incompleteReason }) as never;
+    expect(viewTurn(msg('input_required'), null).status).toBe('done');
+    expect(viewTurn(msg('max_steps'), null).status).not.toBe('done');
+  });
+
+  it('says what it is waiting for', () => {
+    render(<InputRequestCard request={ask({})} onAnswer={jest.fn()} />);
+    expect(screen.getByText('Waiting for your answer')).toBeTruthy();
   });
 
   it('reads the question from the end of a response, and an incomplete turn says why', () => {

@@ -35,6 +35,7 @@ export function InputRequestCard({ request, disabled, onAnswer }: {
   };
   return (
     <form className="input-request" aria-label="Answer the question" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+      <p className="input-request-lead">Waiting for your answer</p>
       {choices.length ? (
         <div className="input-request-choices">
           {choices.map((o) => (
