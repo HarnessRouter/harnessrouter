@@ -7,6 +7,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 - [Install](#install)
 - [Restarts, upgrades, and backups](#restarts-upgrades-and-backups)
 - [What a delete removes, and when](#what-a-delete-removes-and-when)
+- [What an agent can read](#what-an-agent-can-read)
 - [Starter kits](#starter-kits)
 - [Plugins](#plugins)
 - [Environments](#environments)
@@ -516,6 +517,21 @@ docker exec harnessrouter hr-retention restore harnesses chrn_...     # or respo
 
 An environment cannot be restored while another environment holds its name; rename that one
 first.
+
+## What an agent can read
+
+An agent runs in its own session, under its own user, and can read that session's folder. So the credentials it needs aren't put there.
+
+- **Provider keys and remote MCP servers:** the server keeps the key, the server's address and its headers. The session gets a local address and a token that stops working when the turn ends, so nothing in its environment, folder or checkpoint still works afterwards.
+- **Your instance's own secrets:** the key that protects stored credentials, and the console password, can't be read by a session.
+
+Some things can't be hidden from it:
+
+- **During a turn, an agent can use what it's given.** It can call your MCP tools and spend through your provider key, and it can send out what it reads. Give a harness only the tools it needs.
+- **A stdio MCP server and a harness's variables run inside the session,** so the agent can read their values. Don't put a long-lived credential there.
+- **An MCP server's address, and a plugin package's own files, are stored as you wrote them.** Keep tokens out of the url where the server allows it, and out of a package's files. Use the server's token field instead, which is encrypted at rest.
+
+Every release is checked for this: a planted value in each kind of credential, one task per base, and the release fails if one reaches a session or a response.
 
 ## Starter kits
 

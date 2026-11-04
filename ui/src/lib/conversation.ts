@@ -80,11 +80,22 @@ export interface ToolStep { name: string; args: string; result?: string; callId?
 // An assistant turn is an ORDERED list of blocks appended as events arrive, so tool activity is
 // interleaved with prose in real time (not all tools hoisted to the top).
 export type Block = { kind: 'text'; text: string; error?: true } | { kind: 'tools'; reasoning: string; steps: ToolStep[] };
+export interface InputRequest { id: string; kind: 'choice' | 'confirm' | 'free_text' | 'secret' | string; prompt: string;
+  options?: { id: string; label: string }[]; expires_at?: number }
+/** The question at the end of a response, if it ended on one: its last input_request item. */
+export function inputRequestOf(response: unknown): InputRequest | undefined {
+  const out = (response as { output?: { type?: string }[] } | undefined)?.output;
+  if (!Array.isArray(out)) return undefined;
+  const item = [...out].reverse().find((x) => x?.type === 'input_request') as unknown as InputRequest | undefined;
+  return item && item.id ? item : undefined;
+}
 export interface AsstMsg { role: 'assistant'; blocks: Block[]; files: RespFile[]; status: 'running' | 'done' | 'failed' | 'cancelled' | 'incomplete';
   /** Why an incomplete turn is incomplete (max_steps | timeout | interrupted) — from the
    *  gateway's incomplete_details. Absent on records from before the field existed, which is
    *  why the badge itself must not assert a cause. */
   incompleteReason?: string;
+  /** The question a turn ended on (Tasks 3.2), while it is still the person's to answer. */
+  inputRequest?: InputRequest;
   /** the server's own sentence for a refusal, when it sent one (shown beside the reason) */
   incompleteDetail?: string;
   /** Seconds this turn took, when the gateway kept it. */
@@ -152,6 +163,7 @@ export function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boo
     m.push({ role: 'assistant', blocks, files: t.files || [], status: st,
       incompleteReason: (t as { incomplete_reason?: string }).incomplete_reason || undefined,
       incompleteDetail: (t as { incomplete_detail?: string }).incomplete_detail || undefined,
+      inputRequest: (t as { input_request?: InputRequest }).input_request || undefined,
       elapsed: typeof t.elapsed === 'number' ? t.elapsed : undefined });
   }
   return { msgs: m, running };
@@ -353,7 +365,7 @@ function applyBusEvent(sid: string, responseId: string, ev: Record<string, unkno
       // sent one; the stored record has the same fields, so a reload agrees with what the live turn
       // showed
       const inc = (ev.response as { incomplete_details?: { reason?: string; detail?: string } } | undefined)?.incomplete_details;
-      busUpdateLast(sid, (a) => { a.status = 'incomplete'; if (inc?.reason) a.incompleteReason = inc.reason; if (inc?.detail) a.incompleteDetail = inc.detail; });
+      busUpdateLast(sid, (a) => { a.status = 'incomplete'; if (inc?.reason) a.incompleteReason = inc.reason; if (inc?.detail) a.incompleteDetail = inc.detail; a.inputRequest = inputRequestOf(ev.response); });
       setConvState(sid, { busy: false, prevId: responseId, firstTurn: false }); break;
     }
     case 'response.failed': {
@@ -835,6 +847,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
                 : (['failed', 'cancelled', 'incomplete'].includes(status) ? status as AsstMsg['status'] : 'failed');
               if (status === 'incomplete' && inc?.reason) a.incompleteReason = inc.reason;
               if (status === 'incomplete' && inc?.detail) a.incompleteDetail = inc.detail;
+              if (status === 'incomplete') a.inputRequest = inputRequestOf(response);
             });
             const sk = sessionId ?? sidRef.current;
             const ms = getConvState(convKeyRef.current).msgs;
