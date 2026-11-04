@@ -1,0 +1,563 @@
+.shell {
+  --content-inline-padding: 44px;
+  /* Small, symmetric breathing room around the title row: the gap above (this
+     value) and the gap below the title are kept equal so the first row reads
+     balanced, while the top stays padding-free. */
+  --content-top: 14px;
+  /* TOC starts level with the title (just a hair of margin), GitBook-style. */
+  --toc-offset: 14px;
+  position: relative;
+  /* The editor lays itself out by the room it is given, not the viewport: the
+     studio sidebar is resizable and a drawer on phones. */
+  container-type: inline-size;
+  /* No top/bottom padding — content rises to the top with only a small margin
+     from the editor surface; horizontal padding stays. */
+  padding: 0;
+  margin-left: calc(var(--content-inline-padding) * -1);
+  margin-right: calc(var(--content-inline-padding) * -1);
+  background: transparent;
+  color: #25282d;
+  overflow: visible;
+  display: flex;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Text",
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+}
+
+.shellLoading {
+  padding: 0;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+  width: 100%;
+  margin: 0;
+  min-height: 0;
+  height: 100%;
+  flex: 1;
+}
+
+.sidebar {
+  grid-column: 2;
+  grid-row: 1;
+  margin-top: var(--toc-offset);
+  max-height: calc(100% - var(--toc-offset));
+  border-left: 1px solid #e3e5e8;
+  padding-left: 16px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sidebar h2 {
+  margin: 0 0 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.17em;
+  color: #7d848f;
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tocItem {
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-size: 15px;
+  font-weight: 450;
+  color: #3d434c;
+  padding: 7px 0;
+  border-radius: 5px;
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.tocItem:hover {
+  color: #171a1f;
+}
+
+.tocItemActive {
+  color: #111317;
+  font-weight: 650;
+}
+
+.main {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.header {
+  margin-bottom: 18px;
+  padding: 0 var(--content-inline-padding);
+}
+
+.header h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 44px;
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.022em;
+  color: #1c1f24;
+}
+
+.header h1 span {
+  font-size: 19px;
+  color: #1e232a;
+  margin-top: 4px;
+}
+
+.header p {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: #8b919b;
+}
+
+.editorSurface {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  overflow: visible;
+}
+
+.editorSurface :global(.ProseMirror) {
+  min-height: 100%;
+  border: 0;
+  outline: 0;
+  /* Small top margin so the title sits near the top (level with the TOC);
+     modest bottom breathing room for the scroll end. */
+  padding: var(--content-top) var(--content-inline-padding) 28px;
+  font-size: 16px;
+  line-height: 1.52;
+  color: #2a2d32;
+  font-weight: 420;
+}
+
+.editorSurface,
+.sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: #c9d0dc transparent;
+}
+
+.editorSurface::-webkit-scrollbar,
+.sidebar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.editorSurface::-webkit-scrollbar-track,
+.sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.editorSurface::-webkit-scrollbar-thumb,
+.sidebar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #d9dee8, #c1c9d8);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.editorSurface::-webkit-scrollbar-thumb:hover,
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #c8cfdd, #adb7c9);
+  background-clip: padding-box;
+}
+
+.editorSurface :global(.ProseMirror > *:first-child) {
+  margin-top: 0;
+}
+
+/* Balance the title row: the gap below it equals the gap above (--content-top),
+   no matter what heading follows. Zeroing the next element's margin-top stops a
+   section heading's large margin from collapsing through and lopsiding the row. */
+.editorSurface :global(.ProseMirror > h1:first-child) {
+  margin-bottom: var(--content-top);
+}
+.editorSurface :global(.ProseMirror > h1:first-child + *) {
+  margin-top: 0;
+}
+
+.editorSurface :global(.ProseMirror p) {
+  margin: 0 0 1.06em;
+}
+
+.editorSurface :global(.ProseMirror h1) {
+  margin: 1.25em 0 0.32em;
+  font-size: 38px;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  color: #1c1f24;
+}
+
+.editorSurface :global(.ProseMirror h2) {
+  margin: 1.36em 0 0.34em;
+  font-size: 30px;
+  line-height: 1.18;
+  letter-spacing: -0.017em;
+  color: #1c1f24;
+}
+
+.editorSurface :global(.ProseMirror h3) {
+  margin: 1.22em 0 0.4em;
+  font-size: 24px;
+  line-height: 1.24;
+  letter-spacing: -0.01em;
+  color: #1f2329;
+}
+
+.editorSurface :global(.ProseMirror h4) {
+  margin: 1.18em 0 0.44em;
+  font-size: 20px;
+  line-height: 1.28;
+  letter-spacing: -0.01em;
+  color: #1f2329;
+}
+
+.editorSurface :global(.ProseMirror h5) {
+  margin: 1.12em 0 0.46em;
+  font-size: 17px;
+  line-height: 1.32;
+  color: #22272e;
+}
+
+.editorSurface :global(.ProseMirror h6) {
+  margin: 1.08em 0 0.48em;
+  font-size: 15px;
+  line-height: 1.36;
+  color: #313742;
+}
+
+.editorSurface :global(.ProseMirror ul) {
+  margin: 0.2em 0 1em;
+  padding-left: 1.2em;
+  list-style: disc outside;
+}
+
+.editorSurface :global(.ProseMirror ol) {
+  margin: 0.2em 0 1em;
+  padding-left: 1.3em;
+  list-style: decimal outside;
+}
+
+.editorSurface :global(.ProseMirror li) {
+  margin: 0.2em 0;
+}
+
+.editorSurface :global(.ProseMirror code) {
+  font-size: 0.8em;
+  border-radius: 4px;
+  padding: 0.06em 0.3em;
+  background: #e9ebef;
+  color: #4f5660;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+}
+
+.editorSurface :global(.ProseMirror p.is-empty::before) {
+  content: attr(data-placeholder);
+  color: #a5acb6;
+  pointer-events: none;
+  height: 0;
+  float: left;
+}
+
+.rowControls {
+  position: absolute;
+  left: 14px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+}
+
+.rowAddButton,
+.rowDragButton {
+  width: 20px;
+  height: 20px;
+  border: 1px solid #d7d1c9;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #8f8a84;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
+}
+
+.rowAddButton:hover,
+.rowDragButton:hover {
+  color: #666d76;
+  border-color: #c9c2b9;
+  background: #f6f4f1;
+}
+
+.dropIndicator {
+  position: absolute;
+  left: var(--content-inline-padding);
+  right: var(--content-inline-padding);
+  height: 2px;
+  background: #4385f5;
+  border-radius: 999px;
+  z-index: 6;
+}
+
+.commandMenu {
+  position: absolute;
+  z-index: 20;
+  width: 320px;
+  background: #f7f7f7;
+  border: 1px solid #d8d8d8;
+  border-radius: 12px;
+  box-shadow: 0 18px 42px rgb(0 0 0 / 20%);
+  overflow: hidden;
+}
+
+.commandMenuSearchRow {
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid #e2e2e2;
+}
+
+.commandMenuSearch {
+  width: 100%;
+  border: 1px solid #d7d7d7;
+  border-radius: 6px;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 15px;
+  color: #434343;
+  background: #fbfbfb;
+}
+
+.commandMenuSearch::placeholder {
+  color: #8e8e8e;
+}
+
+.commandMenuSearch:focus {
+  outline: none;
+  border-color: #c4c4c4;
+}
+
+.commandMenuSectionTitle {
+  padding: 8px 12px 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #8c8c8c;
+}
+
+.commandMenuList {
+  padding: 0 7px 8px;
+}
+
+.commandMenuItem {
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 10px;
+  font-size: 15px;
+  color: #2b2b2b;
+  cursor: pointer;
+}
+
+.commandMenuItem:hover {
+  background: #ececec;
+}
+
+.commandMenuItem > span:last-child {
+  color: #8d8d8d;
+  font-size: 13px;
+}
+
+.commandMenuEmpty {
+  padding: 12px 10px;
+  font-size: 13px;
+  color: #8d8d8d;
+}
+
+.commandMenuClose {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid #e2e2e2;
+  background: #f7f7f7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  font-size: 14px;
+  color: #3d3d3d;
+  cursor: pointer;
+}
+
+.commandMenuClose > span:last-child {
+  color: #8d8d8d;
+}
+
+.commandMenuClose:hover {
+  background: #f0f0f0;
+}
+
+.editorSurface :global(.collaboration-cursor__selection) {
+  border-radius: 2px;
+}
+
+.editorSurface :global(.collaboration-cursor__caret) {
+  position: relative;
+  margin-left: -1px;
+  margin-right: -1px;
+  border-left: 2px solid #fb8a3c;
+  z-index: 8;
+  pointer-events: none;
+  word-break: normal;
+}
+
+.editorSurface :global(.collaboration-cursor__label) {
+  position: absolute;
+  top: -24px;
+  left: -1px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 16px;
+  padding: 2px 8px;
+  z-index: 9;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.loading {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666d77;
+  font-size: 14px;
+  background: #fff;
+}
+
+@media (max-width: 980px) {
+  .shell {
+    --content-inline-padding: 48px;
+    --toc-offset: 0px;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .sidebar {
+    grid-row: auto;
+    margin-top: 0;
+    max-height: none;
+    border-left: 0;
+    border-bottom: 1px solid #e3e5e8;
+    padding: 0 0 14px;
+  }
+
+  .main {
+    grid-row: auto;
+    max-width: 100%;
+  }
+
+  .header h1 {
+    font-size: 36px;
+  }
+
+  .editorSurface :global(.ProseMirror) {
+    font-size: 17px;
+  }
+
+  .editorSurface :global(.ProseMirror h2) {
+    font-size: 28px;
+  }
+
+  .editorSurface :global(.ProseMirror h1) {
+    font-size: 34px;
+  }
+
+  .editorSurface :global(.ProseMirror h3) {
+    font-size: 23px;
+  }
+
+  .editorSurface :global(.ProseMirror h4) {
+    font-size: 19px;
+  }
+
+  .editorSurface :global(.ProseMirror h5) {
+    font-size: 16px;
+  }
+
+  .editorSurface :global(.ProseMirror h6) {
+    font-size: 14px;
+  }
+
+  .commandMenu {
+    width: min(92vw, 320px);
+  }
+
+}
+
+/* Narrow room. Under 760px the Contents column would leave the body a strip,
+   so the body takes the whole width. Under 560px the reading gutters tighten
+   and the block handles that live in the left gutter step aside (the slash
+   menu and Enter still add blocks). */
+@container (max-width: 760px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .sidebar {
+    display: none;
+  }
+}
+
+@container (max-width: 560px) {
+  .layout {
+    --content-inline-padding: 20px;
+  }
+  .rowControls {
+    display: none;
+  }
+}

@@ -120,6 +120,7 @@ export const addRecord = (id: string, b: RecordInput) => call<MemoryRecord>('POS
 /** A revision appends a version; the earlier one stays in the record's history. */
 export const reviseRecord = (id: string, rid: string, b: RecordInput) => call<MemoryRecord>('PATCH', R(id, rid), b);
 /** Closed and kept: the everyday remove. */
+export const getRecord = (id: string, rid: string) => call<MemoryRecord>('GET', R(id, rid));
 export const forgetRecord = (id: string, rid: string) => call<MemoryRecord>('DELETE', R(id, rid));
 /** Destroyed. `unreachable` names what the provider could not remove, and must be shown. */
 export const eraseRecords = (id: string, record_ids: string[]) => call<{ erased: string[]; unreachable: string[] }>('POST', `${M(id)}/erase`, { record_ids });
