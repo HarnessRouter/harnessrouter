@@ -105,7 +105,8 @@ class Local:
     async def remember(self, mid, record):
         async def go():
             prov, _ = await self._prov(mid, "write")
-            return await mp.present(self.org, mid, await prov.remember(mid, mp._record_in(record), self.writer), self.pr)
+            made = await mp.remember(prov, mid, mp._record_in(record), self.writer)
+            return {**await mp.present(self.org, mid, made, self.pr), **{k: made[k] for k in ("closed", "conflicts") if k in made}}
         return await self._do(go())
 
     async def revise(self, mid, rid, patch):

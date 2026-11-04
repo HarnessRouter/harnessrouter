@@ -20,6 +20,7 @@ Three rules shape everything here:
 """
 from __future__ import annotations
 
+import datetime
 import json
 import re
 import time
@@ -565,8 +566,124 @@ async def recall(org: str, memories: list[dict], req: dict) -> dict:
                 degraded.append(d)
         abstains.append(bool(res.get("abstain")))
     results.sort(key=lambda x: -(x.get("score") or 0))
-    return {"results": results[: int(req.get("limit") or 8)], "degraded": degraded,
+    results = results[: int(req.get("limit") or 8)]
+    return {"results": results + await _other_sides(memories, results), "degraded": degraded,
             "abstain": bool(abstains) and all(abstains)}
+
+
+async def _other_sides(memories: list[dict], results: list[dict]) -> list[dict]:
+    """A hit on one side of a disagreement brings the other, whichever provider keeps them, marked as
+    brought along and not counted against the limit: a reader should not act on half of one (§6.3)."""
+    by_id = {str(m["id"]): m for m in memories}
+    have = {str((r.get("record") or {}).get("id")) for r in results}
+    out: list[dict] = []
+    for r in results:
+        here = str(r.get("memory_id") or "")
+        for ref in (r.get("record") or {}).get("references") or []:
+            other = str(ref.get("record_id") or "")
+            where = str(ref.get("memory_id") or here)
+            if ref.get("rel") != "contradicts" or other in have or where not in by_id:
+                continue
+            rec = await (await provider_of(by_id[where])).get(where, other)
+            if rec and rec.get("status") == "active":
+                have.add(other)
+                out.append({"record": rec, "memory_id": where, "score": None, "why": ["contradicts"]})
+    return out
+
+
+def _instant(ts) -> float | None:
+    """A time as a number, to compare: providers answer several forms of one instant."""
+    if not ts:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _same_word(a, b) -> bool:
+    """Two predicates are the same when they differ only by case, spacing or a plural (§4.4)."""
+    def norm(x) -> str:
+        w = re.sub(r"[\s_-]+", "_", str(x or "").strip().lower())
+        return w[:-1] if w.endswith("s") and len(w) > 3 else w
+    return bool(norm(a)) and norm(a) == norm(b)
+
+
+async def _facts_about(prov: Provider, mid: str, subject: str, predicate) -> list[dict]:
+    out, cursor = [], ""
+    for _ in range(20):
+        page = await prov.list(mid, {"types": ["fact"], "limit": 200, "cursor": cursor, "include": "active"})
+        for r in page.get("records") or []:
+            a = r.get("attributes") or {}
+            if a.get("holds") == "one" and _same_word(a.get("predicate"), predicate) and \
+                    any(x.get("rel") == "subject" and str(x.get("record_id")) == subject for x in r.get("references") or []):
+                out.append(r)
+        cursor = str(page.get("next") or "")
+        if not cursor:
+            break
+    return out
+
+
+async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict:
+    """A stated record kept, with what the chapter asks of the server around it. Every writer comes
+    through here, a person's request and an agent's tool, on every provider.
+
+    A `contradicts` it names is kept on the other record too (§4.2). A fact that holds one value, on a
+    provider that declares `holds`, takes its place among the others on its subject and predicate (§4.4),
+    and the answer says what that did. That logic is here because it reads only what every provider keeps:
+    the attributes, the references and the world time of a stated fact."""
+    a = record.get("attributes") or {}
+    if a.get("stated_at") and not (record.get("time") or {}).get("valid_from"):
+        record = {**record, "time": {**(record.get("time") or {}), "valid_from": a["stated_at"]}}
+    placing = a.get("holds") == "one" and bool(prov.capabilities().get("holds"))
+    closes: list[dict] = []
+    conflicts: list[str] = []
+    subject = next((str(x["record_id"]) for x in record.get("references") or [] if x.get("rel") == "subject"), "")
+    if placing and subject and a.get("predicate"):
+        at = _instant(record["time"].get("valid_from")) if record.get("time") else None
+        at = at if at is not None else time.time()
+        later: list[tuple[float, str]] = []
+        for o in await _facts_about(prov, mid, subject, a["predicate"]):
+            t = o.get("time") or {}
+            start, end = _instant(t.get("valid_from")), _instant(t.get("valid_to"))
+            same = str((o.get("attributes") or {}).get("value") or "").strip().lower() == str(a.get("value") or "").strip().lower()
+            if start is None or start < at:
+                if (end is None or end > at) and not same:
+                    closes.append(o)
+            elif start == at:
+                if not same:
+                    conflicts.append(str(o["id"]))
+            else:
+                later.append((start, str(t.get("valid_from"))))
+        if later:
+            record = {**record, "time": {**(record.get("time") or {}), "valid_to": min(later)[1]}}
+        if conflicts:
+            record = {**record, "references": [*(record.get("references") or []), *[{"rel": "contradicts", "memory_id": "", "record_id": c} for c in conflicts]]}
+    made = await prov.remember(mid, record, writer)
+    by_server = {"kind": "provider", "id": prov.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}
+    for o in closes:
+        await prov.revise(mid, str(o["id"]), {"time": {"valid_to": (record.get("time") or {}).get("valid_from") or _now_iso()}}, by_server)
+    await keep_on_both_ends(prov, mid, made, by_server)
+    if placing:
+        made = {**made, "closed": [str(o["id"]) for o in closes], "conflicts": conflicts}
+    return made
+
+
+async def keep_on_both_ends(prov: Provider, mid: str, record: dict, writer: dict) -> None:
+    """`contradicts` says the same from either end, so it is kept on both records (§4.2)."""
+    rid = str(record.get("id") or "")
+    for ref in record.get("references") or []:
+        other = str(ref.get("record_id") or "")
+        if ref.get("rel") != "contradicts" or str(ref.get("memory_id") or mid) != mid or not other or other == rid:
+            continue
+        o = await prov.get(mid, other)
+        if not o or any(x.get("rel") == "contradicts" and str(x.get("record_id")) == rid for x in o.get("references") or []):
+            continue
+        await prov.revise(mid, other, {"references": [*(o.get("references") or []), {"rel": "contradicts", "memory_id": "", "record_id": rid}]}, writer)
+
+
+def _now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 async def graph(org: str, memory: dict, principals: list[str], *, around: str = "", hops: int = 1,

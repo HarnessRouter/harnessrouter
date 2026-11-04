@@ -305,7 +305,8 @@ async def remember(mid: str, request: Request) -> dict:
     await mp.settle_files(org, rec_in["content"], prov)
 
     async def write():
-        return 200, await mp.present(org, mid, await prov.remember(mid, rec_in, mp.writer_of(member)), pr)
+        made = await mp.remember(prov, mid, rec_in, mp.writer_of(member))
+        return 200, {**await mp.present(org, mid, made, pr), **{k: made[k] for k in ("closed", "conflicts") if k in made}}
     return _answer_of(*await _once(request, org, member, mid, "remember", write))
 
 
@@ -337,7 +338,9 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
         stated = mp._record_in({"type": (cur or {}).get("type") or "fact", "title": "x",
                                 "references": [r for r in patch["references"] if isinstance(r, dict) and r.get("available") is not False]})["references"]
         patch["references"] = stated + kept
-    return await mp.present(org, mid, await prov.revise(mid, rid, patch, mp.writer_of(member)), pr)
+    made = await prov.revise(mid, rid, patch, mp.writer_of(member))
+    await mp.keep_on_both_ends(prov, mid, made, {"kind": "provider", "id": prov.id, "on_behalf_of": f"member:{member}"})
+    return await mp.present(org, mid, made, pr)
 
 
 @router.delete("/v1/memories/{mid}/records/{rid}")

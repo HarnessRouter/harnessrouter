@@ -115,7 +115,7 @@ class Graphiti(mp.Provider):
         return {"id": NODE + str(n["uuid"]), "type": rtype, "title": str(a.get("hr_title") if stated else n.get("name") or "") or "",
                 "content": [{"type": "text", "text": body}] if body else [], "attributes": attrs, "references": js("hr_refs", "[]"), "version": version,
                 "status": status, "supersedes": version - 1 if version > 1 else None,
-                "time": {"valid_from": None, "valid_to": None, "written_at": a.get("hr_written_at") or n.get("created_at"),
+                "time": {"valid_from": a.get("hr_valid_from"), "valid_to": a.get("hr_valid_to"), "written_at": a.get("hr_written_at") or n.get("created_at"),
                          "invalidated_at": a.get("hr_written_at") if status != "active" else None},
                 "written_by": js("hr_writer", json.dumps({"kind": "provider", "id": self.id}))}
 
@@ -172,6 +172,9 @@ class Graphiti(mp.Provider):
              "hr_attributes": json.dumps(attrs, separators=(",", ":")), "hr_refs": json.dumps(record.get("references") or [], separators=(",", ":"))}
         if title:
             a["hr_title"] = title
+        for k in ("valid_from", "valid_to"):
+            if (record.get("time") or {}).get(k):
+                a["hr_" + k] = record["time"][k]
         label = str(attrs.get("entity_type") or "")
         r = await self._call("POST", "/nodes", body={"group_id": mid, "name": title or said[:120] or uuid.uuid4().hex, "summary": said, "labels": [label] if label.isidentifier() else [], "attributes": a})
         if r.status_code != 200:
@@ -221,7 +224,11 @@ class Graphiti(mp.Provider):
             kept = json.loads(a.get("hr_versions") or "[]")
         except ValueError:
             kept = []
-        kept.append({"v": cur["version"], "title": cur["title"], "content": cur["content"], "at": cur["time"]["written_at"], "by": cur["written_by"]})
+        kept.append({"v": cur["version"], "title": cur["title"], "content": cur["content"], "attributes": cur["attributes"], "at": cur["time"]["written_at"], "by": cur["written_by"],
+                     "world": {k: cur["time"][k] for k in ("valid_from", "valid_to")}})
+        for k, v in (patch.get("time") or {}).items():
+            if k in ("valid_from", "valid_to"):
+                a["hr_" + k] = v
         title = patch.get("title", cur["title"])
         attrs = {**cur["attributes"], **(patch.get("attributes") or {})}
         refs = patch.get("references", cur["references"])
@@ -294,8 +301,8 @@ class Graphiti(mp.Provider):
         out = []
         for i, k in enumerate(kept):
             until = kept[i + 1]["at"] if i + 1 < len(kept) else head["time"]["written_at"]
-            out.append({**head, "title": k.get("title") or "", "content": k.get("content") or [], "version": k.get("v") or i + 1, "status": "superseded",
-                        "supersedes": (k.get("v") or i + 1) - 1 or None, "written_by": k.get("by") or head["written_by"], "time": {**head["time"], "written_at": k.get("at"), "invalidated_at": until}})
+            out.append({**head, "title": k.get("title") or "", "content": k.get("content") or [], "attributes": k.get("attributes") or head["attributes"], "version": k.get("v") or i + 1, "status": "superseded",
+                        "supersedes": (k.get("v") or i + 1) - 1 or None, "written_by": k.get("by") or head["written_by"], "time": {**head["time"], **(k.get("world") or {}), "written_at": k.get("at"), "invalidated_at": until}})
         return [*out, head]
 
     async def prime(self, mid, budget):

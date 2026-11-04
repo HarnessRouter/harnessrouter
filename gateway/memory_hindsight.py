@@ -86,7 +86,7 @@ class Hindsight(mp.Provider):
                            "filters": {"native": ["type"], "applied_after_ranking": "every other filter"}},
                 "history": {"content": "versions", "structure": "none", "emulated": True}, "as_of": "one record",
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
-                "prime": True, "consolidate": "trigger", "holds": False, "queries": {"named": False, "free": None},
+                "prime": True, "consolidate": "trigger", "holds": True, "queries": {"named": False, "free": None},
                 "types": False, "graph": {"entities": "derived"},
                 "schema": {"mode": "guides", "properties": False, "relations": False},
                 "content": {"media": ["text/*"], "describes": []}}
@@ -300,7 +300,8 @@ class Hindsight(mp.Provider):
                 kept = json.loads(old.get("hr_versions") or "[]")
             except ValueError:
                 kept = []
-            kept.append({"v": cur["version"], "title": cur["title"], "content": cur["content"], "at": doc.get("updated_at"), "by": cur["written_by"]})
+            kept.append({"v": cur["version"], "title": cur["title"], "content": cur["content"], "attributes": cur["attributes"], "at": doc.get("updated_at"),
+                         "by": cur["written_by"], "world": {k: cur["time"][k] for k in ("valid_from", "valid_to")}})
             version = cur["version"] + 1
             meta = self._meta(merged, writer, version, kept)
             tags = [f"t:{merged['type']}"] + (["standing"] if merged["attributes"].get("standing") else [])
@@ -385,9 +386,9 @@ class Hindsight(mp.Provider):
         out = []
         for i, k in enumerate(kept):
             until = kept[i + 1]["at"] if i + 1 < len(kept) else head["time"]["written_at"]
-            out.append({**head, "title": k.get("title") or "", "content": k.get("content") or [], "version": k.get("v") or i + 1,
+            out.append({**head, "title": k.get("title") or "", "content": k.get("content") or [], "attributes": k.get("attributes") or head["attributes"], "version": k.get("v") or i + 1,
                         "status": "superseded", "supersedes": (k.get("v") or i + 1) - 1 or None, "written_by": k.get("by") or head["written_by"],
-                        "time": {**head["time"], "written_at": k.get("at"), "invalidated_at": until}})
+                        "time": {**head["time"], **(k.get("world") or {}), "written_at": k.get("at"), "invalidated_at": until}})
         return [*out, head]
 
     async def prime(self, mid, budget):

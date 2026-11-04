@@ -87,7 +87,7 @@ class ReMe(mp.Provider):
                            "filters": {"native": [], "applied_after_ranking": "every filter"}},
                 "history": {"content": "versions", "structure": "none", "emulated": True}, "as_of": "one record",
                 "revise": "native", "forget": "emulated", "erase": {"unreachable": "none"},
-                "prime": True, "consolidate": False, "holds": False, "queries": {"named": False, "free": None},
+                "prime": True, "consolidate": False, "holds": True, "queries": {"named": False, "free": None},
                 "types": False, "graph": {"entities": "stated"}, "schema": {"mode": "none"},
                 "content": {"media": ["text/*"], "describes": []}}
 
