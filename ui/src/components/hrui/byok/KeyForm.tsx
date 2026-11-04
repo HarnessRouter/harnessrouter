@@ -13,7 +13,7 @@
 import { useRef, useState } from 'react';
 import { OOB } from '@/lib/harness';
 import { toast } from '../toast';
-import { HOSTED, SECRET, isEntra, nameFor, type CatalogEntry, type Doc, type Integration, type ModelRow, type ProviderField } from './doc';
+import { HOSTED, SECRET, connHeaders, isEntra, nameFor, type CatalogEntry, type Doc, type Integration, type ModelRow, type ProviderField } from './doc';
 
 const X = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>;
 const FORMATS: [string, string][] = [['openai', 'OpenAI Chat Completions'], ['responses', 'OpenAI Responses'], ['anthropic', 'Anthropic Messages']];
@@ -46,6 +46,7 @@ export function KeyForm({ meta, name: provName, doc, editing, busy, onCancel, on
   const custom = meta.id === 'custom';
   const [cfg, setCfg] = useState<Record<string, string>>(() => {
     const c = { ...(editing?.config || {}) };
+    delete c.headers;   // not a form field: carried through as read (see save)
     if (custom && !c.api_format) c.api_format = 'openai';
     return c;
   });
@@ -83,7 +84,11 @@ export function KeyForm({ meta, name: provName, doc, editing, busy, onCancel, on
       .filter((m) => m.canonical);
     if (custom && !own.length) { toast('Add the models this endpoint serves.'); return; }
     const models = custom ? own : [...(meta.models || []).filter((m) => !own.some((o) => o.canonical === m.canonical)), ...own];
-    const res = await onSubmit({ name, provider: meta.id, config: out, models });
+    // A connection's request headers are set through the API, not this form. They come back as names with
+    // each value the sentinel, and go back the same way, so a save here keeps them.
+    const headers = connHeaders(editing);
+    const config = headers ? { ...out, headers } as unknown as Integration['config'] : out;
+    const res = await onSubmit({ name, provider: meta.id, config, models });
     if (!res.ok) {
       // the server's reason, without its own prefix ("integration 'name': "); never the secret
       if (res.detail) { const why = res.detail.replace(/^integration '[^']*':\s*/, ''); setRefused(why.charAt(0).toUpperCase() + why.slice(1)); }
