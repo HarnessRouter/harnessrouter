@@ -9,8 +9,9 @@ import time
 import uuid
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+import memory_live
 import memory_plane as mp
 
 router = APIRouter()
@@ -171,6 +172,7 @@ async def put_schema(mid: str, request: Request) -> dict:
         raise mp.MemoryError(422, "memory_unsupported", "This memory's provider reads names, not relations between them.", "relations")
     await mp.GRAPH.upsert("Memory", mid, {"schema": json.dumps(clean), "updated_at": mp._now_ms()}, raise_on_fail=True)
     await prov.apply_schema(mid, clean)
+    memory_live.publish(mid, "schema.changed")
     return {"object": "memory.schema", "memory_id": mid, "applies": applies, **clean}
 
 
@@ -285,6 +287,37 @@ async def observe(mid: str, request: Request) -> dict:
     return _answer_of(*await _once(request, org, member, mid, "observe", write))
 
 
+@router.get("/v1/memories/{mid}/events")
+@guarded
+async def events(mid: str, request: Request, after: int | None = None) -> StreamingResponse:
+    """What changes in this memory, as it happens: who changed which record, not what it now says. A reader
+    reads the record under its own privileges. `Last-Event-ID` or `after` picks up where a reader left off.
+    A privilege taken away ends the stream within a minute."""
+    org, _, _, pr = await _who(request)
+    await mp.need(org, mid, pr, "read")
+    head = request.headers.get("last-event-id") or ""
+    since = int(head) if head.isdigit() else after
+
+    async def tell():
+        checked = time.monotonic()
+        yield ": connected\n\n"
+        async for ev in memory_live.stream(mid, since):
+            if await request.is_disconnected():
+                return
+            if time.monotonic() - checked > 60:
+                checked = time.monotonic()
+                try:
+                    await mp.need(org, mid, pr, "read")
+                except mp.MemoryError:
+                    return
+            if ev is None:
+                yield ": still here\n\n"
+                continue
+            yield f"id: {ev['id']}\nevent: {ev['type']}\ndata: {json.dumps(ev, separators=(',', ':'))}\n\n"
+    return StreamingResponse(tell(), media_type="text/event-stream",
+                             headers={"cache-control": "no-cache, no-transform", "x-accel-buffering": "no"})
+
+
 @router.get("/v1/memories/{mid}/jobs/{job_id}")
 @guarded
 async def job(mid: str, job_id: str, request: Request) -> dict:
@@ -325,7 +358,9 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
         patch["title"] = mp.title_of(patch["title"])
     prov = await mp.provider_of(m)
     if "content" in patch:
-        patch["content"] = await mp.settle_files(org, mp.parts_of(patch["content"]), prov)
+        # content may be empty on a record with a title (§4): a fact is often one sentence
+        titled = bool(patch.get("title") if "title" in patch else ((await prov.get(mid, rid)) or {}).get("title"))
+        patch["content"] = await mp.settle_files(org, mp.parts_of(patch["content"], empty_ok=titled), prov)
     if "references" in patch:
         # A reviser sets the references it can see. One that leads into a memory it may not read was
         # shown to it as unavailable, without where it leads: it can neither restate nor remove it,
@@ -340,7 +375,12 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
         stated = mp._record_in({"type": (cur or {}).get("type") or "fact", "title": "x",
                                 "references": [r for r in patch["references"] if isinstance(r, dict) and r.get("available") is not False]})["references"]
         patch["references"] = stated + kept
-    made = await prov.revise(mid, rid, patch, mp.writer_of(member))
+    # `If-Match` is the version the writer read: named, a write that crossed another is refused rather than losing it
+    match = (request.headers.get("if-match") or "").strip().strip('"')
+    try:
+        made = await prov.revise(mid, rid, patch, mp.writer_of(member), expected=int(match) if match.isdigit() else None)
+    except memory_live.VersionMoved as e:
+        raise mp.MemoryError(412, "memory_version_moved", f"Someone else changed this record: it is at version {e.version} now.", "version")
     await mp.keep_on_both_ends(prov, mid, made, {"kind": "provider", "id": prov.id, "on_behalf_of": f"member:{member}"})
     return await mp.present(org, mid, made, pr)
 

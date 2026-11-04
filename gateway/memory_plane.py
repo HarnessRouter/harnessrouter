@@ -26,6 +26,8 @@ import re
 import time
 import uuid
 
+from memory_live import Announced
+
 PRIVILEGES = ("read", "write", "create", "delete")
 CORE_TYPES = ("episode", "fact", "note", "procedure", "link", "entity")
 # The graph is not a second structure: a record is a node and a reference is an edge. An entity
@@ -228,7 +230,7 @@ def schema_clean(raw: dict | None) -> dict:
             raise MemoryError(422, "memory_invalid", f"A relation's name must be one word: {rn!r}.", "relations")
         if str(r.get("from")) not in seen or str(r.get("to")) not in seen:
             raise MemoryError(422, "memory_invalid", f"{rn} must join two types of this schema.", "relations")
-        rels.append({"name": rn, "description": str(r.get("description") or ""), "from": str(r["from"]), "to": str(r["to"])})
+        rels.append({"name": rn, "description": str(r.get("description") or ""), "from": str(r["from"]), "to": str(r["to"]), **({"color": str(r["color"])} if r.get("color") else {})})
     return {"types": types, "relations": rels}
 
 
@@ -262,7 +264,8 @@ async def provider_of(memory: dict) -> Provider:
     p = PROVIDERS.get(str(memory.get("provider") or ""))
     if p is None:
         raise MemoryError(503, "memory_unavailable", "This memory's provider is not connected.")
-    return await p.bind(str(memory.get("org") or ""), str(memory.get("workspace") or "") or "default")
+    # Every writer comes through here, so this is where a write gets told to whoever has the memory open.
+    return Announced(await p.bind(str(memory.get("org") or ""), str(memory.get("workspace") or "") or "default"))
 
 
 def field_of(record: dict, field: str):
