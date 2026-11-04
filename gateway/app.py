@@ -19920,7 +19920,7 @@ async def _memory_file_bytes(org: str, file_id: str) -> bytes | None:
 
 
 memory_routes.install(app, _principal, uhp_error, BACKING.graph, _memory_file_meta, _memory_file_bytes,
-                      on_grant=lambda org, principal: _memories_on_grant(org, principal))
+                      on_grant=lambda org, principal: _memories_on_grant(org, principal), workspace_of=_plug_workspace)
 memory_plane.PROVIDERS.update({"mem0": memory_mem0.Mem0(), "graphiti": memory_graphiti.Graphiti(),
                                "hindsight": memory_hindsight.Hindsight(), "reme": memory_reme.ReMe()})
 _MEMORY_CHECKS = {"mem0": memory_mem0.check, "graphiti": memory_graphiti.check,

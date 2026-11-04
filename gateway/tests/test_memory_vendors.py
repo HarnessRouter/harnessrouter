@@ -613,6 +613,42 @@ def test_a_disagreement_is_kept_on_both_records_and_a_search_brings_the_other_si
     assert other["score"] is None and other["why"] == ["contradicts"]
 
 
+# ── a key held to a workspace stays in it ─────────────────────────────────────────────────────
+def _scoped_key(client, ws):
+    r = client.post(f"/v1/orgs/{ORG}/keys", headers=ADA, json={"name": "scoped", "workspace": ws, "member_id": "bot@example.com"})
+    assert r.status_code == 200, r.text
+    return {"authorization": "Bearer " + (r.json().get("key") or r.json().get("token") or r.json()["secret"])}
+
+
+def test_a_key_held_to_a_workspace_cant_use_anothers_vendor_by_naming_it(client, wired):
+    """The plug routes already hold a scoped key to its own workspace, and these routes said they followed them.
+    Naming another workspace in the header would have spent that workspace's vendor account."""
+    wired(memory_hindsight, lambda *a: {"banks": []})
+    assert client.put("/v1/plugs/hindsight", headers={**ADA, "x-harness-workspace": "wsowner"},
+                      json={"config": {"base_url": "http://vendor.test"}}).json()["status"] == "connected"
+    key = _scoped_key(client, "wsother")
+    named = {**key, "x-harness-workspace": "wsowner"}
+    caps = {p["id"]: p for p in client.get("/v1/memories/providers", headers=named).json()["data"]}
+    assert caps["hindsight"]["connected"] is False, "it reads as its own workspace, whatever it names"
+    r = client.post("/v1/memories", headers=named, json={"provider": "hindsight", "name": "Not mine"})
+    assert r.status_code >= 400 and "wsowner" not in r.text, r.text
+    # the workspace itself still reaches it
+    ok = client.post("/v1/memories", headers={**ADA, "x-harness-workspace": "wsowner"}, json={"provider": "hindsight", "name": "Mine"})
+    assert ok.status_code in (200, 201), ok.text
+
+
+def test_what_a_plug_is_connected_on_is_what_a_memory_reads(client, wired):
+    """One rule for both. They disagreed for a Default Workspace key, whose plug went to the default workspace
+    while its memories looked in its own: connected here, not connected there."""
+    r = client.post(f"/v1/orgs/{ORG}/keys", headers=ADA, json={"name": "d", "workspace": "wsdefault", "member_id": "bot@example.com", "workspace_default": True})
+    assert r.status_code == 200, r.text
+    key = {"authorization": "Bearer " + (r.json().get("key") or r.json().get("token") or r.json()["secret"])}
+    wired(memory_reme, lambda *a: {"success": True, "metadata": {"health": {"components": {}}}})
+    assert client.put("/v1/plugs/reme", headers=key, json={"config": {"base_url": "http://vendor.test/one-rule"}}).json()["status"] == "connected"
+    caps = {p["id"]: p for p in client.get("/v1/memories/providers", headers=key).json()["data"]}
+    assert caps["reme"]["connected"] is True
+
+
 # ── a vendor's connection is tried before it is kept ──────────────────────────────────────────
 def test_a_self_hosted_vendor_needs_its_address_and_a_wrong_one_is_refused_with_the_reason(client, wired):
     wired(memory_graphiti, lambda *a: httpx.Response(401, json={}))

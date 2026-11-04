@@ -15,6 +15,7 @@ import memory_plane as mp
 
 router = APIRouter()
 _principal = None          # app.py's resolver, bound by install()
+_workspace_of = None       # app.py's rule for which workspace a call is about, bound by install()
 _uhp_error = None
 
 
@@ -22,12 +23,14 @@ _file_bytes = None          # app.py's reader of an uploaded file's bytes, bound
 _on_grant = None            # app.py's hook after a grant is written, bound by install()
 
 
-def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None, on_grant=None) -> None:
+def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None, on_grant=None, workspace_of=None) -> None:
     """Bind the gateway's principal resolver, error envelope, graph backing and file store, and
     mount the routes. `on_grant(org, principal)` runs after a grant is written: the gateway uses
-    it to give an agent that was just let into its first memory the tools to use it."""
-    global _principal, _uhp_error, _file_bytes, _on_grant
+    it to give an agent that was just let into its first memory the tools to use it. `workspace_of` is the
+    plug routes' own rule for which workspace a call is about, so the two can't disagree."""
+    global _principal, _uhp_error, _file_bytes, _on_grant, _workspace_of
     _principal, _uhp_error, mp.GRAPH, mp.FILES, _file_bytes, _on_grant = principal, uhp_error, graph, file_meta, file_bytes, on_grant
+    _workspace_of = workspace_of
     if os.environ.get("HR_MEMORY_FIXTURE") == "1" and "fixture" not in mp.PROVIDERS:
         import memory_fixture
         mp.PROVIDERS["fixture"] = memory_fixture.FixtureProvider()
@@ -49,10 +52,9 @@ async def _who(request: Request) -> tuple[str, str, str, list[str]]:
     org = p.get("org", "")
     if not org:
         raise _uhp_error(401, "invalid_credential", "Missing or invalid API key.")
-    # The workspace a memory belongs to is named the way a plug's is (the console's header, else the
-    # instance's default workspace), so a memory finds the provider its own workspace connected.
-    ws = str(request.headers.get("x-harness-workspace") or p.get("workspace") or "default")
-    return org, str(p.get("member") or ""), ws, principals_of(p)
+    # The workspace a memory belongs to is decided exactly as a plug's is, so a memory finds the provider
+    # its own workspace connected, and a key held to a workspace can't name another to spend its vendor account.
+    return org, str(p.get("member") or ""), _workspace_of(request, p), principals_of(p)
 
 
 async def _json(request: Request) -> dict:
