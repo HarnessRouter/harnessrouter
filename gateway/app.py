@@ -1320,7 +1320,11 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
     # (see _entra_token). What it holds is not a key to hand over but an application's secret that
     # buys a token good for about an hour, and a turn may run for six: the broker asks again when
     # the token ages, on every call, and the agent never holds the token or the secret.
-    if SANDBOX_TRUST == "owner" and not _entra_conn(conn):
+    #
+    # A connection that carries request headers is brokered here too, for the same reason: a header
+    # value is often a gateway's credential (cf-aig-authorization, Helicone-Auth), and the broker is
+    # the one place every base's requests pass, so the agent never holds it (see _conn_headers).
+    if SANDBOX_TRUST == "owner" and not _entra_conn(conn) and not _conn_headers(conn):
         for field in _SECRET_AUTH_FIELDS:
             if conn.get(field) is not None:
                 out[field] = conn[field]
@@ -1328,8 +1332,10 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
 
     backend = str(conn.get("backend") or "")
     if backend in _NATIVE_ONLY_BACKENDS:
+        why = ("its connection carries request headers, which only the broker sends"
+               if SANDBOX_TRUST == "owner" else "HR_SANDBOX_TRUST=owner runs it")
         print(f"[broker] refusing to build sandbox auth for backend={backend!r}: it speaks the "
-              f"provider's native API, which is not brokered (HR_SANDBOX_TRUST=owner runs it)", flush=True)
+              f"provider's native API, which is not brokered ({why})", flush=True)
         return None
     # Normalised: a connection saved as "TokenRouter" must not skip brokering on a casing mismatch.
     provider = str(conn.get("provider") or "").strip().lower()
@@ -1362,7 +1368,10 @@ def _sandbox_broker_origin() -> str:
 def _conn_public(conn: dict) -> dict:
     """Connection metadata with secret fields stripped (for admin listing)."""
     secret = {"api_key", "aws_secret_access_key", "aws_session_token", "aws_bearer_token", "gcp_sa_json"}
-    return {k: v for k, v in conn.items() if k not in secret}
+    out = {k: v for k, v in conn.items() if k not in secret and k != "headers"}
+    if _conn_headers_public(conn.get("headers")):
+        out["headers"] = _conn_headers_public(conn.get("headers"))
+    return out
 
 
 # ── token-provider integrations (global model→provider routing) ──────────────────────
@@ -4151,6 +4160,111 @@ def _relay_out_headers(incoming) -> dict:
     return out
 
 
+# ── request headers on a connection ─────────────────────────────────────────────────────────
+# A gateway in front of a provider often wants a header beside the key: Cloudflare AI Gateway's
+# cf-aig-authorization, Helicone's Helicone-Auth, Portkey's x-portkey-*, OpenRouter's HTTP-Referer and
+# X-Title, an internal gateway's X-Project. A connection carries them as `headers`, and the broker adds
+# them to every request it forwards on that connection. They are applied HERE and nowhere else: every
+# base reaches its provider through the broker (the loopback relay forwards to it), so this is one place
+# rather than one per CLI. A header value is often a credential, so it is held the way the key is: never
+# handed to the sandbox (a connection with headers is brokered in owner trust too, see _auth_from_conn),
+# masked on read, and typed again when the connection's address changes.
+_CONN_HEADERS_MAX = 20
+_CONN_HEADERS_MAX_BYTES = 8192
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")     # a token, RFC 9110 §5.6.2
+_HEADER_VALUE_BAD = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")         # a control character (a tab is allowed)
+# What the gateway sets itself and a connection must never replace: the credential, the hop, the body's
+# framing, the turn's trace context, and our own names.
+_CONN_HEADERS_RESERVED = frozenset({*_BROKER_HOP, *_RELAY_OURS, "content-type", "content-encoding",
+                                    "accept-encoding", "te", "trailer", "upgrade", "expect",
+                                    "proxy-connection", "traceparent", "tracestate", "baggage"})
+# Providers whose requests are not the broker's to carry: Bedrock signs its own (a header added after
+# the signature is one the signature does not cover), Qoder's runtime and the media providers are other
+# APIs. Refused at write with the reason rather than saved and never sent.
+_CONN_HEADERS_REFUSED_PROVIDERS = frozenset({"bedrock", "vertex", "qoder", "elevenlabs"})
+
+
+def _conn_header_problem(name: str, value, carried_ok: bool) -> str:
+    """Why one header cannot be sent, "" when it can."""
+    if not _HEADER_NAME_RE.match(name):
+        return f"{name!r} is not a header name"
+    low = name.lower()
+    if low in _CONN_HEADERS_RESERVED or low.startswith(_RELAY_OURS_PREFIX):
+        return f"the {name} header is set by the gateway, not by a connection"
+    if not isinstance(value, str):
+        return f"the {name} header's value is text"
+    if value == _SECRET_SENTINEL:
+        return "" if carried_ok else f"the {name} header has no value"
+    if not value.strip():
+        return f"the {name} header has no value"
+    if _HEADER_VALUE_BAD.search(value):
+        return f"the {name} header's value holds a line break or another control character"
+    return ""
+
+
+def _conn_headers_error(provider: str, headers, carried_ok: bool = True) -> str:
+    """Why a connection's headers cannot be saved, "" when they can. `carried_ok` accepts the sentinel
+    for a value the console did not see (an integration's saved header, kept on an unchanged save)."""
+    if headers is None or headers == {}:
+        return ""
+    if not isinstance(headers, dict):
+        return "headers is an object of header names and their values"
+    prov = str(provider or "").strip().lower()
+    if prov in _CONN_HEADERS_REFUSED_PROVIDERS:
+        return f"request headers are not available on a {prov} connection, which the model broker does not carry"
+    if len(headers) > _CONN_HEADERS_MAX:
+        return f"at most {_CONN_HEADERS_MAX} request headers"
+    seen: set[str] = set()
+    size = 0
+    for k, v in headers.items():
+        name = str(k).strip()
+        why = _conn_header_problem(name, v, carried_ok)
+        if why:
+            return why
+        if name.lower() in seen:
+            return f"the {name} header is given twice"
+        seen.add(name.lower())
+        size += len(name) + len(v)
+    if size > _CONN_HEADERS_MAX_BYTES:
+        return f"the request headers are longer than {_CONN_HEADERS_MAX_BYTES} bytes together"
+    return ""
+
+
+def _conn_headers(conn: dict | None) -> dict[str, str]:
+    """The connection's headers as they go upstream. Each is checked again here, not only at write: a
+    connection can arrive from an environment connector or a store written before the check, and a name
+    that slipped through must never replace the key's header or forge a second line."""
+    raw = (conn or {}).get("headers")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        name = str(k).strip()
+        if _conn_header_problem(name, v, carried_ok=False) or name.lower() in {n.lower() for n in out}:
+            print(f"[broker] connection {str((conn or {}).get('name') or '')!r}: header {name!r} not sent "
+                  f"(not a header the gateway lets a connection set)", flush=True)
+            continue
+        out[name] = v.strip()
+    return out
+
+
+def _with_conn_headers(headers: dict, conn: dict | None) -> dict:
+    """`headers` with the connection's own on top: a connection's header replaces the client's header of
+    the same name, in whatever case either was written."""
+    for name, value in _conn_headers(conn).items():
+        for k in [k for k in headers if k.lower() == name.lower()]:
+            del headers[k]
+        headers[name] = value
+    return headers
+
+
+def _conn_headers_public(headers) -> dict | None:
+    """A connection's headers as a reader sees them: the names, each value the sentinel."""
+    if not isinstance(headers, dict) or not headers:
+        return None
+    return {str(k): _SECRET_SENTINEL for k in headers}
+
+
 # What the broker removes from a request, by request shape and by key, and nothing else:
 #
 # * Anthropic-shape requests (the `messages` path): the extended-thinking controls. Measured 400s:
@@ -4798,6 +4912,9 @@ async def llm_broker(path: str, request: Request):
         headers["x-api-key"] = key
     else:
         headers["authorization"] = f"Bearer {key}"
+    # The connection's own headers (a gateway's project or auth header), after the credential: none of
+    # them may name the credential's header, so none can replace it.
+    _with_conn_headers(headers, conn)
 
     body = _strip_unsupported(await request.body(), provider=provider, byok=True, path=suffix,
                               keep_thinking=bool(_turn_cred_level(_broker_token(request))))
@@ -5869,11 +5986,20 @@ class ConnBody(BaseModel):
     gcp_region: str | None = None
     gcp_sa_json: str | None = None
     wire_api: str | None = None
+    # Request headers the broker adds upstream (see _conn_headers): {name: value}.
+    headers: dict[str, str] | None = None
 
 
 @app.put("/v1/orgs/{org}/connections/{name}", dependencies=[Depends(_internal_only)])
 async def put_connection(org: str, name: str, body: ConnBody) -> dict:
+    why = _conn_headers_error(body.provider, body.headers, carried_ok=False)
+    if why:
+        raise HTTPException(400, f"connection '{name}': {why}")
     conn = {"name": name, **{k: v for k, v in body.model_dump().items() if v is not None}}
+    if conn.get("headers"):
+        conn["headers"] = {str(k).strip(): v.strip() for k, v in conn["headers"].items()}
+    else:
+        conn.pop("headers", None)
     await _vault_put_credential(org, f"harness-conn-{name}", json.dumps(conn), "api_key")
     return {"ok": True, "org": org, "connection": _conn_public(conn)}
 
@@ -6261,6 +6387,10 @@ def _integration_public(integ: dict) -> dict:
     for k in _INTEGRATION_SECRET_FIELDS:
         if cfg.get(k):
             cfg[k] = _SECRET_SENTINEL
+    if "headers" in cfg:
+        hdrs = _conn_headers_public(cfg.pop("headers"))
+        if hdrs:
+            cfg["headers"] = hdrs
     return {**integ, "config": cfg,
             "models": [{"canonical": c, "provider_id": v}
                        for c, v in _integration_models(integ).items()],
@@ -6488,6 +6618,27 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
                     raise HTTPException(400, f"integration '{name}': missing {k}")
                 cfg[k] = prior_cfg[k]
                 carried.append(k)
+        # Request headers (see _conn_headers). A value is a secret like the key: it comes back as the
+        # sentinel, and the sentinel saves the stored value under that name again.
+        if "headers" in cfg:
+            why = _conn_headers_error(provider, cfg["headers"])
+            if why:
+                raise HTTPException(400, f"integration '{name}': {why}")
+            prior_h = {str(k).lower(): v for k, v in (prior_cfg.get("headers") or {}).items()}
+            kept: dict[str, str] = {}
+            for k, v in cfg["headers"].items():
+                hname = str(k).strip()
+                if v == _SECRET_SENTINEL:
+                    if not prior_h.get(hname.lower()):
+                        raise HTTPException(400, f"integration '{name}': type the {hname} header's value")
+                    kept[hname] = prior_h[hname.lower()]
+                    carried.append(f"headers.{hname}")
+                else:
+                    kept[hname] = v.strip()
+            if kept:
+                cfg["headers"] = kept
+            else:
+                cfg.pop("headers")
         # A stored key goes only where it was typed for. A save that kept it while changing the address (or the
         # provider) sent the key on to wherever the new one pointed, read by nobody but spent by its new owner: the
         # hosted service refuses it, and so does this one. The address compared is the effective one, the
@@ -6497,7 +6648,9 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
             def _addr(c: dict, prov: str) -> str:
                 return str(c.get("base_url") or (_PROVIDER_CATALOG.get(prov) or {}).get("base_url") or "").strip().rstrip("/")
             if prior_provider != provider or _addr(cfg, provider) != _addr(prior_cfg, prior_provider):
-                raise HTTPException(400, f"integration '{name}': its address changed, so type its key again to save it.")
+                raise HTTPException(400, f"integration '{name}': its address changed, so type its key again to save it."
+                                    if any(not c.startswith("headers.") for c in carried) else
+                                    f"integration '{name}': its address changed, so type its header values again to save it.")
         # How the connection signs in: an API key (nothing said, as before) or Microsoft Entra.
         how = str(cfg.get("auth") or "").strip().lower()
         if how in ("", "key", "api_key"):
@@ -21362,6 +21515,9 @@ def _setup_build_wire(vendor: str, cfg: dict, model_id: str, canonical: str) -> 
         return None
     full = vendor == "custom" and str(cfg.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
     header = {"api-key": key} if vendor in ("azure", "azure-foundry") else {"authorization": f"Bearer {key}"}
+    # The builder calls the provider from here rather than through the broker, so it adds the
+    # connection's headers itself, after the key's, which none of them may name.
+    _with_conn_headers(header, cfg)
     return {"url": base if full else f"{base}/chat/completions", "headers": header,
             "model": model_id or canonical, "canonical": canonical, "route": vendor}
 
