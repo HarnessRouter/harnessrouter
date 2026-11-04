@@ -3,6 +3,11 @@
 
     check-licenses.py --js       the console's production packages, from ui/package-lock.json
     check-licenses.py --python   the Python packages installed in this environment
+    check-licenses.py --image    inside a built image: every Node package in what we ship, and its Python
+
+The lockfile says what a project asked for; an image holds what the build actually copied. Only the image's
+own answer can catch a package nobody asked for by name. What an operator installs at first start
+(/data/agent-tools) is theirs, under its own terms (NOTICE), and isn't in what we ship.
 
 A package under anything other than a permissive licence is used only as the separate, unmodified package it
 is, and is named below with the reason. It is never a place to copy a function from: read it, learn from it,
@@ -19,7 +24,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PERMISSIVE = re.compile(
-    r"^(MIT|MIT-0|ISC|0BSD|BSD|BSD-2-Clause|BSD-3-Clause|Apache-2\.0|Apache Software License|Apache License 2\.0|"
+    r"^(MIT|MIT-0|MIT-CMU|ISC|0BSD|BSD|BSD-2-Clause|BSD-3-Clause|Apache-2\.0|Apache Software License|Apache License 2\.0|"
     r"BlueOak-1\.0\.0|Unlicense|CC0-1\.0|CC-BY-3\.0|CC-BY-4\.0|OFL-1\.1|Python-2\.0|PSF-2\.0|Zlib|HPND|MIT License|"
     r"BSD License|Python Software Foundation License|The Unlicense \(Unlicense\))$", re.I)
 
@@ -30,6 +35,7 @@ ACCEPTED_JS = {
 ACCEPTED_PY = {
     "certifi": "MPL-2.0. Mozilla's root certificates, unchanged",
     "pyphen": "Offered under GPL, LGPL or MPL; used under MPL, unchanged. WeasyPrint needs it",
+    "pypdfium2": "BSD-3-Clause and Apache-2.0, with PDFium's permissive dependencies in its own licence files",
 }
 
 
@@ -75,6 +81,34 @@ def js(lock_path: str) -> list[str]:
     return bad
 
 
+def image(roots=("/app", "/opt/harnessrouter")) -> list[str]:
+    bad = []
+    n = 0
+    for root in roots:
+        for dp, _dirs, files in os.walk(root):
+            if "package.json" not in files or "/node_modules/" not in dp + "/":
+                continue
+            try:
+                with open(os.path.join(dp, "package.json"), encoding="utf-8") as f:
+                    o = json.load(f)
+            except (OSError, ValueError):
+                continue
+            # a package.json with no name and version only marks a folder of a package as ESM or CJS
+            if not isinstance(o, dict) or not o.get("name") or not o.get("version") or o.get("private"):
+                continue
+            n += 1
+            lic = o.get("license")
+            if not lic and isinstance(o.get("licenses"), list):
+                lic = " OR ".join(str(x.get("type") if isinstance(x, dict) else x) for x in o["licenses"])
+            if isinstance(lic, dict):
+                lic = lic.get("type")
+            if permissive(str(lic or "")) or o["name"] in ACCEPTED_JS:
+                continue
+            bad.append(f"{o['name']}@{o['version']}: {lic or 'no licence declared'} ({dp})")
+    print(f"checked {n} Node packages in the image")
+    return bad
+
+
 def python() -> list[str]:
     bad = []
     n = 0
@@ -106,8 +140,11 @@ def main() -> int:
     a = argparse.ArgumentParser()
     a.add_argument("--js", action="store_true")
     a.add_argument("--python", action="store_true")
+    a.add_argument("--image", action="store_true")
     o = a.parse_args()
     bad = []
+    if o.image:
+        bad += image() + python()
     if o.js:
         bad += js(os.path.join(ROOT, "ui", "package-lock.json"))
     if o.python:

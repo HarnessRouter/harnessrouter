@@ -102,6 +102,8 @@ jobs:
       # refuses the tree (several deps still declare React 18 peers while the app runs 19).
       - name: What ships stays under permissive licences
         run: python3 ../scripts/check-licenses.py --js
+      - name: The licence check can fail
+        run: python3 ../scripts/test-check-licenses.py
       - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
       - run: npm run type-check
       # The console has no jest tests yet, and bare `jest` exits 1 on "No tests found" — which
@@ -109,6 +111,8 @@ jobs:
       # suite pass and a failing test still fail; the first real test file makes it moot.
       - run: npm test -- --passWithNoTests
       - run: npm run build
+      - name: The image's list of third-party licences builds
+        run: node scripts/third-party-licenses.mjs > /dev/null
 
   # The unifiedharnessprotocol.org site is generated from protocol/ markdown by
   # protocol/site/build.py and deployed by Vercel. Nothing gated it until now — a broken generator,
