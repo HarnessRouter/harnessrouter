@@ -390,6 +390,70 @@ async def resp_get_cursor(org: str, rid: str) -> int:
         return 0
 
 
+async def resp_set_pending_input(org: str, rid: str, request_id: str, ttl_s: int) -> None:
+    """The turn ended on a question (UHP Tasks §3.2, #476): record it as pending on the
+    response's control record, so that an answer is claimed once across replicas
+    (resp_claim_input). The record's life is extended to the answer's: a question stands for
+    days, longer than a turn. Best-effort; the response record itself says the question is
+    pending, and this is what makes two answers race safely."""
+    cont = await _container()
+    cex = _exceptions()
+    doc_id = f"resp::{org}::{rid}"
+    pend = {"id": request_id, "state": "pending"}
+    for _ in range(5):
+        try:
+            cur = await cont.read_item(doc_id, partition_key=_pk(org))
+            cur.update(pending_input=pend, ts=time.time(), ttl=int(ttl_s))
+            try:
+                await cont.replace_item(doc_id, cur, etag=cur["_etag"], match_condition=_IF_MATCH)
+                return
+            except cex.CosmosAccessConditionFailedError:
+                continue
+        except cex.CosmosResourceNotFoundError:
+            try:
+                await cont.create_item({"id": doc_id, "pk": _pk(org), "kind": "resp", "status": "incomplete",
+                                        "sid": "", "runner_turn_id": "", "ts": time.time(),
+                                        "ttl": int(ttl_s), "pending_input": pend})
+                return
+            except cex.CosmosResourceExistsError:
+                continue
+
+
+async def resp_claim_input(org: str, rid: str, request_id: str, state: str, ttl_s: int) -> bool:
+    """Move a response's pending input request to `state` (answered, voided, expired), once:
+    a compare-and-swap on the control record, so two replicas holding the same answer produce one
+    turn and one 409, not two turns. True when this call made the move; False when the request was
+    already moved (by an earlier answer, a later turn, or an expiry) — the caller refuses with
+    `input_not_pending`. A record never written (a store swept it, or the question predates the
+    store) is created in the claimed state, since the response record is what said the question
+    was pending and the first claim to write here is the one that wins."""
+    cont = await _container()
+    cex = _exceptions()
+    doc_id = f"resp::{org}::{rid}"
+    for _ in range(5):
+        try:
+            cur = await cont.read_item(doc_id, partition_key=_pk(org))
+        except cex.CosmosResourceNotFoundError:
+            try:
+                await cont.create_item({"id": doc_id, "pk": _pk(org), "kind": "resp", "status": "incomplete",
+                                        "sid": "", "runner_turn_id": "", "ts": time.time(), "ttl": int(ttl_s),
+                                        "pending_input": {"id": request_id, "state": state}})
+                return True
+            except cex.CosmosResourceExistsError:
+                continue
+        pend = cur.get("pending_input") or {}
+        if state != "pending" and pend.get("id") == request_id and pend.get("state") != "pending":
+            return False                     # already answered, voided or expired
+        # (a move back to `pending` is the gateway undoing a claim whose turn never ran)
+        cur.update(pending_input={"id": request_id, "state": state}, ts=time.time())
+        try:
+            await cont.replace_item(doc_id, cur, etag=cur["_etag"], match_condition=_IF_MATCH)
+            return True
+        except cex.CosmosAccessConditionFailedError:
+            continue                         # another claim raced in: read it and decide again
+    return False
+
+
 async def resp_mark_terminal(org: str, rid: str, status: str, ttl_s: int) -> dict:
     """One-way transition to a terminal status. Returns the record (with sid +
     runner_turn_id) so the caller can propagate cancellation to the runner.

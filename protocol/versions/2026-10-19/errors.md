@@ -48,7 +48,7 @@ Rules:
 
 | `type` | HTTP | Meaning |
 |---|---|---|
-| `invalid_request_error` | 400, 404, 409, 413, 422 | The request was wrong. Retrying it unchanged will fail again. |
+| `invalid_request_error` | 400, 404, 409, 410, 413, 422 | The request was wrong. Retrying it unchanged will fail again. |
 | `authentication_error` | 401 | The credential is missing, malformed or unknown. |
 | `permission_error` | 403 | Authenticated, but not allowed to do this. |
 | `rate_limit_error` | 429 | Too many requests, or a quota is exhausted. |
@@ -74,6 +74,9 @@ Rules:
 | `harness_busy` | 409 | A harness that retires its sessions with it has a task in progress; it is not retired mid-task ([Harnesses §5.3](harnesses.md#53-delete)). |
 | `plugin_conflict` | 409 | Two plugins share a name, or a component name collides across the harness and its plugins. `detail.component`, `detail.name` and `detail.between` say which. |
 | `idempotency_key_reused` | 409 | An `Idempotency-Key` came back with a different request than the one it was first sent with ([Harnesses §5.1](harnesses.md#51-create)). |
+| `input_not_pending` | 409 | An `input_response` names a request the response has no pending one for: unknown, already answered, or passed over by a later task ([Tasks §3.2](tasks.md#32-asking-the-person)). |
+| `input_request_expired` | 410 | The answer came after the request's `expires_at`. The harness has to ask again. |
+| `input_response_invalid` | 422 | The answer does not fit the request's `kind` or `options`. The request stays pending. |
 | `file_too_large` | 413 | The upload exceeds the server's limit. `detail.max_bytes` states it. |
 | `model_unavailable` | 422 | The requested model cannot be served for this harness. |
 | `model_not_available` | 422 | A harness create or update named a `default_model` its base does not run ([Harnesses §5.1](harnesses.md#51-create)). |
@@ -132,7 +135,9 @@ to fix the harness, the second to send the task with another model.
 | `rate_limited` | Yes, after `Retry-After` |
 | `quota_exhausted` | No — nothing will change until the quota does |
 | `session_busy` | Yes, once the in-flight task is terminal |
-| Any `invalid_request_error` | No — fix the request |
+| `input_response_invalid` | Yes, with an answer that fits the request |
+| `input_request_expired` | No — the question is gone; send a new task and the harness asks again |
+| Any other `invalid_request_error` | No — fix the request |
 | `authentication_error` | No — fix the credential |
 | A task that reached `failed` | Only with the client's own judgment; it consumed real resources |
 

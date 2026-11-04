@@ -48,7 +48,7 @@ Events describe *what happened*. They never describe how to display it.
 | `response.created` | The task was accepted. Carries the initial `response` with `status: in_progress`. |
 | `response.in_progress` | Work has started. |
 | `response.completed` | Terminal — success. Carries the final `response`. |
-| `response.incomplete` | Terminal — a budget stopped the work. Carries the final `response`. |
+| `response.incomplete` | Terminal — the work stopped short: a budget, or a question for the person ([Tasks §3.2](tasks.md#32-asking-the-person)). Carries the final `response`. |
 | `response.failed` | Terminal — failure. Carries the final `response`, whose `error` is non-null. |
 
 ### 2.2 Output items
@@ -57,6 +57,10 @@ Events describe *what happened*. They never describe how to display it.
 |---|---|
 | `response.output_item.added` | A new item begins. Carries `output_index` and a shell `item`. |
 | `response.output_item.done` | That item is final. Carries the complete `item`. |
+
+Every item type travels through these two, the `input_request` of a task that ends on a question
+([Tasks §3.2](tasks.md#32-asking-the-person)) included: no item type has events of its own beyond
+the text and tool-call deltas below.
 
 ### 2.3 Assistant text
 

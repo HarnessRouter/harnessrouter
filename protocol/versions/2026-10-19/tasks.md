@@ -124,6 +124,8 @@ work and client authors can stop building on them.
 harness invokes and executes tools itself and reports them as observability. There is no input path
 for a tool result, so the loop `tools` implies cannot be completed by a conformant server — not
 because implementations are immature, but because the object model has no place for the return leg.
+The one input item that answers an output item, `input_response` (§3.2), answers the harness's
+question to the person, not a tool the client ran: the harness still executes every tool itself.
 
 **`tools` also cannot mean "MCP servers for this task", which is the other plausible reading.**
 [Harnesses](harnesses.md) §4.1 already specifies MCP servers on the harness, with a
@@ -179,6 +181,10 @@ the honest form here is to say plainly that these two do nothing.
 
 A server at conformance class **Core** MUST accept `input_text`. A server at **Extended** MUST also
 accept `input_file` and `input_image`. See [Files](files.md).
+
+One item stands in the array on its own, with no `role`: `input_response`, the answer to a question
+the previous response asked (§3.2). A request carries at most one, and only with
+`previous_response_id`.
 
 ### 2.1 Earlier turns
 
@@ -252,6 +258,7 @@ server without it may give the harness the last messages alone.
 | `created_at` | integer | yes | Unix seconds |
 | `status` | string | yes | See [Lifecycle §3](lifecycle.md) |
 | `error` | object \| null | yes | Present and non-null only when `status` is `failed` |
+| `incomplete_details` | object \| null | yes | Non-null only when `status` is `incomplete`: `reason` says what stopped the work. See [Lifecycle §3](lifecycle.md#3-task-lifecycle) |
 | `output` | item[] | yes | Ordered; MAY be empty for a task that produced nothing |
 | `model` | string | yes | The model that actually ran |
 | `usage` | object \| null | yes | `null` when the server cannot account for usage — never a fabricated zero |
@@ -267,10 +274,90 @@ server without it may give the harness the last messages alone.
 | `reasoning` | The agent's summarised thinking, in `summary[].text` |
 | `function_call` | A tool the agent invoked, with `arguments` as a JSON string |
 | `function_call_output` | The result of that tool call, matched by `call_id` |
+| `input_request` | A question the harness asks the person; the task ended on it. See §3.2 |
 
 A client MUST tolerate output item types it does not recognise, and MUST NOT assume any ordering
 beyond the array order given. A client that renders only `message` items and ignores the rest is a
 valid client.
+
+### 3.2 Asking the person
+
+A harness often needs one answer before it can go on: a choice between alternatives, a confirmation
+before an action that cannot be undone, a value it must not guess, a secret it must not invent. On a
+server that reports the `input_requests` capability, the harness asks, and the task ends on the
+question:
+
+- The response ends `incomplete`, with `incomplete_details.reason` `input_required`. Nothing waits:
+  the turn is over and its working directory is kept as after any turn. The question stands until it
+  is answered, passed over, or expires. A wait can last days, and a turn held open that long is a
+  sandbox held open that long; ending the turn costs the server one resume, which it already does
+  for every continuation.
+- The question is the response's last `input_request` item.
+- The turn's last `message` carries the question as text as well, so a client that renders only
+  `message` items shows it (§3.1).
+
+```json
+{ "id": "inreq_7c1d", "type": "input_request", "status": "completed",
+  "kind": "choice", "prompt": "Which invoice?",
+  "options": [ { "id": "left", "label": "Top toolbar" }, { "id": "right", "label": "Sidebar" } ],
+  "expires_at": 1760000000 }
+```
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `id` | string | yes | `inreq_`-prefixed; what the answer names |
+| `kind` | string | yes | `choice`, `confirm`, `free_text` or `secret` |
+| `prompt` | string | yes | The question, as the person reads it |
+| `options` | object[] | for `choice` and `confirm` | `{ id, label }` each; the answer is one `id`. A `confirm` without options is answered `yes` or `no` |
+| `expires_at` | integer | no | Unix seconds; an answer after it is refused |
+
+The answer is an `input_response` item in the next request's `input`, chained on the response that
+asked — a normal continuation ([Sessions §1](sessions.md#1-continuing-a-session)), the way a
+`function_call_output` answers a `function_call`:
+
+```json
+{ "previous_response_id": "resp_a1b2c3",
+  "input": [ { "type": "input_response", "input_request_id": "inreq_7c1d", "answer": "left" } ] }
+```
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `type` | string | yes | `input_response` |
+| `input_request_id` | string | yes | The `input_request` it answers |
+| `answer` | string | yes | An option `id` for `choice` and `confirm`; any text for `free_text` and `secret` |
+
+A server that reports `input_requests`:
+
+- MUST run the answer as a continuation of the session, and MUST give the harness the answer as the
+  person's reply, with the question it answers, so the harness does not depend on its own record of
+  having asked.
+- MUST refuse an answer with `409` and `code: "input_not_pending"` when the response has no pending
+  request with that id: the id is unknown, the request was already answered, or a later task in the
+  session passed it over. Not `404`: the response exists, and in this protocol a `404` says the
+  addressed object does not.
+- MUST refuse an answer after `expires_at` with `410` and `code: "input_request_expired"`. Nothing
+  runs during the wait, so this is a check at answer time.
+- MUST refuse an answer that does not fit the `kind` or the `options` with `422` and
+  `code: "input_response_invalid"`, and MUST keep the request pending for a better one.
+- MUST treat any other input chained on a response with a pending question as a normal task that
+  voids the question, and MUST name the voided request's id in `metadata.voided_input_requests` on the
+  new response. The same request, answered later, is `input_not_pending`.
+- MUST keep a `secret` answer out of the conversation. It reaches the harness through a reference of
+  the server's own — an environment variable the message names, an entry in the server's secret
+  store — and MUST NOT appear in any event, in the stored response, in `GET /v1/responses/{id}`, or
+  in its `input_items`.
+- MUST refuse a request that carries an `input_response` and no `previous_response_id`, or more
+  than one `input_response`, with `400` and `code: "invalid_input"`.
+
+How a harness asks is the server's. A base with a question tool of its own maps it; a base without
+one is given a tool, and that tool MUST be named `ask_user` and take the request's fields (`kind`,
+`prompt`, `options`), so that a client — and the conformance suite — can ask any harness on a server
+with the capability to put a question. Which bases can ask is the server's to say, beside the
+capability; a base that cannot asks in prose and the task completes, as before.
+
+This section is additive. A server without the capability never emits `input_request`, and a client
+that does not know the item sees a terminal `incomplete` response with the question in its text
+(§3.1: a client tolerates item types it does not recognise).
 
 ## 4. Reading a task back
 

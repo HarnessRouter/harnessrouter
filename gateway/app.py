@@ -649,11 +649,16 @@ def _idem_sha(key: str) -> str:
 def _req_hash(body: "CreateResponseBody") -> str:
     """Stable hash of the semantically-meaningful request fields (used to detect a
     reused idempotency key carrying a DIFFERENT request → 409). Excludes `stream`
-    (a streaming vs non-streaming retry is the same request) and the idempotency
-    key itself inside metadata."""
+    (a streaming vs non-streaming retry is the same request), the idempotency key itself
+    inside metadata, and the answer of an input_response: it can be a secret, and this
+    unsalted hash is stored, and a six digit code can be read back out of it."""
     meta = dict(body.metadata or {})
     meta.pop("idempotency_key", None)
-    canon = {"model": body.model, "input": body.input, "instructions": body.instructions,
+    given = body.input
+    if isinstance(given, list):
+        given = [{k: v for k, v in it.items() if k != "answer"}
+                 if isinstance(it, dict) and it.get("type") == "input_response" else it for it in given]
+    canon = {"model": body.model, "input": given, "instructions": body.instructions,
              "previous_response_id": body.previous_response_id, "backend": body.backend,
              "tools": body.tools, "max_output_tokens": body.max_output_tokens,
              "max_step": body.max_step, "metadata": meta,
@@ -3214,6 +3219,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             elif st == "incomplete":
                 translator.incomplete_reason = str(s.get("reason") or "incomplete")
                 translator.handoff = s.get("handoff") if isinstance(s.get("handoff"), dict) else None
+                if isinstance(s.get("input_request"), dict):
+                    translator.set_input_request(s["input_request"])
             if terminal != "cancelled" and await _turn_cancelled(sid, org, resp_id):
                 terminal = "cancelled"        # an answered cancel wins over the runner's end (_resp_execute)
             break
@@ -3264,6 +3271,9 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         full_output = await _replay_output_from_trace(base, resp_id, model, since_ms=turn_since_ms)
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
                   "_member": member}
+        if _status == "incomplete" and translator.input_request:
+            # the question the turn ended on, for the answer to be checked against (§3.2)
+            stored["_pending_input"] = translator.pending_input()
         # the turn's start, not this adoption's (the translator's created_at is the adoption time)
         stored["_created_ms"] = (_orig_rec or {}).get("_created_ms") or turn_since_ms or None
         if full_output:
@@ -3271,6 +3281,9 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             # too large to attach (complete), so that paragraph is carried over onto the record
             note = translator.note_item
             stored["output"] = full_output + ([note] if note and note not in full_output else [])
+            if _status == "incomplete" and translator.input_request:
+                # ...and so is the question: its message and its item are the gateway's as well (§3.2)
+                stored["output"] += translator.output[-2:]
         await _resp_put(resp_id, stored, org, sid, None, _status, translator.created_at, True)
     except Exception:  # noqa: BLE001
         pass
@@ -4910,8 +4923,20 @@ UHP_CAPABILITIES = {
     # marked imported (_input_history). The console offers a recorded task's fork only where this is
     # true (GET /v1/bases repeats it).
     "input_history": True,
+    # Tasks §3.2: a harness can end its turn by asking the person something. The turn ends
+    # `incomplete` with reason `input_required` and an `input_request` item; the answer is an
+    # `input_response` item on the next request, chained on the response. Served to the bases in
+    # _INPUT_REQUEST_BASES (GET /v1/bases says which).
+    "input_requests": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
+# The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py).
+# One base end to end is the reference; the others ask in prose until each gets its own wiring.
+_INPUT_REQUEST_BASES = {"claude"}
+# How long a question's claim record lives (control_store.resp_set_pending_input): a question
+# stands until it is answered, voided by another turn, or expires by its own `expires_at`; a
+# claim older than this is decided by the response record alone.
+_INPUT_REQUEST_TTL_S = 30 * 86400
 
 # status -> (error type, fallback code) for raises that predate uhp_error() and carry only a string.
 # The type is always right because it follows from the status; the code is generic, which is honest:
@@ -4922,6 +4947,7 @@ _UHP_STATUS_TYPE = {
     403: ("permission_error", "insufficient_scope"),
     404: ("invalid_request_error", "not_found"),
     409: ("invalid_request_error", "conflict"),
+    410: ("invalid_request_error", "gone"),
     413: ("invalid_request_error", "file_too_large"),
     422: ("invalid_request_error", "unprocessable"),
     429: ("rate_limit_error", "rate_limited"),
@@ -6798,6 +6824,13 @@ class _RespTranslator:
         # threshold, the risk class and the step, so a router can hand the same state to a System
         # Two harness or a person without reading the trace (#227). None on every other ending.
         self.handoff: dict | None = None
+        # The question the turn ended on (Tasks §3.2, #476), as the `input_request` item the
+        # response carries: {id, kind, prompt, options?, expires_at?}; set by set_input_request from
+        # what the runner reported beside the reason `input_required`. None on every other ending.
+        self.input_request: dict | None = None
+        # The ids of input requests this turn voided: the previous response asked, and this request
+        # carried something other than an answer (§3.2). Named in metadata, as ignoring is.
+        self.voided_input_requests: list[str] = []
         # run metadata (CT-124): the model the caller asked for, and whether the gateway substituted
         # the harness's authorized default because the request was unavailable for this backend.
         self.environment = ""     # the environment id the turn read: reported beside session_id
@@ -6840,6 +6873,8 @@ class _RespTranslator:
             meta["ignored_fields"] = self.ignored
         if self.charge:
             meta["charge"] = self.charge
+        if self.voided_input_requests:
+            meta["voided_input_requests"] = list(self.voided_input_requests)
         return {"id": self.resp_id, "object": "response", "created_at": int(self.created_at),
                 "status": status, "error": self.error,
                 "incomplete_details": ({"reason": self.incomplete_reason, "handoff": self.handoff}
@@ -6850,6 +6885,29 @@ class _RespTranslator:
                 "served_model": self.served_model,
                 "reasoning": self.reasoning,
                 "metadata": meta}
+
+    def set_input_request(self, req: dict) -> None:
+        """The question the runner reported (kind, prompt, options, expires_at), given its id here:
+        the id is the response's to hand out, since it is what the answer names."""
+        ir: dict = {"id": _rid("inreq"), "kind": str(req.get("kind") or "free_text"),
+                    "prompt": str(req.get("prompt") or "")}
+        if isinstance(req.get("options"), list):
+            ir["options"] = [{"id": str(o.get("id")), "label": str(o.get("label") or o.get("id"))}
+                             for o in req["options"] if isinstance(o, dict) and o.get("id")]
+        if req.get("expires_at"):
+            ir["expires_at"] = int(req["expires_at"])
+        self.input_request = ir
+
+    def pending_input(self) -> dict | None:
+        """What an answer is checked against, kept on the stored record under `_pending_input`:
+        the id, the kind, the option ids, the expiry, the question (for the turn that answers)
+        and the state the request is in: pending, answered, voided or expired."""
+        ir = self.input_request
+        if not ir:
+            return None
+        return {"id": ir["id"], "kind": ir["kind"], "prompt": ir["prompt"],
+                "option_ids": [o["id"] for o in ir.get("options") or []],
+                "expires_at": ir.get("expires_at"), "state": "pending"}
 
     def start(self) -> list[dict]:
         snap = {**self._response_obj("in_progress"), "output": []}
@@ -7020,6 +7078,21 @@ class _RespTranslator:
             evs += self._handle("text", _too_large_note(big))
             evs += self._close_cur()
             self.note_item = self.output[-1]
+        if status == "incomplete" and self.input_request:
+            # The question (Tasks §3.2): as text in the turn's last message, for a client that
+            # renders only message items (§3.1), then as the typed item a client answers. The
+            # item streams through the output-item events every client already reads.
+            evs += self._open_message()
+            evs += self._handle("text", _input_request_text(self.input_request))
+            evs += self._close_cur()
+            self.out_index += 1
+            item = {"id": self.input_request["id"], "type": "input_request", "status": "completed",
+                    **{k: self.input_request[k] for k in ("kind", "prompt", "options", "expires_at")
+                       if k in self.input_request}}
+            evs.append(self._ev("response.output_item.added", output_index=self.out_index,
+                                item={**item, "status": "in_progress"}))
+            evs.append(self._ev("response.output_item.done", output_index=self.out_index, item=item))
+            self.output.append(item)
         ev_type = {"completed": "response.completed", "incomplete": "response.incomplete",
                    "failed": "response.failed", "cancelled": "response.failed"}.get(status, "response.completed")
         evs.append(self._ev(ev_type, response=self._response_obj(status)))
@@ -7089,6 +7162,108 @@ def _parse_input(inp) -> tuple[str, list[dict], list[dict]]:
                 parts.append({"type": "input_image", "image_url": p.get("image_url"), "file_id": p.get("file_id")})
         items_norm.append({"role": role, "content": parts})
     return "\n\n".join(t for t in texts if t).strip(), files, items_norm
+
+
+# ── a question for the person, and its answer (Tasks §3.2, capability input_requests) ──────────
+def _input_request_text(ir: dict) -> str:
+    """The question as prose, for the turn's last message: a client that renders only message
+    items still shows what the person is asked (Tasks §3.1)."""
+    lines = [str(ir.get("prompt") or "")]
+    for o in ir.get("options") or []:
+        lines.append(f"- {o.get('label')} ({o.get('id')})")
+    return "\n".join(lines)
+
+
+def _split_input_response(inp) -> tuple[dict | None, object]:
+    """The one `input_response` item a request may carry, taken out of `input` before the rest is
+    read as a message. More than one, or one that names no request, is a malformed body (400):
+    an answer that cannot be matched to a question is not a message either."""
+    if not isinstance(inp, list):
+        return None, inp
+    answers = [it for it in inp if isinstance(it, dict) and it.get("type") == "input_response"]
+    if not answers:
+        return None, inp
+    if len(answers) > 1:
+        raise uhp_error(400, "invalid_input", "A request carries at most one input_response.", "input")
+    a = answers[0]
+    if not str(a.get("input_request_id") or "").strip():
+        raise uhp_error(400, "invalid_input", "An input_response names the request it answers in "
+                                              "input_request_id.", "input.input_request_id")
+    return a, [it for it in inp if it is not a]
+
+
+async def _input_request_settle(org: str, rid: str, rec: dict, state: str, *, claim: bool = False) -> bool:
+    """Move the previous response's pending request to `state` (answered, voided, expired), on
+    the stored record and, where there is one, the control record. A `claim` is the answer's
+    move: it must happen once across replicas, so it is the control store's compare-and-swap
+    that decides it, and a store that cannot decide refuses the answer (503) rather than running
+    the turn twice. A void or an expiry is a report of what already happened, and goes on."""
+    pend = dict(rec.get("_pending_input") or {})
+    if control_store.enabled():
+        try:
+            ok = await control_store.resp_claim_input(org, rid, str(pend.get("id") or ""), state,
+                                                      _INPUT_REQUEST_TTL_S)
+        except Exception as e:  # noqa: BLE001
+            if claim:
+                raise HTTPException(503, "input request store unavailable; retry") from e
+            ok = True
+        if claim and not ok:
+            return False
+    rec["_pending_input"] = {**pend, "state": state}
+    _resp_cache_forget(rid)
+    with contextlib.suppress(Exception):
+        await _blob_put(f"responses/{rid}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
+    return True
+
+
+async def _input_response_accept(org: str, prev_id: str, prev_rec: dict | None, item: dict) -> dict:
+    """An `input_response` checked against the request it answers, and the request claimed.
+
+    Three refusals, one per remedy (Tasks §3.2): `409 input_not_pending` when the response has no
+    pending request with that id (unknown, already answered, voided by a later turn); `410
+    input_request_expired` when the answer came after `expires_at`, checked here because nothing
+    runs during the wait; `422 input_response_invalid` when the answer does not fit the kind or
+    the options, and the request stays pending for a better one. → {id, kind, prompt, answer,
+    label}, with the value of a `secret` kept only for the turn's environment."""
+    rid_q = str(item.get("input_request_id") or "").strip()
+    pend = prev_rec.get("_pending_input") if isinstance(prev_rec, dict) else None
+    if not isinstance(pend, dict) or str(pend.get("id") or "") != rid_q or pend.get("state") != "pending":
+        state = str(pend.get("state") or "") if isinstance(pend, dict) and str(pend.get("id") or "") == rid_q else None
+        raise uhp_error(409, "input_not_pending",
+                        "That response has no pending input request with this id.",
+                        "input.input_request_id", {"input_request_id": rid_q, "state": state})
+    exp = pend.get("expires_at")
+    if exp and time.time() > float(exp):
+        await _input_request_settle(org, prev_id, prev_rec, "expired")
+        raise uhp_error(410, "input_request_expired", "The input request has expired; the harness "
+                                                      "has to ask again.",
+                        "input.input_request_id", {"input_request_id": rid_q, "expires_at": int(exp)})
+    kind = str(pend.get("kind") or "free_text")
+    ids = [str(x) for x in (pend.get("option_ids") or [])]
+    answer = item.get("answer")
+    if kind in ("choice", "confirm"):
+        if not isinstance(answer, str) or answer not in ids:
+            raise uhp_error(422, "input_response_invalid",
+                            f"The answer to a {kind} question is one of its option ids.",
+                            "input.answer", {"input_request_id": rid_q, "kind": kind, "options": ids})
+    elif not isinstance(answer, str) or not answer.strip():
+        raise uhp_error(422, "input_response_invalid", f"The answer to a {kind} question is a non-empty string.",
+                        "input.answer", {"input_request_id": rid_q, "kind": kind})
+    if not await _input_request_settle(org, prev_id, prev_rec, "answered", claim=True):
+        raise uhp_error(409, "input_not_pending", "That input request was already answered.",
+                        "input.input_request_id", {"input_request_id": rid_q, "state": "answered"})
+    return {"id": rid_q, "kind": kind, "prompt": str(pend.get("prompt") or ""), "answer": answer}
+
+
+def _answer_prompt(acc: dict, secret_env: str | None) -> str:
+    """The answer as the next turn's user message, carrying the question back with it, so the
+    turn does not depend on the ask surviving in the base's transcript. A secret is never in the
+    message: the harness is told where in its environment the value is."""
+    q = acc.get("prompt") or ""
+    if secret_env:
+        return (f'Answer to your question "{q}": a secret, in the environment variable {secret_env}. '
+                "Read it from there when you need it; never print, repeat or store it.")
+    return f'Answer to your question "{q}": {acc.get("answer")}'
 
 
 # ── a new task's earlier turns (Tasks §2.1, capability input_history) ───────────────────────────
@@ -9321,7 +9496,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         codex_appserver: bool = False,
                         hv: dict | None = None,
                         environment: dict | None = None,
-                        trace_ctx: dict | None = None) -> tuple[str, list[dict], dict]:
+                        trace_ctx: dict | None = None,
+                        extra_env: dict | None = None,
+                        extra_secret: list[str] | None = None) -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
     files → checkpoint + persist trace. Returns (status, produced_files, rec).
     model_req: the caller-selected model (honored over the connection default when provided)."""
@@ -9412,6 +9589,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # _harness_plugins and agent_doc can't observe a mid-turn config edit inconsistently.
     mcp_servers, skills, skills_suppressed, tools_disabled, plugin_pkgs = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
     turn_env, turn_secret = await _harness_env(hv, org, hdr_vals)
+    if extra_env:
+        # ...and a secret answer to the harness's question (Tasks §3.2), for this turn only, under
+        # a name the prompt gives; a secret's value is redacted from everything read back.
+        turn_env = {**turn_env, **extra_env}
+        turn_secret = [*turn_secret, *(extra_secret or [])]
     if mcp_servers or skills or skills_suppressed or tools_disabled:
         rec["plugins"] = {"mcp": [m.get("name") for m in mcp_servers], "skills": [s.get("name") for s in skills],
                           "skills_off": skills_suppressed, "tools_off": tools_disabled}
@@ -9541,6 +9723,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                 # The harness's own variables, then the platform's HR_ names for a harness that drives
                 # another one; the platform's win.
                 "env": {**turn_env, **(_calibration_env(hv, org, sid, timeout_s) or {})}, "env_secret": turn_secret,
+                # Whether this base is served `ask_user` and its turn ends at the call (§3.2, #476).
+                "input_requests": conn.get("backend", backend) in _INPUT_REQUEST_BASES,
                 # A probe (docs/dual-loop.md, Appendix B): `metadata.systemone.script` names the
                 # actions a scripted provider answers instead of the model. The additive
                 # extension point of the protocol; nothing else of the metadata reaches the runner.
@@ -9721,6 +9905,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                     terminal = "incomplete"
                     translator.incomplete_reason = str(s.get("reason") or "incomplete")
                     translator.handoff = s.get("handoff") if isinstance(s.get("handoff"), dict) else None
+                    if isinstance(s.get("input_request"), dict):
+                        translator.set_input_request(s["input_request"])   # the question it ended on (§3.2)
                 elif st in ("cancelled", "timeout"):
                     # user cancel / wall-clock cap end the SESSION's turn — never retry it
                     # on the next connection in the chain (that would re-run the whole task)
@@ -10719,7 +10905,12 @@ async def create_response(body: CreateResponseBody, request: Request):
     # anything is allocated. Over the caps, and on a continuation (a previous response, or a session
     # named), the input is read exactly as before.
     history: list[dict] = []
-    live_input = body.input
+    # An answer to the previous response's question (Tasks §3.2) is taken out before the rest of
+    # the input is read as a message; it is checked once the session it answers in is resolved.
+    answer, live_input = _split_input_response(body.input)
+    if answer is not None and not body.previous_response_id:
+        raise uhp_error(400, "invalid_input", "An input_response answers the response named in "
+                                              "previous_response_id.", "previous_response_id")
     if not body.previous_response_id and not str(meta.get("session_id") or "").strip():
         history, live_input = _input_history(body.input, org)
     prompt, files_in, input_items = _parse_input(live_input)
@@ -10740,7 +10931,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 for f in files_in if f.get("content_b64") and f.get("filename")]
     if body.instructions:
         prompt = f"{body.instructions}\n\n---\n\n{prompt}"
-    if not prompt and not files_in:
+    if not prompt and not files_in and answer is None:
         raise HTTPException(400, "empty input")
     if files_in:
         names = ", ".join(f["filename"] for f in files_in)
@@ -10754,6 +10945,45 @@ async def create_response(body: CreateResponseBody, request: Request):
                                               session_hint=str(meta.get("session_id") or ""),
                                               workspace=str(principal.get("workspace") or ""),
                                               caller=principal)
+    # The previous response's question (Tasks §3.2), now that the response is known to be the
+    # caller's: an answer is checked and claimed, and the answer becomes this turn's message,
+    # carrying the question with it; any other input voids the question, and the response says
+    # so. A secret answer never enters the conversation: it goes to the harness's environment
+    # for this one turn, under a name the message gives, and is redacted from what comes back.
+    extra_env: dict[str, str] = {}
+    extra_secret: list[str] = []
+    voided: list[str] = []
+    claimed: tuple[str, dict] | None = None
+    # A later task passes the question over however it names the session (§3.2), so what a task
+    # chains on is the session's newest response when it names no response of its own.
+    _newest = ""
+    if answer is not None or (not body.previous_response_id and str(meta.get("session_id") or "").strip()):
+        with contextlib.suppress(Exception):
+            _newest = str((await _session_turns_data(sid)).get("last_response_id") or "")
+    _chained = body.previous_response_id or _newest
+    if _chained:
+        _prev = await _resp_get(_chained)
+        _pend = (_prev or {}).get("_pending_input") if isinstance(_prev, dict) else None
+        if answer is not None:
+            if _newest and _newest != body.previous_response_id:
+                # a later task already ran: the question it passed over is no longer pending
+                raise uhp_error(409, "input_not_pending", "A later task passed that input request over.",
+                                "input.input_request_id",
+                                {"input_request_id": str(answer.get("input_request_id") or ""), "state": "voided"})
+            acc = await _input_response_accept(org, body.previous_response_id, _prev, answer)
+            claimed = (body.previous_response_id, _prev or {})
+            secret_env = None
+            if acc["kind"] == "secret":
+                secret_env = "HR_INPUT_" + re.sub(r"[^A-Za-z0-9]", "_", acc["id"]).upper()
+                extra_env[secret_env] = str(acc["answer"])
+                extra_secret.append(secret_env)
+            line = _answer_prompt(acc, secret_env)
+            prompt = f"{line}\n\n{prompt}" if prompt else line
+            user_text = f"{line}\n\n{user_text}" if user_text else line
+            input_items = [{**answer, **({"answer": "[redacted]"} if secret_env else {})}, *input_items]
+        elif isinstance(_pend, dict) and _pend.get("state") == "pending":
+            await _input_request_settle(org, _chained, _prev, "voided")
+            voided = [str(_pend.get("id") or "")]
     # Bill the harness OWNER's org (resolved above), not the caller's — stamp it on the in-process
     # session trace so trace-finalize meters usage against the same org the gate admitted. The turn
     # executes + finalizes on THIS replica, so this in-process stamp is authoritative for metering;
@@ -10817,6 +11047,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         _ignored = _ignored_request_fields(body)
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
         tr.environment = str((environment or {}).get("id") or "")
+        tr.voided_input_requests = voided     # the question this turn passed over, named (§3.2)
         if effort:   # what the turn asked of the model's thinking; "applied" arrives with the result
             tr.reasoning = {"effort": effort, "applied": None}
 
@@ -10831,10 +11062,19 @@ async def create_response(body: CreateResponseBody, request: Request):
             # The trace context is kept on the turn record under internal names: a leading
             # underscore is dropped by _strip_internal, so the caller's trace id never reaches the
             # response object the caller and the console read.
+            # A turn that ended on a question keeps what its answer is checked against (§3.2).
+            pending = tr.pending_input() if status == "incomplete" else None
             stored = {**tr._response_obj(status), "_session_id": sid, "_org": org,
                       "_member": member, "_input": input_items, "_backend": backend,
+                      **({"_pending_input": pending} if pending else {}),
                       **{"_" + k: v for k, v in trace_ctx.items()}}
             await _resp_put(resp_id, stored, org, sid, body.previous_response_id, status, created_at, body.store)
+            if pending and control_store.enabled():
+                # ...and the claim record the answer is decided on, across replicas. Best-effort:
+                # the stored record says the question is pending, and an answer creates the
+                # claim record where none was written.
+                with contextlib.suppress(Exception):
+                    await control_store.resp_set_pending_input(org, resp_id, pending["id"], _INPUT_REQUEST_TTL_S)
 
         if history:
             # the task's first turns, the conversation it was started with, written before this
@@ -10862,6 +11102,11 @@ async def create_response(body: CreateResponseBody, request: Request):
                 await control_store.idem_release(org, idem_sha_v, resp_id)
             except Exception:  # noqa: BLE001
                 pass
+        if claimed is not None:
+            # Nothing ran: the question the answer claimed is pending again, so the client's retry
+            # is not refused as already answered.
+            with contextlib.suppress(Exception):
+                await _input_request_settle(org, claimed[0], claimed[1], "pending")
         raise
     # Past this point we are committed to executing; the turn will persist a terminal record even
     # on failure, so the reservation must stand (releasing would permit a double run).
@@ -10886,7 +11131,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
-                        trace_ctx=trace_ctx)
+                        trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret)
                     end["status"] = status
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
@@ -10941,7 +11186,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
-                            trace_ctx=trace_ctx)
+                            trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret)
                         end["status"] = status
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
@@ -11002,7 +11247,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
                 timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
-                trace_ctx=trace_ctx)
+                trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
@@ -18541,6 +18786,7 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("Grep", "Grep"), ("Glob", "Glob"), ("WebFetch", "WebFetch"),
                   ("WebSearch", "WebSearch"), ("Task", "Task (subagents)")],
         "tool_enforcement": "hard",
+        "input_requests": True,     # the runner serves `ask_user` here (Tasks §3.2, #476)
     },
     "hermes": {
         "label": "Hermes", "backend": "hermes", "status": "ready",
@@ -22395,13 +22641,17 @@ async def list_bases(request: Request) -> dict:
             # box only, and a turn that names one is refused (_backend_takes_environments), so the
             # console offers none rather than a choice every Task would then fail on
             "takesEnvironments": bool(b.get("environments", True)),
+            # True for a base the runner serves `ask_user` to: a task on it can end by asking the
+            # person a question (Tasks §3.2). Another base asks in prose and the turn completes.
+            "takesInputRequests": bool(b.get("input_requests", False)),
         })
     # The limits a turn gets when neither the request nor the harness sets one, so the console can
     # show the number that will apply rather than a placeholder of its own.
     return {"bases": out,
             "runtimeDefaults": {"maxStep": DEFAULT_MAX_STEP, "timeoutSeconds": DEFAULT_TIMEOUT_S},
             # what every base here takes, from the protocol's own list (GET /v1/uhp), so the two agree
-            "capabilities": {"input_history": bool(UHP_CAPABILITIES.get("input_history"))}}
+            "capabilities": {"input_history": bool(UHP_CAPABILITIES.get("input_history")),
+                             "input_requests": bool(UHP_CAPABILITIES.get("input_requests"))}}
 
 
 @app.get("/v1/models")

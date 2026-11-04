@@ -461,4 +461,4 @@ def test_the_runner_is_given_the_history_on_every_backend(monkeypatch, backend):
 # ── discovery ────────────────────────────────────────────────────────────────────────────────────
 def test_the_capability_is_said_where_the_protocol_and_the_console_read_it(env):
     assert env["c"].get("/v1/uhp").json()["capabilities"]["input_history"] is True
-    assert env["c"].get("/v1/bases").json()["capabilities"] == {"input_history": True}
+    assert env["c"].get("/v1/bases").json()["capabilities"] == {"input_history": True, "input_requests": True}

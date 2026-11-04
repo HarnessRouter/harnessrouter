@@ -111,6 +111,10 @@
           "type": "boolean",
           "description": "`POST /v1/harnesses` honours an `Idempotency-Key`: a repeat within 24 hours answers with\nthe harness the first request created. See Harnesses §5.1. Optional at every class.\n"
         },
+        "input_requests": {
+          "type": "boolean",
+          "description": "A harness can end its turn by asking the person something: the response ends `incomplete`\nwith reason `input_required` and an `input_request` item, and the answer is an\n`input_response` item on the next request, chained on that response. See Tasks §3.2.\nOptional at every class.\n"
+        },
         "plugins": {
           "type": "boolean",
           "description": "The server installs Agent Plugins packages into harnesses, serves their files, and exports\na harness as a package. Optional at every class.\n"
@@ -741,7 +745,7 @@
               }
             }
           ],
-          "description": "A bare string is shorthand for one user message. Without `previous_response_id`, on a\nserver with `input_history`, `user` and `assistant` messages before the last `user` message\nare the conversation so far, kept as the session's first turns, marked imported (Tasks §2.1).\n"
+          "description": "A bare string is shorthand for one user message. Without `previous_response_id`, on a\nserver with `input_history`, `user` and `assistant` messages before the last `user` message\nare the conversation so far, kept as the session's first turns, marked imported (Tasks §2.1).\nWith `previous_response_id`, on a server with `input_requests`, one item may be an\n`InputResponse`: the answer to the question that response asked (Tasks §3.2).\n"
         },
         "model": {
           "type": "string",
@@ -857,11 +861,30 @@
           "description": "Non-null only when status is `failed`."
         },
         "incomplete_details": {
-          "type": [
-            "object",
-            "null"
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "reason"
+              ],
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "examples": [
+                    "max_steps",
+                    "timeout",
+                    "input_required"
+                  ],
+                  "description": "What stopped the work short: a budget (`max_steps`, `timeout`), a question for the\nperson (`input_required`, Tasks §3.2), or a server's own word for another cause.\n"
+                }
+              },
+              "additionalProperties": true
+            }
           ],
-          "additionalProperties": true
+          "description": "Non-null only when status is `incomplete` (Lifecycle §3)."
         },
         "previous_response_id": {
           "type": [
@@ -919,6 +942,13 @@
                 "type": "string"
               },
               "description": "Request fields the server did not act on, by name, in any order. Required when the\nrequest carried `tools` or `include`, which are reserved and ignored. A silently\nignored field is indistinguishable from an honoured one. Tasks §1.1 and §1.4.\n"
+            },
+            "voided_input_requests": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The ids of input requests this task passed over: the previous response asked, and this\nrequest carried something other than an answer (Tasks §3.2).\n"
             }
           },
           "additionalProperties": true
@@ -935,7 +965,7 @@
         "incomplete",
         "cancelled"
       ],
-      "description": "`incomplete` means a budget stopped the work and is usually worth continuing.\n`failed` means it could not be done. `cancelled` means the client asked for a stop, and must\nnever be reported as `failed`.\n"
+      "description": "`incomplete` means the work stopped short — at a budget, or on a question for the person\n(Tasks §3.2) — and is usually worth continuing; `incomplete_details.reason` says which.\n`failed` means it could not be done. `cancelled` means the client asked for a stop, and must\nnever be reported as `failed`.\n"
     },
     "OutputItem": {
       "type": "object",
@@ -953,7 +983,8 @@
             "message",
             "reasoning",
             "function_call",
-            "function_call_output"
+            "function_call_output",
+            "input_request"
           ]
         },
         "status": {
@@ -988,9 +1019,69 @@
         },
         "output": {
           "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "choice",
+            "confirm",
+            "free_text",
+            "secret"
+          ],
+          "description": "`input_request`: what kind of answer the question takes (Tasks §3.2)."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "`input_request`: the question, as the person reads it."
+        },
+        "options": {
+          "type": "array",
+          "description": "`input_request`: the alternatives of a `choice` or `confirm`; the answer is one `id`.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "expires_at": {
+          "type": "integer",
+          "description": "`input_request`: Unix seconds after which an answer is refused `input_request_expired`."
         }
       },
       "additionalProperties": true
+    },
+    "InputResponse": {
+      "type": "object",
+      "required": [
+        "type",
+        "input_request_id",
+        "answer"
+      ],
+      "description": "The answer to an `input_request`, as an item of `CreateResponseRequest.input` on a request\nchained on the response that asked (Tasks §3.2). One per request.\n",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "input_response"
+        },
+        "input_request_id": {
+          "type": "string",
+          "pattern": "^inreq_"
+        },
+        "answer": {
+          "type": "string",
+          "description": "An option `id` for `choice` and `confirm`; any text for `free_text` and `secret`."
+        }
+      }
     },
     "ContentPart": {
       "type": "object",
@@ -1845,6 +1936,10 @@
             "session_busy",
             "harness_busy",
             "plugin_conflict",
+            "idempotency_key_reused",
+            "input_not_pending",
+            "input_request_expired",
+            "input_response_invalid",
             "file_too_large",
             "model_unavailable",
             "model_not_available",

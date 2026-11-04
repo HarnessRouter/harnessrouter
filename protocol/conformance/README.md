@@ -109,6 +109,16 @@ A few of them are worth calling out, because they catch things a schema check ne
   items the server produced, so a model that only claims a call cannot make the count rise. A chain
   that stayed inside the budget says nothing about the rule, so it is skipped rather than failed. A
   server that cannot bound a base may name `max_step` in `metadata.ignored_fields`, which passes.
+- **T-13/T-14**: a question for the person (Tasks §3.2), on a server that reports
+  `input_requests`. T-13 asks the harness, through the `ask_user` tool the chapter names, for a
+  choice between two options, and requires the task to end `incomplete` with reason
+  `input_required`, the question as an `input_request` item and in the last message's text; then it
+  answers outside the options (`422`, the question stands), names a request the response does not
+  hold (`409`), answers (a continuation that ends not failed), and answers again (`409`). T-14 asks
+  for a `secret`, answers with a nonce, and reads the task back everywhere a client can, expecting
+  the nonce nowhere. A model that never asked measured nothing, so both skip; so does a server
+  without the capability. `tests/test_input_requests.py` runs both against a server that gets each
+  rule wrong, one defect at a time.
 - **R-01…R-08** — session sharing, which is mostly a set of refusals. Sessions §5 requires that a
   shared view be read-only, revocable, and free of credentials, and a check that merely opens a
   link and reads the conversation passes against a server that also lets that link continue the
