@@ -49,6 +49,7 @@ A schema is only worth having where something reads it. So what you can set foll
 
 ## Worth knowing
 
+- **A turn that corrects memory isn't recorded.** When an agent revises or forgets something, that conversation is left out, whichever vendor it is. Otherwise a vendor would learn the forgotten thing again from the request to forget it. Whatever else the agent wants kept from that turn, it has to remember itself.
 - **mem0 and history.** Its server records only text changes, so an earlier version can't keep the time it was true. It doesn't declare facts that hold one value, and the answer says so.
 - **ReMe's search is shared.** Its search has no folder scope, so HarnessRouter checks every result against the memory's folder. It also reads words only until embeddings are set, and the answer says so when a search by meaning ran on words.
 - **ReMe's search is a few seconds behind.** It indexes about six seconds after a write. What was just written is matched directly until then.

@@ -10014,7 +10014,9 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             await control_store.lease_release(org, sid, translator.resp_id, rec["lease_fence"])
         except Exception:  # noqa: BLE001
             pass
-    if status == "completed" and harness_id and "memories" in rec:
+    _corrected = sid in _memory_corrected
+    _memory_corrected.discard(sid)
+    if status == "completed" and harness_id and "memories" in rec and not _corrected:
         # Not awaited: the turn isn't complete until this returns, and some vendors extract with a model
         # before they answer. Measured on real turns: 5.5 s on Graphiti and 7.2 s on ReMe after the last words.
         _t = asyncio.create_task(_memories_observe(org, harness_id, sid, hv, rec, _translator_answer(translator)))
@@ -20164,7 +20166,10 @@ async def memories_mcp(request: Request):
     if method == "tools/list":
         return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(await seam.entries(), await seam.offers())})
     args = params.get("arguments") or {}
-    text, is_error = await memory_tools.call(seam, str(params.get("name") or ""), args if isinstance(args, dict) else {})
+    tool = str(params.get("name") or "")
+    text, is_error = await memory_tools.call(seam, tool, args if isinstance(args, dict) else {})
+    if tool in ("memory_revise", "memory_forget") and not is_error:
+        _memory_corrected.add(sid)
     return _jsonrpc_result(rid, _tool_text(text, is_error))
 
 
@@ -20178,6 +20183,13 @@ def _translator_answer(tr) -> str:
     if tr.cur and tr.cur.get("kind") == "message":
         parts.append(str(tr.cur.get("text") or ""))
     return "\n".join(p for p in parts if p.strip())
+
+
+# Sessions whose agent corrected memory in the turn now running. That turn isn't observed: it is about what
+# must not be kept. A vendor that derives from what was said would learn the old title from "the title is no
+# longer X" and the forgotten thing from the answer that says it was forgotten. Measured on real turns. What
+# the agent wanted kept, it has just said through its tools.
+_memory_corrected: set[str] = set()
 
 
 async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: dict, answer: str) -> None:

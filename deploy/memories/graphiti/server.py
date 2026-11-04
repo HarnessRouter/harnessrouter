@@ -190,7 +190,33 @@ async def edges(group: str, limit: int = 100) -> list[dict]:
 @app.get("/groups/{group}/episodes", dependencies=[Depends(auth)])
 async def episodes(group: str, limit: int = 100) -> list[dict]:
     g = await ready(group)
-    return [episode_out(e) for e in await EpisodicNode.get_by_group_ids(g.driver, [group], limit=limit)]
+    closed, _, _ = await g.driver.execute_query(
+        "MATCH (e:Episodic) WHERE e.group_id = $group AND e.hr_forgotten IS NOT NULL RETURN e.uuid AS uuid, e.hr_words AS words, e.hr_forgotten AS at", group=group)
+    by = {r["uuid"]: r for r in closed}
+    out = []
+    for e in await EpisodicNode.get_by_group_ids(g.driver, [group], limit=limit):
+        x = episode_out(e)
+        if e.uuid in by:
+            x.update(content=by[e.uuid]["words"] or "", forgotten_at=by[e.uuid]["at"])
+        out.append(x)
+    return out
+
+
+class EpisodeForget(BaseModel):
+    at: str
+
+
+@app.post("/groups/{group}/episodes/{uid}/forget", dependencies=[Depends(auth)])
+async def forget_episode(group: str, uid: str, b: EpisodeForget) -> dict:
+    """Graphiti reads recent episodes back as context for the next extraction, so a forgotten one's words
+    leave `content` and are kept beside it as its trace. Otherwise the next episode could learn them again."""
+    g = await ready(group)
+    done, _, _ = await g.driver.execute_query(
+        "MATCH (e:Episodic {uuid: $uid}) WHERE e.group_id = $group AND e.hr_forgotten IS NULL "
+        "SET e.hr_words = e.content, e.content = '', e.hr_forgotten = $at RETURN e.uuid AS uuid", uid=uid, group=group, at=b.at)
+    if not done:
+        raise HTTPException(404, "no such episode")
+    return {"uuid": uid, "forgotten_at": b.at}
 
 
 @app.get("/groups/{group}/nodes/{uid}", dependencies=[Depends(auth)])

@@ -131,9 +131,11 @@ class Graphiti(mp.Provider):
                 "written_by": {"kind": "provider", "id": self.id}}
 
     def _episode_out(self, mid: str, x: dict) -> dict:
+        closed = x.get("forgotten_at")
         return {"id": EPISODE + str(x["uuid"]), "type": "episode", "title": str(x.get("name") or ""),
-                "content": [{"type": "text", "text": str(x.get("content") or "")}], "attributes": {}, "references": [], "version": 1, "status": "active", "supersedes": None,
-                "time": {"valid_from": x.get("valid_at"), "valid_to": None, "written_at": x.get("created_at"), "invalidated_at": None},
+                "content": [{"type": "text", "text": str(x.get("content") or "")}], "attributes": {}, "references": [], "version": 1,
+                "status": "forgotten" if closed else "active", "supersedes": None,
+                "time": {"valid_from": x.get("valid_at"), "valid_to": None, "written_at": x.get("created_at"), "invalidated_at": closed},
                 "written_by": {"kind": "provider", "id": self.id}}
 
     async def _schema(self, mid: str) -> dict:
@@ -249,8 +251,12 @@ class Graphiti(mp.Provider):
         if rid.startswith(EDGE):
             r = await self._call("POST", f"/groups/{mid}/edges/{rid[len(EDGE):]}/close", body={"forgotten": True})
             return self._edge_out(mid, r.json())
-        if not rid.startswith(NODE):
-            raise mp.MemoryError(422, "memory_unsupported", "An episode is what happened: erase it instead.")
+        if rid.startswith(EPISODE):
+            at = _now()
+            r = await self._call("POST", f"/groups/{mid}/episodes/{rid[len(EPISODE):]}/forget", body={"at": at})
+            if r.status_code != 200:
+                raise GraphitiUnavailable("the episode was not closed")
+            return {**cur, "status": "forgotten", "time": {**cur["time"], "invalidated_at": at}}
         r0 = await self._call("GET", f"/groups/{mid}/nodes/{rid[len(NODE):]}")
         n = r0.json()
         a = {**(n.get("attributes") or {}), "hr_status": "forgotten", "hr_written_at": _now(), "hr_forgotten_by": f"{writer.get('kind')}:{writer.get('id')}"}

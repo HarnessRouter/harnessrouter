@@ -188,6 +188,31 @@ def test_with_no_schema_the_extraction_is_left_to_itself(wired, monkeypatch):
     assert sent["entity_types"] == [] and sent["edge_types"] == [] and sent["edge_type_map"] == []
 
 
+def test_forgetting_an_episode_closes_it_and_keeps_its_trace(wired):
+    """It holds what was said, so a forgotten thing left in it would still be in the memory."""
+    episodes = [{"uuid": "ep1", "name": "x", "content": "the title is Wren", "created_at": "2026-11-04T00:00:00Z"}]
+
+    def answer(method, path, params, body):
+        if path == "/groups/m/episodes":
+            return episodes
+        if path == "/groups/m/episodes/ep1/forget":
+            episodes[0]["forgotten_at"] = body["at"]
+            return {"uuid": "ep1", "forgotten_at": body["at"]}
+        if path.endswith(("/nodes", "/edges")):
+            return []
+        return {}
+    wired(memory_graphiti, answer)
+    g = memory_graphiti.Graphiti("http://vendor.test", "", ORG)
+    assert [x["id"] for x in run(g.list("m", {"types": ["episode"]}))["records"]] == ["ep_ep1"]
+    out = run(g.forget("m", "ep_ep1", WRITER))
+    assert out["status"] == "forgotten" and out["time"]["invalidated_at"]
+    assert run(g.list("m", {"types": ["episode"]}))["records"] == [], "closed means no longer read"
+    kept = run(g.list("m", {"types": ["episode"], "include": "all"}))["records"]
+    assert kept[0]["status"] == "forgotten" and kept[0]["content"][0]["text"] == "the title is Wren"
+    with pytest.raises(mp.MemoryError):
+        run(g.forget("m", "ep_ep1", WRITER))     # already closed: nothing to close
+
+
 @pytest.mark.parametrize("status,ok", [(200, True), (401, False), (500, False)])
 def test_graphitis_check_tries_the_key_not_just_the_address(wired, status, ok):
     w = wired(memory_graphiti, lambda *a: httpx.Response(status, json={}))

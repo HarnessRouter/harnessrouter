@@ -275,9 +275,9 @@ def test_another_organization_running_the_harness_gets_the_run_and_not_the_owner
     assert [e["memory_id"] for e in asyncio.run(gw._harness_memories(hid, ORG, hv))] == [world["company"]]
 
 
-def test_a_slow_memory_never_holds_up_the_turn_it_describes(world, monkeypatch):
-    """Some vendors extract with a model before they answer an episode. The answer is already written, so
-    the person must not wait for that: the turn completes and the episode arrives afterwards."""
+def _a_finished_turn(monkeypatch, world, sid):
+    """_resp_execute on a runner that finishes at once, with an observation that never ends. Returns the
+    turn's status, its record, and the observations it started."""
     async def nothing(*a, **kw):
         return None
 
@@ -336,15 +336,47 @@ def test_a_slow_memory_never_holds_up_the_turn_it_describes(world, monkeypatch):
     async def turn():
         tr = gw._RespTranslator("resp_slow", "m", None, True, time.time())
         out = await asyncio.wait_for(gw._resp_execute(
-            tr, org=ORG, member="me@local", sid="sess_slow", backend="claude", chain=["anthropic"], prompt="hi", files_in=[], resume=None,
+            tr, org=ORG, member="me@local", sid=sid, backend="claude", chain=["anthropic"], prompt="hi", files_in=[], resume=None,
             harness_id=world["hid"], emit=lambda ev: asyncio.sleep(0)), 10)
-        await asyncio.sleep(0)           # the episode has been started by the time anyone reads the answer
         assert out[0] == "completed", out[2].get("tried")
+        await asyncio.sleep(0)           # an observation has started by the time anyone reads the answer
         pending = [t for t in list(gw._inflight) if not t.done()]
-        assert began == [(world["hid"], "sess_slow")] and pending, "it must still run, kept alive and drained at shutdown"
+        kept = bool(pending)
         for t in pending:
             t.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
-        return out
-    status, _produced, rec = asyncio.run(turn())
-    assert status == "completed" and "memories" in rec, rec.get("tried")
+        return out, kept
+    (status, _produced, rec), kept = asyncio.run(turn())
+    return status, rec, began, kept
+
+
+def test_a_slow_memory_never_holds_up_the_turn_it_describes(world, monkeypatch):
+    """Some vendors extract with a model before they answer an episode. The answer is already written, so
+    the person must not wait for that: the turn completes and the episode arrives afterwards."""
+    status, rec, began, kept = _a_finished_turn(monkeypatch, world, "sess_slow")
+    assert status == "completed" and "memories" in rec
+    assert began == [(world["hid"], "sess_slow")] and kept, "it must still run, kept alive and drained at shutdown"
+
+
+def test_a_turn_that_corrected_memory_is_not_observed(world, monkeypatch):
+    """A vendor that derives from what was said would learn the old title from "the title is no longer X",
+    and the forgotten thing from the answer saying it was forgotten."""
+    gw._memory_corrected.add("sess_fixed")
+    status, _, began, _ = _a_finished_turn(monkeypatch, world, "sess_fixed")
+    assert status == "completed" and began == [] and "sess_fixed" not in gw._memory_corrected
+    # and only that turn: the session's next one is observed as usual
+    _, _, began, _ = _a_finished_turn(monkeypatch, world, "sess_fixed")
+    assert began == [(world["hid"], "sess_fixed")]
+
+
+def test_only_a_correction_that_happened_marks_the_turn(client, world):
+    tok = _tok(world["hid"])
+    before = set(gw._memory_corrected)
+    made, err = _call(client, tok, "memory_remember", content="The title is Wren.")
+    assert not err and set(gw._memory_corrected) == before, "writing something new is no correction"
+    rid = made["remembered"]["id"]
+    _, err = _call(client, tok, "memory_forget", memory=world["notes"], record="hrec_not_there")
+    assert err and set(gw._memory_corrected) == before, "a correction that failed changed nothing"
+    _, err = _call(client, tok, "memory_forget", memory=world["notes"], record=rid)
+    assert not err and len(set(gw._memory_corrected) - before) == 1
+    gw._memory_corrected.clear()
