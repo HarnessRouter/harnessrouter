@@ -115,12 +115,17 @@ async def test_three_real_turns_branch_from_one_and_continue_after_gateway_memor
     async def chain(*_, **__):
         return ["fixture"]
 
+    # Use the actual catalog, rather than a guessed/retired name that the real filter rejects.
+    catalog = gw._vendor_models("anthropic")
+    assert catalog, "the synthetic provider must have a real model catalog"
+    canonical_model, provider_model = next(iter(catalog.items()))
+
     async def connection(*_, **__):
         return {"backend": "claude", "provider": "anthropic", "api_key": "synthetic-not-a-key",
-                "model": "claude-sonnet-4-6"}, org
+                "model": provider_model}, org
 
     async def model(name, *_, **__):
-        return name or "sonnet-4.6"
+        return name or canonical_model
 
     async def none(*_, **__):
         return None
@@ -130,7 +135,7 @@ async def test_three_real_turns_branch_from_one_and_continue_after_gateway_memor
     monkeypatch.setattr(gw, "_principal", principal)
     monkeypatch.setattr(gw, "_resolve_chain", chain)
     conn, _ = await connection()
-    assert gw._conn_serves(conn, "sonnet-4.6"), "synthetic configuration must pass the real vendor model filter"
+    assert gw._conn_serves(conn, canonical_model), "synthetic configuration must pass the real vendor model filter"
     assert gw._auth_from_conn(conn, "fixture-session") is not None, "synthetic owner-trust auth must be usable"
     monkeypatch.setattr(gw, "_get_connection", connection)
     monkeypatch.setattr(gw, "_resolve_model_policy", model)
