@@ -214,7 +214,7 @@ export function StackPanel({ r, live, off, onToggle, focus, now, drops }: {
             </button>
           ) : (
             <button key={k} type="button" className="part locked" data-partlock={k} title="Add it in Settings" aria-label={`${label}, none yet`}>
-              <span className="part-ic" dangerouslySetInnerHTML={{ __html: partIcon('empty', k === 'memory' ? 'memory' : '') }} />
+              <span className="part-ic" dangerouslySetInnerHTML={{ __html: partIcon('empty', '') }} />
               <span className="part-n">{label}</span>
             </button>
           );

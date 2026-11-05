@@ -43,6 +43,8 @@ export interface CustomHarness {
   defaultModel: string;
   systemPrompt: string;
   mcpServers: McpServer[];
+  /** How many memories its agent holds, from its grants. On a read, not on what a save sends. */
+  memories?: { count: number };
   // A skill carries its bundle inline as `files`; bundles over the gateway's inline cap are
   // offloaded server-side and round-trip as {name, enabled, blob}, `blob` is an opaque pointer,
   // resolved back to files via getSkillFiles() when editing. Either shape is a REAL own skill.

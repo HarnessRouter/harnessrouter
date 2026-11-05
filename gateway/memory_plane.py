@@ -919,6 +919,24 @@ async def granted(org: str, principal: str) -> list[tuple[dict, list[str]]]:
     return [(m, privs) for _, _, m, privs in sorted(res, key=lambda x: (x[0], x[1], str(x[2]["id"]))) if privs]
 
 
+async def grant_counts(org: str) -> dict[str, int]:
+    """How many memories each principal holds a grant on: what `granted` says of one, for a list of many. One read
+    of the organization's grants and one of its memories, however long the list is. A grant left on a memory
+    since deleted, or one taken away, doesn't count, and neither does whether a server entry happens to exist."""
+    grants = await GRAPH.find("MemoryGrant", {"org": org})
+    if not grants:
+        return {}
+    live = {str(m.get("id") or "") for m in await GRAPH.find("Memory", {"org": org}) if str(m.get("deleted") or "0") != "1"}
+    held: dict[str, set[str]] = {}
+    for g in grants:
+        mid = str(g.get("memory_id") or "")
+        if str(g.get("deleted") or "0") == "1" or mid not in live:
+            continue
+        if any(p in PRIVILEGES for p in json.loads(g.get("privileges") or "[]")):
+            held.setdefault(str(g.get("principal") or ""), set()).add(mid)
+    return {who: len(mids) for who, mids in held.items()}
+
+
 async def revoke(org: str, mid: str, principals: list[str], gid: str) -> None:
     await need(org, mid, principals, "delete")
     g = await GRAPH.get(gid, label="MemoryGrant")

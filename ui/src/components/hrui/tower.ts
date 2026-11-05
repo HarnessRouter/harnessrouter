@@ -8,8 +8,6 @@
 // The drawing is an SVG string, as in the design; the only text in it is the harness and model
 // names, escaped.
 
-import { MEMORY_R, memoryDrum } from './memoryBrick';
-
 export type BrickState = 'empty' | 'next' | 'built' | 'run';
 export type States = Record<string, BrickState>;
 
@@ -136,23 +134,13 @@ function agentModel(K: ReturnType<typeof Iso>, o: Tower, opts: Opts) {
     if (!n) return;
     const pk = 'part:' + k, dk2 = drops[pk] != null, dl2 = dk2 ? drops[pk] : 0;
     if (dk2) out.push(ripple(px, py, px + 2, py + 2, Z, dl2));
-    const h = Math.min(n, PART_STACK);
+    // Memory stands right in front of the Plugin corner, so a stack of it would hide that corner: one brick high,
+    // and its count goes on the brick as any part's does past its stack
+    const cap = k === 'memory' ? 1 : PART_STACK, h = Math.min(n, cap);
     let g = '';
-    if (k === 'memory') {
-      // a disc per memory rather than a brick: it stands in front of the Plugin corner, and a full stack would hide it
-      const top = Z + 0.5 * (1 + h);
-      g += memoryDrum(K.P, u, px + 1, py + 1, Z, top);
-      if (n > PART_STACK) {
-        // on the top disc, just under its rim: whatever stands in front of it comes no higher
-        const q = K.P(px + 1, py + 1, top);
-        g += '<text class="lbl part-n-lbl" text-anchor="middle" x="' + q[0].toFixed(1) + '" y="' + (q[1] + 0.7071 * MEMORY_R * u + 0.5 * u).toFixed(1) + '" font-size="' + (0.5 * u).toFixed(1) + '">' + n + '</text>';
-      }
-      out.push('<g class="bk f-' + FAM[k] + ' ' + (st[k] || 'empty') + (dk2 ? ' drop' : '') + '" data-tw="' + k + '"' + (dk2 ? ' style="animation-delay:' + dl2 + 'ms"' : '') + '><title>' + esc(name) + '</title>' + g + '</g>');
-      return;
-    }
     for (let j = 0; j < h; j++) g += K.box(px, py, Z + j, px + 2, py + 2, Z + j + 1);
     g += K.stud(px + 1, py + 1, Z + h, 2);
-    if (n > PART_STACK) {
+    if (n > cap) {
       const fs = 0.5 * u, q = K.P(px, py + 2, Z + h);
       g += '<text class="lbl part-n-lbl" transform="matrix(' + K.c + ',0.5,0,1,' + q[0].toFixed(1) + ',' + q[1].toFixed(1) + ')" x="' + u.toFixed(1) + '" y="' + (K.zH * u * 0.5 + fs * 0.36).toFixed(1) + '" font-size="' + fs.toFixed(1) + '" text-anchor="middle">' + n + '</text>';
     }
@@ -211,10 +199,9 @@ export function towerOf(f: SetupFacts): Tower {
   return { harness: f.harness, model: f.model, parts: f.parts, st };
 }
 
-/** The tower with the memories its agent holds, which the setup's record doesn't say (a read of its own). */
+/** The tower with the memories its agent holds now, from the Agent stack's own read, which is newer than the list's. */
 export function withMemories(t: Tower, n: number): Tower {
-  if (!n) return t;
-  return { ...t, parts: { ...t.parts, memory: n }, st: { ...t.st, memory: t.st.memory === 'run' ? 'run' : 'built' } };
+  return { ...t, parts: { ...t.parts, memory: n }, st: { ...t.st, memory: n ? (t.st.memory === 'run' ? 'run' : 'built') : 'empty' } };
 }
 
 /** The empty tower on the "New setup" card: nothing built, the harness is the next step. */

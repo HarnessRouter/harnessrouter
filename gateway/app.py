@@ -19677,7 +19677,7 @@ class HarnessBody(BaseModel):
 
 # What a harness comes back with (_harness_out) that is not written through these fields, plus the
 # protocol's `object` (Harnesses §2), so a harness read from any UHP server can be sent back.
-_HARNESS_READ_ONLY = frozenset({"id", "object", "kit", "notLoaded", "member", "workspace", "createdAt"})
+_HARNESS_READ_ONLY = frozenset({"id", "object", "kit", "notLoaded", "member", "workspace", "createdAt", "memories"})
 
 
 def _harness_field_names() -> frozenset:
@@ -19692,7 +19692,7 @@ def _harness_field_names() -> frozenset:
     return frozenset(names)
 
 
-def _harness_out(v: dict) -> dict:
+def _harness_out(v: dict, grants: dict[str, int] | None = None) -> dict:
     """VG vertex (snake_case, JSON-string lists) -> the frontend CustomHarness shape (camelCase)."""
     def _parse(s):
         try:
@@ -19732,6 +19732,9 @@ def _harness_out(v: dict) -> dict:
             "calibrates": str(v.get("calibrates") or ""),
             "environment": str(v.get("environment") or ""),
             "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created,
+            # how many memories its agent holds, from its grants (memory_plane.grant_counts), where a read asked:
+            # its record doesn't say, and a list can't ask once per row
+            **({"memories": {"count": grants.get(_agent(str(v.get("id") or "")), 0)}} if grants is not None else {}),
             # where it came from (HarnessBody.source), when whatever made it said; a harness made
             # without one has no key, so "said nothing" and "said this" never read alike
             **({"source": str(v["source"])} if v.get("source") else {})}
@@ -21354,7 +21357,8 @@ async def list_harnesses(org: str, request: Request,
     if _key_scope(p):     # a key held to a workspace lists that workspace, whatever it asks for
         workspace, workspace_default = _key_scope(p), 0
     rows = await _vg_list_by_org("Harness", org)
-    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
+    grants = await memory_plane.grant_counts(org)
+    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r), grants) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
     if workspace:
         items = [i for i in items if _workspace_keep(i.get("workspace") or "", workspace, bool(workspace_default))]
@@ -21365,7 +21369,7 @@ async def list_harnesses(org: str, request: Request,
 @app.get("/v1/orgs/{org}/harnesses/{hid}")
 async def get_harness(org: str, hid: str, request: Request) -> dict:
     v = await _harness_in_reach(await _owned_org(request, org), hid)
-    return _harness_out(await _mcp_migrate(org, hid, v))
+    return _harness_out(await _mcp_migrate(org, hid, v), await memory_plane.grant_counts(org))
 
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}/models")
@@ -21440,7 +21444,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     await _hosted_scrub_removed(org, hid, _mcp_list(cur), body.mcp_servers)
     await _plugs_ensure_required(org, hid)
     v = await _vertex_get(hid)
-    return _harness_out(v or {"id": hid})
+    return _harness_out(v or {"id": hid}, await memory_plane.grant_counts(org))
 
 
 @app.delete("/v1/orgs/{org}/harnesses/{hid}")
@@ -22494,7 +22498,8 @@ async def list_harnesses_public(request: Request) -> dict:
     # org — narrowed to its workspace when the key is workspace-scoped — exactly like the
     # console, so both surfaces always agree.
     rows = await _vg_list_by_org("Harness", org)
-    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
+    grants = await memory_plane.grant_counts(org)
+    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r), grants) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
     ws = str(p.get("workspace") or "")
     if ws:
@@ -23019,7 +23024,7 @@ async def get_harness_public(hid: str, request: Request) -> dict:
     _caller = await _pub_principal(request)
     org = _caller["org"]
     v = await _harness_in_reach(_caller, hid)
-    return _harness_out(await _mcp_migrate(org, hid, v))
+    return _harness_out(await _mcp_migrate(org, hid, v), await memory_plane.grant_counts(org))
 
 
 # ── the API, described ────────────────────────────────────────────────────────────────────────
@@ -23257,7 +23262,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     # client saved: its access is its grants, and a harness save is not a revocation.
     if await memory_plane.granted(org, _agent(hid)):
         await _memories_ensure(org, hid, await _vertex_get(hid) or v)
-    return _harness_out(await _vertex_get(hid) or {"id": hid})
+    return _harness_out(await _vertex_get(hid) or {"id": hid}, await memory_plane.grant_counts(org))
 
 
 @app.delete("/v1/harnesses/{hid}")

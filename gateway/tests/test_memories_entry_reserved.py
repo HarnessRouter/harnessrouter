@@ -190,3 +190,85 @@ def test_the_turn_still_gets_it_after_a_save_that_didn_t_name_it(client, mid):
     assert HOSTED in urls
     assert any(s.get("auth") for s in servers if s["url"] == HOSTED), "a minted credential, never the stored reference"
     assert not any(str(s.get("auth")).startswith("vault:") for s in servers)
+
+
+def _count(client, hid):
+    one = client.get(f"/v1/harnesses/{hid}", headers=ADA).json()["memories"]["count"]
+    every = client.get("/v1/harnesses", headers=ADA).json()
+    row = next(h for h in (every.get("data") or every.get("harnesses")) if h["id"] == hid)
+    assert row["memories"]["count"] == one, "the list and the setup say the same"
+    return one
+
+
+def _grant_id(client, mid, hid):
+    return next(g["id"] for g in client.get(f"/v1/memories/{mid}/grants", headers=ADA).json()["data"] if g["principal"] == f"member:{hid}")
+
+
+def test_a_read_says_how_many_memories_its_agent_holds(client, mid):
+    hid = harness(client)
+    assert _count(client, hid) == 0
+    client.post(f"/v1/memories/{mid}/grants", headers=ADA, json={"principal": f"member:{hid}", "privileges": ["read"]})
+    assert _count(client, hid) == 1
+    other = client.post("/v1/memories", headers=ADA, json={"provider": "fixture", "name": "Another"}).json()["id"]
+    client.post(f"/v1/memories/{other}/grants", headers=ADA, json={"principal": f"member:{hid}", "privileges": ["read", "write"]})
+    assert _count(client, hid) == 2
+
+
+def test_it_comes_from_the_grants_not_from_the_entry_being_there(client, mid):
+    hid = holding(client, mid)
+    assert _count(client, hid) == 1
+    assert client.delete(f"/v1/memories/{mid}/grants/{_grant_id(client, mid, hid)}", headers=ADA).status_code == 200
+    assert theirs(hid), "the entry stays when the grant goes"
+    assert _count(client, hid) == 0
+
+
+def test_a_memory_since_deleted_doesn_t_count(client):
+    m = client.post("/v1/memories", headers=ADA, json={"provider": "fixture", "name": "Gone soon"}).json()["id"]
+    hid = holding(client, m)
+    assert _count(client, hid) == 1
+    assert client.delete(f"/v1/memories/{m}", headers=ADA).status_code == 200
+    assert _count(client, hid) == 0
+
+
+def test_the_list_and_the_setting_agree(client, mid):
+    hid = holding(client, mid)
+    said = client.get(f"/v1/harnesses/{hid}/memories", headers=ADA).json()["data"]
+    assert _count(client, hid) == len(said)
+
+
+def test_a_grant_to_another_harness_or_a_person_isn_t_counted(client, mid):
+    a, b = harness(client), holding(client, mid)
+    client.post(f"/v1/memories/{mid}/grants", headers=ADA, json={"principal": "member:someone@example.com", "privileges": ["read"]})
+    assert _count(client, a) == 0
+    assert _count(client, b) == 1
+
+
+def test_another_organization_s_grants_aren_t_read(client, mid):
+    hid = holding(client, mid)
+    assert asyncio.run(memory_plane.grant_counts("someone-else")) == {}
+    assert asyncio.run(memory_plane.grant_counts(ORG))[f"member:{hid}"] == 1
+
+
+def test_the_list_reads_grants_once_however_many_rows_it_has(client, mid, monkeypatch):
+    for _ in range(3):
+        holding(client, mid)
+    seen = []
+    real = memory_plane.GRAPH.find
+
+    async def counting(label, *a, **k):
+        seen.append(label)
+        return await real(label, *a, **k)
+    monkeypatch.setattr(memory_plane.GRAPH, "find", counting)
+    assert client.get("/v1/harnesses", headers=ADA).status_code == 200
+    assert seen.count("MemoryGrant") == 1 and seen.count("Memory") == 1, seen
+
+
+def test_a_read_sent_back_saves_and_the_count_can_t_be_written(client, mid):
+    hid = holding(client, mid)
+    got = client.get(f"/v1/harnesses/{hid}", headers=ADA).json()
+    assert got["memories"] == {"count": 1}
+    got.update(systemPrompt="v2", memories={"count": 99})
+    r = client.put(f"/v1/harnesses/{hid}", json=got, headers=ADA)
+    assert r.status_code == 200, r.text
+    assert r.json()["systemPrompt"] == "v2" and r.json()["memories"] == {"count": 1}
+    assert _count(client, hid) == 1
