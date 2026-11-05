@@ -123,7 +123,11 @@ def runner(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_SESSION_UIDS", False)
     monkeypatch.setattr(server, "_INTERNAL_KEY", "")
     (tmp_path / "workspaces").mkdir()
-    return TestClient(server.app)
+    client = TestClient(server.app)
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 def test_real_runner_branch_is_idempotent_and_its_checkpoint_has_full_commit(runner, history, tmp_path):

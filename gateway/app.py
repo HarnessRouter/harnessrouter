@@ -3158,7 +3158,10 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     model = str(v.get("model") or "")
     harness_id = tr["harness_id"]
     member = tr["member"]
-    translator = _RespTranslator(resp_id, model, None, True, time.time(), sid=sid,
+    translator = _RespTranslator(resp_id, model,
+                                 (_orig_rec or {}).get("previous_response_id"),
+                                 (_orig_rec or {}).get("store", True),
+                                 (_orig_rec or {}).get("created_at") or time.time(), sid=sid,
                                  # The original owner computed this from the request body, which
                                  # this replica never saw. Without it, the settle below overwrites
                                  # the stored record and the marker vanishes exactly when a turn is
@@ -10890,7 +10893,7 @@ def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
     """The fields of this request the gateway will not act on, in a stable order; `None` means the
     client did not send the field, so it is not named."""
     ignored = [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
-    if "branch" in body.model_fields_set and body.branch is not False and not (body.branch is True and body.previous_response_id):
+    if "branch" in getattr(body, "model_fields_set", set()) and body.branch is not False and not (body.branch is True and body.previous_response_id):
         ignored.append("branch")
     return ignored
 

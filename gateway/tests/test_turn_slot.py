@@ -137,7 +137,11 @@ def test_the_accept_time_write_stamps_the_heartbeat():
     i = src.index('"running_response_id": resp_id, "runner_turn_id": "",')
     assert '"heartbeat": str(time.time())' in src[i:i + 200]
     assert src.count("async with _turn_slot(org, sid):") == 3
-    assert src.count("async with _global_sem(), _tenant_sem(org):") == 1   # inside _turn_slot only
+    # The turn slot owns normal execution admission. Branch preparation also needs capacity,
+    # before it publishes a session or can start the turn's heartbeat/lease.
+    assert src.count("async with _global_sem(), _tenant_sem(org):") == 2
+    handler = src[src.index("async def create_response"):src.index('@app.get("/v1/responses/{response_id}")')]
+    assert handler.count("async with _global_sem(), _tenant_sem(org):") == 1
 
 
 def test_a_restore_that_hangs_past_the_cap_settles_at_the_cap_though_the_slot_still_beats(monkeypatch):

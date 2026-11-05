@@ -25,7 +25,7 @@ _DATA = tempfile.mkdtemp(prefix="hr-branch-integration-")
 os.environ.update({"HR_BACKING": "local", "HR_DATA_DIR": _DATA,
                    "HARNESS_WORKSPACE": str(Path(_DATA) / "workspaces"),
                    "HR_SECRET_KEY": "synthetic-test-passphrase", "HARNESS_INTERNAL_KEY": "synthetic-internal-key",
-                   "HR_POOL_AUTH": "none", "HR_IDENTITY_MODE": "off",
+                   "HR_POOL_AUTH": "none", "HR_IDENTITY_MODE": "off", "HR_SANDBOX_TRUST": "owner",
                    "HARNESS_PUBLIC_BASE_URL": "https://gateway.example"})
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "gateway"))
 import app as gw
@@ -85,6 +85,7 @@ def runner_url(tmp_path):
                 time.sleep(0.1)
         yield url
     finally:
+        print("SYNTHETIC RUNNER LOG:\n" + (tmp_path / "runner.log").read_text())
         process.terminate()
         try:
             process.wait(timeout=5)
@@ -115,10 +116,11 @@ async def test_three_real_turns_branch_from_one_and_continue_after_gateway_memor
         return ["fixture"]
 
     async def connection(*_, **__):
-        return {"provider": "anthropic", "api_key": "synthetic-not-a-key", "model": "fixture-model"}, org
+        return {"backend": "claude", "provider": "anthropic", "api_key": "synthetic-not-a-key",
+                "model": "claude-sonnet-4-6"}, org
 
     async def model(name, *_, **__):
-        return name or "fixture-model"
+        return name or "sonnet-4.6"
 
     async def none(*_, **__):
         return None
@@ -127,6 +129,9 @@ async def test_three_real_turns_branch_from_one_and_continue_after_gateway_memor
     monkeypatch.setattr(gw, "RESP_POLL_S", 0.05)
     monkeypatch.setattr(gw, "_principal", principal)
     monkeypatch.setattr(gw, "_resolve_chain", chain)
+    conn, _ = await connection()
+    assert gw._conn_serves(conn, "sonnet-4.6"), "synthetic configuration must pass the real vendor model filter"
+    assert gw._auth_from_conn(conn, "fixture-session") is not None, "synthetic owner-trust auth must be usable"
     monkeypatch.setattr(gw, "_get_connection", connection)
     monkeypatch.setattr(gw, "_resolve_model_policy", model)
     monkeypatch.setattr(gw, "_mapped_integration_conn", none)
@@ -142,7 +147,7 @@ async def test_three_real_turns_branch_from_one_and_continue_after_gateway_memor
                 "previous_response_id": previous, "metadata": {"harness_id": hid}})
             assert response.status_code == 200, response.text
             body = response.json()
-            assert body["status"] == "completed", body
+            assert body["status"] == "completed", json.dumps(body, indent=2)
             turns.append(body)
             previous = body["id"]
         source = turns[0]["metadata"]["session_id"]
@@ -151,7 +156,7 @@ async def test_three_real_turns_branch_from_one_and_continue_after_gateway_memor
             "previous_response_id": turns[0]["id"], "metadata": {"harness_id": hid}})
         assert response.status_code == 200, response.text
         body = response.json()
-        assert body["status"] == "completed", body
+        assert body["status"] == "completed", json.dumps(body, indent=2)
         target = body["metadata"]["session_id"]
         assert target != source, "branch must create a new session"
         assert body["metadata"]["branched_from"] == turns[0]["id"]
