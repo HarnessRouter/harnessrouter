@@ -44,7 +44,8 @@ class Local:
             langs += [x for x in ((c.get("queries") or {}).get("free") or {}).get("languages", []) if x not in langs]
         return {"files": False,          # see keep_file
                 "queries": any((c.get("queries") or {}).get("named") for c in caps),
-                "operations": any(c.get("types") for c in caps), "languages": langs}
+                "operations": any(c.get("types") for c in caps), "languages": langs,
+                "standing": any(c.get("prime") for c in caps)}
 
     async def keep_file(self, mid, file, record):
         # This gateway does not yet turn a media item or a workspace file an agent names into a

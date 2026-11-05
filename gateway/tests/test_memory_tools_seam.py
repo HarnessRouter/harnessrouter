@@ -156,3 +156,29 @@ def test_a_long_standing_record_is_cut_to_a_line():
     section, _ = asyncio.run(mt.doc_section(Fake(standing={"m-notes": [{"id": "s3", "title": long}]})))
     line = next(x for x in section.splitlines() if x.startswith("  - Always"))
     assert len(line) <= mt.STANDING_CAP + 4 and line.endswith("…")
+
+
+def _says_standing(section):
+    return "`attributes: {\"standing\": true}`" in section and "Only what a person asked for" in section
+
+
+def test_an_agent_is_told_how_to_keep_a_preference_where_a_memory_gives_it_to_the_others():
+    """Without this an agent kept "always list the owner first" as a plain procedure, and the next agent was never given it."""
+    seam = Fake(offers={"standing": True})
+    section, _ = asyncio.run(mt.doc_section(seam))
+    assert _says_standing(section)
+    said = next(t for t in mt.tool_list([{"write": True}], {"standing": True}) if t["name"] == "memory_remember")
+    assert "standing" in said["inputSchema"]["properties"]["attributes"]["description"]
+
+
+def test_nothing_is_said_of_it_where_it_would_do_nothing():
+    section, _ = asyncio.run(mt.doc_section(Fake()))          # a memory that gives nothing without being asked
+    assert "standing" not in section
+    said = next(t for t in mt.tool_list([{"write": True}], {"standing": False}) if t["name"] == "memory_remember")
+    assert "standing" not in said["inputSchema"]["properties"]["attributes"]["description"]
+
+
+def test_an_agent_that_only_reads_is_not_told_how_to_keep_one():
+    section, _ = asyncio.run(mt.doc_section(Fake(offers={"standing": True}, write=False)))
+    assert not _says_standing(section)
+

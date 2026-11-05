@@ -113,7 +113,7 @@ class Mem0(mp.Provider):
                                        "applied_after_ranking": "every other filter"}},
                 "history": {"content": "versions", "structure": "none"}, "as_of": "one record",
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
-                "prime": False, "consolidate": False, "queries": {"named": False, "free": None},
+                "prime": True, "consolidate": False, "queries": {"named": False, "free": None},
                 "types": False, "schema": {"mode": "none"}, "content": {"media": ["text/*"], "describes": []}}
 
     async def bind(self, org: str, workspace: str) -> "Mem0":
@@ -146,6 +146,9 @@ class Mem0(mp.Provider):
     def _meta(record: dict, writer: dict, version: int = 1) -> dict:
         """The protocol's fields a mem0 memory has no place for, kept in its metadata."""
         m = {k: v for k, v in (record.get("attributes") or {}).items() if not str(k).startswith(_RESERVED)}
+        # mem0's listing gives metadata back as text (true reads "True", 15 reads "15") where a read by id doesn't:
+        # the plain keys are what it filters on, and this is what a record's attributes are read from.
+        m[_RESERVED + "attrs"] = json.dumps(m, separators=(",", ":"))
         m[_RESERVED + "type"] = record.get("type") or "fact"
         if record.get("title"):
             m[_RESERVED + "title"] = "1"        # the memory's first line is the record's title
@@ -175,9 +178,13 @@ class Mem0(mp.Provider):
         if meta.get(_RESERVED + "observed_by"):
             writer = {"kind": "provider", "id": "mem0", "on_behalf_of": meta[_RESERVED + "observed_by"]}
         title, body = _split(item.get("memory") or "", bool(meta.get(_RESERVED + "title")))
+        try:
+            attrs = json.loads(meta[_RESERVED + "attrs"])
+        except (KeyError, TypeError, ValueError):
+            attrs = {k: v for k, v in meta.items() if not str(k).startswith(_RESERVED)}    # what mem0 derived carries only what it was sent
         return {"id": str(item["id"]), "type": meta.get(_RESERVED + "type") or "fact", "title": title,
                 "content": [{"type": "text", "text": body}] if body else [],
-                "attributes": {k: v for k, v in meta.items() if not str(k).startswith(_RESERVED)},
+                "attributes": attrs,
                 "references": refs if isinstance(refs, list) else [],
                 "version": int(meta.get(_RESERVED + "version") or 1), "status": "forgotten" if gone else "active",
                 "supersedes": None,
@@ -371,6 +378,11 @@ class Mem0(mp.Provider):
         if later:
             degraded.append("filters:applied_after_ranking")
         return ({"AND": clauses} if len(clauses) > 1 else clauses[0]), later
+
+    async def prime(self, mid, budget):
+        """A record stated with `standing` has it in its metadata, which mem0 filters on itself."""
+        got = await self.list(mid, {"filters": {"field": "attributes.standing", "op": "eq", "value": True}, "limit": 50})
+        return mp.within_budget([x for x in got["records"] if x["status"] == "active"], budget)
 
     async def list(self, mid, req):
         degraded: list[str] = []

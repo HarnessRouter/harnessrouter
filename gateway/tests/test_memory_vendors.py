@@ -249,6 +249,63 @@ def test_forgetting_an_episode_closes_it_and_keeps_its_trace(wired):
         run(g.forget("m", "ep_ep1", WRITER))     # already closed: nothing to close
 
 
+@pytest.mark.parametrize("make", [lambda: memory_mem0.Mem0Server("k", "http://vendor.test"), lambda: memory_mem0.Mem0("k")], ids=["server", "platform"])
+def test_mem0_gives_what_is_standing_and_nothing_else(wired, make):
+    """Its metadata is kept and filtered on by mem0: a preference one agent keeps reaches the next one here as well."""
+    def item(i, meta, memory):
+        return {"id": i, "user_id": "m", "memory": memory, "created_at": "2026-11-04T00:00:00Z", "metadata": {"hr_type": "note", **meta}}
+    rows = [item("a", {"standing": True}, "Sign notes with Thanks, Ops"), item("b", {}, "Acme renews in March")]
+    asked = []
+
+    def answer(method, path, params, body):
+        asked.append(body)
+        if method == "POST" and path.endswith("/memories/"):      # the Platform filters it, as it is asked to
+            want = (body or {}).get("filters")
+            assert {"metadata": {"standing": True}} in want["AND"] and {"user_id": "m"} in want["AND"]
+            return {"results": rows[:1]}
+        return {"results": rows}
+    wired(memory_mem0, answer)
+    out = run(make().prime("m", 4000))
+    assert [x["id"] for x in out["records"]] == ["a"] and out["tokens"] > 0 and out["truncated"] is False
+
+
+def test_mem0s_listing_of_metadata_as_text_does_not_change_what_a_record_says():
+    meta = memory_mem0.Mem0._meta({"type": "note", "attributes": {"standing": True, "seats": 15}}, WRITER)
+    listed = {k: (str(v) if k in ("standing", "seats") else v) for k, v in meta.items()}
+    assert meta["standing"] is True, "the plain key is what mem0 filters on"
+    out = memory_mem0.Mem0._out({"id": "a", "memory": "x", "metadata": listed})
+    assert out["attributes"] == {"standing": True, "seats": 15}
+
+
+def test_a_records_link_to_an_entity_is_not_shown_as_a_fact_of_its_own(wired):
+    """A fact naming its subject and object made two edges whose only words were "subject" and
+    "object", and they were listed, searched and counted as facts."""
+    made = []
+    said = {"uuid": "e1", "name": "OWNS", "fact": "Dana owns the account.", "source": "n1", "target": "n2", "attributes": {}}
+
+    def answer(method, path, params, body):
+        if method == "POST" and path == "/nodes":
+            return {"uuid": "n3", "name": "Dana owns it", "attributes": body["attributes"]}
+        if method == "POST" and path == "/edges":
+            made.append({"uuid": f"l{len(made)}", "source": body["source"], "target": body["target"], **{k: body[k] for k in ("name", "fact", "attributes")}})
+            return made[-1]
+        if path == "/groups/m/edges":
+            return [said, *made]
+        if path == "/search":
+            return {"edges": [*made, said], "nodes": [], "episodes": []}
+        if path in ("/groups/m/nodes", "/groups/m/episodes"):
+            return []
+        return {}
+    wired(memory_graphiti, answer)
+    g = memory_graphiti.Graphiti("http://vendor.test", "", ORG)
+    rec = run(g.remember("m", {"type": "fact", "title": "Dana owns it", "references": [
+        {"rel": "subject", "record_id": "node_n1"}, {"rel": "object", "record_id": "node_n2"}]}, WRITER))
+    assert [x["name"] for x in made] == ["subject", "object"] and [x["rel"] for x in rec["references"]] == ["subject", "object"]
+    assert [x["id"] for x in run(g.list("m", {"types": ["fact"]}))["records"]] == ["edge_e1"]
+    assert [x["record"]["id"] for x in run(g.recall("m", {"query": "subject"}))["results"]] == ["edge_e1"]
+    assert run(g.count("m")) == 1
+
+
 @pytest.mark.parametrize("status,ok", [(200, True), (401, False), (500, False)])
 def test_graphitis_check_tries_the_key_not_just_the_address(wired, status, ok):
     w = wired(memory_graphiti, lambda *a: httpx.Response(status, json={}))

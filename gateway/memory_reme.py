@@ -375,15 +375,7 @@ class ReMe(mp.Provider):
 
     async def prime(self, mid, budget):
         rows = [x for x in await self._rows(mid) if x["attributes"].get("standing") is True]
-        kept, used, cut = [], 0, False
-        for x in rows:
-            cost = mp.tokens_of(mp.record_words(x))
-            if kept and used + cost > budget:
-                cut = True
-                continue
-            kept.append(x)
-            used += cost
-        return {"records": kept, "tokens": used, "truncated": cut}
+        return mp.within_budget(rows, budget)
 
     async def list(self, mid, req):
         if req.get("as_of"):

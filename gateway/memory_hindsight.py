@@ -447,16 +447,7 @@ class Hindsight(mp.Provider):
             full = await self._doc(mid, str(d["id"]))
             if full and "forgotten" not in (full.get("tags") or []):
                 rows.append(self._doc_out(mid, full))
-        rows.sort(key=lambda x: str(x["time"]["written_at"] or ""), reverse=True)
-        kept, used, cut = [], 0, False
-        for x in rows:
-            cost = mp.tokens_of(mp.record_words(x))
-            if kept and used + cost > budget:
-                cut = True
-                continue
-            kept.append(x)
-            used += cost
-        return {"records": kept, "tokens": used, "truncated": cut}
+        return mp.within_budget(rows, budget)
 
     async def list(self, mid, req):
         if req.get("as_of"):

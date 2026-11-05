@@ -32,6 +32,7 @@ import memory_plane as mp
 
 TIMEOUT_S = 180
 NODE, EDGE, EPISODE = "node_", "edge_", "ep_"
+LINK = "hr_link"     # on an edge made for a record's reference, not for a fact
 # Tests set an httpx transport here so every call is exercised without a server.
 transport: httpx.BaseTransport | None = None
 
@@ -51,6 +52,10 @@ async def check(api_key: str, base_url: str = "") -> str:
     except httpx.HTTPError as e:
         return f"Graphiti could not be reached at that address: {type(e).__name__}."
     return "" if r.status_code == 200 else f"Graphiti refused the connection (HTTP {r.status_code})."
+
+
+def _is_link(e: dict) -> bool:
+    return bool((e.get("attributes") or {}).get(LINK))
 
 
 def _now() -> str:
@@ -120,6 +125,11 @@ class Graphiti(mp.Provider):
                          "invalidated_at": a.get("hr_written_at") if status != "active" else None},
                 "written_by": js("hr_writer", json.dumps({"kind": "provider", "id": self.id}))}
 
+    def _facts_out(self, mid: str, edges: list[dict]) -> list[dict]:
+        """The edges that are facts. An edge made for a record's reference (_edges_for) is how the
+        graph walks to it: the reference is already on the record, and nobody stated it as a fact."""
+        return [self._edge_out(mid, e) for e in edges if not _is_link(e)]
+
     def _edge_out(self, mid: str, e: dict) -> dict:
         closed = e.get("invalid_at") or e.get("expired_at")
         refs = [{"rel": "about", "memory_id": mid, "record_id": NODE + str(e[k])} for k in ("source", "target") if e.get(k)]
@@ -154,7 +164,7 @@ class Graphiti(mp.Provider):
         total = 0
         for kind in ("nodes", "edges"):
             r = await self._call("GET", f"/groups/{mid}/{kind}", params={"limit": 1000})
-            total += len(r.json()) if r.status_code == 200 else 0
+            total += sum(1 for x in r.json() if not _is_link(x)) if r.status_code == 200 else 0
         return total
 
     # ── writes ────────────────────────────────────────────────────────────────────────────────
@@ -164,7 +174,7 @@ class Graphiti(mp.Provider):
             rid = str(x.get("record_id") or "")
             if str(x.get("memory_id") or mid) == mid and rid.startswith(NODE) and source.startswith(NODE):
                 await self._call("POST", "/edges", body={"group_id": mid, "source": source[len(NODE):], "target": rid[len(NODE):],
-                                                         "name": str(x.get("rel") or "RELATES_TO"), "fact": str(x.get("fact") or x.get("rel") or "related")})
+                                                         "name": str(x.get("rel") or "RELATES_TO"), "fact": str(x.get("rel") or "related"), "attributes": {LINK: "1"}})
 
     async def remember(self, mid, record, writer):
         said = mp.text_of(record.get("content") or [])
@@ -315,16 +325,7 @@ class Graphiti(mp.Provider):
     async def prime(self, mid, budget):
         r = await self._call("GET", f"/groups/{mid}/nodes", params={"limit": 1000})
         rows = [x for x in (self._node_out(mid, n) for n in (r.json() if r.status_code == 200 else [])) if x["status"] == "active" and x["attributes"].get("standing") is True]
-        rows.sort(key=lambda x: str(x["time"]["written_at"] or ""), reverse=True)
-        kept, used, cut = [], 0, False
-        for x in rows:
-            cost = mp.tokens_of(mp.record_words(x))
-            if kept and used + cost > budget:
-                cut = True
-                continue
-            kept.append(x)
-            used += cost
-        return {"records": kept, "tokens": used, "truncated": cut}
+        return mp.within_budget(rows, budget)
 
     async def _everything(self, mid: str, types: list[str]) -> list[dict]:
         rows: list[dict] = []
@@ -333,7 +334,7 @@ class Graphiti(mp.Provider):
         rows += [x for x in (self._node_out(mid, n) for n in (r.json() if r.status_code == 200 else [])) if not types or x["type"] in types]
         if wants("fact"):
             r = await self._call("GET", f"/groups/{mid}/edges", params={"limit": 1000})
-            rows += [self._edge_out(mid, e) for e in (r.json() if r.status_code == 200 else [])]
+            rows += self._facts_out(mid, r.json() if r.status_code == 200 else [])
         if wants("episode"):
             r = await self._call("GET", f"/groups/{mid}/episodes", params={"limit": 1000})
             rows += [self._episode_out(mid, x) for x in (r.json() if r.status_code == 200 else [])]
@@ -368,7 +369,7 @@ class Graphiti(mp.Provider):
             return {"results": [{"record": x, "memory_id": mid, "score": 1.0, "why": ["filters"]} for x in rows[:limit]], "degraded": degraded, "abstain": False}
         r = await self._call("POST", "/search", body={"group_id": mid, "query": f"{query} {text}".strip(), "limit": max(limit * 2, 10)})
         d = r.json() if r.status_code == 200 else {}
-        rows = [self._edge_out(mid, e) for e in d.get("edges") or []] + [self._node_out(mid, n) for n in d.get("nodes") or []] + [self._episode_out(mid, x) for x in d.get("episodes") or []]
+        rows = self._facts_out(mid, d.get("edges") or []) + [self._node_out(mid, n) for n in d.get("nodes") or []] + [self._episode_out(mid, x) for x in d.get("episodes") or []]
         why = [w for w, on in (("query", query), ("text", text), ("filters", later)) if on]
         kept = [x for x in rows if keep(x)]
         return {"results": [{"record": x, "memory_id": mid, "score": round(1 - i / max(len(kept), 1), 4), "why": why} for i, x in enumerate(kept)][:limit], "degraded": degraded, "abstain": False}

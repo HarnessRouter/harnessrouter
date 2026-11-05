@@ -546,6 +546,21 @@ def record_words(r: dict) -> str:
     return "\n".join(x for x in parts if x)
 
 
+def within_budget(rows: list[dict], budget: int) -> dict:
+    """A provider's answer to `prime`: its standing records, newest first, cut to `budget` tokens
+    with the first always kept."""
+    rows = sorted(rows, key=lambda x: str((x.get("time") or {}).get("written_at") or ""), reverse=True)
+    kept, used, cut = [], 0, False
+    for x in rows:
+        cost = tokens_of(record_words(x))
+        if kept and used + cost > budget:
+            cut = True
+            continue
+        kept.append(x)
+        used += cost
+    return {"records": kept, "tokens": used, "truncated": cut}
+
+
 async def prime(org: str, memories: list[dict], budget: int) -> dict:
     """The standing records of a set of memories, newest first, cut to one budget: each provider
     is asked for its own, then the whole is ordered by when each was written and cut again, the
