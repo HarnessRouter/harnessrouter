@@ -16409,10 +16409,10 @@ def _ws_marker_get(identifier: str) -> str:
 
 
 def _ws_marker_clear(identifier: str) -> None:
-    try:
-        _ws_marker_path(identifier).unlink()
-    except OSError:
-        pass
+    marker = _ws_marker_path(identifier)
+    for path in (marker, pathlib.Path(str(marker) + ".branch.json")):
+        with contextlib.suppress(OSError):
+            path.unlink()
 
 
 def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
@@ -16434,6 +16434,81 @@ def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
     return False
 
 
+async def _hydrate_branch(request: Request, identifier: str) -> dict:
+    """A new session from committed user files; never import another session's CLI home."""
+    from branching import BranchUnavailable, restore
+
+    selected = request.query_params.get("branch_commit", "")
+    latest = request.query_params.get("branch_head", "")
+    if request.query_params.get("probe"):
+        raise HTTPException(409, "branch_unavailable")
+    fd, spool_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)
+    target = receipt = None
+    created = complete = False
+    nbytes = 0
+    try:
+        try:
+            with os.fdopen(fd, "wb") as output:
+                async for chunk in request.stream():
+                    output.write(chunk)
+                    nbytes += len(chunk)
+        except Exception as error:
+            raise HTTPException(400, "branch body incomplete") from error
+        if not nbytes:
+            raise HTTPException(409, "branch_unavailable")
+        ws = _ws(identifier)
+        target = pathlib.Path(ws)
+        receipt = pathlib.Path(str(_ws_marker_path(identifier)) + ".branch.json")
+        if target.exists() and any(target.iterdir()):
+            try:
+                previous = json.loads(receipt.read_text())
+                if (previous["commit"] == selected and previous["head"] == latest
+                        and _ws_holds(identifier, target, previous["sha"])):
+                    return {"ok": True, "restored": True, "branched": True}
+            except (OSError, ValueError, KeyError):
+                pass
+            raise HTTPException(409, "branch_unavailable")
+        # A truncated upload never gets here. A failed restore owns only this new target.
+        target.mkdir(parents=True, exist_ok=True)
+        created = True
+        _isolate_session(ws)
+        branch_sha = restore(pathlib.Path(spool_path), target, selected, latest,
+                             pathlib.Path(SPOOL_DIR),
+                             write_context=lambda: _fs_as(_session_uid(ws)),
+                             excluded=(*CHECKPOINT_EXCLUDE,
+                                       *("./" + p for p in (*_PER_TURN_CONFIG, *_STATE_DIRS))))
+        _git_ensure(ws)
+        if request.query_params.get("branch_backend") == "nanobot":
+            with _fs_as(_session_uid(ws)):
+                # Regenerate public file-root metadata; never import the source's .harness state.
+                _agent_subdir_set(ws, _NANOBOT_WS)
+                _git_exclude(ws, [f"{_NANOBOT_WS}/.nanobot/", f"{_NANOBOT_WS}/skills/",
+                                  f"{_NANOBOT_WS}/memory/", f"{_NANOBOT_WS}/AGENTS.md"],
+                             "nanobot's own machinery, never the task's output")
+        _ws_marker_set(identifier, branch_sha)
+        if _ws_marker_get(identifier) != branch_sha:
+            raise OSError("branch marker could not be saved")
+        receipt_fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(receipt_fd, "w") as output:
+            json.dump({"commit": selected, "head": latest, "sha": branch_sha}, output)
+        complete = True
+        return {"ok": True, "restored": True, "branched": True}
+    except BranchUnavailable as error:
+        raise HTTPException(409, "branch_unavailable") from error
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(503, "branch restore temporarily unavailable") from error
+    finally:
+        if created and not complete:
+            _ws_marker_clear(identifier)
+            with contextlib.suppress(OSError):
+                receipt.unlink()
+            shutil.rmtree(target, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            os.unlink(spool_path)
+
+
 @app.post("/hydrate")
 async def hydrate(request: Request, identifier: str = "") -> dict:
     """Restore /workspace from a checkpoint tarball (the request body). Empty body = a fresh
@@ -16444,6 +16519,8 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
     materializes in the sandbox's ~2 GiB RAM. sha256 folds over the incoming stream; untar reads
     from the spooled file. CRITICALLY, the spool completes BEFORE the workspace wipe — a truncated
     upload (client disconnect) raises during spooling and leaves the current workspace untouched."""
+    if "branch_commit" in request.query_params:
+        return await _hydrate_branch(request, identifier)
     _reap_workspaces(keep=_SID_SAFE.sub("_", (identifier or "").strip())[:120] or "_default")
     ws = _ws(identifier)
     ws_path = pathlib.Path(ws)
@@ -16535,6 +16612,15 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "") -> Respo
     _git_ensure(ws)
     _git(ws, "add", "-A")
     _git(ws, "commit", "-q", "-m", f"checkpoint {int(time.time())}", "--allow-empty")
+    # Capture both identities before archiving; absent Git metadata must not lose the workspace.
+    head = full_commit = ""
+    try:
+        full_commit = _git(ws, "rev-parse", "HEAD").stdout.strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", full_commit):
+            full_commit = ""
+        head = _git(ws, "rev-parse", "--short", "HEAD").stdout.strip()
+    except Exception:
+        head = full_commit = ""
     excl = [f"--exclude={p}" for p in CHECKPOINT_EXCLUDE]
     fd, tar_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
     try:
@@ -16550,11 +16636,11 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "") -> Respo
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 h.update(chunk)
                 nbytes += len(chunk)
-        head = _git(ws, "rev-parse", "--short", "HEAD").stdout.strip()
         _ws_marker_set(identifier, h.hexdigest())   # this session now HOLDS this checkpoint
         background_tasks.add_task(os.unlink, tar_path)   # cleanup after the response streams out
         return FileResponse(tar_path, media_type="application/gzip", background=background_tasks,
-                            headers={"X-Checkpoint-Bytes": str(nbytes), "X-Git-Head": head})
+                            headers={"X-Checkpoint-Bytes": str(nbytes), "X-Git-Head": head,
+                                     "X-Git-Commit": full_commit})
     except HTTPException:
         raise
     except Exception:

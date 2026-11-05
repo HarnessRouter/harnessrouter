@@ -41,6 +41,63 @@ item, or anything else, which passes the question over; the server says which ha
 > Chaining on it also names an exact point in the conversation, which leaves room for a server to
 > branch from an earlier response later without changing the request shape.
 
+## 1.1. Branching from an earlier response
+
+A server claiming conformance class **Full** MUST support an explicit branch; other servers MAY:
+
+```json
+{
+  "input": "Try a different approach from here.",
+  "previous_response_id": "resp_first",
+  "branch": true
+}
+```
+
+`branch` is a top-level request field, beside `previous_response_id`. With `true` and a
+previous response, the server MUST create a **new** session from that response's committed
+user files and the transcript up to and including it. The original session, its working files,
+and its transcript MUST remain unchanged. A session hint does not replace the branch point.
+Without `branch: true`, continuation is unchanged. Non-boolean values and `true` without a
+previous response are ignored and named in `metadata.ignored_fields`.
+
+The response MUST carry a new `metadata.session_id` and
+`metadata.branched_from: "resp_first"`, identically for synchronous, streaming, background,
+and subsequently retrieved responses. A branch restores the user's files, **not installed
+dependencies or native CLI state**. The conversation is supplied as its transcript, so a
+branch does not require any base's native fork or resume feature. Imported history is kept
+in full; inference prompt limits do not truncate the stored transcript.
+
+A response still running cannot be a branch point. A server MUST return `409` with
+`code: "branch_unavailable"` when that response has no recorded checkpoint, its commit is
+no longer in the session's history, or the committed files cannot be restored. This includes
+older responses whose checkpoint position was never recorded. `store: false` alone does not
+make a response ineligible: the same response-record and checkpoint availability checks apply. It MUST NOT substitute the
+latest workspace. Unknown or inaccessible sessions follow the ordinary `404` scope rules;
+transient preparation failures are retryable `503` errors. Preparation failures are HTTP
+errors in every response mode, before a background acknowledgment or stream is accepted.
+An `input_response` on a branch is `409 input_not_pending`: branching neither answers nor
+voids the original question.
+
+The reference implementation copies committed files from Git into a fresh session repository. The reference regenerates non-secret file-root metadata for
+bases whose user workspace is a subdirectory; it does not copy their native conversation state.
+It excludes Git internals, `.harness/` (CLI home and per-turn configuration), ignored files,
+checkpoint-excluded credentials and scratch paths (rooted configuration patterns stay rooted;
+unanchored scratch patterns apply at any depth), and dependency directories `node_modules`,
+`.venv`, `venv`, `__pycache__`, and `.cache` at any depth. A submodule or an escaping symlink
+makes that checkpoint unavailable; it is never restored partially. The source's Git configuration,
+hooks, alternate object stores and native CLI credentials are never imported. A successful branch
+has its own durable checkpoint, so it can continue after a gateway or sandbox restart.
+Imported workspace-file citations resolve against the new session. Captured artifact bytes are
+copied into its storage, so deleting the source does not break those imported artifacts. A citation
+already missing before the branch remains unavailable. References into excluded state, credential
+or dependency paths remain unavailable in the branch. Imported transcript-only turns have no
+checkpoint of their own and return `branch_unavailable` when selected as a branch point.
+
+**Compatibility:** an older server may ignore `branch` and continue the original session.
+A client MUST check both the new session id and `metadata.branched_from` before treating a
+response as a branch. Such a check detects old-server behavior; it cannot undo a task that an
+old server already ran. Use branching only with an implementation known to support it.
+
 ## 2. Listing sessions
 
 Conformance class **Extended**.
@@ -106,6 +163,10 @@ never has to fetch each turn's response to learn when it happened.
 
 A session whose turns read an environment carries `environment`, the environment's id, so a client
 can tell which project a conversation worked in ([Environments §6](environments.md#6-what-a-session-sees)).
+
+A branched session's detail carries `branched_from: {"response_id": "resp_first",
+"session_id": "hsess_original"}`. Its copied turns are `imported: true`, with new response ids
+and zero imported cost. Git commit ids and turn positions are internal checkpoint details.
 
 ## 4. Cancelling
 

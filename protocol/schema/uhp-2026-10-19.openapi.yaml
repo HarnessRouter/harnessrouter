@@ -2181,6 +2181,10 @@ components:
           additionalProperties: true
         stream: { type: boolean, default: false }
         previous_response_id: { type: [string, 'null'] }
+        branch:
+          type: boolean
+          default: false
+          description: "Create a new session from the previous response's committed user files and transcript (Sessions §1.1). Only true opts in; other values or a missing previous response are ignored observably."
         instructions: { type: string }
         store: { type: boolean, default: true }
         max_output_tokens: { type: [integer, 'null'] }
@@ -2249,6 +2253,9 @@ components:
           type: object
           properties:
             session_id: { type: string }
+            branched_from:
+              type: string
+              description: "The response id this session branched from (Sessions §1.1)."
             environment:
               type: string
               description: The environment the task read, when it read one (capability `environments`).
@@ -2262,7 +2269,8 @@ components:
               items: { type: string }
               description: |
                 Request fields the server did not act on, by name, in any order. Required when the
-                request carried `tools` or `include`, which are reserved and ignored. A silently
+                request carried `tools` or `include`, which are reserved and ignored, or an ignored
+                `branch` value (Sessions §1.1). A silently
                 ignored field is indistinguishable from an honoured one. Tasks §1.1 and §1.4.
             voided_input_requests:
               type: array
@@ -2636,6 +2644,13 @@ components:
         id: { type: string }
         object: { type: string, const: session }
         harness_id: { type: string }
+        branched_from:
+          type: object
+          required: [response_id, session_id]
+          properties:
+            response_id: { type: string }
+            session_id: { type: string }
+          additionalProperties: false
         environment: { type: string, description: The environment the session's turns read, when one did. }
         title: { type: string }
         status: { type: string }
@@ -2713,6 +2728,7 @@ components:
             - harness_busy
             - plugin_conflict
             - idempotency_key_reused
+            - branch_unavailable
             - input_not_pending
             - input_request_expired
             - input_response_invalid

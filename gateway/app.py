@@ -662,7 +662,8 @@ def _req_hash(body: "CreateResponseBody") -> str:
              "previous_response_id": body.previous_response_id, "backend": body.backend,
              "tools": body.tools, "max_output_tokens": body.max_output_tokens,
              "max_step": body.max_step, "metadata": meta,
-             **({"reasoning": body.reasoning} if body.reasoning else {})}
+             **({"reasoning": body.reasoning} if body.reasoning else {}),
+             **({"branch": True} if body.branch is True else {})}
     return hashlib.sha256(json.dumps(canon, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -2157,10 +2158,10 @@ async def _blob_put(file_id: str, data: bytes, kb: str = BLOB_KB) -> bool:
     return await BACKING.blob.put(kb, file_id, data)
 
 
-async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
+async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str, str]:
     """Stream the workspace tar from the runner /checkpoint straight into the VG blob PUT without
     ever holding the whole tarball in gateway memory (HR-INF-015). Folds sha256 + byte count over
-    the stream as it flows. Returns (ok, nbytes, ws_sha, git_head). A 1 GiB workspace no longer
+    the stream as it flows. Returns (ok, nbytes, ws_sha, git_head, git_commit). A 1 GiB workspace no longer
     materializes a full copy in the gateway (it did on every turn end, for every session).
 
     Safety (verified): the runner sends a fixed Content-Length, so a short read makes aiter_bytes
@@ -2176,25 +2177,26 @@ async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
             r0 = await rc0.get(f"{POOL_ENDPOINT}/checkpoint", params={"identifier": sid},
                                headers=_pool_headers())
             if r0.status_code >= 400 or not r0.content:
-                return False, 0, "", ""
+                return False, 0, "", "", ""
             ok0 = await BACKING.blob.put(BLOB_KB, _ws_blob(sid), r0.content)
             return (ok0, len(r0.content), hashlib.sha256(r0.content).hexdigest() if ok0 else "",
-                    r0.headers.get("X-Git-Head", ""))
+                    r0.headers.get("X-Git-Head", ""), r0.headers.get("X-Git-Commit", ""))
         except Exception:  # noqa: BLE001 — same contract as the streaming path: failure = no advance
-            return False, 0, "", ""
+            return False, 0, "", "", ""
     h = hashlib.sha256()
     nbytes = 0
-    git_head = ""
+    git_head = git_commit = ""
     rc = _relay_client()
 
     async def _pipe():
-        nonlocal nbytes, git_head
+        nonlocal nbytes, git_head, git_commit
         req = rc.build_request("GET", f"{POOL_ENDPOINT}/checkpoint", params={"identifier": sid},
                                headers=_pool_headers())
         resp = await rc.send(req, stream=True)
         try:
             resp.raise_for_status()
             git_head = resp.headers.get("X-Git-Head", "")
+            git_commit = resp.headers.get("X-Git-Commit", "")
             async for chunk in resp.aiter_bytes():
                 nbytes += len(chunk)
                 h.update(chunk)
@@ -2205,10 +2207,10 @@ async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
     put = await rc.put(_blob_url(_ws_blob(sid)),
                        headers=_blob_headers("application/octet-stream"), content=_pipe())
     ok = put.status_code < 400 and nbytes > 0
-    return ok, nbytes, (h.hexdigest() if nbytes else ""), git_head
+    return ok, nbytes, (h.hexdigest() if nbytes else ""), git_head, git_commit
 
 
-async def _hydrate_relay(sid: str, params: dict | None) -> httpx.Response:
+async def _hydrate_relay(sid: str, params: dict | None, *, source_sid: str | None = None) -> httpx.Response:
     """Stream the workspace tar from VG blob storage straight into the runner /hydrate POST body
     (HR-INF-015 reverse path) — no full-tarball buffer in the gateway. Uses the dedicated relay pool.
 
@@ -2218,14 +2220,14 @@ async def _hydrate_relay(sid: str, params: dict | None) -> httpx.Response:
     if not _blob_streaming():
         # Local backing: read the checkpoint (absent → empty body → runner starts fresh, the same
         # meaning a 404 carries on the streaming path) and post it buffered.
-        tar = await BACKING.blob.get(BLOB_KB, _ws_blob(sid))
+        tar = await BACKING.blob.get(BLOB_KB, _ws_blob(source_sid or sid))
         return await _relay_client().request(
             "POST", f"{POOL_ENDPOINT}/hydrate", params={"identifier": sid, **(params or {})},
             headers=_pool_headers(), content=tar or b"")
     rc = _relay_client()
 
     async def _pipe():
-        resp = await _blob_open_stream(_ws_blob(sid), client=rc)
+        resp = await _blob_open_stream(_ws_blob(source_sid or sid), client=rc)
         try:
             if resp.status_code == 404:
                 return                       # genuine no-checkpoint → empty body → fresh workspace
@@ -2846,7 +2848,7 @@ def _hydrate_reason(rec: dict) -> str:
     return err or "unknown"
 
 
-async def _checkpoint(sid: str, rec: dict) -> None:
+async def _checkpoint(sid: str, rec: dict, *, response_id: str = "") -> None:
     """Pull the committed /workspace from the sandbox and persist it to durable blob storage."""
     _ws_tar_evict(sid)             # workspace changed — next file open refetches
     _WS_FILES_CACHE.pop(sid, None)
@@ -2873,7 +2875,10 @@ async def _checkpoint(sid: str, rec: dict) -> None:
             except Exception:  # noqa: BLE001
                 pass
         # Stream runner tar -> VG blob without buffering the whole workspace (HR-INF-015).
-        ok, nbytes, ws_sha, git_head = await _checkpoint_relay(sid)
+        snapshot = await _checkpoint_relay(sid)
+        ok, nbytes, ws_sha, git_head = snapshot[:4]
+        # Four-value test doubles and older relay implementations provide no full mapping.
+        git_commit = snapshot[4] if len(snapshot) == 5 else ""
         if nbytes > 0:
             rec["checkpoint_bytes"] = nbytes
             rec["checkpointed"] = ok
@@ -2884,6 +2889,21 @@ async def _checkpoint(sid: str, rec: dict) -> None:
                 rec["ws_sha"] = ws_sha
                 await _vertex_upsert(sid, {"checkpoint_bytes": str(nbytes), "git_head": git_head,
                                            "ws_sha": ws_sha})
+                try:
+                    if re.fullmatch(r"[0-9a-f]{40}", git_commit):
+                        head = {"commit": git_commit, "ws_sha": ws_sha}
+                        if await _blob_put(f"sessions/{sid}/branch-head.json", json.dumps(head).encode(), kb=RESP_BLOB_KB):
+                            if response_id:
+                                rows = await BACKING.graph.find_strict("HarnessResponse", {"session_id": sid})
+                                rows.sort(key=lambda row: float(row.get("created_at") or 0))
+                                ids = [str(row.get("id")) for row in rows]
+                                if response_id in ids:
+                                    point = {**head, "session_id": sid, "turn_index": ids.index(response_id),
+                                             "response_id": response_id, "backend": rec.get("backend") or ""}
+                                    await _blob_put(f"responses/{response_id}.branch.json",
+                                                    json.dumps(point).encode(), kb=RESP_BLOB_KB)
+                except Exception:  # Branch metadata is optional; the durable checkpoint succeeded.
+                    rec["branch_checkpoint_unavailable"] = True
             else:
                 rec["checkpoint_error"] = "durable workspace upload failed; ws_sha not advanced"
     except Exception as e:  # noqa: BLE001
@@ -3146,6 +3166,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
                                  # the running snapshot and then not on the terminal record, which
                                  # reads as the field having been honoured after all (tasks.md 1.1).
                                  ignored=((_orig_rec or {}).get("metadata") or {}).get("ignored_fields"))
+    translator.branched_from = str(((_orig_rec or {}).get("metadata") or {}).get("branched_from") or "")
     # Resume at the PER-TURN harvest cursor (the sandbox indexes /turn/{rt}?since=N in THIS turn's
     # own event space — NOT the session-wide trace count). The primary loop persists it after each
     # ack'd flush; poll since=cursor so no already-flushed event is re-written or re-emitted. If it
@@ -3250,7 +3271,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     await _browser_close(sid, "turn_end")
     # Saved before the answer completes, as on the primary path: whether a file too large to
     # attach is in the task's files is known only once the save has landed (_too_large_saved).
-    await _checkpoint(sid, rec)
+    await _checkpoint(sid, rec, response_id=resp_id)
     try:
         _too_large_saved(produced, rec)
         # Translate for the wire, the same way the persist just below does: `rec["status"]` holds
@@ -3270,7 +3291,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     try:
         full_output = await _replay_output_from_trace(base, resp_id, model, since_ms=turn_since_ms)
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
-                  "_member": member}
+                  "_member": member, "_input": (_orig_rec or {}).get("_input") or [],
+                  "_backend": (_orig_rec or {}).get("_backend") or rec.get("backend") or ""}
         if _status == "incomplete" and translator.input_request:
             # the question the turn ended on, for the answer to be checked against (§3.2)
             stored["_pending_input"] = translator.pending_input()
@@ -3284,7 +3306,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             if _status == "incomplete" and translator.input_request:
                 # ...and so is the question: its message and its item are the gateway's as well (§3.2)
                 stored["output"] += translator.output[-2:]
-        await _resp_put(resp_id, stored, org, sid, None, _status, translator.created_at, True)
+        await _resp_put(resp_id, stored, org, sid, (_orig_rec or {}).get("previous_response_id"),
+                        _status, (_orig_rec or {}).get("created_at") or translator.created_at, True)
     except Exception:  # noqa: BLE001
         pass
     if fence:
@@ -5383,6 +5406,8 @@ async def session_detail(sid: str, request: Request) -> dict:
     org, v = await _owned_session(request, sid)
     out = {"session_id": sid,
            **{k: val for k, val in v.items() if k not in ("id", "pk", "label")}}
+    if "branched_from" in out:
+        out["branched_from"] = _branch_origin(out["branched_from"])
     base = _prefix_from_vertex(sid, v)
     if base:
         mb = await _blob_get(_manifest_key(base), kb=TRACE_KB)
@@ -5820,6 +5845,7 @@ async def _session_purge(sid: str, v: dict | None, index: dict | None = None) ->
         for rid in await _session_records("HarnessResponse", "session_id", sid, index):
             _resp_cache_forget(rid)
             await _blob_delete(f"responses/{rid}.json", kb=RESP_BLOB_KB)
+            await _blob_delete(f"responses/{rid}.branch.json", kb=RESP_BLOB_KB)
             await BACKING.graph.delete(rid, "HarnessResponse")
     # 3) everything stored under its id: the checkpoint and the media scene (sessions/<sid>/ in
     # the session store), the change list (sessions/<sid>/ in the response store), the files its
@@ -6811,6 +6837,7 @@ class _RespTranslator:
     def __init__(self, resp_id: str, model: str, prev: str | None, store: bool, created_at: float,
                  sid: str = "", ignored: list[str] | None = None):
         self.resp_id, self.model, self.prev, self.store, self.created_at = resp_id, model, prev, store, created_at
+        self.branched_from = ""
         self.sid = sid   # surfaced in response.metadata so the client can highlight/track the session
         # Request fields we accepted and did not act on (tasks.md 1.1). `tools` and `include` are
         # reserved and ignored (1.4), and ignoring has to be observable: a silently dropped field
@@ -6869,6 +6896,8 @@ class _RespTranslator:
 
     def _response_obj(self, status: str) -> dict:
         meta: dict = {}
+        if self.branched_from:
+            meta["branched_from"] = self.branched_from
         if self.sid:
             meta["session_id"] = self.sid
         if self.environment:
@@ -7367,7 +7396,9 @@ def _input_history(inp, org: str = "") -> tuple[list[dict], object]:
 
 
 async def _imported_turns_put(turns: list[dict], *, sid: str, org: str, member: str, backend: str,
-                              before: float, store: bool) -> list[str]:
+                              before: float, store: bool,
+                              copied_inputs: list[list[dict]] | None = None,
+                              copied_outputs: list[list[dict]] | None = None) -> list[str]:
     """A new task's earlier turns (_input_history, each with its `input` items) as its first response
     records, oldest first, each a millisecond apart and before `before` (the turn's own created_at),
     so the thread sorts them ahead of it. Completed, no model, no usage: nothing ran, so nothing is
@@ -7382,12 +7413,13 @@ async def _imported_turns_put(turns: list[dict], *, sid: str, org: str, member: 
         stored = {"id": rid, "object": "response", "created_at": int(at), "status": "completed", "error": None,
                   "served_model": None, "reasoning": None, "incomplete_details": None,
                   "previous_response_id": None, "model": "", "store": store,
-                  "output": ([{"id": "msg_" + rid.removeprefix("resp_"), "type": "message", "status": "completed",
+                  "output": copied_outputs[i] if copied_outputs is not None else ([{"id": "msg_" + rid.removeprefix("resp_"), "type": "message", "status": "completed",
                                "role": "assistant", "content": [{"type": "output_text", "text": said, "annotations": []}]}]
                              if said else []),
                   "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                   "metadata": {"session_id": sid, "imported": True},
-                  "_session_id": sid, "_org": org, "_member": member, "_input": t.get("input") or [],
+                  "_session_id": sid, "_org": org, "_member": member,
+                  "_input": copied_inputs[i] if copied_inputs is not None else t.get("input") or [],
                   "_backend": backend, "_imported": True}
         async with sem:
             if not await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB):
@@ -9394,11 +9426,212 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
     return out
 
 
+def _branch_origin(value) -> dict:
+    try:
+        origin = json.loads(value) if isinstance(value, str) else value
+        if (isinstance(origin, dict) and isinstance(origin.get("response_id"), str)
+                and isinstance(origin.get("session_id"), str)):
+            return {"response_id": origin["response_id"], "session_id": origin["session_id"]}
+    except (TypeError, ValueError):
+        pass
+    return {}
+
+
+async def _branch_source(rid: str, org: str, harness_id: str, caller: dict) -> dict:
+    """Authorize before disclosing whether a response can be restored."""
+    try:
+        rec = await _resp_get(rid, strict=True)
+        sid = str((rec or {}).get("_session_id") or "")
+        vertex = await _vertex_get(sid) if sid else None
+    except Exception as error:
+        raise uhp_error(503, "server_error", "The source session could not be read. Try again.") from error
+    if (not rec or rec.get("_deleted") or rec.get("_org") != org or not vertex or vertex.get("tenant") != org
+            or vertex.get("status") == "deleted" or not _scope_keeps(caller, vertex.get("workspace"))
+            or str(vertex.get("harness_id") or "") != harness_id):
+        raise uhp_error(404, "session_not_found", "No session with that id.")
+    if _UHP_STATUS.get(str(rec.get("status"))) not in {"completed", "failed", "cancelled", "incomplete"}:
+        raise uhp_error(409, "branch_unavailable", "Only a completed response checkpoint can be branched.")
+    try:
+        point_bytes = await _blob_get_or_raise(f"responses/{rid}.branch.json", kb=RESP_BLOB_KB)
+        head_bytes = await _blob_get_or_raise(f"sessions/{sid}/branch-head.json", kb=RESP_BLOB_KB)
+    except Exception as error:
+        raise uhp_error(503, "server_error", "The checkpoint could not be read. Try again.") from error
+    try:
+        point, head = json.loads(point_bytes or b"null"), json.loads(head_bytes or b"null")
+        if (not point or not head or point["response_id"] != rid or point["session_id"] != sid
+                or type(point.get("turn_index")) is not int or point["turn_index"] < 0
+                or not re.fullmatch(r"[0-9a-f]{40}", point["commit"])
+                or not re.fullmatch(r"[0-9a-f]{40}", head["commit"])):
+            raise ValueError("missing or stale checkpoint")
+    except (ValueError, TypeError, KeyError):
+        raise uhp_error(409, "branch_unavailable", "This response has no restorable checkpoint.")
+    return {"point": point, "head": head, "source_sid": sid,
+            "backend": str(point.get("backend") or vertex.get("backend") or ""),
+            "workspace": str(vertex.get("workspace") or "")}
+
+
+async def _branch_artifacts(history: list[dict], source: str, target: str,
+                            org: str, caller: dict) -> list[dict]:
+    """Give imported citations target-owned paths or immutable copies, never source aliases."""
+    result = json.loads(json.dumps(history))  # Never mutate cached original response records.
+    copied: dict[tuple[str, str], str | None] = {}
+
+    async def visit(value):
+        if isinstance(value, list):
+            for item in value:
+                await visit(item)
+            return
+        if not isinstance(value, dict):
+            return
+        container, file_id = value.get("container_id"), value.get("file_id")
+        if (isinstance(container, str) and isinstance(file_id, str)
+                and re.fullmatch(r"[A-Za-z0-9_-]+", container)
+                and re.fullmatch(r"[A-Za-z0-9_-]+", file_id)):
+            key = (container, file_id)
+            if key not in copied:
+                owner = await _vertex_get(container)
+                calibration = caller.get("calibration") or {}
+                allowed = (owner and owner.get("tenant") == org and owner.get("status") != "deleted"
+                           and _scope_keeps(caller, owner.get("workspace"))
+                           and (not calibration or owner.get("harness_id") == calibration.get("inner")))
+                copied[key] = None
+                if allowed and file_id.startswith("wf_"):
+                    # Path ids resolve against the restored committed tree, not the source's tip.
+                    path = _wf_path(file_id)
+                    if path and _ws_visible(path):
+                        copied[key] = file_id
+                elif allowed:
+                    raw_meta = await _blob_get_or_raise(f"containers/{container}/{file_id}.meta", kb=RESP_BLOB_KB)
+                    meta = json.loads(raw_meta) if raw_meta else {
+                        "filename": value.get("filename") or file_id,
+                        "media_type": "application/octet-stream"}
+                    filename = str(meta.get("filename") or file_id)
+                    if not _ws_visible(filename):
+                        # Preserve the citation but never carry excluded bytes through an old capture.
+                        copied[key] = _wf_id(filename)
+                    else:
+                        data = await _blob_get_or_raise(f"containers/{container}/{file_id}", kb=RESP_BLOB_KB)
+                        if data is not None:
+                            new_id = _rid("cfile")
+                            # Imported captures must never be reapplied as later app edits.
+                            meta["source"] = "branch"
+                            if not await _blob_put(f"containers/{target}/{new_id}", data, kb=RESP_BLOB_KB):
+                                raise uhp_error(503, "server_error", "A branch artifact could not be saved.")
+                            if not await _blob_put(f"containers/{target}/{new_id}.meta", json.dumps(meta).encode(), kb=RESP_BLOB_KB):
+                                raise uhp_error(503, "server_error", "A branch artifact's metadata could not be saved.")
+                            copied[key] = new_id
+            if copied[key] is not None:
+                value["container_id"], value["file_id"] = target, copied[key]
+                value["download_url"] = _file_url(target, copied[key])
+        for item in value.values():
+            await visit(item)
+
+    for turn in result:
+        await visit(turn.get("output") or [])
+    return result
+
+
+async def _branch_prepare(info: dict, target: str, org: str, member: str, backend: str,
+                          harness_id: str, harness_name: str, workspace: str, caller: dict,
+                          before: float, store: bool) -> list[dict]:
+    try:
+        return await _branch_prepare_inner(info, target, org, member, backend, harness_id,
+                                           harness_name, workspace, caller, before, store)
+    except HTTPException as error:
+        if error.status_code >= 500:
+            raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.") from error
+        raise
+    except Exception as error:
+        raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.") from error
+
+
+async def _branch_prepare_inner(info: dict, target: str, org: str, member: str, backend: str,
+                          harness_id: str, harness_name: str, workspace: str, caller: dict,
+                          before: float, store: bool) -> list[dict]:
+    """Restore into a new sandbox before publishing the new session or accepting a turn."""
+    point, head = info["point"], info["head"]
+    source_sid, rid = info["source_sid"], point["response_id"]
+    # Read the full durable transcript before target work. No storage truncation or later turns.
+    rows = await BACKING.graph.find_strict("HarnessResponse", {"session_id": source_sid})
+    rows.sort(key=lambda row: float(row.get("created_at") or 0))
+    ids = [str(row.get("id")) for row in rows]
+    if rid not in ids:
+        raise uhp_error(409, "branch_unavailable", "The response's original history is unavailable.")
+    history = []
+    for row in rows[:ids.index(rid) + 1]:
+        response_id = str(row.get("id"))
+        if row.get("status") == "deleted":
+            if response_id == rid:
+                raise uhp_error(409, "branch_unavailable", "The selected response was deleted.")
+            continue
+        rec = await _resp_get(response_id, strict=True)
+        if not rec or rec.get("_session_id") != source_sid or rec.get("_org") != org:
+            raise uhp_error(409, "branch_unavailable", "The response's original history is unavailable.")
+        if rec.get("_deleted") or rec.get("status") == "deleted":
+            if response_id == rid:
+                raise uhp_error(409, "branch_unavailable", "The selected response was deleted.")
+            continue
+        user_parts = []
+        for item in rec.get("_input") or []:
+            content = item.get("content")
+            if isinstance(content, str):
+                user_parts.append(content)
+            elif isinstance(content, list):
+                user_parts.extend(str(part.get("text") or "") for part in content
+                                  if isinstance(part, dict) and part.get("type") == "input_text")
+        user = "\n".join(user_parts)
+        assistant, _, _ = _output_to_turn_fields(rec.get("output") or [])
+        history.append({"user": user, "assistant": assistant, "input": rec.get("_input") or [],
+                        "output": rec.get("output") or []})
+    params = {"branch_commit": point["commit"], "branch_head": head["commit"],
+              "branch_backend": info["backend"]}
+    response = None
+    for pause in _HYDRATE_PAUSES:
+        try:
+            response = await _hydrate_relay(target, params, source_sid=source_sid)
+            if response.status_code == 409:
+                raise uhp_error(409, "branch_unavailable", "The committed files cannot be restored.")
+            if response.status_code < 400:
+                break
+        except HTTPException:
+            raise
+        except Exception:
+            response = None
+        if pause is not None:
+            await asyncio.sleep(pause)
+    if response is None or response.status_code >= 400:
+        raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.")
+    try:
+        snapshot = await _checkpoint_relay(target)
+        ok, nbytes, ws_sha, git_head = snapshot[:4]
+        if not ok or not nbytes:
+            raise uhp_error(503, "server_error", "The branch workspace could not be saved.")
+        history = await _branch_artifacts(history, source_sid, target, org, caller)
+        # Complete the imported records before the session can be listed or read.
+        await _imported_turns_put(history, sid=target, org=org, member=member, backend=backend,
+                                  before=before, store=store,
+                                  copied_inputs=[turn["input"] for turn in history],
+                                  copied_outputs=[turn["output"] for turn in history])
+        await _resp_resolve_session(org, member, None, backend, harness_id=harness_id,
+                                   harness_name=harness_name, workspace=workspace, caller=caller,
+                                   new_sid=target)
+        await _vertex_upsert(target, {"ws_sha": ws_sha, "git_head": git_head,
+                                      "checkpoint_bytes": str(nbytes),
+                                      "branched_from": json.dumps({"response_id": rid, "session_id": source_sid})})
+        await _vg_edge("BRANCHED_FROM", target, rid)
+        _session_trace[target]["branched_from"] = rid
+        return history
+    except BaseException:
+        with contextlib.suppress(Exception):
+            await _session_purge(target, await _vertex_get(target))
+        raise
+
+
 # ── session resolution (previous_response_id → reuse prior session for continuity) ──────
 async def _resp_resolve_session(org: str, member: str, prev: str | None, backend_hint: str,
                                 harness_id: str = "", harness_name: str = "",
                                 session_hint: str = "", workspace: str = "",
-                                caller: dict | None = None) -> tuple[str, str | None]:
+                                caller: dict | None = None, new_sid: str = "") -> tuple[str, str | None]:
     # Continue an existing conversation by (1) the response-id chain, or (2) an explicit session id.
     # (2) is the robust path: the client always knows which conversation it's in, so a follow-up never
     # forks a new empty session just because previous_response_id was momentarily unavailable.
@@ -9408,6 +9641,9 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
         # Workspace sticks to the session: the vertex's stamp wins (set at creation/backfill);
         # the caller's workspace only fills the gap for pre-stamping sessions.
         tr["workspace"] = str((v or {}).get("workspace") or "") or tr.get("workspace") or workspace or ""
+        origin = _branch_origin((v or {}).get("branched_from"))
+        if origin:
+            tr["branched_from"] = origin.get("response_id", "")
         # The vertex names the harness the session belongs to, and every app route addressed to a
         # harness refuses a session that names none — correctly, since an unnamed session cannot be
         # proved to be this harness's. But the stamp is written at CREATION only, and this is the
@@ -9456,7 +9692,7 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
             # billed, and rewrote the task's card as if it were live (2026-09-07)
             raise uhp_error(404, "session_not_found", "No session with that id.")
         raise uhp_error(404, "session_not_found", "No session with that id.")
-    sid = "hsess" + uuid.uuid4().hex
+    sid = new_sid or "hsess" + uuid.uuid4().hex
     created = time.time()
     inv = _inv_ts(created)
     trace_prefix = f"{org}/{inv}_{sid}"
@@ -9625,7 +9861,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
     # the request — the workspace and AGENTS.md still carry the working context.
     runner_prompt = prompt
-    if backend in _NO_RESUME_BACKENDS and resume:
+    if not resume and (_session_trace.get(sid) or {}).get("branched_from"):
+        # A lost first native turn must not silently lose the branch's transcript either.
+        _hist = (await _session_turns_data(sid, limit=_HISTORY_MAX_TURNS, strict=True)).get("turns") or []
+        runner_prompt = _history_prompt([t for t in _hist if t["id"] != translator.resp_id], prompt)
+    elif backend in _NO_RESUME_BACKENDS and resume:
         try:
             _hist = (await _session_turns_data(sid, limit=_HISTORY_MAX_TURNS)).get("turns") or []
             runner_prompt = _history_prompt(_hist, prompt)
@@ -9990,7 +10230,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         rec["charge"] = translator.charge      # a remote runtime's own bill for the turn, beside the tokens
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
-    await _checkpoint(sid, rec)
+    await _checkpoint(sid, rec, response_id=translator.resp_id)
     _too_large_saved(produced, rec)      # the answer says a file is in the task's files only once it is
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
@@ -10309,6 +10549,7 @@ async def _retention_remove(kind: str, item: dict, ctx: dict) -> str | None:
     elif kind == "responses":
         _resp_cache_forget(iid)
         await _blob_delete(f"responses/{iid}.json", kb=RESP_BLOB_KB)
+        await _blob_delete(f"responses/{iid}.branch.json", kb=RESP_BLOB_KB)
         await BACKING.graph.delete(iid, "HarnessResponse")
     elif kind == "harnesses":
         org = str(row.get("org") or "")
@@ -10623,6 +10864,7 @@ class CreateResponseBody(BaseModel):
     input: object = None
     stream: bool = False
     previous_response_id: str | None = None
+    branch: object = None
     store: bool = True
     instructions: str | None = None
     max_output_tokens: int | None = None
@@ -10647,7 +10889,10 @@ _UNAPPLIED_REQUEST_FIELDS = ("tools", "include", "max_output_tokens")
 def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
     """The fields of this request the gateway will not act on, in a stable order; `None` means the
     client did not send the field, so it is not named."""
-    return [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
+    ignored = [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
+    if "branch" in body.model_fields_set and body.branch is not False and not (body.branch is True and body.previous_response_id):
+        ignored.append("branch")
+    return ignored
 
 
 def _trace_context(traceparent: str | None, tracestate: str | None) -> dict:
@@ -10756,6 +11001,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         _pv = await _vertex_get(_psid) if _psid else None
         harness_id = str((_pv or {}).get("harness_id") or "")
     harness_name = str(meta.get("harness_name") or "")
+    branching = body.branch is True and bool(body.previous_response_id)
     # A calibration credential is held to its one harness HERE, before the idempotency replay below
     # hands back a stored response and before any session is touched: a refusal that comes after a
     # read or a write is not a refusal. It starts runs on that harness, and continues only a
@@ -10769,7 +11015,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     if _cal and body.previous_response_id and not await _calibration_holds_response(
             _calibration_inner(principal), await _resp_get(body.previous_response_id)):
         raise uhp_error(404, "response_not_found", "No response with that id.", "previous_response_id")
-    if _cal and str(meta.get("session_id") or "") and not await _calibration_holds_session(
+    if _cal and not branching and str(meta.get("session_id") or "") and not await _calibration_holds_session(
             _calibration_inner(principal), str(meta.get("session_id") or "")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "metadata.session_id")
     # Request idempotency: the durable control store is the SINGLE authority (create_item = atomic
@@ -10818,6 +11064,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # SEPARATE Stripe Connect flow — a different fund system, not this credit gate.)
     billing_org = (str(hv.get("org") or "") if hv else "") or org
     await _credit_gate(billing_org)
+    branch_info = await _branch_source(body.previous_response_id, org, harness_id, principal) if branching else None
     # Caller-selected model: the top-level OpenAI `model` field (what the console + API users send),
     # then request metadata. When omitted, fall back to the harness's saved default_model so every
     # session of a custom harness inherits its configured default.
@@ -10955,16 +11202,21 @@ async def create_response(body: CreateResponseBody, request: Request):
     # session_hint: the client's known active session — a fallback continuity signal so a
     # follow-up never forks a new session when previous_response_id was lost client-side
     # (interrupted stream, tab switch). The resolver validates org ownership before reuse.
-    sid, resume = await _resp_resolve_session(org, member, body.previous_response_id, backend,
-                                              harness_id=harness_id, harness_name=harness_name,
-                                              session_hint=str(meta.get("session_id") or ""),
-                                              workspace=str(principal.get("workspace") or ""),
-                                              caller=principal)
+    if branching:
+        sid, resume = "hsess" + uuid.uuid4().hex, None
+    else:
+        sid, resume = await _resp_resolve_session(org, member, body.previous_response_id, backend,
+                                                  harness_id=harness_id, harness_name=harness_name,
+                                                  session_hint=str(meta.get("session_id") or ""),
+                                                  workspace=str(principal.get("workspace") or ""),
+                                                  caller=principal)
     # The previous response's question (Tasks §3.2), now that the response is known to be the
     # caller's: an answer is checked and claimed, and the answer becomes this turn's message,
     # carrying the question with it; any other input voids the question, and the response says
     # so. A secret answer never enters the conversation: it goes to the harness's environment
     # for this one turn, under a name the message gives, and is redacted from what comes back.
+    if branching and answer is not None:
+        raise uhp_error(409, "input_not_pending", "A branch does not answer the original response's question.")
     extra_env: dict[str, str] = {}
     extra_secret: list[str] = []
     voided: list[str] = []
@@ -10975,7 +11227,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     if answer is not None or (not body.previous_response_id and str(meta.get("session_id") or "").strip()):
         with contextlib.suppress(Exception):
             _newest = str((await _session_turns_data(sid)).get("last_response_id") or "")
-    _chained = body.previous_response_id or _newest
+    _chained = None if branching else body.previous_response_id or _newest
     if _chained:
         _prev = await _resp_get(_chained)
         _pend = (_prev or {}).get("_pending_input") if isinstance(_prev, dict) else None
@@ -11023,6 +11275,19 @@ async def create_response(body: CreateResponseBody, request: Request):
             if str(existing.get("req_hash") or "") not in ("", idem_rhash or ""):
                 raise HTTPException(409, "Idempotency-Key reused with a different request payload")
             return await _idem_replay(str(existing.get("resp_id") or ""), bool(body.stream))
+    if branching:
+        try:
+            # Use the same capacity gates, without publishing a heartbeat-only session.
+            async with _global_sem(), _tenant_sem(org):
+                history = await _branch_prepare(branch_info, sid, org, member, backend, harness_id,
+                                                harness_name, branch_info["workspace"], principal,
+                                                created_at, body.store)
+            _session_trace[sid]["billing_org"] = billing_org
+        except BaseException:
+            if idem_key and idem_sha_v is not None:
+                with contextlib.suppress(Exception):
+                    await control_store.idem_release(org, idem_sha_v, resp_id)
+            raise
     # This turn owns the session from HERE: clear a leftover Stop flag (it belonged to the
     # previous turn) and mark the vertex starting so cancel_session sees a live turn during
     # the entire warmup window — even while this task waits on the concurrency gates. Stamp
@@ -11061,6 +11326,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         # Reserved fields, named on the response rather than dropped in silence (tasks.md 1.4).
         _ignored = _ignored_request_fields(body)
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
+        tr.branched_from = str((_session_trace.get(sid) or {}).get("branched_from") or "")
         tr.environment = str((environment or {}).get("id") or "")
         tr.voided_input_requests = voided     # the question this turn passed over, named (§3.2)
         if effort:   # what the turn asked of the model's thinking; "applied" arrives with the result
@@ -11091,7 +11357,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 with contextlib.suppress(Exception):
                     await control_store.resp_set_pending_input(org, resp_id, pending["id"], _INPUT_REQUEST_TTL_S)
 
-        if history:
+        if history and not branching:
             # the task's first turns, the conversation it was started with, written before this
             # turn's own record: the thread reads whole from its first read, and a write that fails
             # refuses the turn here (the guard below releases what it holds)
@@ -11693,6 +11959,7 @@ async def delete_response(response_id: str, request: Request):
     try:
         _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
+        await _blob_delete(f"responses/{response_id}.branch.json", kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
     await _vg_upsert("HarnessResponse", response_id, {"status": "deleted", "deleted_at": str(now)})
