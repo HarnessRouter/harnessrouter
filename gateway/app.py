@@ -6134,11 +6134,9 @@ _CUSTOM_FORMAT_BACKENDS = {
                "vibe", "docker-agent", "fast-agent"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
-    # The OpenAI Responses API: what codex speaks, and — since this batch — dcode, whose
-    # langchain-openai model posts to /v1/responses on every turn (measured through a recording
-    # proxy and again through the runner's own relay). A custom integration declaring
-    # chat/completions cannot serve it, which is why dcode is in this set and in neither other one.
-    "responses": {"codex", "dcode"},
+    # The OpenAI Responses API: codex and dcode use it natively; omp and pi can select it for a
+    # custom connection, whose explicit format takes precedence over model-family inference.
+    "responses": {"codex", "dcode", "omp", "pi"},
 }
 
 

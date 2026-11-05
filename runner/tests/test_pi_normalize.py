@@ -205,6 +205,16 @@ def test_build_openai_api_other_family_uses_completions(tmp_path):
     assert mj["providers"]["hr"]["api"] == "openai-completions"
 
 
+def test_custom_responses_format_overrides_pi_model_family(tmp_path):
+    env = {"HOME": str(tmp_path / "home")}
+    _build_pi("openai-api", Auth(api_key="k-test", base_url="https://agg.example/v1",
+                                  api_format="responses"), "vendor-model", "do it",
+              str(tmp_path), env)
+    mj = json.loads((tmp_path / "home" / ".pi" / "agent" / "models.json").read_text())
+    assert mj["providers"]["hr"]["api"] == "openai-responses"
+    assert mj["providers"]["hr"]["baseUrl"].startswith("http://127.0.0.1:")
+
+
 def test_build_resume_and_disabled_tools(tmp_path):
     cmd, _ = _cmdline(tmp_path, resume_session_id="abc-123",
                       tools_disabled=["bash (Shell)", "write"])
