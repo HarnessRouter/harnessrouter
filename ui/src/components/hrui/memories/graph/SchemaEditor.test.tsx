@@ -323,7 +323,7 @@ describe('the round trip', () => {
 describe('where something can\'t change, the same panel shows all of it, not editable', () => {
   it('read only: everything there, nothing to add or delete, and the pencil still opens it', async () => {
     await open(CAPS.graphiti, { ro: true });
-    expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Inspect selected type', 'expand']);
+    expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Inspect selected type', 'Read only', 'expand']);
     expect(canvasProps.edgeDrawEnabled).toBe(false);
     await act(async () => { canvasProps.onNodeDragEnd('Person', { x: 1, y: 2 }, {}); });
     await flush();
@@ -381,7 +381,7 @@ describe('where something can\'t change, the same panel shows all of it, not edi
       const seen: string[] = [];
       await open(CAPS.mem0, { onOpenData: (t) => seen.push(t) });
       expect(el.textContent).toContain('Mem0 decides for itself what to keep, and takes no schema');
-      expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Inspect selected type', 'expand']);
+      expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Inspect selected type', 'Read only', 'expand']);
       expect(nodes().map((n) => n.data.id).sort()).toEqual(['entity', 'fact', 'note']);
       expect(nodes().find((n) => n.data.id === 'fact')?.data.caption).toBe('Fact\n2 records');
       await act(async () => { canvasProps.onTapNode('fact'); });
@@ -436,5 +436,25 @@ describe('a schema with no saved places', () => {
   it('keeps any icon and caption it was stored with', () => {
     const s = schemaIn({ types: [{ name: 'A', icon: 'Rocket', caption: 'seats', x: 1, y: 1 }] });
     expect(s.types[0]).toMatchObject({ icon: 'Rocket', caption: 'seats' });
+  });
+});
+
+describe('nothing here looks editable where the vendor takes no schema', () => {
+  const editIcon = 'M16 4l4 4-11 11H5v-4z';
+  test.each([['Mem0', 'mem0'], ['ReMe', 'reme']])('%s has no pencil and says it is read only', async (_name, id) => {
+    await open(CAPS[id]);
+    expect(el.innerHTML).not.toContain(editIcon);
+    expect(el.textContent).toContain('Read only');
+  });
+  test('a vendor a schema guides keeps the pencil, and says a change applies from here on', async () => {
+    await open(CAPS.graphiti);
+    expect(el.innerHTML).toContain(editIcon);
+    expect(el.textContent).not.toContain('Read only');
+    expect(el.textContent).toContain('A change applies from here on: what’s already kept stays as it is.');
+  });
+  test('someone who may only read sees no pencil on a vendor that takes a schema', async () => {
+    await open(CAPS.graphiti, { ro: true });
+    expect(el.innerHTML).not.toContain(editIcon);
+    expect(el.textContent).toContain('Read only');
   });
 });

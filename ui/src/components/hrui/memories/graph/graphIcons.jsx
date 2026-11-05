@@ -15,6 +15,7 @@ export const I = {
   search: <Icon d={<><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4-4" /></>} />,
   close: <Icon d={<><path d="M6 6l12 12M18 6L6 18" /></>} />,
   pencil: <Icon d={<><path d="M16 4l4 4-11 11H5v-4z" /><path d="M13 7l4 4" /></>} />,
+  info: <Icon d={<><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5" /><path d="M12 8v.01" /></>} />,
   cornersOut: <Icon d={<><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></>} />,
   cornersIn: <Icon d={<><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></>} />,
 };

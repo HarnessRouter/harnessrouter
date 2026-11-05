@@ -751,7 +751,8 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
         <div className="dg-body" ref={bodyRef}>
           <div className="dg-canvas">
             <div className="dg-canvas-tools" style={{ zIndex: edit ? 4 : undefined }}>
-              <button className={'pane-btn' + (edit ? ' active' : '')} onClick={() => setEdit(!edit)} title={caps.any ? 'Inspect / edit selected type' : 'Inspect selected type'} aria-label="Inspect selected type" aria-pressed={edit}>{I.pencil}</button>
+              <button className={'pane-btn' + (edit ? ' active' : '')} onClick={() => setEdit(!edit)} title={caps.any ? 'Inspect / edit selected type' : 'Inspect selected type'} aria-label="Inspect selected type" aria-pressed={edit}>{(caps.any ? I.pencil : I.info)}</button>
+              {caps.any ? null : <span className="pill neutral" title="This can be read here, not changed">Read only</span>}
               {caps.add ? <button type="button" className="btn sm" onClick={() => setAddType((v) => !v)} title={`Add a ${word}`}>+ {word === 'label' ? 'Label' : 'Type'}</button> : null}
               <button className={'pane-btn' + (expanded ? ' active' : '')} onClick={() => setExpanded((v) => !v)} title={expanded ? 'restore' : 'expand'} aria-label={expanded ? 'restore' : 'expand'} aria-pressed={expanded}>{expanded ? I.cornersIn : I.cornersOut}</button>
               {caps.any && schemaDirty && (
