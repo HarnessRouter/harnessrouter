@@ -118,11 +118,20 @@ async def _let_go(request, call_next):
         await _make_room()
 
 
+def beside(name: str) -> str:
+    """A file in the data folder, and only there, whatever a name turned out to hold."""
+    root = os.path.realpath(DATA)
+    full = os.path.realpath(os.path.join(root, name))
+    if not full.startswith(root + os.sep):
+        raise HTTPException(400, "not a file of this store")
+    return full
+
+
 def path_of(group: str) -> str:
     """A group names a file here, so a name that could lead anywhere else is refused."""
     if not _GROUP.fullmatch(group):
         raise HTTPException(400, "a group is letters, digits, dashes and underscores")
-    return os.path.join(DATA, f"{group}.lbug")
+    return beside(f"{group}.lbug")
 
 
 def exists(group: str) -> bool:
@@ -179,7 +188,7 @@ async def ready(group: str) -> Graphiti:
 async def _open_graph(group: str) -> Graphiti:
     # A log still holding something means the server didn't stop cleanly. The store replays it, but what it replays
     # doesn't reach the search by words, so that index is made again.
-    wal = f"{path_of(group)}.wal"
+    wal = beside(f"{group}.lbug.wal")
     replayed = os.path.exists(wal) and os.path.getsize(wal) > 0
     g = await asyncio.to_thread(graph_of, group)
     # Search by words is an extension the store loads per open database, and its indexes are made once, here:
@@ -496,9 +505,10 @@ async def del_group(group: str) -> dict:
     """The memory's file goes, with its log and whatever else the store keeps beside it."""
     path = path_of(group)
     await _close(group)
+    own = f"{os.path.basename(path)}."
     for name in os.listdir(DATA):
-        if name == f"{group}.lbug" or name.startswith(f"{group}.lbug."):
-            os.remove(os.path.join(DATA, name))
+        if name == os.path.basename(path) or name.startswith(own):
+            os.remove(beside(name))
     return {"deleted": group, "path_gone": not os.path.exists(path)}
 
 
