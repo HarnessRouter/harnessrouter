@@ -333,3 +333,6 @@
 #hrui .mm-peer:first-child{margin-left:0}
 #hrui .mm-peer.agent{border-radius:6px}
 @media (max-width:720px){#hrui .mm-doc-col{padding:24px 20px 72px}}
+
+/* The caret says where the writing is. A ring around the whole text reads as a form field, not a document. */
+#hrui .ProseMirror:focus, #hrui .ProseMirror:focus-visible { outline: none; }

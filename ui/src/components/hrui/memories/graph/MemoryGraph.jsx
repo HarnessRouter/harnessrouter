@@ -72,6 +72,7 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
   const anchors = useRef(new Map());
   const painted = useRef(false);
   const wantFit = useRef(false);
+  const whole = useRef(true);        // nobody has moved the view since it last showed everything
   const wantSim = useRef(null);
   const reveal = useRef(false);  // bring what a double click brought in into view
   const fading = useRef(new Set());
@@ -223,8 +224,9 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
       cy.minZoom(0.02);
       cy.resize();
       if (cy.width() < 2 || cy.height() < 2) return;
-      cy.fit(undefined, 32);
+      cy.fit(undefined, fitPadding(cy));
       if (cy.zoom() > 1.3) { cy.zoom(1.3); cy.center(); }
+      whole.current = true;
     } catch { /* gone */ }
   }, []);
 
@@ -251,6 +253,7 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
     const p = el.isNode() ? el.position() : el.midpoint();
     const z = cy.zoom();
     const pan = { x: cy.width() / 2 - p.x * z, y: (top + bottom) / 2 - p.y * z };
+    whole.current = false;
     try {
       cy.stop();
       if (reducedMotion()) cy.pan(pan); else cy.animate({ pan }, { duration: 320, easing: 'ease-out' });
@@ -308,6 +311,7 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
       apply(sim.finish());
       live.current = null;
       savePositions();
+      if (whole.current) showAll(cy);
     };
     if (reducedMotion()) { while (sim.step(8)); done(); return; }
     const frame = () => {
@@ -342,11 +346,7 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
     pulse(cy);
     if (reveal.current) {
       reveal.current = false;
-      const e = cy.extent();
-      const out = cy.nodes().some((n) => { const p = n.position(); return p.x < e.x1 || p.x > e.x2 || p.y < e.y1 || p.y > e.y2; });
-      if (out) {
-        try { cy.animate({ fit: { eles: cy.elements(), padding: 32 } }, { duration: quiet ? 0 : 420, easing: 'ease-out' }); } catch { /* gone */ }
-      }
+      showAll(cy);
     }
     if (wantSim.current && cy.nodes().length) {
       const w = wantSim.current;
@@ -408,10 +408,12 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
     };
     const off = () => cy.batch(() => { cy.elements().removeClass('dim hov'); });
     const hold = (e) => live.current?.pin(e.target.id(), e.target.position());
+    const moved = () => { whole.current = false; };
+    cy.on('dragpan scrollzoom pinchzoom', moved);
     cy.on('mouseover', 'node, edge', on);
     cy.on('mouseout', 'node, edge', off);
     cy.on('grab drag free', 'node', hold);
-    return () => { cy.off('mouseover', 'node, edge', on); cy.off('mouseout', 'node, edge', off); cy.off('grab drag free', 'node', hold); };
+    return () => { cy.off('dragpan scrollzoom pinchzoom', moved); cy.off('mouseover', 'node, edge', on); cy.off('mouseout', 'node, edge', off); cy.off('grab drag free', 'node', hold); };
   }, []);
 
   // The pane is resizable: a compact detail below a width, and a first paint that was waiting for a pane with a size.
@@ -431,7 +433,8 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
     return () => ro.disconnect();
   }, [fit, startSim]);
 
-  // The middle of the canvas stays the middle as the pane is dragged wider or narrower, or a detail opens beside it.
+  // As the pane changes size (a column dragged, the links below it growing): a graph showing everything goes on showing
+  // everything. One the person has moved keeps its middle as the middle.
   useEffect(() => {
     const el = box.current;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
@@ -440,13 +443,14 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
       const r = es[es.length - 1].contentRect;
       const cy = canvas.current?.getCy?.();
       if (cy && w0 >= 2 && r.width >= 2 && !wantFit.current) {
-        try { cy.panBy({ x: (r.width - w0) / 2, y: (r.height - h0) / 2 }); } catch { /* gone */ }
+        if (whole.current) fit();
+        else try { cy.panBy({ x: (r.width - w0) / 2, y: (r.height - h0) / 2 }); } catch { /* gone */ }
       }
       w0 = r.width; h0 = r.height;
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [fit]);
 
   // ── going places ──────────────────────────────────────────────────────────────────────────
   const jump = useCallback((id, memoryId) => {
@@ -691,8 +695,8 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
             ) : null}
           </div>
           <div className="mgv-zoom" role="group" aria-label="Zoom">
-            <button type="button" className="pane-btn" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(canvas, 1.25)}>+</button>
-            <button type="button" className="pane-btn" aria-label="Zoom out" title="Zoom out" onClick={() => zoomBy(canvas, 0.8)}>−</button>
+            <button type="button" className="pane-btn" aria-label="Zoom in" title="Zoom in" onClick={() => { whole.current = false; zoomBy(canvas, 1.25); }}>+</button>
+            <button type="button" className="pane-btn" aria-label="Zoom out" title="Zoom out" onClick={() => { whole.current = false; zoomBy(canvas, 0.8); }}>−</button>
             <button type="button" className="pane-btn" aria-label="Fit to the pane" title="Fit to the pane" onClick={fit}>{I.cornersOut}</button>
           </div>
         </div>
@@ -704,6 +708,19 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
       </div>
     </div>
   );
+}
+
+// Room around the graph for what lies over the canvas: the search above it, the types below it. A very small pane keeps its room for the graph.
+function fitPadding(cy) {
+  return Math.min(cy.width(), cy.height()) > 320 ? 56 : 32;
+}
+
+// Brings back into view anything the simulation or a new record left outside it.
+function showAll(cy) {
+  const e = cy.extent();
+  const out = cy.nodes().some((n) => { const p = n.position(); return p.x < e.x1 || p.x > e.x2 || p.y < e.y1 || p.y > e.y2; });
+  if (!out) return;
+  try { cy.animate({ fit: { eles: cy.elements(), padding: fitPadding(cy) } }, { duration: reducedMotion() ? 0 : 420, easing: 'ease-out' }); } catch { /* gone */ }
 }
 
 function zoomBy(canvas, f) {
