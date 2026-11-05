@@ -101,7 +101,8 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
   }, 'That memory was not taken away. Try again.');
   const setAccess = (mid: string, write: boolean) => run(async () => {
     await grant(mid, principal, write ? ['read', 'write'] : ['read']);
-    if (write && !d?.default_memory_id) await setHarnessMemories(hid, { default_memory_id: mid });
+    // What gets written is the agent's own call. Keeping every task as well, whatever the agent thought of it, is a person's choice: the switch below stays as it reads.
+    if (write && !d?.default_memory_id) await setHarnessMemories(hid, { default_memory_id: mid, observe: false });
     if (!write) await handOn(mid);
   }, 'The access was not changed. Try again.');
 

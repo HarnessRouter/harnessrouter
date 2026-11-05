@@ -103,7 +103,7 @@ test('the first memory it can write becomes its default', async () => {
   await act(async () => { sel.value = 'w'; sel.dispatchEvent(new Event('change', { bubbles: true })); });
   await flush();
   expect(s.sent('POST', '/v1/memories/m1/grants')[0].body).toEqual({ principal: `member:${H}`, privileges: ['read', 'write'] });
-  expect(s.sent('PUT', `/v1/harnesses/${H}/memories`)[0].body).toEqual({ default_memory_id: 'm1' });
+  expect(s.sent('PUT', `/v1/harnesses/${H}/memories`)[0].body).toEqual({ default_memory_id: 'm1', observe: false });
 });
 test('losing write or being turned off hands the default on, or clears it', async () => {
   const s = backend({ data: [held('m1', 'Brand kits', true, true), held('m2', 'Support', true)], def: 'm1' });
