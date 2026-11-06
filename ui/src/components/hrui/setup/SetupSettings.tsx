@@ -54,6 +54,7 @@ import { SkillSheet, skillDraft, skillFiles, skillSlug, splitSkillMd, type Skill
 import {
   DeleteSetupSheet, EnvPickSheet, PackageSheet, DuplicateSheet,
 } from './settingsSheets';
+import { Markup } from '../Markup';
 
 type Skill = CustomHarness['skills'][number];
 const isOwn = isOwnSkill;
@@ -368,7 +369,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
     return hit;
   };
   const capEmpty = (fam: string, say: string) => (
-    <div className="empty-list es cap-empty"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', fam) }} /><span>{say}</span></div>
+    <div className="empty-list es cap-empty"><Markup className="es-art" html={partIcon('empty', fam)} /><span>{say}</span></div>
   );
   // the Memory layer's line: read here, and again by the layer itself whenever it changes something
   const [memoryRead, setMemoryRead] = useState<HarnessMemories | null>(null);
@@ -457,7 +458,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
         <div className="tabs inline cap-tabs" role="tablist" aria-label="Capabilities" onKeyDown={(e) => tabKeys(e, capTabs.map(([k]) => k), capT, pickCap)}>
           {capTabs.map(([k, label, fam]) => (
             <button key={k} type="button" role="tab" aria-selected={k === capT} tabIndex={k === capT ? 0 : -1} className={k === capT ? 'on' : ''} onClick={() => pickCap(k)}>
-              <span className="tab-brick" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('built', fam) }} />{label} <span className="count">{capN[k]}</span>
+              <Markup className="tab-brick" html={partIcon('built', fam)} />{label} <span className="count">{capN[k]}</span>
             </button>
           ))}
         </div>

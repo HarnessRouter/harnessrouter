@@ -11,6 +11,7 @@ import { wayPic, type Way } from './start/art';
 import { DEMOS, baseName, demoOf, demoPick } from './start/demos';
 import { Handoff, type HandKind } from './start/Handoff';
 import { NewSetup, type NewSetupPre } from './NewSetup';
+import { useHtml } from './Markup';
 
 const PLAY = <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1l7 4-7 4z" fill="currentColor" /></svg>;
 // the stories play once, on the first Start of this tab (the design's stPlayedAt)
@@ -20,7 +21,8 @@ const lastPlay = new WeakMap<Element, number>();
 
 function Pic({ kind, play }: { kind: Way; play: boolean }) {
   const [svg] = useState(() => wayPic(kind, play));
-  return <span className="sg-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: svg }} />;
+  const html = useHtml(svg);
+  return <span className="sg-art" aria-hidden="true" dangerouslySetInnerHTML={html} />;
 }
 
 function replay(e: MouseEvent<HTMLElement>) {

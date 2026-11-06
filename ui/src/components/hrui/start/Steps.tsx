@@ -11,6 +11,7 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { partIcon } from '../bricks';
 import { PasteHint, PromptCopy } from './PromptCopy';
+import { Markup } from '../Markup';
 
 export type StepState = 'empty' | 'next' | 'built';
 
@@ -27,7 +28,7 @@ export function HxStep({ n, state, title, sum, keep, children }: {
   const folded = state === 'built' && !!sum;
   return (
     <li className={`hx-s ${state}`} aria-current={state === 'next' ? 'step' : undefined}>
-      <span className="hx-b" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon(state, 'backend') }} />
+      <Markup className="hx-b" html={partIcon(state, 'backend')} />
       <div className="hx-c">
         <div className="hx-t"><span className="hx-n">{n}</span><b>{title}</b>{folded ? <span className="hx-sum">{sum}</span> : null}</div>
         {folded ? (keep ? <div className="hx-d hx-keep">{keep}</div> : null)

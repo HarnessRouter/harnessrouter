@@ -38,6 +38,7 @@ import { AUTO } from './start/compose';
 import { DEMOS, baseName, demoPick, runnableModels } from './start/demos';
 import { Handoff } from './start/Handoff';
 import { tooShort } from './start/names';
+import { useHtml } from './Markup';
 
 export interface NewSetupPre { job?: string; demo?: number }
 
@@ -151,6 +152,7 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
   const dropH = !!artH && artH !== prev.current.h, dropM = !!artM && (artM !== prev.current.m || dropH);
   useEffect(() => { prev.current = { h: artH, m: artM }; });
   const art = useMemo(() => nwArt({ h: artH, m: artM, dropH, dropM, parts: { skill: 0, plugin: 0, tool: 0 } }), [artH, artM, dropH, dropM]);
+  const artHtml = useHtml(art);
 
   // the open list sits beside the button it belongs to, top-aligned with it; below (or above) it when
   // the window has no room on the right (the design's placeDD)
@@ -302,7 +304,7 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
         <button type="button" className="icon-btn" aria-label="Close" onClick={close}>{X}</button>
       </div>
       <div className="nw-build">
-        <span className="nw-art" id="nwArt" dangerouslySetInnerHTML={{ __html: art }} />
+        <span className="nw-art" id="nwArt" dangerouslySetInnerHTML={artHtml} />
         <div className="nw-picks" id="nwPicks">
           <button ref={btnH} type="button" className={`nw-pk${pick === 'h' ? ' on' : ''}`} aria-haspopup="listbox" aria-expanded={pick === 'h'}
             disabled={busy} onClick={() => toggle('h')}>

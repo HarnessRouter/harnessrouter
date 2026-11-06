@@ -17,6 +17,7 @@ import { keepLine, keepsTasks } from './caps';
 import { memoriesWord, PLUS, useProviders } from './parts';
 import { vendorName } from './vendors';
 import './memories.css';
+import { Markup } from '../Markup';
 
 /** Open, as everywhere a row leads somewhere else: a quiet arrow at the end of the row. */
 const OPEN_IC = <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8" /></svg>;
@@ -152,7 +153,7 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
               const why = m.from ? `Comes with ${m.from}` : !mayChange ? 'Only someone who manages this memory can change who holds it' : undefined;
               return (
                 <div className={`cap-row cap-mcp mm-sl${on ? '' : ' off'}`} key={m.id}>
-                  <span className="cap-ic" dangerouslySetInnerHTML={{ __html: partIcon(on ? 'built' : 'empty', 'memory') }} />
+                  <Markup className="cap-ic" html={partIcon(on ? 'built' : 'empty', 'memory')} />
                   <span className="grow"><b className="mm-sl-name"><span title={m.name}>{m.name}</span>{isD ? <span className="pill run mm-defp">Default</span> : null}</b>{sub || m.from ? <small>{[m.from ? `Comes with ${m.from}` : '', sub].filter(Boolean).join(' · ')}</small> : null}</span>
                   {/* the same columns in every row, filled only where the memory is on, so the switches and arrows line up */}
                   <span className="mm-sl-c mm-sl-acc">
