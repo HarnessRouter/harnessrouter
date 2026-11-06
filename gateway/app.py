@@ -11007,7 +11007,7 @@ async def create_response(body: CreateResponseBody, request: Request):
             raise uhp_error(400, "invalid_input", "A branch starts from the response named in "
                                                   "previous_response_id.", "branch")
     meta = body.metadata or {}
-    probe ={"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
+    probe = {"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
     # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
     # {harness_id}/v1/* -> /v1/*, or by the native public-shape route above).
     harness_id = str(meta.get("harness_id") or request.headers.get("x-harness-id") or "")

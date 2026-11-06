@@ -777,7 +777,7 @@
         "branch": {
           "type": "boolean",
           "default": false,
-          "description": "Create a new session from the previous response's committed user files and transcript (Sessions §1.1). Only true opts in; true without previous_response_id, or a value that is not a boolean, is 400 invalid_input (param branch)."
+          "description": "Create a new session from the previous response's committed user files and transcript (Sessions §1.1). Only true opts in; null is the same as absent; true without previous_response_id, or any other non-boolean value, is 400 invalid_input (param branch)."
         },
         "instructions": {
           "type": "string"

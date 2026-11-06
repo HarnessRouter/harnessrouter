@@ -57,7 +57,7 @@ A server claiming conformance class **Full** MUST support an explicit branch; ot
 previous response, the server MUST create a **new** session from that response's committed
 user files and the transcript up to and including it. The original session, its working files,
 and its transcript MUST remain unchanged. A session hint does not replace the branch point.
-Without `branch: true`, continuation is unchanged. `branch` is `true`, `false` or absent. Any
+Without `branch: true`, continuation is unchanged. `branch` is `true`, `false`, `null` or absent; `null` is the same as absent. Any
 other value, and `true` without `previous_response_id`, MUST be refused with `400`,
 `code: "invalid_input"`, `param: "branch"`. A request that asked for a branch never runs some
 other way: with a session hint it would otherwise run as a new turn of the session the client
