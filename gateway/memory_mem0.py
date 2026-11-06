@@ -106,7 +106,10 @@ class Mem0(mp.Provider):
 # beside what a person can set; record types and reference rels as this adapter answers them.
     BUILTIN = {
         "types": [
-            {"name": "fact", "description": "A short fact Mem0 drew from a conversation. Mem0 keeps facts on their own: not the conversation, and no links between them."},
+            # mem0 2.x links each fact to the names, titles and topics in it (an entity store, `linked_memory_ids`) and
+            # boosts a search by them, but no route serves that store, and it is built only where spaCy is installed
+            # (the server image as shipped has none). So nothing here can read it, and it isn't drawn.
+            {"name": "fact", "description": "A short fact Mem0 drew from a conversation. Mem0 links facts that name the same person or thing inside itself, to rank searches, and doesn't hand those links out."},
         ],
         "relations": [],
     }
@@ -114,8 +117,8 @@ class Mem0(mp.Provider):
     def capabilities(self) -> dict:
         return {"id": self.id, "isolation": "enforced_filter", "derivation": "write_time",
                 "observe": {"keeps_episodes": False, "answers": "job"},
-                # mem0 links entities inside itself to rank, and no longer serves them: an entity is
-                # here only when someone states one
+                # mem0 links entities inside itself to rank (and only with spaCy installed), and no route
+                # serves them: an entity is here only when someone states one
                 "graph": {"entities": "stated"},
                 "recall": {"signals": ["query", "text", "filters"], "abstain": False,
                            "filters": {"native": ["eq on type and attributes.*", "gte/lte/gt/lt on time.written_at"],
