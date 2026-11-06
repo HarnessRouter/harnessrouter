@@ -58,9 +58,9 @@
 
 .sidebar h2 {
   margin: 0 0 10px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.17em;
+  letter-spacing: 0.08em;
   color: #7d848f;
 }
 
@@ -75,7 +75,7 @@
   background: transparent;
   text-align: left;
   font-size: 15px;
-  font-weight: 450;
+  font-weight: 500;
   color: #3d434c;
   padding: 7px 0;
   border-radius: 5px;
@@ -120,7 +120,7 @@
 }
 
 .header h1 span {
-  font-size: 19px;
+  font-size: 20px;
   color: #1e232a;
   margin-top: 4px;
 }
@@ -148,7 +148,7 @@
   font-size: 16px;
   line-height: 1.52;
   color: #2a2d32;
-  font-weight: 420;
+  font-weight: 400;
 }
 
 .editorSurface,
@@ -263,7 +263,7 @@
 }
 
 .editorSurface :global(.ProseMirror code) {
-  font-size: 0.8em;
+  font-size: max(11px, 0.9em);
   border-radius: 4px;
   padding: 0.06em 0.3em;
   background: #e9ebef;
@@ -518,11 +518,11 @@
   }
 
   .editorSurface :global(.ProseMirror h3) {
-    font-size: 23px;
+    font-size: 24px;
   }
 
   .editorSurface :global(.ProseMirror h4) {
-    font-size: 19px;
+    font-size: 20px;
   }
 
   .editorSurface :global(.ProseMirror h5) {
