@@ -13339,22 +13339,26 @@ async def revoke_key(org: str, kid: str, request: Request) -> dict:
 
 def _parse_jsonrpc(text: str) -> dict:
     """A streamable-HTTP MCP endpoint answers either as plain JSON or as SSE (`data: {…}`
-    lines). Return the first JSON-RPC object found, whichever form."""
+    events). Return the first JSON-RPC object found, whichever form."""
     t = (text or "").strip()
     if t.startswith("{"):
         try:
             return json.loads(t)
         except Exception:  # noqa: BLE001
             pass
-    for line in t.splitlines():
-        line = line.strip()
-        if line.startswith("data:"):
-            body = line[5:].strip()
-            if body.startswith("{"):
-                try:
-                    return json.loads(body)
-                except Exception:  # noqa: BLE001
-                    continue
+    # SSE joins all data fields in an event with LF before interpreting the payload.
+    # Keep accepting a final event without a blank line, as this complete-body probe
+    # did for single-line responses; it is not an incremental stream reader.
+    for event in t.replace("\r\n", "\n").replace("\r", "\n").split("\n\n"):
+        data = [line[5:].removeprefix(" ") for line in event.split("\n") if line.startswith("data:")]
+        if not data:
+            continue
+        try:
+            obj = json.loads("\n".join(data))
+        except (ValueError, TypeError):
+            continue
+        if isinstance(obj, dict):
+            return obj
     return {}
 
 
