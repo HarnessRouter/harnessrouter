@@ -71,7 +71,7 @@ for a, b in [("Northwind", "Agent API"), ("Lumen Health", "Console"), ("Acme Rob
 # 2. Support playbook: 7 entities, 5 facts
 m = memory("Support playbook", "Known issues, what fixed them, and what they affect.", "graphiti", ["Support agent"], {
     "types": [
-        {"name": "Issue", "color": C["pink"], "icon": "alert", "x": 0, "y": 0, "properties": [{"name": "severity", "type": "choice", "options": ["low", "high"]}]},
+        {"name": "Issue", "color": C["pink"], "icon": "bug", "x": 0, "y": 0, "properties": [{"name": "severity", "type": "choice", "options": ["low", "high"]}]},
         {"name": "Fix", "color": C["teal"], "icon": "check", "x": 300, "y": 0, "properties": [{"name": "steps", "type": "text"}]},
         {"name": "Area", "color": C["slate"], "icon": "box", "x": 150, "y": 200}],
     "relations": [{"name": "fixed_by", "from": "Issue", "to": "Fix"}, {"name": "affects", "from": "Issue", "to": "Area"}]})

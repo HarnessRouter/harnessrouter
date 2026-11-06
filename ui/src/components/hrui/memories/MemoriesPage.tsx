@@ -5,18 +5,20 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
-import { getSchema, listGrants, listMemories, type Memory, type Provider } from '@/lib/memories';
+import { getSchema, labelOf, listGrants, listMemories, listRecords, type Memory, type Provider } from '@/lib/memories';
 import { Skel, SkCards, SkHead } from '../Skel';
 import { toast } from '../toast';
 import { plural } from '../setup/settingsModel';
 import { hasSchema, schemaLabels } from './caps';
-import { Art, memoriesWord, pool, PLUS, setupsOf, useProviders, useSetupNames } from './parts';
+import { CardArt, Ghost } from './CardArt';
+import { memoriesWord, pool, PLUS, setupsOf, useProviders, useSetupNames } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
 import { ChooseServiceSheet, NewMemorySheet } from './sheets';
 import { vendorName } from './vendors';
 import './memories.css';
 
-interface Facts { schema?: LSchema | null; grants?: Awaited<ReturnType<typeof listGrants>> | null }
+// `recent`: what a memory with no schema to draw shows on its card, the first few records it keeps
+interface Facts { schema?: LSchema | null; grants?: Awaited<ReturnType<typeof listGrants>> | null; recent?: string[] | null }
 type Open = { k: 'new'; picked?: string } | { k: 'choose' } | null;
 const enc = encodeURIComponent;
 
@@ -42,11 +44,13 @@ export function MemoriesPage() {
     if (!list || !providers) return;
     let live = true;
     void pool(list, 4, async (m) => {
-      const [schema, grants] = await Promise.all([
-        hasSchema(providerOf(m.provider)) ? getSchema(m.id).then(schemaIn).catch(() => null) : Promise.resolve(null),
+      const withSchema = hasSchema(providerOf(m.provider));
+      const [schema, grants, recent] = await Promise.all([
+        withSchema ? getSchema(m.id).then(schemaIn).catch(() => null) : Promise.resolve(null),
         listGrants(m.id).catch(() => null),
+        !withSchema && m.records?.count ? listRecords(m.id, { limit: 3 }).then((d) => d.data.map(labelOf).filter(Boolean)).catch(() => null) : Promise.resolve(null),
       ]);
-      if (live) setFacts((f) => ({ ...f, [m.id]: { schema, grants } }));
+      if (live) setFacts((f) => ({ ...f, [m.id]: { schema, grants, recent } }));
     });
     return () => { live = false; };
   }, [list, providers, providerOf]);
@@ -92,7 +96,7 @@ export function MemoriesPage() {
   } else if (noneConnected && !L.length) {
     body = (
       <div className="mm-empty-list">
-        <div className="mm-art big"><Art s={null} w={220} h={120} /></div>
+        <div className="mm-art big"><Ghost /></div>
         <h2>Connect a memory service</h2>
         <p>A memory lives in a memory service you connect, and your setups read and write it from one task to the next.</p>
         <button type="button" className="btn primary" onClick={() => setOpen({ k: 'choose' })}>Connect a service</button>
@@ -101,7 +105,7 @@ export function MemoriesPage() {
   } else if (!L.length) {
     body = (
       <div className="mm-empty-list">
-        <div className="mm-art big"><Art s={null} w={220} h={120} /></div>
+        <div className="mm-art big"><Ghost /></div>
         <h2>No memories yet</h2>
         <p>A memory is where your setups keep what should outlast one task: who your customers are, the rules they follow, what happened last time.</p>
         <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>
@@ -114,10 +118,10 @@ export function MemoriesPage() {
           const p = providerOf(m.provider), f = facts[m.id], us = setupsFor(m);
           return (
             <Link key={m.id} href={`/memories/${enc(m.id)}`} className="card mm-card">
-              <span className="mm-art"><Art s={f?.schema} w={300} h={150} records={m.records?.count ?? 0} /></span>
+              <span className="mm-art"><CardArt s={f?.schema} labels={schemaLabels(p)} records={m.records?.count ?? null} recent={f?.recent} pending={!f} /></span>
               <span className="mm-cb">
-                <span className="mm-ct"><b>{m.name}</b></span>
-                <span className="mm-cp">{`Kept by ${vendorName(m.provider)}`}{p && !p.connected ? ' · not connected' : ''}</span>
+                <span className="mm-ct"><b>{m.name}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
+                <span className="mm-cp">{`Kept by ${vendorName(m.provider)}`}</span>
                 <span className="mm-cd">{m.description || 'No description yet.'}</span>
                 <span className="mm-cs">
                   {hasSchema(p) ? <span><small>{schemaLabels(p) ? 'Labels' : 'Types'}</small><b>{f?.schema ? f.schema.types.length : '—'}</b></span> : null}
@@ -129,7 +133,7 @@ export function MemoriesPage() {
           );
         })}
         <button type="button" className="card new-card mm-new" onClick={() => setOpen({ k: 'new' })}>
-          <span className="mm-art"><Art s={null} w={300} h={150} /></span>
+          <span className="mm-art"><Ghost /></span>
           <span className="nc-b">{PLUS}<span>New memory</span></span>
         </button>
       </div>
