@@ -56,8 +56,15 @@ trap cleanup EXIT INT TERM
 (cd "$ROOT/ui" && exec npx next dev -p "$PORT") > "$CACHE/console.log" 2>&1 & pids+=($!)
 
 say "Starting… (logs: $CACHE)"
+# wait for the gateway (it answers 401 to a request without a workspace), then for the console's
+# first compile to reach it, so the sample data goes in only once both are up
+H=(-H 'x-harness-org: local' -H 'x-harness-member: local@localhost' -H 'x-harness-workspace: default' -H 'x-harness-workspace-default: 1')
 for _ in $(seq 1 180); do
-  curl -s -o /dev/null "http://localhost:$PORT/api/harness/v1/memories" -H 'x-harness-org: local' && break
+  [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$GW_PORT/v1/memories")" = 401 ] && break
+  sleep 1
+done
+for _ in $(seq 1 300); do
+  [ "$(curl -s -m 20 -o /dev/null -w '%{http_code}' "${H[@]}" "http://localhost:$PORT/api/harness/v1/memories")" = 200 ] && break
   sleep 1
 done
 HR_CONSOLE="http://localhost:$PORT" "$CACHE/venv/bin/python" "$KIT/seed.py" || say "Sample data could not be added; see $CACHE/gateway.log"

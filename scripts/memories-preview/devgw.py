@@ -20,9 +20,8 @@ def sample(pid):
         id = pid
         def capabilities(self):
             c = super().capabilities()
-            c.update({k: v for k, v in caps.items() if k in ("observe", "history", "revise", "forget", "erase", "schema", "layout", "derivation")})
+            c.update({k: v for k, v in caps.items() if k in ("observe", "history", "revise", "forget", "erase", "schema", "layout", "derivation", "graph")})
             c["id"] = pid
-            c["graph"] = {"entities": "stated"}
             return c
         async def bind(self, org, workspace):
             return self

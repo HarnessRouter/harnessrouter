@@ -2,13 +2,12 @@
 // The sheets of the Memories pages: New memory (name, description, who keeps it), Connect (a server's
 // address and a key, tried by the service at once), the list of services when none is connected yet,
 // and Rename. Each is the console's Sheet.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { connectProvider, createMemory, listProviderPlugs, updateMemory, type Memory, type Provider } from '@/lib/memories';
 import { Sheet, SheetTop } from '../Sheet';
 import { plain } from '../setup/settingsModel';
-import { hasFolders, hasSchema, schemaLabels } from './caps';
+import { hasFolders, hasSchema, schemaLabels, serviceFacts } from './caps';
 import { KindArt, type Kind } from './CardArt';
-import { useDismiss } from './parts';
 import { GUIDE, VENDORS, vendorName } from './vendors';
 
 /** Connecting one service: its address and, optionally, its key. The service tries both, and its
@@ -94,17 +93,29 @@ export function ChooseServiceSheet({ providers, onClose, onConnected }: { provid
   );
 }
 
-const CHEV = <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>;
-const CHECK = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>;
-const LOCK = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
+const LOCK = <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
 
 /** The shape a service gives a memory, read from what it says it does. */
 const kindOf = (p: Provider | null): Kind => (!p ? null : hasFolders(p) ? 'files' : schemaLabels(p) ? 'labels' : hasSchema(p) ? 'schema' : 'records');
 
-/** New memory, laid out like Set up an agent harness: on top, what it will be (a dashed picture of its
- *  shape) and who keeps it, a pill opening the list of services; under that, its name and description.
- *  A service not connected offers Connect in place of being chosen. The list ends where Set up an agent
- *  harness's does: what is chosen here is fixed once created. Create says what comes next. */
+/** One service, as a column of the comparison: the shape of memory it keeps, its name and line, then
+ *  the same three facts as every other column, so they line up and read across. */
+function ServiceBody({ p }: { p: Provider }) {
+  return (
+    <>
+      <span className="mm-sv-pic"><KindArt kind={kindOf(p)} /></span>
+      <Says p={p} />
+      <span className="mm-sv-facts">
+        {serviceFacts(p).map((f) => <span key={f.label}><small>{f.label}</small><em>{f.value}</em></span>)}
+      </span>
+    </>
+  );
+}
+
+/** New memory. The service it is kept by is fixed once created, so it is chosen from a comparison:
+ *  every service side by side, each with the same facts read from its capability document. One not
+ *  connected is drawn unbuilt (dashed) and offers Connect. Name and description come first; Create,
+ *  next to the choice it follows from, says what comes next. */
 export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCreated, reloadProviders }: {
   providers: Provider[] | null; failed: boolean; retry: () => void; picked?: string;
   onClose: () => void; onCreated: (m: Memory, p: Provider) => void; reloadProviders: () => Promise<Provider[] | null>;
@@ -112,34 +123,9 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [chosen, setChosen] = useState(picked || '');
-  const [list, setList] = useState(false);
   const [connecting, setConnecting] = useState<{ id: string; connected: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const popRef = useRef<HTMLDivElement>(null);
-  const pillRef = useRef<HTMLButtonElement>(null);
-  const [at, setAt] = useState<React.CSSProperties>({});
-  const closeList = useCallback(() => setList(false), []);
-  useDismiss(list, popRef, closeList);
-  // the list floats over the sheet, under the pill and inside the window, so its end is never cut off
-  const place = useCallback(() => {
-    const r = pillRef.current?.getBoundingClientRect();
-    if (!r) return;
-    const w = Math.min(360, window.innerWidth - 24), below = window.innerHeight - r.bottom - 18, above = r.top - 18;
-    const left = Math.max(12, Math.min(r.left, window.innerWidth - w - 12));
-    setAt(below >= 260 || below >= above
-      ? { position: 'fixed', left, top: r.bottom + 6, width: w, maxHeight: below }
-      : { position: 'fixed', left, bottom: window.innerHeight - r.top + 6, width: w, maxHeight: above });
-  }, []);
-  useEffect(() => {
-    if (!list) return;
-    place();
-    // Escape closes the list and leaves the sheet open: taken before the sheet's own (on the document)
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setList(false); pillRef.current?.focus(); } };
-    window.addEventListener('resize', place);
-    window.addEventListener('keydown', esc, true);
-    return () => { window.removeEventListener('resize', place); window.removeEventListener('keydown', esc, true); };
-  }, [list, place]);
   const open = (providers || []).filter((p) => p.connected);
   const sel = open.find((p) => p.id === chosen) || open[0] || null;
   const guided = hasSchema(sel);
@@ -148,6 +134,15 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
     setBusy(true); setErr('');
     try { onCreated(await createMemory({ name: name.trim(), description: desc.trim(), provider: sel.id }), sel); }
     catch (e) { setErr(plain(e, 'The memory was not created. Try again.')); setBusy(false); }
+  };
+  // arrows move the choice along the connected services, as in any group of radio buttons
+  const onKey = (e: React.KeyboardEvent) => {
+    const d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!d || !open.length || !sel) return;
+    e.preventDefault();
+    const next = open[(open.indexOf(sel) + d + open.length) % open.length];
+    setChosen(next.id);
+    (e.currentTarget.querySelector(`[data-sv="${next.id}"]`) as HTMLElement | null)?.focus();
   };
   if (connecting) {
     return (
@@ -158,55 +153,43 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
   return (
     <Sheet onClose={onClose} labelledBy="mmCrT" className="mm-sheet mm-new-sheet" busy={busy}>
       <SheetTop id="mmCrT" title="New memory" onClose={onClose} />
-      <div className="nw-build mm-build">
-        <span className={`mm-kind${sel ? '' : ' none'}`}><KindArt kind={kindOf(sel)} /></span>
-        <div className="mm-kb">
-          {failed ? (
-            <p className="mm-err" role="alert">The memory services could not be read just now. <button type="button" className="link-q inl" onClick={retry}>Try again</button></p>
-          ) : (
-            <div className="mm-popw" ref={popRef}>
-              <button ref={pillRef} type="button" className={`nw-pk mm-kp-pill${list ? ' on' : ''}`} aria-haspopup="listbox" aria-expanded={list}
-                disabled={busy || !providers} onClick={() => setList((v) => !v)}>
-                <span>Kept by</span><b>{sel ? vendorName(sel.id) : providers ? 'Connect a service' : '…'}</b>{CHEV}
-              </button>
-              {list ? (
-                <div className="mm-pop mm-kp" role="listbox" aria-label="Kept by" style={at}>
-                  <div className="mm-prov">
-                    {(providers || []).map((p) => (p.connected ? (
-                      <button key={p.id} type="button" role="option" aria-selected={sel?.id === p.id}
-                        className={`mm-pv-o${sel?.id === p.id ? ' on' : ''}`} onClick={() => { setChosen(p.id); setList(false); }}>
-                        <span className="chk">{sel?.id === p.id ? CHECK : null}</span><Says p={p} />
-                      </button>
-                    ) : (
-                      <div key={p.id} className="mm-pv-o off"><span className="chk" /><Says p={p} />
-                        <button type="button" className="btn small" onClick={() => setConnecting({ id: p.id, connected: false })}>Connect</button>
-                      </div>
-                    )))}
-                  </div>
-                  <p className="dd-foot">{LOCK}Fixed once created</p>
-                </div>
-              ) : null}
-            </div>
-          )}
-          {sel ? (
-            <p className="mm-kline">
-              {VENDORS[sel.id]?.line || null}{' '}
-              <button type="button" className="link-q inl" aria-label={`Change ${vendorName(sel.id)} connection`} onClick={() => setConnecting({ id: sel.id, connected: true })}>Change connection</button>
-            </p>
-          ) : providers && !failed ? <p className="mm-kline">A memory lives in a service you connect.</p> : null}
+      <div className="mm-nf">
+        <div className="set-f">
+          <label htmlFor="mmCrName">Name</label>
+          <input id="mmCrName" className="set-in" value={name} placeholder="Brand kits" autoComplete="off" onChange={(e) => setName(e.target.value)} />
         </div>
+        <div className="set-f">
+          <label htmlFor="mmCrDesc">Description</label>
+          <input id="mmCrDesc" className="set-in" value={desc} placeholder="What is kept here, in a sentence." autoComplete="off" aria-describedby="mmCrDescH" onChange={(e) => setDesc(e.target.value)} />
+        </div>
+        <p className="set-help mm-nf-h" id="mmCrDescH">Agents read the description to decide whether to look inside.</p>
       </div>
-      <div className="set-f">
-        <label htmlFor="mmCrName">Name</label>
-        <input id="mmCrName" className="set-in" value={name} placeholder="Brand kits" autoComplete="off" onChange={(e) => setName(e.target.value)} />
-      </div>
-      <div className="set-f">
-        <label htmlFor="mmCrDesc">Description</label>
-        <textarea id="mmCrDesc" className="set-in" rows={2} value={desc} placeholder="What is kept here, in a sentence." aria-describedby="mmCrDescH" onChange={(e) => setDesc(e.target.value)} />
-        <p className="set-help" id="mmCrDescH">Agents read it to decide whether to look inside.</p>
+      <div className="set-f mm-kept">
+        <div className="mm-kept-h">
+          <span className="set-lb" id="mmCrKept">Kept by</span>
+          {sel ? <button type="button" className="link-q inl" aria-label={`Change ${vendorName(sel.id)} connection`} onClick={() => setConnecting({ id: sel.id, connected: true })}>Change connection</button> : null}
+        </div>
+        {failed ? (
+          <p className="mm-err" role="alert">The memory services could not be read just now. <button type="button" className="link-q inl" onClick={retry}>Try again</button></p>
+        ) : (
+          <div className="mm-prov mm-sv" role="radiogroup" aria-labelledby="mmCrKept" onKeyDown={onKey}>
+            {(providers || []).map((p) => (p.connected ? (
+              <button key={p.id} type="button" role="radio" aria-checked={sel?.id === p.id} tabIndex={sel?.id === p.id ? 0 : -1} data-sv={p.id}
+                className={`mm-pv-o${sel?.id === p.id ? ' on' : ''}`} onClick={() => setChosen(p.id)}>
+                <i className="mm-sv-dot" aria-hidden="true" /><ServiceBody p={p} />
+              </button>
+            ) : (
+              <div key={p.id} className="mm-pv-o off">
+                <ServiceBody p={p} />
+                <button type="button" className="btn small" onClick={() => setConnecting({ id: p.id, connected: false })}>Connect</button>
+              </div>
+            )))}
+          </div>
+        )}
       </div>
       {err ? <p className="mm-err" role="alert">{err}</p> : null}
       <div className="sheet-actions">
+        <span className="mm-lock">{LOCK}Fixed once created</span>
         <span className="grow" />
         <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
         <button type="button" className="btn primary" disabled={!sel || !name.trim() || busy} onClick={() => void go()}>
