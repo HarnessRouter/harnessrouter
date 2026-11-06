@@ -16,7 +16,7 @@ import { Skel, SkHead, SkRows } from '../Skel';
 import { plain, plural } from '../setup/settingsModel';
 import { tabKeys } from '../tabKeys';
 import { toast } from '../toast';
-import { hasSchema, kindOf, schemaTab } from './caps';
+import { hasSchema, kindOf } from './caps';
 import { DataTab, type RecordsRead } from './DataTab';
 import { BACK_IC, DOTS, setupsOf, useDismiss, useProviders, useSetupNames } from './parts';
 import { ConnectSheet, RenameSheet } from './sheets';
@@ -151,7 +151,8 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
     try { await navigator.clipboard.writeText(m.id); toast('Memory ID copied'); }
     catch { toast('Text selected. Press Cmd or Ctrl + C.'); }
   };
-  const tabs: ['schema' | 'data', string][] = [['schema', schemaTab(provider)], ['data', 'Data']];
+  // every provider has a schema: what it makes itself, drawn locked, and where it reads one, what a person sets
+  const tabs: ['schema' | 'data', string][] = [['schema', 'Schema'], ['data', 'Data']];
   const canRename = !!m.privileges?.includes('write'), canDelete = !!m.privileges?.includes('delete');
   const disconnected = provider ? provider.connected === false : true;
 

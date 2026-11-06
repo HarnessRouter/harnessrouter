@@ -347,3 +347,12 @@
 #hrui .mm-live .collaboration-cursor__caret{position:relative;margin:0 -1px;border-left:2px solid;pointer-events:none;word-break:normal}
 #hrui .mm-live .collaboration-cursor__label{position:absolute;top:-1.5em;left:-2px;padding:1px 6px;border-radius:4px 4px 4px 0;color:#fff;font-family:var(--sans,inherit);font-size:11px;font-weight:600;line-height:1.5;letter-spacing:0;white-space:nowrap;user-select:none;pointer-events:none}
 #hrui .mm-live .collaboration-cursor__selection{border-radius:2px}
+
+/* The Schema tab beside what a provider makes itself (drawn locked, "Built in"): where a person's own types or labels go,
+   and the note on a built-in type that says why it can't be changed. */
+#hrui .mm-sch-own{position:absolute;left:50%;transform:translateX(-50%);bottom:72px;z-index:2;width:min(600px,calc(100% - 32px));display:flex;flex-direction:column;gap:6px;padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:var(--bg);box-shadow:0 10px 30px rgba(0,0,0,.08);text-align:left}
+#hrui .mm-sch-own b{font-size:14px;font-weight:600}
+#hrui .mm-sch-own>span{font-size:13px;color:var(--muted);line-height:1.5}
+#hrui .mm-sch-own .mm-starts{margin-top:6px}
+#hrui .mm-locked{margin:0 0 14px;padding:8px 10px;border-radius:8px;background:var(--surface);font-size:12.5px;color:var(--muted);line-height:1.5}
+@media (max-width:720px){#hrui .mm-sch-own{bottom:84px;padding:12px}#hrui .mm-sch-own .mm-starts{grid-template-columns:repeat(2,minmax(0,1fr))}}

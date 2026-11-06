@@ -15,7 +15,8 @@ export const schemaLabels = (p?: Provider | null) => p?.schema?.mode === 'labels
 export const hasProperties = (p?: Provider | null) => schemaGuides(p) && !!p?.schema?.properties;
 export const hasRelations = (p?: Provider | null) => schemaGuides(p) && !!p?.schema?.relations;
 /** What the schema is called here: its tab, and the word for one of its entries. */
-export const schemaTab = (p?: Provider | null) => (schemaLabels(p) ? 'Labels' : 'Schema');
+/** What a provider makes itself, if it says. */
+export const builtinOf = (p?: Provider | null) => p?.schema?.builtin || null;
 export const schemaWord = (p?: Provider | null) => (schemaLabels(p) ? 'label' : 'type');
 // Measured on Graphiti: a type renamed leaves the records already kept under the old name, and no vendor here rewrites what
 // it kept. So a schema steers what comes next, and the page says so rather than implying more than a vendor does.

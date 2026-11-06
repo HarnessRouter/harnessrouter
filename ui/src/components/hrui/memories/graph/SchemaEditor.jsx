@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConfirmSheet } from '../../Sheet';
 import { toast } from '../../toast';
 import { plural } from '../../setup/settingsModel';
-import { guideLine, hasProperties, hasRelations, NO_RELATIONS_LINE, RELATIONS_LINE, relText, schemaGuides, schemaLabels, schemaWord, TYPES_LINE } from '../caps';
+import { builtinOf, guideLine, hasProperties, hasRelations, NO_RELATIONS_LINE, RELATIONS_LINE, relText, schemaGuides, schemaLabels, schemaWord, TYPES_LINE } from '../caps';
 import { MM_COLORS, MM_PTYPES, MM_STARTS, propNameOf, schemaProblem, startSchema, typeLabel, typeNameOf, uid } from '../schemaModel';
 import { kindInfo } from '../tree';
 import { vendorName } from '../vendors';
@@ -45,7 +45,9 @@ export function buildSchemaElements(graph, posDrafts, typeDrafts, captionOf) {
     const pos = (posDrafts && posDrafts[label]) || (vt.ui && vt.ui.position) || { x: 120 * i, y: 0 };
     const data = { id: label, kind: 'vertex', caption: captionOf ? captionOf(label, d) : typeLabel(d.name || label), color };
     if (url) data.iconUrl = url;
-    elements.push({ data, position: { x: pos.x, y: pos.y }, grabbable: true });
+    if (vt.builtin) data.builtin = true;
+    // what the provider makes itself stays where it is drawn: nobody moves, renames or removes it
+    elements.push({ data, position: { x: pos.x, y: pos.y }, grabbable: !vt.builtin, ...(vt.builtin ? { classes: 'builtin' } : {}) });
   });
   (graph.edge_types || []).forEach((et) => {
     const label = et.label;
@@ -62,17 +64,69 @@ export function buildSchemaElements(graph, posDrafts, typeDrafts, captionOf) {
       const key = `${c.from_type}->${c.to_type}`;
       if (seen.has(key)) return; seen.add(key);
       const preview = !(et.connections || []).some((x) => `${x.from_type}->${x.to_type}` === key);
+      const classes = [preview ? 'preview' : '', c.builtin ? 'builtin' : ''].filter(Boolean).join(' ');
       elements.push({
         data: {
           id: `e-${label}-${c.from_type}-${c.to_type}`,
           kind: 'edge', edgeLabel: label,
           source: c.from_type, target: c.to_type, caption: relText(d.name || label), lineColor: color,
         },
-        ...(preview ? { classes: 'preview' } : {}),
+        ...(classes ? { classes } : {}),
       });
     });
   });
   return elements;
+}
+
+// ── What the provider makes itself (capabilities.schema.builtin): its types and links, merged in and marked built in.
+// A type already drawn under the same name (a kind a memory holds) is marked rather than drawn twice. What's new is laid
+// out among itself and set to the left of what already has a place.
+const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+export function builtinTitles(provider) {
+  return andList((builtinOf(provider)?.types || []).map((t) => kindInfo(t.name, null).one));
+}
+export function withBuiltin(graph, provider) {
+  const b = builtinOf(provider);
+  if (!graph || !b || !(b.types || []).length) return graph;
+  const titles = { ...(graph.titles || {}) };
+  const vts = (graph.vertex_types || []).map((v) => ({ ...v }));
+  const fresh = [];
+  for (const t of b.types) {
+    const k = kindInfo(t.name, null);
+    if (!titles[t.name]) titles[t.name] = k.one;
+    const have = vts.find((v) => v.label === t.name);
+    if (have) { have.builtin = true; have.description = have.description || t.description; continue; }
+    const v = { label: t.name, description: t.description, properties: [], builtin: true, ui: { color: k.color, icon: k.icon, caption: 'title' } };
+    vts.push(v);
+    fresh.push(v);
+  }
+  const ets = (graph.edge_types || []).map((e) => ({ ...e, connections: [...(e.connections || [])] }));
+  for (const r of b.relations || []) {
+    const label = relText(r.name);
+    let e = ets.find((x) => x.label === label);
+    if (!e) { e = { label, description: r.description, connections: [], properties: [], ui: {} }; ets.push(e); }
+    const at = e.connections.findIndex((c) => c.from_type === r.from && c.to_type === r.to);
+    if (at >= 0) e.connections[at] = { ...e.connections[at], builtin: true };
+    else e.connections.push({ from_type: r.from, to_type: r.to, builtin: true });
+    if (!e.description) e.description = r.description;
+  }
+  for (const e of ets) if (e.connections.length && e.connections.every((c) => c.builtin)) e.builtin = true;
+  if (fresh.length) {
+    const ids = new Set(fresh.map((v) => v.label));
+    const nodes = fresh.map((v) => ({ id: v.label, ...footprint(`${titles[v.label]}\nBuilt in · 00 records`, 38) }));
+    const links = (b.relations || []).filter((r) => ids.has(r.from) && ids.has(r.to) && r.from !== r.to).map((r) => ({ source: r.from, target: r.to }));
+    const { pos } = initialLayout(nodes, links, { spread: 1.7 });
+    const placed = vts.filter((v) => !ids.has(v.label) && v.ui && v.ui.position);
+    const xs = [...pos.values()].map((q) => q.x), ys = [...pos.values()].map((q) => q.y);
+    let dx = 0, dy = 0;
+    if (placed.length) {
+      const px = placed.map((v) => v.ui.position.x), py = placed.map((v) => v.ui.position.y);
+      dx = Math.min(...px) - 280 - Math.max(...xs);
+      dy = (Math.min(...py) + Math.max(...py)) / 2 - (Math.min(...ys) + Math.max(...ys)) / 2;
+    }
+    for (const v of fresh) { const q = pos.get(v.label); v.ui = { ...v.ui, position: { x: Math.round(q.x + dx), y: Math.round(q.y + dy) } }; }
+  }
+  return { ...graph, titles, vertex_types: vts, edge_types: ets };
 }
 
 // ── Schema editing controls ─────────────────────────────────────────────────
@@ -171,7 +225,7 @@ function SavedPropRow({ p, busy, readOnly, onRename, onDelete, onOptions }) {
 // the whole draft. Destructive/structural edits (rename or delete a property, delete the type) are IMMEDIATE operations
 // passed in as handlers, and each confirms where it destroys anything.
 function TypeDetail({
-  graph, sel, draft, onDraft, compact, onClose, caps, count, onOpenData, relationsLine,
+  graph, sel, draft, onDraft, compact, onClose, caps, count, onOpenData, relationsLine, lockedLine,
   rowBusy, onRenameProp, onDeleteProp, onPropOptions, onDeleteType,
   dirty, busy, onSave, onDiscard,
 }) {
@@ -204,7 +258,7 @@ function TypeDetail({
   const removedSet = new Set((d.removeConns || []).map((c) => `${c.from_type}->${c.to_type}`));
   const savedConns = (t.connections || []).filter((c) => !removedSet.has(`${c.from_type}->${c.to_type}`));
   const draftConns = d.addConns || [];
-  const vLabels = (graph.vertex_types || []).map((v) => v.label);
+  const vLabels = (graph.vertex_types || []).filter((v) => !v.builtin).map((v) => v.label);
   const description = d.description != null ? d.description : (t.description || '');
 
   const setColor = (color) => onDraft({ color });
@@ -268,6 +322,7 @@ function TypeDetail({
         {onClose && <button className="pane-btn dg-detail-close" onClick={onClose} title="Close" aria-label="Close">{I.close}</button>}
       </div>
       <div className="dg-detail-b">
+        {lockedLine ? <p className="mm-locked" role="note">{lockedLine}</p> : null}
         <div className="dg-field-label">Color</div>
         <ColorPicker value={ring} onPick={setColor} disabled={!caps.color}/>
         {isVertex && (<>
@@ -590,11 +645,19 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
 
   // The immediate operations: they go to the schema document, and on to the service, at once.
   const apply = useCallback((fn) => { if (!doc) return; doc.update(fn, false); doc.saveNow(); }, [doc]);
+  const vendor = vendorName(provider.id);
+  const builtinNamed = useCallback((name) => {
+    const n = String(name || '').toLowerCase();
+    return (graph?.vertex_types || []).find((v) => v.builtin && (v.label.toLowerCase() === n || String(graph.titles?.[v.label] || '').toLowerCase() === n)) || null;
+  }, [graph]);
+  const titleOfType = (v) => graph?.titles?.[v.label] || typeLabel(v.label);
 
   const createType = useCallback(({ label, kind, color, connections }) => {
     if (kind === 'vertex') {
       const name = typeNameOf(label);
       if (saved?.types.some((t) => t.name === name)) { toast(`A ${word} called ${typeLabel(name)} is already here.`); return; }
+      const clash = builtinNamed(name) || builtinNamed(typeLabel(name));
+      if (clash) { toast(`${titleOfType(clash)} is built into ${vendor}. Call yours something else.`); return; }
       const nodes = [...(saved?.types || []).map((t) => ({ id: t.id, ...footprint(typeLabel(t.name), 38) })), { id: 'new', ...footprint(typeLabel(name), 38) }];
       const known = new Map((saved?.types || []).map((t) => [t.id, { x: t.x, y: t.y }]));
       const at = known.size ? arrive(nodes, [], known).get('new') : { x: 470, y: 320 };
@@ -614,11 +677,14 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
     });
     setSchemaSel({ kind: 'edge', label });
     setEdit(true);
-  }, [apply, saved, word]);
+  }, [apply, saved, word, builtinNamed, vendor]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Drag-to-connect (schema canvas): the gesture ends on a target node, and the popover asks for the link's name.
   const onSchemaEdgeDraw = useCallback((sourceId, targetId, pos) => {
     if (!caps.conns) return;
+    // the provider's own links are its; a person relates their own types
+    const locked = [sourceId, targetId].map((id) => (graph?.vertex_types || []).find((v) => v.label === id && v.builtin)).find(Boolean);
+    if (locked) { toast(`${titleOfType(locked)} is built into ${vendor}. Relate your own types.`); return; }
     const cy = schemaRef.current && schemaRef.current.getCy && schemaRef.current.getCy();
     const W = cy ? cy.width() : 600, H = cy ? cy.height() : 400;
     setLinkDraw({
@@ -626,7 +692,7 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
       x: Math.max(10, Math.min(pos.x - 126, W - 262)),
       y: Math.max(10, Math.min(pos.y + 16, H - 210)),
     });
-  }, [caps.conns]);
+  }, [caps.conns, graph, vendor]); // eslint-disable-line react-hooks/exhaustive-deps
   const createDrawnLink = useCallback(({ label, color }) => {
     const pend = linkDraw;
     if (!pend || !label) return;
@@ -709,7 +775,9 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
   const catalog = useIconCatalog(needsCatalog(icons));
   const captionOf = useCallback((label, d) => {
     const n = countOf(`vertex:${label}`, label);
-    return `${graph?.titles?.[label] || typeLabel(d?.name || label)}${n != null ? `\n${plural(n, 'record')}` : ''}`;
+    const built = (graph?.vertex_types || []).some((v) => v.label === label && v.builtin);
+    const sub = [built ? 'Built in' : '', n != null ? plural(n, 'record') : ''].filter(Boolean).join(' · ');
+    return `${graph?.titles?.[label] || typeLabel(d?.name || label)}${sub ? `\n${sub}` : ''}`;
   }, [countOf, graph]);
   const schemaElements = useMemo(() => buildSchemaElements(graph, positionDrafts, typeDrafts, captionOf), [graph, positionDrafts, typeDrafts, captionOf, catalog]); // eslint-disable-line react-hooks/exhaustive-deps
   const vertexColorByLabel = useMemo(() => {
@@ -744,6 +812,10 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
   const openSel = (sel) => { setSchemaSel(sel); setEdit(true); };
   const selCount = schemaSel ? countOf(`${schemaSel.kind}:${schemaSel.label}`, schemaSel.label) : null;
   const empty = !loading && !failed && graph && !schemaElements.length;
+  // only what the provider makes is here: a person's own types go beside it
+  const onlyBuiltin = !loading && !failed && graph && schemaElements.length > 0 && !(graph.vertex_types || []).some((v) => !v.builtin);
+  const selType = schemaSel ? ((schemaSel.kind === 'vertex' ? graph?.vertex_types : graph?.edge_types) || []).find((x) => x.label === schemaSel.label) : null;
+  const selLocked = !!selType?.builtin;
 
   return (
     <>
@@ -813,9 +885,27 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
                 </div>
               )
             ) : null}
+            {onlyBuiltin && caps.add && !addType ? (
+              <div className="mm-sch-own mgv-live">
+                <b>{schemaGuides(provider) ? 'Add your own types' : 'Add your own labels'}</b>
+                <span>{schemaGuides(provider) ? `${vendor} looks for them in what it reads, beside what it makes itself.` : `${vendor} tags each fact it learns with the ones that fit.`}</span>
+                {schemaGuides(provider) ? (
+                  <div className="mm-starts">
+                    {MM_STARTS.map(([n, sub], i) => (
+                      <button key={n} type="button" className="mm-start" onClick={() => {
+                        const fresh = startSchema(i, provider);
+                        apply((d) => { d.types = fresh.types; d.relations = fresh.relations; });
+                        toast(`Started from ${n}. Rename or remove anything.`);
+                      }}><b>{n}</b><small>{sub}</small></button>
+                    ))}
+                    <button type="button" className="mm-start" onClick={() => setAddType(true)}><b>Blank</b><small>Start with one type</small></button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {addType && (
               <div className="sp-graph-addtype-wrap">
-                <AddTypeForm onCreate={createType} busy={busy} onClose={() => setAddType(false)} vertexLabels={((graph && graph.vertex_types) || []).map((v) => v.label)} edges={!!caps.conns} word={word}/>
+                <AddTypeForm onCreate={createType} busy={busy} onClose={() => setAddType(false)} vertexLabels={((graph && graph.vertex_types) || []).filter((v) => !v.builtin).map((v) => v.label)} edges={!!caps.conns} word={word}/>
               </div>
             )}
             <div className="mm-foot">
@@ -827,9 +917,10 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
             <TypeDetail
               graph={graph} sel={schemaSel} draft={selDraft} onDraft={updateSelDraft}
               compact={compact} onClose={() => setEdit(false)}
-              caps={caps} count={selCount}
+              caps={selLocked ? NOTHING : caps} count={selCount}
+              lockedLine={selLocked ? `Built into ${vendor}, so it can't be changed here.` : ''}
               onOpenData={schemaSel && schemaSel.kind === 'vertex' ? () => onOpenData(schemaSel.label) : null}
-              relationsLine={caps.conns ? ((graph?.edge_types || []).length ? RELATIONS_LINE : NO_RELATIONS_LINE) : ''}
+              relationsLine={caps.conns && !selLocked ? ((graph?.edge_types || []).length ? RELATIONS_LINE : NO_RELATIONS_LINE) : ''}
               rowBusy={rowBusy}
               onRenameProp={(p, newName) => renameProperty(schemaSel.label, p, newName)}
               onDeleteProp={(p) => setConfirm({ kind: 'prop', label: schemaSel.label, p })}
@@ -893,12 +984,15 @@ function WrittenSchema({ memory, provider, doc, ro, countOf, onOpenData }) {
     // a label has a name and what it means, and the provider reads nothing more
     return { ...NOTHING, any: true, name: true, description: true, del: true, add: true };
   }, [ro, guides, provider]);
-  const graph = useMemo(() => (doc.schema ? graphOf(doc.schema) : null), [doc.schema]);
+  // what the provider makes itself, drawn locked, beside what a person sets
+  const graph = useMemo(() => (doc.schema ? withBuiltin(graphOf(doc.schema), provider) : null), [doc.schema, provider]);
   const count = useCallback((key, label) => (key.startsWith('vertex:') ? countOf(label) : null), [countOf]);
+  const made = builtinTitles(provider);
   return (
     <SchemaPane memory={memory} provider={provider} graph={graph} saved={doc.schema} doc={doc} caps={caps}
       loading={!doc.schema && !doc.failed} failed={!doc.schema && doc.failed ? (schemaLabels(provider) ? 'The labels could not be read just now.' : 'The schema could not be read just now.') : ''}
-      retry={doc.retry} countOf={count} onOpenData={onOpenData} footLine={guideLine(provider)} />
+      retry={doc.retry} countOf={count} onOpenData={onOpenData}
+      footLine={`${made ? `Built into ${vendorName(provider.id)}: ${made}. ` : ''}${guideLine(provider)}`} />
   );
 }
 
@@ -910,20 +1004,26 @@ function HeldSchema({ memory, provider, onOpenData }) {
     readGraph(memory.id).then((g) => {
       const ex = exploreOf(g);
       const held = heldGraph(ex, (k) => kindInfo(k, null));
+      held.stated = held.graph.vertex_types.some((v) => !(builtinOf(provider)?.types || []).some((t) => t.name === v.label));
       const nodes = held.graph.vertex_types.map((v) => ({ id: v.label, ...footprint(`${typeLabel(v.label)}\n00 records`, 38) }));
       const edges = held.graph.edge_types.flatMap((e) => e.connections.map((c) => ({ source: c.from_type, target: c.to_type })));
       const { pos } = initialLayout(nodes, edges, { spread: 1.7 });
       held.graph.vertex_types.forEach((v) => { const p = pos.get(v.label); v.ui.position = { x: Math.round(p.x), y: Math.round(p.y) }; });
+      // what the provider makes itself, locked, and what writers stated beside it
+      held.graph = withBuiltin(held.graph, provider);
       setState({ loading: false, failed: false, held, truncated: !!g.truncated });
     }).catch(() => setState({ loading: false, failed: true, held: null, truncated: false }));
-  }, [memory.id]);
+  }, [memory.id, provider]);
   useEffect(() => { read(); }, [read]);
   const held = state.held;
   const count = useCallback((key) => (held && held.count[key] != null ? held.count[key] : null), [held]);
   const vendor = vendorName(provider.id);
-  const line = `${vendor} decides for itself what to keep, and takes no schema, so there is nothing to set here. This is what it holds now.${state.truncated ? ` Counted from the first ${GRAPH_LIMIT} records.` : ''}`;
+  const made = builtinTitles(provider);
+  const line = made
+    ? `Built into ${vendor}: ${made}. It takes no schema, so nothing here can be changed.${held?.stated ? ' The other types are what writers stated in this memory.' : ''}${state.truncated ? ` Counted from the first ${GRAPH_LIMIT} records.` : ''}`
+    : `${vendor} decides for itself what to keep, and takes no schema, so there is nothing to set here. This is what it holds now.${state.truncated ? ` Counted from the first ${GRAPH_LIMIT} records.` : ''}`;
   return (
-    <SchemaPane memory={memory} provider={provider} graph={held ? held.graph : (state.loading ? null : { vertex_types: [], edge_types: [] })} caps={NOTHING}
+    <SchemaPane memory={memory} provider={provider} graph={held ? held.graph : (state.loading ? null : withBuiltin({ vertex_types: [], edge_types: [] }, provider))} caps={NOTHING}
       loading={state.loading} failed={state.failed ? 'What this memory holds could not be read just now.' : ''} retry={read}
       countOf={count} onOpenData={onOpenData} footLine={line} />
   );

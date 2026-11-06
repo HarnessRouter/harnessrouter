@@ -137,10 +137,10 @@ describe('the schema is always somewhere to go, and says what this provider does
     expect(page().querySelector('.schema-stub')?.getAttribute('data-mode')).toBe('guides');
     expect(s.sent('GET', '/v1/memories/hmem_1/schema').length).toBeGreaterThan(0);
   });
-  test('one that applies labels is called Labels', async () => {
+  test('one that applies labels still calls it Schema: it shows what the provider makes, beside the labels', async () => {
     open({ provider: CAPS.hindsight, records: [record()], schema: { types: [{ name: 'Company' }] } });
     await draw('labels');
-    expect(tabs()).toEqual(['Labels', 'Data']);
+    expect(tabs()).toEqual(['Schema', 'Data']);
     expect(page().querySelector('.schema-stub')?.getAttribute('data-mode')).toBe('labels');
   });
   test('with nothing in it, a memory a schema guides opens on its schema; one that decides for itself on its data', async () => {

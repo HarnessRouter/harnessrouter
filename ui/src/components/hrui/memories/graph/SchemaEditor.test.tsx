@@ -460,3 +460,104 @@ describe('nothing here looks editable where the vendor takes no schema', () => {
     expect(el.textContent).toContain('Read only');
   });
 });
+
+describe('what the provider makes itself is drawn, locked, beside what a person sets', () => {
+  const GRAPHITI_MADE = {
+    types: [
+      { name: 'episode', description: 'A conversation or task Graphiti read, kept as it was given.' },
+      { name: 'entity', description: 'A person, place or thing Graphiti found.' },
+      { name: 'fact', description: 'A statement that joins two entities, with when it was true.' },
+    ],
+    relations: [
+      { name: 'about', from: 'fact', to: 'entity', description: 'The two entities a fact joins.' },
+      { name: 'derived_from', from: 'fact', to: 'episode', description: 'Where Graphiti read it.' },
+      { name: 'derived_from', from: 'entity', to: 'episode', description: 'Where Graphiti read it.' },
+    ],
+  };
+  const graphiti = { ...CAPS.graphiti, schema: { ...CAPS.graphiti.schema, builtin: GRAPHITI_MADE } } as Provider;
+  const mem0 = { ...CAPS.mem0, schema: { mode: 'none', builtin: { types: [{ name: 'fact', description: 'A short fact Mem0 drew from a conversation.' }], relations: [] } } } as Provider;
+  const reme = { ...CAPS.reme, schema: { mode: 'none', builtin: { types: [{ name: 'episode', description: 'A conversation ReMe was given.' }, { name: 'note', description: "What ReMe's own agent wrote down." }], relations: [{ name: 'derived_from', from: 'note', to: 'episode', description: 'The conversation the note is about.' }] } } } as Provider;
+  const toasts: string[] = [];
+  const onToast = (e: Event) => { toasts.push(String((e as CustomEvent).detail)); };
+  beforeEach(() => { toasts.length = 0; window.addEventListener('hrui:toast', onToast); });
+  afterEach(() => { window.removeEventListener('hrui:toast', onToast); });
+  const node = (id: string) => nodes().find((n) => n.data.id === id) as { data: Record<string, unknown>; position: { x: number; y: number }; grabbable?: boolean; classes?: string };
+
+  it("draws Graphiti's own types and links beside a person's, marked built in and fixed in place", async () => {
+    await open(graphiti);
+    expect(nodes().map((n) => n.data.id).sort()).toEqual(['Company', 'Person', 'entity', 'episode', 'fact']);
+    expect(node('fact').data.caption).toBe('Fact\nBuilt in · 2 records');
+    expect(node('fact').grabbable).toBe(false);
+    expect(node('Company').grabbable).toBe(true);
+    expect(node('Company').data.caption).toBe('Company\n2 records');
+    expect(Math.max(node('fact').position.x, node('entity').position.x, node('episode').position.x)).toBeLessThan(100);
+    const made = edges().filter((e) => String(e.classes || '').includes('builtin')).map((e) => `${e.data.source} ${e.data.caption} ${e.data.target}`).sort();
+    expect(made).toEqual(['entity came from episode', 'fact about entity', 'fact came from episode']);
+    expect(el.textContent).toContain('Built into Graphiti: Episode, Entity and Fact. Graphiti uses these types to decide what to pull out of each task.');
+  });
+  it('a built-in type or link opens read only and says why, and nothing about it is written', async () => {
+    await open(graphiti);
+    await act(async () => { canvasProps.onTapNode('fact'); });
+    await flush();
+    expect(panel().querySelector('.mm-locked')?.textContent).toBe("Built into Graphiti, so it can't be changed here.");
+    expect(panel().querySelector('input[aria-label="Name"]')).toBeNull();
+    expect((panel().querySelector('textarea[aria-label="Description"]') as HTMLTextAreaElement).value).toBe('A statement that joins two entities, with when it was true.');
+    expect((panel().querySelector('textarea[aria-label="Description"]') as HTMLTextAreaElement).disabled).toBe(true);
+    expect(button('Delete this type')).toBeUndefined();
+    await act(async () => { canvasProps.onTapEdge('x', { edgeLabel: 'about' }); });
+    await flush();
+    expect(panel().querySelector('.mm-locked')).toBeTruthy();
+    expect(panel().querySelector('button[aria-label="Remove"]')).toBeNull();
+    // a person's own type next to it is as editable as before
+    await act(async () => { canvasProps.onTapNode('Company'); });
+    await flush();
+    expect(panel().querySelector('.mm-locked')).toBeNull();
+    expect(panel().querySelector('input[aria-label="Name"]')).toBeTruthy();
+    expect(puts).toEqual([]);
+  });
+  it('a person relates their own types, and names none after a built-in one', async () => {
+    await open(graphiti);
+    await act(async () => { canvasProps.onEdgeDraw('fact', 'Person', { x: 200, y: 200 }); });
+    await flush();
+    expect(q('.dg-eh-pop')).toBeNull();
+    expect(toasts).toContain('Fact is built into Graphiti. Relate your own types.');
+    await click(button('+ Type'));
+    await type(q('.sp-graph-addtype input[aria-label="Label"]'), 'Fact');
+    await click(q('.sp-graph-addtype .btn.primary:last-child'));
+    await later(20);
+    expect(toasts).toContain('Fact is built into Graphiti. Call yours something else.');
+    expect(puts).toEqual([]);
+    // a relation's ends are a person's own types
+    await click(button('+ Type'));
+    await click(button('Edge'));
+    const sources = Array.from(q('.sp-graph-addtype select[aria-label="Source"]').querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value).filter(Boolean);
+    expect(sources).toEqual(['Company', 'Person']);
+  });
+  it('with none of their own yet, the starting points sit beside what Graphiti makes, not over it', async () => {
+    stored = { types: [], relations: [] };
+    await open(graphiti);
+    expect(q('.mm-sch-empty')).toBeNull();
+    expect(q('.mm-sch-own')?.textContent).toContain('Add your own types');
+    await click(Array.from(el.querySelectorAll('.mm-start')).find((b) => (b.textContent || '').startsWith('Customers')) as Element);
+    await later(20);
+    expect(nodes()).toHaveLength(6);
+    expect(puts).toHaveLength(1);
+    expect(q('.mm-sch-own')).toBeNull();
+  });
+  it('Mem0: the one type it makes, locked, and what writers stated beside it', async () => {
+    const rec = (id: string, type: string) => ({ record: { id, object: 'memory.record', memory_id: 'hmem_1', type, title: id, content: [], attributes: {}, references: [] }, memory: { id: 'hmem_1', name: 'x' } });
+    graphAnswer = { nodes: [rec('a', 'fact'), rec('b', 'fact'), rec('n', 'note'), rec('e', 'entity')], edges: [{ from: { record_id: 'n' }, to: { record_id: 'e' }, rel: 'about', available: true }] };
+    await open(mem0);
+    expect(node('fact').data.caption).toBe('Fact\nBuilt in · 2 records');
+    expect(node('note').data.caption).toBe('Note\n1 record');
+    expect(el.textContent).toContain('Built into Mem0: Fact. It takes no schema, so nothing here can be changed. The other types are what writers stated in this memory.');
+  });
+  it('ReMe with nothing kept yet still shows what it makes', async () => {
+    await open(reme);
+    expect(el.textContent).not.toContain('Nothing is kept here yet.');
+    expect(nodes().map((n) => n.data.id).sort()).toEqual(['episode', 'note']);
+    expect(edges().map((e) => `${e.data.source} ${e.data.caption} ${e.data.target}`)).toEqual(['note came from episode']);
+    expect(el.textContent).toContain('Built into ReMe: Episode and Note. It takes no schema, so nothing here can be changed.');
+    expect(el.textContent).not.toContain('The other types');
+  });
+});

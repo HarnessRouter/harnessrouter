@@ -31,6 +31,13 @@ export interface Grant { id: string; memory_id: string; principal: string; privi
 
 /** What a provider says it does (GET /v1/memories/providers). The console offers from this and
  *  nothing else: never from a provider's name. */
+/** What a provider makes itself and how it links it: the part of a memory's schema nobody sets, drawn locked. Types are
+ *  record types; relations are the references its records carry. */
+export interface BuiltinSchema {
+  types: { name: string; description: string }[];
+  relations: { name: string; from: string; to: string; description: string }[];
+}
+
 export interface Provider {
   id: string; connected?: boolean; isolation?: string; derivation?: string;
   observe?: { keeps_episodes?: boolean; answers?: string };
@@ -44,7 +51,7 @@ export interface Provider {
   graph?: { entities?: 'derived' | 'stated' | 'none' };
   /** `none`: nothing reads a schema. `guides`: types, with properties and relations as declared.
    *  `labels`: a flat vocabulary of names applied to facts. */
-  schema?: { mode?: 'guides' | 'labels' | 'none'; properties?: boolean; relations?: boolean };
+  schema?: { mode?: 'guides' | 'labels' | 'none'; properties?: boolean; relations?: boolean; builtin?: BuiltinSchema };
   layout?: string;
   content?: { media?: string[]; bytes?: string; describes?: string[] };
 }
