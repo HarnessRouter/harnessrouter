@@ -31,16 +31,43 @@ export function CardArt({ s, labels, records, recent, pending }: {
   return <Ghost />;
 }
 
-/** Types where they sit, joined by their relations. */
+/** Types where they sit, joined by their relations. Nothing is drawn on anything else: a type's name sits on the side
+ *  away from the middle (above a type in the top half, below one in the bottom half), so a line between two types never
+ *  crosses a name; and a relation's name goes where it fits along its line, clear of every type, name and other
+ *  relation's name, or isn't drawn. */
 function SchemaArt({ s }: { s: LSchema }) {
   const T = s.types, many = T.length > 6;
-  const r = many ? 11 : 15;
-  const padX = 46, top = 26, bottom = many ? 34 : 40;
+  const r = many ? 11 : 15, nameH = 15;
+  const padX = 46, padY = r + nameH + 6;
   const xs = T.map((t) => t.x), ys = T.map((t) => t.y);
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const f = Math.min((W - 2 * padX) / Math.max(1, x1 - x0), (H - top - bottom) / Math.max(1, y1 - y0), 0.62);
-  const ox = (W - (x1 - x0) * f) / 2, oy = top + (H - top - bottom - (y1 - y0) * f) / 2;
+  const f = Math.min((W - 2 * padX) / Math.max(1, x1 - x0), (H - 2 * padY) / Math.max(1, y1 - y0), 1);
+  const ox = (W - (x1 - x0) * f) / 2, oy = (H - (y1 - y0) * f) / 2;
   const at = new Map(T.map((t) => [t.id, [ox + (t.x - x0) * f, oy + (t.y - y0) * f] as const]));
+  const mid = H / 2;
+  const above = (y: number) => y < mid - 1;
+  // what's taken: each type's disc and its name
+  const taken: Box[] = T.flatMap((t) => {
+    const [x, y] = at.get(t.id) as readonly [number, number];
+    const nw = typeLabel(t.name).length * 6.4 + 4;
+    const ny = above(y) ? y - r - nameH - 2 : y + r + 2;
+    return [{ x: x - r - 2, y: y - r - 2, w: 2 * r + 4, h: 2 * r + 4 }, { x: x - nw / 2, y: ny, w: nw, h: nameH }];
+  });
+  const named = new Map<string, Box>();
+  if (!many) {
+    for (const rel of s.relations) {
+      const a = at.get(rel.from), b = at.get(rel.to);
+      if (!a || !b || rel.from === rel.to) continue;
+      const lw = rel.name.length * 6.6 + 10;
+      for (const t of SLIDE) {
+        const box = { x: a[0] + (b[0] - a[0]) * t - lw / 2, y: a[1] + (b[1] - a[1]) * t - 9, w: lw, h: 18 };
+        if (box.x < 2 || box.y < 2 || box.x + box.w > W - 2 || box.y + box.h > H - 2 || taken.some((o) => meets(box, o))) continue;
+        named.set(rel.id, box);
+        taken.push(box);
+        break;
+      }
+    }
+  }
   return (
     <svg className="mm-art-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Schema: ${T.map((t) => typeLabel(t.name)).join(', ')}`}>
       <defs>
@@ -53,20 +80,19 @@ function SchemaArt({ s }: { s: LSchema }) {
         if (!a || !b || rel.from === rel.to) return null;
         const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
         const ux = dx / len, uy = dy / len, gap = r + 3;
-        const label = rel.name.toLowerCase(), lw = label.length * 6.6 + 10;
-        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
         return (
-          <g key={rel.id}>
-            <line x1={a[0] + ux * gap} y1={a[1] + uy * gap} x2={b[0] - ux * gap} y2={b[1] - uy * gap}
-              stroke="var(--g-line, var(--line))" strokeWidth="1.4" markerEnd="url(#mm-ca-arrow)" />
-            {!many && len > lw + 2 * gap ? (
-              <g className="mm-ca-rel">
-                <rect x={mx - lw / 2} y={my - 9} width={lw} height={18} rx={9} />
-                <text x={mx} y={my + 4} textAnchor="middle">{label}</text>
-              </g>
-            ) : null}
-          </g>
+          <line key={rel.id} x1={a[0] + ux * gap} y1={a[1] + uy * gap} x2={b[0] - ux * gap} y2={b[1] - uy * gap}
+            stroke="var(--g-line, var(--line))" strokeWidth="1.4" markerEnd="url(#mm-ca-arrow)" />
         );
+      })}
+      {s.relations.map((rel) => {
+        const box = named.get(rel.id);
+        return box ? (
+          <g key={rel.id} className="mm-ca-rel">
+            <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={9} />
+            <text x={box.x + box.w / 2} y={box.y + 13} textAnchor="middle">{rel.name.toLowerCase()}</text>
+          </g>
+        ) : null;
       })}
       {T.map((t) => {
         const [x, y] = at.get(t.id) as readonly [number, number];
@@ -75,13 +101,18 @@ function SchemaArt({ s }: { s: LSchema }) {
           <g key={t.id}>
             <circle cx={x} cy={y} r={r} fill={t.color} stroke="var(--surface)" strokeWidth="3" />
             <g transform={`translate(${x - ic / 2} ${y - ic / 2})`}><MmIco k={t.icon} size={ic} color="#fff" /></g>
-            <text className="mm-ca-type" x={x} y={y + r + 15} textAnchor="middle">{typeLabel(t.name)}</text>
+            <text className="mm-ca-type" x={x} y={above(y) ? y - r - 6 : y + r + 15} textAnchor="middle">{typeLabel(t.name)}</text>
           </g>
         );
       })}
     </svg>
   );
 }
+
+interface Box { x: number; y: number; w: number; h: number }
+const meets = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+/** Where along its line a relation's name is tried, the middle first. */
+const SLIDE = [0.5, 0.4, 0.6, 0.32, 0.68, 0.25, 0.75];
 
 /** Labels: names applied to facts, so a row of chips and no lines between them. */
 function Vocabulary({ s }: { s: LSchema }) {

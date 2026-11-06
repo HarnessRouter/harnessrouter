@@ -73,13 +73,14 @@ export function concepts(s: LSchema | null | undefined, provider: Provider | nul
   const g = withBuiltin(graphOf(s || { types: [], relations: [] }), provider) as BGraph;
   const placed = g.vertex_types;
   const ids = new Map(placed.map((v) => [v.label, v.id || v.label]));
-  // A card is small: the types go evenly around a circle, first at the top (three a triangle, six a hexagon), so none
-  // sits on another or on a line between two others, whatever the canvas layout put where. The radius gives a link's
-  // name room between its two ends at the card's scale.
-  const R = placed.length <= 3 ? 110 : 60 * placed.length / Math.PI;
+  // A card is small: the types go evenly around a circle (three a triangle, six a hexagon), so none sits on another or on
+  // a line between two others, whatever the canvas layout put where. An even number lies flat, wider than tall like the
+  // card; an odd one has a point at the top. The radius gives a link's name room between its two ends at the card's scale.
+  const n = Math.max(1, placed.length);
+  const R = n <= 3 ? 110 : 60 * n / Math.PI, start = -Math.PI / 2 + (n % 2 ? 0 : Math.PI / n);
   // what the provider makes is drawn by its title (Fact, Episode); a person's own type by its name
   const types: LType[] = placed.map((v, i) => {
-    const a = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, placed.length);
+    const a = start + (2 * Math.PI * i) / n;
     return {
       id: ids.get(v.label) as string, name: v.builtin && g.titles?.[v.label] ? g.titles[v.label] : v.label, description: v.description,
       properties: [], color: v.ui.color || '', icon: v.ui.icon || '', x: Math.round(R * Math.cos(a)), y: Math.round(R * Math.sin(a)), caption: v.ui.caption || 'title',

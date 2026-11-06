@@ -4,6 +4,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CardArt } from './CardArt';
+import { concepts } from './graph/builtin';
 import type { LSchema } from './schemaModel';
 
 jest.mock('@/lib/harness', () => ({ gwHeaders: () => ({}), listCustom: jest.fn(async () => []) }));
@@ -51,4 +52,26 @@ test('titles not read: one quiet row a record, never more than fit', () => {
 test('nothing kept: the unbuilt shape; still being read: nothing yet', () => {
   expect(draw(<CardArt s={null} labels={false} records={0} />).querySelector('.mm-ca-ghost')).not.toBeNull();
   expect(draw(<CardArt s={schema} labels={false} records={4} pending />).innerHTML).toBe('');
+});
+
+test("a vendor's concepts: nothing drawn on anything else, and a name above a type at the top", () => {
+  // Graphiti's own: two relations meet at Episode, where their names used to sit on each other ("came fro|came from")
+  const T3 = (name: string) => ({ name, description: '' });
+  const L = (name: string, from: string, to: string) => ({ name, from, to, description: '' });
+  const s = concepts(null, { id: 'graphiti', schema: { builtin: {
+    types: [T3('episode'), T3('fact'), T3('entity')],
+    relations: [L('came_from', 'fact', 'episode'), L('came_from', 'entity', 'episode'), L('about', 'fact', 'entity')],
+  } } }) as LSchema;
+  const h = draw(<CardArt s={s} labels={false} records={4} />);
+  const n = (el: Element, a: string) => Number(el.getAttribute(a));
+  const rels = Array.from(h.querySelectorAll('.mm-ca-rel rect')).map((r) => ({ x: n(r, 'x'), y: n(r, 'y'), w: n(r, 'width'), h: n(r, 'height') }));
+  expect(rels).toHaveLength(3);
+  for (const [i, a] of rels.entries()) for (const b of rels.slice(i + 1)) {
+    expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h).toBe(false);
+  }
+  const discs = Array.from(h.querySelectorAll('circle')).map((c) => ({ x: n(c, 'cx'), y: n(c, 'cy') }));
+  const names = Array.from(h.querySelectorAll('.mm-ca-type'));
+  const top = discs.reduce((m, d, i) => (d.y < discs[m].y ? i : m), 0);
+  expect(n(names[top], 'y')).toBeLessThan(discs[top].y);
+  for (const [i, d] of discs.entries()) if (i !== top) expect(n(names[i], 'y')).toBeGreaterThan(d.y);
 });
