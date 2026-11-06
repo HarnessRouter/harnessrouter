@@ -11,8 +11,12 @@ against that server on 2026-11-04.
   a derived record = a fact (`edge_<uuid>`, type `fact`), an entity (`node_<uuid>`, type `entity`, labelled
       with its schema type) or an episode (`ep_<uuid>`). A fact references the two entities it joins and
       the episodes it came from, so these references are the graph.
-  remember = a stated node, words kept as written, no model call. It is found by search like any entity.
-      An entity it references gets a real edge in the graph, named by the reference's `rel`.
+  remember = a stated node, words kept as written, found by search like any entity. An entity it references
+      gets a real edge in the graph, named by the reference's `rel`. Graphiti also reads a copy, an episode named
+      `hr_read:<node>` taken in the background (11-06, so each system is used as it is built to be): the entities
+      and facts it finds come from the stated record, never from the copy, which is not shown. Graphiti's merging
+      can rewrite a node's summary, so a stated node keeps its words in `hr_text`. Revising re-reads; forgetting
+      or erasing it takes the copy, and what came only from it, away.
   holds    = Graphiti's own: a new fact that contradicts an old one closes it (`invalid_at`), and the old
       one stays readable. A closed fact is `superseded`, and `time.valid_to` says when.
   forget   = a fact closed now; a stated node marked. erase = deleted. An erased fact's words can still be in
@@ -24,6 +28,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import time
 import uuid
 
 import httpx
@@ -32,6 +37,7 @@ import memory_plane as mp
 
 TIMEOUT_S = 180
 NODE, EDGE, EPISODE = "node_", "edge_", "ep_"
+READ = "hr_read:"    # the name of the episode Graphiti reads a stated record as, followed by the node's uuid
 LINK = "hr_link"     # on an edge made for a record's reference, not for a fact
 # Tests set an httpx transport here so every call is exercised without a server.
 transport: httpx.BaseTransport | None = None
@@ -68,6 +74,7 @@ class Graphiti(mp.Provider):
 
     def __init__(self, base_url: str = "", api_key: str = "", org: str = ""):
         self.base, self.key, self.org = base_url.rstrip("/"), api_key, org
+        self._copies_at: dict[str, tuple[float, dict[str, str], set[str]]] = {}
 
 # What Graphiti itself makes and how it links it: the part of a memory's schema nobody sets. The console draws it locked
 # beside what a person can set; record types and reference rels as this adapter answers them.
@@ -117,7 +124,7 @@ class Graphiti(mp.Provider):
         raise GraphitiUnavailable(f"HTTP {r.status_code}")
 
     # ── one shape in, one shape out ───────────────────────────────────────────────────────────
-    def _node_out(self, mid: str, n: dict) -> dict:
+    def _node_out(self, mid: str, n: dict, copies: dict[str, str] | None = None) -> dict:
         a = n.get("attributes") or {}
         stated = bool(a.get("hr_stated"))
         def js(k, d):
@@ -131,8 +138,8 @@ class Graphiti(mp.Provider):
         plain = {k: v for k, v in a.items() if not str(k).startswith("hr_")}
         attrs = js("hr_attributes", "{}") if stated else {**plain, **({"entity_type": label} if label else {})}
         rtype = str(a.get("hr_type") or "entity")
-        body = str(n.get("summary") or "")
-        refs = js("hr_refs", "[]") + [{"rel": "derived_from", "memory_id": mid, "record_id": EPISODE + str(x)} for x in n.get("episodes") or []]
+        body = str((a.get("hr_text") if stated and a.get("hr_text") is not None else n.get("summary")) or "")
+        refs = js("hr_refs", "[]") + self._from(mid, n.get("episodes") or [], copies, NODE + str(n["uuid"]))
         return {"id": NODE + str(n["uuid"]), "type": rtype, "title": str(a.get("hr_title") if stated else n.get("name") or "") or "",
                 "content": [{"type": "text", "text": body}] if body else [], "attributes": attrs, "references": refs, "version": version,
                 "status": status, "supersedes": version - 1 if version > 1 else None,
@@ -140,15 +147,26 @@ class Graphiti(mp.Provider):
                          "invalidated_at": a.get("hr_written_at") if status != "active" else None},
                 "written_by": js("hr_writer", json.dumps({"kind": "provider", "id": self.id}))}
 
-    def _facts_out(self, mid: str, edges: list[dict]) -> list[dict]:
+    @staticmethod
+    def _from(mid: str, episodes: list, copies: dict[str, str] | None, me: str = "") -> list[dict]:
+        """What a record came from: its episodes, a stated record's copy read as that record, each once. A stated
+        node Graphiti matched in its own copy didn't come from itself."""
+        out: list[dict] = []
+        for x in episodes:
+            ref = {"rel": "derived_from", "memory_id": mid, "record_id": (copies or {}).get(str(x)) or EPISODE + str(x)}
+            if ref["record_id"] != me and ref not in out:
+                out.append(ref)
+        return out
+
+    def _facts_out(self, mid: str, edges: list[dict], copies: dict[str, str] | None = None) -> list[dict]:
         """The edges that are facts. An edge made for a record's reference (_edges_for) is how the
         graph walks to it: the reference is already on the record, and nobody stated it as a fact."""
-        return [self._edge_out(mid, e) for e in edges if not _is_link(e)]
+        return [self._edge_out(mid, e, copies) for e in edges if not _is_link(e)]
 
-    def _edge_out(self, mid: str, e: dict) -> dict:
+    def _edge_out(self, mid: str, e: dict, copies: dict[str, str] | None = None) -> dict:
         closed = e.get("invalid_at") or e.get("expired_at")
         refs = [{"rel": "about", "memory_id": mid, "record_id": NODE + str(e[k])} for k in ("source", "target") if e.get(k)]
-        refs += [{"rel": "derived_from", "memory_id": mid, "record_id": EPISODE + str(x)} for x in e.get("episodes") or []]
+        refs += self._from(mid, e.get("episodes") or [], copies)
         a = e.get("attributes") or {}
         return {"id": EDGE + str(e["uuid"]), "type": "fact", "title": "", "content": [{"type": "text", "text": str(e.get("fact") or "")}],
                 "attributes": {"predicate": e.get("name"), **{k: v for k, v in a.items() if not str(k).startswith("hr_")}}, "references": refs, "version": 1,
@@ -163,6 +181,57 @@ class Graphiti(mp.Provider):
                 "status": "forgotten" if closed else "active", "supersedes": None,
                 "time": {"valid_from": x.get("valid_at"), "valid_to": None, "written_at": x.get("created_at"), "invalidated_at": closed},
                 "written_by": {"kind": "provider", "id": self.id}}
+
+    async def _episodes(self, mid: str) -> list[dict]:
+        r = await self._call("GET", f"/groups/{mid}/episodes", params={"limit": 1000})
+        return r.json() if r.status_code == 200 else []
+
+    async def _copies(self, mid: str, need=(), episodes: list[dict] | None = None) -> dict[str, str]:
+        """Each copy Graphiti read of a stated record, as that record: episode uuid -> `node_<uuid>`. Read again when
+        an episode asked about isn't in it yet, since a copy is read a few seconds after its record is written."""
+        hit = self._copies_at.get(mid)
+        if episodes is None and hit and time.time() - hit[0] < 30 and all(str(x) in hit[1] or str(x) in hit[2] for x in need):
+            return hit[1]
+        eps = episodes if episodes is not None else await self._episodes(mid)
+        out = {str(x["uuid"]): NODE + str(x["name"])[len(READ):] for x in eps if str(x.get("name") or "").startswith(READ)}
+        self._copies_at[mid] = (time.time(), out, {str(x["uuid"]) for x in eps})
+        return out
+
+    @staticmethod
+    def _is_copy(x: dict) -> bool:
+        return str(x.get("name") or "").startswith(READ)
+
+    async def _extraction(self, mid: str) -> dict:
+        """This memory's schema as what Graphiti extracts into."""
+        schema = await self._schema(mid)
+        rels = schema.get("relations") or []
+        names = {str(t.get("id") or t.get("name")): str(t.get("name")) for t in schema.get("types") or []}
+        emap: dict[tuple[str, str], list[str]] = {}
+        for rel in rels:
+            pair = (names.get(str(rel.get("from")), str(rel.get("from"))), names.get(str(rel.get("to")), str(rel.get("to"))))
+            emap.setdefault(pair, []).append(str(rel.get("name")))
+        return {"entity_types": schema.get("types") or [], "edge_types": [{"name": x.get("name"), "description": x.get("description"), "properties": x.get("properties") or []} for x in rels],
+                "edge_type_map": [{"from": a, "to": b, "names": n} for (a, b), n in emap.items()]}
+
+    async def _read_copy(self, mid: str, node: str, title: str, said: str, when: str | None, writer: dict) -> None:
+        """Graphiti reads what was stated, as it reads anything it is given, in the background. A copy not taken
+        costs what Graphiti would have found in it, never the record."""
+        text = f"{title}\n\n{said}".strip() if title and title not in said else said
+        if not text.strip():
+            return
+        try:
+            await self._call("POST", "/episodes", body={"group_id": mid, "content": text, "name": READ + node, "background": True,
+                                                        "source_description": f"{writer.get('kind')}:{writer.get('id')}",
+                                                        **({"reference_time": str(when)} if when else {}), **await self._extraction(mid)})
+        except mp.MemoryError:
+            pass
+        self._copies_at.pop(mid, None)
+
+    async def _drop_copies(self, mid: str, node: str) -> None:
+        for ep, rid in (await self._copies(mid, episodes=await self._episodes(mid))).items():
+            if rid == NODE + node:
+                await self._call("DELETE", f"/groups/{mid}/episodes/{ep}")
+        self._copies_at.pop(mid, None)
 
     async def _schema(self, mid: str) -> dict:
         m = await mp._load(self.org, mid) if self.org else None
@@ -203,30 +272,25 @@ class Graphiti(mp.Provider):
         for k in ("valid_from", "valid_to"):
             if (record.get("time") or {}).get(k):
                 a["hr_" + k] = record["time"][k]
+        a["hr_text"] = said
         label = str(attrs.get("entity_type") or "")
         r = await self._call("POST", "/nodes", body={"group_id": mid, "name": title or said[:120] or uuid.uuid4().hex, "summary": said, "labels": [label] if label.isidentifier() else [], "attributes": a})
         if r.status_code != 200:
             raise GraphitiUnavailable("the record was not stored")
         out = self._node_out(mid, r.json())
         await self._edges_for(mid, out["id"], record.get("references") or [])
+        await self._read_copy(mid, str(r.json()["uuid"]), title, said, (record.get("time") or {}).get("valid_from"), writer)
         return out
 
     async def observe(self, mid, episodes, writer):
-        schema = await self._schema(mid)
-        rels = schema.get("relations") or []
-        names = {str(t.get("id") or t.get("name")): str(t.get("name")) for t in schema.get("types") or []}
-        emap: dict[tuple[str, str], list[str]] = {}
-        for rel in rels:
-            pair = (names.get(str(rel.get("from")), str(rel.get("from"))), names.get(str(rel.get("to")), str(rel.get("to"))))
-            emap.setdefault(pair, []).append(str(rel.get("name")))
+        extraction = await self._extraction(mid)
         records = []
         for e in episodes:
             text = "\n".join(f"{p.get('role')}: {p['text']}" if p.get("role") else str(p["text"]) for p in e.get("content") or [] if p.get("text"))
             r = await self._call("POST", "/episodes", body={
                 "group_id": mid, "content": text, "source_description": f"{writer.get('kind')}:{writer.get('id')}",
                 **({"reference_time": str((e.get("time") or {})["valid_from"])} if (e.get("time") or {}).get("valid_from") else {}),
-                "entity_types": schema.get("types") or [], "edge_types": [{"name": x.get("name"), "description": x.get("description"), "properties": x.get("properties") or []} for x in rels],
-                "edge_type_map": [{"from": a, "to": b, "names": n} for (a, b), n in emap.items()]})
+                **extraction})
             if r.status_code != 200:
                 raise GraphitiUnavailable("the episode was not taken")
             d = r.json()
@@ -266,9 +330,13 @@ class Graphiti(mp.Provider):
                   "hr_refs": json.dumps(refs, separators=(",", ":"))})
         if title:
             a["hr_title"] = title
+        a["hr_text"] = said
         r = await self._call("PUT", f"/groups/{mid}/nodes/{rid[len(NODE):]}", body={"name": title or said[:120], "summary": said, "attributes": a})
         if r.status_code != 200:
             raise GraphitiUnavailable("the revision was not stored")
+        if said != mp.text_of(cur["content"]) or title != cur["title"]:
+            await self._drop_copies(mid, rid[len(NODE):])
+            await self._read_copy(mid, rid[len(NODE):], title, said, a.get("hr_valid_from"), writer)
         return {**self._node_out(mid, r.json()), "supersedes": cur["version"]}
 
     async def forget(self, mid, rid, writer):
@@ -288,6 +356,8 @@ class Graphiti(mp.Provider):
         n = r0.json()
         a = {**(n.get("attributes") or {}), "hr_status": "forgotten", "hr_written_at": _now(), "hr_forgotten_by": f"{writer.get('kind')}:{writer.get('id')}"}
         r = await self._call("PUT", f"/groups/{mid}/nodes/{rid[len(NODE):]}", body={"name": n.get("name"), "summary": n.get("summary"), "attributes": a})
+        # what Graphiti learned only from it leaves with it, so a search can't bring it back
+        await self._drop_copies(mid, rid[len(NODE):])
         return self._node_out(mid, r.json())
 
     async def erase(self, mid, rids):
@@ -301,6 +371,7 @@ class Graphiti(mp.Provider):
                 if any(x["rel"] == "derived_from" for x in cur["references"]):
                     unreachable.append(rid)      # its words can still be in the episode it came from
             elif rid.startswith(NODE):
+                await self._drop_copies(mid, rid[len(NODE):])
                 r = await self._call("DELETE", f"/groups/{mid}/nodes/{rid[len(NODE):]}")
             else:
                 r = await self._call("DELETE", f"/groups/{mid}/episodes/{rid[len(EPISODE):]}")
@@ -313,7 +384,9 @@ class Graphiti(mp.Provider):
         for prefix, kind, out in ((NODE, "nodes", self._node_out), (EDGE, "edges", self._edge_out)):
             if rid.startswith(prefix):
                 r = await self._call("GET", f"/groups/{mid}/{kind}/{rid[len(prefix):]}")
-                return out(mid, r.json()) if r.status_code == 200 else None
+                if r.status_code != 200:
+                    return None
+                return out(mid, r.json(), await self._copies(mid, r.json().get("episodes") or []))
         if rid.startswith(EPISODE):
             r = await self._call("GET", f"/groups/{mid}/episodes", params={"limit": 1000})
             hit = next((x for x in (r.json() if r.status_code == 200 else []) if str(x.get("uuid")) == rid[len(EPISODE):]), None)
@@ -346,14 +419,16 @@ class Graphiti(mp.Provider):
     async def _everything(self, mid: str, types: list[str]) -> list[dict]:
         rows: list[dict] = []
         wants = lambda *ts: not types or any(t in types for t in ts)       # noqa: E731
+        eps = await self._episodes(mid)
+        copies = await self._copies(mid, episodes=eps)
         r = await self._call("GET", f"/groups/{mid}/nodes", params={"limit": 1000})
-        rows += [x for x in (self._node_out(mid, n) for n in (r.json() if r.status_code == 200 else [])) if not types or x["type"] in types]
+        rows += [x for x in (self._node_out(mid, n, copies) for n in (r.json() if r.status_code == 200 else [])) if not types or x["type"] in types]
         if wants("fact"):
             r = await self._call("GET", f"/groups/{mid}/edges", params={"limit": 1000})
-            rows += self._facts_out(mid, r.json() if r.status_code == 200 else [])
+            rows += self._facts_out(mid, r.json() if r.status_code == 200 else [], copies)
         if wants("episode"):
-            r = await self._call("GET", f"/groups/{mid}/episodes", params={"limit": 1000})
-            rows += [self._episode_out(mid, x) for x in (r.json() if r.status_code == 200 else [])]
+            # a copy Graphiti read of a stated record is that record, already listed
+            rows += [self._episode_out(mid, x) for x in eps if not self._is_copy(x)]
         rows.sort(key=lambda x: str(x["time"]["written_at"] or ""), reverse=True)
         return rows
 
@@ -385,7 +460,10 @@ class Graphiti(mp.Provider):
             return {"results": [{"record": x, "memory_id": mid, "score": 1.0, "why": ["filters"]} for x in rows[:limit]], "degraded": degraded, "abstain": False}
         r = await self._call("POST", "/search", body={"group_id": mid, "query": f"{query} {text}".strip(), "limit": max(limit * 2, 10)})
         d = r.json() if r.status_code == 200 else {}
-        rows = self._facts_out(mid, d.get("edges") or []) + [self._node_out(mid, n) for n in d.get("nodes") or []] + [self._episode_out(mid, x) for x in d.get("episodes") or []]
+        seen = [x for e in (d.get("edges") or []) + (d.get("nodes") or []) for x in e.get("episodes") or []]
+        copies = await self._copies(mid, seen)
+        rows = self._facts_out(mid, d.get("edges") or [], copies) + [self._node_out(mid, n, copies) for n in d.get("nodes") or []] + \
+            [self._episode_out(mid, x) for x in d.get("episodes") or [] if not self._is_copy(x)]
         why = [w for w, on in (("query", query), ("text", text), ("filters", later)) if on]
         kept = [x for x in rows if keep(x)]
         return {"results": [{"record": x, "memory_id": mid, "score": round(1 - i / max(len(kept), 1), 4), "why": why} for i, x in enumerate(kept)][:limit], "degraded": degraded, "abstain": False}

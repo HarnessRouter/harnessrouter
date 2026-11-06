@@ -224,6 +224,70 @@ def test_with_no_schema_the_extraction_is_left_to_itself(wired, monkeypatch):
     assert sent["entity_types"] == [] and sent["edge_types"] == [] and sent["edge_type_map"] == []
 
 
+def _reads_its_copy(monkeypatch):
+    """A Graphiti server where a stated node is n_s, and the copy it read of it (ep_c) found Caroline and a fact."""
+    async def load(org, mid):
+        return {}
+    monkeypatch.setattr(mp, "_load", load)
+    state = {"episodes": [{"uuid": "ep_c", "name": "hr_read:n_s", "content": "copy"}, {"uuid": "ep_o", "name": "turn", "content": "observed"}],
+             "nodes": {}, "deleted": [], "posted": []}
+
+    def answer(method, path, params, body):
+        if method == "POST" and path == "/nodes":
+            n = {"uuid": "n_s", "name": body["name"], "summary": body["summary"], "labels": body["labels"], "attributes": body["attributes"]}
+            state["nodes"]["n_s"] = n
+            return n
+        if method == "POST" and path == "/episodes":
+            state["posted"].append(body)
+            return {"queued": True, "pending": 1}
+        if method == "GET" and path == "/groups/m/episodes":
+            return [e for e in state["episodes"] if e["uuid"] not in state["deleted"]]
+        if method == "DELETE" and path.startswith("/groups/m/episodes/"):
+            state["deleted"].append(path.rsplit("/", 1)[1])
+            return {"deleted": True}
+        if method == "GET" and path == "/groups/m/nodes":
+            # Graphiti rewrote the stated node's summary when it matched it, and found Caroline in the copy
+            stated = {**state["nodes"].get("n_s", {}), "summary": "Graphiti's own words", "episodes": ["ep_c"]}
+            return [stated, {"uuid": "n_c", "name": "Caroline", "labels": ["Entity"], "attributes": {}, "episodes": ["ep_c", "ep_o"]}]
+        if method == "GET" and path == "/groups/m/edges":
+            return [{"uuid": "e1", "name": "ATTENDED", "fact": "Caroline went to a support group.", "source": "n_c", "target": "n_c", "episodes": ["ep_c"], "attributes": {}}]
+        if method == "DELETE" and path == "/groups/m/nodes/n_s":
+            return {"deleted": "n_s"}
+        if method == "GET" and path == "/groups/m/nodes/n_s":
+            return state["nodes"]["n_s"]
+        return {}
+    return state, answer
+
+
+def test_graphiti_reads_a_copy_of_what_is_stated_and_what_it_finds_comes_from_the_record(wired, monkeypatch):
+    state, answer = _reads_its_copy(monkeypatch)
+    wired(memory_graphiti, answer)
+    g = memory_graphiti.Graphiti("http://vendor.test", "", ORG)
+    rec = run(g.remember("m", {"type": "note", "title": "Support group", "content": [{"type": "text", "text": "Caroline went to an LGBTQ support group on 7 May 2023."}],
+                              "time": {"valid_from": "2023-05-07T00:00:00Z"}}, WRITER))
+    sent = state["posted"][0]
+    assert sent["background"] is True and sent["name"] == "hr_read:n_s" and sent["reference_time"] == "2023-05-07T00:00:00Z"
+    assert "Caroline went to an LGBTQ support group" in sent["content"] and sent["group_id"] == "m"
+    rows = {r["id"]: r for r in run(g.list("m", {"limit": 50}))["records"]}
+    assert rows["node_n_s"]["content"][0]["text"] == "Caroline went to an LGBTQ support group on 7 May 2023.", "the stated words, not Graphiti's rewrite"
+    assert "ep_ep_c" not in rows, "the copy is the record, already listed"
+    assert "ep_ep_o" in rows
+    came = lambda r: [x["record_id"] for x in r["references"] if x["rel"] == "derived_from"]   # noqa: E731
+    assert came(rows["edge_e1"]) == ["node_n_s"], "a fact Graphiti found came from the stated record"
+    assert came(rows["node_n_c"]) == ["node_n_s", "ep_ep_o"]
+    assert came(rows["node_n_s"]) == [], "a stated node matched in its own copy didn't come from itself"
+    assert rec["id"] == "node_n_s"
+
+
+def test_forgetting_or_erasing_what_was_stated_takes_what_graphiti_read_in_it(wired, monkeypatch):
+    state, answer = _reads_its_copy(monkeypatch)
+    wired(memory_graphiti, answer)
+    g = memory_graphiti.Graphiti("http://vendor.test", "", ORG)
+    run(g.remember("m", {"type": "note", "content": [{"type": "text", "text": "Caroline went to a support group."}]}, WRITER))
+    out = run(g.erase("m", ["node_n_s"]))
+    assert out["erased"] == ["node_n_s"] and state["deleted"] == ["ep_c"], "the copy goes, and only the copy"
+
+
 def test_forgetting_an_episode_closes_it_and_keeps_its_trace(wired):
     """It holds what was said, so a forgotten thing left in it would still be in the memory."""
     episodes = [{"uuid": "ep1", "name": "x", "content": "the title is Wren", "created_at": "2026-11-04T00:00:00Z"}]

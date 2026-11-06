@@ -277,17 +277,64 @@ class EpisodeIn(BaseModel):
     entity_types: list[dict] = []
     edge_types: list[dict] = []
     edge_type_map: list[dict] = []
+    # Taken and read later, in order: what Graphiti pulls out of it lands in the memory a few seconds on. For what an
+    # agent writes down, which it shouldn't wait on.
+    background: bool = False
+
+
+async def _read(b: EpisodeIn, g: Graphiti):
+    when = utc(b.reference_time) if b.reference_time else datetime.now(timezone.utc)
+    emap = {(m["from"], m["to"]): m["names"] for m in b.edge_type_map if m.get("from") and m.get("to") and m.get("names")} or None
+    return await g.add_episode(name=b.name or f"episode-{uuid.uuid4().hex[:8]}", episode_body=b.content, source=EpisodeType.message,
+                               source_description=b.source_description or "conversation", reference_time=when, group_id=b.group_id,
+                               entity_types=models_of(b.entity_types) or None, edge_types=models_of(b.edge_types) or None, edge_type_map=emap)
+
+
+# One reader a memory: Graphiti reads a memory's episodes one after another (each is resolved against what the ones
+# before it made), so a memory's queue is drained in order. A graph being read counts as in use and isn't closed.
+_queues: dict[str, asyncio.Queue] = {}
+_readers: dict[str, asyncio.Task] = {}
+_reading: dict[str, int] = {}
+
+
+async def _reader(group: str) -> None:
+    q = _queues[group]
+    while True:
+        b = await q.get()
+        _reading[group] = 1
+        g = None
+        try:
+            g = await ready(group)
+            g._hr_busy += 1
+            await _read(b, g)
+        except Exception as e:  # noqa: BLE001
+            print(f"[graphiti] {group}: {b.name or 'an episode'} was not read: {type(e).__name__}: {str(e)[:200]}", flush=True)
+        finally:
+            if g is not None:
+                g._hr_busy -= 1
+                g._hr_used = time.monotonic()
+            _reading[group] = 0
+            q.task_done()
 
 
 @app.post("/episodes", dependencies=[Depends(auth)])
 async def add_episode(b: EpisodeIn) -> dict:
+    if b.background:
+        q = _queues.setdefault(b.group_id, asyncio.Queue())
+        if b.group_id not in _readers or _readers[b.group_id].done():
+            _readers[b.group_id] = asyncio.create_task(_reader(b.group_id))
+        q.put_nowait(b)
+        return {"queued": True, "pending": q.qsize() + _reading.get(b.group_id, 0)}
     g = await ready(b.group_id)
-    when = utc(b.reference_time) if b.reference_time else datetime.now(timezone.utc)
-    emap = {(m["from"], m["to"]): m["names"] for m in b.edge_type_map if m.get("from") and m.get("to") and m.get("names")} or None
-    res = await g.add_episode(name=b.name or f"episode-{uuid.uuid4().hex[:8]}", episode_body=b.content, source=EpisodeType.message,
-                              source_description=b.source_description or "conversation", reference_time=when, group_id=b.group_id,
-                              entity_types=models_of(b.entity_types) or None, edge_types=models_of(b.edge_types) or None, edge_type_map=emap)
+    res = await _read(b, g)
     return {"episode": episode_out(res.episode), "nodes": [node_out(n) for n in res.nodes], "edges": [edge_out(e) for e in res.edges]}
+
+
+@app.get("/groups/{group}/pending", dependencies=[Depends(auth)])
+async def pending(group: str) -> dict:
+    """How many episodes taken in the background are still to be read."""
+    q = _queues.get(group)
+    return {"pending": (q.qsize() if q else 0) + _reading.get(group, 0)}
 
 
 class NodeIn(BaseModel):
@@ -502,7 +549,12 @@ async def del_episode(group: str, uid: str) -> dict:
 
 @app.delete("/groups/{group}", dependencies=[Depends(auth)])
 async def del_group(group: str) -> dict:
-    """The memory's file goes, with its log and whatever else the store keeps beside it."""
+    """The memory's file goes, with its log and whatever else the store keeps beside it, and anything still to be read."""
+    t = _readers.pop(group, None)
+    if t:
+        t.cancel()
+    _queues.pop(group, None)
+    _reading.pop(group, None)
     path = path_of(group)
     await _close(group)
     own = f"{os.path.basename(path)}."
