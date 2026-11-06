@@ -5,14 +5,13 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
-import { getSchema, labelOf, listGrants, listMemories, listRecords, type Memory, type Provider } from '@/lib/memories';
+import { getSchema, labelOf, listMemories, listRecords, type Memory, type Provider } from '@/lib/memories';
 import { Skel, SkCards, SkHead } from '../Skel';
 import { toast } from '../toast';
-import { plural } from '../setup/settingsModel';
 import { builtinOf, hasSchema, schemaLabels } from './caps';
 import { CardArt, Ghost, MiniArt } from './CardArt';
 import { concepts } from './graph/builtin';
-import { memoriesWord, pool, PLUS, setupsOf, useProviders, useSetupNames } from './parts';
+import { pool, PLUS, useProviders } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
 import { ChooseServiceSheet, NewMemorySheet } from './sheets';
 import { vendorName } from './vendors';
@@ -28,7 +27,7 @@ const pictureOf = (f: { schema?: LSchema | null } | undefined, p: Provider | nul
 };
 
 // `recent`: what a memory with no schema to draw shows on its card, the first few records it keeps
-interface Facts { schema?: LSchema | null; grants?: Awaited<ReturnType<typeof listGrants>> | null; recent?: string[] | null }
+interface Facts { schema?: LSchema | null; recent?: string[] | null }
 type Open = { k: 'new'; picked?: string } | { k: 'choose' } | null;
 const enc = encodeURIComponent;
 // Cards or a list, as on Studio, and remembered the same way (for this person, in this browser)
@@ -40,7 +39,6 @@ const LIST_IC = <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stro
 export function MemoriesPage() {
   const router = useRouter();
   const { providers, failed: providersFailed, reload: reloadProviders } = useProviders();
-  const names = useSetupNames();
   const [list, setList] = useState<Memory[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [facts, setFacts] = useState<Record<string, Facts>>({});
@@ -51,7 +49,8 @@ export function MemoriesPage() {
 
   const read = useCallback(() => {
     setFailed(false);
-    listMemories().then(setList).catch(() => setFailed(true));
+    // no counts: the page shows none, and counting asked every memory's service in turn (13 s for sixty, 2026-11-06)
+    listMemories({ counts: false }).then(setList).catch(() => setFailed(true));
   }, []);
   useEffect(() => { read(); }, [read]);
   // a setup's Settings sends a person here to make a memory
@@ -63,12 +62,14 @@ export function MemoriesPage() {
     let live = true;
     void pool(list, 4, async (m) => {
       const withSchema = hasSchema(providerOf(m.provider));
-      const [schema, grants, recent] = await Promise.all([
+      // the picture's own reads only: a schema where one is read, and the first records where a service has neither
+      // a schema nor concepts of its own to draw
+      const p = providerOf(m.provider);
+      const [schema, recent] = await Promise.all([
         withSchema ? getSchema(m.id).then(schemaIn).catch(() => null) : Promise.resolve(null),
-        listGrants(m.id).catch(() => null),
-        !withSchema && m.records?.count ? listRecords(m.id, { limit: 3 }).then((d) => d.data.map(labelOf).filter(Boolean)).catch(() => null) : Promise.resolve(null),
+        !withSchema && !made(p) ? listRecords(m.id, { limit: 3 }).then((d) => d.data.map(labelOf).filter(Boolean)).catch(() => null) : Promise.resolve(null),
       ]);
-      if (live) setFacts((f) => ({ ...f, [m.id]: { schema, grants, recent } }));
+      if (live) setFacts((f) => ({ ...f, [m.id]: { schema, recent } }));
     });
     return () => { live = false; };
   }, [list, providers, providerOf]);
@@ -78,27 +79,16 @@ export function MemoriesPage() {
     toast(toSchema ? (schemaLabels(p) ? `${m.name} created. Add its labels.` : `${m.name} created. Design its schema.`) : `${m.name} created.`);
     router.push(`/memories/${enc(m.id)}?tab=${toSchema ? 'schema' : 'data'}`);
   };
-  const setupsFor = (m: Memory) => { const g = facts[m.id]?.grants; return g && names ? setupsOf(g, names) : null; };
 
   const loading = !failed && (!list || (!providers && !providersFailed));
   const noneConnected = !!providers && !providers.some((p) => p.connected);
   const L = list || [];
-  const recs = L.every((m) => m.records?.count != null) ? L.reduce((n, m) => n + (m.records.count as number), 0) : null;
-  const used = new Set(L.flatMap((m) => (setupsFor(m) || []).map((s) => s.id)));
 
   const top = (
     <div className="list-top">
       <div>
         <h1>Memories</h1>
-        <p className="sub meta">
-          {L.length ? (
-            <span className="meta-in">
-              <span className="meta-i">{memoriesWord(L.length)}</span>
-              {recs != null ? <span className="meta-i">{plural(recs, 'record')}</span> : null}
-              {used.size ? <span className="meta-i">{`used by ${plural(used.size, 'setup')}`}</span> : null}
-            </span>
-          ) : 'What your setups keep from one task to the next.'}
-        </p>
+        {L.length ? null : <p className="sub">What your setups keep from one task to the next.</p>}
       </div>
       {loading || failed || (noneConnected && !L.length) ? null : (
         <div className="top-actions">
@@ -140,24 +130,20 @@ export function MemoriesPage() {
   } else if (vm === 'list') {
     body = (
       <>
-        <div className="rows-head mm-rows-g"><span>Name</span><span>Description</span><span>Schema</span><span className="r">Records</span><span className="r">Setups</span></div>
+        <div className="rows-head mm-rows-g"><span>Name</span><span>Description</span></div>
         <div className="rows mm-rows">
           {L.map((m) => {
-            const p = providerOf(m.provider), f = facts[m.id], us = setupsFor(m), word = schemaLabels(p) ? 'label' : 'type';
+            const p = providerOf(m.provider), f = facts[m.id];
             return (
               <Link key={m.id} href={`/memories/${enc(m.id)}`} className="row mm-rows-g mm-row">
                 <span className="t with-mini">
-                  <span className="mm-mini-box">{f ? <MiniArt {...pictureOf(f, p)} records={m.records?.count ?? null} /> : null}</span>
+                  <span className="mm-mini-box">{f ? <MiniArt {...pictureOf(f, p)} records={f.recent?.length ?? null} /> : null}</span>
                   <span className="mm-rn">
                     <span className="mm-ct"><b>{m.name}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
                     <small className="sub2 mm-cp">{`Kept by ${vendorName(m.provider)}`}</small>
                   </span>
                 </span>
                 <span className="mm-rd">{m.description || 'No description yet.'}</span>
-                <span className="mm-rs">{schemaLabels(p) ? (f?.schema ? plural(f.schema.types.length, word) : '—')
-                  : hasSchema(p) ? (f?.schema ? plural(f.schema.types.length + made(p), word) : '—') : made(p) ? plural(made(p), word) : ''}</span>
-                <span className="r">{m.records?.count ?? '—'}</span>
-                <span className="r">{us && us.length ? us.length : '—'}</span>
               </Link>
             );
           })}
@@ -168,21 +154,14 @@ export function MemoriesPage() {
     body = (
       <div className="cards mm-cards">
         {L.map((m) => {
-          const p = providerOf(m.provider), f = facts[m.id], us = setupsFor(m);
+          const p = providerOf(m.provider), f = facts[m.id];
           return (
             <Link key={m.id} href={`/memories/${enc(m.id)}`} className="card mm-card">
-              <span className="mm-art"><CardArt {...pictureOf(f, p)} records={m.records?.count ?? null} recent={f?.recent} pending={!f} /></span>
+              <span className="mm-art"><CardArt {...pictureOf(f, p)} records={f?.recent?.length ?? null} recent={f?.recent} pending={!f} /></span>
               <span className="mm-cb">
                 <span className="mm-ct"><b>{m.name}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
                 <span className="mm-cp">{`Kept by ${vendorName(m.provider)}`}</span>
                 <span className="mm-cd">{m.description || 'No description yet.'}</span>
-                <span className="mm-cs">
-                  {/* types: what the provider makes itself and what a person set, as the cover draws them; labels apart */}
-                  {schemaLabels(p) ? <span><small>Labels</small><b>{f?.schema ? f.schema.types.length : '—'}</b></span>
-                    : hasSchema(p) || made(p) ? <span><small>Types</small><b>{hasSchema(p) ? (f?.schema ? f.schema.types.length + made(p) : '—') : made(p)}</b></span> : null}
-                  <span><small>Records</small><b>{m.records?.count ?? '—'}</b></span>
-                  <span><small>Setups</small><b>{us && us.length ? us.length : '—'}</b></span>
-                </span>
               </span>
             </Link>
           );

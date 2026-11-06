@@ -108,7 +108,8 @@ export const connectProvider = (type: string, b: { baseUrl: string; apiKey: stri
   });
 
 // ── memories ────────────────────────────────────────────────────────────────────────────────
-export const listMemories = () => call<{ data: Memory[] }>('GET', '/v1/memories').then((d) => d.data);
+/** `counts: false`: no record counts (null), so the list is one read and asks no memory service anything. */
+export const listMemories = (o: { counts?: boolean } = {}) => call<{ data: Memory[] }>('GET', `/v1/memories${o.counts === false ? '?counts=false' : ''}`).then((d) => d.data);
 export const getMemory = (id: string) => call<Memory>('GET', M(id));
 export const createMemory = (b: { name: string; description?: string; provider: string }) => call<Memory>('POST', '/v1/memories', b);
 export const updateMemory = (id: string, b: { name?: string; description?: string }) => call<Memory>('PUT', M(id), b);

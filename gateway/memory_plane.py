@@ -20,6 +20,7 @@ Three rules shape everything here:
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import re
@@ -369,8 +370,11 @@ async def need(org: str, mid: str, principals: list[str], privilege: str) -> tup
     return m, privs
 
 
-async def out(org: str, memory: dict, principals: list[str], privs: list[str] | None = None) -> dict:
-    """The memory object as this caller sees it: ancestors only as far up as it may see."""
+async def out(org: str, memory: dict, principals: list[str], privs: list[str] | None = None, *,
+              count: bool = True, kids: int | None = None) -> dict:
+    """The memory object as this caller sees it: ancestors only as far up as it may see. `count: False` leaves its
+    record count unknown (null) and asks the provider nothing; `kids`, when the caller already has it, is how many
+    memories are in it."""
     privs = privs if privs is not None else await effective(org, memory, principals)
     anc, seen = [], []
     for aid in _anc(memory):
@@ -382,18 +386,21 @@ async def out(org: str, memory: dict, principals: list[str], privs: list[str] | 
             break
         anc.insert(0, aid)
     parent = str(memory.get("parent_id") or "")
-    kids = [k for k in await GRAPH.find("Memory", {"org": org, "parent_id": memory["id"]})
-            if str(k.get("deleted") or "0") != "1"]
-    try:
-        n = await (await provider_of(memory)).count(str(memory["id"]))
-    except MemoryError:
-        n = None                       # the provider is not reachable: unknown, not zero
+    if kids is None:
+        kids = len([k for k in await GRAPH.find("Memory", {"org": org, "parent_id": memory["id"]})
+                    if str(k.get("deleted") or "0") != "1"])
+    n = None
+    if count:
+        try:
+            n = await (await provider_of(memory)).count(str(memory["id"]))
+        except MemoryError:
+            n = None                   # the provider is not reachable: unknown, not zero
     return {"id": memory["id"], "object": "memory", "name": memory.get("name") or "",
             "description": memory.get("description") or "",
             "parent_id": parent if parent and parent in anc else None, "ancestors": anc,
             "restricted": str(memory.get("restricted") or "0") == "1",
             "provider": memory.get("provider") or "", "privileges": privs,
-            "records": {"count": n}, "children": {"count": len(kids)},
+            "records": {"count": n}, "children": {"count": kids},
             "createdAt": int(memory.get("created_at") or 0), "updatedAt": int(memory.get("updated_at") or 0)}
 
 
@@ -825,11 +832,32 @@ async def graph(org: str, memory: dict, principals: list[str], *, around: str = 
     return {"nodes": nodes, "edges": out_edges, "truncated": truncated, "degraded": degraded}
 
 
-async def roots(org: str, principals: list[str]) -> list[dict]:
+# How many memories a list asks providers about at once: a list of sixty took 13 s one at a time (2026-11-06).
+LIST_AT_ONCE = 12
+
+
+async def _outs(org: str, pairs: list[tuple[dict, list[str]]], principals: list[str], everything: list[dict], count: bool) -> list[dict]:
+    """Each memory as `out` gives it, the providers asked at once (up to LIST_AT_ONCE), and how many memories each
+    holds read from `everything` the caller already has instead of once a memory."""
+    kids: dict[str, int] = {}
+    for k in everything:
+        if str(k.get("deleted") or "0") != "1" and k.get("parent_id"):
+            kids[str(k["parent_id"])] = kids.get(str(k["parent_id"]), 0) + 1
+    gate = asyncio.Semaphore(LIST_AT_ONCE)
+
+    async def one(m: dict, privs: list[str]) -> dict:
+        async with gate:
+            return await out(org, m, principals, privs, count=count, kids=kids.get(str(m["id"]), 0))
+    res = await asyncio.gather(*(one(m, privs) for m, privs in pairs))
+    return sorted(res, key=lambda x: (x["name"].casefold(), x["id"]))
+
+
+async def roots(org: str, principals: list[str], count: bool = True) -> list[dict]:
     """Where a caller enters the tree: every memory it holds a privilege on whose parent it cannot
     see. A caller granted one branch enters at that branch, not at a root it has no part in."""
-    res = []
-    for m in await GRAPH.find("Memory", {"org": org}):
+    everything = await GRAPH.find("Memory", {"org": org})
+    pairs = []
+    for m in everything:
         if str(m.get("deleted") or "0") == "1":
             continue
         privs = await effective(org, m, principals)
@@ -840,20 +868,21 @@ async def roots(org: str, principals: list[str]) -> list[dict]:
             p = await _load(org, pid)
             if p and await effective(org, p, principals):
                 continue
-        res.append(await out(org, m, principals, privs))
-    return sorted(res, key=lambda x: (x["name"].casefold(), x["id"]))
+        pairs.append((m, privs))
+    return await _outs(org, pairs, principals, everything, count)
 
 
-async def children(org: str, mid: str, principals: list[str]) -> list[dict]:
+async def children(org: str, mid: str, principals: list[str], count: bool = True) -> list[dict]:
     m, _ = await need(org, mid, principals, "read")
-    res = []
-    for k in await GRAPH.find("Memory", {"org": org, "parent_id": m["id"]}):
-        if str(k.get("deleted") or "0") == "1":
+    everything = await GRAPH.find("Memory", {"org": org})
+    pairs = []
+    for k in everything:
+        if str(k.get("parent_id") or "") != str(m["id"]) or str(k.get("deleted") or "0") == "1":
             continue
         kp = await effective(org, k, principals)
         if kp:
-            res.append(await out(org, k, principals, kp))
-    return sorted(res, key=lambda x: (x["name"].casefold(), x["id"]))
+            pairs.append((k, kp))
+    return await _outs(org, pairs, principals, everything, count)
 
 
 # ── grants ────────────────────────────────────────────────────────────────────────────────────

@@ -196,19 +196,19 @@ describe('New memory', () => {
 });
 
 describe('the cards', () => {
-  test('every figure is the service’s: types from the schema, records and setups read, a dash for what is not known', async () => {
-    backend({
+  test('no figures and no counts: the list is read without counts, and a card says who keeps it and what it is', async () => {
+    // Richard 11-06: the counts (memories, records, setups; a card's types, records and setups) made the list slow
+    const s = backend({
       'GET /v1/memories/providers': { data: [CAPS.graphiti, CAPS.mem0] },
       'GET /v1/memories': { data: [memory(), memory({ id: 'hmem_2', name: 'Support', provider: 'mem0', records: { count: null }, description: '' })] },
       'GET /v1/memories/hmem_1/schema': { types: [{ name: 'Company' }, { name: 'Person' }], relations: [] },
-      'GET /v1/memories/hmem_1/grants': { data: [{ id: 'g1', memory_id: 'hmem_1', principal: 'member:chrn_a', privileges: ['read'], inherited: false }, { id: 'g2', memory_id: 'hmem_1', principal: 'member:someone', privileges: ['read'], inherited: false }] },
     });
     await open();
     const [a, b] = Array.from(page().querySelectorAll('.mm-card'));
-    const figures = (c: Element) => Array.from(c.querySelectorAll('.mm-cs > span')).map((x) => `${x.querySelector('small')?.textContent} ${x.querySelector('b')?.textContent}`);
-    expect(figures(a)).toEqual(['Types 2', 'Records 1', 'Setups 1']);
-    // no schema is read here: no Types figure at all; its count could not be read: a dash, never 0
-    expect(figures(b)).toEqual(['Records —', 'Setups —']);
+    expect(page().querySelectorAll('.mm-cs')).toHaveLength(0);
+    expect(page().querySelector('.list-top')?.textContent).not.toMatch(/\d+ (memories|memory|records?)|used by/);
+    expect(s.sent('GET', '/v1/memories').map((c) => c.path)).toEqual(['/v1/memories?counts=false']);
+    expect(s.calls.filter((c) => c.path.includes('/grants'))).toEqual([]);
     expect(a.querySelector('.mm-cp')?.textContent).toBe('Kept by Graphiti');
     expect(b.querySelector('.mm-cd')?.textContent).toBe('No description yet.');
   });
@@ -230,7 +230,7 @@ describe('a card draws what is kept', () => {
     expect(host.textContent).not.toContain('Caroline gave a talk');
     act(() => r.unmount());
   });
-  test('its types count what it makes and what a person set, and the picture has both', async () => {
+  test('the picture has what the vendor makes and what a person set', async () => {
     backend({
       'GET /v1/memories/providers': { data: [makes] },
       'GET /v1/memories': { data: [memory()] },
@@ -239,7 +239,6 @@ describe('a card draws what is kept', () => {
     });
     await open();
     const card = page().querySelector('.mm-card') as Element;
-    expect(Array.from(card.querySelectorAll('.mm-cs > span')).map((x) => `${x.querySelector('small')?.textContent} ${x.querySelector('b')?.textContent}`)[0]).toBe('Types 5');
     expect(names(card)).toEqual(['Company', 'Entity', 'Episode', 'Fact', 'Person']);
   });
   test('labels a person set are drawn as labels; with none yet, what the vendor makes', () => {
@@ -253,7 +252,7 @@ describe('a card draws what is kept', () => {
 });
 
 describe('cards or a list', () => {
-  test('List shows a row a memory with the same figures, and the choice is remembered', async () => {
+  test('List shows a row a memory, its name and description, and the choice is remembered', async () => {
     localStorage.removeItem('hr.memories.view');
     backend({
       'GET /v1/memories/providers': { data: [CAPS.graphiti, CAPS.mem0] },
@@ -267,9 +266,8 @@ describe('cards or a list', () => {
     const rows = Array.from(page().querySelectorAll('.mm-row'));
     expect(rows).toHaveLength(2);
     const cells = (r: Element) => Array.from(r.children).slice(1).map((c) => c.textContent);
-    expect(cells(rows[0])).toEqual(['What each brand wants.', '2 types', '1', '1']);
-    // no schema is read here: the Schema cell stays empty; what could not be read is a dash
-    expect(cells(rows[1])).toEqual(['No description yet.', '', '—', '—']);
+    expect(cells(rows[0])).toEqual(['What each brand wants.']);
+    expect(cells(rows[1])).toEqual(['No description yet.']);
     expect(localStorage.getItem('hr.memories.view')).toBe('list');
     await press('Cards');
     expect(page().querySelectorAll('.mm-card')).toHaveLength(2);

@@ -199,7 +199,9 @@ async def create_memory(request: Request) -> dict:
 
 @router.get("/v1/memories")
 @guarded
-async def list_memories(request: Request, parent: str = "", ancestor: str = "", granted: bool = False) -> dict:
+async def list_memories(request: Request, parent: str = "", ancestor: str = "", granted: bool = False, counts: bool = True) -> dict:
+    """`counts=false`: each memory's record count is left unknown (null), and no provider is asked. A list that shows
+    no counts (the console's Memories page) loads in one read instead of a call to a provider for every memory."""
     org, _, _, pr = await _who(request)
     if granted:
         return {"object": "list", "data": await mp.given(org, pr)}
@@ -211,7 +213,7 @@ async def list_memories(request: Request, parent: str = "", ancestor: str = "", 
             if kp:
                 data.append(await mp.out(org, k, pr, kp))
         return {"object": "list", "data": data}
-    return {"object": "list", "data": await (mp.children(org, parent, pr) if parent else mp.roots(org, pr))}
+    return {"object": "list", "data": await (mp.children(org, parent, pr, counts) if parent else mp.roots(org, pr, counts))}
 
 
 @router.get("/v1/memories/{mid}")
