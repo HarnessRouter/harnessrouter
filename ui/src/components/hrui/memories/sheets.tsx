@@ -2,11 +2,13 @@
 // The sheets of the Memories pages: New memory (name, description, who keeps it), Connect (a server's
 // address and a key, tried by the service at once), the list of services when none is connected yet,
 // and Rename. Each is the console's Sheet.
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { connectProvider, createMemory, listProviderPlugs, updateMemory, type Memory, type Provider } from '@/lib/memories';
 import { Sheet, SheetTop } from '../Sheet';
 import { plain } from '../setup/settingsModel';
-import { hasSchema, schemaLabels } from './caps';
+import { hasFolders, hasSchema, schemaLabels } from './caps';
+import { KindArt, type Kind } from './CardArt';
+import { useDismiss } from './parts';
 import { GUIDE, VENDORS, vendorName } from './vendors';
 
 /** Connecting one service: its address and, optionally, its key. The service tries both, and its
@@ -92,8 +94,17 @@ export function ChooseServiceSheet({ providers, onClose, onConnected }: { provid
   );
 }
 
-/** New memory: who keeps it lists every service, and one not connected offers Connect in place of
- *  being chosen. A schema is designed only where the service reads one, so Create says what comes next. */
+const CHEV = <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>;
+const CHECK = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>;
+const LOCK = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
+
+/** The shape a service gives a memory, read from what it says it does. */
+const kindOf = (p: Provider | null): Kind => (!p ? null : hasFolders(p) ? 'files' : schemaLabels(p) ? 'labels' : hasSchema(p) ? 'schema' : 'records');
+
+/** New memory, laid out like Set up an agent harness: on top, what it will be (a dashed picture of its
+ *  shape) and who keeps it, a pill opening the list of services; under that, its name and description.
+ *  A service not connected offers Connect in place of being chosen. The list ends where Set up an agent
+ *  harness's does: what is chosen here is fixed once created. Create says what comes next. */
 export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCreated, reloadProviders }: {
   providers: Provider[] | null; failed: boolean; retry: () => void; picked?: string;
   onClose: () => void; onCreated: (m: Memory, p: Provider) => void; reloadProviders: () => Promise<Provider[] | null>;
@@ -101,9 +112,34 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [chosen, setChosen] = useState(picked || '');
+  const [list, setList] = useState(false);
   const [connecting, setConnecting] = useState<{ id: string; connected: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const popRef = useRef<HTMLDivElement>(null);
+  const pillRef = useRef<HTMLButtonElement>(null);
+  const [at, setAt] = useState<React.CSSProperties>({});
+  const closeList = useCallback(() => setList(false), []);
+  useDismiss(list, popRef, closeList);
+  // the list floats over the sheet, under the pill and inside the window, so its end is never cut off
+  const place = useCallback(() => {
+    const r = pillRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const w = Math.min(360, window.innerWidth - 24), below = window.innerHeight - r.bottom - 18, above = r.top - 18;
+    const left = Math.max(12, Math.min(r.left, window.innerWidth - w - 12));
+    setAt(below >= 260 || below >= above
+      ? { position: 'fixed', left, top: r.bottom + 6, width: w, maxHeight: below }
+      : { position: 'fixed', left, bottom: window.innerHeight - r.top + 6, width: w, maxHeight: above });
+  }, []);
+  useEffect(() => {
+    if (!list) return;
+    place();
+    // Escape closes the list and leaves the sheet open: taken before the sheet's own (on the document)
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setList(false); pillRef.current?.focus(); } };
+    window.addEventListener('resize', place);
+    window.addEventListener('keydown', esc, true);
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('keydown', esc, true); };
+  }, [list, place]);
   const open = (providers || []).filter((p) => p.connected);
   const sel = open.find((p) => p.id === chosen) || open[0] || null;
   const guided = hasSchema(sel);
@@ -120,38 +156,54 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
     );
   }
   return (
-    <Sheet onClose={onClose} labelledBy="mmCrT" className="mm-sheet" busy={busy}>
-      <SheetTop id="mmCrT" title="New memory" onClose={onClose}
-        sub={schemaLabels(sel) ? 'Name it, then add its labels.' : guided ? 'Name it, then design its schema.' : 'Name it, then start keeping records in it.'} />
+    <Sheet onClose={onClose} labelledBy="mmCrT" className="mm-sheet mm-new-sheet" busy={busy}>
+      <SheetTop id="mmCrT" title="New memory" onClose={onClose} />
+      <div className="nw-build mm-build">
+        <span className={`mm-kind${sel ? '' : ' none'}`}><KindArt kind={kindOf(sel)} /></span>
+        <div className="mm-kb">
+          {failed ? (
+            <p className="mm-err" role="alert">The memory services could not be read just now. <button type="button" className="link-q inl" onClick={retry}>Try again</button></p>
+          ) : (
+            <div className="mm-popw" ref={popRef}>
+              <button ref={pillRef} type="button" className={`nw-pk mm-kp-pill${list ? ' on' : ''}`} aria-haspopup="listbox" aria-expanded={list}
+                disabled={busy || !providers} onClick={() => setList((v) => !v)}>
+                <span>Kept by</span><b>{sel ? vendorName(sel.id) : providers ? 'Connect a service' : '…'}</b>{CHEV}
+              </button>
+              {list ? (
+                <div className="mm-pop mm-kp" role="listbox" aria-label="Kept by" style={at}>
+                  <div className="mm-prov">
+                    {(providers || []).map((p) => (p.connected ? (
+                      <button key={p.id} type="button" role="option" aria-selected={sel?.id === p.id}
+                        className={`mm-pv-o${sel?.id === p.id ? ' on' : ''}`} onClick={() => { setChosen(p.id); setList(false); }}>
+                        <span className="chk">{sel?.id === p.id ? CHECK : null}</span><Says p={p} />
+                      </button>
+                    ) : (
+                      <div key={p.id} className="mm-pv-o off"><span className="chk" /><Says p={p} />
+                        <button type="button" className="btn small" onClick={() => setConnecting({ id: p.id, connected: false })}>Connect</button>
+                      </div>
+                    )))}
+                  </div>
+                  <p className="dd-foot">{LOCK}Fixed once created</p>
+                </div>
+              ) : null}
+            </div>
+          )}
+          {sel ? (
+            <p className="mm-kline">
+              {VENDORS[sel.id]?.line || null}{' '}
+              <button type="button" className="link-q inl" aria-label={`Change ${vendorName(sel.id)} connection`} onClick={() => setConnecting({ id: sel.id, connected: true })}>Change connection</button>
+            </p>
+          ) : providers && !failed ? <p className="mm-kline">A memory lives in a service you connect.</p> : null}
+        </div>
+      </div>
       <div className="set-f">
         <label htmlFor="mmCrName">Name</label>
         <input id="mmCrName" className="set-in" value={name} placeholder="Brand kits" autoComplete="off" onChange={(e) => setName(e.target.value)} />
       </div>
       <div className="set-f">
         <label htmlFor="mmCrDesc">Description</label>
-        <textarea id="mmCrDesc" className="set-in" rows={2} value={desc} placeholder="What is kept here, in a sentence. Agents read it to decide whether to look inside." onChange={(e) => setDesc(e.target.value)} />
-      </div>
-      <div className="set-f">
-        <span className="set-lb">Kept by</span>
-        {failed ? (
-          <p className="mm-err" role="alert">The memory services could not be read just now. <button type="button" className="link-q inl" onClick={retry}>Try again</button></p>
-        ) : (
-          <div className="mm-prov">
-            {(providers || []).map((p) => (p.connected ? (
-              <div key={p.id} className={`mm-pv-r${sel?.id === p.id ? ' on' : ''}`}>
-                <button type="button" className={`mm-pv-o${sel?.id === p.id ? ' on' : ''}`} aria-pressed={sel?.id === p.id} onClick={() => setChosen(p.id)}>
-                  <i aria-hidden="true" /><Says p={p} />
-                </button>
-                <button type="button" className="link-q mm-pv-ch" aria-label={`Change ${vendorName(p.id)} connection`} onClick={() => setConnecting({ id: p.id, connected: true })}>Change</button>
-              </div>
-            ) : (
-              <div key={p.id} className="mm-pv-o off"><Says p={p} />
-                <button type="button" className="btn small" onClick={() => setConnecting({ id: p.id, connected: false })}>Connect</button>
-              </div>
-            )))}
-          </div>
-        )}
-        <p className="set-help">Fixed once created.</p>
+        <textarea id="mmCrDesc" className="set-in" rows={2} value={desc} placeholder="What is kept here, in a sentence." aria-describedby="mmCrDescH" onChange={(e) => setDesc(e.target.value)} />
+        <p className="set-help" id="mmCrDescH">Agents read it to decide whether to look inside.</p>
       </div>
       {err ? <p className="mm-err" role="alert">{err}</p> : null}
       <div className="sheet-actions">

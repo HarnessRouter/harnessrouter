@@ -46,7 +46,7 @@ export HR_BACKING=local HR_DATA_DIR="$CACHE/data" HR_IDENTITY_MODE=off HR_CREDIT
 export HARNESS_INTERNAL_KEY="${HARNESS_INTERNAL_KEY:-$("$PY" -c 'import secrets; print(secrets.token_hex(32))')}"
 export HR_SECRET_KEY="${HR_SECRET_KEY:-$("$PY" -c 'import secrets; print(secrets.token_hex(24))')}"
 export HARNESS_GATEWAY_URL="http://127.0.0.1:$GW_PORT" NEXT_PUBLIC_HR_EDITION=selfhost HR_AUTH_DISABLED=1
-export HR_AUTH_STORE="$CACHE/data/auth.json" HR_MEMORY_FIXTURE=1 HR_GW_PORT="$GW_PORT"
+export HR_AUTH_STORE="$CACHE/data/auth.json" HR_GW_PORT="$GW_PORT"
 
 pids=()
 cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }

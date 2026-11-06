@@ -87,7 +87,7 @@ describe('nothing connected', () => {
     refuse = false;
     await press('Connect');
     expect(page().querySelector('#mmCrT')?.textContent).toBe('New memory');
-    expect(page().querySelector('.mm-pv-o.on b')?.textContent).toBe('Graphiti');
+    expect(page().querySelector('.mm-kp-pill b')?.textContent).toBe('Graphiti');
   });
 
   test('a service that may go without an address needs a key then, and no key is sent when none is typed', async () => {
@@ -120,12 +120,24 @@ describe('New memory', () => {
     await type('#mmCrName', 'Accounts');
     return s;
   };
+  const list = async () => { if (!page().querySelector('.mm-kp')) await act(async () => { (page().querySelector('.mm-kp-pill') as HTMLButtonElement).click(); }); };
   const choose = async (name: string) => {
+    await list();
     await act(async () => { (Array.from(page().querySelectorAll('button.mm-pv-o')).find((o) => o.textContent?.includes(name)) as HTMLButtonElement).click(); });
+    expect(page().querySelector('.mm-kp')).toBeNull();
+    expect(page().querySelector('.mm-kp-pill b')?.textContent).toBe(name);
   };
 
   test('lists all four: one not connected offers Connect and cannot be chosen', async () => {
     await start();
+    expect(page().querySelector('.mm-kp')).toBeNull();
+    await list();
+    expect(page().querySelector('.mm-kp .dd-foot')?.textContent).toBe('Fixed once created');
+    // Escape closes the list, not the sheet; the next one closes the sheet
+    await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(page().querySelector('.mm-kp')).toBeNull();
+    expect(page().querySelector('#mmCrT')).not.toBeNull();
+    await list();
     expect(Array.from(page().querySelectorAll('.mm-prov b')).map((b) => b.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight', 'ReMe']);
     expect(Array.from(page().querySelectorAll('button.mm-pv-o b')).map((b) => b.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight']);
     const reme = Array.from(page().querySelectorAll('.mm-pv-o')).find((o) => o.textContent?.includes('ReMe')) as HTMLElement;
@@ -143,7 +155,7 @@ describe('New memory', () => {
     await open();
     await press('New memory');
     await type('#mmCrName', 'Accounts');
-    expect(page().querySelector('.mm-pv-o.on b')?.textContent).toBe('Graphiti');
+    expect(page().querySelector('.mm-kp-pill b')?.textContent).toBe('Graphiti');
     await press('Create and design schema');
     expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe('graphiti');
   });
@@ -154,6 +166,8 @@ describe('New memory', () => {
     await press('New memory');
     await type('#mmCrName', 'Accounts');
     expect(button('Create')?.disabled).toBe(true);
+    expect(page().querySelector('.mm-kp-pill b')?.textContent).toBe('Connect a service');
+    await act(async () => { (page().querySelector('.mm-kp-pill') as HTMLButtonElement).click(); });
     expect(page().querySelectorAll('button.mm-pv-o')).toHaveLength(0);
   });
 

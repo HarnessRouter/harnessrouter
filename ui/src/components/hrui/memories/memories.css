@@ -374,3 +374,33 @@
 
 /* The caret says where the writing is. A ring around the whole text reads as a form field, not a document. */
 #hrui .ProseMirror:focus, #hrui .ProseMirror:focus-visible { outline: none; }
+/* New memory: Set up an agent harness's layout. A stage on top (what it will be, who keeps it), then the fields. */
+#hrui .mm-new-sheet{width:min(520px,100%)}
+#hrui .mm-new-sheet .sheet-top{margin-bottom:14px}
+#hrui .mm-build{align-items:center;gap:16px;margin:0 0 20px;padding:14px 16px 14px 12px}
+#hrui .mm-kind{flex:none;width:96px;height:80px;display:grid;place-items:center}
+#hrui .mm-kind-svg *{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:4 3.5;stroke-linecap:round;stroke-linejoin:round}
+#hrui .mm-kind-svg circle{fill:var(--bg)}
+#hrui .mm-kind-svg rect{fill:var(--bg)}
+#hrui .mm-kind-svg .none{stroke:var(--line-strong,var(--faint))}
+#hrui .mm-kb{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+#hrui .mm-kb .mm-err{margin:0}
+#hrui .mm-kp-pill{background:var(--bg);box-shadow:0 0 0 1px var(--line);max-width:100%}
+#hrui .mm-kp-pill:hover{box-shadow:0 0 0 1px var(--faint)}
+#hrui .mm-kp-pill.on{box-shadow:0 0 0 2px var(--accent)}
+#hrui .mm-kline{margin:0;font-size:13px;line-height:1.5;color:var(--muted);text-wrap:pretty}
+#hrui .mm-kline .link-q{font-size:13px;white-space:nowrap}
+/* the list of services: the console's small floating list, a row a service, ending in what is fixed */
+#hrui .mm-kp{width:min(360px,calc(100vw - 24px));max-width:none;padding:6px;overflow:auto;z-index:1000}
+#hrui .mm-kp .mm-prov{gap:2px}
+#hrui .mm-kp .mm-pv-o{align-items:flex-start;gap:8px;padding:8px 10px;border:0;border-radius:8px;background:none}
+#hrui .mm-kp button.mm-pv-o:hover{background:var(--surface)}
+#hrui .mm-kp .mm-pv-o.on{background:none}
+#hrui .mm-kp .mm-pv-o .chk{flex:none;width:16px;height:20px;display:grid;place-items:center;color:var(--accent)}
+#hrui .mm-kp .mm-pv-o b{font-size:14px;font-weight:500;line-height:20px}
+#hrui .mm-kp .mm-pv-o.on b{font-weight:600}
+#hrui .mm-kp .mm-pv-o small{font-size:12px;line-height:1.45;margin-top:1px}
+#hrui .mm-kp .mm-pv-o.off{align-items:center}
+#hrui .mm-kp .mm-pv-o.off b{color:var(--muted)}
+#hrui .mm-kp .dd-foot{margin:6px -6px -6px;border-radius:0 0 12px 12px}
+@media (max-width:520px){#hrui .mm-build{gap:12px;padding:12px}#hrui .mm-kind{width:72px;height:60px}#hrui .mm-kind-svg{width:72px;height:60px}}

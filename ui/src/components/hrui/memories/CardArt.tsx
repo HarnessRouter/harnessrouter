@@ -153,3 +153,38 @@ export function MiniArt({ s, labels, records }: { s: LSchema | null | undefined;
   }
   return <svg className="mm-mini" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">{inner}</svg>;
 }
+
+/** What a new memory will be, before it exists: drawn dashed in the "next" blue, like a brick not yet
+ *  built. The shape follows what its service does: a schema to design, labels to add, files, or records. */
+export type Kind = 'schema' | 'labels' | 'files' | 'records' | null;
+export function KindArt({ kind }: { kind: Kind }) {
+  const w = 96, h = 80;
+  let inner: React.ReactNode;
+  if (kind === 'schema') {
+    inner = (
+      <>
+        <line x1={34} y1={26} x2={62} y2={26} /><line x1={29} y1={33} x2={43} y2={51} /><line x1={67} y1={33} x2={53} y2={51} />
+        <circle cx={26} cy={26} r={9} /><circle cx={70} cy={26} r={9} /><circle cx={48} cy={58} r={9} />
+      </>
+    );
+  } else if (kind === 'labels') {
+    inner = (
+      <>
+        <rect x={10} y={20} width={34} height={14} rx={7} /><rect x={50} y={20} width={36} height={14} rx={7} />
+        <rect x={24} y={44} width={48} height={14} rx={7} />
+      </>
+    );
+  } else if (kind === 'files') {
+    inner = (
+      <>
+        <path d="M26 14h30l14 14v38H26z" /><path d="M56 14v14h14" />
+        <line x1={34} y1={40} x2={62} y2={40} /><line x1={34} y1={48} x2={62} y2={48} /><line x1={34} y1={56} x2={52} y2={56} />
+      </>
+    );
+  } else if (kind === 'records') {
+    inner = [16, 34, 52].map((y) => <rect key={y} x={14} y={y} width={68} height={12} rx={5} />);
+  } else {
+    inner = <circle cx={w / 2} cy={h / 2} r={14} className="none" />;
+  }
+  return <svg className="mm-kind-svg" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">{inner}</svg>;
+}

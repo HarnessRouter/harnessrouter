@@ -7,7 +7,6 @@ Nothing is kept across a restart; seed.py fills it again.
 import os, sys
 GW = os.environ.get("HR_GATEWAY_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gateway")
 sys.path.insert(0, os.path.abspath(GW))
-os.environ.setdefault("HR_MEMORY_FIXTURE", "1")
 import app as gateway  # noqa: E402
 import memory_plane as mp  # noqa: E402
 import memory_fixture  # noqa: E402
@@ -34,6 +33,8 @@ def sample(pid):
 
 for pid in ("graphiti", "hindsight", "mem0"):
     mp.PROVIDERS[pid] = sample(pid)
+# the conformance fixture is a test provider, not a service anyone would choose
+mp.PROVIDERS.pop("fixture", None)
 
 if __name__ == "__main__":
     import uvicorn
