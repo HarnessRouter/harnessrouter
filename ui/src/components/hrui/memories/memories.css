@@ -420,3 +420,45 @@
 #hrui .mm-page .ag-bar.ag-rt>.ag-tabs>button.on{font-weight:600}
 /* the list of memories: a description wraps to two lines rather than end in "…" */
 #hrui .mm-rd{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.45;text-wrap:pretty}
+/* A setup's Settings › Memory. Every row has the same columns, filled only where the memory is on: what the agent
+   may do (a pill that is plainly a choice), Make default, the switch, and an arrow that opens the memory. So the
+   switches and arrows line up down the list. A memory that is off is a row like any other: its empty brick and the
+   switch say it is off; the row is not greyed as if it could not be used. */
+#hrui .mm-layer .cap-row.mm-sl{gap:12px;min-height:60px}
+#hrui .mm-layer .cap-row.mm-sl.off{background:var(--bg)}
+#hrui .mm-layer .cap-row.mm-sl.off b{color:var(--fg)}
+#hrui .mm-sl-c{flex:none;display:flex;align-items:center;justify-content:flex-end}
+#hrui .mm-sl-acc{width:150px}
+#hrui .mm-sl-def{width:96px}
+#hrui .mm-sl-open{width:28px;justify-content:center}
+#hrui .mm-sl-open .icon-btn{width:28px;height:28px;border-radius:8px;color:var(--muted)}
+#hrui .mm-sl-open .icon-btn:hover{color:var(--fg);background:var(--surface)}
+#hrui .mm-layer .mm-acc-q{height:28px;max-width:none;padding:0 26px 0 11px;border:1px solid var(--line);border-radius:999px;background-color:var(--bg);background-position:right 10px center;font-size:13px;color:var(--fg)}
+#hrui .mm-layer .mm-acc-q:hover:not(:disabled){border-color:var(--faint)}
+#hrui .mm-layer .mm-row-a{font-size:13px;color:var(--muted);white-space:nowrap}
+#hrui .mm-layer .mm-row-a:hover:not(:disabled){color:var(--accent);text-decoration:none}
+#hrui .mm-layer .mm-sl-name{display:flex;align-items:center;gap:8px;min-width:0}
+#hrui .mm-layer .mm-sl-name>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hrui .mm-layer .mm-defp{flex:none}
+#hrui .mm-sl-help{margin-top:10px}
+/* where the column is narrow, the controls take only the room they need, so a name is never cut short for an empty slot */
+#hrui .mm-layer{container-type:inline-size}
+@container (max-width:600px){
+  #hrui .mm-sl-acc,#hrui .mm-sl-def{width:auto}
+  #hrui .mm-sl .mm-sl-acc:empty,#hrui .mm-sl .mm-sl-def:empty{display:none}
+}
+/* narrower still: the name keeps the first line with the switch and the arrow; what the agent may do and Make default
+   go to a second line under the name, as on a phone */
+@container (max-width:520px){
+  #hrui .cap-row.mm-sl.cap-mcp{flex-wrap:wrap;row-gap:6px}
+  #hrui .mm-sl .tog,#hrui .mm-sl .mm-sl-open{order:1}
+  #hrui .mm-sl .cap-br{display:block;order:2;flex-basis:100%;height:0}
+  #hrui .mm-sl .mm-sl-acc{order:3;margin-left:36px;justify-content:flex-start}
+  #hrui .mm-sl .mm-sl-def{order:4}
+}
+@media (max-width:520px){
+  #hrui .mm-sl .mm-sl-open{order:1}
+  #hrui .mm-sl .mm-sl-acc{order:3;width:auto;margin-left:36px;justify-content:flex-start}
+  #hrui .mm-sl .mm-sl-def{order:4;width:auto}
+  #hrui .mm-sl .mm-sl-c:empty{display:none}
+}

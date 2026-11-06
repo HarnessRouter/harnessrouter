@@ -654,16 +654,15 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const pkg = pop?.k === 'pkg' ? pkgs.find((p) => p.name === pop.name) || null : null;
   const mcpEdit = pop?.k === 'mcp' && pop.i != null ? c.mcp[pop.i] || null : null;
 
-  // Delete setup: the settings' last row, a layer row's anatomy, past a hairline and outside the
-  // layers' tablist; red, its name alone (the sheet says what deleting does). Duplicate shares its
-  // row at the right, blue (as on the hosted console; its sheet picks the other agent harness).
-  // Drawn at any width (hrui-console.css): `rail` under the layers, else at the foot of the open
-  // layer.
+  // Delete harness and, under it, Duplicate harness: the settings' last rows, a layer row's anatomy,
+  // past a hairline and outside the layers' tablist. Delete in red, its name alone (the sheet says
+  // what deleting does); Duplicate in blue (its sheet picks the other agent harness). Drawn at any
+  // width (hrui-console.css): `rail` under the layers, else at the foot of the open layer.
   const delRow = (where: 'rail' | 'foot') => (
     <div className="lg-dz" data-where={where}>
-      <button type="button" className="ly-n" aria-haspopup="dialog" onClick={() => setPop({ k: 'del' })}><b>Delete setup</b></button>
+      <button type="button" className="ly-n" aria-haspopup="dialog" onClick={() => setPop({ k: 'del' })}><b>Delete harness</b></button>
       <button type="button" className="ly-n lg-dup" aria-haspopup="dialog" title="Duplicate with another agent harness"
-        onClick={() => setPop({ k: 'dup' })}><b>Duplicate</b></button>
+        onClick={() => setPop({ k: 'dup' })}><b>Duplicate harness</b></button>
     </div>
   );
 

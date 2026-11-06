@@ -2,7 +2,7 @@
 // A setup's plugins, skills and tools as a person sees them (Richard, 10-18): every place reads
 // setupParts.ts and says which list it shows: the Capabilities tabs list everything, built-ins
 // included; the Agent stack and the layers line beside it count only what a person added. Then what
-// Settings shows when a read fails (no fallbacks), the Plugins tab's switches, and that it ends with Delete setup.
+// Settings shows when a read fails (no fallbacks), the Plugins tab's switches, and that it ends with Delete harness and Duplicate harness.
 import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { BaseInfo, CustomHarness, HarnessPlugin, Plug } from '@/lib/harness';
@@ -303,10 +303,10 @@ describe('the Plugins tab: the workspace’s connected plugins, a switch each', 
 });
 
 describe('Deploy to Cloud lives in the page bar, not here', () => {
-  test('the settings end with Delete setup and Duplicate alone', async () => {
+  test('the settings end with Delete harness and, under it, Duplicate harness alone', async () => {
     await settings(setup(), 'harness');
     expect(el.querySelector('.lg-rows .ly-n.lg-up')).toBeNull();
-    expect([...el.querySelectorAll('.lg-rows .lg-dz .ly-n')].map((b) => b.textContent)).toEqual(['Delete setup', 'Duplicate']);
+    expect([...el.querySelectorAll('.lg-rows .lg-dz .ly-n')].map((b) => b.textContent)).toEqual(['Delete harness', 'Duplicate harness']);
     expect(el.textContent).not.toContain('Upload to cloud');
   });
 });
@@ -351,13 +351,13 @@ describe('the Harness ID', () => {
   });
 });
 
-// Duplicate shares Delete setup's row, at its right (as on the hosted console), and no longer sits under the agent harness.
+// Duplicate harness is the row under Delete harness, and no longer sits under the agent harness.
 describe('Duplicate', () => {
-  test('is the second button of every Delete setup row, and Agent harness has none', async () => {
+  test('is the second button of every Delete harness row, and Agent harness has none', async () => {
     await settings(setup(), 'harness');
     const rows = Array.from(el.querySelectorAll('.lg-dz'));
     expect(rows.length).toBe(2);                                             // the rail's and the open layer's foot
-    for (const row of rows) expect(Array.from(row.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['Delete setup', 'Duplicate']);
+    for (const row of rows) expect(Array.from(row.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['Delete harness', 'Duplicate harness']);
     expect(el.textContent).not.toContain('Duplicate with another agent harness');
     expect(el.querySelector('.lg-dup')?.getAttribute('title')).toBe('Duplicate with another agent harness');
   });
