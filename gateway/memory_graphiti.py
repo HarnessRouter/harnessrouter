@@ -69,6 +69,21 @@ class Graphiti(mp.Provider):
     def __init__(self, base_url: str = "", api_key: str = "", org: str = ""):
         self.base, self.key, self.org = base_url.rstrip("/"), api_key, org
 
+# What Graphiti itself makes and how it links it: the part of a memory's schema nobody sets. The console draws it locked
+# beside what a person can set; record types and reference rels as this adapter answers them.
+    BUILTIN = {
+        "types": [
+            {"name": "episode", "description": "A conversation or task Graphiti read, kept as it was given."},
+            {"name": "entity", "description": "A person, place or thing Graphiti found. The types you add here are kinds of entity."},
+            {"name": "fact", "description": "A statement that joins two entities, with when it was true. The relations you add here are kinds of fact."},
+        ],
+        "relations": [
+            {"name": "about", "from": "fact", "to": "entity", "description": "The two entities a fact joins."},
+            {"name": "derived_from", "from": "fact", "to": "episode", "description": "Where Graphiti read it."},
+            {"name": "derived_from", "from": "entity", "to": "episode", "description": "Where Graphiti read it."},
+        ],
+    }
+
     def capabilities(self) -> dict:
         return {"id": self.id, "isolation": "container", "derivation": "write_time",
                 "observe": {"keeps_episodes": True, "answers": "records"},
@@ -78,7 +93,7 @@ class Graphiti(mp.Provider):
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
                 "prime": True, "consolidate": False, "holds": True, "queries": {"named": False, "free": None},
                 "types": False, "graph": {"entities": "derived"},
-                "schema": {"mode": "guides", "properties": True, "relations": True},
+                "schema": {"mode": "guides", "properties": True, "relations": True, "builtin": self.BUILTIN},
                 "content": {"media": ["text/*"], "describes": []}}
 
     async def bind(self, org, workspace):

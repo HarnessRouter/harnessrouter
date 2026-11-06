@@ -84,6 +84,18 @@ class ReMe(mp.Provider):
         self.base, self.key, self.by_meaning = base_url.rstrip("/"), api_key, by_meaning
         self._recent: dict[str, list[tuple[float, str]]] = {}
 
+# What ReMe itself makes and how it links it: the part of a memory's schema nobody sets. The console draws it locked
+# beside what a person can set; record types and reference rels as this adapter answers them.
+    BUILTIN = {
+        "types": [
+            {"name": "episode", "description": "A conversation ReMe was given, kept as a file."},
+            {"name": "note", "description": "What ReMe's own agent wrote down about a conversation."},
+        ],
+        "relations": [
+            {"name": "derived_from", "from": "note", "to": "episode", "description": "The conversation the note is about."},
+        ],
+    }
+
     def capabilities(self) -> dict:
         return {"id": self.id, "isolation": "enforced_filter", "derivation": "agent", "layout": "files",
                 "observe": {"keeps_episodes": True, "answers": "records"},
@@ -92,7 +104,7 @@ class ReMe(mp.Provider):
                 "history": {"content": "versions", "structure": "none", "emulated": True}, "as_of": "one record",
                 "revise": "native", "forget": "emulated", "erase": {"unreachable": "none"},
                 "prime": True, "consolidate": False, "holds": True, "queries": {"named": False, "free": None},
-                "types": False, "graph": {"entities": "stated"}, "schema": {"mode": "none"},
+                "types": False, "graph": {"entities": "stated"}, "schema": {"mode": "none", "builtin": self.BUILTIN},
                 "content": {"media": ["text/*"], "describes": []}}
 
     async def bind(self, org, workspace):

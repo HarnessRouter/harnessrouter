@@ -102,6 +102,15 @@ class Mem0(mp.Provider):
         self.key = api_key
         self._counts: dict[str, tuple[float, int]] = {}
 
+# What mem0 itself makes and how it links it: the part of a memory's schema nobody sets. The console draws it locked
+# beside what a person can set; record types and reference rels as this adapter answers them.
+    BUILTIN = {
+        "types": [
+            {"name": "fact", "description": "A short fact Mem0 drew from a conversation. Mem0 keeps facts on their own: not the conversation, and no links between them."},
+        ],
+        "relations": [],
+    }
+
     def capabilities(self) -> dict:
         return {"id": self.id, "isolation": "enforced_filter", "derivation": "write_time",
                 "observe": {"keeps_episodes": False, "answers": "job"},
@@ -114,7 +123,7 @@ class Mem0(mp.Provider):
                 "history": {"content": "versions", "structure": "none"}, "as_of": "one record",
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
                 "prime": True, "consolidate": False, "queries": {"named": False, "free": None},
-                "types": False, "schema": {"mode": "none"}, "content": {"media": ["text/*"], "describes": []}}
+                "types": False, "schema": {"mode": "none", "builtin": self.BUILTIN}, "content": {"media": ["text/*"], "describes": []}}
 
     async def bind(self, org: str, workspace: str) -> "Mem0":
         fields = await mp.CREDENTIALS(org, workspace, self.id) if mp.CREDENTIALS else None

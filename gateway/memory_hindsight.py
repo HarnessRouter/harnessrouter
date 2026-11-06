@@ -12,7 +12,10 @@ shape here was read off a server running on 2026-11-04.
   observe  = a document with no strategy, retained asynchronously: the bank extracts facts and entities
       from it, and it stays as the `episode`. `keeps_episodes`, and the answer is a job.
   a derived record = a fact (Hindsight's id), or an entity (`ent_<id>`). A fact says which entities it
-      involves and which document it came from, as references, so the graph read has real edges.
+      involves and which document it came from, as references, so the graph read has real edges. An
+      observation, which Hindsight consolidates from other facts in the background, has neither: it names
+      its `source_memory_ids`, and each is its `derived_from`, a stated record's fact as that record (measured
+      11-06: 172 of a bank's 211 facts were observations, and with no references they drew as loose dots).
   revise   = the same document retained with update_mode `replace`. Hindsight keeps no earlier words of
       a document, so the versions are kept in its metadata: `emulated`, and said in the capability
       document. A derived fact is edited in place by Hindsight, which keeps that fact's own history.
@@ -45,6 +48,7 @@ LABEL = "type:"     # how Hindsight names a label of the group we keep: never an
 LABEL_ASK = "Every kind of thing this fact mentions. Choose all that apply, or none if nothing fits."
 STATED = "hr_stated"
 MAX_KEPT_VERSIONS = 50
+UNIT_PAGE, UNIT_PAGES = 500, 20    # how a bank's facts are read to name what an observation came from: up to 10,000
 ACTIVE = "valid"
 # Tests set an httpx transport here so every call is exercised without a server.
 transport: httpx.BaseTransport | None = None
@@ -107,6 +111,22 @@ class Hindsight(mp.Provider):
         self.base, self.key = base_url.rstrip("/"), api_key
         self._ready: set[str] = set()
         self._entities: dict[str, tuple[float, dict[str, str]]] = {}
+        self._units: dict[str, tuple[float, dict[str, str]]] = {}
+
+# What Hindsight itself makes and how it links it: the part of a memory's schema nobody sets. The console draws it locked
+# beside what a person can set; record types and reference rels as this adapter answers them.
+    BUILTIN = {
+        "types": [
+            {"name": "episode", "description": "A conversation Hindsight was given, kept whole."},
+            {"name": "fact", "description": "Something Hindsight learned: about the world, from an experience, or an observation it drew from other facts."},
+            {"name": "entity", "description": "Someone or something its facts mention."},
+        ],
+        "relations": [
+            {"name": "about", "from": "fact", "to": "entity", "description": "Who or what a fact mentions."},
+            {"name": "derived_from", "from": "fact", "to": "episode", "description": "The conversation it was read from."},
+            {"name": "derived_from", "from": "fact", "to": "fact", "description": "The facts an observation was drawn from."},
+        ],
+    }
 
     def capabilities(self) -> dict:
         return {"id": self.id, "isolation": "container", "derivation": "background",
@@ -117,7 +137,7 @@ class Hindsight(mp.Provider):
                 "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
                 "prime": True, "consolidate": "trigger", "holds": True, "queries": {"named": False, "free": None},
                 "types": False, "graph": {"entities": "derived"},
-                "schema": {"mode": "labels"},
+                "schema": {"mode": "labels", "builtin": self.BUILTIN},
                 "content": {"media": ["text/*"], "describes": []}}
 
     async def bind(self, org, workspace):
@@ -212,7 +232,7 @@ class Hindsight(mp.Provider):
                 "time": {"valid_from": None, "valid_to": None, "written_at": doc.get("created_at"), "invalidated_at": doc.get("updated_at") if closed else None},
                 "written_by": json.loads(meta.get("hr_writer") or '{"kind":"provider","id":"hindsight"}')}
 
-    def _fact_out(self, mid: str, unit: dict, entities: dict[str, str]) -> dict:
+    def _fact_out(self, mid: str, unit: dict, entities: dict[str, str], units: dict[str, str] | None = None) -> dict:
         meta = unit.get("metadata") or {}
         active = str(unit.get("state") or ACTIVE) == ACTIVE
         if meta.get("hr_stated") and str(unit.get("document_id") or "").startswith(PREFIX):
@@ -223,6 +243,11 @@ class Hindsight(mp.Provider):
         refs = [{"rel": "about", "memory_id": mid, "record_id": ENTITY + entities[n]} for n in names if n in entities]
         if unit.get("document_id"):
             refs.append({"rel": "derived_from", "memory_id": mid, "record_id": str(unit["document_id"])})
+        # an observation: the facts it was consolidated from, each as the record a reader sees it as
+        for src in unit.get("source_memory_ids") or []:
+            ref = {"rel": "derived_from", "memory_id": mid, "record_id": (units or {}).get(str(src), str(src))}
+            if ref not in refs:
+                refs.append(ref)
         kind = unit.get("fact_type") or unit.get("type")
         labels = sorted(str(n)[len(LABEL):] for n in names if self._is_label(n))
         said, more = _sentence(unit.get("text"))
@@ -259,6 +284,36 @@ class Hindsight(mp.Provider):
         self._entities[mid] = (time.time(), names)
         return names
 
+    async def _unit_ids(self, mid: str, need=()) -> dict[str, str]:
+        """Each fact of the bank as the record it is read as: a stated record's own fact is that record (its document),
+        any other fact is itself. Read again when a fact asked about isn't in it yet, since an observation can be
+        made from a record stated after the last read."""
+        hit = self._units.get(mid)
+        if hit and time.time() - hit[0] < 30 and all(str(x) in hit[1] for x in need):
+            return hit[1]
+        if hit and time.time() - hit[0] < 2:
+            return hit[1]
+        out: dict[str, str] = {}
+        at = 0
+        for _ in range(UNIT_PAGES):
+            r = await self._call("GET", self._bank(mid) + "/memories/list", params={"limit": UNIT_PAGE, "offset": at})
+            if r.status_code != 200:
+                break
+            doc = r.json() or {}
+            items = doc.get("items") or []
+            for u in items:
+                d = str(u.get("document_id") or "")
+                out[str(u["id"])] = d if (u.get("metadata") or {}).get("hr_stated") and d.startswith(PREFIX) else str(u["id"])
+            at += len(items)
+            if not items or at >= int(doc.get("total") or 0):
+                break
+        self._units[mid] = (time.time(), out)
+        return out
+
+    async def _sources(self, mid: str, units: list[dict]) -> dict[str, str]:
+        need = {str(x) for u in units for x in (u.get("source_memory_ids") or [])}
+        return await self._unit_ids(mid, need) if need else {}
+
     async def _doc(self, mid: str, rid: str) -> dict | None:
         r = await self._call("GET", self._bank(mid) + f"/documents/{rid}")
         return r.json() if r.status_code == 200 else None
@@ -275,6 +330,7 @@ class Hindsight(mp.Provider):
         await self._call("DELETE", self._bank(mid))
         self._ready.discard(mid)
         self._entities.pop(mid, None)
+        self._units.pop(mid, None)
 
     async def count(self, mid):
         """What the tree holds, from the lists themselves. Its /stats route stayed at zero for minutes while
@@ -334,7 +390,9 @@ class Hindsight(mp.Provider):
         if pending or failed:
             return {"id": job_id, "status": "failed" if failed else "pending", "error": failed, "records": []}
         names = await self._entity_ids(mid)
-        records = [self._fact_out(mid, u, names) for rid in ids.split("|") for u in await self._units_of(mid, rid)]
+        units = [u for rid in ids.split("|") for u in await self._units_of(mid, rid)]
+        srcs = await self._sources(mid, units)
+        records = [self._fact_out(mid, u, names, srcs) for u in units]
         return {"id": job_id, "status": "completed", "error": "", "records": records}
 
     async def revise(self, mid, rid, patch, writer):
@@ -368,7 +426,7 @@ class Hindsight(mp.Provider):
         r = await self._call("PATCH", self._bank(mid) + f"/memories/{rid}", body={"text": text} if text else {})
         if r.status_code != 200:
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
-        out = self._fact_out(mid, {**r.json(), "fact_type": r.json().get("type")}, await self._entity_ids(mid))
+        out = self._fact_out(mid, {**r.json(), "fact_type": r.json().get("type")}, await self._entity_ids(mid), await self._sources(mid, [r.json()]))
         return {**out, "version": 2, "supersedes": 1}
 
     async def forget(self, mid, rid, writer):
@@ -387,7 +445,7 @@ class Hindsight(mp.Provider):
         r = await self._call("PATCH", self._bank(mid) + f"/memories/{rid}", body={"state": "invalidated", "reason": reason})
         if r.status_code != 200:
             raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
-        return self._fact_out(mid, {**r.json(), "state": "invalidated", "fact_type": r.json().get("type")}, {})
+        return self._fact_out(mid, {**r.json(), "state": "invalidated", "fact_type": r.json().get("type")}, {}, await self._sources(mid, [r.json()]))
 
     async def close_episode(self, mid, rid, writer):
         """Only the conversation: its `forget` above invalidates every fact it taught, and these stay."""
@@ -428,7 +486,7 @@ class Hindsight(mp.Provider):
         if r.status_code != 200:
             return None
         u = r.json()
-        return self._fact_out(mid, {**u, "fact_type": u.get("type")}, await self._entity_ids(mid))
+        return self._fact_out(mid, {**u, "fact_type": u.get("type")}, await self._entity_ids(mid), await self._sources(mid, [u]))
 
     async def history(self, mid, rid):
         head = await self.get(mid, rid)
@@ -486,9 +544,10 @@ class Hindsight(mp.Provider):
         r = await self._call("GET", self._bank(mid) + "/memories/list", params=params)
         doc = r.json() if r.status_code == 200 else {}
         names = await self._entity_ids(mid)
+        srcs = await self._sources(mid, doc.get("items") or [])
         seen, rows = set(), []
         for u in doc.get("items") or []:
-            x = self._fact_out(mid, u, names)
+            x = self._fact_out(mid, u, names, srcs)
             if x["id"] in seen or (types and x["type"] not in types):
                 continue
             seen.add(x["id"])
@@ -552,9 +611,11 @@ class Hindsight(mp.Provider):
                 return {"results": [], "degraded": degraded, "abstain": False}
             raise HindsightUnavailable("the search did not answer")
         names = await self._entity_ids(mid)
+        found = (r.json() or {}).get("results") or []
+        srcs = await self._sources(mid, found)
         seen, results = set(), []
-        for u in (r.json() or {}).get("results") or []:
-            x = self._fact_out(mid, {**u, "fact_type": u.get("type"), "state": ACTIVE}, names)
+        for u in found:
+            x = self._fact_out(mid, {**u, "fact_type": u.get("type"), "state": ACTIVE}, names, srcs)
             if x["id"] in seen or (types and x["type"] not in types) or not all(mp.matches(x, f) for f in later):
                 continue
             seen.add(x["id"])

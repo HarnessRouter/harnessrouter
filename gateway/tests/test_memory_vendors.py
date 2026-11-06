@@ -613,6 +613,44 @@ def test_hindsight_lists_everything_a_person_has_to_see_to_forget_it(wired):
     assert [r["type"] for r in run(h.list("m", {"limit": 2, "cursor": first["next"]}))["records"]][-1] == "fact"
 
 
+def test_an_observation_names_the_records_it_was_drawn_from(wired):
+    """Measured 11-06: 172 of a bank's 211 facts were observations, with no document and no entities, so they drew as
+    loose dots. Each names its sources; a stated record's own fact is read as that record."""
+    units = [
+        {"id": "u_s", "text": "Caroline went to a support group", "document_id": "hrec_s", "metadata": {"hr_stated": "1"}, "state": "valid", "fact_type": "world"},
+        {"id": "u_w", "text": "Caroline paints", "document_id": "ep_1", "entities": "", "state": "valid", "fact_type": "world"},
+        {"id": "u_o", "text": "Caroline finds support in her community", "document_id": None, "entities": "", "state": "valid",
+         "fact_type": "observation", "source_memory_ids": ["u_s", "u_w", "u_w"]},
+    ]
+    def answer(method, path, params, body):
+        if path == BANK + "/memories/list":
+            return {"items": units, "total": len(units)}
+        if path == BANK + "/entities":
+            return {"items": [], "total": 0}
+        return {}
+    wired(memory_hindsight, answer)
+    h = memory_hindsight.Hindsight("http://vendor.test")
+    rows = run(h.list("m", {"types": ["fact"], "limit": 50}))["records"]
+    obs = next(r for r in rows if r["id"] == "u_o")
+    assert [r["record_id"] for r in obs["references"] if r["rel"] == "derived_from"] == ["hrec_s", "u_w"], \
+        "the stated record as itself, a derived fact as itself, each once"
+    assert obs["attributes"]["kind"] == "observation"
+
+
+@pytest.mark.parametrize("cls", [memory_graphiti.Graphiti, memory_hindsight.Hindsight, memory_mem0.Mem0, memory_mem0.Mem0Server, memory_reme.ReMe])
+def test_every_vendor_says_what_it_makes_itself(cls):
+    """The part of a memory's schema nobody sets, which the console draws locked: each link joins two of its own types."""
+    b = cls().capabilities()["schema"]["builtin"]
+    names = [t["name"] for t in b["types"]]
+    assert names and len(names) == len(set(names))
+    assert set(names) <= {"episode", "entity", "fact", "note"}, "the record types the adapter answers"
+    for r in b["relations"]:
+        assert r["from"] in names and r["to"] in names, r
+        assert r["name"] in ("about", "derived_from"), "the rels its records carry"
+    for x in b["types"] + b["relations"]:
+        assert x["description"] and "\u2014" not in x["description"] and "\u2013" not in x["description"]
+
+
 def test_a_graphiti_entity_names_the_conversations_that_mention_it():
     g = memory_graphiti.Graphiti("http://vendor.test", "", ORG)
     x = g._node_out("m", {"uuid": "n1", "name": "Acme", "labels": ["Entity"], "attributes": {}, "episodes": ["ep1"]})
