@@ -64,6 +64,7 @@ import memory_graphiti
 import memory_hindsight
 import memory_mem0
 import memory_reme
+import memory_relay      # memory vendors' servers call the model relay with a service credential
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
 import setup_compose         # New setup: the rules every built configuration is held to
 import setup_builder         # New setup: the built-in builder, saving into the person's workspace
@@ -4769,8 +4770,123 @@ async def _entra_token(conn: dict) -> str:
         return token
 
 
+# ── memory services on the model relay (memory_relay) ──────────────────────────────────────────────
+# A memory vendor's server calls /v1/llm with an `hrm_` credential instead of a provider key: each call names one of its
+# service's models and goes through this instance's key for that model. Set up and withdrawn by the operator (internal
+# routes below); the registry is a vault document, so a credential is checked on every call.
+# The keys memory services may use, in order (provider types or key names); unset = any key, the model's maker first.
+# A test instance sets "vercel,azure-foundry" so its vendors spend gateway credit, never a provider's own key.
+HR_MEMORY_RELAY_KEYS = [x.strip() for x in os.environ.get("HR_MEMORY_RELAY_KEYS", "").split(",") if x.strip()]
+
+
+async def _memory_services() -> dict:
+    v = await _vault_get(GLOBAL_TENANT, memory_relay.REGISTRY_KEY)
+    try:
+        doc = json.loads(v) if v else {}
+        return doc if isinstance(doc, dict) else {}
+    except ValueError:
+        return {}
+
+
+class MemoryServiceIn(BaseModel):
+    vendor: str
+    llm_model: str
+    embedding_model: str
+    small_model: str = ""
+
+
+@app.post("/v1/memory-services", dependencies=[Depends(_internal_only)])
+async def memory_service_create(b: MemoryServiceIn) -> dict:
+    """A memory service and its credential, which is answered once here and kept nowhere else (it is the gateway's
+    signature over the id, so the vendor's server holds it, from the vault)."""
+    if b.vendor not in memory_relay.VENDORS:
+        raise HTTPException(400, f"vendor must be one of {', '.join(memory_relay.VENDORS)}")
+    catalog, integrations = await _effective_model_map(), await _integrations_doc()
+    for field, want in (("llm_model", "chat"), ("small_model", "chat"), ("embedding_model", "embedding")):
+        model = getattr(b, field)
+        if not model and field == "small_model":
+            continue
+        if memory_relay.kind_of(model, catalog) != want:
+            raise HTTPException(400, f"{field}: {model!r} is not a {want} model a memory service can use")
+        if not memory_relay.pick(model, integrations, catalog, _integration_models, HR_MEMORY_RELAY_KEYS):
+            raise HTTPException(400, f"{field}: no key here serves {model}")
+    doc = await _memory_services()
+    sid = memory_relay.new_id()
+    doc[sid] = memory_relay.service_record(b.vendor, b.llm_model, b.embedding_model, b.small_model)
+    await _vault_put(GLOBAL_TENANT, memory_relay.REGISTRY_KEY, json.dumps(doc))
+    return {"id": sid, "credential": memory_relay.mint(_signing_key(), sid), **doc[sid]}
+
+
+@app.get("/v1/memory-services", dependencies=[Depends(_internal_only)])
+async def memory_service_list() -> dict:
+    return {"data": [{"id": k, **v} for k, v in (await _memory_services()).items()]}
+
+
+@app.post("/v1/memory-services/{sid}/revoke", dependencies=[Depends(_internal_only)])
+async def memory_service_revoke(sid: str) -> dict:
+    doc = await _memory_services()
+    if sid not in doc:
+        raise HTTPException(404, "no such memory service")
+    doc[sid]["revoked"] = True
+    await _vault_put(GLOBAL_TENANT, memory_relay.REGISTRY_KEY, json.dumps(doc))
+    return {"id": sid, **doc[sid]}
+
+
+async def _memory_relay(tok: str, path: str, request: Request):
+    """A memory service's call: its own models only, on the inference paths only, through the key that serves the
+    model, which is named the way that key names it. The agents' turn credential plays no part."""
+    sid = memory_relay.verify(_signing_key(), tok)
+    svc = (await _memory_services()).get(sid) if sid else None
+    if not svc or svc.get("revoked"):
+        raise HTTPException(401, "invalid memory service credential")
+    suffix = path[3:] if path.startswith("v1/") else path
+    kind = memory_relay.PATHS.get(suffix)
+    if request.method != "POST" or not kind:
+        raise HTTPException(403, "this path is not available to a memory service")
+    raw = await request.body()
+    model = memory_relay.model_in(raw)
+    catalog = await _effective_model_map()
+    if model not in memory_relay.models_of(svc) or memory_relay.kind_of(model, catalog) != kind:
+        raise HTTPException(403, f"this memory service doesn't use {model or 'that model'} here")
+    got = memory_relay.pick(model, await _integrations_doc(), catalog, _integration_models, HR_MEMORY_RELAY_KEYS)
+    if not got:
+        raise HTTPException(502, f"no key here serves {model}")
+    integ, pid = got
+    conn = _with_provider_base({**dict(integ.get("config") or {}), "provider": str(integ.get("provider") or "").lower()}) or {}
+    provider = str(conn.get("provider") or "")
+    base = _provider_base_url(provider, str(conn.get("base_url") or ""))
+    if not base:
+        raise HTTPException(502, "that key has no address")
+    headers = _relay_out_headers(request.headers)
+    key = str(conn.get("api_key") or "")
+    if provider in ("azure", "azure-foundry"):
+        if _entra_conn(conn):
+            headers["authorization"] = f"Bearer {await _entra_token(conn)}"
+        else:
+            headers["api-key"] = key
+    elif provider == "anthropic":
+        headers["x-api-key"] = key
+    else:
+        headers["authorization"] = f"Bearer {key}"
+    body = _strip_unsupported(memory_relay.with_model(raw, pid), provider=provider, byok=True, path=suffix, keep_thinking=False)
+    rc = _relay_client()
+    up = await rc.send(rc.build_request("POST", f"{base}/{suffix}", headers=headers, content=body), stream=True)
+    print(f"[memory-relay] {sid} {svc.get('vendor')} {suffix} {model} -> {integ.get('name')} {up.status_code}", flush=True)
+
+    async def pump():
+        try:
+            async for chunk in up.aiter_raw():
+                yield chunk
+        finally:
+            await up.aclose()
+    out = {k: val for k, val in up.headers.items() if k.lower() not in ("content-length", "transfer-encoding", "connection")}
+    return StreamingResponse(pump(), status_code=up.status_code, headers=out, media_type=up.headers.get("content-type"))
+
+
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def llm_broker(path: str, request: Request):
+    if _broker_token(request).startswith(memory_relay.PREFIX):
+        return await _memory_relay(_broker_token(request), path, request)
     claims = _verify_turn_cred(_broker_token(request))
     if not claims:
         raise HTTPException(401, "invalid or expired turn credential")
