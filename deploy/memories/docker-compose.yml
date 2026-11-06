@@ -21,7 +21,9 @@ services:
     build: ./graphiti
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       MODEL_NAME: ${MEMORY_MODEL:-gpt-4o-mini}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
       GRAPHITI_API_KEY: ${GRAPHITI_API_KEY:-}
     # one file per memory, in a database that runs inside this server
     volumes: [graphiti:/data]
@@ -38,9 +40,11 @@ services:
       HINDSIGHT_API_LLM_PROVIDER: openai
       HINDSIGHT_API_LLM_API_KEY: ${OPENAI_API_KEY:-}
       HINDSIGHT_API_LLM_MODEL: ${MEMORY_MODEL:-gpt-4o-mini}
+      HINDSIGHT_API_LLM_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: openai
       HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       # The model downloads once, into hindsight-cache.
       HINDSIGHT_API_RERANKER_PROVIDER: local
       HINDSIGHT_API_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-}@postgres:5432/hindsight
@@ -63,6 +67,7 @@ services:
     entrypoint: ["sh", "-c", "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port 8000"]
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_DB: postgres
@@ -106,10 +111,10 @@ services:
     environment:
       REME_CONFIG: /etc/reme/config.yaml
       LLM_API_KEY: ${OPENAI_API_KEY:-}
-      LLM_BASE_URL: https://api.openai.com/v1
+      LLM_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       LLM_MODEL_NAME: ${MEMORY_MODEL:-gpt-4o-mini}
       EMBEDDING_API_KEY: ${OPENAI_API_KEY:-}
-      EMBEDDING_BASE_URL: https://api.openai.com/v1
+      EMBEDDING_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL:-text-embedding-3-small}
     volumes:
       - reme:/data

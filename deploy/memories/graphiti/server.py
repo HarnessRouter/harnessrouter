@@ -52,9 +52,11 @@ from graphiti_core.driver.driver import GraphProvider  # noqa: E402
 from graphiti_core.driver.kuzu_driver import KuzuDriver  # noqa: E402
 from graphiti_core.edges import EntityEdge  # noqa: E402
 from graphiti_core.embedder import OpenAIEmbedder  # noqa: E402
+from graphiti_core.embedder.openai import OpenAIEmbedderConfig  # noqa: E402
 from graphiti_core.errors import GroupsEdgesNotFoundError, GroupsNodesNotFoundError  # noqa: E402
 from graphiti_core.graph_queries import get_fulltext_indices  # noqa: E402
 from graphiti_core.llm_client import LLMConfig, OpenAIClient  # noqa: E402
+from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient  # noqa: E402
 from graphiti_core.nodes import EntityNode, EpisodeType, EpisodicNode  # noqa: E402
 from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RRF  # noqa: E402
 from graphiti_core.search.search_filters import SearchFilters  # noqa: E402
@@ -161,10 +163,18 @@ def graph_of(group: str) -> Graphiti:
 
 @lru_cache(maxsize=1)
 def _clients():
-    """One set for the whole server: memories open and close, and the model's connections have no reason to."""
-    cfg = LLMConfig(api_key=os.environ.get("OPENAI_API_KEY"), base_url=os.environ.get("OPENAI_BASE_URL") or None,
-                    model=os.environ.get("MODEL_NAME", "gpt-4o-mini"), small_model=os.environ.get("SMALL_MODEL_NAME") or os.environ.get("MODEL_NAME", "gpt-4o-mini"))
-    return OpenAIClient(cfg, reasoning=None, verbosity=None), OpenAIRerankerClient(cfg), OpenAIEmbedder()
+    """One set for the whole server: memories open and close, and the model's connections have no reason to.
+
+    The address and key are where the models are reached: a provider, or HarnessRouter's model relay with a memory
+    service credential (OPENAI_BASE_URL=<HarnessRouter>/api/harness/v1/llm/v1). The embedding model is named here too;
+    left unset, Graphiti's embedder read only the environment and always used its own default. GRAPHITI_LLM_API=chat
+    extracts through chat completions with a JSON schema, for an address that doesn't serve the Responses API."""
+    key, base = os.environ.get("OPENAI_API_KEY"), os.environ.get("OPENAI_BASE_URL") or None
+    model = os.environ.get("MODEL_NAME", "gpt-4o-mini")
+    cfg = LLMConfig(api_key=key, base_url=base, model=model, small_model=os.environ.get("SMALL_MODEL_NAME") or model)
+    llm = OpenAIGenericClient(cfg) if os.environ.get("GRAPHITI_LLM_API") == "chat" else OpenAIClient(cfg, reasoning=None, verbosity=None)
+    embedder = OpenAIEmbedder(OpenAIEmbedderConfig(api_key=key, base_url=base, embedding_model=os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")))
+    return llm, OpenAIRerankerClient(cfg), embedder
 
 
 async def ready(group: str) -> Graphiti:
