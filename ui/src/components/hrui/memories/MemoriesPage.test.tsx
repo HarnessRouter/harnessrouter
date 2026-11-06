@@ -20,7 +20,8 @@ jest.mock('../setup/settingsModel', () => ({
 
 import { harnessFetch } from '@/lib/hfetch';
 import { MemoriesPage } from './MemoriesPage';
-import { Art } from './parts';
+import { CardArt } from './CardArt';
+import { concepts } from './graph/builtin';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root; let el: HTMLElement;
@@ -123,10 +124,20 @@ describe('New memory', () => {
   };
   const choose = async (name: string) => {
     await act(async () => { (Array.from(page().querySelectorAll('button.mm-pv-o')).find((o) => o.textContent?.includes(name)) as HTMLButtonElement).click(); });
+    expect(page().querySelector('.mm-pv-o.on b')?.textContent).toBe(name);
   };
 
   test('lists all four: one not connected offers Connect and cannot be chosen', async () => {
     await start();
+    // every service is compared on the same three facts, read from what it says it does
+    const facts = (n: string) => Array.from((Array.from(page().querySelectorAll('.mm-pv-o')).find((o) => o.querySelector('b')?.textContent === n) as HTMLElement).querySelectorAll('.mm-sv-facts > span')).map((f) => `${f.querySelector('small')?.textContent}: ${f.querySelector('em')?.textContent}`);
+    expect(facts('Graphiti')).toEqual(['Schema: Types and relations', 'Entities: Found for you', 'Pulls out facts: As it writes']);
+    expect(facts('Hindsight')).toEqual(['Schema: Labels', 'Entities: Found for you', 'Pulls out facts: In the background']);
+    expect(page().querySelector('.mm-lock')?.textContent).toBe('Fixed once created');
+    // a choice of one among them: arrows move it, as in any group of radio buttons
+    expect(page().querySelector('[role=radiogroup] [aria-checked=true] b')?.textContent).toBe('Mem0');
+    await act(async () => { (page().querySelector('[role=radiogroup]') as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); });
+    expect(page().querySelector('[role=radiogroup] [aria-checked=true] b')?.textContent).toBe('Graphiti');
     expect(Array.from(page().querySelectorAll('.mm-prov b')).map((b) => b.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight', 'ReMe']);
     expect(Array.from(page().querySelectorAll('button.mm-pv-o b')).map((b) => b.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight']);
     const reme = Array.from(page().querySelectorAll('.mm-pv-o')).find((o) => o.textContent?.includes('ReMe')) as HTMLElement;
@@ -204,37 +215,22 @@ describe('the cards', () => {
 });
 
 describe('a card draws what is kept', () => {
-  const dots = (records: number) => {
-    const host = document.createElement('div');
-    const root = createRoot(host);
-    act(() => root.render(<Art s={null} w={300} h={150} records={records} />));
-    const out = { filled: host.querySelectorAll('circle[fill="var(--faint)"]').length, ring: host.querySelectorAll('circle[fill="none"]').length };
-    act(() => root.unmount());
-    return out;
-  };
-  test('one dot a record where there is no schema, never more than fit', () => {
-    expect(dots(4)).toEqual({ filled: 4, ring: 0 });
-    expect(dots(400)).toEqual({ filled: 15, ring: 0 });
-  });
-  test('an empty memory stays an empty ring, so it does not read as one with records', () => {
-    expect(dots(0)).toEqual({ filled: 0, ring: 1 });
-  });
   const MADE = {
     types: [{ name: 'episode', description: 'e' }, { name: 'entity', description: 'n' }, { name: 'fact', description: 'f' }],
-    relations: [{ name: 'about', from: 'fact', to: 'entity', description: 'a' }, { name: 'derived_from', from: 'fact', to: 'fact', description: 'o' }],
+    relations: [{ name: 'about', from: 'fact', to: 'entity', description: 'a' }, { name: 'derived_from', from: 'fact', to: 'episode', description: 'o' }],
   };
   const makes = { ...CAPS.graphiti, schema: { ...CAPS.graphiti.schema, builtin: MADE } } as Provider;
-  test('a vendor that says what it makes: the cover is its concepts, named and linked, not a dot a record', () => {
+  const names = (el: Element) => Array.from(el.querySelectorAll('text.mm-ca-type')).map((x) => x.textContent).sort();
+  test('where nobody set a schema it draws what the vendor makes, named and linked, not the records (Richard 11-06)', () => {
     const host = document.createElement('div');
     const r = createRoot(host);
-    act(() => r.render(<Art s={null} w={300} h={150} records={41} provider={makes} />));
-    expect(Array.from(host.querySelectorAll('text')).map((t) => t.textContent).sort()).toEqual(['Entity', 'Episode', 'Fact']);
-    expect(host.querySelectorAll('circle[fill="var(--faint)"]')).toHaveLength(0);
-    expect(host.querySelectorAll('line')).toHaveLength(1);
-    expect(host.querySelectorAll('circle[fill="none"]')).toHaveLength(1);   // an observation drawn from facts
+    act(() => r.render(<CardArt s={concepts(null, makes)} labels={false} records={41} recent={['Caroline gave a talk']} />));
+    expect(names(host)).toEqual(['Entity', 'Episode', 'Fact']);
+    expect(host.querySelectorAll('line')).toHaveLength(2);
+    expect(host.textContent).not.toContain('Caroline gave a talk');
     act(() => r.unmount());
   });
-  test('its types count what it makes and what a person set', async () => {
+  test('its types count what it makes and what a person set, and the picture has both', async () => {
     backend({
       'GET /v1/memories/providers': { data: [makes] },
       'GET /v1/memories': { data: [memory()] },
@@ -244,6 +240,39 @@ describe('a card draws what is kept', () => {
     await open();
     const card = page().querySelector('.mm-card') as Element;
     expect(Array.from(card.querySelectorAll('.mm-cs > span')).map((x) => `${x.querySelector('small')?.textContent} ${x.querySelector('b')?.textContent}`)[0]).toBe('Types 5');
-    expect(Array.from(card.querySelectorAll('.mm-art text')).map((t) => t.textContent).sort()).toEqual(['Company', 'Entity', 'Episode', 'Fact', 'Person']);
+    expect(names(card)).toEqual(['Company', 'Entity', 'Episode', 'Fact', 'Person']);
+  });
+  test('labels a person set are drawn as labels; with none yet, what the vendor makes', () => {
+    const labelled = { ...CAPS.hindsight, schema: { mode: 'labels', builtin: MADE } } as Provider;
+    const host = document.createElement('div');
+    const r = createRoot(host);
+    act(() => r.render(<CardArt s={concepts({ types: [], relations: [] }, labelled)} labels={false} records={3} />));
+    expect(names(host)).toEqual(['Entity', 'Episode', 'Fact']);
+    act(() => r.unmount());
+  });
+});
+
+describe('cards or a list', () => {
+  test('List shows a row a memory with the same figures, and the choice is remembered', async () => {
+    localStorage.removeItem('hr.memories.view');
+    backend({
+      'GET /v1/memories/providers': { data: [CAPS.graphiti, CAPS.mem0] },
+      'GET /v1/memories': { data: [memory(), memory({ id: 'hmem_2', name: 'Support', provider: 'mem0', records: { count: null }, description: '' })] },
+      'GET /v1/memories/hmem_1/schema': { types: [{ name: 'Company' }, { name: 'Person' }], relations: [] },
+      'GET /v1/memories/hmem_1/grants': { data: [{ id: 'g1', memory_id: 'hmem_1', principal: 'member:chrn_a', privileges: ['read'], inherited: false }] },
+    });
+    await open();
+    expect(page().querySelectorAll('.mm-card')).toHaveLength(2);
+    await press('List');
+    const rows = Array.from(page().querySelectorAll('.mm-row'));
+    expect(rows).toHaveLength(2);
+    const cells = (r: Element) => Array.from(r.children).slice(1).map((c) => c.textContent);
+    expect(cells(rows[0])).toEqual(['What each brand wants.', '2 types', '1', '1']);
+    // no schema is read here: the Schema cell stays empty; what could not be read is a dash
+    expect(cells(rows[1])).toEqual(['No description yet.', '', '—', '—']);
+    expect(localStorage.getItem('hr.memories.view')).toBe('list');
+    await press('Cards');
+    expect(page().querySelectorAll('.mm-card')).toHaveLength(2);
+    expect(localStorage.getItem('hr.memories.view')).toBe('cards');
   });
 });

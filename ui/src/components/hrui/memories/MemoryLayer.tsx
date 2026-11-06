@@ -18,6 +18,9 @@ import { memoriesWord, PLUS, useProviders } from './parts';
 import { vendorName } from './vendors';
 import './memories.css';
 
+/** Open, as everywhere a row leads somewhere else: a quiet arrow at the end of the row. */
+const OPEN_IC = <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8" /></svg>;
+
 /** Past this many, a search is worth its row. */
 const FIND_FROM = 4;
 
@@ -87,11 +90,18 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
     } catch (e) { toast(plain(e, fallback)); await read(); } finally { setBusy(false); }
   };
   const principal = d?.principal || '';
-  // the default is a memory the agent can write: the first one written becomes it, and losing write hands it on
+  // The default is a memory the agent can write: the first one written becomes it, and losing write hands it on.
+  // Keeping every finished task is a person's choice, made for the default they see. So a default that appears
+  // where there was none (by either way: the first write, or Make default) comes with keeping off, and a default
+  // that goes takes keeping with it; the service's own setting would otherwise turn it on unasked.
+  const makeDefault = (mid: string) => setHarnessMemories(hid, d?.default_memory_id ? { default_memory_id: mid } : { default_memory_id: mid, observe: false });
   const handOn = async (mid: string) => {
     if (d?.default_memory_id !== mid) return;
     const other = d.data.find((x) => x.id !== mid && x.privileges.includes('write'));
-    await setHarnessMemories(hid, { default_memory_id: other ? other.id : '' });
+    if (!other) { await setHarnessMemories(hid, { default_memory_id: '', observe: false }); return; }
+    await setHarnessMemories(hid, { default_memory_id: other.id });
+    // what changed without being pressed is said: where the agent writes now, and where tasks are kept now
+    toast(d.observe ? `${other.name} is now the default. Finished tasks are kept there.` : `${other.name} is now the default.`);
   };
   const turnOn = (mid: string) => run(() => grant(mid, principal, ['read']), 'That memory was not given. Try again.');
   const turnOff = (mid: string) => run(async () => {
@@ -102,7 +112,7 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
   const setAccess = (mid: string, write: boolean) => run(async () => {
     await grant(mid, principal, write ? ['read', 'write'] : ['read']);
     // What gets written is the agent's own call. Keeping every task as well, whatever the agent thought of it, is a person's choice: the switch below stays as it reads.
-    if (write && !d?.default_memory_id) await setHarnessMemories(hid, { default_memory_id: mid, observe: false });
+    if (write && !d?.default_memory_id) await makeDefault(mid);
     if (!write) await handOn(mid);
   }, 'The access was not changed. Try again.');
 
@@ -121,7 +131,7 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
   const shown = rows.filter((r) => !needle || r.name.toLowerCase().includes(needle) || (r.provider && vendorName(r.provider).toLowerCase().includes(needle)));
   return (
     <>
-      <div className="lg-sub">
+      <div className="lg-sub mm-layer">
         <div className="lg-sub-h">
           <h3>Memories{d.data.length ? <span className="muted">{`${d.data.length} on`}</span> : null}</h3>
           <button type="button" className="btn small" onClick={() => router.push('/memories?new=1')}>{PLUS}New memory</button>
@@ -141,35 +151,44 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
               const sub = [m.parent ? `In ${m.parent}` : '', m.records != null ? plural(m.records, 'record') : '', m.provider ? vendorName(m.provider) : ''].filter(Boolean).join(' · ');
               const why = m.from ? `Comes with ${m.from}` : !mayChange ? 'Only someone who manages this memory can change who holds it' : undefined;
               return (
-                <div className={`cap-row cap-mcp${on ? '' : ' off'}`} key={m.id}>
+                <div className={`cap-row cap-mcp mm-sl${on ? '' : ' off'}`} key={m.id}>
                   <span className="cap-ic" dangerouslySetInnerHTML={{ __html: partIcon(on ? 'built' : 'empty', 'memory') }} />
-                  <span className="grow"><b>{m.name}{isD ? <span className="pill run mm-defp">Default</span> : null}</b>{sub || m.from ? <small>{[m.from ? `Comes with ${m.from}` : '', sub].filter(Boolean).join(' · ')}</small> : null}</span>
-                  {mine ? (
-                    <select className="mm-acc-q" aria-label={`What this setup may do with ${m.name}`} disabled={busy || !mayChange} value={w ? 'w' : 'r'} onChange={(e) => void setAccess(m.id, e.target.value === 'w')}>
-                      <option value="r">Reads</option>
-                      <option value="w">Reads and writes</option>
-                    </select>
-                  ) : null}
-                  {mine && w && !isD ? <button type="button" className="link-q mm-row-a" disabled={busy} onClick={() => void run(() => setHarnessMemories(hid, { default_memory_id: m.id }), 'The default was not changed. Try again.')}>Make default</button> : null}
-                  {all?.some((x) => x.id === m.id) ? <button type="button" className={`link-q mm-row-a${mine ? '' : ' first'}`} aria-label={`Open ${m.name}`} onClick={() => router.push(`/memories/${encodeURIComponent(m.id)}`)}>Open</button> : null}
+                  <span className="grow"><b className="mm-sl-name"><span title={m.name}>{m.name}</span>{isD ? <span className="pill run mm-defp">Default</span> : null}</b>{sub || m.from ? <small>{[m.from ? `Comes with ${m.from}` : '', sub].filter(Boolean).join(' · ')}</small> : null}</span>
+                  {/* the same columns in every row, filled only where the memory is on, so the switches and arrows line up */}
+                  <span className="mm-sl-c mm-sl-acc">
+                    {mine ? (
+                      <select className="mm-acc-q" aria-label={`What this setup may do with ${m.name}`} disabled={busy || !mayChange} value={w ? 'w' : 'r'} onChange={(e) => void setAccess(m.id, e.target.value === 'w')}>
+                        <option value="r">Reads</option>
+                        <option value="w">Reads and writes</option>
+                      </select>
+                    ) : null}
+                  </span>
+                  <span className="mm-sl-c mm-sl-def">
+                    {mine && w && !isD ? <button type="button" className="link-q mm-row-a" disabled={busy} onClick={() => void run(() => makeDefault(m.id), 'The default was not changed. Try again.')}>Make default</button> : null}
+                  </span>
                   <button type="button" className={`tog${on ? ' on' : ''}`} aria-pressed={on} aria-label={m.name} title={why} disabled={busy || !!m.from || !mayChange}
                     onClick={() => void (mine ? turnOff(m.id) : turnOn(m.id))}><i />{on ? 'On' : 'Off'}</button>
+                  <span className="mm-sl-c mm-sl-open">
+                    {all?.some((x) => x.id === m.id) ? <button type="button" className="icon-btn" aria-label={`Open ${m.name}`} title="Open" onClick={() => router.push(`/memories/${encodeURIComponent(m.id)}`)}>{OPEN_IC}</button> : null}
+                  </span>
                   <i className="cap-br" aria-hidden="true" />
                 </div>
               );
             })}
           </div>
         ) : <p className="set-help" role="status">Nothing here matches that.</p>}
-        <p className="set-help">Reading lets it recall records. Writing also lets it remember, revise and forget them. Erasing is never up to an agent. Changes here apply right away.</p>
+        <p className="set-help mm-sl-help">Reading lets it recall records. Writing also lets it remember, revise and forget them. Erasing is never up to an agent. Changes here apply right away.</p>
       </div>
       {showKeep ? (
-        <div className="lg-sub">
+        <div className="lg-sub mm-layer">
           <div className="lg-sub-h"><h3>Remember tasks</h3></div>
           <div className="cap-list">
-            <div className="cap-row">
+            <div className="cap-row mm-sl">
               <span className="grow"><b>Keep every finished task</b><small>{def ? keepLine(defProvider, def.name) : 'Needs a default memory: one it can write.'}</small></span>
               <button type="button" className={`tog${d.observe && def ? ' on' : ''}`} aria-pressed={!!(d.observe && def)} aria-label="Keep every finished task" disabled={!def || busy}
                 onClick={() => void run(() => setHarnessMemories(hid, { observe: !d.observe }), 'That was not changed. Try again.')}><i />{d.observe && def ? 'On' : 'Off'}</button>
+              {/* the arrow's column, empty here, so this switch lines up with the memories' switches above */}
+              <span className="mm-sl-c mm-sl-open" aria-hidden="true" />
             </div>
           </div>
         </div>

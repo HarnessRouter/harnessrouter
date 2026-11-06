@@ -440,8 +440,9 @@
 #hrui .set-split .lg-dz>.ly-n{flex:1 1 auto;min-width:0}
 #hrui .set-split .lg-dz>.ly-n b{color:var(--bad)}
 #hrui .set-split .lg-dz>.ly-n:hover{background:var(--bad-soft)}
-/* Duplicate: Delete setup's row, at its right end, blue */
-#hrui .set-split .lg-dz>.ly-n.lg-dup{flex:none;width:auto;text-align:right}
+/* Delete harness, then Duplicate harness under it: two rows of a layer's anatomy, red then blue */
+#hrui .set-split .lg-dz{flex-direction:column;align-items:stretch;gap:2px}
+#hrui .set-split .lg-dz>.ly-n.lg-dup{flex:none;width:100%;text-align:left}
 #hrui .set-split .lg-dz>.ly-n.lg-dup b{color:var(--accent)}
 #hrui .set-split .lg-dz>.ly-n.lg-dup:hover{background:var(--accent-soft)}
 #hrui .set-split .lg-col>.lg-dz{display:none}

@@ -116,7 +116,34 @@ test('losing write or being turned off hands the default on, or clears it', asyn
   const sel = rowOf('Brand kits').querySelector('select') as HTMLSelectElement;
   await act(async () => { sel.value = 'r'; sel.dispatchEvent(new Event('change', { bubbles: true })); });
   await flush();
-  expect(s2.sent('PUT', `/v1/harnesses/${H}/memories`)[0].body).toEqual({ default_memory_id: '' });
+  // no default left: keeping tasks goes with it, so what is stored is what the switch shows
+  expect(s2.sent('PUT', `/v1/harnesses/${H}/memories`)[0].body).toEqual({ default_memory_id: '', observe: false });
+});
+test('a default handed on is said, with where finished tasks go now', async () => {
+  backend({ data: [held('m1', 'Brand kits', true, true), held('m2', 'Support', true)], def: 'm1', observe: true });
+  await draw();
+  await press(sw('Brand kits'));
+  expect(toast).toHaveBeenCalledWith('Support is now the default. Finished tasks are kept there.');
+  await act(async () => { root.unmount(); }); root = createRoot(el); toast.mockClear();
+  backend({ data: [held('m1', 'Brand kits', true, true), held('m2', 'Support', true)], def: 'm1', observe: false });
+  await draw();
+  await press(sw('Brand kits'));
+  expect(toast).toHaveBeenCalledWith('Support is now the default.');
+});
+test('Make default where there is none never turns keeping tasks on: the service would otherwise, unasked', async () => {
+  // write given elsewhere, so a memory it writes and no default; the service keeps tasks unless told not to
+  const s = backend({ data: [held('m1', 'Brand kits', true)], def: null, observe: true });
+  await draw();
+  expect(sw('Keep every finished task').textContent).toBe('Off');
+  await press(Array.from(rowOf('Brand kits').querySelectorAll('button')).find((b) => b.textContent === 'Make default') as HTMLElement);
+  expect(s.sent('PUT', `/v1/harnesses/${H}/memories`)[0].body).toEqual({ default_memory_id: 'm1', observe: false });
+  expect(sw('Keep every finished task').textContent).toBe('Off');
+});
+test('Make default where there is one already moves the default and leaves keeping as the person set it', async () => {
+  const s = backend({ data: [held('m1', 'Brand kits', true, true), held('m2', 'Support', true)], def: 'm1', observe: true });
+  await draw();
+  await press(Array.from(rowOf('Support').querySelectorAll('button')).find((b) => b.textContent === 'Make default') as HTMLElement);
+  expect(s.sent('PUT', `/v1/harnesses/${H}/memories`)[0].body).toEqual({ default_memory_id: 'm2' });
 });
 test('a memory below one that’s on comes with it: on, and not a switch of its own', async () => {
   backend({

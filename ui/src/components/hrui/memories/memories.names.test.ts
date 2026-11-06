@@ -41,7 +41,7 @@ test('the measured lines name no provider', () => {
 test('every style is scoped to the console’s root', () => {
   const css = readFileSync(join(DIR, 'memories.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   // a comma inside a value (a shadow, a function) is not a selector: only what opens a rule counts
-  const heads = css.replace(/@media[^{]+\{/g, '').split('}').map((r) => r.split('{')[0].trim()).filter(Boolean);
+  const heads = css.replace(/@(?:media|container)[^{]+\{/g, '').split('}').map((r) => r.split('{')[0].trim()).filter(Boolean);
   for (const h of heads) expect([h, h.split(/,(?![^(]*\))/).every((x) => x.trim().startsWith('#hrui '))]).toEqual([h, true]);
 });
 test('the narrow rules the design has are kept', () => {

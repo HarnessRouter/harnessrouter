@@ -143,12 +143,13 @@ export function ResizableColumns({ storageKey, panes, tab, onTab }: ResizableCol
   return (
     <div ref={el} className={`rc${narrow ? ' narrow' : ''}${dragging >= 0 ? ' dragging' : ''}`}>
       {narrow ? (
-        <div className="tabs inline rc-tabs" role="tablist" onKeyDown={(e) => tabKeys(e, ids, current, pick)}>
+        // a small segmented control, not a second row of underlined tabs: the page's own tabs (Schema, Data) are those
+        <div className="rc-segbar"><div className="seg rc-tabs" role="tablist" onKeyDown={(e) => tabKeys(e, ids, current, pick)}>
           {panes.map((p) => (
             <button key={p.id} type="button" role="tab" id={`rc-t-${p.id}`} aria-selected={current === p.id} aria-controls={`rc-p-${p.id}`} tabIndex={current === p.id ? 0 : -1}
               className={current === p.id ? 'on' : ''} onClick={() => pick(p.id)}>{p.label}</button>
           ))}
-        </div>
+        </div></div>
       ) : null}
       <div className="rc-body">
         {panes.map((p, i) => (

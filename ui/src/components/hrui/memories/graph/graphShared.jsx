@@ -82,7 +82,7 @@ export function NodeContextMenu({
                   <span className="cy-ctx-node-chip" style={{ background: targetColor }}>
                     {targetIcon
                       ? <IconByName name={targetIcon} size={12} color="#fff"/>
-                      : <span style={{ fontSize: 10, color: '#fff', fontWeight: 600 }}>{(target[0] || '?').toUpperCase()}</span>}
+                      : <span style={{ fontSize: 11, color: '#fff', fontWeight: 600 }}>{(target[0] || '?').toUpperCase()}</span>}
                   </span>
                   <span className="cy-ctx-target-label">{target}</span>
                 </button>

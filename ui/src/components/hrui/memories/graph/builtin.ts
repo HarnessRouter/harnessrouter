@@ -6,7 +6,8 @@ import type { Provider } from '@/lib/memories';
 import { builtinOf, relText } from '../caps';
 import { kindInfo } from '../tree';
 import { footprint, initialLayout } from './layout';
-import type { EType, VGraph, VType } from './schemaDraft';
+import type { LRel, LSchema, LType } from '../schemaModel';
+import { graphOf, type EType, type VGraph, type VType } from './schemaDraft';
 
 export type BConn = { from_type: string; to_type: string; builtin?: boolean };
 export type BVType = VType & { builtin?: boolean };
@@ -62,4 +63,24 @@ export function withBuiltin<G extends VGraph | BGraph | null>(graph: G, provider
     for (const v of fresh) { const q = pos.get(v.label)!; v.ui = { ...v.ui, position: { x: Math.round(q.x + dx), y: Math.round(q.y + dy) } }; }
   }
   return { ...graph, titles, vertex_types: vts, edge_types: ets };
+}
+
+/** A memory's schema as its card draws it (Richard 11-06: the vendor's concepts where nobody set a schema, in Vivian's
+ *  drawing): what the provider makes itself and the types a person set, with the links between them, in the schema's
+ *  own shape. A provider that declares nothing gives back what was set. */
+export function concepts(s: LSchema | null | undefined, provider: Provider | null | undefined): LSchema | null {
+  if (!builtinOf(provider)?.types.length) return s ?? null;
+  const g = withBuiltin(graphOf(s || { types: [], relations: [] }), provider) as BGraph;
+  const placed = g.vertex_types.filter((v) => v.ui.position);
+  const ids = new Map(placed.map((v) => [v.label, v.id || v.label]));
+  // what the provider makes is drawn by its title (Fact, Episode); a person's own type by its name
+  const types: LType[] = placed.map((v) => ({
+    id: ids.get(v.label) as string, name: v.builtin && g.titles?.[v.label] ? g.titles[v.label] : v.label, description: v.description,
+    properties: [], color: v.ui.color || '', icon: v.ui.icon || '', x: v.ui.position!.x, y: v.ui.position!.y, caption: v.ui.caption || 'title',
+  }));
+  const idOf = (label: string) => ids.get(label) || label;
+  const relations: LRel[] = g.edge_types.flatMap((e) => e.connections.map((c, i) => ({
+    id: `${e.label}:${i}`, name: e.label, description: e.description, from: idOf(c.from_type), to: idOf(c.to_type), color: e.ui.color,
+  })));
+  return { types, relations };
 }

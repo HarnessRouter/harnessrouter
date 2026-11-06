@@ -6,9 +6,7 @@ import { useCallback, useEffect, useState, type RefObject } from 'react';
 import { listCustom } from '@/lib/harness';
 import { listProviders, type Grant, type Provider } from '@/lib/memories';
 import { inVendorOrder } from './vendors';
-import { MM_ICONS, typeLabel, type LSchema } from './schemaModel';
-import { withBuiltin, type BGraph } from './graph/builtin';
-import { graphOf } from './graph/schemaDraft';
+import { MM_ICONS } from './schemaModel';
 
 export function MmIco({ k, size = 16, color }: { k: string; size?: number; color?: string }) {
   if (k && !MM_ICONS[k]) return <IconByName name={k} size={size} color={color} />;   // any icon a schema names, from the full catalogue
@@ -38,58 +36,6 @@ export const BADGE = <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
 
 export function Dot({ color, icon, size = 11 }: { color: string; icon: string; size?: number }) {
   return <span className="mm-dot" style={{ background: color }}><MmIco k={icon} size={size} color="#fff" /></span>;
-}
-
-/** A memory's cover: its schema, small. What the provider makes itself (its concepts) and the types a person set, each
- *  named, with the links between them, as the Schema tab draws them. Nothing to draw: one dot a record, and an empty memory
- *  stays an empty ring. */
-const ART_DOTS = 15, ART_COLS = 5, ART_NAMED = 9;
-export function Art({ s, w, h, records = 0, provider = null }: { s: LSchema | null | undefined; w: number; h: number; records?: number; provider?: Provider | null }) {
-  const g = withBuiltin(graphOf(s || { types: [], relations: [] }), provider) as BGraph;
-  const V = (g.vertex_types || []).filter((v) => Number.isFinite(v.ui?.position?.x) && Number.isFinite(v.ui?.position?.y));
-  if (!V.length && records > 0) {
-    const n = Math.min(records, ART_DOTS), gap = 26;
-    const rows = Math.ceil(n / ART_COLS), y0 = h / 2 - ((rows - 1) * gap) / 2;
-    return (
-      <svg className="mm-art-svg" viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
-        {Array.from({ length: n }, (_, i) => {
-          const row = Math.floor(i / ART_COLS), inRow = Math.min(ART_COLS, n - row * ART_COLS);
-          return <circle key={i} cx={w / 2 + ((i % ART_COLS) - (inRow - 1) / 2) * gap} cy={y0 + row * gap} r="4.5" fill="var(--faint)" />;
-        })}
-      </svg>
-    );
-  }
-  if (!V.length) {
-    return <svg className="mm-art-svg" viewBox={`0 0 ${w} ${h}`} aria-hidden="true"><circle cx={w / 2} cy={h / 2} r="16" fill="none" stroke="var(--line)" strokeWidth="2" strokeDasharray="4 4" /></svg>;
-  }
-  const named = V.length <= ART_NAMED && w >= 120;
-  const xs = V.map((v) => v.ui.position!.x), ys = V.map((v) => v.ui.position!.y);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const padX = named ? 40 : 22, padTop = 22, padBottom = named ? 34 : 22;
-  const f = Math.min((w - 2 * padX) / Math.max(1, x1 - x0), (h - padTop - padBottom) / Math.max(1, y1 - y0), 0.5);
-  const ox = (w - (x1 - x0) * f) / 2, oy = padTop + (h - padTop - padBottom - (y1 - y0) * f) / 2;
-  const at = (label: string) => { const v = V.find((x) => x.label === label); return v ? [ox + (v.ui.position!.x - x0) * f, oy + (v.ui.position!.y - y0) * f] : null; };
-  const r = w < 60 ? 3.6 : 9;
-  const nameOf = (label: string) => { const t = g.titles?.[label] || typeLabel(label); return t.length > 14 ? `${t.slice(0, 13)}…` : t; };
-  return (
-    <svg className="mm-art-svg" viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
-      {(g.edge_types || []).flatMap((e) => e.connections.map((c, i) => {
-        const a = at(c.from_type), b = at(c.to_type);
-        if (!a || !b) return null;
-        if (c.from_type === c.to_type) return <circle key={`${e.label}-${i}`} cx={a[0] + r} cy={a[1] - r} r={r * 0.9} fill="none" stroke="var(--g-line)" strokeWidth="1.4" />;
-        return <line key={`${e.label}-${i}`} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke="var(--g-line)" strokeWidth="1.4" />;
-      }))}
-      {V.map((v) => {
-        const q = at(v.label)!;
-        return (
-          <g key={v.label}>
-            <circle cx={q[0]} cy={q[1]} r={r} fill={v.ui.color || 'var(--faint)'} stroke="var(--surface)" strokeWidth={w < 60 ? 1 : 3} />
-            {named ? <text x={q[0]} y={q[1] + r + 13} textAnchor="middle" fontSize="11" fill="var(--muted)">{nameOf(v.label)}</text> : null}
-          </g>
-        );
-      })}
-    </svg>
-  );
 }
 
 /** A menu that closes on a press outside it or Escape. */
