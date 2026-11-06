@@ -41,13 +41,14 @@ const sizeOf = (degree) => 30 + Math.min(degree, 10) * 2.2;
 
 /**
  * @param {{ memory: import('@/lib/memories').Memory, provider: import('@/lib/memories').Provider | null, schema: import('../schemaModel').LSchema | null,
- *   activeRecordId: string, refreshKey: number, changed?: string[], onOpenRecord: (recordId: string, memoryId?: string) => void }} props
+ *   activeRecordId: string, refreshKey: number, changed?: string[], onOpenRecord: (recordId: string, memoryId?: string) => void,
+ *   linksFor?: (recordId: string) => import('react').ReactNode }} props   a record's links for its panel, where they can be changed
  */
 export function MemoryGraph(props) {
   return <Explorer key={props.memory.id} {...props} />;
 }
 
-function Explorer({ memory, provider, schema, activeRecordId, refreshKey, changed, onOpenRecord }) {
+function Explorer({ memory, provider, schema, activeRecordId, refreshKey, changed, onOpenRecord, linksFor }) {
   const mid = memory.id;
   const canvas = useRef(null);
   const body = useRef(null);
@@ -703,6 +704,7 @@ function Explorer({ memory, provider, schema, activeRecordId, refreshKey, change
         {detailEdge ? <DataEdgeDetail edge={detailEdge} nodes={all.nodes} schema={schema} compact={compact} onJump={jump} onClose={() => setDetail(null)} /> : null}
         {detailNode ? (
           <DataNodeDetail node={detailNode} nodes={all.nodes} edges={all.edges} schema={schema} thisMemoryId={mid} compact={compact} collapsed={!!collapsed[detailNode.key]}
+            links={linksFor && detailNode.record ? linksFor(detailNode.record.id) : null}
             onJump={jump} onExpand={(k) => void expand(k)} onCollapse={collapse} onRestore={restore} onClose={() => setDetail(null)} />
         ) : null}
       </div>

@@ -169,8 +169,22 @@
 #hrui .mgv .dg-canvas-tools { flex-wrap: wrap; justify-content: center; }
 #hrui .mgv .mm-foot .mm-hint { white-space: normal; }
 /* In the graph's column the detail rises from the bottom, so the graph it is about stays in view. */
-#hrui .mgv-explorer .dg-detail.compact { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-width: none; max-height: 56%; border-left: 0; border-top: 1px solid var(--line); border-radius: 12px 12px 0 0; box-shadow: 0 -8px 24px rgba(15,23,42,.12); }
+#hrui .mgv-explorer .dg-detail.compact { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-width: none; max-height: 40%; border-left: 0; border-top: 1px solid var(--line); border-radius: 12px 12px 0 0; box-shadow: 0 -8px 24px rgba(15,23,42,.12); }
 @media (max-width: 480px) {
   #hrui .mgv .sp-graph-addtype { width: min(240px, calc(100vw - 48px)); }
 }
 
+
+/* The record panel on the graph (DataNodeDetail, DataEdgeDetail; Richard 11-06): one scroll for all of it, head, actions,
+   text, properties and links, never a scroll inside it; a column at the side when wide, a sheet across the bottom when
+   narrow, capped at 40% so the graph stays the main thing. A compact head: a smaller badge, the title on two lines at
+   most, the neighbour actions as small buttons under it. */
+#hrui .mgv-explorer .dg-detail { overflow-y: auto; overscroll-behavior: contain; }
+#hrui .mgv-explorer .dg-detail > .dg-detail-b { flex: none; overflow: visible; min-height: auto; }
+#hrui .mgv-explorer .dg-detail-h { padding: 10px 14px; gap: 8px; }
+#hrui .mgv-explorer .dg-detail-h .av.sm { width: 28px; height: 28px; flex: none; }
+#hrui .mgv .mgv-dtitle { font-weight: 600; font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#hrui .mgv .mgv-dact { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+#hrui .mgv .mgv-dact .btn.sm { padding: 3px 10px; font-size: 12px; }
+#hrui .mgv .mgv-dlinks { margin-top: 14px; }
+#hrui .mgv .mgv-dlinks .mm-clist { padding: 0; overflow: visible; flex: none; min-height: 0; }

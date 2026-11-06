@@ -5,7 +5,7 @@ import { join } from 'path';
 
 const css = readFileSync(join(__dirname, 'memories.css'), 'utf8');
 
-test.each(['.mm-conn', '.mm-doc', '.mm-graphbox', '.mm-linksbox'])('%s takes its place from the column it is in', (sel) => {
+test.each(['.mm-conn', '.mm-doc', '.mm-graphbox'])('%s takes its place from the column it is in', (sel) => {
   const rules = css.match(new RegExp(`\\${sel}\\{[^}]*\\}`, 'g')) || [];
   for (const r of rules) expect(r).not.toMatch(/position:\s*(absolute|fixed)|transform:|visibility:\s*hidden/);
 });

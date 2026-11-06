@@ -163,14 +163,14 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   const right = (
     <aside className="mm-conn" aria-label="Graph">
       <div className="mm-graphbox">
-        <MemoryGraphView memory={memory} provider={provider} schema={kinds} activeRecordId={rid} refreshKey={liveTick} changed={pulse} onOpenRecord={open} />
+        {/* One list of links, in the panel a record opens on the graph (Richard 11-06: not a strip under it as well,
+            and nothing until a record is clicked). The open record's are the ones that can be changed. */}
+        <MemoryGraphView memory={memory} provider={provider} schema={kinds} activeRecordId={rid} refreshKey={liveTick} changed={pulse} onOpenRecord={open}
+          linksFor={(id: string) => (hideLinks || !record?.id || id !== record.id ? null : (
+            <Connections record={record} graph={graph} failed={graphFailed} retry={readGraph} schema={kinds} options={options} candidates={candidates} provider={provider}
+              onOpen={open} onLink={link} onUnlink={unlink} canUnlink={canUnlink} />
+          ))} />
       </div>
-      {hideLinks || !record?.id ? null : (
-        <div className="mm-linksbox">
-          <Connections record={record} graph={graph} failed={graphFailed} retry={readGraph} schema={kinds} options={options} candidates={candidates} provider={provider}
-            onOpen={open} onLink={link} onUnlink={unlink} canUnlink={canUnlink} />
-        </div>
-      )}
     </aside>
   );
   // A memory that holds nothing at all (no records, no sub memories) is said once, in the middle: what it will hold,

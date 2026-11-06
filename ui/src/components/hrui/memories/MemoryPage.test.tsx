@@ -2,7 +2,7 @@
 // One memory, and the rules that matter most: the capability document drives the page, never a vendor's name, and
 // whatever changes in the memory while the page is open reaches it. The tree, the graph and the schema editor have
 // their own tests; here they meet.
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import * as Y from 'yjs';
 import { CAPS, memory, record, service } from './fixtures';
@@ -33,9 +33,13 @@ jest.mock('next/dynamic', () => ({
   },
 }));
 jest.mock('./editor/DocEditor', () => ({ DocEditor: ({ readOnly }: { readOnly?: boolean }) => <div className="editor-stub" data-readonly={String(!!readOnly)} /> }));
+// the graph, and the panel a record opens on it, which holds the record's links (linksFor)
 jest.mock('./graph/MemoryGraph', () => ({
-  MemoryGraph: (p: { activeRecordId: string; refreshKey: number; onOpenRecord: (r: string, m?: string) => void }) => (
-    <button type="button" className="graph-stub" data-active={p.activeRecordId} data-tick={p.refreshKey} onClick={() => p.onOpenRecord('far', 'hmem_2')}>graph</button>
+  MemoryGraph: (p: { activeRecordId: string; refreshKey: number; onOpenRecord: (r: string, m?: string) => void; linksFor?: (id: string) => ReactNode }) => (
+    <div className="graph-panel-stub">
+      <button type="button" className="graph-stub" data-active={p.activeRecordId} data-tick={p.refreshKey} onClick={() => p.onOpenRecord('far', 'hmem_2')}>graph</button>
+      {p.linksFor ? p.linksFor(p.activeRecordId) : null}
+    </div>
   ),
 }));
 jest.mock('./graph/SchemaEditor', () => ({
@@ -293,14 +297,14 @@ describe('links', () => {
   test('none kept and none to show: the list goes and the graph stays, which still draws the records', async () => {
     open({ provider: { ...CAPS.mem0, graph: { entities: 'none' } }, records: [record({ id: 'r' })] });
     await draw();
-    expect(page().querySelector('.mm-linksbox')).toBeNull();
+    expect(page().querySelector('.mm-clist')).toBeNull();
     expect(page().querySelector('.graph-stub')).toBeTruthy();
   });
   test('a provider with no links at all isn’t asked what a record links to', async () => {
     const { graph: _g, ...rest } = CAPS.mem0;
     const s = open({ provider: rest as Provider, records: [record({ id: 'r' })] });
     await draw();
-    expect(page().querySelector('.mm-linksbox')).toBeNull();
+    expect(page().querySelector('.mm-clist')).toBeNull();
     expect(s.sent('POST', '/v1/memories/hmem_1/graph')).toHaveLength(0);
   });
   test('one that keeps stated links: a link can be made with a word of your own', async () => {

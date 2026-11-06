@@ -359,7 +359,6 @@
 
 #hrui .mm-conn{height:100%}
 #hrui .mm-graphbox{flex:1;min-height:220px;position:relative;display:flex;flex-direction:column}
-#hrui .mm-linksbox{flex:none;max-height:40%;overflow:auto;border-top:1px solid var(--line)}
 #hrui .mm-clist-h{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px}
 #hrui .mm-doc{height:100%}
 #hrui .mm-live{margin-top:20px}

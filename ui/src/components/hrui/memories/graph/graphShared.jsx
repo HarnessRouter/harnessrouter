@@ -137,7 +137,7 @@ function Jump({ node, onJump, schema }) {
   );
 }
 
-export function DataNodeDetail({ node, nodes, edges, schema, thisMemoryId, compact, collapsed, onJump, onExpand, onCollapse, onRestore, onClose }) {
+export function DataNodeDetail({ node, nodes, edges, schema, thisMemoryId, compact, collapsed, links: linksSlot, onJump, onExpand, onCollapse, onRestore, onClose }) {
   const cls = 'dg-detail' + (compact ? ' compact' : '');
   if (!node) return null;
   if (!node.record) {
@@ -162,18 +162,25 @@ export function DataNodeDetail({ node, nodes, edges, schema, thisMemoryId, compa
     <div className={cls} role="region" aria-label={title}>
       <div className="dg-detail-h">
         <span className="av sm" style={{ background: k.color, color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-          <IconByName name={k.icon} size={16} color="#fff" />
+          <IconByName name={k.icon} size={14} color="#fff" />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={title}>{title}</div>
+          <div className="mgv-dtitle" title={title}>{title}</div>
           <div className="stat-lbl mono">{k.one}{other}</div>
         </div>
         <button type="button" className="pane-btn" aria-label="Close" onClick={onClose}>{I.close}</button>
+      </div>
+      <div className="mgv-dact">
+        <button type="button" className="btn sm" onClick={() => onExpand(node.key)}>Expand neighbors</button>
+        {collapsed
+          ? <button type="button" className="btn sm" onClick={() => onRestore(node.key)}>Restore collapsed</button>
+          : links.length ? <button type="button" className="btn sm" onClick={() => onCollapse(node.key)}>Collapse neighbors</button> : null}
       </div>
       <div className="dg-detail-b">
         {text && text !== title ? <p className="mgv-text">{truncateLabel(text, 360)}</p> : null}
         <div className="stat-lbl" style={{ fontWeight: 600, marginBottom: 6 }}>Properties</div>
         <PropList fields={fields} empty="no fields" />
+        {linksSlot ? <div className="mgv-dlinks">{linksSlot}</div> : (<>
         <div className="stat-lbl" style={{ fontWeight: 600, margin: '14px 0 6px' }}>Links <span className="mono">{links.length}</span></div>
         {links.length ? links.map((e) => {
           const out = e.from === node.key;
@@ -193,12 +200,7 @@ export function DataNodeDetail({ node, nodes, edges, schema, thisMemoryId, compa
             </div>
           );
         }) : <div className="stat-lbl">no links</div>}
-      </div>
-      <div className="dg-detail-f">
-        <button type="button" className="btn sm" onClick={() => onExpand(node.key)}>Expand neighbors</button>
-        {collapsed
-          ? <button type="button" className="btn sm" onClick={() => onRestore(node.key)}>Restore collapsed</button>
-          : links.length ? <button type="button" className="btn sm" onClick={() => onCollapse(node.key)}>Collapse neighbors</button> : null}
+        </>)}
       </div>
     </div>
   );
