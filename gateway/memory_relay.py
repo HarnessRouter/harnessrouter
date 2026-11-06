@@ -29,7 +29,8 @@ import time
 
 PREFIX = "hrm_"
 REGISTRY_KEY = "harness-memory-services"
-VENDORS = ("graphiti", "hindsight", "mem0", "reme")
+# whose server holds a credential: a vendor's, or the operator's own tools (an evaluation's judge), on the same terms
+VENDORS = ("graphiti", "hindsight", "mem0", "reme", "operator")
 PATHS = {"chat/completions": "chat", "responses": "chat", "embeddings": "embedding"}
 
 # Model -> what it is and its id at each kind of key, the maker first (an Azure deployment is named for its model).

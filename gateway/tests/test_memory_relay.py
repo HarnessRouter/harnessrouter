@@ -167,3 +167,10 @@ def test_an_azure_key_serves_what_it_has_deployed_named_as_deployed(relay, monke
     # not deployed there: the next key on the list
     c.post("/v1/llm/v1/embeddings", headers={"authorization": f"Bearer {tok}"}, json={"model": "text-embedding-3-small", "input": ["x"]})
     assert str(sent[-1].url) == "https://ai-gateway.vercel.sh/v1/embeddings"
+
+
+def test_the_operators_own_tools_take_a_credential_on_the_same_terms(relay):
+    c, service, sent, _keys = relay
+    tok = service(vendor="operator", embedding_model="text-embedding-3-small")["credential"]
+    assert c.post("/v1/llm/v1/chat/completions", headers={"authorization": f"Bearer {tok}"}, json={"model": "gpt-4o-mini", "messages": []}).status_code == 200
+    assert c.post("/v1/llm/v1/chat/completions", headers={"authorization": f"Bearer {tok}"}, json={"model": "gpt-4.1-mini", "messages": []}).status_code == 403
