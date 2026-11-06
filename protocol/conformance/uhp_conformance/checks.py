@@ -2922,7 +2922,7 @@ def me08(ctx):
     return f"{len(ids)} tree(s) removed"
 
 
-# Explicit response branching (Sessions §1.1). Four turns are shared by B-01..B-03.
+# Explicit response branching (Sessions §1.1). Four turns are shared by B-01..B-03 and B-05..B-06.
 def _branch_archive(ctx, sid):
     import io
     import zipfile
@@ -2974,7 +2974,8 @@ def _branch_case(ctx):
     assert target and target != sid, "branch continued the original session instead of creating a new one"
     assert meta.get("branched_from") == rid, "branch response omitted or changed metadata.branched_from"
     case = {"source": sid, "point": rid, "target": target, "first": original,
-            "filename": filename, "future": future, "latest": latest, "turns_before": turns_before.json}
+            "filename": filename, "future": future, "latest": latest, "turns_before": turns_before.json,
+            "branch_response": (branched.json or {}).get("id"), "harness": h["id"]}
     ctx.state["branch_case"] = case
     return case
 
@@ -3005,8 +3006,48 @@ def b03(ctx):
     case = _branch_case(ctx)
     detail = ctx.client.get(f"/v1/sessions/{case['target']}")
     assert detail.status == 200
-    assert (detail.json or {}).get("branched_from") == {
+    origin = (detail.json or {}).get("branched_from") or {}
+    assert isinstance(origin, dict) and {k: origin.get(k) for k in ("response_id", "session_id")} == {
         "response_id": case["point"], "session_id": case["source"]}, "session lost branch provenance"
+    # `turn` is optional; when given it is where the point stood in its session, and the point
+    # here is the session's first response
+    if "turn" in origin:
+        assert origin["turn"] == 1, f"branched_from.turn is {origin['turn']!r} for a branch from the first response"
+
+
+@check("B-05", "A branch request without a previous response is refused, never run on the session it names", "full",
+       f"{SPEC}/sessions.md#11-branching-from-an-earlier-response")
+def b05(ctx):
+    case = _branch_case(ctx)
+    response = ctx.client.post("/v1/responses", body={
+        "input": "Reply with exactly: ran.", "branch": True,
+        **({"model": ctx.model} if ctx.model else {}),
+        "metadata": {"harness_id": case["harness"], "session_id": case["source"]}})
+    after = ctx.client.get(f"/v1/sessions/{case['source']}/turns")
+    assert after.status == 200
+    assert after.json == case["turns_before"], (
+        f"branch: true without previous_response_id ran a task in the session it named (HTTP {response.status})")
+    assert response.status == 400, f"branch: true without previous_response_id returned HTTP {response.status}"
+    assert ((response.json or {}).get("error") or {}).get("code") == "invalid_input"
+    return "400 invalid_input, and the named session has no new turn"
+
+
+@check("B-06", "A later turn in a branch is a continuation and does not name the branch's origin", "full",
+       f"{SPEC}/sessions.md#11-branching-from-an-earlier-response")
+def b06(ctx):
+    case = _branch_case(ctx)
+    if not case.get("branch_response"):
+        raise Skip("the branch response gave no id to continue from")
+    response = ctx.client.post("/v1/responses", body={
+        "input": "Reply with exactly: continued. Do not write or change any files.",
+        "previous_response_id": case["branch_response"],
+        **({"model": ctx.model} if ctx.model else {}), "metadata": {"harness_id": case["harness"]}})
+    assert response.status == 200, f"continuing the branch returned HTTP {response.status}"
+    meta = (response.json or {}).get("metadata") or {}
+    assert meta.get("session_id") == case["target"], "continuing the branch left its session"
+    assert "branched_from" not in meta, (
+        "a continuation in the branch carries metadata.branched_from, so every turn reads as a new branch")
+    return "the continuation stays in the branch and names no origin"
 
 
 @check("B-04", "A response still running cannot be a branch point", "full",

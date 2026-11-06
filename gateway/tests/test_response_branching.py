@@ -106,12 +106,39 @@ def test_new_session_has_only_history_to_selected_response_and_preserves_origina
     assert target_turns[0]["imported"] is True and target_turns[0]["cost_usd"] == 0
     assert target_turns[0]["id"] not in env["ids"]
     detail = env["client"].get(f"/v1/sessions/{target}").json()
-    assert detail["branched_from"] == {"response_id": env["ids"][0], "session_id": env["sid"]}
+    assert detail["branched_from"] == {"response_id": env["ids"][0], "session_id": env["sid"], "turn": 1}
     reread = env["client"].get(f"/v1/responses/{body['id']}").json()
     assert reread["metadata"]["branched_from"] == env["ids"][0]
 
 
-@pytest.mark.parametrize("change", ["mapping", "running", "invalid-head"])
+def test_only_the_branching_response_names_its_origin(env):
+    """A later turn in the branch is a continuation: no `branched_from` on it, while the branching
+    response and the session's detail keep the origin (Sessions §1.1, §3)."""
+    first = post(env)
+    assert first.status_code == 200, first.text
+    target, branched = first.json()["metadata"]["session_id"], first.json()["id"]
+    later = env["client"].post("/v1/responses", json={"input": "go on", "previous_response_id": branched,
+                                                       "metadata": {"harness_id": env["hid"]}})
+    assert later.status_code == 200, later.text
+    assert later.json()["metadata"]["session_id"] == target
+    assert "branched_from" not in later.json()["metadata"]
+    assert "branched_from" not in env["client"].get(f"/v1/responses/{later.json()['id']}").json()["metadata"]
+    assert env["client"].get(f"/v1/responses/{branched}").json()["metadata"]["branched_from"] == env["ids"][0]
+    detail = env["client"].get(f"/v1/sessions/{target}").json()
+    assert detail["branched_from"] == {"response_id": env["ids"][0], "session_id": env["sid"], "turn": 1}
+
+
+def test_the_turn_is_the_selected_responses_place_in_its_session(env):
+    point = {"response_id": env["ids"][2], "session_id": env["sid"], "commit": "3" * 40,
+             "ws_sha": "source-sha", "turn_index": 2}
+    asyncio.run(gw._blob_put(f"responses/{env['ids'][2]}.branch.json", json.dumps(point).encode(), kb=gw.RESP_BLOB_KB))
+    response = post(env, previous_response_id=env["ids"][2])
+    assert response.status_code == 200, response.text
+    detail = env["client"].get(f"/v1/sessions/{response.json()['metadata']['session_id']}").json()
+    assert detail["branched_from"]["turn"] == 3
+
+
+@pytest.mark.parametrize("change", ["mapping", "running", "invalid-commit"])
 def test_unavailable_checkpoint_is_http409_before_any_target_work(env, change):
     async def alter():
         if change == "mapping":
@@ -121,13 +148,42 @@ def test_unavailable_checkpoint_is_http409_before_any_target_work(env, change):
             record["status"] = "in_progress"
             await gw._resp_put(env["ids"][0], record, env["org"], env["sid"], None, "in_progress", 1000, True)
         else:
-            await gw._blob_put(f"sessions/{env['sid']}/branch-head.json", json.dumps({"commit": "invalid"}).encode(), kb=gw.RESP_BLOB_KB)
+            # main: the `invalid-head` case, a stored copy of the session's latest commit that was
+            # not a full commit. No such copy is kept now; the stored point is what is checked.
+            await gw._blob_put(f"responses/{env['ids'][0]}.branch.json", json.dumps({
+                "response_id": env["ids"][0], "session_id": env["sid"], "commit": "invalid", "turn_index": 0
+            }).encode(), kb=gw.RESP_BLOB_KB)
     asyncio.run(alter())
     for mode in ({}, {"stream": True}, {"background": True}):
         response = post(env, **mode)
         assert response.status_code == 409, response.text
         assert response.json()["error"]["code"] == "branch_unavailable"
     assert not env["calls"]
+
+
+@pytest.mark.parametrize("head", ["missing", "stale"])
+def test_a_branch_needs_no_copy_of_the_sessions_latest_commit(env, head):
+    """A copy of the latest commit beside the tarball fell out of step with it (a failed write, a
+    branch racing a new turn's checkpoint) and made every point of the session 409. The runner
+    checks the point against the checkpoint's own HEAD, so nothing like it is read or sent."""
+    key = f"sessions/{env['sid']}/branch-head.json"
+    if head == "missing":
+        asyncio.run(gw._blob_delete(key, kb=gw.RESP_BLOB_KB))
+    else:
+        asyncio.run(gw._blob_put(key, json.dumps({"commit": "9" * 40}).encode(), kb=gw.RESP_BLOB_KB))
+    response = post(env)
+    assert response.status_code == 200, response.text
+    restore = [c for c in env["calls"] if "restore_target" in c]
+    assert restore and restore[0]["params"]["branch_commit"] == "1" * 40
+    assert "branch_head" not in restore[0]["params"]
+
+
+def test_checkpoint_writes_only_the_point(env):
+    asyncio.run(gw._blob_delete(f"sessions/{env['sid']}/branch-head.json", kb=gw.RESP_BLOB_KB))
+    asyncio.run(gw._checkpoint(env["sid"], {}, response_id=env["ids"][1]))
+    point = json.loads(asyncio.run(gw._blob_get(f"responses/{env['ids'][1]}.branch.json", kb=gw.RESP_BLOB_KB)))
+    assert point["commit"] == "a" * 40 and point["turn_index"] == 1
+    assert asyncio.run(gw._blob_get(f"sessions/{env['sid']}/branch-head.json", kb=gw.RESP_BLOB_KB)) is None
 
 
 def test_harness_scope_is_checked_before_checkpoint_availability(env):
@@ -138,16 +194,33 @@ def test_harness_scope_is_checked_before_checkpoint_availability(env):
 
 def test_branch_does_not_claim_an_answer_to_original_question(env):
     response = post(env, input=[{"type": "input_response", "input_request_id": "question", "answer": "value"}])
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "input_not_pending"
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_input"
+    assert response.json()["error"]["param"] == "branch"
     assert not env["calls"]
+    assert asyncio.run(gw._resp_get(env["ids"][0]))["_pending_input"]["state"] == "pending"
 
 
-@pytest.mark.parametrize("value", ["yes", 1, [], {}, None])
-def test_nonboolean_branch_is_ignored_not_coerced_or_rejected(value):
-    body = gw.CreateResponseBody(input="hello", branch=value, previous_response_id="resp_before")
-    assert body.branch is not True
-    assert "branch" in gw._ignored_request_fields(body)
+@pytest.mark.parametrize("value", ["yes", "true", 1, [], {}])
+def test_nonboolean_branch_is_refused_not_coerced(env, value):
+    """main: test_nonboolean_branch_is_ignored_not_coerced_or_rejected. Still never coerced to a
+    branch; now refused rather than ignored, so the task never runs as something else."""
+    sessions = asyncio.run(gw.BACKING.graph.find_strict("HarnessSession", {"tenant": env["org"]}))
+    response = post(env, branch=value)
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] == "invalid_input"
+    assert response.json()["error"]["param"] == "branch"
+    assert not env["calls"]
+    assert asyncio.run(gw.BACKING.graph.find_strict("HarnessSession", {"tenant": env["org"]})) == sessions
+
+
+def test_null_branch_is_the_same_as_absent(env):
+    """main: the None case of test_nonboolean_branch_is_ignored_not_coerced_or_rejected."""
+    response = post(env, branch=None)
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["session_id"] == env["sid"]
+    assert "branch" not in (response.json()["metadata"].get("ignored_fields") or [])
+    assert not any("restore_target" in item for item in env["calls"])
 
 
 def test_false_and_absent_branch_preserve_existing_idempotency_hash():
@@ -156,7 +229,9 @@ def test_false_and_absent_branch_preserve_existing_idempotency_hash():
     true = gw.CreateResponseBody(input="hello", branch=True, previous_response_id="resp_before")
     assert gw._req_hash(before) == gw._req_hash(false)
     assert gw._req_hash(before) != gw._req_hash(true)
-    assert "branch" in gw._ignored_request_fields(gw.CreateResponseBody(input="hello", branch=True))
+    # `branch` is acted on or refused, never listed as ignored
+    # (test_true_without_point_is_refused_over_http has the refusal)
+    assert "branch" not in gw._ignored_request_fields(gw.CreateResponseBody(input="hello", branch=True))
 
 
 def test_missing_full_commit_from_old_runner_writes_no_checkpoint_mapping(env, monkeypatch):
@@ -239,14 +314,20 @@ async def test_real_idempotency_replay_creates_one_target(env):
 
 
 @pytest.mark.asyncio
-async def test_true_without_point_is_ignored_over_http(env):
+@pytest.mark.parametrize("hint", [False, True])
+async def test_true_without_point_is_refused_over_http(env, hint):
+    """main: test_true_without_point_is_ignored_over_http. With a session hint the ignored flag ran
+    the task as a new turn of that session, the one a branch leaves alone; now no task runs."""
+    turns = env["client"].get(f"/v1/sessions/{env['sid']}/turns").json()["turns"]
+    metadata = {"harness_id": env["hid"], **({"session_id": env["sid"]} if hint else {})}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gw.app), base_url="http://gateway") as client:
         response = await client.post("/v1/responses", json={"input": "fresh task", "branch": True,
-            "metadata": {"harness_id": env["hid"]}})
-    assert response.status_code == 200, response.text
-    assert "branch" in response.json()["metadata"]["ignored_fields"]
-    assert response.json()["metadata"]["session_id"] != env["sid"]
-    assert not any("restore_target" in item for item in env["calls"])
+            "metadata": metadata})
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] == "invalid_input"
+    assert response.json()["error"]["param"] == "branch"
+    assert not env["calls"]
+    assert env["client"].get(f"/v1/sessions/{env['sid']}/turns").json()["turns"] == turns
 
 
 @pytest.mark.asyncio

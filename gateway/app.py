@@ -2889,19 +2889,23 @@ async def _checkpoint(sid: str, rec: dict, *, response_id: str = "") -> None:
                 rec["ws_sha"] = ws_sha
                 await _vertex_upsert(sid, {"checkpoint_bytes": str(nbytes), "git_head": git_head,
                                            "ws_sha": ws_sha})
+                # The response's branch point (Sessions §1.1): the commit this turn ended on. Only
+                # the point is kept. The runner checks it against the HEAD of the checkpoint it is
+                # given, so no copy of the session's latest commit has to be kept in step with the
+                # tarball; one used to be, written after it, and a put that failed or a branch that
+                # read it while a new turn was checkpointing made every point 409 until next turn.
                 try:
-                    if re.fullmatch(r"[0-9a-f]{40}", git_commit):
-                        head = {"commit": git_commit, "ws_sha": ws_sha}
-                        if await _blob_put(f"sessions/{sid}/branch-head.json", json.dumps(head).encode(), kb=RESP_BLOB_KB):
-                            if response_id:
-                                rows = await BACKING.graph.find_strict("HarnessResponse", {"session_id": sid})
-                                rows.sort(key=lambda row: float(row.get("created_at") or 0))
-                                ids = [str(row.get("id")) for row in rows]
-                                if response_id in ids:
-                                    point = {**head, "session_id": sid, "turn_index": ids.index(response_id),
-                                             "response_id": response_id, "backend": rec.get("backend") or ""}
-                                    await _blob_put(f"responses/{response_id}.branch.json",
-                                                    json.dumps(point).encode(), kb=RESP_BLOB_KB)
+                    if response_id and re.fullmatch(r"[0-9a-f]{40}", git_commit):
+                        rows = await BACKING.graph.find_strict("HarnessResponse", {"session_id": sid})
+                        rows.sort(key=lambda row: float(row.get("created_at") or 0))
+                        ids = [str(row.get("id")) for row in rows]
+                        if response_id in ids:
+                            point = {"commit": git_commit, "ws_sha": ws_sha, "session_id": sid,
+                                     "turn_index": ids.index(response_id),
+                                     "response_id": response_id, "backend": rec.get("backend") or ""}
+                            if not await _blob_put(f"responses/{response_id}.branch.json",
+                                                   json.dumps(point).encode(), kb=RESP_BLOB_KB):
+                                rec["branch_checkpoint_unavailable"] = True
                 except Exception:  # Branch metadata is optional; the durable checkpoint succeeded.
                     rec["branch_checkpoint_unavailable"] = True
             else:
@@ -9434,7 +9438,12 @@ def _branch_origin(value) -> dict:
         origin = json.loads(value) if isinstance(value, str) else value
         if (isinstance(origin, dict) and isinstance(origin.get("response_id"), str)
                 and isinstance(origin.get("session_id"), str)):
-            return {"response_id": origin["response_id"], "session_id": origin["session_id"]}
+            out = {"response_id": origin["response_id"], "session_id": origin["session_id"]}
+            # Where on the original line the branch starts (Sessions §3), from 1. Absent rather
+            # than guessed when the stored origin has none.
+            if type(origin.get("turn")) is int and origin["turn"] >= 1:
+                out["turn"] = origin["turn"]
+            return out
     except (TypeError, ValueError):
         pass
     return {}
@@ -9456,19 +9465,17 @@ async def _branch_source(rid: str, org: str, harness_id: str, caller: dict) -> d
         raise uhp_error(409, "branch_unavailable", "Only a completed response checkpoint can be branched.")
     try:
         point_bytes = await _blob_get_or_raise(f"responses/{rid}.branch.json", kb=RESP_BLOB_KB)
-        head_bytes = await _blob_get_or_raise(f"sessions/{sid}/branch-head.json", kb=RESP_BLOB_KB)
     except Exception as error:
         raise uhp_error(503, "server_error", "The checkpoint could not be read. Try again.") from error
     try:
-        point, head = json.loads(point_bytes or b"null"), json.loads(head_bytes or b"null")
-        if (not point or not head or point["response_id"] != rid or point["session_id"] != sid
+        point = json.loads(point_bytes or b"null")
+        if (not point or point["response_id"] != rid or point["session_id"] != sid
                 or type(point.get("turn_index")) is not int or point["turn_index"] < 0
-                or not re.fullmatch(r"[0-9a-f]{40}", point["commit"])
-                or not re.fullmatch(r"[0-9a-f]{40}", head["commit"])):
-            raise ValueError("missing or stale checkpoint")
+                or not re.fullmatch(r"[0-9a-f]{40}", point["commit"])):
+            raise ValueError("missing checkpoint position")
     except (ValueError, TypeError, KeyError):
         raise uhp_error(409, "branch_unavailable", "This response has no restorable checkpoint.")
-    return {"point": point, "head": head, "source_sid": sid,
+    return {"point": point, "source_sid": sid,
             "backend": str(point.get("backend") or vertex.get("backend") or ""),
             "workspace": str(vertex.get("workspace") or "")}
 
@@ -9552,7 +9559,7 @@ async def _branch_prepare_inner(info: dict, target: str, org: str, member: str, 
                           harness_id: str, harness_name: str, workspace: str, caller: dict,
                           before: float, store: bool) -> list[dict]:
     """Restore into a new sandbox before publishing the new session or accepting a turn."""
-    point, head = info["point"], info["head"]
+    point = info["point"]
     source_sid, rid = info["source_sid"], point["response_id"]
     # Read the full durable transcript before target work. No storage truncation or later turns.
     rows = await BACKING.graph.find_strict("HarnessResponse", {"session_id": source_sid})
@@ -9586,7 +9593,9 @@ async def _branch_prepare_inner(info: dict, target: str, org: str, member: str, 
         assistant, _, _ = _output_to_turn_fields(rec.get("output") or [])
         history.append({"user": user, "assistant": assistant, "input": rec.get("_input") or [],
                         "output": rec.get("output") or []})
-    params = {"branch_commit": point["commit"], "branch_head": head["commit"],
+    # No `branch_head`: the runner checks the point against the HEAD of the checkpoint it is
+    # sent, whichever turn last wrote it (see _checkpoint).
+    params = {"branch_commit": point["commit"],
               "branch_backend": info["backend"]}
     response = None
     for pause in _HYDRATE_PAUSES:
@@ -9620,7 +9629,8 @@ async def _branch_prepare_inner(info: dict, target: str, org: str, member: str, 
                                    new_sid=target)
         await _vertex_upsert(target, {"ws_sha": ws_sha, "git_head": git_head,
                                       "checkpoint_bytes": str(nbytes),
-                                      "branched_from": json.dumps({"response_id": rid, "session_id": source_sid})})
+                                      "branched_from": json.dumps({"response_id": rid, "session_id": source_sid,
+                                                                   "turn": point["turn_index"] + 1})})
         await _vg_edge("BRANCHED_FROM", target, rid)
         _session_trace[target]["branched_from"] = rid
         return history
@@ -10892,10 +10902,8 @@ _UNAPPLIED_REQUEST_FIELDS = ("tools", "include", "max_output_tokens")
 def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
     """The fields of this request the gateway will not act on, in a stable order; `None` means the
     client did not send the field, so it is not named."""
-    ignored = [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
-    if "branch" in getattr(body, "model_fields_set", set()) and body.branch is not False and not (body.branch is True and body.previous_response_id):
-        ignored.append("branch")
-    return ignored
+    # `branch` is never in this list: it is acted on, or the request is refused (create_response).
+    return [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
 
 
 def _trace_context(traceparent: str | None, tracestate: str | None) -> dict:
@@ -10988,8 +10996,18 @@ async def create_response(body: CreateResponseBody, request: Request):
     org, member = principal.get("org", ""), principal.get("member", "")
     if not org:
         raise HTTPException(400, "no org resolved for this principal")
+    # A request that asks for a branch and can't have one is refused, never run some other way
+    # (Sessions §1.1). Ignoring it used to be the rule, and with a session hint the task then ran
+    # as a new turn of the very session the client asked to leave alone, which no later answer
+    # can undo. Checked here, before anything is read or claimed: the body alone decides it.
+    if body.branch is not None and body.branch is not False:
+        if body.branch is not True:
+            raise uhp_error(400, "invalid_input", "branch is true or false.", "branch")
+        if not body.previous_response_id:
+            raise uhp_error(400, "invalid_input", "A branch starts from the response named in "
+                                                  "previous_response_id.", "branch")
     meta = body.metadata or {}
-    probe = {"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
+    probe ={"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
     # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
     # {harness_id}/v1/* -> /v1/*, or by the native public-shape route above).
     harness_id = str(meta.get("harness_id") or request.headers.get("x-harness-id") or "")
@@ -11176,6 +11194,12 @@ async def create_response(body: CreateResponseBody, request: Request):
     if answer is not None and not body.previous_response_id:
         raise uhp_error(400, "invalid_input", "An input_response answers the response named in "
                                               "previous_response_id.", "previous_response_id")
+    if answer is not None and branching:
+        # The two can't combine: an answer continues the session that asked, a branch leaves it as
+        # it was. A malformed request, so 400, the same as an answer with no response to answer;
+        # the question itself may well be pending, which `input_not_pending` would deny.
+        raise uhp_error(400, "invalid_input", "A branch does not answer the original response's "
+                                              "question. Send the input_response without branch.", "branch")
     if not body.previous_response_id and not str(meta.get("session_id") or "").strip():
         history, live_input = _input_history(body.input, org)
     prompt, files_in, input_items = _parse_input(live_input)
@@ -11218,8 +11242,6 @@ async def create_response(body: CreateResponseBody, request: Request):
     # carrying the question with it; any other input voids the question, and the response says
     # so. A secret answer never enters the conversation: it goes to the harness's environment
     # for this one turn, under a name the message gives, and is redacted from what comes back.
-    if branching and answer is not None:
-        raise uhp_error(409, "input_not_pending", "A branch does not answer the original response's question.")
     extra_env: dict[str, str] = {}
     extra_secret: list[str] = []
     voided: list[str] = []
@@ -11329,7 +11351,11 @@ async def create_response(body: CreateResponseBody, request: Request):
         # Reserved fields, named on the response rather than dropped in silence (tasks.md 1.4).
         _ignored = _ignored_request_fields(body)
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
-        tr.branched_from = str((_session_trace.get(sid) or {}).get("branched_from") or "")
+        # Only the response that branched says where it came from (Sessions §1.1). The session
+        # keeps the origin for the rest of its life (its detail, and the trace the transcript
+        # fallback in _resp_execute reads), but a later turn in it is a continuation like any
+        # other: naming the origin there too read as a new branch at every turn.
+        tr.branched_from = str(body.previous_response_id or "") if branching else ""
         tr.environment = str((environment or {}).get("id") or "")
         tr.voided_input_requests = voided     # the question this turn passed over, named (§3.2)
         if effort:   # what the turn asked of the model's thinking; "applied" arrives with the result

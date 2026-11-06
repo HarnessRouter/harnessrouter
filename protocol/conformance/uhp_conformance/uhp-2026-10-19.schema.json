@@ -777,7 +777,7 @@
         "branch": {
           "type": "boolean",
           "default": false,
-          "description": "Create a new session from the previous response's committed user files and transcript (Sessions §1.1). Only true opts in; other values or a missing previous response are ignored observably."
+          "description": "Create a new session from the previous response's committed user files and transcript (Sessions §1.1). Only true opts in; true without previous_response_id, or a value that is not a boolean, is 400 invalid_input (param branch)."
         },
         "instructions": {
           "type": "string"
@@ -929,7 +929,7 @@
             },
             "branched_from": {
               "type": "string",
-              "description": "The response id this session branched from (Sessions §1.1)."
+              "description": "The response id this task branched from (Sessions §1.1). Only on the response that branched, not on later responses in its session."
             },
             "environment": {
               "type": "string",
@@ -950,7 +950,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Request fields the server did not act on, by name, in any order. Required when the\nrequest carried `tools` or `include`, which are reserved and ignored, or an ignored\n`branch` value (Sessions §1.1). A silently\nignored field is indistinguishable from an honoured one. Tasks §1.1 and §1.4.\n"
+              "description": "Request fields the server did not act on, by name, in any order. Required when the\nrequest carried `tools` or `include`, which are reserved and ignored. A silently\nignored field is indistinguishable from an honoured one. Tasks §1.1 and §1.4.\n"
             },
             "voided_input_requests": {
               "type": "array",
@@ -1833,6 +1833,11 @@
             },
             "session_id": {
               "type": "string"
+            },
+            "turn": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Where that response stood in its session, counting from 1 (Sessions §3)."
             }
           },
           "additionalProperties": false

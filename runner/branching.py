@@ -69,8 +69,12 @@ def restore(source: Path, target: Path, selected: str, latest: str, spool: Path,
     The fresh bare repository supplies its own config. The source's config, hooks, CLI state,
     alternates and worktree files cannot influence the export. All intermediate files are under
     the runner's private spool, not under either session's workspace.
+
+    `latest` empty means the checkpoint's own HEAD, which is what the gateway sends: `selected`
+    names its files by hash, so any later checkpoint whose history still holds it restores the
+    same bytes. A caller that does name `latest` still has it checked against that HEAD.
     """
-    if not COMMIT.fullmatch(selected) or not COMMIT.fullmatch(latest):
+    if not COMMIT.fullmatch(selected) or (latest and not COMMIT.fullmatch(latest)):
         raise BranchUnavailable("missing full checkpoint commit")
     if target.exists() and any(target.iterdir()):
         raise BranchUnavailable("branch target is not empty")
@@ -112,8 +116,10 @@ def restore(source: Path, target: Path, selected: str, latest: str, spool: Path,
                                 output.write(chunk)
             # Validate imported object hashes before using the source's refs for ancestry queries.
             _git(repository, "fsck", "--strict", "--no-reflogs")
-            if _git(repository, "rev-parse", "--verify", "HEAD").stdout.decode().strip() != latest:
+            head = _git(repository, "rev-parse", "--verify", "HEAD").stdout.decode().strip()
+            if latest and head != latest:
                 raise BranchUnavailable("checkpoint HEAD differs from its acknowledged commit")
+            latest = head
             _git(repository, "cat-file", "-e", selected + "^{commit}")
             _git(repository, "merge-base", "--is-ancestor", selected, latest)
             tree = _git(repository, "ls-tree", "-r", "-z", selected).stdout
