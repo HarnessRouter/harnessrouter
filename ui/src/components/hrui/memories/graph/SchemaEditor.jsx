@@ -789,8 +789,8 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
             {empty ? (
               caps.add ? (
                 <div className="mm-sch-empty mgv-live">
-                  <h2>Design what this memory keeps</h2>
-                  <p>{`A type is a kind of thing, like a person, a company or a product. ${hasProperties(provider) ? 'Give it properties.' : 'Give it a name and say what it is.'}${hasRelations(provider) ? ' Relating types is optional.' : ''}`}</p>
+                  <h2>{memory?.records?.count ? 'No types yet' : 'Design what this memory keeps'}</h2>
+                  <p>{`${memory?.records?.count ? `It already holds ${plural(memory.records.count, 'record')}. Types shape what is kept from here on. ` : ''}A type is a kind of thing, like a person, a company or a product. ${hasProperties(provider) ? 'Give it properties.' : 'Give it a name and say what it is.'}${hasRelations(provider) ? ' Relating types is optional.' : ''}`}</p>
                   {schemaGuides(provider) ? (
                     <div className="mm-starts">
                       {MM_STARTS.map(([n, sub], i) => (

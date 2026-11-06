@@ -88,15 +88,19 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   const options = useMemo<LinkOption[] | null>(() => {
     if (!record || !record.id || !links || !canEdit(record, provider, memory)) return null;
     if (hasSchema(provider) && !hasRelations(provider)) return null;
-    if (!hasSchema(provider)) return [{ key: 'free', rel: '', out: true, other: null, label: '' }];
+    const free: LinkOption[] = [{ key: 'free', rel: '', out: true, other: null, label: '' }];
+    if (!hasSchema(provider)) return free;
     const kind = kindOf(record);
     const nameOf = (id: string) => schema?.types.find((t) => t.id === id)?.name || '';
-    return (schema?.relations || []).flatMap((r) => {
+    const designed = (schema?.relations || []).flatMap((r) => {
       const a = nameOf(r.from), b = nameOf(r.to), o: LinkOption[] = [];
       if (a === kind) o.push({ key: `${r.id}:o`, rel: r.name, out: true, other: b, label: `${r.name} → ${typeLabel(b)}` });
       if (b === kind) o.push({ key: `${r.id}:i`, rel: r.name, out: false, other: a, label: `← ${r.name} from ${typeLabel(a)}` });
       return o;
     });
+    // A schema steers what the provider pulls out; it does not limit what is stated. An agent links any two records
+    // with a word of its own, so a person can too where the schema relates this type to nothing.
+    return designed.length ? designed : free;
   }, [record, links, provider, memory, schema]);
   const candidates = (o: LinkOption) => all.filter((x) => x.id !== rid && (o.other === null || kindOf(x) === o.other) && (o.out || canEdit(x, provider, memory)));
   const refsOf = (r: MemoryRecord) => (r.references || []).filter((x) => x.available !== false).map((x) => ({ rel: x.rel || 'related', record_id: x.record_id, ...(x.memory_id ? { memory_id: x.memory_id } : {}) }));

@@ -43,7 +43,7 @@ function writerOf(r: MemoryRecord, setups: Map<string, string> | null): string {
   if (named) return named;
   const me = getSession()?.member;
   if (w.id === LOCAL_MEMBER || (me && (w.id === me.email || w.id === me.id))) return 'You';
-  return w.id || '';
+  return w.id?.startsWith('chrn_') ? 'An agent' : w.id || '';
 }
 
 const asText = (v: unknown) => (v == null ? '' : typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : JSON.stringify(v));
@@ -196,8 +196,8 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
 
   const bodyBlock = !isNew ? (
     live && state?.synced ? (
-      <div className={sentence ? 'mm-live mm-sentence' : 'mm-live'}>
-        <DocEditor doc={live.doc} provider={live} currentUser={me} readOnly={!writable} placeholder={writable ? 'Write it down, or press / for commands. Setups read all of it.' : ''} />
+      <div className={`mm-live mm-body${sentence ? ' mm-sentence' : ''}`}>
+        <DocEditor doc={live.doc} provider={live} currentUser={me} readOnly={!writable} placeholder={writable ? 'Write it down. Setups read all of it.' : ''} />
       </div>
     ) : state?.denied ? <p className="mm-err" role="alert">{state.denied}</p> : <div className={`mm-body${sentence ? ' mm-sentence' : ''}`}>{body ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown> : null}</div>
   ) : open ? (

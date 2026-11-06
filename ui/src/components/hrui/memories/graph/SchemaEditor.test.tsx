@@ -307,7 +307,9 @@ describe('the round trip', () => {
   it('starts from an empty schema with the same starting points', async () => {
     stored = { types: [], relations: [] };
     await open(CAPS.graphiti);
-    expect(el.textContent).toContain('Design what this memory keeps');
+    // the memory already holds a record, so the page says so rather than reading as a blank one
+    expect(el.textContent).toContain('No types yet');
+    expect(el.textContent).toContain('It already holds 1 record.');
     await click(Array.from(el.querySelectorAll('.mm-start')).find((b) => (b.textContent || '').startsWith('Customers')) as Element);
     await later(20);
     expect(nodes()).toHaveLength(3);

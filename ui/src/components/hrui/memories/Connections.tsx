@@ -12,7 +12,7 @@ export type LinkOption = { key: string; rel: string; out: boolean; other: string
 
 const secondWord = (node: MemoryRecord | undefined, e: GraphEdge) => relText(String(node?.attributes?.predicate || '') || e.rel);
 
-export function Connections({ record, graph, failed, retry, schema, options, candidates, provider, onOpen, onLink, onUnlink, canUnlink }: {
+export function Connections({ record, graph, failed, retry, schema, options, candidates, onOpen, onLink, onUnlink, canUnlink }: {
   record: MemoryRecord | null; graph: MemoryGraph | null; failed: boolean; retry: () => void; schema: LSchema | null;
   options: LinkOption[] | null; candidates: (o: LinkOption) => MemoryRecord[]; provider: Provider | null;
   onOpen: (rid: string, memoryId?: string) => void;
@@ -79,9 +79,9 @@ export function Connections({ record, graph, failed, retry, schema, options, can
           </div>
         </div>
       ) : null}
-      {adding || options === null ? null : options.length ? (
+      {adding || !options?.length ? null : (
         <button type="button" className="btn small mm-add" onClick={() => { setAdding(true); setOptKey(''); setTo(''); }}>{PLUS}Link a record</button>
-      ) : provider ? <p className="set-help">This type has no relations in the schema yet.</p> : null}
+      )}
     </div>
   );
 }

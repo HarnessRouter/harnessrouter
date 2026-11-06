@@ -336,3 +336,14 @@
 
 /* The caret says where the writing is. A ring around the whole text reads as a form field, not a document. */
 #hrui .ProseMirror:focus, #hrui .ProseMirror:focus-visible { outline: none; }
+
+/* The live text (editor/DocEditor.tsx) reads like the record's text above: .mm-live is also .mm-body. The console's
+   reset undoes the editor's own injected rules too, so the ones it needs are restated here. */
+#hrui .mm-live .mm-ed,#hrui .mm-live .ProseMirror{min-height:inherit}
+#hrui .mm-live .ProseMirror{position:relative;outline:none;overflow-wrap:break-word;white-space:pre-wrap;white-space:break-spaces;font-variant-ligatures:none;font-feature-settings:"liga" 0}
+#hrui .mm-live .ProseMirror pre{white-space:pre-wrap}
+#hrui .mm-live .ProseMirror>:last-child{margin-bottom:0}
+#hrui .mm-live .ProseMirror p.is-editor-empty:first-child::before{content:attr(data-placeholder);float:left;height:0;color:var(--faint);pointer-events:none}
+#hrui .mm-live .collaboration-cursor__caret{position:relative;margin:0 -1px;border-left:2px solid;pointer-events:none;word-break:normal}
+#hrui .mm-live .collaboration-cursor__label{position:absolute;top:-1.5em;left:-2px;padding:1px 6px;border-radius:4px 4px 4px 0;color:#fff;font-family:var(--sans,inherit);font-size:11px;font-weight:600;line-height:1.5;letter-spacing:0;white-space:nowrap;user-select:none;pointer-events:none}
+#hrui .mm-live .collaboration-cursor__selection{border-radius:2px}

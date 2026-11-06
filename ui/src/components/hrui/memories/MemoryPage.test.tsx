@@ -186,6 +186,12 @@ describe('a derived record', () => {
     expect(editable()).toBeNull();
     expect(editorReadOnly()).toBe('true');
   });
+  test('an agent this workspace cannot name reads as an agent, never as its id', async () => {
+    open({ provider: CAPS.graphiti, records: [found({ written_by: { kind: 'member', id: 'chrn_elsewhere', type: 'agent' } })] });
+    await draw('data');
+    expect(page().textContent).toContain('An agent');
+    expect(page().textContent).not.toContain('chrn_elsewhere');
+  });
   test('a word in `revise` speaks of what a writer stated, so it stays read only', async () => {
     open({ provider: { ...CAPS.graphiti, revise: 'native' }, records: [found()] });
     await draw('data');
@@ -306,6 +312,21 @@ describe('links', () => {
     });
     await draw();
     await click(button('Link a record'));
+    await click(button('Link'));
+    const patched = [...s.sent('PATCH', '/v1/memories/hmem_1/records/a'), ...s.sent('PATCH', '/v1/memories/hmem_1/records/b')][0].body;
+    expect(patched).toMatchObject({ references: [{ rel: 'related' }] });
+  });
+  test('a schema that relates this type to nothing still lets a person link it, in a word of their own', async () => {
+    const a = record({ id: 'a', title: 'Alpha' }), b = record({ id: 'b', title: 'Beta' });
+    const s = open({
+      provider: CAPS.graphiti, records: [a, b], schema: { types: [], relations: [] },
+      graph: { nodes: [{ record: a, memory: { id: 'hmem_1', name: 'x' } }], edges: [], truncated: false, degraded: [] },
+      extra: { 'PATCH /v1/memories/hmem_1/records/a': a, 'PATCH /v1/memories/hmem_1/records/b': b },
+    });
+    await draw('data');
+    expect(page().textContent).not.toContain('no relations in the schema');
+    await click(button('Link a record'));
+    expect(page().querySelector('input[aria-label="How they relate"]')).toBeTruthy();
     await click(button('Link'));
     const patched = [...s.sent('PATCH', '/v1/memories/hmem_1/records/a'), ...s.sent('PATCH', '/v1/memories/hmem_1/records/b')][0].body;
     expect(patched).toMatchObject({ references: [{ rel: 'related' }] });
