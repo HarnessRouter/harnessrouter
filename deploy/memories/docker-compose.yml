@@ -30,7 +30,10 @@ services:
   hindsight:
     <<: *restart
     profiles: [hindsight]
-    image: ghcr.io/vectorize-io/hindsight:latest-slim@sha256:c7d494c309fde53d07e79158be08d7a61f3f309b23cc417c7e4b0b8fc8adc77a
+    # The full image, not -slim: Hindsight's default reranker is a local cross-encoder (hindsight-ai/hs-rerank-1), and
+    # only the full image carries what runs it. Without another account, -slim leaves `rrf`, a passthrough that "does
+    # no work": with it, long notes that shared a name with the question outranked the one fact that answered it.
+    image: ghcr.io/vectorize-io/hindsight:latest@sha256:19d0c08f3df79acac29384826419a1ca158129e81ec527cdcbd8c97ff4ef76da
     environment:
       HINDSIGHT_API_LLM_PROVIDER: openai
       HINDSIGHT_API_LLM_API_KEY: ${OPENAI_API_KEY:-}
@@ -38,9 +41,8 @@ services:
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: openai
       HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
-      # A real reranker: `rrf` is Hindsight's passthrough ("does no work"), and with it long notes that share a name
-      # with the question outranked the one fact that answered it. The slim image runs ONNX; the model downloads once.
-      HINDSIGHT_API_RERANKER_PROVIDER: onnx
+      # The model downloads once, into hindsight-cache.
+      HINDSIGHT_API_RERANKER_PROVIDER: local
       HINDSIGHT_API_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-}@postgres:5432/hindsight
       HINDSIGHT_ENABLE_UI: "false"
       HINDSIGHT_ENABLE_CP: "false"
