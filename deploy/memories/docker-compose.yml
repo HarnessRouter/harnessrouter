@@ -38,10 +38,13 @@ services:
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: openai
       HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
-      HINDSIGHT_API_RERANKER_PROVIDER: rrf
+      # A real reranker: `rrf` is Hindsight's passthrough ("does no work"), and with it long notes that share a name
+      # with the question outranked the one fact that answered it. The slim image runs ONNX; the model downloads once.
+      HINDSIGHT_API_RERANKER_PROVIDER: onnx
       HINDSIGHT_API_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-}@postgres:5432/hindsight
       HINDSIGHT_ENABLE_UI: "false"
       HINDSIGHT_ENABLE_CP: "false"
+    volumes: [hindsight-cache:/home/hindsight/.cache]
     depends_on:
       postgres: {condition: service_healthy}
 
@@ -107,6 +110,7 @@ services:
 
 volumes:
   graphiti:
+  hindsight-cache:
   postgres:
   mem0-history:
   reme:
