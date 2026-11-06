@@ -8,7 +8,11 @@ shape here was read off a server running on 2026-11-04.
   a record someone states = a document we name (`hrec_...`), retained with the strategy `hr_stated`,
       whose extraction mode is `chunks`: the words are kept as written and cost no model call. A
       retain answers no ids, so the id has to be ours. Hindsight also holds it as one fact, which is
-      what a search finds; that fact is reported as the document it came from.
+      what a search finds; that fact is reported as the document it came from. Hindsight also reads a
+      copy (`hrx_...`, the same id after the prefix), retained in the background with its own extraction,
+      so a stated record gets the facts, entities and links Hindsight is built to make (11-06): those come
+      from the stated record, and the copy is never listed. Revising reads it again; forgetting takes its
+      facts out of search; erasing deletes it with the record.
   observe  = a document with no strategy, retained asynchronously: the bank extracts facts and entities
       from it, and it stays as the `episode`. `keeps_episodes`, and the answer is a job.
   a derived record = a fact (Hindsight's id), or an entity (`ent_<id>`). A fact says which entities it
@@ -41,6 +45,7 @@ import memory_plane as mp
 
 TIMEOUT_S = 90
 PREFIX = "hrec_"
+COPY = "hrx_"      # the copy Hindsight reads of a stated record: the same id after the prefix
 ENTITY = "ent_"
 LABEL = "type:"     # how Hindsight names a label of the group we keep: never an entity of the graph
 # The wording matters more than any other setting. Measured three times each on one text: this one labelled
@@ -242,7 +247,7 @@ class Hindsight(mp.Provider):
             names = [x.strip() for x in names.split(",") if x.strip()]
         refs = [{"rel": "about", "memory_id": mid, "record_id": ENTITY + entities[n]} for n in names if n in entities]
         if unit.get("document_id"):
-            refs.append({"rel": "derived_from", "memory_id": mid, "record_id": str(unit["document_id"])})
+            refs.append({"rel": "derived_from", "memory_id": mid, "record_id": self._record_of(str(unit["document_id"]))})
         # an observation: the facts it was consolidated from, each as the record a reader sees it as
         for src in unit.get("source_memory_ids") or []:
             ref = {"rel": "derived_from", "memory_id": mid, "record_id": (units or {}).get(str(src), str(src))}
@@ -283,6 +288,28 @@ class Hindsight(mp.Provider):
         names = {str(e.get("canonical_name")): str(e["id"]) for e in ((r.json() or {}).get("items") or []) if not self._is_label(e.get("canonical_name"))} if r.status_code == 200 else {}
         self._entities[mid] = (time.time(), names)
         return names
+
+    @staticmethod
+    def _copy_of(rid: str) -> str:
+        return COPY + rid[len(PREFIX):]
+
+    @staticmethod
+    def _record_of(doc_id: str) -> str:
+        """A copy Hindsight read of a stated record is that record."""
+        return PREFIX + doc_id[len(COPY):] if doc_id.startswith(COPY) else doc_id
+
+    async def _read_copy(self, mid: str, rid: str, record: dict, replace: bool = False) -> None:
+        """Hindsight reads what was stated as it reads anything it is given, in the background. A copy not taken
+        costs what Hindsight would have learned from it, never the record."""
+        said = mp.said(record)
+        if not said.strip():
+            return
+        item = {"content": said, "document_id": self._copy_of(rid), "tags": ["t:read"], "metadata": {"hr_read": rid}, **_stamp(record),
+                **({"update_mode": "replace"} if replace else {})}
+        try:
+            await self._call("POST", self._bank(mid) + "/memories", body={"async": True, "items": [item]})
+        except mp.MemoryError:
+            pass
 
     async def _unit_ids(self, mid: str, need=()) -> dict[str, str]:
         """Each fact of the bank as the record it is read as: a stated record's own fact is that record (its document),
@@ -355,6 +382,7 @@ class Hindsight(mp.Provider):
              **_stamp(record)}]})
         if r.status_code != 200:
             raise HindsightUnavailable("the record was not stored")
+        await self._read_copy(mid, rid, record)
         return self._stated(rid, mp.said(record), meta, _now(), True)
 
     async def observe(self, mid, episodes, writer):
@@ -419,6 +447,8 @@ class Hindsight(mp.Provider):
                  **_stamp(merged)}]})
             if r.status_code != 200:
                 raise HindsightUnavailable("the revision was not stored")
+            if mp.said(merged) != mp.said(cur):
+                await self._read_copy(mid, rid, merged, replace=True)
             return self._stated(rid, mp.said(merged), meta, _now(), True)
         if rid.startswith(ENTITY):
             raise mp.MemoryError(422, "memory_unsupported", "Hindsight derives its entities: revise what they came from.")
@@ -435,7 +465,7 @@ class Hindsight(mp.Provider):
             doc = await self._doc(mid, rid)
             if not doc or "forgotten" in (doc.get("tags") or []):
                 raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
-            for u in await self._units_of(mid, rid):
+            for u in [*await self._units_of(mid, rid), *await self._units_of(mid, self._copy_of(rid))]:
                 await self._call("PATCH", self._bank(mid) + f"/memories/{u['id']}", body={"state": "invalidated", "reason": reason})
             tags = [t for t in (doc.get("tags") or []) if t != "standing"] + ["forgotten"]
             await self._call("PATCH", self._bank(mid) + f"/documents/{rid}", body={"tags": tags})
@@ -457,6 +487,7 @@ class Hindsight(mp.Provider):
         erased, unreachable = [], []
         for rid in rids:
             if rid.startswith(PREFIX):
+                await self._call("DELETE", self._bank(mid) + f"/documents/{self._copy_of(rid)}", ok=(200, 404))
                 r = await self._call("DELETE", self._bank(mid) + f"/documents/{rid}")
                 if r.status_code == 200:
                     erased.append(rid)

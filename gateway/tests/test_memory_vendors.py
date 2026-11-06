@@ -151,8 +151,8 @@ def test_a_search_for_facts_reads_what_episodes_derived_and_a_search_for_episode
 def test_a_stated_record_is_kept_word_for_word_under_an_id_we_chose(wired):
     w = wired(memory_hindsight, lambda *a: {})
     x = run(memory_hindsight.Hindsight("http://vendor.test").remember("m", {"type": "fact", "content": [{"type": "text", "text": "Refunds take 30 days."}]}, WRITER))
-    item = w.to("/memories")[-1]["body"]["items"][0]
-    assert item["strategy"] == memory_hindsight.STATED and item["document_id"] == x["id"] and x["id"].startswith("hrec_")
+    item = next(c["body"]["items"][0] for c in w.to("/memories") if c["body"]["items"][0]["document_id"] == x["id"])
+    assert item["strategy"] == memory_hindsight.STATED and x["id"].startswith("hrec_")
     assert item["content"] == "Refunds take 30 days." and "t:fact" in item["tags"]
     bank = w.to("/config")[0]["body"]["updates"]["retain_strategies"][memory_hindsight.STATED]
     assert bank == {"retain_extraction_mode": "chunks"}, "words are kept only with no extraction"
@@ -713,6 +713,41 @@ def test_every_vendor_says_what_it_makes_itself(cls):
         assert r["name"] in ("about", "derived_from"), "the rels its records carry"
     for x in b["types"] + b["relations"]:
         assert x["description"] and "\u2014" not in x["description"] and "\u2013" not in x["description"]
+
+
+def test_hindsight_reads_a_copy_of_what_is_stated_and_what_it_learns_comes_from_the_record(wired):
+    retained, deleted = [], []
+    units = [
+        {"id": "u_s", "text": "Caroline went to a support group on 7 May 2023", "document_id": "hrec_1", "metadata": {"hr_stated": "1"}, "state": "valid", "fact_type": "world"},
+        {"id": "u_x", "text": "Caroline attended an LGBTQ support group", "document_id": "hrx_1", "entities": "Caroline", "metadata": {"hr_read": "hrec_1"}, "state": "valid", "fact_type": "world"},
+    ]
+    def answer(method, path, params, body):
+        if method == "POST" and path == BANK + "/memories":
+            retained.append(body)
+            return {"success": True}
+        if path == BANK + "/memories/list":
+            return {"items": units, "total": len(units)}
+        if path == BANK + "/entities":
+            return {"items": [{"id": "e1", "canonical_name": "Caroline"}], "total": 1}
+        if method == "DELETE":
+            deleted.append(path.rsplit("/", 1)[1])
+            return {}
+        if method == "GET" and path.startswith(BANK + "/banks") or path == BANK:
+            return {}
+        return {}
+    wired(memory_hindsight, answer)
+    h = memory_hindsight.Hindsight("http://vendor.test")
+    h._ready.add("m")
+    rec = run(h.remember("m", {"type": "note", "content": [{"type": "text", "text": "Caroline went to a support group on 7 May 2023"}], "time": {"valid_from": "2023-05-07T00:00:00Z"}}, WRITER))
+    stated, copy = retained[0]["items"][0], retained[1]["items"][0]
+    assert stated["strategy"] == "hr_stated" and retained[0]["async"] is False
+    assert copy["document_id"] == "hrx_" + rec["id"][len("hrec_"):] and "strategy" not in copy and retained[1]["async"] is True
+    assert copy["tags"] == ["t:read"] and copy["timestamp"] == "2023-05-07T00:00:00Z" and copy["content"] == stated["content"]
+    found = next(r for r in run(h.list("m", {"types": ["fact"], "limit": 50}))["records"] if r["id"] == "u_x")
+    assert {(x["rel"], x["record_id"]) for x in found["references"]} == {("about", "ent_e1"), ("derived_from", "hrec_1")}, \
+        "what Hindsight learned from the copy came from the stated record, and is about who it names"
+    run(h.erase("m", ["hrec_1"]))
+    assert deleted == ["hrx_1", "hrec_1"], "the copy goes with the record"
 
 
 def test_a_graphiti_entity_names_the_conversations_that_mention_it():
