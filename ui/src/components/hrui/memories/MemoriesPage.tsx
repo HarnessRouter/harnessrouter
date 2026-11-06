@@ -10,7 +10,7 @@ import { Skel, SkCards, SkHead } from '../Skel';
 import { toast } from '../toast';
 import { plural } from '../setup/settingsModel';
 import { hasSchema, schemaLabels } from './caps';
-import { CardArt, Ghost } from './CardArt';
+import { CardArt, Ghost, MiniArt } from './CardArt';
 import { memoriesWord, pool, PLUS, setupsOf, useProviders, useSetupNames } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
 import { ChooseServiceSheet, NewMemorySheet } from './sheets';
@@ -21,6 +21,11 @@ import './memories.css';
 interface Facts { schema?: LSchema | null; grants?: Awaited<ReturnType<typeof listGrants>> | null; recent?: string[] | null }
 type Open = { k: 'new'; picked?: string } | { k: 'choose' } | null;
 const enc = encodeURIComponent;
+// Cards or a list, as on Studio, and remembered the same way (for this person, in this browser)
+const VM_KEY = 'hr.memories.view';
+type View = 'cards' | 'list';
+const GRID_IC = <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={1.6} aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2" /><rect x="9" y="2" width="5" height="5" rx="1.2" /><rect x="2" y="9" width="5" height="5" rx="1.2" /><rect x="9" y="9" width="5" height="5" rx="1.2" /></svg>;
+const LIST_IC = <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" /></svg>;
 
 export function MemoriesPage() {
   const router = useRouter();
@@ -30,6 +35,9 @@ export function MemoriesPage() {
   const [failed, setFailed] = useState(false);
   const [facts, setFacts] = useState<Record<string, Facts>>({});
   const [open, setOpen] = useState<Open>(null);
+  const [vm, setVm] = useState<View>('cards');
+  useEffect(() => { try { if (localStorage.getItem(VM_KEY) === 'list') setVm('list'); } catch { /* none */ } }, []);
+  const pick = (v: View) => { setVm(v); try { localStorage.setItem(VM_KEY, v); } catch { /* none */ } };
 
   const read = useCallback(() => {
     setFailed(false);
@@ -83,7 +91,15 @@ export function MemoriesPage() {
         </p>
       </div>
       {loading || failed || (noneConnected && !L.length) ? null : (
-        <div className="top-actions"><button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button></div>
+        <div className="top-actions">
+          {L.length ? (
+            <div className="seg vm-seg" role="group" aria-label="View">
+              <button type="button" className={vm === 'cards' ? 'on' : ''} aria-pressed={vm === 'cards'} onClick={() => pick('cards')}>{GRID_IC}Cards</button>
+              <button type="button" className={vm === 'list' ? 'on' : ''} aria-pressed={vm === 'list'} onClick={() => pick('list')}>{LIST_IC}List</button>
+            </div>
+          ) : null}
+          <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>
+        </div>
       )}
     </div>
   );
@@ -110,6 +126,32 @@ export function MemoriesPage() {
         <p>A memory is where your setups keep what should outlast one task: who your customers are, the rules they follow, what happened last time.</p>
         <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>
       </div>
+    );
+  } else if (vm === 'list') {
+    body = (
+      <>
+        <div className="rows-head mm-rows-g"><span>Name</span><span>Description</span><span>Schema</span><span className="r">Records</span><span className="r">Setups</span></div>
+        <div className="rows mm-rows">
+          {L.map((m) => {
+            const p = providerOf(m.provider), f = facts[m.id], us = setupsFor(m), word = schemaLabels(p) ? 'label' : 'type';
+            return (
+              <Link key={m.id} href={`/memories/${enc(m.id)}`} className="row mm-rows-g mm-row">
+                <span className="t with-mini">
+                  <span className="mm-mini-box">{f ? <MiniArt s={f.schema} labels={schemaLabels(p)} records={m.records?.count ?? null} /> : null}</span>
+                  <span className="mm-rn">
+                    <span className="mm-ct"><b>{m.name}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
+                    <small className="sub2 mm-cp">{`Kept by ${vendorName(m.provider)}`}</small>
+                  </span>
+                </span>
+                <span className="mm-rd">{m.description || 'No description yet.'}</span>
+                <span className="mm-rs">{hasSchema(p) ? (f?.schema ? plural(f.schema.types.length, word) : '—') : ''}</span>
+                <span className="r">{m.records?.count ?? '—'}</span>
+                <span className="r">{us && us.length ? us.length : '—'}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </>
     );
   } else {
     body = (

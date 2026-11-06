@@ -120,3 +120,36 @@ export function Ghost() {
     </svg>
   );
 }
+
+/** The same picture, small, for a row of the list: the types and their relations as dots and lines,
+ *  a vocabulary as a few chips' dots, records as lines, and nothing kept as an empty dashed ring. */
+export function MiniArt({ s, labels, records }: { s: LSchema | null | undefined; labels: boolean; records: number | null }) {
+  const T = s?.types || [], w = 36, h = 36;
+  let inner: React.ReactNode;
+  if (T.length && labels) {
+    const shown = T.slice(0, 3);
+    inner = shown.map((t, i) => <circle key={t.id} cx={w / 2 + (i - (shown.length - 1) / 2) * 9} cy={h / 2} r={3.4} fill={t.color} />);
+  } else if (T.length) {
+    const xs = T.map((t) => t.x), ys = T.map((t) => t.y), pad = 7;
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const f = Math.min((w - 2 * pad) / Math.max(1, x1 - x0), (h - 2 * pad) / Math.max(1, y1 - y0));
+    const ox = (w - (x1 - x0) * f) / 2, oy = (h - (y1 - y0) * f) / 2;
+    const at = new Map(T.map((t) => [t.id, [ox + (t.x - x0) * f, oy + (t.y - y0) * f] as const]));
+    inner = (
+      <>
+        {s!.relations.map((r) => {
+          const a = at.get(r.from), b = at.get(r.to);
+          return a && b ? <line key={r.id} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke="var(--line-strong, var(--faint))" strokeWidth="1" /> : null;
+        })}
+        {T.map((t) => { const p = at.get(t.id)!; return <circle key={t.id} cx={p[0]} cy={p[1]} r={3.6} fill={t.color} />; })}
+      </>
+    );
+  } else if (records && records > 0) {
+    inner = [0, 1, 2].slice(0, Math.min(3, records)).map((i) => (
+      <g key={i}><circle cx={10} cy={11 + i * 7} r={1.6} fill="var(--faint)" /><rect x={14} y={10 + i * 7} width={[14, 11, 13][i]} height={2} rx={1} fill="var(--line-strong, var(--faint))" /></g>
+    ));
+  } else {
+    inner = <circle cx={w / 2} cy={h / 2} r={8} fill="none" stroke="var(--line-strong, var(--faint))" strokeWidth="1.2" strokeDasharray="3 3" />;
+  }
+  return <svg className="mm-mini" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">{inner}</svg>;
+}

@@ -219,3 +219,28 @@ describe('a card draws what is kept', () => {
     expect(dots(0)).toEqual({ filled: 0, ring: 1 });
   });
 });
+
+describe('cards or a list', () => {
+  test('List shows a row a memory with the same figures, and the choice is remembered', async () => {
+    localStorage.removeItem('hr.memories.view');
+    backend({
+      'GET /v1/memories/providers': { data: [CAPS.graphiti, CAPS.mem0] },
+      'GET /v1/memories': { data: [memory(), memory({ id: 'hmem_2', name: 'Support', provider: 'mem0', records: { count: null }, description: '' })] },
+      'GET /v1/memories/hmem_1/schema': { types: [{ name: 'Company' }, { name: 'Person' }], relations: [] },
+      'GET /v1/memories/hmem_1/grants': { data: [{ id: 'g1', memory_id: 'hmem_1', principal: 'member:chrn_a', privileges: ['read'], inherited: false }] },
+    });
+    await open();
+    expect(page().querySelectorAll('.mm-card')).toHaveLength(2);
+    await press('List');
+    const rows = Array.from(page().querySelectorAll('.mm-row'));
+    expect(rows).toHaveLength(2);
+    const cells = (r: Element) => Array.from(r.children).slice(1).map((c) => c.textContent);
+    expect(cells(rows[0])).toEqual(['What each brand wants.', '2 types', '1', '1']);
+    // no schema is read here: the Schema cell stays empty; what could not be read is a dash
+    expect(cells(rows[1])).toEqual(['No description yet.', '', '—', '—']);
+    expect(localStorage.getItem('hr.memories.view')).toBe('list');
+    await press('Cards');
+    expect(page().querySelectorAll('.mm-card')).toHaveLength(2);
+    expect(localStorage.getItem('hr.memories.view')).toBe('cards');
+  });
+});

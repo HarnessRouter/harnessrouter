@@ -38,6 +38,20 @@
 #hrui .mm-ca-rows.named .mm-ca-row span{font-size:12px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 #hrui .mm-ca-rows.named small{align-self:flex-start;padding-left:12px}
 @media (max-width:520px){#hrui .mm-art{height:168px}}
+/* the list: Studio's rows, with the memory's picture small beside its name */
+#hrui .mm-rows-g{grid-template-columns:minmax(0,1.25fr) minmax(0,1.6fr) 110px 80px 70px!important}
+#hrui .mm-row{color:inherit;text-decoration:none}
+#hrui .mm-row .t{white-space:normal}
+#hrui .mm-mini-box{flex:none;width:40px;height:40px;margin-right:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:grid;place-items:center}
+#hrui .mm-mini{display:block}
+#hrui .mm-rn{min-width:0;display:block}
+#hrui .mm-rn .mm-ct{justify-content:flex-start}
+#hrui .mm-rn .mm-ct b{font-family:var(--sans);font-size:14px;letter-spacing:0}
+#hrui .mm-rd{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#hrui .mm-rs{font-size:13px;color:var(--muted);white-space:nowrap}
+#hrui .mm-row .r{font-variant-numeric:tabular-nums}
+@media (max-width:1000px){#hrui .mm-rows-g{grid-template-columns:minmax(0,1fr) 110px 80px 70px!important}#hrui .mm-rows-g>:nth-child(2){display:none}}
+@media (max-width:520px){#hrui .mm-rows-g{grid-template-columns:minmax(0,1fr) auto!important}#hrui .mm-rows-g>:nth-child(2),#hrui .mm-rows-g>:nth-child(3),#hrui .mm-rows-g>:nth-child(5){display:none}}
 #hrui .mm-empty-list{max-width:520px;margin:40px auto 0;text-align:center}
 #hrui .mm-empty-list .mm-art.big{height:140px;border:0;background:transparent}
 #hrui .mm-empty-list h2{font-size:20px;font-weight:600;margin:10px 0 8px}#hrui .mm-empty-list p{color:var(--muted);font-size:14px;line-height:1.6;margin:0 0 18px}
