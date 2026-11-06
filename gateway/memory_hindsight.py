@@ -50,6 +50,13 @@ ACTIVE = "valid"
 transport: httpx.BaseTransport | None = None
 
 
+
+def _stamp(record: dict) -> dict:
+    """The item's timestamp: when what it says happened (the record's or episode's valid_from). Hindsight dates what it
+    derives from it by this; without it, by when it was written."""
+    t = (record.get("time") or {}).get("valid_from")
+    return {"timestamp": str(t)} if t else {}
+
 class HindsightUnavailable(mp.MemoryError):
     def __init__(self, why: str):
         super().__init__(502, "memory_unavailable", f"Hindsight did not answer: {why}"[:300])
@@ -288,7 +295,8 @@ class Hindsight(mp.Provider):
         meta = self._meta(record, writer)
         tags = [f"t:{record.get('type') or 'fact'}"] + (["standing"] if (record.get("attributes") or {}).get("standing") else [])
         r = await self._call("POST", self._bank(mid) + "/memories", body={"async": False, "items": [
-            {"content": mp.said(record), "document_id": rid, "metadata": meta, "tags": tags, "strategy": STATED}]})
+            {"content": mp.said(record), "document_id": rid, "metadata": meta, "tags": tags, "strategy": STATED,
+             **_stamp(record)}]})
         if r.status_code != 200:
             raise HindsightUnavailable("the record was not stored")
         return self._stated(rid, mp.said(record), meta, _now(), True)
@@ -300,7 +308,7 @@ class Hindsight(mp.Provider):
             rid = PREFIX + uuid.uuid4().hex
             ids.append(rid)
             text = "\n".join(f"{p.get('role')}: {p['text']}" if p.get("role") else str(p["text"]) for p in e.get("content") or [] if p.get("text"))
-            items.append({"content": text, "document_id": rid, "tags": ["t:episode"], "metadata": {
+            items.append({"content": text, "document_id": rid, "tags": ["t:episode"], **_stamp(e), "metadata": {
                 "hr_type": "episode", "hr_writer": json.dumps({"kind": "provider", "id": self.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}, separators=(",", ":")),
                 "hr_parts": json.dumps(e.get("content") or [], separators=(",", ":")),
                 **({"hr_attributes": json.dumps(e["attributes"], separators=(",", ":"))} if e.get("attributes") else {})}})
@@ -349,7 +357,8 @@ class Hindsight(mp.Provider):
             meta = self._meta(merged, writer, version, kept)
             tags = [f"t:{merged['type']}"] + (["standing"] if merged["attributes"].get("standing") else [])
             r = await self._call("POST", self._bank(mid) + "/memories", body={"async": False, "items": [
-                {"content": mp.said(merged), "document_id": rid, "metadata": meta, "tags": tags, "strategy": STATED, "update_mode": "replace"}]})
+                {"content": mp.said(merged), "document_id": rid, "metadata": meta, "tags": tags, "strategy": STATED, "update_mode": "replace",
+                 **_stamp(merged)}]})
             if r.status_code != 200:
                 raise HindsightUnavailable("the revision was not stored")
             return self._stated(rid, mp.said(merged), meta, _now(), True)

@@ -209,6 +209,7 @@ class Graphiti(mp.Provider):
             text = "\n".join(f"{p.get('role')}: {p['text']}" if p.get("role") else str(p["text"]) for p in e.get("content") or [] if p.get("text"))
             r = await self._call("POST", "/episodes", body={
                 "group_id": mid, "content": text, "source_description": f"{writer.get('kind')}:{writer.get('id')}",
+                **({"reference_time": str((e.get("time") or {})["valid_from"])} if (e.get("time") or {}).get("valid_from") else {}),
                 "entity_types": schema.get("types") or [], "edge_types": [{"name": x.get("name"), "description": x.get("description"), "properties": x.get("properties") or []} for x in rels],
                 "edge_type_map": [{"from": a, "to": b, "names": n} for (a, b), n in emap.items()]})
             if r.status_code != 200:

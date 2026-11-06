@@ -10,6 +10,8 @@ member, what it can reach is what it was granted, and no argument of a tool can 
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 
@@ -84,6 +86,42 @@ def _tool(name, description, props, required=(), write=False, needs=""):
             "inputSchema": {"type": "object", "properties": props, "required": list(required)}}
 
 
+# When something happened or began to hold, said by the agent. Without it a record is dated only by when it was written,
+# and a vendor that reasons about time (Graphiti's valid_at, Hindsight's occurred time) places a May 2023 event in the week
+# the agent wrote it down.
+_WHEN = {"type": "string", "description": "when it happened or began to be true, if it is tied to a time: a date (2023-05-07) "
+         "or a date and time (2023-05-07T14:00:00Z). Work out a relative day (\"yesterday\") from when it was said."}
+_UNTIL = {"type": "string", "description": "when it stopped being true, if it has: a date or a date and time"}
+_WHEN_RE = re.compile(r"^(\d{4})-(\d{2})(?:-(\d{2}))?(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?$")
+
+
+def _instant(s) -> str | None:
+    """A date or date-time an agent wrote, as UTC ISO; None when it is not one."""
+    m = _WHEN_RE.match(str(s or "").strip())
+    if not m:
+        return None
+    y, mo, d, hh, mm, ss, tz = m.groups()
+    try:
+        t = datetime(int(y), int(mo), int(d or 1), int(hh or 0), int(mm or 0), int(ss or 0),
+                     tzinfo=timezone.utc if not tz or tz == "Z" else
+                     timezone((1 if tz[0] == "+" else -1) * timedelta(hours=int(tz[1:3]), minutes=int(tz[-2:]))))
+    except ValueError:
+        return None
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _when_of(args: dict):
+    """{valid_from, valid_to} from `when` and `until`; {} when neither is given; a message when one is not a date."""
+    out = {}
+    for arg, k in (("when", "valid_from"), ("until", "valid_to")):
+        if str(args.get(arg) or "").strip():
+            t = _instant(args[arg])
+            if t is None:
+                return f"`{arg}` is a date like 2023-05-07, or a date and time like 2023-05-07T14:00:00Z."
+            out[k] = t
+    return out
+
+
 _TOOLS = [
     _tool("memory_list",
           "Where you can look. With no argument: the memories you were given. With a memory: that memory, its parent "
@@ -118,6 +156,7 @@ _TOOLS = [
            "title": {"type": "string", "description": "one line naming it: a document's heading, an entity's name, a fact's statement"},
            "content": {"type": "string", "description": "what it says beyond the title; may be left out when the title says it all"},
            "attributes": {"type": "object", "description": "fields of the record, e.g. {\"kind\": \"person\"} on an entity, {\"predicate\": \"works at\"} on a fact between two entities"},
+           "when": _WHEN, "until": _UNTIL,
            "references": {"type": "array", "description": "records this one points at",
                           "items": {"type": "object", "properties": {
                               "rel": {"type": "string", "description": "subject, object (a fact's two entities), about (the entity a record concerns), derived_from (where it came from), part_of"},
@@ -127,7 +166,7 @@ _TOOLS = [
     _tool("memory_revise", "Correct a record. The earlier version is kept in its history; say why. A record that carries `follows` "
           "comes from a source kept elsewhere (a document) and is changed there, not here.",
           {"memory": _MEM, "record": {"type": "string"}, "title": {"type": "string"}, "content": {"type": "string"},
-           "attributes": {"type": "object"}, "reason": {"type": "string"}}, ["memory", "record", "reason"], write=True),
+           "attributes": {"type": "object"}, "when": _WHEN, "until": _UNTIL, "reason": {"type": "string"}}, ["memory", "record", "reason"], write=True),
     _tool("memory_forget", "Close a record that is no longer true or wanted. Its history remains.",
           {"memory": _MEM, "record": {"type": "string"}}, ["memory", "record"], write=True),
     _tool("memory_run_query", "Run a query the memory's owner defined. memory_list on a memory names its queries and their parameters.",
@@ -195,9 +234,51 @@ def _slim(record: dict) -> dict:
     return {k: record[k] for k in keep if k in record and record[k] not in (None, {}, [])}
 
 
+# What some agent CLIs send in place of a number, a list or an object: the same value as a string ("50", "['entity']",
+# "{\"kind\": \"person\"}"). Measured on dsh, 2026-11-06: `depth` was dropped for not being an int and `types` reached
+# the vendor as one string.
+_INT_ARGS = ("limit", "depth", "hops")
+_LIST_ARGS = ("types", "references")
+_OBJECT_ARGS = ("attributes", "filters", "params", "input")
+_RECORD_TOOLS = ("memory_get", "memory_revise", "memory_forget", "memory_operate")
+
+
+def _parsed(s: str):
+    for t in (s, s.replace("'", '"')):
+        try:
+            return json.loads(t)
+        except ValueError:
+            pass
+    return None
+
+
+def _coerced(args: dict) -> dict:
+    out = dict(args or {})
+    for k in _INT_ARGS:
+        v = out.get(k)
+        if isinstance(v, str) and re.fullmatch(r"\s*\d+\s*", v):
+            out[k] = int(v)
+    for k in _LIST_ARGS:
+        v = out.get(k)
+        if isinstance(v, str):
+            p = _parsed(v)
+            if isinstance(p, list):
+                out[k] = p
+            elif k == "types" and v.strip():
+                out[k] = [x.strip().strip("'\"") for x in v.strip().strip("[]").split(",") if x.strip().strip("'\"")]
+    for k in _OBJECT_ARGS:
+        v = out.get(k)
+        if isinstance(v, str) and v.strip():
+            p = _parsed(v)
+            if isinstance(p, dict):
+                out[k] = p
+    return out
+
+
 async def call(seam: Seam, name: str, args: dict) -> tuple[str, bool]:
     """One tool call as the agent. Returns (text for the agent, is_error)."""
     try:
+        args = _coerced(args)
         entries = await seam.entries()
         if name == "memory_list" and not args.get("memory"):
             return _text({"memories": [{**e["memory"], "default": bool(e.get("default"))} for e in entries]}), False
@@ -207,15 +288,26 @@ async def call(seam: Seam, name: str, args: dict) -> tuple[str, bool]:
             mid = next((str(e["memory"]["id"]) for e in entries if e.get("default")), "")
             if not mid:
                 return "This agent has no default memory to write to: name the memory.", True
+        if not mid:
+            # A read with no memory named reads where this agent writes by default, or its only memory. It used to
+            # answer "no such memory" to an agent holding exactly one, which then gave up on what it knew.
+            mid = next((str(e["memory"]["id"]) for e in entries if e.get("default")), "") or (
+                str(entries[0]["memory"]["id"]) if len(entries) == 1 else "")
+            if not mid:
+                names = ", ".join(f"{e['memory'].get('name')} (`{e['memory']['id']}`)" for e in entries)
+                return (f"Name the memory: this agent has {len(entries)}: {names}." if entries else "This agent holds no memory."), True
+        if name in _RECORD_TOOLS and not str(args.get("record") or "").strip():
+            return "Name the record: its `id` comes from memory_recall or memory_graph.", True
         if name in ("memory_remember", "memory_revise", "memory_forget") and not _can_write(entries):
             return "This agent may read its memories, not write them.", True
 
         if name == "memory_list":
             return _text(await seam.memory(mid)), False
         if name == "memory_recall":
-            if not (args.get("query") or args.get("text") or args.get("filters")):
-                return "Give a query, text or filters.", True
             body = {k: args.get(k) for k in ("query", "text", "filters", "types") if args.get(k)}
+            if not (args.get("query") or args.get("text") or args.get("filters")):
+                # Nothing asked: what the memory holds now, of the types named if any (an agent listing its entities).
+                body["filters"] = {"field": "status", "op": "eq", "value": "active"}
             body["limit"] = max(1, min(int(args.get("limit") or 8), 50))
             if isinstance(args.get("depth"), int) and args["depth"] >= 0:
                 body["depth"] = args["depth"]
@@ -241,6 +333,11 @@ async def call(seam: Seam, name: str, args: dict) -> tuple[str, bool]:
             return _text(out), False
         if name == "memory_remember":
             record = {k: args[k] for k in ("type", "title", "content", "attributes", "references") if k in args}
+            when = _when_of(args)
+            if isinstance(when, str):
+                return when, True
+            if when:
+                record["time"] = when
             if args.get("file"):
                 if not (await seam.offers()).get("files"):
                     return "A file cannot be kept in memory here. Keep what it says, in words.", True
@@ -252,6 +349,11 @@ async def call(seam: Seam, name: str, args: dict) -> tuple[str, bool]:
             return _text({"remembered": _slim(rec)}), False
         if name == "memory_revise":
             patch = {k: args[k] for k in ("title", "content", "attributes") if k in args}
+            when = _when_of(args)
+            if isinstance(when, str):
+                return when, True
+            if when:
+                patch["time"] = when
             if not patch or not str(args.get("reason") or "").strip():
                 return "Give the new content or attributes, and the reason.", True
             patch["attributes"] = {**(patch.get("attributes") or {}), "revision_reason": str(args["reason"])[:500]}
