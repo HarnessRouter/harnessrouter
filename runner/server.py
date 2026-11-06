@@ -15075,7 +15075,7 @@ def _evict_turns(now: float | None = None) -> int:
                 if tid not in _turns:
                     _turn_by_key.pop(key, None)
     return gone
-_turn_by_key: dict[str, str] = {}   # idempotency_key -> turn_id (dedup a retried /turn; see turn())
+_turn_by_key: dict[str, str] = {}   # "<identifier>\0<idempotency_key>" -> turn_id (dedup a retried /turn, per session; see turn())
 _turns_lock = threading.Lock()
 
 
@@ -17146,11 +17146,13 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
 
     Idempotent by idempotency_key: the gateway retries this call on a lost/slow reply (a turn can
     take minutes to acknowledge), and without dedup each retry would start a SECOND CLI process in
-    this sandbox — the same request executed twice. A key seen before returns the existing turn."""
+    this sandbox — the same request executed twice. A key seen before returns the existing turn, to the session
+    that started it only: the map is keyed by session and key, so another session's key never names this turn."""
     key = (req.idempotency_key or "").strip()
+    dk = f"{identifier}\x00{key}" if key else ""
     if key:
         with _turns_lock:
-            prior_id = _turn_by_key.get(key)
+            prior_id = _turn_by_key.get(dk)
             if prior_id and prior_id in _turns:
                 r = _turns[prior_id]
                 return {"turn_id": prior_id, "status": r.get("status", "running"),
@@ -17545,8 +17547,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         # Double-check under the lock: a concurrent retry with the same key may have raced past the
         # top-of-handler check before this one recorded the key. If so, use the winner and let this
         # freshly-built cmd drop (no thread started for it).
-        if key and _turn_by_key.get(key) in _turns:
-            prior_id = _turn_by_key[key]; r = _turns[prior_id]
+        if key and _turn_by_key.get(dk) in _turns:
+            prior_id = _turn_by_key[dk]; r = _turns[prior_id]
             return {"turn_id": prior_id, "status": r.get("status", "running"),
                     "backend": r.get("backend", ""), "model": r.get("model", ""),
                     "host": socket.gethostname(), "deduplicated": True, "max_seconds": MAX_TURN_SECONDS}
@@ -17566,7 +17568,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             _turns[turn_id]["events"].append({"type": "system", "subtype": "resume_lost", "_ts": time.time(),
                                               "requested_session_id": resume_lost})
         if key:
-            _turn_by_key[key] = turn_id
+            _turn_by_key[dk] = turn_id
     if use_appserver:
         threading.Thread(target=_routes_end_with_turn(_run_codex_appserver_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds,
