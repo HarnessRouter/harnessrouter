@@ -333,6 +333,49 @@ def test_mem0_gives_what_is_standing_and_nothing_else(wired, make):
     assert [x["id"] for x in out["records"]] == ["a"] and out["tokens"] > 0 and out["truncated"] is False
 
 
+def test_mem0_reads_a_copy_in_a_scope_of_its_own_and_its_facts_are_about_what_it_linked(wired):
+    """What an agent states is kept as stated (infer off); Mem0 also reads a copy (infer on) as agent hr_read, so its
+    merging never touches the stated record, and links each fact it draws to the names in it."""
+    stated = {"id": "s1", "user_id": "m", "memory": "Caroline went to a support group.", "metadata": memory_mem0.Mem0._meta({"type": "note"}, WRITER)}
+    drawn = {"id": "f1", "user_id": "m", "memory": "Caroline attended an LGBTQ support group",
+             "metadata": memory_mem0.Mem0._meta({"type": "fact", "references": [{"rel": "derived_from", "memory_id": "m", "record_id": "s1"}]}, {"kind": "provider", "id": "mem0"})}
+    calls = []
+
+    def answer(method, path, params, body):
+        calls.append((method, path, body))
+        if method == "POST" and path.endswith("/memories"):
+            return {"results": [{"id": "s1", "event": "ADD"}] if body.get("infer") is False else []}
+        if method == "GET" and path.endswith("/memories/s1"):
+            return stated
+        if method == "GET" and path.endswith("/memories/f1"):
+            return drawn
+        if method == "GET" and path.endswith("/memories"):
+            return {"results": [stated, drawn]}
+        if method == "GET" and path.endswith("/hr/entities"):
+            return [{"id": "e1", "text": "Caroline", "kind": "PROPER", "memory_ids": ["f1"]}]
+        return {"message": "ok"}
+    wired(memory_mem0, answer)
+
+    async def go():
+        m = memory_mem0.Mem0Server("k", "http://vendor.test")
+        rec = await m.remember("m", {"type": "note", "content": [{"type": "text", "text": "Caroline went to a support group."}]}, WRITER)
+        await asyncio.gather(*list(memory_mem0._TASKS))
+        listed = await m.list("m", {"limit": 50})
+        erased = await m.erase("m", ["s1"])
+        return rec, listed, erased
+    rec, listed, erased = run(go())
+    copy = [b for (method, path, b) in calls if method == "POST" and path.endswith("/memories") and b.get("infer") is True]
+    assert rec["id"] == "s1" and len(copy) == 1
+    assert copy[0]["agent_id"] == "hr_read" and copy[0]["user_id"] == "m" and copy[0]["messages"][0]["content"] == "Caroline went to a support group."
+    assert json.loads(copy[0]["metadata"]["hr_refs"]) == [{"rel": "derived_from", "memory_id": "m", "record_id": "s1"}]
+    rows = {r["id"]: r for r in listed["records"]}
+    assert rows["ment_e1"]["type"] == "entity" and rows["ment_e1"]["title"] == "Caroline" and rows["ment_e1"]["attributes"] == {"kind": "proper"}
+    assert {"rel": "about", "memory_id": "m", "record_id": "ment_e1"} in rows["f1"]["references"]
+    assert rows["s1"]["references"] == [], "the stated record is as it was stated"
+    deletes = [path for (method, path, _b) in calls if method == "DELETE"]
+    assert [d.rsplit("/", 1)[1] for d in deletes] == ["f1", "s1"] and erased["erased"] == ["s1"], "what Mem0 drew from it goes first"
+
+
 def test_mem0s_listing_of_metadata_as_text_does_not_change_what_a_record_says():
     meta = memory_mem0.Mem0._meta({"type": "note", "attributes": {"standing": True, "seats": 15}}, WRITER)
     listed = {k: (str(v) if k in ("standing", "seats") else v) for k, v in meta.items()}

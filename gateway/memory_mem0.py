@@ -33,6 +33,7 @@ the gateway stamped, references, validity, the version count.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
 import time
@@ -449,6 +450,17 @@ class Mem0(mp.Provider):
         return {"results": results[:limit], "degraded": degraded, "abstain": False}
 
 
+READ_AGENT = "hr_read"   # the scope Mem0 reads a stated record's copy in: its updates and deletes never reach what was stated
+ENT = "ment_"            # an entity Mem0 linked, by the id of its row in Mem0's entity store
+_TASKS: set = set()      # copies being read, held so they finish
+
+
+def _spawn(coro) -> None:
+    t = asyncio.get_running_loop().create_task(coro)
+    _TASKS.add(t)
+    t.add_done_callback(_TASKS.discard)
+
+
 class Mem0Server(Mem0):
     """The open-source mem0 REST server (mem0ai/mem0, server/). Every shape here was read off a server
     running on 2026-11-04, and it differs from the Platform in what matters to a memory:
@@ -463,15 +475,36 @@ class Mem0Server(Mem0):
 
     Same on both: one memory is one user_id with the check on every read, metadata carries the
     protocol's fields, history is read from mem0's own events. A schema has no place here: what mem0
-    derives is free text, and nothing it does reads a type."""
+    derives is free text, and nothing it does reads a type.
+
+    Here only (11-06, so each system is used as it is built to be):
+      remember = the record kept as stated (infer off), and a copy Mem0 reads with infer on, in the background,
+          as agent `hr_read` of the same user: Mem0 extracts facts from it, merges and drops them among its own,
+          and links each to the names, titles and topics in it. The scope keeps its merging away from what was
+          stated. Each fact comes from the stated record; revising reads it again, forgetting and erasing take them.
+      entities = Mem0's entity store, read through GET /hr/entities, a read-only route our build of the server
+          adds (deploy/memories/mem0): `ment_<id>`, and each fact it is linked to is `about` it. Built only with
+          spaCy, which that build installs."""
+
+    BUILTIN = {
+        "types": [
+            {"name": "fact", "description": "A short fact Mem0 drew from what it read, merged with the facts it already had."},
+            {"name": "entity", "description": "A name, title or topic Mem0 found in its facts, which links the facts that share it."},
+        ],
+        "relations": [
+            {"name": "about", "from": "fact", "to": "entity", "description": "The names, titles and topics in a fact."},
+            {"name": "derived_from", "from": "fact", "to": "fact", "description": "What Mem0 read it in."},
+        ],
+    }
 
     def __init__(self, api_key: str = "", base_url: str = ""):
         super().__init__(api_key)
         self.base = base_url.rstrip("/")
+        self._ents: dict[str, tuple[float, list[dict]]] = {}
 
     def capabilities(self) -> dict:
         c = super().capabilities()
-        return {**c, "observe": {"keeps_episodes": False, "answers": "records"},
+        return {**c, "observe": {"keeps_episodes": False, "answers": "records"}, "graph": {"entities": "derived"},
                 "recall": {"signals": ["query", "filters"], "abstain": False,
                            "filters": {"native": ["eq on type and attributes.*"], "applied_after_ranking": "every other filter"}}}
 
@@ -497,17 +530,85 @@ class Mem0Server(Mem0):
         r = await self._call("GET", "/memories", params={"user_id": mid, "top_k": 1000, "show_expired": "true" if expired else "false"})
         return ((r.json() or {}).get("results") or []) if r.status_code == 200 else []
 
+    async def _entities(self, mid: str) -> list[dict]:
+        hit = self._ents.get(mid)
+        if hit and time.time() - hit[0] < 30:
+            return hit[1]
+        try:
+            r = await self._call("GET", "/hr/entities", params={"user_id": mid})
+            rows = r.json() if r.status_code == 200 and isinstance(r.json(), list) else []
+        except mp.MemoryError:
+            rows = []                       # a server without the route: no entities, the facts still read
+        self._ents[mid] = (time.time(), rows)
+        return rows
+
+    @staticmethod
+    def _entity_out(e: dict) -> dict:
+        return {"id": ENT + str(e["id"]), "type": "entity", "title": str(e.get("text") or ""), "content": [],
+                "attributes": {"kind": str(e["kind"]).lower()} if e.get("kind") else {}, "references": [], "version": 1,
+                "status": "active", "supersedes": None,
+                "time": {"valid_from": None, "valid_to": None, "written_at": None, "invalidated_at": None},
+                "written_by": {"kind": "provider", "id": "mem0"}}
+
+    @staticmethod
+    def _about(mid: str, rows: list[dict], ents: list[dict]) -> list[dict]:
+        by: dict[str, list[str]] = {}
+        for e in ents:
+            for m in e.get("memory_ids") or []:
+                by.setdefault(str(m), []).append(ENT + str(e["id"]))
+        for x in rows:
+            for eid in by.get(x["id"], []):
+                ref = {"rel": "about", "memory_id": mid, "record_id": eid}
+                if ref not in x["references"]:
+                    x["references"].append(ref)
+        return rows
+
+    def _read_copy(self, mid: str, rid: str, text: str, record: dict) -> None:
+        """Mem0 reads what was stated, as it reads anything it is given, in the background. A copy not read
+        costs what Mem0 would have drawn from it, never the record."""
+        if not text.strip():
+            return
+        meta = self._meta({"type": "fact", "references": [{"rel": "derived_from", "memory_id": mid, "record_id": rid}],
+                           "time": {k: v for k, v in (record.get("time") or {}).items() if k == "valid_from"}}, {"kind": "provider", "id": "mem0"})
+
+        async def go():
+            try:
+                await self._call("POST", "/memories", body={"user_id": mid, "agent_id": READ_AGENT, "infer": True,
+                                                            "messages": [{"role": "user", "content": text}], "metadata": meta})
+            except mp.MemoryError:
+                pass
+            self._counts.pop(mid, None)
+            self._ents.pop(mid, None)
+        _spawn(go())
+
+    async def _drawn_from(self, mid: str, rid: str) -> list[str]:
+        """The facts Mem0 drew from a stated record's copy."""
+        out = []
+        for item in await self._all(mid, expired=True):
+            x = self._out(item)
+            if x["written_by"].get("kind") == "provider" and any(r.get("rel") == "derived_from" and r.get("record_id") == rid for r in x["references"]):
+                out.append(x["id"])
+        return out
+
     async def drop(self, mid):
         await self._call("DELETE", "/memories", params={"user_id": mid})
         self._counts.pop(mid, None)
+        self._ents.pop(mid, None)
 
     async def count(self, mid):
         hit = self._counts.get(mid)
         if hit and time.time() - hit[0] < 30:
             return hit[1]
-        n = len(await self._all(mid))
+        n = len(await self._all(mid)) + len(await self._entities(mid))
         self._counts[mid] = (time.time(), n)
         return n
+
+    async def get(self, mid, rid, as_of=None):
+        if rid.startswith(ENT):
+            e = next((x for x in await self._entities(mid) if ENT + str(x["id"]) == rid), None)
+            return self._entity_out(e) if e else None
+        rec = await super().get(mid, rid, as_of)
+        return self._about(mid, [rec], await self._entities(mid))[0] if rec else None
 
     async def remember(self, mid, record, writer):
         text = mp.said(record)
@@ -518,8 +619,10 @@ class Mem0Server(Mem0):
         if r.status_code != 200 or not made:
             raise Mem0Unavailable("the memory was not stored")
         self._counts.pop(mid, None)
-        return self._out((await self._owned(mid, str(made[0]["id"]))) or
-                         {"id": made[0]["id"], "memory": text, "metadata": self._meta(record, writer)})
+        out = self._out((await self._owned(mid, str(made[0]["id"]))) or
+                        {"id": made[0]["id"], "memory": text, "metadata": self._meta(record, writer)})
+        self._read_copy(mid, out["id"], text, record)
+        return out
 
     async def observe(self, mid, episodes, writer):
         records = []
@@ -555,6 +658,10 @@ class Mem0Server(Mem0):
             raise Mem0Unavailable("the revision was not stored")
         out = self._out(await self._owned(mid, rid) or item)
         out["supersedes"] = cur["version"]
+        if cur["written_by"].get("kind") != "provider" and mp.said(merged) != mp.said(cur):
+            for x in await self._drawn_from(mid, rid):
+                await self._call("DELETE", f"/memories/{x}")
+            self._read_copy(mid, rid, mp.said(merged), merged)
         return out
 
     async def forget(self, mid, rid, writer):
@@ -566,6 +673,11 @@ class Mem0Server(Mem0):
             "text": item.get("memory") or "", "metadata": meta, "expiration_date": (_today() - _dt.timedelta(days=1)).isoformat()})
         if r.status_code != 200:
             raise Mem0Unavailable("the record was not closed")
+        for x in await self._drawn_from(mid, rid):
+            d = await self._owned(mid, x)
+            if d:
+                await self._call("PUT", f"/memories/{x}", body={"text": d.get("memory") or "", "metadata": d.get("metadata") or {},
+                                                               "expiration_date": (_today() - _dt.timedelta(days=1)).isoformat()})
         self._counts.pop(mid, None)
         return self._out(await self._owned(mid, rid) or item)
 
@@ -573,10 +685,13 @@ class Mem0Server(Mem0):
         erased = []
         for rid in rids:
             if await self._owned(mid, rid):
+                for x in await self._drawn_from(mid, rid):
+                    await self._call("DELETE", f"/memories/{x}")
                 r = await self._call("DELETE", f"/memories/{rid}")
                 if r.status_code == 200:
                     erased.append(rid)
         self._counts.pop(mid, None)
+        self._ents.pop(mid, None)
         return {"erased": erased, "unreachable": list(erased)}
 
     async def history(self, mid, rid):
@@ -637,7 +752,9 @@ class Mem0Server(Mem0):
             raise mp.MemoryError(422, "memory_unsupported", "This memory's provider does not list a memory as of a past time.")
         degraded: list[str] = []
         flat, later = self._flat(mid, req, degraded)
-        rows = [self._out(i) for i in await self._all(mid, expired=req.get("include") == "all")]
+        ents = await self._entities(mid)
+        rows = self._about(mid, [self._out(i) for i in await self._all(mid, expired=req.get("include") == "all")], ents)
+        rows += [self._entity_out(e) for e in ents]
         checks = [{"field": "type", "op": "eq", "value": flat[_RESERVED + "type"]}] if _RESERVED + "type" in flat else []
         checks += [{"field": f"attributes.{k}", "op": "eq", "value": v} for k, v in flat.items() if k not in ("user_id", _RESERVED + "type")]
         rows = [x for x in rows if all(mp.matches(x, f) for f in [*checks, *later])]
@@ -659,13 +776,14 @@ class Mem0Server(Mem0):
         if text:
             degraded.append("text:searched_with_the_query")
         filters = {k: v for k, v in flat.items() if k != "user_id"}
+        ents = await self._entities(mid)
         r = await self._call("POST", "/search", body={
             "query": f"{query} {text}".strip(), "user_id": mid, "top_k": limit * (3 if later else 1), **({"filters": {"user_id": mid, **filters}} if filters else {})})
         results = []
         for item in (r.json() or {}).get("results") or [] if r.status_code == 200 else []:
             if str(item.get("user_id") or "") != mid:
                 continue
-            rec = self._out(item)
+            rec = self._about(mid, [self._out(item)], ents)[0]
             if rec["status"] != "active" or not all(mp.matches(rec, f) for f in later):
                 continue
             results.append({"record": rec, "memory_id": mid, "score": item.get("score"),

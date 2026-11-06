@@ -54,7 +54,12 @@ services:
   mem0:
     <<: *restart
     profiles: [mem0]
-    build: https://github.com/mem0ai/mem0.git#753496cf1435d76c3a711f3af51303f7fdcb6420:server
+    # Mem0's own server at a pinned commit, plus spaCy (its entity linking) and a read-only route for those links:
+    # see mem0/Dockerfile.
+    build:
+      context: ./mem0
+      additional_contexts:
+        mem0: https://github.com/mem0ai/mem0.git#753496cf1435d76c3a711f3af51303f7fdcb6420:server
     entrypoint: ["sh", "-c", "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port 8000"]
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
