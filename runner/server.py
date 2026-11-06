@@ -17550,7 +17550,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             return {"turn_id": prior_id, "status": r.get("status", "running"),
                     "backend": r.get("backend", ""), "model": r.get("model", ""),
                     "host": socket.gethostname(), "deduplicated": True, "max_seconds": MAX_TURN_SECONDS}
-        _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
+        _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False, "identifier": identifier,
                            "backend": backend, "model": model, "started": time.time(),
                            "reasoning": turn_thinking,
                            # the flags of every route the turn registered (see _turn_route)
@@ -17683,13 +17683,20 @@ async def delete_workspace(identifier: str = "", body: WorkspaceDelete | None = 
     return out
 
 
+def _turn_of(turn_id: str, identifier: str) -> dict:
+    """A turn, only to the session that started it: another session's turn id reads as no turn at all.
+    The gateway sends the session's identifier on every call; a turn recorded without one (made in-process) is as before."""
+    rec = _turns.get(turn_id)
+    if not rec or (rec.get("identifier") and identifier != rec["identifier"]):
+        raise HTTPException(404, "turn not found")
+    return rec
+
+
 @app.post("/turn/{turn_id}/cancel")
-def cancel_turn(turn_id: str) -> dict:
+def cancel_turn(turn_id: str, identifier: str = "") -> dict:
     """Kill a running turn's CLI process on demand (user-initiated stop). The reader loop
     in _run_turn_bg then drains and finalizes the record with status='cancelled'."""
-    rec = _turns.get(turn_id)
-    if not rec:
-        raise HTTPException(404, "turn not found")
+    rec = _turn_of(turn_id, identifier)
     if rec.get("done"):
         return {"turn_id": turn_id, "status": rec["status"], "cancelled": False}
     rec["cancelled"] = True
@@ -17734,7 +17741,7 @@ def _turn_answer(turn_id: str, rec: dict, since: int, held: bool) -> dict:
 
 
 @app.get("/turn/{turn_id}")
-async def get_turn(turn_id: str, since: int = 0, wait: float = 0.0) -> dict:
+async def get_turn(turn_id: str, since: int = 0, wait: float = 0.0, identifier: str = "") -> dict:
     """Incremental turn status + normalized events (events[since:]). Polling also keeps the
     Timed sandbox alive (every request resets the idle cooldown).
 
@@ -17744,9 +17751,7 @@ async def get_turn(turn_id: str, since: int = 0, wait: float = 0.0) -> dict:
 
     The hold waits on the event loop, not on a worker thread: this one runner serves every session
     of an instance, and a thread held per running turn would leave none to start the next."""
-    rec = _turns.get(turn_id)
-    if not rec:
-        raise HTTPException(404, "turn not found")
+    rec = _turn_of(turn_id, identifier)
     if wait > 0:
         deadline = time.monotonic() + min(wait, _TURN_HOLD_MAX_S)
         while time.monotonic() < deadline and not rec["done"] and len(rec["events"]) <= since:
