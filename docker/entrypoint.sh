@@ -332,6 +332,7 @@ backend_bin() {
     # interpreter is what "installed" means here.
     qoder) echo "$TOOLS/qoder-venv/bin/python" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
+    roder)  echo "$TOOLS/bin/roder" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
@@ -1117,6 +1118,32 @@ install_mimo() {
   fi
 }
 
+# Pin the release archives independently of the download host's checksum files.
+RODER_PIN="${HR_RODER_VERSION:-0.4.8}"
+install_roder() {
+  case "$(uname -m)" in
+    x86_64) rd_arch="x86_64"; rd_expected="de6a8a642894164004d4fd434c6a6f44ec08657083bf2b1420a97f7f4fd00a31" ;;
+    aarch64|arm64) rd_arch="aarch64"; rd_expected="978a84c872d22301036dd6f3d707559d1b9648bd9e6aa4149dd52c6456c68af5" ;;
+    *) echo "unsupported architecture for Roder: $(uname -m)"; return 1 ;;
+  esac
+  # An operator selecting a different release must supply that archive's trusted checksum.
+  if [ "$RODER_PIN" != "0.4.8" ]; then rd_expected="${HR_RODER_SHA256:-}"; fi
+  if [[ ! "$rd_expected" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Roder: set HR_RODER_SHA256 for version $RODER_PIN"; return 1
+  fi
+  rd_asset="roder-$rd_arch-unknown-linux-gnu"
+  rd_tmp="$(mktemp -d)"
+  rd_base="https://github.com/RoderAI/roder/releases/download/roder/v$RODER_PIN"
+  curl -fsSL "$rd_base/$rd_asset.tar.gz" -o "$rd_tmp/archive.tar.gz" || { rm -rf "$rd_tmp"; return 1; }
+  rd_have="$(sha256sum "$rd_tmp/archive.tar.gz" | awk '{print $1}')"
+  if [ "$rd_expected" != "$rd_have" ]; then
+    echo "Roder: checksum mismatch for $rd_asset"; rm -rf "$rd_tmp"; return 1
+  fi
+  tar -xzf "$rd_tmp/archive.tar.gz" -C "$rd_tmp" "$rd_asset/roder" || { rm -rf "$rd_tmp"; return 1; }
+  install -m 755 "$rd_tmp/$rd_asset/roder" "$TOOLS/bin/roder" || { rm -rf "$rd_tmp"; return 1; }
+  rm -rf "$rd_tmp"
+}
+
 # jcode (MIT, 1jehuang/jcode) publishes one prebuilt archive per target with a SHA256SUMS file, so
 # it is fetched and compared the same way. v0.90.0 is the release _build_jcode and _jcode_to_claude
 # were measured against — the NDJSON event names, the per-request `tokens` accounting, the resume
@@ -1651,6 +1678,11 @@ install_backends() {
   if wanted mimo && [ "$("$(backend_bin mimo)" --version 2>/dev/null | head -n 1)" != "$MIMO_PIN" ]; then
     echo "[harnessrouter] installing MiMo Code $MIMO_PIN (MIT, version-pinned)…"
     try_install "MiMo Code" install_mimo || true
+  fi
+
+  if wanted roder && [ "$("$(backend_bin roder)" --version 2>/dev/null | awk '{print $2}')" != "$RODER_PIN" ]; then
+    echo "[harnessrouter] installing Roder $RODER_PIN (MIT, version-pinned)…"
+    try_install "Roder" install_roder || true
   fi
 
   JCODE_PIN="${HR_JCODE_VERSION:-0.90.0}"
