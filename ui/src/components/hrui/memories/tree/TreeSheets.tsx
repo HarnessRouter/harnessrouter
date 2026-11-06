@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { addRecord, createMemory, type Memory, type MemoryRecord } from '@/lib/memories';
 import { Sheet, SheetTop } from '../../Sheet';
 import { plain } from '../../setup/settingsModel';
+import { NameFields } from '../sheets';
 
 export function NewSubMemorySheet({ parent, onClose, onDone }: { parent: Memory; onClose: () => void; onDone: (m: Memory) => void }) {
   const [name, setName] = useState('');
@@ -20,11 +21,10 @@ export function NewSubMemorySheet({ parent, onClose, onDone }: { parent: Memory;
     catch (e) { setErr(plain(e, 'That was not created. Try again.')); setBusy(false); }
   };
   return (
-    <Sheet onClose={onClose} labelledBy="mtNs" className="small-sheet mm-sheet" busy={busy}>
-      <SheetTop id="mtNs" title="New sub memory" sub={`Inside ${parent.name}`} onClose={onClose} />
+    <Sheet onClose={onClose} labelledBy="mtNs" className="mm-sheet mm-nd-sheet" busy={busy}>
+      <SheetTop id="mtNs" title="New sub memory" sub={`Inside ${parent.name}. Kept by the same service.`} onClose={onClose} />
       <form noValidate onSubmit={(e) => { e.preventDefault(); void go(); }}>
-        <div className="set-f"><label htmlFor="mtNsN">Name</label><input id="mtNsN" className="set-in" value={name} autoComplete="off" autoFocus onChange={(e) => setName(e.target.value)} /></div>
-        <div className="set-f"><label htmlFor="mtNsD">Description</label><textarea id="mtNsD" className="set-in" rows={3} value={desc} placeholder="What is kept here, in a sentence an agent can act on." onChange={(e) => setDesc(e.target.value)} /></div>
+        <NameFields nameId="mtNsN" descId="mtNsD" name={name} desc={desc} onName={setName} onDesc={setDesc} focus />
         {err ? <p className="mm-err" role="alert">{err}</p> : null}
         <div className="sheet-actions">
           <span className="grow" />

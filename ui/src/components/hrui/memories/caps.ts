@@ -118,3 +118,7 @@ export function serviceFacts(p: Provider): { label: string; value: string }[] {
   const finds = ({ write_time: 'As it writes', background: 'In the background', agent: 'Its own agent' } as Record<string, string>)[String(p.derivation)] || 'Keeps what you write';
   return [{ label: 'Schema', value: schema }, { label: 'Entities', value: entities }, { label: 'Pulls out facts', value: finds }];
 }
+
+/** The shape a memory takes with this service, for the pictures drawn before it holds anything. */
+export const shapeOf = (p?: Provider | null): 'schema' | 'labels' | 'files' | 'records' | null =>
+  (!p ? null : hasFolders(p) ? 'files' : schemaLabels(p) ? 'labels' : hasSchema(p) ? 'schema' : 'records');

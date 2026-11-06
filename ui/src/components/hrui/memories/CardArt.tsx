@@ -188,3 +188,34 @@ export function KindArt({ kind }: { kind: Kind }) {
   }
   return <svg className="mm-kind-svg" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">{inner}</svg>;
 }
+
+/** A starting schema, small, on the button that starts from it: its types in their colours and icons where they sit,
+ *  and the relations between them; one dashed type for starting blank. */
+export function StarterArt({ s }: { s: LSchema | null }) {
+  const w = 120, h = 64, r = 9, pad = 14;
+  if (!s || !s.types.length) {
+    return <svg className="mm-starter-svg" viewBox={`0 0 ${w} ${h}`} aria-hidden="true"><circle cx={w / 2} cy={h / 2} r={r + 2} className="ghost" /></svg>;
+  }
+  const T = s.types, xs = T.map((t) => t.x), ys = T.map((t) => t.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const f = Math.min((w - 2 * pad) / Math.max(1, x1 - x0), (h - 2 * pad) / Math.max(1, y1 - y0));
+  const ox = (w - (x1 - x0) * f) / 2, oy = (h - (y1 - y0) * f) / 2;
+  const at = new Map(T.map((t) => [t.id, [ox + (t.x - x0) * f, oy + (t.y - y0) * f] as const]));
+  return (
+    <svg className="mm-starter-svg" viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
+      {s.relations.map((rel) => {
+        const a = at.get(rel.from), b = at.get(rel.to);
+        return a && b ? <line key={rel.id} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke="var(--line-strong, var(--faint))" strokeWidth="1.2" /> : null;
+      })}
+      {T.map((t) => {
+        const [x, y] = at.get(t.id) as readonly [number, number];
+        return (
+          <g key={t.id}>
+            <circle cx={x} cy={y} r={r} fill={t.color} stroke="var(--bg)" strokeWidth="2" />
+            <g transform={`translate(${x - 5.5} ${y - 5.5})`}><MmIco k={t.icon} size={11} color="#fff" /></g>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}

@@ -9,7 +9,9 @@ import {
 } from '@/lib/memories';
 import { plain } from '../setup/settingsModel';
 import { toast } from '../toast';
-import { canEdit, connectionsHidden, hasFolders, hasRelations, hasSchema, keepsLinks, kindOf, schemaGuides } from './caps';
+import { canEdit, connectionsHidden, hasFolders, hasRelations, hasSchema, keepsLinks, kindOf, schemaGuides, shapeOf } from './caps';
+import { KindArt } from './CardArt';
+import { NewSubMemorySheet } from './tree/TreeSheets';
 import { Connections, type LinkOption } from './Connections';
 import { PLUS } from './parts';
 import { ResizableColumns } from './ResizableColumns';
@@ -40,6 +42,7 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   const [draft, setDraft] = useState<MemoryRecord | null>(null);
   const [outside, setOutside] = useState<MemoryRecord | null>(null);    // open, but not in the list: forgotten, or past a page
   const [tab, setTab] = useState('doc');
+  const [subSheet, setSubSheet] = useState(false);
   useEffect(() => { onOpenRecord(sel); }, [sel, onOpenRecord]);
 
   const all = useMemo(() => read.records || [], [read.records]);
@@ -166,6 +169,29 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
       )}
     </aside>
   );
+  // A memory that holds nothing at all (no records, no sub memories) is said once, in the middle: what it will hold,
+  // drawn dashed in the next blue, and the ways to start. The list and the graph would each only say "empty" again.
+  const nothing = !!read.records && !all.length && !draft && !record && !memory.children?.count;
+  if (nothing) {
+    const create = !!memory.privileges?.includes('create');
+    return (
+      <div className="mm-data mm-data-none">
+        <div className="mm-none">
+          <span className="mm-none-pic"><KindArt kind={shapeOf(provider)} /></span>
+          <h2>Nothing kept yet</h2>
+          <p>{`Add the first record, or give ${memory.name} to a setup and let it write.`}</p>
+          {write || create ? (
+            <div className="mm-none-acts">
+              {write ? <button type="button" className="btn primary small" onClick={() => startNew(kinds?.types[0]?.name || 'note')}>{PLUS}New record</button> : null}
+              {create ? <button type="button" className="btn small" onClick={() => setSubSheet(true)}>New sub memory</button> : null}
+            </div>
+          ) : null}
+          {schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>Set what it should look for first</button></p> : null}
+        </div>
+        {subSheet ? <NewSubMemorySheet parent={memory} onClose={() => setSubSheet(false)} onDone={(m) => { setSubSheet(false); toast(`${m.name} created`); onChanged(); }} /> : null}
+      </div>
+    );
+  }
   return (
     <div className="mm-data">
       <ResizableColumns storageKey="hr.memory.columns" tab={tab} onTab={setTab} panes={[

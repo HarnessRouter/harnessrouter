@@ -462,3 +462,32 @@
   #hrui .mm-sl .mm-sl-def{order:4;width:auto}
   #hrui .mm-sl .mm-sl-c:empty{display:none}
 }
+
+/* Connect a memory service: the same columns, solid (each is a choice to connect, not one missing), Connect at the foot */
+#hrui .mm-sv-cn .mm-pv-o.cn{border-style:solid}
+#hrui .mm-sv-cn .mm-pv-o.cn .btn{margin-top:12px;align-self:flex-start}
+#hrui .mm-sv-guide{margin:12px 0 0}
+@media (max-width:520px){#hrui .mm-sv-cn .mm-pv-o.cn{display:grid;grid-template-columns:52px minmax(0,1fr);column-gap:12px}#hrui .mm-sv-cn .mm-pv-o.cn .btn{grid-column:2}}
+
+/* A memory that holds nothing: one place says so, in the middle of the page, with the shape it will take */
+#hrui .mm-data-none{display:flex;align-items:center;justify-content:center;min-height:100%;padding:40px 24px}
+#hrui .mm-none{max-width:420px;text-align:center}
+#hrui .mm-none-pic{display:inline-grid;place-items:center;width:132px;height:110px;margin:0 0 12px;border-radius:20px;background:var(--surface)}
+#hrui .mm-none h2{font-size:20px;font-weight:600;margin:0 0 8px}
+#hrui .mm-none p{font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 18px;text-wrap:balance}
+#hrui .mm-none-acts{display:flex;justify-content:center;flex-wrap:wrap;gap:8px}
+#hrui .mm-none .mm-doc-alt{margin:14px 0 0}
+
+/* Designing a first schema: each start shows the types it makes and how they relate, drawn as on the memory's card */
+#hrui .mm-start{padding:10px 12px 12px}
+#hrui .mm-start-pic{display:block;height:64px;margin:0 0 8px;border-radius:8px;background:var(--surface)}
+#hrui .mm-start small{text-wrap:balance}
+#hrui .mm-starter-svg{display:block;width:100%;height:100%}
+#hrui .mm-starter-svg .ghost{fill:var(--bg);stroke:var(--accent);stroke-width:1.5;stroke-dasharray:4 3.5}
+#hrui .mm-start:hover .mm-start-pic{background:var(--accent-soft)}
+
+/* Rename and describe, New sub memory: New memory's fields, in a sheet of the console's usual width */
+#hrui .mm-nd-sheet{width:min(560px,100%)}
+#hrui .mm-nd-sheet .mm-nf{margin-bottom:6px}
+#hrui .mm-nf textarea.set-in{resize:vertical;min-height:40px}
+#hrui .mm-nf .set-f{align-self:start}

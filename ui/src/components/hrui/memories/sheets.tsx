@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { connectProvider, createMemory, listProviderPlugs, updateMemory, type Memory, type Provider } from '@/lib/memories';
 import { Sheet, SheetTop } from '../Sheet';
 import { plain } from '../setup/settingsModel';
-import { hasFolders, hasSchema, schemaLabels, serviceFacts } from './caps';
+import { hasSchema, schemaLabels, serviceFacts, shapeOf } from './caps';
 import { KindArt, type Kind } from './CardArt';
 import { GUIDE, VENDORS, vendorName } from './vendors';
 
@@ -72,31 +72,33 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
   );
 }
 
-/** One service in a list: its name and its one honest line. */
-const Says = ({ p }: { p: Provider }) => <span className="grow"><b>{vendorName(p.id)}</b>{VENDORS[p.id]?.line ? <small>{VENDORS[p.id].line}</small> : null}</span>;
-
-/** The services when none is connected yet: pick one and connect it. */
-export function ChooseServiceSheet({ providers, onClose, onConnected }: { providers: Provider[]; onClose: () => void; onConnected: (id: string) => void | Promise<unknown> }) {
-  const [picked, setPicked] = useState('');
-  if (picked) return <ConnectSheet id={picked} onClose={() => setPicked('')} onConnected={onConnected} />;
+/** A memory's name and description, the same in every window that makes or renames one: side by side, and under
+ *  them what the description is for, which stays when the field is filled. */
+export function NameFields({ nameId, descId, name, desc, onName, onDesc, focus }: {
+  nameId: string; descId: string; name: string; desc: string; onName: (v: string) => void; onDesc: (v: string) => void; focus?: boolean;
+}) {
   return (
-    <Sheet onClose={onClose} labelledBy="mmCh" className="mm-sheet">
-      <SheetTop id="mmCh" title="Connect a memory service" sub="Your setups keep what they learn there." onClose={onClose} />
-      <div className="mm-prov">
-        {providers.map((p) => (
-          <div key={p.id} className="mm-pv-o off"><Says p={p} />
-            <button type="button" className="btn small" onClick={() => setPicked(p.id)}>Connect</button>
-          </div>
-        ))}
+    <div className="mm-nf">
+      <div className="set-f">
+        <label htmlFor={nameId}>Name</label>
+        <input id={nameId} className="set-in" value={name} placeholder="Brand kits" autoComplete="off" autoFocus={focus} onChange={(e) => onName(e.target.value)} />
       </div>
-    </Sheet>
+      <div className="set-f">
+        <label htmlFor={descId}>Description</label>
+        <textarea id={descId} className="set-in" rows={2} value={desc} placeholder="What is kept here, in a sentence." aria-describedby={`${descId}H`} onChange={(e) => onDesc(e.target.value)} />
+      </div>
+      <p className="set-help mm-nf-h" id={`${descId}H`}>Agents read the description to decide whether to look inside.</p>
+    </div>
   );
 }
+
+/** One service in a list: its name and its one honest line. */
+const Says = ({ p }: { p: Provider }) => <span className="grow"><b>{vendorName(p.id)}</b>{VENDORS[p.id]?.line ? <small>{VENDORS[p.id].line}</small> : null}</span>;
 
 const LOCK = <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
 
 /** The shape a service gives a memory, read from what it says it does. */
-const kindOf = (p: Provider | null): Kind => (!p ? null : hasFolders(p) ? 'files' : schemaLabels(p) ? 'labels' : hasSchema(p) ? 'schema' : 'records');
+const kindOf = (p: Provider | null): Kind => shapeOf(p);
 
 /** One service, as a column of the comparison: the shape of memory it keeps, its name and line, then
  *  the same three facts as every other column, so they line up and read across. */
@@ -109,6 +111,27 @@ function ServiceBody({ p }: { p: Provider }) {
         {serviceFacts(p).map((f) => <span key={f.label}><small>{f.label}</small><em>{f.value}</em></span>)}
       </span>
     </>
+  );
+}
+
+/** The services when none is connected yet: the same comparison New memory chooses from, every column
+ *  offering Connect, so the first choice is made the way every later one is. */
+export function ChooseServiceSheet({ providers, onClose, onConnected }: { providers: Provider[]; onClose: () => void; onConnected: (id: string) => void | Promise<unknown> }) {
+  const [picked, setPicked] = useState('');
+  if (picked) return <ConnectSheet id={picked} onClose={() => setPicked('')} onConnected={onConnected} />;
+  return (
+    <Sheet onClose={onClose} labelledBy="mmCh" className="mm-sheet mm-new-sheet">
+      <SheetTop id="mmCh" title="Connect a memory service" sub="Your setups keep what they learn there. Each service keeps it its own way." onClose={onClose} />
+      <div className="mm-prov mm-sv mm-sv-cn">
+        {providers.map((p) => (
+          <div key={p.id} className="mm-pv-o cn">
+            <ServiceBody p={p} />
+            <button type="button" className="btn small" onClick={() => setPicked(p.id)}>Connect</button>
+          </div>
+        ))}
+      </div>
+      <p className="set-help mm-sv-guide">Each runs as its own server. <a className="link-q inl" href={GUIDE} target="_blank" rel="noopener noreferrer">How to run a server</a></p>
+    </Sheet>
   );
 }
 
@@ -153,17 +176,7 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
   return (
     <Sheet onClose={onClose} labelledBy="mmCrT" className="mm-sheet mm-new-sheet" busy={busy}>
       <SheetTop id="mmCrT" title="New memory" onClose={onClose} />
-      <div className="mm-nf">
-        <div className="set-f">
-          <label htmlFor="mmCrName">Name</label>
-          <input id="mmCrName" className="set-in" value={name} placeholder="Brand kits" autoComplete="off" onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div className="set-f">
-          <label htmlFor="mmCrDesc">Description</label>
-          <input id="mmCrDesc" className="set-in" value={desc} placeholder="What is kept here, in a sentence." autoComplete="off" aria-describedby="mmCrDescH" onChange={(e) => setDesc(e.target.value)} />
-        </div>
-        <p className="set-help mm-nf-h" id="mmCrDescH">Agents read the description to decide whether to look inside.</p>
-      </div>
+      <NameFields nameId="mmCrName" descId="mmCrDesc" name={name} desc={desc} onName={setName} onDesc={setDesc} />
       <div className="set-f mm-kept">
         <div className="mm-kept-h">
           <span className="set-lb" id="mmCrKept">Kept by</span>
@@ -213,10 +226,9 @@ export function RenameSheet({ m, onClose, onDone }: { m: Memory; onClose: () => 
     catch (e) { setErr(plain(e, 'That was not saved. Try again.')); setBusy(false); }
   };
   return (
-    <Sheet onClose={onClose} labelledBy="mmRn" className="small-sheet mm-sheet" busy={busy}>
+    <Sheet onClose={onClose} labelledBy="mmRn" className="mm-sheet mm-nd-sheet" busy={busy}>
       <SheetTop id="mmRn" title="Rename and describe" onClose={onClose} />
-      <div className="set-f"><label htmlFor="mmRnN">Name</label><input id="mmRnN" className="set-in" value={name} autoComplete="off" onChange={(e) => setName(e.target.value)} /></div>
-      <div className="set-f"><label htmlFor="mmRnD">Description</label><textarea id="mmRnD" className="set-in" rows={3} value={desc} placeholder="What is kept here, in a sentence. Agents read it to decide whether to look inside." onChange={(e) => setDesc(e.target.value)} /></div>
+      <NameFields nameId="mmRnN" descId="mmRnD" name={name} desc={desc} onName={setName} onDesc={setDesc} />
       {err ? <p className="mm-err" role="alert">{err}</p> : null}
       <div className="sheet-actions">
         <span className="grow" />

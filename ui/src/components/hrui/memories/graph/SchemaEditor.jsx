@@ -13,6 +13,7 @@ import { plural } from '../../setup/settingsModel';
 import { guideLine, hasProperties, hasRelations, NO_RELATIONS_LINE, RELATIONS_LINE, relText, schemaGuides, schemaLabels, schemaWord, TYPES_LINE } from '../caps';
 import { MM_COLORS, MM_PTYPES, MM_STARTS, propNameOf, schemaProblem, startSchema, typeLabel, typeNameOf, uid } from '../schemaModel';
 import { kindInfo } from '../tree';
+import { StarterArt } from '../CardArt';
 import { vendorName } from '../vendors';
 import CytoscapeCanvas, { colorFor } from './CytoscapeCanvas.jsx';
 import { exploreOf, readGraph, GRAPH_LIMIT } from './adapter';
@@ -798,9 +799,9 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
                           const fresh = startSchema(i, provider);
                           apply((d) => { d.types = fresh.types; d.relations = fresh.relations; });
                           toast(`Started from ${n}. Rename or remove anything.`);
-                        }}><b>{n}</b><small>{sub}</small></button>
+                        }}><span className="mm-start-pic"><StarterArt s={startSchema(i, provider)} /></span><b>{n}</b><small>{sub}</small></button>
                       ))}
-                      <button type="button" className="mm-start" onClick={() => setAddType(true)}><b>Blank</b><small>Start with one type</small></button>
+                      <button type="button" className="mm-start" onClick={() => setAddType(true)}><span className="mm-start-pic"><StarterArt s={null} /></span><b>Blank</b><small>Start with one type</small></button>
                     </div>
                   ) : null}
                 </div>
