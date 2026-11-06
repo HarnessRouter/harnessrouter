@@ -90,11 +90,18 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
     } catch (e) { toast(plain(e, fallback)); await read(); } finally { setBusy(false); }
   };
   const principal = d?.principal || '';
-  // the default is a memory the agent can write: the first one written becomes it, and losing write hands it on
+  // The default is a memory the agent can write: the first one written becomes it, and losing write hands it on.
+  // Keeping every finished task is a person's choice, made for the default they see. So a default that appears
+  // where there was none (by either way: the first write, or Make default) comes with keeping off, and a default
+  // that goes takes keeping with it; the service's own setting would otherwise turn it on unasked.
+  const makeDefault = (mid: string) => setHarnessMemories(hid, d?.default_memory_id ? { default_memory_id: mid } : { default_memory_id: mid, observe: false });
   const handOn = async (mid: string) => {
     if (d?.default_memory_id !== mid) return;
     const other = d.data.find((x) => x.id !== mid && x.privileges.includes('write'));
-    await setHarnessMemories(hid, { default_memory_id: other ? other.id : '' });
+    if (!other) { await setHarnessMemories(hid, { default_memory_id: '', observe: false }); return; }
+    await setHarnessMemories(hid, { default_memory_id: other.id });
+    // what changed without being pressed is said: where the agent writes now, and where tasks are kept now
+    toast(d.observe ? `${other.name} is now the default. Finished tasks are kept there.` : `${other.name} is now the default.`);
   };
   const turnOn = (mid: string) => run(() => grant(mid, principal, ['read']), 'That memory was not given. Try again.');
   const turnOff = (mid: string) => run(async () => {
@@ -105,7 +112,7 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
   const setAccess = (mid: string, write: boolean) => run(async () => {
     await grant(mid, principal, write ? ['read', 'write'] : ['read']);
     // What gets written is the agent's own call. Keeping every task as well, whatever the agent thought of it, is a person's choice: the switch below stays as it reads.
-    if (write && !d?.default_memory_id) await setHarnessMemories(hid, { default_memory_id: mid, observe: false });
+    if (write && !d?.default_memory_id) await makeDefault(mid);
     if (!write) await handOn(mid);
   }, 'The access was not changed. Try again.');
 
@@ -157,7 +164,7 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
                     ) : null}
                   </span>
                   <span className="mm-sl-c mm-sl-def">
-                    {mine && w && !isD ? <button type="button" className="link-q mm-row-a" disabled={busy} onClick={() => void run(() => setHarnessMemories(hid, { default_memory_id: m.id }), 'The default was not changed. Try again.')}>Make default</button> : null}
+                    {mine && w && !isD ? <button type="button" className="link-q mm-row-a" disabled={busy} onClick={() => void run(() => makeDefault(m.id), 'The default was not changed. Try again.')}>Make default</button> : null}
                   </span>
                   <button type="button" className={`tog${on ? ' on' : ''}`} aria-pressed={on} aria-label={m.name} title={why} disabled={busy || !!m.from || !mayChange}
                     onClick={() => void (mine ? turnOff(m.id) : turnOn(m.id))}><i />{on ? 'On' : 'Off'}</button>
