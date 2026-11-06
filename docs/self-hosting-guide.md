@@ -338,6 +338,31 @@ the product's own table for that vendor, and a `models` row there only changes t
 model that table already lists. `model_map` routes a model id to the integration that serves it;
 a model with no route goes to the first integration that can serve it.
 
+**Request headers.** A gateway in front of the provider often wants a header beside the key:
+Cloudflare AI Gateway's `cf-aig-authorization`, Helicone's `Helicone-Auth`, Portkey's `x-portkey-*`,
+OpenRouter's `HTTP-Referer` and `X-Title`, or an internal gateway's project header. Put them in the
+row's `config.headers` (or `headers` on a connection set from the environment or with
+`PUT /v1/orgs/{org}/connections/{name}`):
+
+```json
+{"name": "cf-gateway", "provider": "custom",
+ "config": {"api_format": "openai", "base_url": "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/openai",
+            "api_key": "…", "headers": {"cf-aig-authorization": "Bearer …", "X-Project": "evals"}},
+ "models": [{"canonical": "gpt-5.5", "provider_id": "gpt-5.5"}]}
+```
+
+The gateway adds them to every model call it forwards on that connection, after the key, and the
+setup builder sends them too. They are never handed to the agent: a connection with headers goes
+through the gateway even under `HR_SANDBOX_TRUST=owner`, and a backend that only speaks its
+provider's native API (and so is not brokered) is refused on such a connection rather than run
+without them. A value is treated like the key: `GET` shows each name with its value redacted, a
+save that sends the redacted value back keeps the stored one, and a save that changes the endpoint
+or the provider asks for the values again. A header the gateway sets itself (`authorization`,
+`x-api-key`, `api-key`, `x-goog-api-key`, `host`, `content-type`, `content-length`, `connection`,
+`traceparent`, the relay's own names and the like) cannot be set on a connection, a value may not
+contain a line break, and a connection takes at most 20 headers, 8 KB together. Bedrock and Vertex
+sign their own requests, so their connections refuse headers when you save.
+
 </details>
 
 <details>

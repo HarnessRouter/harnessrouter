@@ -156,6 +156,17 @@ it('editing a key leaves a blank secret as it was (the sentinel goes back)', asy
   expect(put.integrations[0].config.api_key).toBe(SECRET);
 });
 
+it('editing a key keeps the request headers it was saved with (each value goes back as the sentinel)', async () => {
+  const config = { api_key: SECRET, headers: { 'X-Project': SECRET } } as unknown as Record<string, string>;
+  doc.integrations = [{ name: 'main', provider: 'anthropic', config, models: CATALOG[1].models }];
+  doc.model_map = { 'claude-sonnet': 'main' };
+  await open();
+  await click('Edit', rowOf('anthropic'));
+  await click('Save', rowOf('anthropic'));
+  const put = lastPut() as { integrations: { config: Record<string, unknown> }[] };
+  expect(put.integrations[0].config).toEqual({ api_key: SECRET, headers: { 'X-Project': SECRET } });
+});
+
 it('which key serves a model, chat and image apart, Off included', async () => {
   doc.integrations = [
     { name: 'main', provider: 'anthropic', config: { api_key: SECRET }, models: CATALOG[1].models },
