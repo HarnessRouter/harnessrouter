@@ -57,12 +57,17 @@ A server claiming conformance class **Full** MUST support an explicit branch; ot
 previous response, the server MUST create a **new** session from that response's committed
 user files and the transcript up to and including it. The original session, its working files,
 and its transcript MUST remain unchanged. A session hint does not replace the branch point.
-Without `branch: true`, continuation is unchanged. Non-boolean values and `true` without a
-previous response are ignored and named in `metadata.ignored_fields`.
+Without `branch: true`, continuation is unchanged. `branch` is `true`, `false`, `null` or absent; `null` is the same as absent. Any
+other value, and `true` without `previous_response_id`, MUST be refused with `400`,
+`code: "invalid_input"`, `param: "branch"`. A request that asked for a branch never runs some
+other way: with a session hint it would otherwise run as a new turn of the session the client
+asked to leave alone.
 
 The response MUST carry a new `metadata.session_id` and
 `metadata.branched_from: "resp_first"`, identically for synchronous, streaming, background,
-and subsequently retrieved responses. A branch restores the user's files, **not installed
+and subsequently retrieved responses. Only that response carries it: a later response in the new
+session continues it like any other and has no `branched_from`. The session's own detail keeps
+the origin (§3). A branch restores the user's files, **not installed
 dependencies or native CLI state**. The conversation is supplied as its transcript, so a
 branch does not require any base's native fork or resume feature. Imported history is kept
 in full; inference prompt limits do not truncate the stored transcript.
@@ -75,8 +80,9 @@ make a response ineligible: the same response-record and checkpoint availability
 latest workspace. Unknown or inaccessible sessions follow the ordinary `404` scope rules;
 transient preparation failures are retryable `503` errors. Preparation failures are HTTP
 errors in every response mode, before a background acknowledgment or stream is accepted.
-An `input_response` on a branch is `409 input_not_pending`: branching neither answers nor
-voids the original question.
+An `input_response` together with `branch` is `400 invalid_input` (`param: "branch"`):
+branching neither answers nor voids the original question, which stays pending in the original
+session.
 
 The reference implementation copies committed files from Git into a fresh session repository. The reference regenerates non-secret file-root metadata for
 bases whose user workspace is a subdirectory; it does not copy their native conversation state.
@@ -165,8 +171,10 @@ A session whose turns read an environment carries `environment`, the environment
 can tell which project a conversation worked in ([Environments §6](environments.md#6-what-a-session-sees)).
 
 A branched session's detail carries `branched_from: {"response_id": "resp_first",
-"session_id": "hsess_original"}`. Its copied turns are `imported: true`, with new response ids
-and zero imported cost. Git commit ids and turn positions are internal checkpoint details.
+"session_id": "hsess_original", "turn": 1}`. `turn`, when the server records it, is where that
+response stood in its session, counting from 1, so a client can draw where on the original line the
+branch starts without reading either transcript. Its copied turns are `imported: true`, with new response ids and zero imported
+cost. Git commit ids are internal checkpoint details.
 
 ## 4. Cancelling
 

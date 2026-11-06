@@ -71,10 +71,13 @@ A few of them are worth calling out, because they catch things a schema check ne
   server that buffers everything and flushes at the end. That is the single most common UHP
   deployment error, it is usually a proxy setting, and it is indistinguishable from a slow agent
   unless something measures it.
-- **B-01…B-04** — explicit historical branching (Full): a three-turn file fixture branches
+- **B-01…B-06** — explicit historical branching (Full): a three-turn file fixture branches
   from its first response, checks the original bytes and absence of the later file, verifies
   the source's files and transcript remain unchanged, checks inspection provenance, and requires
-  `branch_unavailable` for a response still running. The first three share four model tasks;
+  `branch_unavailable` for a response still running. B-05 sends `branch: true` with no previous
+  response but the source session named, and requires `400 invalid_input` with no new turn in that
+  session. B-06 continues the branch once and requires the continuation to stay in it without
+  `branched_from`. B-01…B-03 and B-05 share four model tasks, B-06 adds one;
   B-04 uses one background task and cancels it after probing. Missing model-created fixtures
   are explicit skips; refusing the valid fresh fixture's branch fails Full conformance. The good/defective servers in
   `tests/test_branching_checks.py` pin what each check actually detects.

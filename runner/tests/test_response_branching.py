@@ -336,3 +336,54 @@ def test_subdirectory_base_file_root_is_regenerated_without_cli_state(runner, hi
     target = Path(server._ws("subdir"))
     assert (target / ".harness/agent-subdir").read_text() == "workspace"
     assert not (target / ".harness/home").exists()
+
+
+# The gateway sends no `branch_head` (app.py _checkpoint): the point is checked against the HEAD of
+# the checkpoint it is restored from. A copy of the session's latest commit kept beside the tarball
+# fell out of step with it (a failed write, a branch racing a new turn's checkpoint), and every
+# point of that session was then 409 until the session's next turn.
+
+def test_a_checkpoint_newer_than_the_point_still_branches_from_it(history, tmp_path):
+    source, first, latest = history
+    # a fourth turn after the point was recorded, and after any copy of "latest" anyone kept
+    (source / "answer.txt").write_text("turn 4")
+    git(source, "add", "-A")
+    git(source, "commit", "-qm", "turn 4")
+    target = tmp_path / "branch"
+    restore(checkpoint(source, tmp_path / "checkpoint.tgz"), target, first, "", tmp_path)
+    assert (target / "answer.txt").read_text() == "turn one"
+    assert not list(target.glob("future-*"))
+
+
+@pytest.mark.parametrize("which", ["unknown", "divergent", "shed"])
+def test_without_a_named_head_a_point_off_the_checkpoints_history_is_still_refused(history, tmp_path, which):
+    """The same refusals as test_missing_nonfull_or_divergent_commits_fail_before_export,
+    test_a_present_but_divergent_commit_is_not_a_branch_point and
+    test_actual_cli_home_history_shed_makes_old_point_unavailable, with the HEAD taken from the
+    checkpoint rather than named by the caller."""
+    source, first, latest = history
+    selected = "a" * 40
+    if which == "divergent":
+        original = git(source, "branch", "--show-current")
+        git(source, "checkout", "--orphan", "divergent")
+        git(source, "commit", "-qm", "unrelated root")
+        selected = git(source, "rev-parse", "HEAD")
+        git(source, "checkout", original)
+    elif which == "shed":
+        server._git_shed_cli_home_history(str(source))
+        selected = first
+    target = tmp_path / "branch"
+    with pytest.raises(BranchUnavailable):
+        restore(checkpoint(source, tmp_path / "checkpoint.tgz"), target, selected, "", tmp_path)
+    assert not target.exists()
+
+
+def test_real_runner_branches_with_no_head_named(runner, history, tmp_path):
+    source, first, latest = history
+    body = checkpoint(source, tmp_path / "source.tgz").read_bytes()
+    result = runner.post(f"/hydrate?identifier=nohead&branch_commit={first}", content=body)
+    assert result.status_code == 200, result.text
+    assert (Path(server._ws("nohead")) / "answer.txt").read_text() == "turn one"
+    result = runner.post(f"/hydrate?identifier=nohead-bad&branch_commit={'a' * 40}", content=body)
+    assert result.status_code == 409
+    assert not Path(server._ws("nohead-bad")).exists()

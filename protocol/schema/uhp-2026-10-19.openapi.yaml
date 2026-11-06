@@ -2184,7 +2184,7 @@ components:
         branch:
           type: boolean
           default: false
-          description: "Create a new session from the previous response's committed user files and transcript (Sessions §1.1). Only true opts in; other values or a missing previous response are ignored observably."
+          description: "Create a new session from the previous response's committed user files and transcript (Sessions §1.1). Only true opts in; null is the same as absent; true without previous_response_id, or any other non-boolean value, is 400 invalid_input (param branch)."
         instructions: { type: string }
         store: { type: boolean, default: true }
         max_output_tokens: { type: [integer, 'null'] }
@@ -2255,7 +2255,7 @@ components:
             session_id: { type: string }
             branched_from:
               type: string
-              description: "The response id this session branched from (Sessions §1.1)."
+              description: "The response id this task branched from (Sessions §1.1). Only on the response that branched, not on later responses in its session."
             environment:
               type: string
               description: The environment the task read, when it read one (capability `environments`).
@@ -2269,8 +2269,7 @@ components:
               items: { type: string }
               description: |
                 Request fields the server did not act on, by name, in any order. Required when the
-                request carried `tools` or `include`, which are reserved and ignored, or an ignored
-                `branch` value (Sessions §1.1). A silently
+                request carried `tools` or `include`, which are reserved and ignored. A silently
                 ignored field is indistinguishable from an honoured one. Tasks §1.1 and §1.4.
             voided_input_requests:
               type: array
@@ -2650,6 +2649,10 @@ components:
           properties:
             response_id: { type: string }
             session_id: { type: string }
+            turn:
+              type: integer
+              minimum: 1
+              description: Where that response stood in its session, counting from 1 (Sessions §3).
           additionalProperties: false
         environment: { type: string, description: The environment the session's turns read, when one did. }
         title: { type: string }
