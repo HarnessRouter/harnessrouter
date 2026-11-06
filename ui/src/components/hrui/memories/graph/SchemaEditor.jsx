@@ -19,6 +19,7 @@ import { exploreOf, readGraph, GRAPH_LIMIT } from './adapter';
 import { I, IconByName, iconUrl, needsCatalog, useIconCatalog } from './graphIcons.jsx';
 import { arrive, footprint, initialLayout } from './layout';
 import { applyDrafts, cloneSchema, graphOf, heldGraph, newRelation } from './schemaDraft';
+import { builtinTitles, withBuiltin } from './builtin';
 import './graph.css';
 
 const SWATCHES = [
@@ -76,57 +77,6 @@ export function buildSchemaElements(graph, posDrafts, typeDrafts, captionOf) {
     });
   });
   return elements;
-}
-
-// ── What the provider makes itself (capabilities.schema.builtin): its types and links, merged in and marked built in.
-// A type already drawn under the same name (a kind a memory holds) is marked rather than drawn twice. What's new is laid
-// out among itself and set to the left of what already has a place.
-const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
-export function builtinTitles(provider) {
-  return andList((builtinOf(provider)?.types || []).map((t) => kindInfo(t.name, null).one));
-}
-export function withBuiltin(graph, provider) {
-  const b = builtinOf(provider);
-  if (!graph || !b || !(b.types || []).length) return graph;
-  const titles = { ...(graph.titles || {}) };
-  const vts = (graph.vertex_types || []).map((v) => ({ ...v }));
-  const fresh = [];
-  for (const t of b.types) {
-    const k = kindInfo(t.name, null);
-    if (!titles[t.name]) titles[t.name] = k.one;
-    const have = vts.find((v) => v.label === t.name);
-    if (have) { have.builtin = true; have.description = have.description || t.description; continue; }
-    const v = { label: t.name, description: t.description, properties: [], builtin: true, ui: { color: k.color, icon: k.icon, caption: 'title' } };
-    vts.push(v);
-    fresh.push(v);
-  }
-  const ets = (graph.edge_types || []).map((e) => ({ ...e, connections: [...(e.connections || [])] }));
-  for (const r of b.relations || []) {
-    const label = relText(r.name);
-    let e = ets.find((x) => x.label === label);
-    if (!e) { e = { label, description: r.description, connections: [], properties: [], ui: {} }; ets.push(e); }
-    const at = e.connections.findIndex((c) => c.from_type === r.from && c.to_type === r.to);
-    if (at >= 0) e.connections[at] = { ...e.connections[at], builtin: true };
-    else e.connections.push({ from_type: r.from, to_type: r.to, builtin: true });
-    if (!e.description) e.description = r.description;
-  }
-  for (const e of ets) if (e.connections.length && e.connections.every((c) => c.builtin)) e.builtin = true;
-  if (fresh.length) {
-    const ids = new Set(fresh.map((v) => v.label));
-    const nodes = fresh.map((v) => ({ id: v.label, ...footprint(`${titles[v.label]}\nBuilt in · 00 records`, 38) }));
-    const links = (b.relations || []).filter((r) => ids.has(r.from) && ids.has(r.to) && r.from !== r.to).map((r) => ({ source: r.from, target: r.to }));
-    const { pos } = initialLayout(nodes, links, { spread: 1.7 });
-    const placed = vts.filter((v) => !ids.has(v.label) && v.ui && v.ui.position);
-    const xs = [...pos.values()].map((q) => q.x), ys = [...pos.values()].map((q) => q.y);
-    let dx = 0, dy = 0;
-    if (placed.length) {
-      const px = placed.map((v) => v.ui.position.x), py = placed.map((v) => v.ui.position.y);
-      dx = Math.min(...px) - 280 - Math.max(...xs);
-      dy = (Math.min(...py) + Math.max(...py)) / 2 - (Math.min(...ys) + Math.max(...ys)) / 2;
-    }
-    for (const v of fresh) { const q = pos.get(v.label); v.ui = { ...v.ui, position: { x: Math.round(q.x + dx), y: Math.round(q.y + dy) } }; }
-  }
-  return { ...graph, titles, vertex_types: vts, edge_types: ets };
 }
 
 // ── Schema editing controls ─────────────────────────────────────────────────

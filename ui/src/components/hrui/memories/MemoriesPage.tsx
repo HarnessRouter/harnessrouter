@@ -9,12 +9,15 @@ import { getSchema, listGrants, listMemories, type Memory, type Provider } from 
 import { Skel, SkCards, SkHead } from '../Skel';
 import { toast } from '../toast';
 import { plural } from '../setup/settingsModel';
-import { hasSchema, schemaLabels } from './caps';
+import { builtinOf, hasSchema, schemaLabels } from './caps';
 import { Art, memoriesWord, pool, PLUS, setupsOf, useProviders, useSetupNames } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
 import { ChooseServiceSheet, NewMemorySheet } from './sheets';
 import { vendorName } from './vendors';
 import './memories.css';
+
+/** How many types a provider makes itself. */
+const made = (p: Provider | null | undefined) => builtinOf(p)?.types.length || 0;
 
 interface Facts { schema?: LSchema | null; grants?: Awaited<ReturnType<typeof listGrants>> | null }
 type Open = { k: 'new'; picked?: string } | { k: 'choose' } | null;
@@ -114,13 +117,15 @@ export function MemoriesPage() {
           const p = providerOf(m.provider), f = facts[m.id], us = setupsFor(m);
           return (
             <Link key={m.id} href={`/memories/${enc(m.id)}`} className="card mm-card">
-              <span className="mm-art"><Art s={f?.schema} w={300} h={150} records={m.records?.count ?? 0} /></span>
+              <span className="mm-art"><Art s={f?.schema} w={300} h={150} records={m.records?.count ?? 0} provider={p} /></span>
               <span className="mm-cb">
                 <span className="mm-ct"><b>{m.name}</b></span>
                 <span className="mm-cp">{`Kept by ${vendorName(m.provider)}`}{p && !p.connected ? ' · not connected' : ''}</span>
                 <span className="mm-cd">{m.description || 'No description yet.'}</span>
                 <span className="mm-cs">
-                  {hasSchema(p) ? <span><small>{schemaLabels(p) ? 'Labels' : 'Types'}</small><b>{f?.schema ? f.schema.types.length : '—'}</b></span> : null}
+                  {/* types: what the provider makes itself and what a person set, as the cover draws them; labels apart */}
+                  {schemaLabels(p) ? <span><small>Labels</small><b>{f?.schema ? f.schema.types.length : '—'}</b></span>
+                    : hasSchema(p) || made(p) ? <span><small>Types</small><b>{hasSchema(p) ? (f?.schema ? f.schema.types.length + made(p) : '—') : made(p)}</b></span> : null}
                   <span><small>Records</small><b>{m.records?.count ?? '—'}</b></span>
                   <span><small>Setups</small><b>{us && us.length ? us.length : '—'}</b></span>
                 </span>

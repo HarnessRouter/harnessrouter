@@ -5,6 +5,7 @@
 // connection says the service's own words. Every figure on a card is the service's.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import type { Provider } from '@/lib/memories';
 import { allProviders, CAPS, memory, service } from './fixtures';
 
 const push = jest.fn();
@@ -217,5 +218,32 @@ describe('a card draws what is kept', () => {
   });
   test('an empty memory stays an empty ring, so it does not read as one with records', () => {
     expect(dots(0)).toEqual({ filled: 0, ring: 1 });
+  });
+  const MADE = {
+    types: [{ name: 'episode', description: 'e' }, { name: 'entity', description: 'n' }, { name: 'fact', description: 'f' }],
+    relations: [{ name: 'about', from: 'fact', to: 'entity', description: 'a' }, { name: 'derived_from', from: 'fact', to: 'fact', description: 'o' }],
+  };
+  const makes = { ...CAPS.graphiti, schema: { ...CAPS.graphiti.schema, builtin: MADE } } as Provider;
+  test('a vendor that says what it makes: the cover is its concepts, named and linked, not a dot a record', () => {
+    const host = document.createElement('div');
+    const r = createRoot(host);
+    act(() => r.render(<Art s={null} w={300} h={150} records={41} provider={makes} />));
+    expect(Array.from(host.querySelectorAll('text')).map((t) => t.textContent).sort()).toEqual(['Entity', 'Episode', 'Fact']);
+    expect(host.querySelectorAll('circle[fill="var(--faint)"]')).toHaveLength(0);
+    expect(host.querySelectorAll('line')).toHaveLength(1);
+    expect(host.querySelectorAll('circle[fill="none"]')).toHaveLength(1);   // an observation drawn from facts
+    act(() => r.unmount());
+  });
+  test('its types count what it makes and what a person set', async () => {
+    backend({
+      'GET /v1/memories/providers': { data: [makes] },
+      'GET /v1/memories': { data: [memory()] },
+      'GET /v1/memories/hmem_1/schema': { types: [{ name: 'Company' }, { name: 'Person' }], relations: [] },
+      'GET /v1/memories/hmem_1/grants': { data: [] },
+    });
+    await open();
+    const card = page().querySelector('.mm-card') as Element;
+    expect(Array.from(card.querySelectorAll('.mm-cs > span')).map((x) => `${x.querySelector('small')?.textContent} ${x.querySelector('b')?.textContent}`)[0]).toBe('Types 5');
+    expect(Array.from(card.querySelectorAll('.mm-art text')).map((t) => t.textContent).sort()).toEqual(['Company', 'Entity', 'Episode', 'Fact', 'Person']);
   });
 });
