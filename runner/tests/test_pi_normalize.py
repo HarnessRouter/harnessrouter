@@ -6,6 +6,7 @@ stopReason="error" on the assistant message, so the synthesized result event is 
 status can truthfully come from.
 """
 import json
+import pytest
 import pathlib
 import sys
 
@@ -213,6 +214,24 @@ def test_custom_responses_format_overrides_pi_model_family(tmp_path):
     mj = json.loads((tmp_path / "home" / ".pi" / "agent" / "models.json").read_text())
     assert mj["providers"]["hr"]["api"] == "openai-responses"
     assert mj["providers"]["hr"]["baseUrl"].startswith("http://127.0.0.1:")
+
+
+@pytest.mark.parametrize("build,cfg_path", [("pi", ".pi/agent/models.json"), ("omp", ".omp/agent/models.yml")])
+def test_a_responses_connection_rides_the_same_relay_route_as_an_openai_one(tmp_path, build, cfg_path):
+    """The format changes the client's API and nothing else: the same upstream, joined exactly, with the
+    key behind the loopback relay and never in the config the CLI reads."""
+    from server import _HERMES_RELAY, _build_omp
+    builder = _build_pi if build == "pi" else _build_omp
+    routes = {}
+    for fmt in ("openai", "responses"):
+        home = tmp_path / fmt
+        builder("openai-api", Auth(api_key="sk-SENTINEL", base_url="https://agg.example/v3/", api_format=fmt),
+                "vendor-model", "do it", str(home), {"HOME": str(home)})
+        text = (home / cfg_path).read_text()
+        assert "sk-SENTINEL" not in text
+        token = next(t for t in _HERMES_RELAY["routes"] if t in text)
+        routes[fmt] = _HERMES_RELAY["routes"][token][:2]
+    assert routes["openai"] == routes["responses"] == ("https://agg.example/v3", "sk-SENTINEL")
 
 
 def test_build_resume_and_disabled_tools(tmp_path):
