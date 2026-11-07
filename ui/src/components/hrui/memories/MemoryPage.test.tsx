@@ -38,6 +38,7 @@ jest.mock('./graph/MemoryGraph', () => ({
   MemoryGraph: (p: { activeRecordId: string; refreshKey: number; onOpenRecord: (r: string, m?: string) => void; linksFor?: (id: string) => ReactNode }) => (
     <div className="graph-panel-stub">
       <button type="button" className="graph-stub" data-active={p.activeRecordId} data-tick={p.refreshKey} onClick={() => p.onOpenRecord('far', 'hmem_2')}>graph</button>
+      <button type="button" className="graph-here" onClick={() => p.onOpenRecord('r2')}>here</button>
       {p.linksFor ? p.linksFor(p.activeRecordId) : null}
     </div>
   ),
@@ -178,6 +179,22 @@ describe('three columns: everything it holds, the open record, and the graph', (
     await draw();
     await click(page().querySelector('.graph-stub'));
     expect(page().querySelector('.graph-stub')?.getAttribute('data-active')).toBe('r');
+  });
+});
+
+describe('narrow: the columns are tabs', () => {
+  const wide = Element.prototype.getBoundingClientRect;
+  beforeEach(() => { Element.prototype.getBoundingClientRect = () => ({ width: 390, height: 800, top: 0, left: 0, right: 390, bottom: 800, x: 0, y: 0, toJSON: () => ({}) }); });
+  afterEach(() => { Element.prototype.getBoundingClientRect = wide; });
+  test('a record picked on the graph opens in its panel there, and the graph stays (Richard 11-06)', async () => {
+    open({ provider: CAPS.mem0, records: [record({ id: 'r', title: 'Mine' }), record({ id: 'r2', title: 'Other' })] });
+    await draw();
+    const tab = (id: string) => page().querySelector(`#rc-t-${id}`) as HTMLButtonElement;
+    expect(tab('graph')).toBeTruthy();
+    await click(tab('graph'));
+    await click(page().querySelector('.graph-here'));
+    expect(tab('graph').getAttribute('aria-selected')).toBe('true');
+    expect(page().querySelector('.graph-stub')?.getAttribute('data-active')).toBe('r2');
   });
 });
 

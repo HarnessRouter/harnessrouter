@@ -62,10 +62,14 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   }, [sel, listed, read.records, memory.id]);
   const record = draft || listed || outside;
 
-  const open = useCallback((rid: string, mid?: string) => {
-    if (mid && mid !== memory.id) { onOtherMemory(mid, rid); return; }
-    setDraft(null); setSel(rid); setTab('doc');
+  // A record picked on the graph opens in the graph's own panel, so where the columns are tabs the graph stays (Richard
+  // 11-06: in a narrow view the panel takes the bottom of the graph); picked anywhere else, the Record tab shows it.
+  const show = useCallback((rid: string, mid?: string) => {
+    if (mid && mid !== memory.id) { onOtherMemory(mid, rid); return false; }
+    setDraft(null); setSel(rid);
+    return true;
   }, [memory.id, onOtherMemory]);
+  const open = useCallback((rid: string, mid?: string) => { if (show(rid, mid)) setTab('doc'); }, [show]);
 
   // ── what the open record links to ─────────────────────────────────────────────────────────
   const links = keepsLinks(provider);
@@ -165,10 +169,10 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
       <div className="mm-graphbox">
         {/* One list of links, in the panel a record opens on the graph (Richard 11-06: not a strip under it as well,
             and nothing until a record is clicked). The open record's are the ones that can be changed. */}
-        <MemoryGraphView memory={memory} provider={provider} schema={kinds} activeRecordId={rid} refreshKey={liveTick} changed={pulse} onOpenRecord={open}
+        <MemoryGraphView memory={memory} provider={provider} schema={kinds} activeRecordId={rid} refreshKey={liveTick} changed={pulse} onOpenRecord={show}
           linksFor={(id: string) => (hideLinks || !record?.id || id !== record.id ? null : (
             <Connections record={record} graph={graph} failed={graphFailed} retry={readGraph} schema={kinds} options={options} candidates={candidates} provider={provider}
-              onOpen={open} onLink={link} onUnlink={unlink} canUnlink={canUnlink} />
+              onOpen={show} onLink={link} onUnlink={unlink} canUnlink={canUnlink} />
           ))} />
       </div>
     </aside>
