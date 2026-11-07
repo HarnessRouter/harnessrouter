@@ -929,3 +929,21 @@ def test_an_address_that_isnt_one_is_refused(client, wired, address):
 def test_a_vendor_without_an_address_asks_for_one(client):
     r = client.put("/v1/plugs/reme", headers=ADA, json={"secrets": {"api_key": SECRET}})
     assert r.status_code == 422 and "address" in r.json()["error"]["message"]
+
+
+# ── the Memories list: what each memory's provider makes, as its own workspace reaches it ─────────────
+def test_the_list_says_what_each_memorys_provider_makes_where_it_is_kept_and_asks_no_provider(client, wired):
+    """A card draws a provider's own concepts. Mem0's own service makes facts and a Mem0 server facts and the names in
+    them, so two Mem0 memories in two workspaces draw differently, whichever workspace the list is read from. Without
+    counts the list calls no provider at all."""
+    w = wired(memory_mem0, lambda *a: {"results": [], "memories": []} if a[0] == "GET" else {})
+    for ws, cfg in (("wsplatform", {"secrets": {"api_key": "m0-platform"}}),
+                    ("wsserver", {"config": {"base_url": "http://vendor.test"}, "secrets": {"api_key": "m0-server"}})):
+        assert client.put("/v1/plugs/mem0", headers={**ADA, "x-harness-workspace": ws}, json=cfg).json()["status"] == "connected"
+        r = client.post("/v1/memories", headers={**ADA, "x-harness-workspace": ws}, json={"provider": "mem0", "name": f"Kept in {ws}"})
+        assert r.status_code in (200, 201), r.text
+    before = len(w.calls)
+    got = client.get("/v1/memories", params={"counts": "false"}, headers={**ADA, "x-harness-workspace": "wsplatform"}).json()["data"]
+    made = {m["name"]: [t["name"] for t in (m["builtin"] or {}).get("types", [])] for m in got if m["name"].startswith("Kept in ws")}
+    assert made == {"Kept in wsplatform": ["fact"], "Kept in wsserver": ["fact", "entity"]}
+    assert all(m["records"]["count"] is None for m in got) and len(w.calls) == before, "no provider was called"

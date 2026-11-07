@@ -56,15 +56,20 @@ export function MemoriesPage() {
   // a setup's Settings sends a person here to make a memory
   useEffect(() => { if (new URLSearchParams(window.location.search).get('new') === '1') setOpen({ k: 'new' }); }, []);
 
-  const providerOf = useCallback((id: string) => (providers || []).find((p) => p.id === id) || null, [providers]);
+  // A memory's provider as the memory's own workspace reaches it: what a provider makes itself can differ by connection
+  // (Mem0's own service makes facts; a Mem0 server, facts and the names in them), and the list says which.
+  const providerOf = useCallback((m: Memory) => {
+    const p = (providers || []).find((x) => x.id === m.provider) || null;
+    return p && m.builtin !== undefined ? { ...p, schema: { ...p.schema, builtin: m.builtin || undefined } } : p;
+  }, [providers]);
   useEffect(() => {
     if (!list || !providers) return;
     let live = true;
     void pool(list, 4, async (m) => {
-      const withSchema = hasSchema(providerOf(m.provider));
+      const withSchema = hasSchema(providerOf(m));
       // the picture's own reads only: a schema where one is read, and the first records where a service has neither
       // a schema nor concepts of its own to draw
-      const p = providerOf(m.provider);
+      const p = providerOf(m);
       const [schema, recent] = await Promise.all([
         withSchema ? getSchema(m.id).then(schemaIn).catch(() => null) : Promise.resolve(null),
         !withSchema && !made(p) ? listRecords(m.id, { limit: 3 }).then((d) => d.data.map(labelOf).filter(Boolean)).catch(() => null) : Promise.resolve(null),
@@ -133,7 +138,7 @@ export function MemoriesPage() {
         <div className="rows-head mm-rows-g"><span>Name</span><span>Description</span></div>
         <div className="rows mm-rows">
           {L.map((m) => {
-            const p = providerOf(m.provider), f = facts[m.id];
+            const p = providerOf(m), f = facts[m.id];
             return (
               <Link key={m.id} href={`/memories/${enc(m.id)}`} className="row mm-rows-g mm-row">
                 <span className="t with-mini">
@@ -154,7 +159,7 @@ export function MemoriesPage() {
     body = (
       <div className="cards mm-cards">
         {L.map((m) => {
-          const p = providerOf(m.provider), f = facts[m.id];
+          const p = providerOf(m), f = facts[m.id];
           return (
             <Link key={m.id} href={`/memories/${enc(m.id)}`} className="card mm-card">
               <span className="mm-art"><CardArt {...pictureOf(f, p)} records={f?.recent?.length ?? null} recent={f?.recent} pending={!f} /></span>

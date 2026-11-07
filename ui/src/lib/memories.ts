@@ -10,6 +10,8 @@ export interface Memory {
   id: string; object: 'memory'; name: string; description: string; provider: string;
   parent_id: string | null; ancestors: string[]; restricted: boolean; privileges: Privilege[];
   records: { count: number | null }; children?: { count: number }; createdAt?: number; updatedAt?: number;
+  /** In a list: what the memory's provider makes itself, as the memory's own workspace reaches it (null: nothing). */
+  builtin?: BuiltinSchema | null;
 }
 export interface Writer { kind: string; id: string; type?: 'human' | 'agent'; on_behalf_of?: string; consolidation_id?: string }
 export interface ContentPart { type: string; text?: string; role?: string; file?: { id: string; name?: string; media_type?: string; bytes?: number }; text_source?: string }

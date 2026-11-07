@@ -241,6 +241,20 @@ describe('a card draws what is kept', () => {
     const card = page().querySelector('.mm-card') as Element;
     expect(names(card)).toEqual(['Company', 'Entity', 'Episode', 'Fact', 'Person']);
   });
+  test("each memory draws what its provider makes where the memory is kept, not where the list is read", async () => {
+    // Mem0's own service makes facts; a Mem0 server, facts and the names in them: two Mem0 memories draw differently
+    const factsOnly = { ...CAPS.mem0, schema: { mode: 'none', builtin: { types: [{ name: 'fact', description: 'f' }], relations: [] } } } as Provider;
+    const server = { types: [{ name: 'fact', description: 'f' }, { name: 'entity', description: 'n' }], relations: [{ name: 'about', from: 'fact', to: 'entity', description: 'a' }] };
+    backend({
+      'GET /v1/memories/providers': { data: [factsOnly] },
+      'GET /v1/memories': { data: [{ ...memory(), id: 'hmem_1', name: 'Kept by the service', provider: 'mem0', builtin: factsOnly.schema!.builtin },
+        { ...memory(), id: 'hmem_2', name: 'Kept by a server', provider: 'mem0', builtin: server }] },
+    });
+    await open();
+    const card = (n: string) => Array.from(page().querySelectorAll('.mm-card')).find((c) => c.textContent?.includes(n)) as Element;
+    expect(names(card('Kept by the service'))).toEqual(['Fact']);
+    expect(names(card('Kept by a server'))).toEqual(['Entity', 'Fact']);
+  });
   test('labels a person set are drawn as labels; with none yet, what the vendor makes', () => {
     const labelled = { ...CAPS.hindsight, schema: { mode: 'labels', builtin: MADE } } as Provider;
     const host = document.createElement('div');

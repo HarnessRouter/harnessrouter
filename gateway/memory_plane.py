@@ -844,10 +844,27 @@ async def _outs(org: str, pairs: list[tuple[dict, list[str]]], principals: list[
         if str(k.get("deleted") or "0") != "1" and k.get("parent_id"):
             kids[str(k["parent_id"])] = kids.get(str(k["parent_id"]), 0) + 1
     gate = asyncio.Semaphore(LIST_AT_ONCE)
+    # What each memory's provider makes itself, as the memory's own workspace reaches it: a connection can change it
+    # (Mem0's own service makes facts; a Mem0 server, facts and the names in them). A card draws it, so the list says
+    # it, asked once for each provider and workspace: no provider is called, only its connection read.
+    where = lambda m: (str(m.get("provider") or ""), str(m.get("workspace") or "") or "default")   # noqa: E731
+    keys = sorted({where(m) for m, _ in pairs})
+
+    async def made(prov: str, ws: str) -> dict | None:
+        p = PROVIDERS.get(prov)
+        if p is None:
+            return None
+        try:
+            p = await p.bind(org, ws)
+        except MemoryError:
+            pass                       # not connected there: what the provider makes as it comes, as /providers says
+        return (p.capabilities().get("schema") or {}).get("builtin") or None
+    builtin = dict(zip(keys, await asyncio.gather(*(made(*k) for k in keys))))
 
     async def one(m: dict, privs: list[str]) -> dict:
         async with gate:
-            return await out(org, m, principals, privs, count=count, kids=kids.get(str(m["id"]), 0))
+            o = await out(org, m, principals, privs, count=count, kids=kids.get(str(m["id"]), 0))
+        return {**o, "builtin": builtin.get(where(m))}
     res = await asyncio.gather(*(one(m, privs) for m, privs in pairs))
     return sorted(res, key=lambda x: (x["name"].casefold(), x["id"]))
 
