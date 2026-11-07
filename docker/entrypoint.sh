@@ -1436,7 +1436,7 @@ DSH_PIN="0.1.2rc1"
 DSH_PYYAML_PIN="6.0.3"
 install_dsh() {
   rm -rf "$TOOLS/dsh-venv"
-  "$PY" -m venv "$TOOLS/dsh-venv" || return 1
+  "$PY" -I -m venv "$TOOLS/dsh-venv" || return 1
   "$TOOLS/dsh-venv/bin/pip" install --no-cache-dir -q --disable-pip-version-check \
     "deepseek-harness-sdk==$DSH_PIN" "deepseek-harness-runtime-bin==$DSH_PIN" "pyyaml==$DSH_PYYAML_PIN" || return 1
   # dsh-ready exists ONLY after the import check proved the runtime executable resolves — a venv
@@ -1468,7 +1468,7 @@ HERMES_MCP_PIN="${HR_HERMES_MCP_VERSION:-1.30.0}"
 HERMES_BREAKER=/app/runner/patches/hermes_mcp_breaker.py
 install_hermes() {
   rm -rf "$TOOLS/venv"
-  "$PY" -m venv "$TOOLS/venv" || return 1
+  "$PY" -I -m venv "$TOOLS/venv" || return 1
   "$TOOLS/venv/bin/pip" install --no-cache-dir -q --disable-pip-version-check \
     "hermes-agent[anthropic]==$HERMES_PIN" "boto3==$HERMES_BOTO3_PIN" "mcp==$HERMES_MCP_PIN" || return 1
   "$TOOLS/venv/bin/python" -c '
