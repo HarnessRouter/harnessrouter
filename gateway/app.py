@@ -887,6 +887,46 @@ def _relay_client() -> httpx.AsyncClient:
     return _relay_http
 
 
+def _relay_checked_client(fresh: bool = False) -> httpx.AsyncClient:
+    """The relay's two clients (_relay_client, _relay_fresh_client), for a connection an organization
+    supplied itself: the same timeouts and pool sizes, every socket opened through _CheckedNetwork,
+    which resolves the name once, refuses any internal answer and connects to the very address it
+    classified (a DNS rebind cannot swap it), and no redirect followed. Before, the relay sent an
+    organization's own base_url to whatever it resolved to, this deployment's own networks included."""
+    key = "relay-fresh" if fresh else "relay"
+    c = _checked_clients.get(key)
+    if c is None:
+        limits = (httpx.Limits(max_connections=100, max_keepalive_connections=0) if fresh
+                  else httpx.Limits(max_connections=400, max_keepalive_connections=100))
+        transport = httpx.AsyncHTTPTransport(limits=limits)
+        transport._pool._network_backend = _CheckedNetwork(always=False)
+        c = _checked_clients[key] = httpx.AsyncClient(
+            transport=transport, follow_redirects=False,
+            timeout=httpx.Timeout(connect=30, read=3600, write=600, pool=60))
+    return c
+
+
+def _org_endpoint_problem(url: str) -> str | None:
+    """What makes an address an organization typed for its own connection unusable here before any
+    socket opens, or None: not http(s), no host, a user name or password in it, or a query or a
+    fragment. With "?" at its end, the path this relay appends would turn into a query string, and a
+    call would reach any path of the host. Where the address points is classified when the socket
+    opens (_relay_checked_client)."""
+    try:
+        u = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError:
+        return "it is not a valid address"
+    if u.scheme not in ("http", "https"):
+        return "it must start with https://"
+    if not u.hostname:
+        return "it has no host"
+    if u.username or u.password or "@" in u.netloc:
+        return "it must not contain a user name or password"
+    if u.query or u.fragment or "?" in str(url) or "#" in str(url):
+        return "it must not contain ? or #"
+    return None
+
+
 def _tenant_sem(t: str) -> asyncio.Semaphore:
     return _tenant_sems.setdefault(t or "_", asyncio.Semaphore(_conc_limit("tenant")))
 
@@ -4650,8 +4690,14 @@ async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
         # provider here is the INTEGRATION's own type — it selects the upstream auth header, which
         # is all the broker needs (the runner-side wiring already happened at turn start).
         cfg["provider"] = (integ.get("provider") or "").lower()
+        # the integrations here are the operator's own (one document, the platform's): never an address an
+        # organization typed
+        cfg["_org_supplied"] = False
         return _with_provider_base(cfg)
-    conn, _ = await _get_connection(org, conn_name)
+    conn, src = await _get_connection(org, conn_name)
+    if conn:
+        # an address an organization typed (its own tenant's connection) is checked where the relay opens it
+        conn = {**conn, "_org_supplied": bool(src) and src != GLOBAL_TENANT}
     return _with_provider_base(conn)
 
 
@@ -4759,6 +4805,19 @@ async def _entra_token(conn: dict) -> str:
         return token
 
 
+async def _broker_send(rc: httpx.AsyncClient, req: httpx.Request, org_supplied: bool, sid: str) -> httpx.Response:
+    """The broker's send, first or again. Where an organization's own address resolved inside this deployment's
+    networks, _CheckedNetwork refused the socket: that is said as such, a 403 with the reason, on every send."""
+    try:
+        return await rc.send(req, stream=True)
+    except httpx.ConnectError as e:
+        why = str(e)
+        if not (org_supplied and why.startswith("that address cannot be used: ")):
+            raise
+        print(f"[relay] refused an organization's connection address at the socket: {why} sid={sid}", flush=True)
+        raise HTTPException(403, f"This connection's address can't be used: {why.removeprefix('that address cannot be used: ')}.") from None
+
+
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def llm_broker(path: str, request: Request):
     claims = _verify_turn_cred(_broker_token(request))
@@ -4773,6 +4832,14 @@ async def llm_broker(path: str, request: Request):
     base = _provider_base_url(str(conn.get("provider") or ""), str(conn.get("base_url") or ""))
     if not base:
         raise HTTPException(502, "connection has no base_url")
+    # An organization's own connection goes where its address resolves to only when that is outside this
+    # deployment's networks, and only as an address: _org_endpoint_problem now, _relay_checked_client at the socket.
+    org_supplied = bool(conn.get("_org_supplied")) and not _pool_is_local()
+    if org_supplied:
+        why = _org_endpoint_problem(base)
+        if why:
+            print(f"[relay] refused an organization's connection address: {why} sid={sid}", flush=True)
+            raise HTTPException(403, f"This connection's address can't be used: {why}.")
     # CLIs append their own version segment (…/v1/messages, …/v1/responses) while provider
     # base_urls already end in /v1 — collapse the duplicate rather than 404 upstream.
     suffix = path[3:] if path.startswith("v1/") else path
@@ -4805,9 +4872,9 @@ async def llm_broker(path: str, request: Request):
         body = _google_with_signatures(body, sid)
     if provider in _STRICT_GEMINI_CHANNELS and "gemini" in _body_model_name(body).lower():
         body = _with_gemini_schemas(body)
-    rc = _relay_client()
+    rc = _relay_checked_client() if org_supplied else _relay_client()
     req = rc.build_request(request.method, url, headers=headers, content=body or None)
-    up = await rc.send(req, stream=True)
+    up = await _broker_send(rc, req, org_supplied, sid)
     if provider == "google" and up.status_code == 400:
         # Google's OpenAI-compatible endpoint refuses a request that names any field it does not
         # know ("Unknown name \"store\": Cannot find field."), and the harnesses send OpenAI's
@@ -4822,7 +4889,7 @@ async def llm_broker(path: str, request: Request):
             body = _without_field(body, unknown)
             print(f"[broker] google refused field {unknown!r}; sent again without it sid={sid}", flush=True)
             req = rc.build_request(request.method, url, headers=headers, content=body or None)
-            up = await rc.send(req, stream=True)
+            up = await _broker_send(rc, req, org_supplied, sid)
             if up.status_code != 400:
                 break
             refused = await up.aread()
@@ -4848,7 +4915,7 @@ async def llm_broker(path: str, request: Request):
             print(f"[broker] {provider} refused reasoning_effort's thinking shape for {_body_model_name(body)!r}; "
                   f"sent again without it sid={sid}", flush=True)
             req = rc.build_request(request.method, url, headers=headers, content=body or None)
-            up = await rc.send(req, stream=True)
+            up = await _broker_send(rc, req, org_supplied, sid)
         else:
             return Response(content=refused, status_code=400, media_type=up.headers.get("content-type"),
                             headers={k: val for k, val in up.headers.items()
@@ -13523,7 +13590,7 @@ async def _sql_peer_check(addr: str) -> str | None:
 
 sql_plane.PEER_CHECK = _sql_peer_check
 
-_checked_clients: dict[bool, httpx.AsyncClient] = {}
+_checked_clients: dict[bool | str, httpx.AsyncClient] = {}
 
 
 def _checked_http(always: bool = False) -> httpx.AsyncClient:
