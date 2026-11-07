@@ -4814,7 +4814,8 @@ async def _broker_send(rc: httpx.AsyncClient, req: httpx.Request, org_supplied: 
         why = str(e)
         if not (org_supplied and why.startswith("that address cannot be used: ")):
             raise
-        print(f"[relay] refused an organization's connection address at the socket: {why} sid={sid}", flush=True)
+        # the reason goes to the caller; the log line names the session only (nothing read off the connection)
+        print(f"[relay] refused an organization's connection address at the socket sid={sid}", flush=True)
         raise HTTPException(403, f"This connection's address can't be used: {why.removeprefix('that address cannot be used: ')}.") from None
 
 
@@ -4838,7 +4839,7 @@ async def llm_broker(path: str, request: Request):
     if org_supplied:
         why = _org_endpoint_problem(base)
         if why:
-            print(f"[relay] refused an organization's connection address: {why} sid={sid}", flush=True)
+            print(f"[relay] refused an organization's connection address as written sid={sid}", flush=True)
             raise HTTPException(403, f"This connection's address can't be used: {why}.")
     # CLIs append their own version segment (…/v1/messages, …/v1/responses) while provider
     # base_urls already end in /v1 — collapse the duplicate rather than 404 upstream.
