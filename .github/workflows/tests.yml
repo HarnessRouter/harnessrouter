@@ -28,6 +28,16 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/test-star-badge.py
 
+  # What a fresh volume installs at first start is pinned: no `releases/latest`, no npm or pip
+  # install without an exact version (or a hashed lock), no sums file fetched beside its asset, no
+  # curl | sh (#623). The self-test first, so a check that can no longer fail fails here.
+  install-pins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/test-check-install-pins.py
+      - run: python3 scripts/check-install-pins.py
+
   gateway:
     runs-on: ubuntu-latest
     steps:
@@ -63,7 +73,7 @@ jobs:
           cache-dependency-path: runner/requirements.txt
       # httpx: the runner suite drives the app through FastAPI's TestClient, which needs it. The
       # runner itself does not, so it stays out of requirements.txt and lives with pytest here.
-      # The System One Harness is on the runner's venv in the image (docker/entrypoint.sh pins the tag);
+      # The System One Harness is on the runner's venv in the image (docker/entrypoint.sh pins the commit v0.4.0 named);
       # the driver's tests import it, and skip without it, so the suite installs the same pin.
       # CheetahClaws the same way: its driver tests run the pinned package against a stub endpoint
       # (they skip without it), and it resolves beside the runner's own pins (pip check is clean).
@@ -71,7 +81,7 @@ jobs:
       # and the driver's tests run it as a subprocess against a stub Managed API.
       # boto3 (botocore inside): the relay signs Bedrock calls itself, and its tests check every signature
       # against botocore's own for the same request; without it they skip.
-      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx boto3 "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@v0.4.0" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
+      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx boto3 "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@3266a17537e283dc5539439835c0b4cab02bf5c0" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
       - run: python -m pytest runner/tests -q
 
   conformance:
