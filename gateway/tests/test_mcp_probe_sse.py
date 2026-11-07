@@ -75,3 +75,50 @@ async def test_connection_probe_retains_server_and_tools_from_multiline_sse(monk
         "initialize", "notifications/initialized", "tools/list"]
     assert all(str(r.url) == url and r.headers["authorization"] == "Bearer test-token" for r in requests)
     assert all(r.headers["mcp-session-id"] == "session-1" for r in requests[1:])
+
+
+def test_a_hostile_nesting_depth_is_no_object_and_no_error():
+    deep = "[" * 200000 + "]" * 200000
+    assert app._parse_jsonrpc("data: " + deep + "\n\n") == {}
+    assert app._parse_jsonrpc("data: " + deep + "\n\n" + _sse(RESPONSE)) == RESPONSE
+
+
+async def test_an_answer_past_the_cap_is_a_failed_probe_and_is_not_read_on(monkeypatch):
+    """A hostile server sends one multi-line event that never ends: the probe stops at the cap."""
+    sent = {"bytes": 0}
+
+    async def endless():
+        line = b"data: " + b"x" * 1018 + b"\n"
+        while True:
+            sent["bytes"] += len(line)
+            yield line
+
+    def respond(request):
+        return httpx.Response(200, content=endless(), headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(app, "_pool_is_local", lambda: True)
+        monkeypatch.setattr(app, "_checked_http", lambda: client)
+        result = await app._mcp_list_tools("https://mcp.example.invalid/mcp", "")
+
+    assert result["ok"] is False and "larger than 4 MiB" in result["error"]
+    assert sent["bytes"] <= app._MCP_PROBE_MAX_BYTES + 64 * 1024
+
+
+async def test_an_answer_that_never_completes_is_a_failed_probe(monkeypatch):
+    async def trickle():
+        import asyncio
+        while True:
+            yield b": heartbeat\n\n"
+            await asyncio.sleep(0.05)
+
+    def respond(request):
+        return httpx.Response(200, content=trickle(), headers={"content-type": "text/event-stream"})
+
+    monkeypatch.setattr(app, "_MCP_PROBE_WAIT_S", 0.3)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(app, "_pool_is_local", lambda: True)
+        monkeypatch.setattr(app, "_checked_http", lambda: client)
+        result = await app._mcp_list_tools("https://mcp.example.invalid/mcp", "")
+
+    assert result == {"ok": False, "error": "initialize: no complete answer within 0.3 s"}
