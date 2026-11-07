@@ -22,7 +22,7 @@
 // Tools (setupTools): ('all' only) the agent harness's built-in tools, on unless turned off, then the
 // setup's own MCP servers (added). Not tools: the workspace plugins binding (plugins).
 // Built-ins come from the bases document; while it is not read, 'all' knows only what was added.
-import { PLUGS_ENTRY_ID, type BaseInfo, type BaseTool, type BuiltinSkill, type CustomHarness, type McpServer } from '@/lib/harness';
+import { MEMORIES_ENTRY_ID, PLUGS_ENTRY_ID, type BaseInfo, type BaseTool, type BuiltinSkill, type CustomHarness, type McpServer } from '@/lib/harness';
 
 /** Workspace plugins the record has but that were not read. */
 export const UNREAD_NAME = 'Plugins from your workspace';
@@ -45,8 +45,9 @@ export type SetupPlugin =
 
 /** The record says the setup includes workspace plugins (their binding's entry, turned on). */
 export const hasPlugsEntry = (h: CustomHarness) => !!(h.mcpServers || []).find((m) => m.id === PLUGS_ENTRY_ID && m.enabled !== false);
-/** The plugins binding is the service's own entry on the record, never one of the setup's own MCP servers. */
-export const isServiceEntry = (m: McpServer) => m.id === PLUGS_ENTRY_ID;
+/** The plugins binding and the memories server are the service's own entries on the record, never one of the setup's
+ *  own MCP servers: not a tool, not counted, not listed. */
+export const isServiceEntry = (m: McpServer) => m.id === PLUGS_ENTRY_ID || m.id === MEMORIES_ENTRY_ID;
 
 /** This setup's plugins (the rule above). `binding`: the plugins binding as read; null when the setup
  *  has none, undefined while it is not read or could not be. Every plugin is added by a person, so

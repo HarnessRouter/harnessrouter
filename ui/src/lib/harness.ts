@@ -43,6 +43,8 @@ export interface CustomHarness {
   defaultModel: string;
   systemPrompt: string;
   mcpServers: McpServer[];
+  /** How many memories its agent holds, from its grants. On a read, not on what a save sends. */
+  memories?: { count: number };
   // A skill carries its bundle inline as `files`; bundles over the gateway's inline cap are
   // offloaded server-side and round-trip as {name, enabled, blob}, `blob` is an opaque pointer,
   // resolved back to files via getSkillFiles() when editing. Either shape is a REAL own skill.
@@ -710,6 +712,8 @@ export interface Plug {
   attention?: string;
 }
 export const PLUGS_ENTRY_ID = 'mcp.plugs';
+/** The server entry that gives an agent its memories: the service's, not one of the setup's own servers. */
+export const MEMORIES_ENTRY_ID = 'mcp.memories';
 
 /** Connect a plugin for the workspace, change its settings, or turn it off. */
 export function setPlug(type: string, body: { enabled: boolean; config?: Record<string, unknown>; secrets?: Record<string, string> }): Promise<Plug> {

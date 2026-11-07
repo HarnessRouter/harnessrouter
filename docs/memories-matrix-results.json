@@ -1,0 +1,2519 @@
+{
+ "interface": {
+  "meta": {
+   "at": "2026-11-04"
+  },
+  "vendors": {
+   "Mem0, self-hosted": {
+    "mem0": [
+     {
+      "route": "GET providers",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET types",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST memories (child)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memories?parent",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memory",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT memory",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST grants",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET grants",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET harness memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT harness memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records (entity, fact)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records (retried with its key)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET record",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET records",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET records?type",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PATCH record",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET history",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (subtree)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (depth 0)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (text)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST graph",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST observe",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET job",
+      "verdict": "n/a",
+      "why": "observe answered at once"
+     },
+     {
+      "route": "PUT query",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET queries",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST query (named)",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST query (free)",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST operation",
+      "verdict": "n/a",
+      "why": "no extension type on this engine"
+     },
+     {
+      "route": "POST snapshots",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET snapshots",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST consolidations",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidations",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidation",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidation changes",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST consolidation revert",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "DELETE record (forget)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST erase",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET record (erased)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "DELETE grant",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET harness memories (revoked)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memory (unknown)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "DELETE memory",
+      "verdict": "pass",
+      "why": ""
+     }
+    ]
+   },
+   "Mem0 Platform": {
+    "mem0": [
+     {
+      "route": "GET providers",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET types",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST memories (child)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memories?parent",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memory",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT memory",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST grants",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET grants",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET harness memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT harness memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records (entity, fact)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records (retried with its key)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET record",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET records",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET records?type",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PATCH record",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET history",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (subtree)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (depth 0)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (text)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST graph",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST observe",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET job",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT query",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET queries",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST query (named)",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST query (free)",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST operation",
+      "verdict": "n/a",
+      "why": "no extension type on this engine"
+     },
+     {
+      "route": "POST snapshots",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET snapshots",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST consolidations",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidations",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidation",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidation changes",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST consolidation revert",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "DELETE record (forget)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST erase",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET record (erased)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "DELETE grant",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET harness memories (revoked)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memory (unknown)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "DELETE memory",
+      "verdict": "pass",
+      "why": ""
+     }
+    ]
+   },
+   "Graphiti": {
+    "graphiti": [
+     {
+      "route": "GET providers",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET types",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST memories (child)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memories?parent",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memory",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT memory",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST grants",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET grants",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET harness memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT harness memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records (entity, fact)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records (retried with its key)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET record",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET records",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET records?type",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PATCH record",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET history",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (subtree)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (depth 0)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (text)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST graph",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST observe",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET job",
+      "verdict": "n/a",
+      "why": "observe answered at once"
+     },
+     {
+      "route": "PUT query",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET queries",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST query (named)",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST query (free)",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST operation",
+      "verdict": "n/a",
+      "why": "no extension type on this engine"
+     },
+     {
+      "route": "POST snapshots",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET snapshots",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST consolidations",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidations",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidation",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidation changes",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST consolidation revert",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "DELETE record (forget)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST erase",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET record (erased)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "DELETE grant",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET harness memories (revoked)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memory (unknown)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "DELETE memory",
+      "verdict": "pass",
+      "why": ""
+     }
+    ]
+   },
+   "Hindsight": {
+    "hindsight": [
+     {
+      "route": "GET providers",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET types",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST memories (child)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memories?parent",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memory",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT memory",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST grants",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET grants",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET harness memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT harness memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records (entity, fact)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records (retried with its key)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET record",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET records",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET records?type",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PATCH record",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET history",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (subtree)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (depth 0)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (text)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST graph",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST observe",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET job",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT query",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET queries",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST query (named)",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST query (free)",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST operation",
+      "verdict": "n/a",
+      "why": "no extension type on this engine"
+     },
+     {
+      "route": "POST snapshots",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET snapshots",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST consolidations",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET consolidations",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET consolidation",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET consolidation changes",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST consolidation revert",
+      "verdict": "n/a",
+      "why": "declared: this provider's runs can be started and read, not undone"
+     },
+     {
+      "route": "DELETE record (forget)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST erase",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET record (erased)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "DELETE grant",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET harness memories (revoked)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memory (unknown)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "DELETE memory",
+      "verdict": "pass",
+      "why": ""
+     }
+    ]
+   },
+   "ReMe": {
+    "reme": [
+     {
+      "route": "GET providers",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET types",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST memories (child)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memories?parent",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memory",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT memory",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST grants",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET grants",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET harness memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PUT harness memories",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records (entity, fact)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST records (retried with its key)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET record",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET records",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET records?type",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "PATCH record",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET history",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (subtree)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (depth 0)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST recall (text)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST graph",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST observe",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET job",
+      "verdict": "n/a",
+      "why": "observe answered at once"
+     },
+     {
+      "route": "PUT query",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET queries",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST query (named)",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST query (free)",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST operation",
+      "verdict": "n/a",
+      "why": "no extension type on this engine"
+     },
+     {
+      "route": "POST snapshots",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET snapshots",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST consolidations",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidations",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidation",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "GET consolidation changes",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "POST consolidation revert",
+      "verdict": "n/a",
+      "why": "declared"
+     },
+     {
+      "route": "DELETE record (forget)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "POST erase",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET record (erased)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "DELETE grant",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET harness memories (revoked)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "GET memory (unknown)",
+      "verdict": "pass",
+      "why": ""
+     },
+     {
+      "route": "DELETE memory",
+      "verdict": "pass",
+      "why": ""
+     }
+    ]
+   }
+  }
+ },
+ "agents": {
+  "meta": {
+   "instance": "",
+   "protocol": "2026-10-04",
+   "at": "2026-11-04 11:33 UTC"
+  },
+  "scenarios": [
+   "remember",
+   "recall",
+   "subtree",
+   "reach",
+   "revise",
+   "graph",
+   "forget",
+   "task_memory",
+   "viewer",
+   "observe",
+   "asset",
+   "document"
+  ],
+  "rows": [
+   {
+    "engine": "mem0-self-hosted",
+    "base": "claude-code",
+    "model": "claude-sonnet-5.5",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "revise": {
+      "ok": true,
+      "why": "revised in place, version 2",
+      "s": 20
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 26
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 21
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 159
+   },
+   {
+    "engine": "mem0-self-hosted",
+    "base": "codex",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "revise": {
+      "ok": true,
+      "why": "revised in place, version 2",
+      "s": 21
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 18
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 150
+   },
+   {
+    "engine": "mem0",
+    "base": "claude-code",
+    "model": "claude-sonnet-5.5",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 17
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 17
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "revise": {
+      "ok": true,
+      "why": "revised in place, version 3",
+      "s": 42
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 33
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 16
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 1
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 228
+   },
+   {
+    "engine": "mem0",
+    "base": "codex",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "kept in the client memory, by the agent's choice",
+      "s": 17
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 22
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 30
+     },
+     "revise": {
+      "ok": true,
+      "why": "revised in place, version 2",
+      "s": 62
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 33
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 36
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 16
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 30
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 279
+   },
+   {
+    "engine": "graphiti",
+    "base": "claude-code",
+    "model": "claude-sonnet-5.5",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "kept in the client memory, by the agent's choice",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "revise": {
+      "ok": true,
+      "why": "passed on the second try; first: the new title is in memory and 3 record(s) still give the old one alone, written by provider",
+      "s": 164
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 17
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 41
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 19
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 307
+   },
+   {
+    "engine": "graphiti",
+    "base": "codex",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "kept in the client memory, by the agent's choice",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "revise": {
+      "ok": true,
+      "why": "revised in place, version 2",
+      "s": 41
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 26
+     },
+     "forget": {
+      "ok": true,
+      "why": "passed on the second try; first: the title is still an active record (tools: memories.memory_forget, memories.memory_graph, memories.memory_list, memories.memory_recall)",
+      "s": 155
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 325
+   },
+   {
+    "engine": "hindsight",
+    "base": "claude-code",
+    "model": "claude-sonnet-5.5",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 11
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "revise": {
+      "ok": true,
+      "why": "forgot the old record and wrote a new one",
+      "s": 48
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 17
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 27
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 186
+   },
+   {
+    "engine": "hindsight",
+    "base": "codex",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "kept in the client memory, by the agent's choice",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 30
+     },
+     "revise": {
+      "ok": true,
+      "why": "forgot the old record and wrote a new one",
+      "s": 48
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 26
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 28
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 209
+   },
+   {
+    "engine": "reme",
+    "base": "claude-code",
+    "model": "claude-sonnet-5.5",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "revise": {
+      "ok": true,
+      "why": "revised in place, version 2",
+      "s": 42
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 22
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 27
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 186
+   },
+   {
+    "engine": "reme",
+    "base": "codex",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "kept in the client memory, by the agent's choice",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "subtree": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "reach": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "revise": {
+      "ok": true,
+      "why": "revised in place, version 2",
+      "s": 27
+     },
+     "graph": {
+      "ok": true,
+      "why": "",
+      "s": 21
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 27
+     },
+     "task_memory": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "viewer": {
+      "ok": true,
+      "why": "",
+      "s": 19
+     },
+     "observe": {
+      "ok": true,
+      "why": "",
+      "s": 0
+     },
+     "asset": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     },
+     "document": {
+      "ok": null,
+      "why": "agents on this instance are not offered a file to keep (run with --files where they are)",
+      "s": 0
+     }
+    },
+    "why": "",
+    "s": 175
+   }
+  ]
+ },
+ "bases": {
+  "meta": {
+   "instance": "",
+   "protocol": "2026-10-04",
+   "at": "2026-11-04 10:29 UTC"
+  },
+  "scenarios": [
+   "remember",
+   "recall",
+   "forget"
+  ],
+  "rows": [
+   {
+    "engine": "graphiti",
+    "base": "agentzero",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 26
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 41
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "aider",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 35
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 56
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "cheetahclaws",
+    "model": "gpt-5.4",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 16
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "claude-code",
+    "model": "claude-sonnet-5.5",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "cline",
+    "model": "gpt-5.4",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 21
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "codex",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 26
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "dcode",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 35
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "docker-agent",
+    "model": "gpt-5.4",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 21
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "dsh",
+    "model": "deepseek-v4-pro",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "passed on the second try; first: no record holds the title after the task (tools: none); answered \"I'll save that to memory so it's there for later conversations.\\n\\n\"",
+      "s": 155
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 72
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "fast-agent",
+    "model": "gpt-5.4",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "forget": {
+      "ok": true,
+      "why": "passed on the second try; first: the title is still an active record (tools: memories/memory_forget, memories/memory_recall)",
+      "s": 140
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "gemini",
+    "model": "gemini-3.8-flash",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 61
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "goose",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 31
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "grok",
+    "model": "grok-4.6",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 36
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "hermes",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "kept in the client memory, by the agent's choice",
+      "s": 20
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 41
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "jcode",
+    "model": "gpt-5.4",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "forget": {
+      "ok": true,
+      "why": "passed on the second try; first: the title is still an active record (tools: none)",
+      "s": 125
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "kilo",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 30
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 30
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 41
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "kimi",
+    "model": "kimi-k3",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 111
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "mimo",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 46
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "minimax",
+    "model": "minimax-m3",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 31
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "nanobot",
+    "model": "gpt-5.4",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "recall": {
+      "ok": true,
+      "why": "passed on the second try; first: answered without the title: '- give me any phrase you remember from that discussion\\n- tell me roughly when it happened\\n- or I can suggest likely naming options based on your project context'",
+      "s": 45
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 21
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "omp",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "passed on the second try; first: no record holds the title after the task (tools: none); answered ' use it in this conversation, but persistent memory isn\u2019t available here, so I couldn\u2019t save it for later conversations.'",
+      "s": 133
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 41
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 36
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "opencode",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 17
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 31
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "openhands",
+    "model": "gpt-5.4",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "kept in the client memory, by the agent's choice",
+      "s": 30
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 56
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "opensquilla",
+    "model": "gpt-5.4",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "forget": {
+      "ok": true,
+      "why": "passed on the second try; first: the title is still an active record (tools: memory_forget, memory_recall)",
+      "s": 161
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "pi",
+    "model": "gpt-6.1-sol",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "kept in the client memory, by the agent's choice",
+      "s": 15
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 15
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 26
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "qoder",
+    "model": "",
+    "scenarios": {
+     "remember": {
+      "ok": false,
+      "why": "the task ended unknown: HTTP 400 {\"error\": {\"type\": \"invalid_request_error\", \"code\": \"invalid_input\", \"message\": \"no provider configured for backend 'qoder'. Add an integration for a provider t",
+      "s": 0
+     },
+     "recall": {
+      "ok": false,
+      "why": "the task ended unknown: HTTP 400 {\"error\": {\"type\": \"invalid_request_error\", \"code\": \"invalid_input\", \"message\": \"no provider configured for backend 'qoder'. Add an integration for a provider t",
+      "s": 1
+     },
+     "forget": {
+      "ok": false,
+      "why": "the task ended unknown: HTTP 400 {\"error\": {\"type\": \"invalid_request_error\", \"code\": \"invalid_input\", \"message\": \"no provider configured for backend 'qoder'. Add an integration for a provider t",
+      "s": 1
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "qwen",
+    "model": "qwen3.7-max",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "passed on the second try; first: no record holds the title after the task (tools: none); answered \"ed \u2014 **LAUNCH-70224D** is stored as the working title for this project's launch. I'll recall it in future conversations.\"",
+      "s": 125
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 25
+     },
+     "forget": {
+      "ok": true,
+      "why": "passed on the second try; first: the title is still an active record (tools: memory_forget, memory_list, memory_recall)",
+      "s": 161
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "vibe",
+    "model": "gpt-5.4",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 20
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 35
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 35
+     }
+    }
+   },
+   {
+    "engine": "graphiti",
+    "base": "zeroclaw",
+    "model": "gpt-5.4",
+    "scenarios": {
+     "remember": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "recall": {
+      "ok": true,
+      "why": "",
+      "s": 10
+     },
+     "forget": {
+      "ok": true,
+      "why": "",
+      "s": 16
+     }
+    }
+   }
+  ]
+ }
+}

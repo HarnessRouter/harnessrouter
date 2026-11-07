@@ -13,7 +13,7 @@ export type States = Record<string, BrickState>;
 
 /** How many of each optional part a setup has (0 when none): one brick each on the tower, up to
  *  PART_STACK high; past that the top brick carries the count. */
-export type PartCounts = { skill: number; plugin: number; mcp: number; env: number };
+export type PartCounts = { skill: number; plugin: number; mcp: number; env: number; memory?: number };
 
 export interface Tower {
   harness: string;
@@ -31,9 +31,11 @@ type Bk = [string, number, number, number, number, number, number];
 const BK: Bk[] = [['b-sandbox', 0, 0, 6, 4, 0, 1], ['b-orch', 0, 4, 6, 6, 0, 1],
   ['b-fill', 0, 0, 4, 4, 1, 1.25], ['b-errors', 4, 0, 6, 2, 1, 1.25], ['b-files', 4, 2, 6, 4, 1, 1.25], ['b-sessions', 0, 4, 2, 6, 1, 1.25], ['b-stream', 2, 4, 6, 6, 1, 1.25]];
 export const SUBS: [string, string, string][] = [['b-sandbox', 'Sandbox', 'Sandbox'], ['b-orch', 'Orchestration', 'Orchestration'], ['b-sessions', 'Sessions', 'Sessions'], ['b-stream', 'Streaming', 'Streaming'], ['b-files', 'Files', 'Files & artifacts'], ['b-errors', 'Errors', 'Cancellation & errors']];
-export const PARTS: [keyof Tower['parts'], string][] = [['plugin', 'Plugin'], ['skill', 'Skill'], ['mcp', 'Tool'], ['env', 'Environment']];
-const PART_AT: Record<string, [number, number]> = { plugin: [0, 0], skill: [4, 0], mcp: [0, 4], env: [4, 4] };
-const FAM: Record<string, string> = { 'b-runtime': 'harness', model: 'model', task: 'task', backend: 'backend', skill: 'skill', plugin: 'plugin', mcp: 'mcp', env: 'tool' };
+// Drawn in this order, back to front: Memory stands in the middle of the top, so it comes before the corner in front
+// of it and after the corner behind it, and the two side corners are clear of it.
+export const PARTS: [keyof Tower['parts'], string][] = [['plugin', 'Plugin'], ['skill', 'Skill'], ['mcp', 'Tool'], ['memory', 'Memory'], ['env', 'Environment']];
+const PART_AT: Record<string, [number, number]> = { plugin: [0, 0], skill: [4, 0], mcp: [0, 4], memory: [2, 2], env: [4, 4] };
+const FAM: Record<string, string> = { 'b-runtime': 'harness', model: 'model', task: 'task', backend: 'backend', skill: 'skill', plugin: 'plugin', mcp: 'mcp', env: 'tool', memory: 'memory' };
 const ZTOP = 5.25, PART_STACK = 3;
 
 const esc = (s: string) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
@@ -121,7 +123,7 @@ function agentModel(K: ReturnType<typeof Iso>, o: Tower, opts: Opts) {
     if (dk) out.push(ripple(x0, y0, x1, y1, z0, delay));
     out.push('<g class="bk f-' + FAM[L.key] + ' ' + s2 + (dk ? ' drop' : '') + '" data-tw="' + L.key + '" style="--z:' + Math.round(L.z) + (dk ? ';animation-delay:' + delay + 'ms' : '') + '"><title>' + esc(L.name) + (L.key === 'b-runtime' && o.harness ? ' · ' + esc(o.harness) : L.key === 'model' && o.model ? ' · ' + esc(o.model) : '') + ': ' + say + '</title>' + inner + '</g>');
   });
-  // HarnessRouter is the top layer; the four part slots sit on it, a stud of its own until a part is
+  // HarnessRouter is the top layer; the five part slots sit on it, a stud of its own until a part is
   // attached. Every tower keeps room for its four parts stacked to their full height, so towers are
   // drawn at one scale whatever they hold. One brick per item, same colour, up to PART_STACK high;
   // past that the top brick carries the count, printed like the layer names.
@@ -132,11 +134,13 @@ function agentModel(K: ReturnType<typeof Iso>, o: Tower, opts: Opts) {
     if (!n) return;
     const pk = 'part:' + k, dk2 = drops[pk] != null, dl2 = dk2 ? drops[pk] : 0;
     if (dk2) out.push(ripple(px, py, px + 2, py + 2, Z, dl2));
-    const h = Math.min(n, PART_STACK);
+    // Memory stands right in front of the Plugin corner, so a stack of it would hide that corner: one brick high,
+    // and its count goes on the brick as any part's does past its stack
+    const cap = k === 'memory' ? 1 : PART_STACK, h = Math.min(n, cap);
     let g = '';
     for (let j = 0; j < h; j++) g += K.box(px, py, Z + j, px + 2, py + 2, Z + j + 1);
     g += K.stud(px + 1, py + 1, Z + h, 2);
-    if (n > PART_STACK) {
+    if (n > cap) {
       const fs = 0.5 * u, q = K.P(px, py + 2, Z + h);
       g += '<text class="lbl part-n-lbl" transform="matrix(' + K.c + ',0.5,0,1,' + q[0].toFixed(1) + ',' + q[1].toFixed(1) + ')" x="' + u.toFixed(1) + '" y="' + (K.zH * u * 0.5 + fs * 0.36).toFixed(1) + '" font-size="' + fs.toFixed(1) + '" text-anchor="middle">' + n + '</text>';
     }
@@ -178,21 +182,26 @@ export function towerOf(f: SetupFacts): Tower {
   const done = f.tested, b: Record<string, boolean> = {};
   b['b-runtime'] = !!f.harness; b.model = !!f.model; b.task = f.instructions || done; b.backend = true;
   SUBS.forEach((x) => { b[x[0]] = true; });
-  b.skill = f.parts.skill > 0; b.plugin = f.parts.plugin > 0; b.mcp = f.parts.mcp > 0; b.env = f.parts.env > 0;
+  b.skill = f.parts.skill > 0; b.plugin = f.parts.plugin > 0; b.mcp = f.parts.mcp > 0; b.env = f.parts.env > 0; b.memory = (f.parts.memory || 0) > 0;
   const run: Record<string, boolean> = {};
   if (f.running) {
     ['b-runtime', 'model', 'task', 'backend', 'b-sandbox', 'b-orch', 'b-sessions', 'b-stream'].forEach((k) => { run[k] = true; });
-    if (f.parts.skill) run.skill = true; if (f.parts.plugin) run.plugin = true; if (f.parts.env) run.env = true;
+    if (f.parts.skill) run.skill = true; if (f.parts.plugin) run.plugin = true; if (f.parts.env) run.env = true; if (f.parts.memory) run.memory = true;
   }
   const st: States = {};
   const keys = [...LAYERS.map((L) => L.key as string), ...PARTS.map((x) => x[0] as string), ...SUBS.map((x) => x[0])];
   keys.forEach((k) => {
-    const attached = k === 'skill' ? f.parts.skill > 0 : k === 'plugin' ? f.parts.plugin > 0 : k === 'mcp' ? f.parts.mcp > 0 : k === 'env' ? f.parts.env > 0 : false;
+    const attached = k === 'skill' ? f.parts.skill > 0 : k === 'plugin' ? f.parts.plugin > 0 : k === 'mcp' ? f.parts.mcp > 0 : k === 'env' ? f.parts.env > 0 : k === 'memory' ? (f.parts.memory || 0) > 0 : false;
     const next = (k === 'b-runtime' && !b[k]) || (k === 'model' && b['b-runtime'] && !b.model) || (k === 'task' && b.model && !b.task)
       || (/^b-/.test(k) && k !== 'b-runtime' && b.task && !b[k]) || (attached && !done);
     st[k] = run[k] && b[k] ? 'run' : b[k] ? 'built' : next ? 'next' : 'empty';
   });
   return { harness: f.harness, model: f.model, parts: f.parts, st };
+}
+
+/** The tower with the memories its agent holds now, from the Agent stack's own read, which is newer than the list's. */
+export function withMemories(t: Tower, n: number): Tower {
+  return { ...t, parts: { ...t.parts, memory: n }, st: { ...t.st, memory: n ? (t.st.memory === 'run' ? 'run' : 'built') : 'empty' } };
 }
 
 /** The empty tower on the "New setup" card: nothing built, the harness is the next step. */

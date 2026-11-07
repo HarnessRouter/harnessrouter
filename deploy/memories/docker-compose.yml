@@ -1,0 +1,132 @@
+# Memory vendors beside HarnessRouter. Run the ones you want, each under its own profile:
+#
+#   cp .env.example .env        # then fill it in
+#   docker compose --profile graphiti --profile reme up -d
+#   docker network connect harnessrouter-memories <your HarnessRouter container>
+#
+# Then connect each one in the console under Memories, with the address its section below names.
+#
+# Nothing here publishes a port. Most of these servers take no key, so keep them on this network.
+# Images are pinned to what the conformance suite passed against; move them on purpose.
+name: harnessrouter-memories
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # Address: http://graphiti:8000. Graphiti is a library, so this is a small server around it.
+  graphiti:
+    <<: *restart
+    profiles: [graphiti]
+    build: ./graphiti
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
+      MODEL_NAME: ${MEMORY_MODEL:-gpt-4o-mini}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      GRAPHITI_API_KEY: ${GRAPHITI_API_KEY:-}
+    # one file per memory, in a database that runs inside this server
+    volumes: [graphiti:/data]
+
+  # Address: http://hindsight:8888
+  hindsight:
+    <<: *restart
+    profiles: [hindsight]
+    # The full image, not -slim: Hindsight's default reranker is a local cross-encoder (hindsight-ai/hs-rerank-1), and
+    # only the full image carries what runs it. Without another account, -slim leaves `rrf`, a passthrough that "does
+    # no work": with it, long notes that shared a name with the question outranked the one fact that answered it.
+    image: ghcr.io/vectorize-io/hindsight:latest@sha256:19d0c08f3df79acac29384826419a1ca158129e81ec527cdcbd8c97ff4ef76da
+    environment:
+      HINDSIGHT_API_LLM_PROVIDER: openai
+      HINDSIGHT_API_LLM_API_KEY: ${OPENAI_API_KEY:-}
+      HINDSIGHT_API_LLM_MODEL: ${MEMORY_MODEL:-gpt-4o-mini}
+      HINDSIGHT_API_LLM_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
+      HINDSIGHT_API_EMBEDDINGS_PROVIDER: openai
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
+      # The model downloads once, into hindsight-cache.
+      HINDSIGHT_API_RERANKER_PROVIDER: local
+      HINDSIGHT_API_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-}@postgres:5432/hindsight
+      HINDSIGHT_ENABLE_UI: "false"
+      HINDSIGHT_ENABLE_CP: "false"
+    volumes: [hindsight-cache:/home/hindsight/.cache]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  # Address: http://mem0:8000. Key: MEM0_ADMIN_API_KEY. Or connect the Mem0 Platform with only its key.
+  mem0:
+    <<: *restart
+    profiles: [mem0]
+    # Mem0's own server at a pinned commit, plus spaCy (its entity linking) and a read-only route for those links:
+    # see mem0/Dockerfile.
+    build:
+      context: ./mem0
+      additional_contexts:
+        mem0: https://github.com/mem0ai/mem0.git#753496cf1435d76c3a711f3af51303f7fdcb6420:server
+    entrypoint: ["sh", "-c", "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port 8000"]
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_COLLECTION_NAME: memories
+      APP_DB_NAME: mem0_app
+      ADMIN_API_KEY: ${MEM0_ADMIN_API_KEY:-}
+      JWT_SECRET: ${MEM0_JWT_SECRET:-}
+      AUTH_DISABLED: "false"
+      MEM0_TELEMETRY: "false"
+      MEM0_DEFAULT_LLM_MODEL: ${MEMORY_MODEL:-gpt-4o-mini}
+      MEM0_DEFAULT_EMBEDDER_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+    # a record's history is kept here, so it needs its own volume to survive an upgrade
+    volumes: [mem0-history:/app/history]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  postgres:
+    <<: *restart
+    profiles: [mem0, hindsight]
+    image: pgvector/pgvector:pg17@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      # over TCP: while it creates the databases it listens only on its socket
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 5s
+      retries: 20
+
+  # Address: http://reme:2333
+  reme:
+    <<: *restart
+    profiles: [reme]
+    image: ghcr.io/agentscope-ai/reme:main@sha256:5fc0ff360b2574220cd16c3565e4d596b7df91abc7ab5c9bc9a152513bcd63d2
+    command: ["start"]
+    environment:
+      REME_CONFIG: /etc/reme/config.yaml
+      LLM_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL_NAME: ${MEMORY_MODEL:-gpt-4o-mini}
+      EMBEDDING_API_KEY: ${OPENAI_API_KEY:-}
+      EMBEDDING_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL:-text-embedding-3-small}
+    volumes:
+      - reme:/data
+      - ./reme/config.yaml:/etc/reme/config.yaml:ro
+
+volumes:
+  graphiti:
+  hindsight-cache:
+  postgres:
+  mem0-history:
+  reme:
+
+networks:
+  default:
+    name: harnessrouter-memories

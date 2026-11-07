@@ -19,6 +19,7 @@ import { Skel, SkRows } from '../Skel';
 import { isServiceEntry } from '../setup/settingsModel';
 import { McpSheet, addrKey, authFor, isHeaderRef, newMcpId, HEADER_REF, type McpSaveInput, type McpTarget } from '../mcp/McpSheet';
 import { AddToSheet, type AddResult, type AddTarget } from './AddToSheet';
+import { Markup } from '../Markup';
 
 interface Tool { key: string; name: string; url: string; on: boolean; by: { id: string; name: string; on: boolean }[]; first: McpServer }
 
@@ -196,7 +197,7 @@ export function ToolsTab({ setups, reload, failed = false, retry }: {
             {tools.map((x) => (
               <div key={x.key} className="row lib-g">
                 <span className="t lib-t">
-                  <span className="lib-ic" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon(x.on ? 'built' : 'empty', 'mcp') }} />
+                  <Markup className="lib-ic" html={partIcon(x.on ? 'built' : 'empty', 'mcp')} />
                   <span>
                     <b>{x.name}</b>
                     <small className="sub2 mono"><UrlBreaks url={x.url} /></small>
@@ -210,7 +211,7 @@ export function ToolsTab({ setups, reload, failed = false, retry }: {
             ))}
           </div>
         ) : (
-          <div className="empty-list es"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', 'mcp') }} /><span>No MCP servers yet.</span></div>
+          <div className="empty-list es"><Markup className="es-art" html={partIcon('empty', 'mcp')} /><span>No MCP servers yet.</span></div>
         )}
 
       {open?.tool && setups ? (

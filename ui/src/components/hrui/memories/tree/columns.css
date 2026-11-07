@@ -1,0 +1,17 @@
+/* A row of columns with a thin rule between them that can be dragged; tabs where there is no room. */
+#hrui .rc{display:flex;flex-direction:column;flex:1;width:100%;min-width:0;min-height:0}
+#hrui .rc-body{display:flex;flex:1;min-width:0;min-height:0}
+#hrui .rc-col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+#hrui .rc-col[hidden]{display:none}
+#hrui .rc-sep{flex:none;position:relative;width:1px;background:var(--line);cursor:col-resize;touch-action:none;outline:none;z-index:2}
+#hrui .rc-sep::before{content:"";position:absolute;top:0;bottom:0;left:-4px;right:-4px}
+#hrui .rc-sep::after{content:"";position:absolute;top:0;bottom:0;left:-1px;right:-1px;background:transparent;transition:background .12s}
+#hrui .rc-sep:hover::after,#hrui .rc-sep:focus-visible::after,#hrui .rc.dragging .rc-sep.on::after{background:var(--accent)}
+#hrui .rc.dragging{cursor:col-resize;user-select:none}
+#hrui .rc.dragging .rc-col{pointer-events:none}
+/* where there is no room: the columns become a small segmented control under the page's tabs, the one row of
+   underlined tabs on a screen being the page's own */
+#hrui .rc-segbar{flex:none;display:flex;padding:10px 16px;border-bottom:1px solid var(--line)}
+#hrui .rc-tabs.seg{display:flex;width:100%;max-width:420px}
+#hrui .rc-tabs.seg button{flex:1;font-size:13px}
+#hrui .rc.narrow .rc-col{flex:1 1 auto;width:100%}

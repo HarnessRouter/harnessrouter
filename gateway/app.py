@@ -56,6 +56,15 @@ import plugs_plane           # the plugs surface: the vendor tools behind the ho
 from public_artifacts import public_artifact_headers
 import browser_plane         # the browser surface: a cloud browser over CDP behind the browser plug
 import sql_plane             # the read-only SQL data plane (gate, row cap, introspection)
+import memory_routes        # the Harness Memories sub-protocol (tree, access, provider seam)
+import memory_plane
+import memory_tools
+import memory_local
+import memory_graphiti
+import memory_hindsight
+import memory_mem0
+import memory_reme
+import memory_relay      # memory vendors' servers call the model relay with a service credential
 import control_store  # durable transactional control state (idempotency / lease / monotonic cancel)
 import setup_compose         # New setup: the rules every built configuration is held to
 import setup_builder         # New setup: the built-in builder, saving into the person's workspace
@@ -3940,6 +3949,8 @@ async def _harness_plugins(harness_id: str, org: str, hdr_vals: dict[str, str] |
             # services. That is the lesson of 2026-07-25, and it is a property of first-party
             # servers rather than of databases. What the sandbox holds is a capability scoped to
             # this harness, this session and the record this entry's auth names, and it expires.
+            if _hosted_server_name(s) == _MEMORIES_SERVER and not _memories_go_with(v, org):
+                continue            # not the harness's own organization: never the owner's memory (_memories_go_with)
             key = _vault_key(s.get("auth"))
             if not key.startswith(_HOSTED_SECRET_PREFIX):
                 print(f"[mcp] '{s.get('name')}' on {harness_id} points here but names no record "
@@ -4759,8 +4770,123 @@ async def _entra_token(conn: dict) -> str:
         return token
 
 
+# ── memory services on the model relay (memory_relay) ──────────────────────────────────────────────
+# A memory vendor's server calls /v1/llm with an `hrm_` credential instead of a provider key: each call names one of its
+# service's models and goes through this instance's key for that model. Set up and withdrawn by the operator (internal
+# routes below); the registry is a vault document, so a credential is checked on every call.
+# The keys memory services may use, in order (provider types or key names); unset = any key, the model's maker first.
+# A test instance sets "vercel,azure-foundry" so its vendors spend gateway credit, never a provider's own key.
+HR_MEMORY_RELAY_KEYS = [x.strip() for x in os.environ.get("HR_MEMORY_RELAY_KEYS", "").split(",") if x.strip()]
+
+
+async def _memory_services() -> dict:
+    v = await _vault_get(GLOBAL_TENANT, memory_relay.REGISTRY_KEY)
+    try:
+        doc = json.loads(v) if v else {}
+        return doc if isinstance(doc, dict) else {}
+    except ValueError:
+        return {}
+
+
+class MemoryServiceIn(BaseModel):
+    vendor: str
+    llm_model: str
+    embedding_model: str
+    small_model: str = ""
+
+
+@app.post("/v1/memory-services", dependencies=[Depends(_internal_only)])
+async def memory_service_create(b: MemoryServiceIn) -> dict:
+    """A memory service and its credential, which is answered once here and kept nowhere else (it is the gateway's
+    signature over the id, so the vendor's server holds it, from the vault)."""
+    if b.vendor not in memory_relay.VENDORS:
+        raise HTTPException(400, f"vendor must be one of {', '.join(memory_relay.VENDORS)}")
+    catalog, integrations = await _effective_model_map(), await _integrations_doc()
+    for field, want in (("llm_model", "chat"), ("small_model", "chat"), ("embedding_model", "embedding")):
+        model = getattr(b, field)
+        if not model and field == "small_model":
+            continue
+        if memory_relay.kind_of(model, catalog) != want:
+            raise HTTPException(400, f"{field}: {model!r} is not a {want} model a memory service can use")
+        if not memory_relay.pick(model, integrations, catalog, _integration_models, HR_MEMORY_RELAY_KEYS):
+            raise HTTPException(400, f"{field}: no key here serves {model}")
+    doc = await _memory_services()
+    sid = memory_relay.new_id()
+    doc[sid] = memory_relay.service_record(b.vendor, b.llm_model, b.embedding_model, b.small_model)
+    await _vault_put(GLOBAL_TENANT, memory_relay.REGISTRY_KEY, json.dumps(doc))
+    return {"id": sid, "credential": memory_relay.mint(_signing_key(), sid), **doc[sid]}
+
+
+@app.get("/v1/memory-services", dependencies=[Depends(_internal_only)])
+async def memory_service_list() -> dict:
+    return {"data": [{"id": k, **v} for k, v in (await _memory_services()).items()]}
+
+
+@app.post("/v1/memory-services/{sid}/revoke", dependencies=[Depends(_internal_only)])
+async def memory_service_revoke(sid: str) -> dict:
+    doc = await _memory_services()
+    if sid not in doc:
+        raise HTTPException(404, "no such memory service")
+    doc[sid]["revoked"] = True
+    await _vault_put(GLOBAL_TENANT, memory_relay.REGISTRY_KEY, json.dumps(doc))
+    return {"id": sid, **doc[sid]}
+
+
+async def _memory_relay(tok: str, path: str, request: Request):
+    """A memory service's call: its own models only, on the inference paths only, through the key that serves the
+    model, which is named the way that key names it. The agents' turn credential plays no part."""
+    sid = memory_relay.verify(_signing_key(), tok)
+    svc = (await _memory_services()).get(sid) if sid else None
+    if not svc or svc.get("revoked"):
+        raise HTTPException(401, "invalid memory service credential")
+    suffix = path[3:] if path.startswith("v1/") else path
+    kind = memory_relay.PATHS.get(suffix)
+    if request.method != "POST" or not kind:
+        raise HTTPException(403, "this path is not available to a memory service")
+    raw = await request.body()
+    model = memory_relay.model_in(raw)
+    catalog = await _effective_model_map()
+    if model not in memory_relay.models_of(svc) or memory_relay.kind_of(model, catalog) != kind:
+        raise HTTPException(403, f"this memory service doesn't use {model or 'that model'} here")
+    got = memory_relay.pick(model, await _integrations_doc(), catalog, _integration_models, HR_MEMORY_RELAY_KEYS)
+    if not got:
+        raise HTTPException(502, f"no key here serves {model}")
+    integ, pid = got
+    conn = _with_provider_base({**dict(integ.get("config") or {}), "provider": str(integ.get("provider") or "").lower()}) or {}
+    provider = str(conn.get("provider") or "")
+    base = _provider_base_url(provider, str(conn.get("base_url") or ""))
+    if not base:
+        raise HTTPException(502, "that key has no address")
+    headers = _relay_out_headers(request.headers)
+    key = str(conn.get("api_key") or "")
+    if provider in ("azure", "azure-foundry"):
+        if _entra_conn(conn):
+            headers["authorization"] = f"Bearer {await _entra_token(conn)}"
+        else:
+            headers["api-key"] = key
+    elif provider == "anthropic":
+        headers["x-api-key"] = key
+    else:
+        headers["authorization"] = f"Bearer {key}"
+    body = _strip_unsupported(memory_relay.with_model(raw, pid), provider=provider, byok=True, path=suffix, keep_thinking=False)
+    rc = _relay_client()
+    up = await rc.send(rc.build_request("POST", f"{base}/{suffix}", headers=headers, content=body), stream=True)
+    print(f"[memory-relay] {sid} {svc.get('vendor')} {suffix} {model} -> {integ.get('name')} {up.status_code}", flush=True)
+
+    async def pump():
+        try:
+            async for chunk in up.aiter_raw():
+                yield chunk
+        finally:
+            await up.aclose()
+    out = {k: val for k, val in up.headers.items() if k.lower() not in ("content-length", "transfer-encoding", "connection")}
+    return StreamingResponse(pump(), status_code=up.status_code, headers=out, media_type=up.headers.get("content-type"))
+
+
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def llm_broker(path: str, request: Request):
+    if _broker_token(request).startswith(memory_relay.PREFIX):
+        return await _memory_relay(_broker_token(request), path, request)
     claims = _verify_turn_cred(_broker_token(request))
     if not claims:
         raise HTTPException(401, "invalid or expired turn credential")
@@ -4893,11 +5019,11 @@ async def llm_broker(path: str, request: Request):
 #      retry. Added the structured error envelope. The old `detail` string is still emitted beside
 #      it, because clients in the wild read it — it is documented as deprecated, not removed under
 #      them.
-UHP_VERSION = "2026-09-28"
+UHP_VERSION = "2026-10-04"
 # Both versions, one code path: 2026-09-12 is additive to 2026-08-11 (plugins, and nothing
 # the earlier version defined changes shape), so the same objects answer either request and
 # the header is the only thing that differs. VERSIONING.md, server rule 3.
-UHP_VERSIONS = [UHP_VERSION, "2026-09-12", "2026-08-11"]
+UHP_VERSIONS = [UHP_VERSION, "2026-09-28", "2026-09-12", "2026-08-11"]
 # The Agent Plugins manifest schemas this server installs (Plugins §7). A package targeting
 # another version is refused with unsupported_plugin_schema naming this list.
 UHP_PLUGIN_SCHEMAS = ["https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"]
@@ -4932,6 +5058,7 @@ UHP_CAPABILITIES = {
     # `input_response` item on the next request, chained on the response. Served to the bases in
     # _INPUT_REQUEST_BASES (GET /v1/bases says which).
     "input_requests": True,
+    "memories": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 # The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py).
@@ -9509,7 +9636,8 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         environment: dict | None = None,
                         trace_ctx: dict | None = None,
                         extra_env: dict | None = None,
-                        extra_secret: list[str] | None = None) -> tuple[str, list[dict], dict]:
+                        extra_secret: list[str] | None = None,
+                        task_memory: str = "") -> tuple[str, list[dict], dict]:
     """Hydrate → run turn over the connection chain → translate events to `emit` → collect produced
     files → checkpoint + persist trace. Returns (status, produced_files, rec).
     model_req: the caller-selected model (honored over the connection default when provided)."""
@@ -9620,6 +9748,15 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # CLI's default system prompt; persistent project instructions live in the doc the agent reads.
     agent_doc = _agent_doc_with_plugs(str((hv or {}).get("system_prompt") or ""),
                                       await _harness_plug_types(harness_id, org, hv))
+    # The Memory section: the attached memories with their descriptions, and what each provider
+    # marks as always relevant. Its size is recorded on the turn, per memory, in tokens.
+    if task_memory:
+        await _vertex_upsert(sid, {"memory": task_memory})     # the session keeps it: its tools and its observation read it
+    _mem_section, _mem_primed = await memory_tools.doc_section(
+        memory_local.Local(org, harness_id, await _harness_memories(harness_id, org, hv, sid=sid)))
+    if _mem_section:
+        agent_doc = (agent_doc + "\n\n" + _mem_section).strip()
+        rec["memories"] = {"primed_tokens": _mem_primed}
     status = "failed"
     # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
@@ -10004,6 +10141,14 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             await control_store.lease_release(org, sid, translator.resp_id, rec["lease_fence"])
         except Exception:  # noqa: BLE001
             pass
+    _corrected = sid in _memory_corrected
+    _memory_corrected.discard(sid)
+    if status == "completed" and harness_id and "memories" in rec and not _corrected:
+        # Not awaited: the turn isn't complete until this returns, and some vendors extract with a model
+        # before they answer. Measured on real turns: 5.5 s on Graphiti and 7.2 s on ReMe after the last words.
+        _t = asyncio.create_task(_memories_observe(org, harness_id, sid, hv, rec, _translator_answer(translator)))
+        _inflight.add(_t)
+        _t.add_done_callback(_inflight.discard)
     return status, produced, rec
 
 
@@ -10808,6 +10953,9 @@ async def create_response(body: CreateResponseBody, request: Request):
         # rather than run without the project the task named.
         raise uhp_error(400, "environment_unsupported",
                         "This harness runs in a remote runtime and cannot mount an environment.", "environment")
+    # One more memory for this task, named by id in metadata.memory: checked against the HARNESS's
+    # privileges here, before anything is allocated (Memories §9).
+    task_memory = await _task_memory_for_turn(org, harness_id, body)
     # HR-INF-023: credit admission. BILLING is the harness OWNER's org — the Developer who built the
     # harness funds its infra consumption (hv["org"], stamped at harness creation), regardless of who
     # calls it. A turn with no harness vertex (built-in, or an ad-hoc/chained turn that carries no
@@ -11146,7 +11294,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                         model_req=model_req, user_text=user_text, harness_id=harness_id,
                         max_step=max_step, timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals,
                         partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
-                        trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret)
+                        trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory)
                     end["status"] = status
                     # A failed turn says why in the transcript, not only in the response record: fail()
                     # carries the message as an error event, which the console prints under the answer.
@@ -11201,7 +11349,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                             prompt=prompt, files_in=files_in, resume=resume, emit=emit, model_req=model_req,
                             user_text=user_text, harness_id=harness_id, max_step=max_step,
                             timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
-                            trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret)
+                            trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory)
                         end["status"] = status
                         # A failed turn says why in the transcript, not only in the response record: fail()
                         # carries the message as an error event, which the console prints under the answer.
@@ -11262,7 +11410,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 prompt=prompt, files_in=files_in, resume=resume, emit=bus_emit, model_req=model_req,
                 user_text=user_text, harness_id=harness_id, max_step=max_step,
                 timeout_s=timeout_s, effort=effort, hdr_vals=hdr_vals, partial_messages=want_partial, codex_appserver=want_appserver, hv=hv, probe=probe, environment=environment,
-                trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret)
+                trace_ctx=trace_ctx, extra_env=extra_env, extra_secret=extra_secret, task_memory=task_memory)
             # A failed turn says why in the transcript, not only in the response record: fail()
             # carries the message as an error event, which the console prints under the answer.
             for ev in (_fail_events(tr, rec) if status == "failed" else tr.complete(status, produced)):
@@ -13887,6 +14035,7 @@ _HOSTED_NOT_CONNECTED = {
     "database": ("database_not_connected", _NOT_CONNECTED),
     "media": ("media_not_connected", "No media tools are connected to this agent yet."),
     "plugs": ("plugs_not_connected", "No plugins are connected to this agent yet."),
+    "memories": ("memories_not_attached", "This agent holds no memory yet."),
 }
 
 
@@ -17489,6 +17638,15 @@ _PLUG_FORMS: dict[str, dict] = {
     # "delegated" (each person signs in with Microsoft once; the record then holds one refresh
     # token per person under rt-<member slug>) or "application" (client credentials).
     "microsoft365": {"secrets": ["client_secret"], "config": ["tenant_id", "client_id", "mode"], "source": "local"},
+    # A memory provider: the workspace's own account at a memory service, connected the way every
+    # plug is (its key in the secret store, never on the record). It offers an agent no tools of
+    # its own: memories kept there are attached to a harness through /v1/harnesses/{id}/memories.
+    # A key where the service has one; the address of your own server where it runs on your machines
+    # (mem0's own service needs only a key, and an address means your mem0 server instead).
+    "mem0": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "source": "local", "kind": "memory"},
+    "graphiti": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "requires": ["base_url"], "source": "local", "kind": "memory"},
+    "hindsight": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "requires": ["base_url"], "source": "local", "kind": "memory"},
+    "reme": {"secrets": ["api_key"], "optional": ["api_key"], "config": ["base_url"], "requires": ["base_url"], "source": "local", "kind": "memory"},
 }
 
 
@@ -17575,14 +17733,15 @@ def _plug_public(org: str, workspace: str, plug_type: str, rec: dict | None, sta
 
 
 @app.get("/v1/plugs")
-async def list_plugs(request: Request) -> dict:
+async def list_plugs(request: Request, kind: str = "") -> dict:
     """The plugin catalog for the caller's workspace: every type this instance serves, with its
-    state here (connected, disabled, needs_auth, missing)."""
+    state here (connected, disabled, needs_auth, missing). `kind=memory` lists the memory
+    providers instead, which are connected here and attached as memories, not as tools."""
     _caller = await _pub_principal(request)
     org, _ = _caller["org"], _caller.get("member", "")
     workspace = _plug_workspace(request, _caller)
     out = []
-    for t in _PLUG_FORMS:
+    for t in [t for t, f in _PLUG_FORMS.items() if str(f.get("kind") or "") == kind]:
         status, rec = await _plug_lookup(org, workspace, t)
         out.append(_plug_public(org, workspace, t, rec, status))
     return {"workspace": workspace, "plugs": out}
@@ -17620,6 +17779,23 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         config.setdefault("deny_domains", [])
         config["proxy"] = False
     refs = {str(r.get("field")): str(r.get("ref")) for r in ((prev or {}).get("key_refs") or []) if isinstance(r, dict)}
+    if form.get("kind") == "memory" and (str((body.secrets or {}).get("api_key") or "").strip() or str(config.get("base_url") or "").strip()):
+        # A memory engine's key and address are tried at the engine BEFORE they are kept. What it
+        # refuses is refused here, with the engine's reason, and whatever was working stays: the
+        # memories on it must not go dark because someone pasted a wrong key.
+        base_url = str(config.get("base_url") or "").strip()
+        if base_url:
+            if await _ssrf_check(base_url):
+                raise uhp_error(422, "memory_invalid", "That address can't be used here: it must be https, on a public address.", "config.base_url")
+            own = _own_service_address(base_url)
+            if own:
+                raise uhp_error(422, "memory_invalid", f"That address can't be used: {own}.", "config.base_url")
+        given = str((body.secrets or {}).get("api_key") or "").strip()
+        if not given and "api_key" in refs:
+            given = await _vault_get(org, refs["api_key"]) or ""
+        refusal = await _MEMORY_CHECKS[plug_type](given, base_url)
+        if refusal:
+            raise uhp_error(422, "memory_invalid", refusal, "secrets.api_key" if given else "config.base_url")
     for field, value in (body.secrets or {}).items():
         if field not in form["secrets"]:
             raise uhp_error(400, "invalid_input", f"{plug_type} takes no secret {field!r}.", "secrets")
@@ -17628,7 +17804,8 @@ async def put_plug(plug_type: str, body: PlugBody, request: Request) -> dict:
         ref = f"plug-{_plug_safe(workspace)}-{_plug_safe(plug_type)}-{_plug_safe(field)}"
         await _vault_put_credential(org, ref, value.strip(), "secrets")
         refs[field] = ref
-    missing = [f for f in form["secrets"] if f not in refs]
+    missing = [f for f in form["secrets"] if f not in refs and f not in form.get("optional", ())]
+    missing += [f for f in form.get("requires", ()) if not str(config.get(f) or "").strip()]
     status = "disabled" if not body.enabled else ("needs_auth" if missing else "connected")
     attention = ""
     if plug_type == plugs_plane.MICROSOFT365 and body.enabled and not missing:
@@ -19616,7 +19793,7 @@ class HarnessBody(BaseModel):
 
 # What a harness comes back with (_harness_out) that is not written through these fields, plus the
 # protocol's `object` (Harnesses §2), so a harness read from any UHP server can be sent back.
-_HARNESS_READ_ONLY = frozenset({"id", "object", "kit", "notLoaded", "member", "workspace", "createdAt"})
+_HARNESS_READ_ONLY = frozenset({"id", "object", "kit", "notLoaded", "member", "workspace", "createdAt", "memories"})
 
 
 def _harness_field_names() -> frozenset:
@@ -19631,7 +19808,7 @@ def _harness_field_names() -> frozenset:
     return frozenset(names)
 
 
-def _harness_out(v: dict) -> dict:
+def _harness_out(v: dict, grants: dict[str, int] | None = None) -> dict:
     """VG vertex (snake_case, JSON-string lists) -> the frontend CustomHarness shape (camelCase)."""
     def _parse(s):
         try:
@@ -19650,9 +19827,10 @@ def _harness_out(v: dict) -> dict:
             "baseLabel": v.get("base_label") or v.get("base"),
             "defaultModel": v.get("default_model") or "",
             "systemPrompt": v.get("system_prompt") or "",
-            # Verbatim: what a client reads is what is stored, for every entry, which is the
-            # ordinary contract and the only one there now is.
-            "mcpServers": _mcp_list(v), "skills": _parse(v.get("skills")),
+            # Verbatim: what a client reads is what is stored, for every entry but the one that gives an
+            # agent its memories. That one is the server's (_is_memories_entry): nothing a client does
+            # with it could be right, and its address is nobody's business.
+            "mcpServers": [s for s in _mcp_list(v) if not _is_memories_entry(s)], "skills": _parse(v.get("skills")),
             # Derived by the server from each package on every write, never copied into the two
             # lists above: a client that PUTs back what it read cannot install a plugin twice.
             "plugins": _plugins_of(v),
@@ -19670,6 +19848,9 @@ def _harness_out(v: dict) -> dict:
             "calibrates": str(v.get("calibrates") or ""),
             "environment": str(v.get("environment") or ""),
             "member": v.get("member") or "", "workspace": v.get("workspace") or "", "createdAt": created,
+            # how many memories its agent holds, from its grants (memory_plane.grant_counts), where a read asked:
+            # its record doesn't say, and a list can't ask once per row
+            **({"memories": {"count": grants.get(_agent(str(v.get("id") or "")), 0)}} if grants is not None else {}),
             # where it came from (HarnessBody.source), when whatever made it said; a harness made
             # without one has no key, so "said nothing" and "said this" never read alike
             **({"source": str(v["source"])} if v.get("source") else {})}
@@ -19779,8 +19960,22 @@ async def _mcp_seal_literals(org: str, servers: list[dict]) -> list[dict]:
     return out
 
 
-async def _mcp_servers_stored(org: str, incoming: list | None) -> list[dict]:
-    return await _mcp_seal_literals(org, _mcp_servers_prepare(incoming))
+async def _mcp_servers_stored(org: str, incoming: list | None, cur: dict | None = None) -> list[dict]:
+    """What a write of a harness's servers stores. `cur` is the harness as it stands; a new one has none.
+
+    The rule that a server the caller didn't send is gone has one exception, and it isn't a kept-if-omitted
+    list: the entry that gives an agent its memories isn't the caller's. It follows from the agent's grants,
+    so it's taken from what's stored, whatever a client sends in its place, and nothing a client sends can
+    become it. A copy of a harness made by reading one and writing another brings nothing of it along."""
+    kept = [s for s in _mcp_list(cur) if _is_memories_entry(s)]
+    sent = [s for s in incoming or [] if not (isinstance(s, dict) and _is_memories_entry(s))]
+    names = {_mcp_name(str(s.get("name") or "mcp")) for s in kept}
+    for s in sent:
+        if isinstance(s, dict) and _mcp_name(str(s.get("name") or "mcp")) in names:
+            raise uhp_error(400, "invalid_mcp_server",
+                            f"'{s.get('name')}' is the name this agent's memories go by. Give this server another name.",
+                            "mcp_servers")
+    return await _mcp_seal_literals(org, _mcp_servers_prepare(sent + kept))
 
 
 async def _skills_prepare(skills: list | None) -> list:
@@ -19839,6 +20034,345 @@ async def _skill_bundle_files(sk: dict) -> list:
     if not files and sk.get("content"):
         files = [{"path": "SKILL.md", "content": sk["content"]}]
     return files or []
+
+
+# ── Memories (the Harness Memories sub-protocol) ──────────────────────────────────────────────
+# The tree, the grants and the provider seam are memory_plane's; the routes are memory_routes'.
+# Bound here because the routes need this process's principal resolver and error envelope.
+async def _memory_file_meta(org: str, file_id: str) -> dict | None:
+    """An uploaded file as a memory record may name it: this org's, with the name, media type and
+    size the file store holds (Files §5: another principal's file is not found)."""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{1,80}", file_id or ""):
+        return None
+    raw = await _blob_get(f"uploads/{file_id}.meta", kb=RESP_BLOB_KB)
+    if raw is None:
+        return None
+    try:
+        meta = json.loads(raw)
+    except ValueError:
+        return None
+    if str(meta.get("org") or "") not in ("", org):
+        return None
+    data = await _blob_get(f"uploads/{file_id}", kb=RESP_BLOB_KB)
+    if data is None:
+        return None
+    return {"name": str(meta.get("filename") or ""), "media_type": str(meta.get("media_type") or "application/octet-stream"),
+            "bytes": len(data)}
+
+
+async def _memory_file_bytes(org: str, file_id: str) -> bytes | None:
+    return await _blob_get(f"uploads/{file_id}", kb=RESP_BLOB_KB) if await _memory_file_meta(org, file_id) else None
+
+
+memory_routes.install(app, _principal, uhp_error, BACKING.graph, _memory_file_meta, _memory_file_bytes,
+                      on_grant=lambda org, principal: _memories_on_grant(org, principal), workspace_of=_plug_workspace)
+memory_plane.PROVIDERS.update({"mem0": memory_mem0.Mem0(), "graphiti": memory_graphiti.Graphiti(),
+                               "hindsight": memory_hindsight.Hindsight(), "reme": memory_reme.ReMe()})
+_MEMORY_CHECKS = {"mem0": memory_mem0.check, "graphiti": memory_graphiti.check,
+                  "hindsight": memory_hindsight.check, "reme": memory_reme.check}
+
+
+def _own_service_address(url: str) -> str:
+    """Why this address is this instance's own gateway or runner, which is not a memory service."""
+    try:
+        u = urllib.parse.urlsplit(url)
+    except ValueError:
+        return "it is not a valid address"
+    if (u.hostname or "") in ("localhost", "127.0.0.1", "::1") and (u.port or 0) in (3000, 8080, 8081):
+        return "it is this instance itself"
+    return ""
+
+
+async def _memory_credentials(org: str, workspace: str, provider: str) -> dict | None:
+    """A memory provider's credential for one workspace, from the plug registry: the workspace's
+    own account, resolved at the moment of the call and never handed to an agent."""
+    status, rec = await _plug_lookup(org, workspace, provider)
+    if status != "connected" or not rec:
+        return None
+    return {**(rec.get("config") or {}), **await _plug_fields(rec)}
+
+
+memory_plane.CREDENTIALS = _memory_credentials
+
+# A harness reaches its memories through one more server this gateway hosts, like its plugs: the
+# entry's record names the memories and how the agent was attached to each; the agent acts as the
+# principal `member:<harness id>`: an agent is a member like a person, and its reach is its grants.
+_MEMORIES_SERVER = "memories"
+_MEMORIES_ENTRY = {"name": "memories", "id": "mcp.memories"}
+
+
+def _is_memories_entry(s: dict) -> bool:
+    """The server entry that gives an agent its memories: by its id, or by saying it's our memories server."""
+    return str(s.get("id") or "") == _MEMORIES_ENTRY["id"] or _hosted_server_name(s) == _MEMORIES_SERVER
+
+
+def _memories_go_with(hv: dict | None, org: str) -> bool:
+    """Whether a turn run in `org` on this harness is given the agent's memories. ONLY when the
+    harness is that organization's own.
+
+    Today no other turn exists: a harness runs only for its own organization (_turn_harness_owned).
+    This is the same statement made about MEMORY, where it has to keep holding if runs are ever
+    opened to others again (callers running a harness whose owner pays is where that came from).
+    A run may be shared; what the owner's organization knows may not: the agent reads and writes
+    it, and whoever drives the agent can have it recite that, or write into it. So this is read
+    wherever an agent's memories are resolved, the credential minted for the turn, the tool server
+    behind that credential, the settings the instructions and the recording read, the task's
+    memory, and is not left to the one gate in front of the turn."""
+    return bool(hv) and bool(org) and str(hv.get("org") or "") == org
+
+
+def _agent(hid: str) -> str:
+    """Who a harness's agent is to the access model: a member, like the people it works beside.
+    Here its member id is the harness's own id."""
+    return f"member:{hid}"
+
+
+async def _memories_settings(hid: str, org: str, hv: dict | None) -> dict | None:
+    """The harness's memory settings (where its agent writes by default, whether its turns are
+    recorded), or None when it has no memories server or the server is switched off."""
+    if not hid or not _memories_go_with(hv, org):
+        return None
+    try:
+        await _hosted_resolve(_MEMORIES_SERVER, hid, org, _mcp_list(hv), entry_id=_MEMORIES_ENTRY["id"], check_enabled=True)
+    except HTTPException:
+        return None
+    # The two settings are the harness's own properties. They are not in the server's entry, so a
+    # save of the harness that leaves that entry out cannot lose them.
+    return {"default_memory_id": str(hv.get("memory_default") or ""), "observe": str(hv.get("memory_observe") or "1") != "0"}
+
+
+async def _harness_memories(hid: str, org: str, hv: dict | None, sid: str = "") -> list[dict]:
+    """The memories a harness's agent holds, from ONE source: its grants. One entry per memory it
+    was granted, `access` read off the privileges it holds there. Nothing is attached and nothing
+    is narrowed here; the harness adds only where the agent writes by default. With a session, the
+    memory its task named in metadata.memory is that session's default when the agent may write it."""
+    rec = await _memories_settings(hid, org, hv)
+    if rec is None:
+        return []
+    who = _agent(hid)
+
+    async def held(mid: str) -> list[str]:
+        m = await memory_plane._load(org, mid) if mid else None
+        return await memory_plane.effective(org, m, [who]) if m else []
+
+    entries = [{"memory_id": str(m["id"]), "access": "write" if "write" in privs else "read", "default": False}
+               for m, privs in await memory_plane.granted(org, who)]
+    default = str(rec.get("default_memory_id") or "")
+    task = str(((await _vertex_get(sid)) or {}).get("memory") or "") if sid else ""
+    if task and "write" in await held(task):
+        default = task                       # this session writes where its task said
+    for mid in (task, default):
+        privs = await held(mid)
+        if "read" in privs and mid not in [e["memory_id"] for e in entries]:
+            entries.append({"memory_id": mid, "access": "write" if "write" in privs else "read", "default": False})
+    for e in entries:
+        e["default"] = e["memory_id"] == default and e["access"] == "write"
+    return entries
+
+
+async def _task_memory_for_turn(org: str, hid: str, body) -> str:
+    """The memory a task names in `metadata.memory`, or ''. The agent must hold a privilege on it:
+    a memory it holds nothing on is refused exactly as one that does not exist, before the task starts."""
+    mid = str((getattr(body, "metadata", None) or {}).get("memory") or "").strip()
+    if not mid:
+        return ""
+    m = await memory_plane._load(org, mid) if hid and _memories_go_with(await _harness_vertex(hid), org) else None
+    if not m or "read" not in await memory_plane.effective(org, m, [_agent(hid)]):
+        raise uhp_error(404, "memory_not_found", "No memory with that id.", "metadata.memory")
+    return mid
+
+
+async def _memories_ensure(org: str, hid: str, v: dict, patch: dict | None = None) -> dict:
+    """Give the harness its memories server (the tools its agent reaches its memories through) and
+    keep its settings. Idempotent: called when the agent is granted a memory and when its settings
+    are written."""
+    origins = _own_origins()
+    if not origins:
+        raise uhp_error(501, "gateway_address_not_configured",
+                        "This server has no address an agent could reach it on — set HARNESS_PUBLIC_BASE_URL.", "memories")
+    cur = _mcp_list(v)
+    others = [x for x in cur if not _is_memories_entry(x)]
+    # this harness's own record, never the one an entry names: an entry copied from another harness names that
+    # harness's, and re-addressing it here would take the first agent's memories away from it
+    key = _hosted_secret_key(hid, _MEMORIES_ENTRY["id"])
+    await _hosted_put_record(org, key, {"server": _MEMORIES_SERVER, "harness": hid, "updated_at": int(time.time() * 1000)},
+                             secret=False, param="memories")
+    # two servers of one name are one server to the agent, and the last wins: a server a person already called
+    # memories keeps its name, and this one takes the next
+    taken = {_mcp_name(str(x.get("name") or "mcp")) for x in others}
+    taken |= {_mcp_name(str(x.get("name") or "mcp")) for p in _plugins_of(v or {}) for x in (p.get("mcpServers") or []) if isinstance(x, dict)}
+    name, n = _MEMORIES_ENTRY["name"], 1
+    while _mcp_name(name) in taken:
+        n += 1
+        name = f"{_MEMORIES_ENTRY['name']}_{n}"
+    # exactly this, whatever it was left as: nothing else should be able to change it, and it has no switch to find
+    want = {"id": _MEMORIES_ENTRY["id"], "name": name, "url": origins[0] + _HOSTED_MCP_PREFIX + _MEMORIES_SERVER,
+            "transport": "http", "auth": f"vault:{key}", "enabled": True}
+    if cur != [*others, want]:
+        await _mcp_write(hid, [*others, want])
+    props = {}
+    if "default_memory_id" in (patch or {}):
+        props["memory_default"] = str(patch["default_memory_id"] or "")
+    if "observe" in (patch or {}):
+        props["memory_observe"] = "1" if patch["observe"] else "0"
+    if props:
+        await _vg_upsert("Harness", hid, props)
+    return {}
+
+
+async def _memories_on_grant(org: str, principal: str) -> None:
+    """A grant was written. When it names an agent of this org, the agent gets its memory tools."""
+    if not principal.startswith("member:"):
+        return
+    hid = principal.split(":", 1)[1]
+    v = await _harness_vertex(hid)
+    if v and v.get("org") == org and str(v.get("deleted")) not in ("1", "true", "True"):
+        await _memories_ensure(org, hid, await _mcp_migrate(org, hid, v))
+
+
+async def _harness_memories_out(hid: str, org: str, v: dict) -> dict:
+    who = _agent(hid)
+    default = str(v.get("memory_default") or "")
+    if default:                      # a default the agent may no longer write is no default: said, not kept up
+        m = await memory_plane._load(org, default)
+        if not m or "write" not in await memory_plane.effective(org, m, [who]):
+            default = ""
+    rec = {"observe": str(v.get("memory_observe") or "1") != "0"}
+    data = [{**memory_plane._brief(await memory_plane.out(org, m, [who], privs)), "privileges": privs,
+             "default": str(m["id"]) == default} for m, privs in await memory_plane.granted(org, who)]
+    return {"object": "harness.memories", "principal": who, "default_memory_id": default or None,
+            "observe": rec.get("observe", True) is not False, "data": data}
+
+
+@app.get("/v1/harnesses/{hid}/memories")
+async def harness_memories(hid: str, request: Request) -> dict:
+    """What this harness's agent may reach, read off its grants, and its two settings."""
+    caller = await _pub_principal(request)
+    org = str(caller.get("org") or "")
+    return await _harness_memories_out(hid, org, await _harness_for_route(hid, caller))
+
+
+@app.put("/v1/harnesses/{hid}/memories")
+async def set_harness_memories(hid: str, request: Request) -> dict:
+    """The harness's memory settings: where its agent writes by default, and whether each finished
+    turn is recorded there. Access is not set here. An agent is a member: it reaches what it is
+    granted, and it is granted where everyone is, on the memory."""
+    p = await _principal(request)
+    org = p.get("org", "")
+    if not org:
+        raise uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    v = await _harness_for_route(hid, p)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    patch: dict = {}
+    if "default_memory_id" in body:
+        mid = str(body.get("default_memory_id") or "")
+        if mid:
+            m = await memory_plane._load(org, mid)
+            if not m or not await memory_plane.effective(org, m, memory_routes.principals_of(p)):
+                raise uhp_error(404, "memory_not_found", "No memory with that id.", "default_memory_id")
+            if "write" not in await memory_plane.effective(org, m, [_agent(hid)]):
+                raise uhp_error(422, "memory_invalid",
+                                f"This agent may not write that memory. Grant `{_agent(hid)}` write on it first.", "default_memory_id")
+        patch["default_memory_id"] = mid
+    if "observe" in body:
+        if not isinstance(body["observe"], bool):
+            raise uhp_error(422, "memory_invalid", "`observe` is true or false.", "observe")
+        patch["observe"] = body["observe"]
+    await _memories_ensure(org, hid, v, patch)
+    return await _harness_memories_out(hid, org, await _harness_for_route(hid, p))
+
+
+@app.post("/v1/mcp/memories")
+async def memories_mcp(request: Request):
+    """The MCP endpoint the agent's CLI talks to for its memories: stateless, the same shape as
+    the plugs server's. The token names the harness and the session; the record names the memories."""
+    claims = _verify_hosted_cred(_broker_token(request))
+    if not claims:
+        raise HTTPException(401, "invalid or expired turn credential")
+    hid, sid, key = claims
+    try:
+        req = json.loads(await request.body() or b"{}")
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "malformed JSON-RPC request") from None
+    method, rid, params = req.get("method") or "", req.get("id"), req.get("params") or {}
+    if method == "initialize":
+        return _jsonrpc_result(rid, {"protocolVersion": str(params.get("protocolVersion") or "2024-11-05"),
+                                     "capabilities": {"tools": {}}, "serverInfo": {"name": "memories", "version": "1"}})
+    if rid is None:
+        return Response(status_code=202)
+    if method not in ("tools/list", "tools/call"):
+        return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {method}"}})
+    v = await _harness_vertex(hid)
+    if v and str(v.get("deleted")) in ("1", "true", "True"):
+        v = None
+    org = str((v or {}).get("org") or "")
+    try:
+        # the session this credential was minted for is the turn: it must be one of the harness's
+        # own organization (_memories_go_with), whatever minted the credential
+        if not _memories_go_with(v, str(((await _vertex_get(sid)) or {}).get("tenant") or "")):
+            raise HTTPException(404, "not this organization's agent")
+        await _hosted_resolve(_MEMORIES_SERVER, hid, org, _mcp_list(v), key=key, check_enabled=True)
+    except HTTPException:
+        if method == "tools/list":
+            return _jsonrpc_result(rid, {"tools": []})
+        return _jsonrpc_result(rid, _tool_text("This agent holds no memory yet. Someone who manages a memory can share "
+                                               "it with this agent; you cannot do that yourself.", True))
+    entries = await _harness_memories(hid, org, v, sid=sid)       # the harness's, and the one this session's task named
+    seam = memory_local.Local(org, hid, entries)      # the tools speak through a seam; here it is this gateway's own plane
+    if method == "tools/list":
+        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(await seam.entries(), await seam.offers())})
+    args = params.get("arguments") or {}
+    tool = str(params.get("name") or "")
+    text, is_error = await memory_tools.call(seam, tool, args if isinstance(args, dict) else {})
+    if tool in ("memory_revise", "memory_forget") and not is_error:
+        _memory_corrected.add(sid)
+    return _jsonrpc_result(rid, _tool_text(text, is_error))
+
+
+def _translator_answer(tr) -> str:
+    """What the agent answered this turn: every closed message item, and the one still open. The
+    turn's last message is closed by `complete()`, which runs after the turn function returns, so
+    reading the closed items alone gave an observed turn with a question and no answer (on an early
+    candidate of this feature, mem0's event log showed each turn's user message and nothing else)."""
+    parts = [str(c.get("text") or "") for o in tr.output if isinstance(o, dict) and o.get("type") == "message"
+             for c in (o.get("content") or []) if isinstance(c, dict)]
+    if tr.cur and tr.cur.get("kind") == "message":
+        parts.append(str(tr.cur.get("text") or ""))
+    return "\n".join(p for p in parts if p.strip())
+
+
+# Sessions whose agent corrected memory in the turn now running. That turn isn't observed: it is about what
+# must not be kept. A vendor that derives from what was said would learn the old title from "the title is no
+# longer X" and the forgotten thing from the answer that says it was forgotten. Measured on real turns. What
+# the agent wanted kept, it has just said through its tools.
+_memory_corrected: set[str] = set()
+
+
+async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: dict, answer: str) -> None:
+    """After a completed turn: what was asked and what was answered, sent as one episode to the
+    memory the harness writes by default. No model runs here; what the provider derives from it,
+    and when, is the provider's. Best-effort: a memory that cannot take the episode never fails
+    the turn it describes, and a slow one never holds it: the turn doesn't wait for this."""
+    try:
+        if ((await _memories_settings(hid, org, hv)) or {}).get("observe", True) is False:
+            return
+        entries = await _harness_memories(hid, org, hv, sid=sid)
+        mid = next((e["memory_id"] for e in entries if e.get("default")), "")
+        if not mid or not (str(rec.get("user_text") or "").strip() or answer.strip()):
+            return
+        m, _ = await memory_plane.need(org, mid, [_agent(hid)], "write")
+        await (await memory_plane.provider_of(m)).observe(mid, [{
+            "content": [{"type": "text", "role": role, "text": text}
+                        for role, text in (("user", str(rec.get("user_text") or "")), ("assistant", answer)) if text.strip()],
+            "attributes": {"session_id": sid, "model": str(rec.get("model") or ""), "kind": "turn"}}],
+            memory_plane.writer_of(hid, agent=True))
+        print(f"[memories] {sid}: the turn was observed into {mid}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[memories] observe after a turn of {sid} was not taken: {type(e).__name__}: {e}"[:300], flush=True)
 
 
 # ── Environments (UHP 2026-09-28, Environments chapter) ───────────────────────────────────────
@@ -20939,7 +21473,8 @@ async def list_harnesses(org: str, request: Request,
     if _key_scope(p):     # a key held to a workspace lists that workspace, whatever it asks for
         workspace, workspace_default = _key_scope(p), 0
     rows = await _vg_list_by_org("Harness", org)
-    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
+    grants = await memory_plane.grant_counts(org)
+    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r), grants) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
     if workspace:
         items = [i for i in items if _workspace_keep(i.get("workspace") or "", workspace, bool(workspace_default))]
@@ -20950,7 +21485,7 @@ async def list_harnesses(org: str, request: Request,
 @app.get("/v1/orgs/{org}/harnesses/{hid}")
 async def get_harness(org: str, hid: str, request: Request) -> dict:
     v = await _harness_in_reach(await _owned_org(request, org), hid)
-    return _harness_out(await _mcp_migrate(org, hid, v))
+    return _harness_out(await _mcp_migrate(org, hid, v), await memory_plane.grant_counts(org))
 
 
 @app.get("/v1/orgs/{org}/harnesses/{hid}/models")
@@ -21015,7 +21550,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     body.base = str(cur.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(cur.get("default_model") or ""))
     # coalesce-upsert: created_at/org are untouched (only the provided props are set)
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, cur)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _caller)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(cur))
@@ -21025,7 +21560,7 @@ async def update_harness(org: str, hid: str, body: HarnessBody, request: Request
     await _hosted_scrub_removed(org, hid, _mcp_list(cur), body.mcp_servers)
     await _plugs_ensure_required(org, hid)
     v = await _vertex_get(hid)
-    return _harness_out(v or {"id": hid})
+    return _harness_out(v or {"id": hid}, await memory_plane.grant_counts(org))
 
 
 @app.delete("/v1/orgs/{org}/harnesses/{hid}")
@@ -22079,7 +22614,8 @@ async def list_harnesses_public(request: Request) -> dict:
     # org — narrowed to its workspace when the key is workspace-scoped — exactly like the
     # console, so both surfaces always agree.
     rows = await _vg_list_by_org("Harness", org)
-    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r)) for r in rows
+    grants = await memory_plane.grant_counts(org)
+    items = [_harness_out(await _mcp_migrate(org, str(r.get("id") or ""), r), grants) for r in rows
              if str(r.get("deleted")) not in ("1", "true", "True")]
     ws = str(p.get("workspace") or "")
     if ws:
@@ -22604,7 +23140,7 @@ async def get_harness_public(hid: str, request: Request) -> dict:
     _caller = await _pub_principal(request)
     org = _caller["org"]
     v = await _harness_in_reach(_caller, hid)
-    return _harness_out(await _mcp_migrate(org, hid, v))
+    return _harness_out(await _mcp_migrate(org, hid, v), await memory_plane.grant_counts(org))
 
 
 # ── the API, described ────────────────────────────────────────────────────────────────────────
@@ -22830,7 +23366,7 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
                         "base", {"base": v.get("base")})
     body.base = str(v.get("base") or body.base)
     await _require_offered_model(org, body.base, body.default_model, str(v.get("default_model") or ""))
-    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
+    body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers, v)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, _p)
     body.plugins = await _plugins_prepare(body, org, previous=_plugins_of(v))
@@ -22838,7 +23374,11 @@ async def update_harness_public(hid: str, body: HarnessBody, request: Request) -
     # AFTER the write: see update_harness.
     await _hosted_scrub_removed(org, hid, _mcp_list(v), body.mcp_servers)
     await _plugs_ensure_required(org, hid)
-    return _harness_out(await _vertex_get(hid) or {"id": hid})
+    # An agent that holds memories keeps the tools to reach them, whatever list of servers a
+    # client saved: its access is its grants, and a harness save is not a revocation.
+    if await memory_plane.granted(org, _agent(hid)):
+        await _memories_ensure(org, hid, await _vertex_get(hid) or v)
+    return _harness_out(await _vertex_get(hid) or {"id": hid}, await memory_plane.grant_counts(org))
 
 
 @app.delete("/v1/harnesses/{hid}")

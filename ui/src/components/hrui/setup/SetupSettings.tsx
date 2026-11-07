@@ -1,7 +1,7 @@
 'use client';
 // A setup's Settings tab (docs/uxuidesign/console-91: settingsHtml, layerStack, field, partRows,
 // savebarHtml, setDirty). One layer open at a time, listed in Richard's order (2026-10-18):
-// Instructions, Agent harness (the agent harness, then its model), Capabilities, Environment &
+// Instructions, Agent harness (the agent harness, then its model), Capabilities, Memory, Environment &
 // limits. The layers list takes the task list's column and the open layer the task's, each under a
 // 56 px bar (the open layer's carries Save). The layer is in the address (?layer=), so a brick of the
 // Agent stack opens it. Delete setup is the last row: under the layers in the rail, at the foot of the
@@ -48,10 +48,13 @@ import {
 } from './setupParts';
 import { PluginSwitches, pluginLines, type PluginsIn } from './PluginSwitches';
 import { openNewSetup } from '../start/open';
+import { MemoryLayer, memorySummary } from '../memories/MemoryLayer';
+import { getHarnessMemories, type HarnessMemories } from '@/lib/memories';
 import { SkillSheet, skillDraft, skillFiles, skillSlug, splitSkillMd, type SkillDraft } from './SkillSheet';
 import {
   DeleteSetupSheet, EnvPickSheet, PackageSheet, DuplicateSheet,
 } from './settingsSheets';
+import { Markup } from '../Markup';
 
 type Skill = CustomHarness['skills'][number];
 const isOwn = isOwnSkill;
@@ -366,12 +369,16 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
     return hit;
   };
   const capEmpty = (fam: string, say: string) => (
-    <div className="empty-list es cap-empty"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', fam) }} /><span>{say}</span></div>
+    <div className="empty-list es cap-empty"><Markup className="es-art" html={partIcon('empty', fam)} /><span>{say}</span></div>
   );
+  // the Memory layer's line: read here, and again by the layer itself whenever it changes something
+  const [memoryRead, setMemoryRead] = useState<HarnessMemories | null>(null);
+  useEffect(() => { let live = true; getHarnessMemories(id).then((d) => { if (live) setMemoryRead(d); }).catch(() => {}); return () => { live = false; }; }, [id]);
   const SUM: Record<LayerKey, string> = {
     instructions: plural(words, 'word'),
     harness: [r.baseName, c.model, c.thinking ? thinkingLabel(c.thinking) : ''].filter(Boolean).join(' · '),
     caps: addedLine({ plugin: plugCount, skill: countOn(setupSkills(rec, srv, 'added')), tool: countOn(setupTools(draftRec, srv, 'added')) }),
+    memory: memorySummary(memoryRead),
     runtime: [envX?.name || '', c.vars.length ? plural(c.vars.length, 'variable') : '', c.headers.length ? plural(c.headers.length, 'header') : '',
       c.turns ? c.turns + ' steps' : '', c.mins ? c.mins + ' min' : ''].filter(Boolean).join(' · ') || 'Defaults',
   };
@@ -443,6 +450,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
     </>,
     instructions: field('setMd', mdName(rec.base),
       <textarea id="setMd" className="set-in md" rows={14} value={c.agentsMd} onChange={(e) => set('agentsMd', e.target.value)} />),
+    memory: <MemoryLayer hid={id} name={rec.name} onRead={setMemoryRead} />,
     // Capabilities: one tab per kind, in Extensions order. A company's lists get long: each tab shows
     // only its own list, with its one action on the right, and a search field once the list passes six.
     caps: <>
@@ -450,7 +458,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
         <div className="tabs inline cap-tabs" role="tablist" aria-label="Capabilities" onKeyDown={(e) => tabKeys(e, capTabs.map(([k]) => k), capT, pickCap)}>
           {capTabs.map(([k, label, fam]) => (
             <button key={k} type="button" role="tab" aria-selected={k === capT} tabIndex={k === capT ? 0 : -1} className={k === capT ? 'on' : ''} onClick={() => pickCap(k)}>
-              <span className="tab-brick" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('built', fam) }} />{label} <span className="count">{capN[k]}</span>
+              <Markup className="tab-brick" html={partIcon('built', fam)} />{label} <span className="count">{capN[k]}</span>
             </button>
           ))}
         </div>
@@ -647,16 +655,15 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   const pkg = pop?.k === 'pkg' ? pkgs.find((p) => p.name === pop.name) || null : null;
   const mcpEdit = pop?.k === 'mcp' && pop.i != null ? c.mcp[pop.i] || null : null;
 
-  // Delete setup: the settings' last row, a layer row's anatomy, past a hairline and outside the
-  // layers' tablist; red, its name alone (the sheet says what deleting does). Duplicate shares its
-  // row at the right, blue (as on the hosted console; its sheet picks the other agent harness).
-  // Drawn at any width (hrui-console.css): `rail` under the layers, else at the foot of the open
-  // layer.
+  // Delete harness and, under it, Duplicate harness: the settings' last rows, a layer row's anatomy,
+  // past a hairline and outside the layers' tablist. Delete in red, its name alone (the sheet says
+  // what deleting does); Duplicate in blue (its sheet picks the other agent harness). Drawn at any
+  // width (hrui-console.css): `rail` under the layers, else at the foot of the open layer.
   const delRow = (where: 'rail' | 'foot') => (
     <div className="lg-dz" data-where={where}>
-      <button type="button" className="ly-n" aria-haspopup="dialog" onClick={() => setPop({ k: 'del' })}><b>Delete setup</b></button>
+      <button type="button" className="ly-n" aria-haspopup="dialog" onClick={() => setPop({ k: 'del' })}><b>Delete harness</b></button>
       <button type="button" className="ly-n lg-dup" aria-haspopup="dialog" title="Duplicate with another agent harness"
-        onClick={() => setPop({ k: 'dup' })}><b>Duplicate</b></button>
+        onClick={() => setPop({ k: 'dup' })}><b>Duplicate harness</b></button>
     </div>
   );
 

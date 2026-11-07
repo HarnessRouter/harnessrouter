@@ -2,12 +2,12 @@
 // The sheets Settings opens (docs/uxuidesign/console-79: delAgentHtml, popHtml's env picker), plus
 // the ones the design has no drawing for but the setup needs: a copy on another agent harness (the
 // design hands this to its New setup sheet) and an installed plugin package.
+import { isServiceEntry } from './setupParts';
 import Link from 'next/link';
 import { useRef, useState } from 'react';
 import { strToU8, zipSync } from 'fflate';
 import {
-  createCustom, deleteCustom, getPluginFiles, getSkillFiles, offeredOob, oobById, oobDefaultModel, oobModels, modelAvailability, setHarnessPlugs, useModelCatalogRead, PLUGS_ENTRY_ID,
-  type BaseInfo, type CustomHarness, type HarnessPlugin, type HarnessPlugs,
+  createCustom, deleteCustom, getPluginFiles, getSkillFiles, offeredOob, oobById, oobDefaultModel, oobModels, modelAvailability, setHarnessPlugs, useModelCatalogRead, type BaseInfo, type CustomHarness, type HarnessPlugin, type HarnessPlugs,
 } from '@/lib/harness';
 import type { Environment } from '@/lib/environments';
 import { Sheet, SheetTop } from '../Sheet';
@@ -40,7 +40,7 @@ export function DeleteSetupSheet({ h, onClose, onDeleted }: { h: CustomHarness; 
   }
   return (
     <Sheet onClose={onClose} labelledBy="dlh" describedBy="dlp" className="small-sheet del-sheet" alert busy={busy} initialFocus={inRef}>
-      <SheetTop id="dlh" title="Delete setup" onClose={onClose} />
+      <SheetTop id="dlh" title="Delete harness" onClose={onClose} />
       <p className="del-p" id="dlp"><b>{name || 'This setup'}</b> stops working at once, and tasks sent to its Harness ID are refused. Its past tasks stay readable. It is removed for good after 30 days.</p>
       <label className="del-l nm" htmlFor="delConfirm">Type <b>{want}</b> to confirm.</label>
       <input id="delConfirm" ref={inRef} className="set-in" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
@@ -158,7 +158,7 @@ export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
   const notes = [
     !takesSkills && ownSkills.length ? `${o?.name || base} takes no skills, so the copy has none.` : '',
     !takesEnv && h.environment ? `${o?.name || base} can’t open an environment, so the copy has none.` : '',
-    (h.mcpServers || []).some((m) => m.id !== PLUGS_ENTRY_ID) || Object.keys(h.env || {}).length
+    (h.mcpServers || []).some((m) => !isServiceEntry(m)) || Object.keys(h.env || {}).length
       ? 'Its MCP servers and environment variables are not copied: add them in the copy’s Settings.' : '',
   ].filter(Boolean);
 
@@ -191,7 +191,7 @@ export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
 
   return (
     <Sheet onClose={onClose} labelledBy="duh" className="small-sheet" busy={busy}>
-      <SheetTop id="duh" title="Duplicate setup" sub="Same skills, plugins and instructions, new Harness ID." onClose={onClose} />
+      <SheetTop id="duh" title="Duplicate harness" sub="Same skills, plugins and instructions, new Harness ID." onClose={onClose} />
       <div className="set-f"><label htmlFor="duName">Name</label>
         <input id="duName" className="set-in" value={name} onChange={(e) => setName(e.target.value)} /></div>
       <div className="set-f"><label htmlFor="duBase">Agent harness</label>

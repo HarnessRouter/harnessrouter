@@ -16,6 +16,7 @@ import type { SetupRow } from '../setups';
 import { pluginName } from '../setup/setupParts';
 import { slabIcon } from './art';
 import type { Composed, Part } from './compose';
+import { Markup } from '../Markup';
 
 const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>';
 const STAGGER_MS = 70;
@@ -79,7 +80,7 @@ function Chip({ fam, lab, name, tip, look, delay, note, still }: { fam: string; 
   const html = partIcon(on ? 'built' : 'empty', fam) + (on ? '<span class="bs-ok">' + CHECK_SVG + '</span>' : '');
   return (
     <div className={`bs-t ${look}${pop ? ' pop' : ''}`} style={pop && delay ? { animationDelay: `${delay}ms` } : undefined} title={tip}>
-      <span className="bs-c" dangerouslySetInnerHTML={{ __html: html }} />
+      <Markup className="bs-c" html={html} />
       <span className="bs-x">{note || lab ? <small>{note || lab}</small> : null}<b>{name}</b></span>
     </div>
   );
@@ -134,8 +135,8 @@ export function Assembly({ s }: { s: AssemblyState }) {
     <div className="bs-wrap"><section className={`bs bs-compact bs-save ${s.done ? 'done' : 'building'}`} aria-label="Your setup">
       <div className="bs-h">
         <span className="bs-ic" aria-hidden="true">
-          <span style={{ display: 'block' }} dangerouslySetInnerHTML={{ __html: slabIcon() }} />
-          {s.done ? <span className="bs-done" dangerouslySetInnerHTML={{ __html: CHECK_SVG }} /> : null}
+          <Markup style={{ display: 'block' }} html={slabIcon()} />
+          {s.done ? <Markup className="bs-done" html={CHECK_SVG} /> : null}
         </span>
         <span className="bs-tt" role="status"><span className="bs-k">{cfg.name}</span><b>{s.done ? 'Setup saved.' : 'Saving your setup…'}</b></span>
       </div>

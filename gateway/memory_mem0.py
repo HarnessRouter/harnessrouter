@@ -1,0 +1,794 @@
+"""mem0 as a memory provider: its Platform API, and the open-source REST server when the connection
+names an address (Mem0Server, at the end of this file; each mapping there was measured the same way).
+
+Every shape here was read off the live API on 2026-10-04, with a workspace's own key, and the
+adapter claims only what that showed:
+
+  one memory = one mem0 `user_id` (the memory's id). mem0 has no container to put a memory in, so
+      the isolation is this adapter's: every search and listing carries the id as a filter, and a
+      record fetched by id is refused unless mem0 says it belongs to this memory. `enforced_filter`.
+  remember = POST /v3/memories/add/ with infer=false: stored as stated, answered at once with its id.
+  observe  = the same call with infer=true: mem0 extracts facts in the background and answers with
+      an event id. It does NOT keep the episode as a record: what remains is the facts it derived
+      (each carries the metadata sent), so `observe` answers a job, and the job's records are facts.
+  recall   = POST /v3/memories/search/: semantic, BM25 and entity matching fused by mem0 into one
+      score, with the parts in `score_breakdown`. Words cannot be asked for on their own, so `text`
+      alone is searched as the query and kept only where BM25 matched. Metadata filters are
+      equality only (`in` is refused: "Unsupported metadata operator"); anything else is applied
+      here, after ranking, and said in `degraded`. mem0 never says "I do not know": no abstention.
+  revise   = PUT /v1/memories/{id}/ with `text`: changed in place, and mem0 keeps the change in the
+      record's history (old and new). Versions are read from that history.
+  forget   = PUT with an `expiration_date` in the past: hidden from search and listing, still
+      stored, still in history. That is mem0's own soft removal.
+  erase    = DELETE. The memory is gone from search, listing and get, and its HISTORY IS STILL
+      SERVED by id, original input included, even after the whole user is deleted (measured). So
+      every erased id is reported `unreachable`: the content can still be read from mem0.
+  content = text only. A record's text parts are stored as one memory; a file part is refused by the
+      gateway before it reaches here, because mem0 is declared to keep `text/*` and nothing else.
+  no `as_of` on recall or list (a single record's past is read from its history), no named or free
+      queries, no extension types, no files, no consolidation the caller can start or read.
+
+What this adapter adds to a mem0 memory is in its metadata under `hr_`: the record type, the writer
+the gateway stamped, references, validity, the version count.
+"""
+from __future__ import annotations
+
+import asyncio
+import datetime as _dt
+import json
+import time
+
+import httpx
+
+import memory_plane as mp
+
+API = "https://api.mem0.ai"
+TIMEOUT_S = 45
+# Tests set an httpx transport here so every call is exercised without an account.
+transport: httpx.BaseTransport | None = None
+_RESERVED = "hr_"
+
+
+def _utc(ts) -> str | None:
+    """mem0 answers timestamps in more than one zone and precision; one form leaves here."""
+    if not ts:
+        return None
+    try:
+        d = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return str(ts)
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=_dt.timezone.utc)
+    return d.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{d.microsecond // 1000:03d}Z"
+
+
+def _today() -> _dt.date:
+    return _dt.datetime.now(_dt.timezone.utc).date()
+
+
+class Mem0Unavailable(mp.MemoryError):
+    def __init__(self, why: str):
+        super().__init__(502, "memory_unavailable", f"mem0 did not answer: {why}"[:300])
+
+
+async def check(api_key: str, base_url: str = "") -> str:
+    """'' when mem0 accepts the key, else why not, in a sentence for the person connecting it."""
+    if base_url:
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+                r = await c.get(base_url.rstrip("/") + "/configure", headers={"X-API-Key": api_key} if api_key else {})
+        except httpx.HTTPError as e:
+            return f"mem0 could not be reached at that address: {type(e).__name__}."
+        return "" if r.status_code == 200 else f"mem0 refused the connection (HTTP {r.status_code})."
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+            r = await c.get(API + "/v1/ping/", headers={"Authorization": f"Token {api_key}"})
+    except httpx.HTTPError as e:
+        return f"mem0 could not be reached: {type(e).__name__}."
+    return "" if r.status_code == 200 else f"mem0 refused the key (HTTP {r.status_code})."
+
+
+def _split(text: str, titled: bool) -> tuple[str, str]:
+    """(title, body) of a mem0 memory: its first line is the title when the record was given one."""
+    if not titled:
+        return "", text
+    head, _, rest = text.partition("\n")
+    return head.strip(), rest.strip()
+
+
+class Mem0(mp.Provider):
+    id = "mem0"
+
+    def __init__(self, api_key: str = ""):
+        self.key = api_key
+        self._counts: dict[str, tuple[float, int]] = {}
+
+# What mem0 itself makes and how it links it: the part of a memory's schema nobody sets. The console draws it locked
+# beside what a person can set; record types and reference rels as this adapter answers them.
+    BUILTIN = {
+        "types": [
+            # mem0 2.x links each fact to the names, titles and topics in it (an entity store, `linked_memory_ids`) and
+            # boosts a search by them, but no route serves that store, and it is built only where spaCy is installed
+            # (the server image as shipped has none). So nothing here can read it, and it isn't drawn.
+            {"name": "fact", "description": "A short fact Mem0 drew from a conversation. Mem0 links facts that name the same person or thing inside itself, to rank searches, and doesn't hand those links out."},
+        ],
+        "relations": [],
+    }
+
+    def capabilities(self) -> dict:
+        return {"id": self.id, "isolation": "enforced_filter", "derivation": "write_time",
+                "observe": {"keeps_episodes": False, "answers": "job"},
+                # mem0 links entities inside itself to rank (and only with spaCy installed), and no route
+                # serves them: an entity is here only when someone states one
+                "graph": {"entities": "stated"},
+                "recall": {"signals": ["query", "text", "filters"], "abstain": False,
+                           "filters": {"native": ["eq on type and attributes.*", "gte/lte/gt/lt on time.written_at"],
+                                       "applied_after_ranking": "every other filter"}},
+                "history": {"content": "versions", "structure": "none"}, "as_of": "one record",
+                "revise": "native", "forget": "native", "erase": {"unreachable": "reported"},
+                "prime": True, "consolidate": False, "queries": {"named": False, "free": None},
+                "types": False, "schema": {"mode": "none", "builtin": self.BUILTIN}, "content": {"media": ["text/*"], "describes": []}}
+
+    async def bind(self, org: str, workspace: str) -> "Mem0":
+        fields = await mp.CREDENTIALS(org, workspace, self.id) if mp.CREDENTIALS else None
+        key = str((fields or {}).get("api_key") or "")
+        base = str((fields or {}).get("base_url") or "").strip().rstrip("/")
+        if base:
+            return Mem0Server(key, base)
+        if not key:
+            raise mp.MemoryError(503, "memory_unavailable",
+                                 "mem0 is not connected for this workspace: connect it with its API key.")
+        return Mem0(key) if key != self.key else self
+
+    # ── the wire ──────────────────────────────────────────────────────────────────────────────
+    async def _call(self, method: str, path: str, *, body=None, params=None, ok=(200,)) -> httpx.Response:
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+                r = await c.request(method, API + mp.vendor_path(path), json=body, params=params,
+                                    headers={"Authorization": f"Token {self.key}", "Accept": "application/json"})
+        except httpx.HTTPError as e:
+            raise Mem0Unavailable(type(e).__name__)
+        if r.status_code in ok or r.status_code == 404:
+            return r
+        if r.status_code in (401, 403):
+            raise mp.MemoryError(503, "memory_unavailable", "mem0 refused this workspace's key: reconnect it.")
+        raise Mem0Unavailable(f"HTTP {r.status_code} {r.text[:160]}")
+
+    # ── one shape in, one shape out ───────────────────────────────────────────────────────────
+    @staticmethod
+    def _meta(record: dict, writer: dict, version: int = 1) -> dict:
+        """The protocol's fields a mem0 memory has no place for, kept in its metadata."""
+        m = {k: v for k, v in (record.get("attributes") or {}).items() if not str(k).startswith(_RESERVED)}
+        # mem0's listing gives metadata back as text (true reads "True", 15 reads "15") where a read by id doesn't:
+        # the plain keys are what it filters on, and this is what a record's attributes are read from.
+        m[_RESERVED + "attrs"] = json.dumps(m, separators=(",", ":"))
+        m[_RESERVED + "type"] = record.get("type") or "fact"
+        if record.get("title"):
+            m[_RESERVED + "title"] = "1"        # the memory's first line is the record's title
+        m[_RESERVED + "version"] = version
+        m[_RESERVED + "writer_kind"], m[_RESERVED + "writer_id"] = writer.get("kind") or "", writer.get("id") or ""
+        if writer.get("type"):
+            m[_RESERVED + "writer_type"] = writer["type"]
+        if record.get("references"):
+            m[_RESERVED + "refs"] = json.dumps(record["references"], separators=(",", ":"))
+        for k in ("valid_from", "valid_to"):
+            if (record.get("time") or {}).get(k):
+                m[_RESERVED + k] = record["time"][k]
+        return m
+
+    @staticmethod
+    def _out(item: dict) -> dict:
+        meta = dict(item.get("metadata") or {})
+        exp = item.get("expiration_date")
+        gone = bool(exp) and str(exp)[:10] < _today().isoformat()
+        try:
+            refs = json.loads(meta.get(_RESERVED + "refs") or "[]")
+        except ValueError:
+            refs = []
+        writer = {"kind": meta.get(_RESERVED + "writer_kind") or "provider", "id": meta.get(_RESERVED + "writer_id") or "mem0"}
+        if meta.get(_RESERVED + "writer_type"):
+            writer["type"] = meta[_RESERVED + "writer_type"]
+        if meta.get(_RESERVED + "observed_by"):
+            writer = {"kind": "provider", "id": "mem0", "on_behalf_of": meta[_RESERVED + "observed_by"]}
+        title, body = _split(item.get("memory") or "", bool(meta.get(_RESERVED + "title")))
+        try:
+            attrs = json.loads(meta[_RESERVED + "attrs"])
+        except (KeyError, TypeError, ValueError):
+            attrs = {k: v for k, v in meta.items() if not str(k).startswith(_RESERVED)}    # what mem0 derived carries only what it was sent
+        return {"id": str(item["id"]), "type": meta.get(_RESERVED + "type") or "fact", "title": title,
+                "content": [{"type": "text", "text": body}] if body else [],
+                "attributes": attrs,
+                "references": refs if isinstance(refs, list) else [],
+                "version": int(meta.get(_RESERVED + "version") or 1), "status": "forgotten" if gone else "active",
+                "supersedes": None,
+                "time": {"valid_from": meta.get(_RESERVED + "valid_from"), "valid_to": meta.get(_RESERVED + "valid_to"),
+                         "written_at": _utc(item.get("updated_at") or item.get("created_at")),
+                         "invalidated_at": _utc(str(exp) + "T23:59:59+00:00") if gone else None},
+                "written_by": writer}
+
+    async def _owned(self, mid: str, rid: str) -> dict | None:
+        """The mem0 memory with this id, if it is this memory's. The id is mem0's and global: one
+        learned in another memory must find nothing here."""
+        r = await self._call("GET", f"/v1/memories/{rid}/")
+        if r.status_code != 200:
+            return None
+        item = r.json()
+        return item if str(item.get("user_id") or "") == mid else None
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────────────────────
+    async def drop(self, mid: str) -> None:
+        await self._call("DELETE", "/v1/memories/", params={"user_id": mid})
+        self._counts.pop(mid, None)
+
+    async def count(self, mid: str):
+        hit = self._counts.get(mid)
+        if hit and time.time() - hit[0] < 30:
+            return hit[1]
+        r = await self._call("POST", "/v3/memories/", body={"filters": {"user_id": mid}}, params={"page": 1, "page_size": 1})
+        n = int((r.json() or {}).get("count") or 0) if r.status_code == 200 else None
+        if n is not None:
+            self._counts[mid] = (time.time(), n)
+        return n
+
+    # ── writes ────────────────────────────────────────────────────────────────────────────────
+    async def remember(self, mid, record, writer):
+        text = mp.said(record)              # mem0 has one text per memory: the title is its first line
+        r = await self._call("POST", "/v3/memories/add/", body={
+            "user_id": mid, "infer": False, "messages": [{"role": "user", "content": text}],
+            "metadata": self._meta(record, writer)})
+        made = (r.json() or {}).get("results") or []
+        if r.status_code != 200 or not made:
+            raise Mem0Unavailable("the memory was not stored")
+        self._counts.pop(mid, None)
+        return self._out((await self._owned(mid, str(made[0]["id"]))) or
+                         {"id": made[0]["id"], "memory": text, "metadata": self._meta(record, writer)})
+
+    async def observe(self, mid, episodes, writer):
+        """One add per episode, inferred. mem0 answers before it has extracted anything, so this
+        answers a job; with several episodes the job id names every event."""
+        events = []
+        for e in episodes:
+            # each text part is one message, under the role it carries (mem0 takes user, assistant, system)
+            msgs = [{"role": p.get("role") if p.get("role") in ("user", "assistant", "system") else "user", "content": p["text"]}
+                    for p in e.get("content") or [] if p.get("text")]
+            meta = self._meta({"type": "fact", "attributes": e.get("attributes") or {}}, {"kind": "provider", "id": "mem0"})
+            meta[_RESERVED + "observed_by"] = f"{writer.get('kind')}:{writer.get('id')}"
+            r = await self._call("POST", "/v3/memories/add/", body={"user_id": mid, "messages": msgs, "metadata": meta})
+            ev = (r.json() or {}).get("event_id") if r.status_code == 200 else None
+            if not ev:
+                raise Mem0Unavailable("the episode was not taken")
+            events.append(str(ev))
+        self._counts.pop(mid, None)
+        return {"records": [], "job": {"id": ".".join(events), "status": "pending"}}
+
+    async def job(self, mid, job_id):
+        records, pending, failed = [], False, ""
+        for ev in job_id.split("."):
+            r = await self._call("GET", f"/v1/event/{ev}/")
+            doc = r.json() if r.status_code == 200 else None
+            if not doc or str((doc.get("payload") or {}).get("user_id") or "") != mid:
+                return None                 # an event of another memory, or none: the same answer
+            st = str(doc.get("status") or "").upper()
+            if st in ("PENDING", "RUNNING", "IN_PROGRESS", "QUEUED"):
+                pending = True
+            elif st == "FAILED":
+                failed = "mem0 could not process the episode."
+            else:
+                for x in doc.get("results") or []:
+                    item = await self._owned(mid, str(x.get("id") or ""))
+                    if item:
+                        records.append(self._out(item))
+        return {"id": job_id, "status": "failed" if failed else "pending" if pending else "completed",
+                "error": failed, "records": records}
+
+    async def revise(self, mid, rid, patch, writer):
+        item = await self._owned(mid, rid)
+        if not item or self._out(item)["status"] != "active":
+            raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+        cur = self._out(item)
+        merged = {"type": cur["type"], "title": patch.get("title", cur["title"]), "content": patch.get("content", cur["content"]),
+                  "attributes": {**cur["attributes"], **(patch.get("attributes") or {})},
+                  "references": patch.get("references", cur["references"]),
+                  "time": {**{k: cur["time"][k] for k in ("valid_from", "valid_to")}, **(patch.get("time") or {})}}
+        body: dict = {"metadata": self._meta(merged, writer, cur["version"] + 1)}
+        if "content" in patch or "title" in patch:
+            body["text"] = mp.said(merged)
+        r = await self._call("PUT", f"/v1/memories/{rid}/", body=body)
+        if r.status_code != 200:
+            raise Mem0Unavailable("the revision was not stored")
+        out = self._out(r.json())
+        out["supersedes"] = cur["version"]
+        return out
+
+    async def forget(self, mid, rid, writer):
+        item = await self._owned(mid, rid)
+        if not item or self._out(item)["status"] != "active":
+            raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+        meta = {**(item.get("metadata") or {}), _RESERVED + "forgotten_by": f"{writer.get('kind')}:{writer.get('id')}"}
+        r = await self._call("PUT", f"/v1/memories/{rid}/", body={
+            "expiration_date": (_today() - _dt.timedelta(days=1)).isoformat(), "metadata": meta})
+        if r.status_code != 200:
+            raise Mem0Unavailable("the record was not closed")
+        self._counts.pop(mid, None)
+        return self._out(r.json())
+
+    async def erase(self, mid, rids):
+        erased = []
+        for rid in rids:
+            if await self._owned(mid, rid):
+                r = await self._call("DELETE", f"/v1/memories/{rid}/")
+                if r.status_code == 200:
+                    erased.append(rid)
+        self._counts.pop(mid, None)
+        # mem0 keeps a deleted memory's history, with its content and the input it came from, and
+        # serves it by id (measured): what was erased here can still be read there.
+        return {"erased": erased, "unreachable": list(erased)}
+
+    # ── reads ─────────────────────────────────────────────────────────────────────────────────
+    async def get(self, mid, rid, as_of=None):
+        item = await self._owned(mid, rid)
+        if not item:
+            return None
+        if not as_of:
+            return self._out(item)
+        past = [v for v in await self.history(mid, rid) if v["time"]["written_at"] <= as_of]
+        return {**past[-1], "status": "active"} if past else None
+
+    async def history(self, mid, rid):
+        item = await self._owned(mid, rid)
+        if not item:
+            raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+        r = await self._call("GET", f"/v1/memories/{rid}/history/")
+        events = sorted(r.json() if r.status_code == 200 else [], key=lambda e: str(e.get("updated_at") or ""))
+        head, versions = self._out(item), []
+        for e in events:
+            if e.get("event") != "ADD" and e.get("old_memory") == e.get("new_memory"):
+                continue                    # a change of metadata or expiry, not of what the record says
+            vt, vb = _split(e.get("new_memory") or "", bool(head["title"]))
+            # mem0 keeps what each version said, not its fields: the reason belongs to the head alone
+            versions.append({**head, "attributes": {k: v for k, v in head["attributes"].items() if k != "revision_reason"},
+                             "title": vt, "content": [{"type": "text", "text": vb}] if vb else [], "version": len(versions) + 1,
+                             "status": "superseded", "supersedes": len(versions) or None,
+                             "time": {**head["time"], "written_at": _utc(e.get("updated_at")), "invalidated_at": None}})
+        if not versions:
+            return [head]
+        for a, b in zip(versions, versions[1:]):
+            a["time"]["invalidated_at"] = b["time"]["written_at"]
+        versions[-1].update(status=head["status"], attributes=head["attributes"])
+        versions[-1]["time"]["invalidated_at"] = head["time"]["invalidated_at"]
+        return versions
+
+    def _filters(self, mid, req: dict, degraded: list[str]) -> tuple[dict, list]:
+        """(what mem0 is asked, what is left to apply here). The memory's id (or the ids, for a
+        question asked of several memories) is always the first clause: nothing a caller sends can
+        remove it."""
+        scope = {"user_id": mid} if isinstance(mid, str) else \
+            ({"user_id": mid[0]} if len(mid) == 1 else {"OR": [{"user_id": x} for x in mid]})
+        clauses, later = [scope], []
+        types = [t for t in (req.get("types") or []) if t]
+        if len(types) == 1:
+            clauses.append({"metadata": {_RESERVED + "type": types[0]}})
+        elif types:
+            clauses.append({"OR": [{"metadata": {_RESERVED + "type": t}} for t in types]})
+
+        def walk(f):
+            if not f:
+                return
+            if "and" in f:
+                for x in f["and"]:
+                    walk(x)
+                return
+            field, op, val = str(f.get("field") or ""), f.get("op", "eq"), f.get("value")
+            if "or" not in f and op == "eq" and field.startswith("attributes.") and "." not in field[11:]:
+                clauses.append({"metadata": {field[11:]: val}})
+            elif "or" not in f and op == "eq" and field == "type":
+                clauses.append({"metadata": {_RESERVED + "type": val}})
+            elif "or" not in f and field == "time.written_at" and op in ("gte", "lte", "gt", "lt"):
+                clauses.append({"created_at": {op: val}})
+            else:
+                later.append(f)
+        walk(req.get("filters"))
+        if later:
+            degraded.append("filters:applied_after_ranking")
+        return ({"AND": clauses} if len(clauses) > 1 else clauses[0]), later
+
+    async def prime(self, mid, budget):
+        """A record stated with `standing` has it in its metadata, which mem0 filters on itself."""
+        got = await self.list(mid, {"filters": {"field": "attributes.standing", "op": "eq", "value": True}, "limit": 50})
+        return mp.within_budget([x for x in got["records"] if x["status"] == "active"], budget)
+
+    async def list(self, mid, req):
+        degraded: list[str] = []
+        if req.get("as_of"):
+            raise mp.MemoryError(422, "memory_unsupported", "This memory's provider does not list a memory as of a past instant.")
+        flt, later = self._filters(mid, req, degraded)
+        page = int(req.get("cursor") or 1)
+        r = await self._call("POST", "/v3/memories/", params={"page": page, "page_size": int(req.get("limit") or 50)},
+                             body={"filters": flt, "show_expired": req.get("include") == "all"})
+        doc = r.json() if r.status_code == 200 else {}
+        rows = [x for x in (self._out(i) for i in doc.get("results") or []) if all(mp.matches(x, f) for f in later)]
+        return {"records": rows, "next": str(page + 1) if doc.get("next") else None}
+
+    async def recall(self, mid, req):
+        res = await self.recall_many([mid], req)
+        return res
+
+    async def recall_many(self, mids, req):
+        """mem0 searches several scopes in one request (an OR of user_ids, measured), so a subtree
+        is one call, and each hit says which memory it is in."""
+        mid = list(mids)
+        degraded: list[str] = []
+        if req.get("as_of"):
+            degraded.append("as_of:not_supported")
+        query, text = str(req.get("query") or "").strip(), str(req.get("text") or "").strip()
+        flt, later = self._filters(mid, req, degraded)
+        limit = int(req.get("limit") or 8)
+        if not query and not text:           # fields alone: mem0 has no ranking to do, so this is a listing
+            r = await self._call("POST", "/v3/memories/", params={"page": 1, "page_size": limit}, body={"filters": flt})
+            rows = [(i, self._out(i)) for i in ((r.json() or {}).get("results") or [] if r.status_code == 200 else [])]
+            return {"results": [{"record": x, "memory_id": str(i.get("user_id") or ""), "score": 1.0, "why": ["filters"]}
+                                for i, x in rows if all(mp.matches(x, f) for f in later)],
+                    "degraded": degraded, "abstain": False}
+        if query and text:
+            degraded.append("text:searched_with_the_query")       # one fused search, not two signals
+        r = await self._call("POST", "/v3/memories/search/", body={
+            "query": f"{query} {text}".strip(), "filters": flt, "top_k": min(limit * (3 if later or (text and not query) else 1), 100)})
+        results = []
+        for item in (r.json() or {}).get("results") or [] if r.status_code == 200 else []:
+            parts = item.get("score_breakdown") or {}
+            if text and not query and not float(parts.get("bm25") or 0) > 0:
+                continue                    # words were asked for: a hit by meaning alone is not one
+            rec = self._out(item)
+            if not all(mp.matches(rec, f) for f in later):
+                continue
+            why = [w for w, on in (("query", query and float(parts.get("semantic") or 0) > 0),
+                                   ("text", float(parts.get("bm25") or 0) > 0),
+                                   ("filters", bool(req.get("filters")))) if on]
+            if str(item.get("user_id") or "") not in mid:
+                continue                    # not one of the memories asked: never returned, whatever mem0 said
+            results.append({"record": rec, "memory_id": str(item["user_id"]), "score": item.get("score"), "why": why})
+        return {"results": results[:limit], "degraded": degraded, "abstain": False}
+
+
+READ_AGENT = "hr_read"   # the scope Mem0 reads a stated record's copy in: its updates and deletes never reach what was stated
+ENT = "ment_"            # an entity Mem0 linked, by the id of its row in Mem0's entity store
+_TASKS: set = set()      # copies being read, held so they finish
+
+
+def _spawn(coro) -> None:
+    t = asyncio.get_running_loop().create_task(coro)
+    _TASKS.add(t)
+    t.add_done_callback(_TASKS.discard)
+
+
+class Mem0Server(Mem0):
+    """The open-source mem0 REST server (mem0ai/mem0, server/). Every shape here was read off a server
+    running on 2026-11-04, and it differs from the Platform in what matters to a memory:
+
+      add      = POST /memories. It answers when it is done, inferred or not, so `observe` answers the
+          records it derived and there is no job.
+      recall   = POST /search: by meaning, with one score. No words on their own, so `text` is searched
+          as the query and said in `degraded`. Filters are equality on metadata, one memory per request.
+      list     = GET /memories, with no pages, so pages are cut here.
+      erase    = DELETE, and as on the Platform the history is still served by id, so every erased id
+          is reported `unreachable`.
+
+    Same on both: one memory is one user_id with the check on every read, metadata carries the
+    protocol's fields, history is read from mem0's own events. A schema has no place here: what mem0
+    derives is free text, and nothing it does reads a type.
+
+    Here only (11-06, so each system is used as it is built to be):
+      remember = the record kept as stated (infer off), and a copy Mem0 reads with infer on, in the background,
+          as agent `hr_read` of the same user: Mem0 extracts facts from it, merges and drops them among its own,
+          and links each to the names, titles and topics in it. The scope keeps its merging away from what was
+          stated. Each fact comes from the stated record; revising reads it again, forgetting and erasing take them.
+      entities = Mem0's entity store, read through GET /hr/entities, a read-only route our build of the server
+          adds (deploy/memories/mem0): `ment_<id>`, and each fact it is linked to is `about` it. Built only with
+          spaCy, which that build installs."""
+
+    BUILTIN = {
+        "types": [
+            {"name": "fact", "description": "A short fact Mem0 drew from what it read, merged with the facts it already had."},
+            {"name": "entity", "description": "A name, title or topic Mem0 found in its facts, which links the facts that share it."},
+        ],
+        "relations": [
+            {"name": "about", "from": "fact", "to": "entity", "description": "The names, titles and topics in a fact."},
+            {"name": "derived_from", "from": "fact", "to": "fact", "description": "What Mem0 read it in."},
+        ],
+    }
+
+    def __init__(self, api_key: str = "", base_url: str = ""):
+        super().__init__(api_key)
+        self.base = base_url.rstrip("/")
+        self._ents: dict[str, tuple[float, list[dict]]] = {}
+
+    def capabilities(self) -> dict:
+        c = super().capabilities()
+        return {**c, "observe": {"keeps_episodes": False, "answers": "records"}, "graph": {"entities": "derived"},
+                "recall": {"signals": ["query", "filters"], "abstain": False,
+                           "filters": {"native": ["eq on type and attributes.*"], "applied_after_ranking": "every other filter"}}}
+
+    async def _call(self, method, path, *, body=None, params=None, ok=(200,)):
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+                r = await c.request(method, self.base + mp.vendor_path(path), json=body, params=params,
+                                    headers={"X-API-Key": self.key, "Accept": "application/json"} if self.key else {"Accept": "application/json"})
+        except httpx.HTTPError as e:
+            raise Mem0Unavailable(type(e).__name__)
+        if r.status_code in ok or r.status_code == 404:
+            return r
+        if r.status_code in (401, 403):
+            raise mp.MemoryError(503, "memory_unavailable", "mem0 refused this workspace's key: reconnect it.")
+        raise Mem0Unavailable(f"HTTP {r.status_code}")
+
+    async def _owned(self, mid, rid):
+        r = await self._call("GET", f"/memories/{rid}")
+        item = r.json() if r.status_code == 200 else None
+        return item if isinstance(item, dict) and str(item.get("user_id") or "") == mid else None
+
+    async def _all(self, mid: str, expired: bool = False) -> list[dict]:
+        r = await self._call("GET", "/memories", params={"user_id": mid, "top_k": 1000, "show_expired": "true" if expired else "false"})
+        return ((r.json() or {}).get("results") or []) if r.status_code == 200 else []
+
+    async def _entities(self, mid: str) -> list[dict]:
+        hit = self._ents.get(mid)
+        if hit and time.time() - hit[0] < 30:
+            return hit[1]
+        try:
+            r = await self._call("GET", "/hr/entities", params={"user_id": mid})
+            rows = r.json() if r.status_code == 200 and isinstance(r.json(), list) else []
+        except mp.MemoryError:
+            rows = []                       # a server without the route: no entities, the facts still read
+        self._ents[mid] = (time.time(), rows)
+        return rows
+
+    @staticmethod
+    def _entity_out(e: dict) -> dict:
+        return {"id": ENT + str(e["id"]), "type": "entity", "title": str(e.get("text") or ""), "content": [],
+                "attributes": {"kind": str(e["kind"]).lower()} if e.get("kind") else {}, "references": [], "version": 1,
+                "status": "active", "supersedes": None,
+                "time": {"valid_from": None, "valid_to": None, "written_at": None, "invalidated_at": None},
+                "written_by": {"kind": "provider", "id": "mem0"}}
+
+    @staticmethod
+    def _about(mid: str, rows: list[dict], ents: list[dict]) -> list[dict]:
+        by: dict[str, list[str]] = {}
+        for e in ents:
+            for m in e.get("memory_ids") or []:
+                by.setdefault(str(m), []).append(ENT + str(e["id"]))
+        for x in rows:
+            for eid in by.get(x["id"], []):
+                ref = {"rel": "about", "memory_id": mid, "record_id": eid}
+                if ref not in x["references"]:
+                    x["references"].append(ref)
+        return rows
+
+    def _read_copy(self, mid: str, rid: str, text: str, record: dict) -> None:
+        """Mem0 reads what was stated, as it reads anything it is given, in the background. A copy not read
+        costs what Mem0 would have drawn from it, never the record."""
+        if not text.strip():
+            return
+        meta = self._meta({"type": "fact", "references": [{"rel": "derived_from", "memory_id": mid, "record_id": rid}],
+                           "time": {k: v for k, v in (record.get("time") or {}).items() if k == "valid_from"}}, {"kind": "provider", "id": "mem0"})
+
+        async def go():
+            try:
+                await self._call("POST", "/memories", body={"user_id": mid, "agent_id": READ_AGENT, "infer": True,
+                                                            "messages": [{"role": "user", "content": text}], "metadata": meta})
+            except mp.MemoryError:
+                pass
+            self._counts.pop(mid, None)
+            self._ents.pop(mid, None)
+        _spawn(go())
+
+    async def _drawn_from(self, mid: str, rid: str) -> list[str]:
+        """The facts Mem0 drew from a stated record's copy."""
+        out = []
+        for item in await self._all(mid, expired=True):
+            x = self._out(item)
+            if x["written_by"].get("kind") == "provider" and any(r.get("rel") == "derived_from" and r.get("record_id") == rid for r in x["references"]):
+                out.append(x["id"])
+        return out
+
+    async def drop(self, mid):
+        await self._call("DELETE", "/memories", params={"user_id": mid})
+        self._counts.pop(mid, None)
+        self._ents.pop(mid, None)
+
+    async def count(self, mid):
+        hit = self._counts.get(mid)
+        if hit and time.time() - hit[0] < 30:
+            return hit[1]
+        n = len(await self._all(mid)) + len(await self._entities(mid))
+        self._counts[mid] = (time.time(), n)
+        return n
+
+    async def get(self, mid, rid, as_of=None):
+        if rid.startswith(ENT):
+            e = next((x for x in await self._entities(mid) if ENT + str(x["id"]) == rid), None)
+            return self._entity_out(e) if e else None
+        rec = await super().get(mid, rid, as_of)
+        return self._about(mid, [rec], await self._entities(mid))[0] if rec else None
+
+    async def remember(self, mid, record, writer):
+        text = mp.said(record)
+        r = await self._call("POST", "/memories", body={
+            "user_id": mid, "infer": False, "messages": [{"role": "user", "content": text}],
+            "metadata": self._meta(record, writer)})
+        made = (r.json() or {}).get("results") or []
+        if r.status_code != 200 or not made:
+            raise Mem0Unavailable("the memory was not stored")
+        self._counts.pop(mid, None)
+        out = self._out((await self._owned(mid, str(made[0]["id"]))) or
+                        {"id": made[0]["id"], "memory": text, "metadata": self._meta(record, writer)})
+        self._read_copy(mid, out["id"], text, record)
+        return out
+
+    async def observe(self, mid, episodes, writer):
+        records = []
+        for e in episodes:
+            msgs = [{"role": p.get("role") if p.get("role") in ("user", "assistant", "system") else "user", "content": p["text"]}
+                    for p in e.get("content") or [] if p.get("text")]
+            meta = self._meta({"type": "fact", "attributes": e.get("attributes") or {}}, {"kind": "provider", "id": "mem0"})
+            meta[_RESERVED + "observed_by"] = f"{writer.get('kind')}:{writer.get('id')}"
+            r = await self._call("POST", "/memories", body={"user_id": mid, "messages": msgs, "metadata": meta, "infer": True})
+            if r.status_code != 200:
+                raise Mem0Unavailable("the episode was not taken")
+            for x in (r.json() or {}).get("results") or []:
+                item = await self._owned(mid, str(x.get("id") or ""))
+                if item:
+                    records.append(self._out(item))
+        self._counts.pop(mid, None)
+        return {"records": records, "job": None}
+
+    async def job(self, mid, job_id):
+        return None
+
+    async def revise(self, mid, rid, patch, writer):
+        item = await self._owned(mid, rid)
+        if not item or self._out(item)["status"] != "active":
+            raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+        cur = self._out(item)
+        merged = {"type": cur["type"], "title": patch.get("title", cur["title"]), "content": patch.get("content", cur["content"]),
+                  "attributes": {**cur["attributes"], **(patch.get("attributes") or {})},
+                  "references": patch.get("references", cur["references"]),
+                  "time": {**{k: cur["time"][k] for k in ("valid_from", "valid_to")}, **(patch.get("time") or {})}}
+        r = await self._call("PUT", f"/memories/{rid}", body={"text": mp.said(merged), "metadata": self._meta(merged, writer, cur["version"] + 1)})
+        if r.status_code != 200:
+            raise Mem0Unavailable("the revision was not stored")
+        out = self._out(await self._owned(mid, rid) or item)
+        out["supersedes"] = cur["version"]
+        if cur["written_by"].get("kind") != "provider" and mp.said(merged) != mp.said(cur):
+            for x in await self._drawn_from(mid, rid):
+                await self._call("DELETE", f"/memories/{x}")
+            self._read_copy(mid, rid, mp.said(merged), merged)
+        return out
+
+    async def forget(self, mid, rid, writer):
+        item = await self._owned(mid, rid)
+        if not item or self._out(item)["status"] != "active":
+            raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+        meta = {**(item.get("metadata") or {}), _RESERVED + "forgotten_by": f"{writer.get('kind')}:{writer.get('id')}"}
+        r = await self._call("PUT", f"/memories/{rid}", body={
+            "text": item.get("memory") or "", "metadata": meta, "expiration_date": (_today() - _dt.timedelta(days=1)).isoformat()})
+        if r.status_code != 200:
+            raise Mem0Unavailable("the record was not closed")
+        for x in await self._drawn_from(mid, rid):
+            d = await self._owned(mid, x)
+            if d:
+                await self._call("PUT", f"/memories/{x}", body={"text": d.get("memory") or "", "metadata": d.get("metadata") or {},
+                                                               "expiration_date": (_today() - _dt.timedelta(days=1)).isoformat()})
+        self._counts.pop(mid, None)
+        return self._out(await self._owned(mid, rid) or item)
+
+    async def erase(self, mid, rids):
+        erased = []
+        for rid in rids:
+            if await self._owned(mid, rid):
+                for x in await self._drawn_from(mid, rid):
+                    await self._call("DELETE", f"/memories/{x}")
+                r = await self._call("DELETE", f"/memories/{rid}")
+                if r.status_code == 200:
+                    erased.append(rid)
+        self._counts.pop(mid, None)
+        self._ents.pop(mid, None)
+        return {"erased": erased, "unreachable": list(erased)}
+
+    async def history(self, mid, rid):
+        item = await self._owned(mid, rid)
+        if not item:
+            raise mp.MemoryError(404, "memory_record_not_found", "No such record in this memory.", "record_id")
+        r = await self._call("GET", f"/memories/{rid}/history")
+        events = sorted(r.json() if r.status_code == 200 else [], key=lambda e: str(e.get("updated_at") or ""))
+        head, versions = self._out(item), []
+        for e in events:
+            if e.get("event") != "ADD" and e.get("old_memory") == e.get("new_memory"):
+                continue
+            vt, vb = _split(e.get("new_memory") or "", bool(head["title"]))
+            versions.append({**head, "attributes": {k: v for k, v in head["attributes"].items() if k != "revision_reason"},
+                             "title": vt, "content": [{"type": "text", "text": vb}] if vb else [], "version": len(versions) + 1,
+                             "status": "superseded", "supersedes": len(versions) or None,
+                             "time": {**head["time"], "written_at": _utc(e.get("updated_at")), "invalidated_at": None}})
+        if not versions:
+            return [head]
+        for a, b in zip(versions, versions[1:]):
+            a["time"]["invalidated_at"] = b["time"]["written_at"]
+        versions[-1].update(status=head["status"], attributes=head["attributes"])
+        versions[-1]["time"]["invalidated_at"] = head["time"]["invalidated_at"]
+        return versions
+
+    @staticmethod
+    def _flat(mid: str, req: dict, degraded: list[str]) -> tuple[dict, list]:
+        """(what the server is asked, what is left to apply here). It takes equality on metadata."""
+        flat: dict = {"user_id": mid}
+        later: list = []
+        types = [t for t in (req.get("types") or []) if t]
+        if len(types) == 1:
+            flat[_RESERVED + "type"] = types[0]
+        elif types:
+            later.append({"or": [{"field": "type", "op": "eq", "value": t} for t in types]})
+
+        def walk(f):
+            if not f:
+                return
+            if "and" in f:
+                for x in f["and"]:
+                    walk(x)
+                return
+            field, op, val = str(f.get("field") or ""), f.get("op", "eq"), f.get("value")
+            if "or" not in f and op == "eq" and field.startswith("attributes.") and "." not in field[11:]:
+                flat[field[11:]] = val
+            elif "or" not in f and op == "eq" and field == "type":
+                flat[_RESERVED + "type"] = val
+            else:
+                later.append(f)
+        walk(req.get("filters"))
+        if later:
+            degraded.append("filters:applied_after_ranking")
+        return flat, later
+
+    async def list(self, mid, req):
+        if req.get("as_of"):
+            raise mp.MemoryError(422, "memory_unsupported", "This memory's provider does not list a memory as of a past time.")
+        degraded: list[str] = []
+        flat, later = self._flat(mid, req, degraded)
+        ents = await self._entities(mid)
+        rows = self._about(mid, [self._out(i) for i in await self._all(mid, expired=req.get("include") == "all")], ents)
+        rows += [self._entity_out(e) for e in ents]
+        checks = [{"field": "type", "op": "eq", "value": flat[_RESERVED + "type"]}] if _RESERVED + "type" in flat else []
+        checks += [{"field": f"attributes.{k}", "op": "eq", "value": v} for k, v in flat.items() if k not in ("user_id", _RESERVED + "type")]
+        rows = [x for x in rows if all(mp.matches(x, f) for f in [*checks, *later])]
+        rows.sort(key=lambda x: str(x["time"]["written_at"] or ""), reverse=True)
+        at, size = int(req.get("cursor") or 0), int(req.get("limit") or 50)
+        return {"records": rows[at:at + size], "next": str(at + size) if at + size < len(rows) else None}
+
+    async def recall(self, mid, req):
+        degraded: list[str] = []
+        if req.get("as_of"):
+            degraded.append("as_of:not_supported")
+        query, text = str(req.get("query") or "").strip(), str(req.get("text") or "").strip()
+        flat, later = self._flat(mid, req, degraded)
+        limit = int(req.get("limit") or 8)
+        if not query and not text:
+            listed = await self.list(mid, {**req, "limit": limit, "cursor": None})
+            return {"results": [{"record": x, "memory_id": mid, "score": 1.0, "why": ["filters"]} for x in listed["records"]],
+                    "degraded": degraded, "abstain": False}
+        if text:
+            degraded.append("text:searched_with_the_query")
+        filters = {k: v for k, v in flat.items() if k != "user_id"}
+        ents = await self._entities(mid)
+        r = await self._call("POST", "/search", body={
+            "query": f"{query} {text}".strip(), "user_id": mid, "top_k": limit * (3 if later else 1), **({"filters": {"user_id": mid, **filters}} if filters else {})})
+        results = []
+        for item in (r.json() or {}).get("results") or [] if r.status_code == 200 else []:
+            if str(item.get("user_id") or "") != mid:
+                continue
+            rec = self._about(mid, [self._out(item)], ents)[0]
+            if rec["status"] != "active" or not all(mp.matches(rec, f) for f in later):
+                continue
+            results.append({"record": rec, "memory_id": mid, "score": item.get("score"),
+                            "why": [w for w, on in (("query", True), ("filters", bool(req.get("filters")))) if on]})
+        return {"results": results[:limit], "degraded": degraded, "abstain": False}
+
+    async def recall_many(self, mids, req):
+        return await mp.Provider.recall_many(self, mids, req)

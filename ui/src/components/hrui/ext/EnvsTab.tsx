@@ -24,6 +24,7 @@ import { Skel, SkRows } from '../Skel';
 import { EnvSheet, type EnvTab, type EnvUser } from './EnvSheet';
 import { MANAGERS, folderFiles, gitUrl, limitOf, sayFail, statusOf, statusView, uploadSummary } from './envModel';
 import './envs.css';
+import { Markup } from '../Markup';
 
 export interface EnvironmentsData { envs: Environment[] | null; failed: boolean; reload: () => Promise<void>; retry: () => void }
 
@@ -133,7 +134,7 @@ export function EnvsTab({ data, setups, reloadSetups }: {
                 return (
                   <div key={e.id} className="row eo-row">
                     <span className="t lib-t">
-                      <span className="lib-ic" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon(e.status === 'ready' || e.status === 'building' ? 'built' : 'empty', 'tool') }} />
+                      <Markup className="lib-ic" html={partIcon(e.status === 'ready' || e.status === 'building' ? 'built' : 'empty', 'tool')} />
                       <span className="eo-row-t">
                         <b><button type="button" className="eo-name" onClick={() => open(e.id)}>{e.name}</button></b>
                         <small className="sub2 mono">{e.mount}<span className="eo-narrow"> · {plural(e.files.count, 'file')} · {pkgLine(e)}</span></small>
@@ -153,7 +154,7 @@ export function EnvsTab({ data, setups, reloadSetups }: {
             </div>
           </div>
         ) : (
-          <div className="empty-list es"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', 'tool') }} /><span>No environments yet.</span></div>
+          <div className="empty-list es"><Markup className="es-art" html={partIcon('empty', 'tool')} /><span>No environments yet.</span></div>
         )}
 
       {creating ? (
