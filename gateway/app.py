@@ -13339,22 +13339,26 @@ async def revoke_key(org: str, kid: str, request: Request) -> dict:
 
 def _parse_jsonrpc(text: str) -> dict:
     """A streamable-HTTP MCP endpoint answers either as plain JSON or as SSE (`data: {…}`
-    lines). Return the first JSON-RPC object found, whichever form."""
+    events). Return the first JSON-RPC object found, whichever form."""
     t = (text or "").strip()
     if t.startswith("{"):
         try:
             return json.loads(t)
         except Exception:  # noqa: BLE001
             pass
-    for line in t.splitlines():
-        line = line.strip()
-        if line.startswith("data:"):
-            body = line[5:].strip()
-            if body.startswith("{"):
-                try:
-                    return json.loads(body)
-                except Exception:  # noqa: BLE001
-                    continue
+    # SSE joins all data fields in an event with LF before interpreting the payload.
+    # Keep accepting a final event without a blank line, as this complete-body probe
+    # did for single-line responses; it is not an incremental stream reader.
+    for event in t.replace("\r\n", "\n").replace("\r", "\n").split("\n\n"):
+        data = [line[5:].removeprefix(" ") for line in event.split("\n") if line.startswith("data:")]
+        if not data:
+            continue
+        try:
+            obj = json.loads("\n".join(data))
+        except Exception:  # noqa: BLE001 - a hostile server's nesting depth is a RecursionError
+            continue
+        if isinstance(obj, dict):
+            return obj
     return {}
 
 
@@ -13551,6 +13555,33 @@ def _checked_transport(always: bool, limits: httpx.Limits | None = None) -> http
 plugs_plane.checked_transport = lambda: _checked_transport(False)
 
 
+# One answer of the connection probe, at most. The server is whoever the caller named, so an answer
+# that runs on (or an SSE stream that never ends) is a failed probe, not memory or a wait the gateway
+# gives it. A tools/list this large is far past any server's; 20 s is the probe's old per-read wait.
+_MCP_PROBE_MAX_BYTES = 4 * 1024 * 1024
+_MCP_PROBE_WAIT_S = 30
+
+
+class _McpProbeRefused(Exception):
+    pass
+
+
+async def _mcp_probe_post(c: httpx.AsyncClient, url: str, headers: dict, msg: dict) -> tuple[int, httpx.Headers, str]:
+    """POST one probe message; (status, headers, text) of an answer read to its end, within the caps."""
+    async def read() -> tuple[int, httpx.Headers, str]:
+        async with c.stream("POST", url, headers=headers, content=json.dumps(msg), timeout=20) as r:
+            buf = bytearray()
+            async for chunk in r.aiter_bytes():
+                buf += chunk
+                if len(buf) > _MCP_PROBE_MAX_BYTES:
+                    raise _McpProbeRefused(f"the answer is larger than {_MCP_PROBE_MAX_BYTES // (1024 * 1024)} MiB")
+            return r.status_code, r.headers, buf.decode(r.charset_encoding or "utf-8", "replace")
+    try:
+        return await asyncio.wait_for(read(), _MCP_PROBE_WAIT_S)
+    except asyncio.TimeoutError:
+        raise _McpProbeRefused(f"no complete answer within {_MCP_PROBE_WAIT_S} s") from None
+
+
 async def _mcp_list_tools(url: str, token: str) -> dict:
     """Probe a remote MCP server: initialize → notifications/initialized → tools/list. Returns
     {ok, server, tools:[{name,description}]} or {ok:false, error}. Used by the config UI's
@@ -13566,23 +13597,27 @@ async def _mcp_list_tools(url: str, token: str) -> dict:
             "params": {"protocolVersion": "2024-11-05", "capabilities": {},
                        "clientInfo": {"name": "harnessrouter", "version": "1"}}}
     try:
-        r = await c.post(url, headers=headers, content=json.dumps(init), timeout=20)
+        status, rh, text = await _mcp_probe_post(c, url, headers, init)
+    except _McpProbeRefused as e:
+        return {"ok": False, "error": f"initialize: {e}"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"unreachable: {str(e)[:140]}"}
-    if r.status_code >= 400:
-        return {"ok": False, "error": f"initialize returned HTTP {r.status_code}"}
-    init_res = _parse_jsonrpc(r.text)
+    if status >= 400:
+        return {"ok": False, "error": f"initialize returned HTTP {status}"}
+    init_res = _parse_jsonrpc(text)
     server = ((init_res.get("result") or {}).get("serverInfo") or {}).get("name") or ""
     h2 = dict(headers)
-    sid = r.headers.get("mcp-session-id")
+    sid = rh.get("mcp-session-id")
     if sid:
         h2["mcp-session-id"] = sid
     try:
-        await c.post(url, headers=h2, content=json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}), timeout=20)
-        r2 = await c.post(url, headers=h2, content=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}), timeout=20)
+        await _mcp_probe_post(c, url, h2, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+        _, _, text2 = await _mcp_probe_post(c, url, h2, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    except _McpProbeRefused as e:
+        return {"ok": False, "error": f"tools/list: {e}", "server": server}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"tools/list failed: {str(e)[:140]}"}
-    tl = _parse_jsonrpc(r2.text)
+    tl = _parse_jsonrpc(text2)
     if tl.get("error"):
         return {"ok": False, "error": str(tl["error"])[:160], "server": server}
     tools = [{"name": t.get("name", ""), "description": (t.get("description") or "")[:200]}
