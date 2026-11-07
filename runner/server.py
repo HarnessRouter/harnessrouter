@@ -3788,6 +3788,8 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
             api = "anthropic-messages"
         elif auth.api_format == "openai":
             api = "openai-completions"
+        elif auth.api_format == "responses":
+            api = "openai-responses"
         elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
             api = "anthropic-messages"
         elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
@@ -4065,6 +4067,8 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
             api = "anthropic-messages"
         elif auth.api_format == "openai":
             api = "openai-completions"
+        elif auth.api_format == "responses":
+            api = "openai-responses"
         elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
             api = "anthropic-messages"
         elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
@@ -15075,7 +15079,7 @@ def _evict_turns(now: float | None = None) -> int:
                 if tid not in _turns:
                     _turn_by_key.pop(key, None)
     return gone
-_turn_by_key: dict[str, str] = {}   # idempotency_key -> turn_id (dedup a retried /turn; see turn())
+_turn_by_key: dict[str, str] = {}   # "<identifier>\0<idempotency_key>" -> turn_id (dedup a retried /turn, per session; see turn())
 _turns_lock = threading.Lock()
 
 
@@ -17146,11 +17150,13 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
 
     Idempotent by idempotency_key: the gateway retries this call on a lost/slow reply (a turn can
     take minutes to acknowledge), and without dedup each retry would start a SECOND CLI process in
-    this sandbox — the same request executed twice. A key seen before returns the existing turn."""
+    this sandbox — the same request executed twice. A key seen before returns the existing turn, to the session
+    that started it only: the map is keyed by session and key, so another session's key never names this turn."""
     key = (req.idempotency_key or "").strip()
+    dk = f"{identifier}\x00{key}" if key else ""
     if key:
         with _turns_lock:
-            prior_id = _turn_by_key.get(key)
+            prior_id = _turn_by_key.get(dk)
             if prior_id and prior_id in _turns:
                 r = _turns[prior_id]
                 return {"turn_id": prior_id, "status": r.get("status", "running"),
@@ -17545,12 +17551,12 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         # Double-check under the lock: a concurrent retry with the same key may have raced past the
         # top-of-handler check before this one recorded the key. If so, use the winner and let this
         # freshly-built cmd drop (no thread started for it).
-        if key and _turn_by_key.get(key) in _turns:
-            prior_id = _turn_by_key[key]; r = _turns[prior_id]
+        if key and _turn_by_key.get(dk) in _turns:
+            prior_id = _turn_by_key[dk]; r = _turns[prior_id]
             return {"turn_id": prior_id, "status": r.get("status", "running"),
                     "backend": r.get("backend", ""), "model": r.get("model", ""),
                     "host": socket.gethostname(), "deduplicated": True, "max_seconds": MAX_TURN_SECONDS}
-        _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
+        _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False, "identifier": identifier,
                            "backend": backend, "model": model, "started": time.time(),
                            "reasoning": turn_thinking,
                            # the flags of every route the turn registered (see _turn_route)
@@ -17566,7 +17572,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             _turns[turn_id]["events"].append({"type": "system", "subtype": "resume_lost", "_ts": time.time(),
                                               "requested_session_id": resume_lost})
         if key:
-            _turn_by_key[key] = turn_id
+            _turn_by_key[dk] = turn_id
     if use_appserver:
         threading.Thread(target=_routes_end_with_turn(_run_codex_appserver_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds,
@@ -17683,13 +17689,20 @@ async def delete_workspace(identifier: str = "", body: WorkspaceDelete | None = 
     return out
 
 
+def _turn_of(turn_id: str, identifier: str) -> dict:
+    """A turn, only to the session that started it: another session's turn id reads as no turn at all.
+    The gateway sends the session's identifier on every call; a turn recorded without one (made in-process) is as before."""
+    rec = _turns.get(turn_id)
+    if not rec or (rec.get("identifier") and identifier != rec["identifier"]):
+        raise HTTPException(404, "turn not found")
+    return rec
+
+
 @app.post("/turn/{turn_id}/cancel")
-def cancel_turn(turn_id: str) -> dict:
+def cancel_turn(turn_id: str, identifier: str = "") -> dict:
     """Kill a running turn's CLI process on demand (user-initiated stop). The reader loop
     in _run_turn_bg then drains and finalizes the record with status='cancelled'."""
-    rec = _turns.get(turn_id)
-    if not rec:
-        raise HTTPException(404, "turn not found")
+    rec = _turn_of(turn_id, identifier)
     if rec.get("done"):
         return {"turn_id": turn_id, "status": rec["status"], "cancelled": False}
     rec["cancelled"] = True
@@ -17734,7 +17747,7 @@ def _turn_answer(turn_id: str, rec: dict, since: int, held: bool) -> dict:
 
 
 @app.get("/turn/{turn_id}")
-async def get_turn(turn_id: str, since: int = 0, wait: float = 0.0) -> dict:
+async def get_turn(turn_id: str, since: int = 0, wait: float = 0.0, identifier: str = "") -> dict:
     """Incremental turn status + normalized events (events[since:]). Polling also keeps the
     Timed sandbox alive (every request resets the idle cooldown).
 
@@ -17744,9 +17757,7 @@ async def get_turn(turn_id: str, since: int = 0, wait: float = 0.0) -> dict:
 
     The hold waits on the event loop, not on a worker thread: this one runner serves every session
     of an instance, and a thread held per running turn would leave none to start the next."""
-    rec = _turns.get(turn_id)
-    if not rec:
-        raise HTTPException(404, "turn not found")
+    rec = _turn_of(turn_id, identifier)
     if wait > 0:
         deadline = time.monotonic() + min(wait, _TURN_HOLD_MAX_S)
         while time.monotonic() < deadline and not rec["done"] and len(rec["events"]) <= since:

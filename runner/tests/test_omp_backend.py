@@ -70,6 +70,18 @@ def test_an_openai_shape_turn_rides_the_loopback_relay_and_a_custom_endpoint_kee
     assert _HERMES_RELAY["routes"][cfg2["providers"]["hr"]["apiKey"]][:2] == ("https://relay.example/v1", "sk-test")
 
 
+def test_custom_responses_format_overrides_omp_model_family():
+    d = tempfile.mkdtemp()
+    _build_omp(
+        "openai-api",
+        Auth(api_key="test-key", base_url="https://relay.example/v1", api_format="responses"),
+        "vendor-model-without-family-prefix", "do work", d, {"HOME": d},
+    )
+    cfg = json.loads((pathlib.Path(d) / ".omp" / "agent" / "models.yml").read_text())
+    assert cfg["providers"]["hr"]["api"] == "openai-responses"
+    assert cfg["providers"]["hr"]["baseUrl"].startswith("http://127.0.0.1:")
+
+
 def test_the_served_model_rides_the_result_and_a_substitution_fails_the_turn():
     """omp names the model it ran on every assistant message (measured on 18.1.13). Richard's rule:
     the models are honest, no fallback; a turn run on another model fails with the reason."""
