@@ -37,6 +37,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/test-check-install-pins.py
       - run: python3 scripts/check-install-pins.py
+      - run: python3 scripts/test-install-env.py
 
   gateway:
     runs-on: ubuntu-latest

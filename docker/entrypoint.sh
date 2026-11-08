@@ -1398,10 +1398,13 @@ if "load_sessions" not in src:
 #
 # Qwen Code and Pi were installed with no version at all, once per volume: what npm served on the day
 # the volume was created is what it ran (#623). Qwen Code 0.26.3 is the release #609 and #614 ran
-# real turns on, and the runner's refusal handling was written against; Pi 0.84.2 is the release
-# the support matrix last ran. --ignore-scripts is pi's own documented install form.
+# real turns on, and the runner's refusal handling was written against. Pi 1.5.0 is what a volume
+# created since 2026-10-01 already runs (npm's latest then), so the pin moves no such volume back a
+# major; real turns on it (2026-11-08): a session made on 0.84.2 resumed, and new sessions on a chat
+# completions and a Responses connection wrote a file and recalled it. --ignore-scripts is pi's own
+# documented install form.
 QWEN_PIN="${HR_QWEN_VERSION:-0.26.3}"; QWEN_PIN="${QWEN_PIN#v}"
-PI_PIN="${HR_PI_VERSION:-0.84.2}"; PI_PIN="${PI_PIN#v}"
+PI_PIN="${HR_PI_VERSION:-1.5.0}"; PI_PIN="${PI_PIN#v}"
 # Pinned: 0.58.0 is the release runner/server.py's gemini code was verified against — the real
 # stream-json field names (tool_name/tool_id/parameters), --approval-mode/--skip-trust being
 # load-bearing, and --resume latest's semantics all came from reading THIS version's own source.
@@ -1464,6 +1467,9 @@ install_dsh() {
 HERMES_PIN="0.19.0"
 HERMES_BOTO3_PIN="1.43.126"
 # HR_HERMES_MCP_VERSION is a version. (HERMES_MCP_PIN, which it replaces, was a range.)
+if [ -n "${HERMES_MCP_PIN:-}" ]; then
+  echo "[harnessrouter] WARN: HERMES_MCP_PIN is no longer read; Hermes gets mcp ${HR_HERMES_MCP_VERSION:-1.30.0}. Set HR_HERMES_MCP_VERSION to an exact version to choose another."
+fi
 HERMES_MCP_PIN="${HR_HERMES_MCP_VERSION:-1.30.0}"
 HERMES_BREAKER=/app/runner/patches/hermes_mcp_breaker.py
 install_hermes() {
@@ -1505,10 +1511,36 @@ hermes_breaker() {
 # the "requested but not installed" line further down — which reads like a configuration choice,
 # not a broken install. An optional step may fail without stopping start-up; it may not fail
 # without leaving the reason where the person looking will find it.
+# What an installer's processes may read of this environment: an allow-list (#623 step 3, its
+# environment half). An install runs packages' own code (npm lifecycle scripts, setup.py, build
+# backends), and their dependencies still resolve within upstream's ranges until the locks land. Each
+# of those used to see the whole environment: HARNESS_INTERNAL_KEY, HR_AUTH_PASSWORD and every
+# provider key an operator passed with -e. Now each sees what fetching and building need: the path and
+# home, the locale, the proxy and CA settings, and the operator's registry settings (PIP_*, NPM_CONFIG_*,
+# UV_*). A base that needs a token to install gets that one name here, never the whole environment.
+# This stops code that reads or reports its environment. It does not stop code that sets out to read
+# the secrets: installs still run as root, who can read /proc/1/environ and /data/secret-key. Running
+# them as their own uid is what closes that.
+install_env_ok() {
+  case "$1" in
+    PATH|HOME|LANG|LANGUAGE|LC_*|TZ|TERM|TMPDIR|PWD|SHLVL|OLDPWD) return 0 ;;
+    HTTP_PROXY|HTTPS_PROXY|NO_PROXY|ALL_PROXY|http_proxy|https_proxy|no_proxy|all_proxy) return 0 ;;
+    SSL_CERT_FILE|SSL_CERT_DIR|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|NODE_EXTRA_CA_CERTS) return 0 ;;
+    PIP_*|NPM_CONFIG_*|npm_config_*|UV_*) return 0 ;;
+    DEBIAN_FRONTEND|PYTHONUNBUFFERED|NODE_PATH|PLAYWRIGHT_BROWSERS_PATH) return 0 ;;
+  esac
+  return 1
+}
+# install_env_only: in an install's own subshell, every other variable stays readable by this script
+# and is no longer exported to the processes the install starts.
+install_env_only() {
+  local v
+  for v in $(compgen -e); do install_env_ok "$v" || export -n "$v"; done
+}
 try_install() {
   label="$1"; shift
   log="$(mktemp)"
-  if "$@" >"$log" 2>&1; then rm -f "$log"; return 0; fi
+  if ( install_env_only; "$@" ) >"$log" 2>&1; then rm -f "$log"; return 0; fi
   echo "[harnessrouter] WARN: could not install $label — it will not be available:"
   tail -n 12 "$log" | sed 's/^/[harnessrouter]   /'
   rm -f "$log"
