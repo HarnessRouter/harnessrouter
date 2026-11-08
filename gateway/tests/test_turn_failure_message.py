@@ -76,3 +76,12 @@ def test_a_provider_refusing_the_tasks_earlier_reasoning_is_said_in_words():
     assert "invalid_request_error" not in gw._turn_failure_message(rec)
     plain = {"tried": [{"connection": "c", "status": "failed", "error": "boom"}]}
     assert gw._turn_failure_message(plain) == "The turn failed: boom"
+
+
+def test_a_refused_integration_is_named_by_its_vendor_not_the_runners_wiring():
+    """A custom OpenAI-format connection reaches some bases wired as another provider; the sentence
+    names what the operator connected (found 2026-11-08: "Your tokenrouter key was refused" for a
+    custom connection)."""
+    conn = {"name": "integration:My endpoint", "provider": "tokenrouter", "_vendor": "custom"}
+    assert gw._refusal_message(conn, "401: bad key") == "Your custom key was refused: 401: bad key"
+    assert gw._refusal_message({"provider": "openai"}, "") == "Your openai key was refused: the provider returned an error"

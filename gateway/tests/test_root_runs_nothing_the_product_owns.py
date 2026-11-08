@@ -40,7 +40,11 @@ def test_python_as_root_takes_no_module_from_its_directory():
             continue
         if "-m uvicorn server:app" in line:   # the runner, from /app/runner, which is root's
             continue
+        if line.lstrip().startswith("install_pinned_venv "):   # runs it as "$pv_py" -I, checked below
+            continue
         assert '"$PY" -I ' in line, line
+    for helper in ("lv_py", "uv_py"):
+        assert f'"${helper}" -I -m venv' in EP, helper
 
 
 def test_nothing_on_the_volume_is_followed_by_a_chown_or_a_chmod_of_root():
