@@ -2206,7 +2206,12 @@ async def _blob_put(file_id: str, data: bytes, kb: str = BLOB_KB) -> bool:
     return await BACKING.blob.put(kb, file_id, data)
 
 
-async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
+def _ckpt_params(sid: str, commit: bool) -> dict:
+    """The runner's /checkpoint query. commit=0 takes the tarball without committing (mid-turn)."""
+    return {"identifier": sid} if commit else {"identifier": sid, "commit": "0"}
+
+
+async def _checkpoint_relay(sid: str, commit: bool = True) -> tuple[bool, int, str, str]:
     """Stream the workspace tar from the runner /checkpoint straight into the VG blob PUT without
     ever holding the whole tarball in gateway memory (HR-INF-015). Folds sha256 + byte count over
     the stream as it flows. Returns (ok, nbytes, ws_sha, git_head). A 1 GiB workspace no longer
@@ -2222,7 +2227,7 @@ async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
         # laptop workspace is not the GB-scale tarball the streaming path exists for.
         try:
             rc0 = _relay_client()
-            r0 = await rc0.get(f"{POOL_ENDPOINT}/checkpoint", params={"identifier": sid},
+            r0 = await rc0.get(f"{POOL_ENDPOINT}/checkpoint", params=_ckpt_params(sid, commit),
                                headers=_pool_headers())
             if r0.status_code >= 400 or not r0.content:
                 return False, 0, "", ""
@@ -2238,7 +2243,7 @@ async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
 
     async def _pipe():
         nonlocal nbytes, git_head
-        req = rc.build_request("GET", f"{POOL_ENDPOINT}/checkpoint", params={"identifier": sid},
+        req = rc.build_request("GET", f"{POOL_ENDPOINT}/checkpoint", params=_ckpt_params(sid, commit),
                                headers=_pool_headers())
         resp = await rc.send(req, stream=True)
         try:
@@ -2869,11 +2874,12 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             if pause is not None:
                 await asyncio.sleep(pause)
         if rec["hydrated"]:
-            # The workspace is now EXACTLY the checkpoint, which is only ever taken at the end of a
-            # turn. Anything an app wrote since then has just been wiped out of it, so put it back
+            # The workspace is now EXACTLY the checkpoint, which is taken at the end of a turn (or
+            # during one, #505). Anything an app wrote since then has just been wiped out of it, so put it back
             # before the agent opens the file. The warm-resume branch above returns early and never
             # reaches this: that workspace was never wiped, so it still holds those writes.
-            rec["app_writes_reapplied"] = await _reapply_app_writes(sid)
+            rec["app_writes_reapplied"] = await _reapply_app_writes(
+                sid, float(v.get("ws_mid_turn_at") or 0))
         if not rec["hydrated"] and want_sha:
             # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed, every time. The turn
             # must not run on this workspace (the caller refuses it), and this turn must never
@@ -2895,8 +2901,15 @@ def _hydrate_reason(rec: dict) -> str:
     return err or "unknown"
 
 
-async def _checkpoint(sid: str, rec: dict) -> None:
-    """Pull the committed /workspace from the sandbox and persist it to durable blob storage."""
+async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False) -> None:
+    """Pull the committed /workspace from the sandbox and persist it to durable blob storage.
+
+    `mid_turn`: taken after a tool step while the turn runs (_step_checkpoint_maybe, #505). It does
+    not commit, and the session records when it was taken (ws_mid_turn_at, read by
+    _reapply_app_writes). The end-of-turn checkpoint first settles any mid-turn one, so it is
+    always the last write, and clears the stamp."""
+    if not mid_turn:
+        await _step_checkpoint_settle(sid)
     _ws_tar_evict(sid)             # workspace changed — next file open refetches
     _WS_FILES_CACHE.pop(sid, None)
     _bus_publish("_ctrl", "_ctrl", "", sid, "", {"type": "hr.ctrl.ws_invalidate"})  # all replicas
@@ -2922,7 +2935,8 @@ async def _checkpoint(sid: str, rec: dict) -> None:
             except Exception:  # noqa: BLE001
                 pass
         # Stream runner tar -> VG blob without buffering the whole workspace (HR-INF-015).
-        ok, nbytes, ws_sha, git_head = await _checkpoint_relay(sid)
+        taken_at = time.time()     # before the tar: what an app wrote before this is in it
+        ok, nbytes, ws_sha, git_head = await _checkpoint_relay(sid, commit=not mid_turn)
         if nbytes > 0:
             rec["checkpoint_bytes"] = nbytes
             rec["checkpointed"] = ok
@@ -2932,11 +2946,120 @@ async def _checkpoint(sid: str, rec: dict) -> None:
             if ok:
                 rec["ws_sha"] = ws_sha
                 await _vertex_upsert(sid, {"checkpoint_bytes": str(nbytes), "git_head": git_head,
-                                           "ws_sha": ws_sha})
+                                           "ws_sha": ws_sha,
+                                           "ws_mid_turn_at": str(taken_at) if mid_turn else ""})
             else:
                 rec["checkpoint_error"] = "durable workspace upload failed; ws_sha not advanced"
     except Exception as e:  # noqa: BLE001
         rec["checkpoint_error"] = str(e)[:200]
+
+
+# ── checkpoints while a turn runs (#505) ──────────────────────────────────────────
+# A workspace was checkpointed only when its turn ended, so a sandbox that died mid-turn took every
+# step since the last turn with it: hosted, the workspace and its marker live in the sandbox's /tmp.
+# A checkpoint is now also taken after a completed tool step, in the background, one at a time per
+# session and at most one per interval. A step inside the interval is not dropped: it is saved when
+# the interval ends, so the last step before a long one (a build, a sleep) is in a checkpoint too.
+# Self-hosted, the workspace on /data already outlives a restart (#530), so the default is on only
+# where the workspace is a checkpoint tarball (the vg backing).
+_STEP_CKPT = os.environ.get("HR_STEP_CHECKPOINT", "").strip().lower()
+STEP_CKPT_EVERY_S = float(os.environ.get("HR_STEP_CHECKPOINT_EVERY_S", "30"))
+# A workspace whose checkpoint is bigger than this is checkpointed when the turn ends only: the
+# tarball is pulled and uploaded whole each time.
+STEP_CKPT_MAX_BYTES = int(os.environ.get("HR_STEP_CHECKPOINT_MAX_BYTES", str(256 * 1024 * 1024)))
+# sid -> the running turn's worker: {"rec" (the turn's record), "task", "dirty" (a step not yet
+# saved), "busy" (a checkpoint is being written), "last" (when the last one started), "off" (over
+# the size limit)}
+_step_ckpt: dict[str, dict] = {}
+
+
+def _step_ckpt_enabled() -> bool:
+    if _STEP_CKPT in ("1", "true", "on", "yes"):
+        return True
+    if _STEP_CKPT in ("0", "false", "off", "no"):
+        return False
+    return BACKING.mode == "vg"
+
+
+def _tool_step_done(events: list) -> bool:
+    """Whether these events finish a tool step: a tool's result, in the Claude-shaped stream every
+    normaliser emits (the block _blocks_from_canonical turns into a tool_result)."""
+    for ev in events:
+        if not isinstance(ev, dict) or ev.get("type") != "user":
+            continue
+        content = (ev.get("message") or {}).get("content")
+        if isinstance(content, list) and any(isinstance(c, dict) and c.get("type") == "tool_result"
+                                             for c in content):
+            return True
+    return False
+
+
+def _step_checkpoint_maybe(sid: str, rec: dict, events: list) -> None:
+    """Called with each batch of a running turn's events. Never waits: the stream is not held for a
+    tarball."""
+    if not events or not _step_ckpt_enabled() or not _tool_step_done(events):
+        return
+    st = _step_ckpt.get(sid)
+    if st is None or st["rec"] is not rec:
+        # A new turn starts its own; a worker an earlier turn left behind (it ended without the
+        # end-of-turn checkpoint that settles it) is stopped unless it is writing.
+        if st is not None and st["task"] is not None and not st["busy"]:
+            st["task"].cancel()
+        st = _step_ckpt[sid] = {"rec": rec, "task": None, "dirty": False, "busy": False,
+                                "last": 0.0, "off": False}
+    if st["off"]:
+        return
+    st["dirty"] = True
+    if st["task"] is None or st["task"].done():
+        st["task"] = asyncio.create_task(_step_checkpoint_run(sid, rec, st))
+
+
+async def _step_checkpoint_run(sid: str, rec: dict, st: dict) -> None:
+    try:
+        while st["dirty"] and not st["off"]:
+            wait = st["last"] + STEP_CKPT_EVERY_S - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            st["dirty"] = False
+            st["last"] = time.time()
+            st["busy"] = True
+            try:
+                await _step_checkpoint(sid, rec, st)
+            finally:
+                st["busy"] = False
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:  # noqa: BLE001 — a mid-turn checkpoint never fails the turn
+        print(f"[checkpoint] mid-turn sid={sid} {type(e).__name__}: {str(e)[:160]}", flush=True)
+
+
+async def _step_checkpoint(sid: str, rec: dict, st: dict) -> None:
+    size = rec.get("_step_ckpt_bytes")
+    if size is None:
+        size = int(float(((await _vertex_get(sid)) or {}).get("checkpoint_bytes") or 0))
+    if size > STEP_CKPT_MAX_BYTES:
+        st["off"] = True
+        return
+    # Written into a record of its own: a mid-turn outcome must not stand in for the turn's
+    # (checkpoint_error is never cleared by a later success). The guards it reads are the turn's.
+    out = {k: rec[k] for k in ("lease_fence", "tenant", "hydrate_failed_with_checkpoint") if k in rec}
+    await _checkpoint(sid, out, mid_turn=True)
+    rec["_step_ckpt_bytes"] = int(out.get("checkpoint_bytes") or size)
+    if out.get("checkpointed"):
+        rec["step_checkpoints"] = int(rec.get("step_checkpoints") or 0) + 1
+
+
+async def _step_checkpoint_settle(sid: str) -> None:
+    """Before the end-of-turn checkpoint: one being written is waited for, so the end-of-turn one is
+    the last write; one waiting out its interval is dropped, since the end-of-turn one covers it."""
+    st = _step_ckpt.pop(sid, None)
+    t = st["task"] if st else None
+    if t is None or t.done():
+        return
+    st["dirty"] = False
+    if not st["busy"]:
+        t.cancel()
+    await asyncio.wait({t})
 
 
 # ── HarnessSession vertex (best-effort; never blocks a turn) ──────────────────────
@@ -3246,6 +3369,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
                             _emit(oev)
                     except Exception:  # noqa: BLE001
                         continue
+                _step_checkpoint_maybe(sid, rec, new)    # as on the primary loop (#505)
                 # Advance the durable per-turn cursor as WE harvest, so if this adopter also dies a
                 # third replica resumes correctly (adoption chains without re-flushing).
                 try:
@@ -10111,6 +10235,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         await emit(oev)
                 fed_upto = n_total
                 pending.extend(new)
+                _step_checkpoint_maybe(sid, rec, new)    # a finished tool step is saved (#505)
             # HR-INF-014: the durable trace is the authority and must not lose events. It is written
             # once per interval rather than once per answer (a stream of token deltas would otherwise
             # be a chunk each), and at the turn's end; a failed write keeps `pending` for the next.
@@ -12640,8 +12765,10 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
     return (await _capture_state(sid))[0]
 
 
-async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[str, float]]:
-    """(_newest_captures, the tombstones: path -> when it was removed).
+async def _capture_state(sid: str, stamps: dict[str, float] | None = None
+                         ) -> tuple[dict[str, tuple[str, bool]], dict[str, float]]:
+    """(_newest_captures, the tombstones: path -> when it was removed). `stamps`, when given, is
+    filled with when each returned capture was written.
 
     The captures are the window they always were (a first page of 200 metas). The tombstones are
     kept under their own prefix and read IN FULL: inside that window a tombstone could fall out of
@@ -12683,6 +12810,8 @@ async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[st
                            meta.get("source") == "app")
     if tombs:
         out = {n: v for n, v in out.items() if not _tombstoned(n, newest[n], tombs)}
+    if stamps is not None:
+        stamps.update({n: newest[n] for n in out})
     return out, tombs
 
 
@@ -12776,25 +12905,36 @@ async def _cfile_by_name(sid: str) -> dict[str, str]:
     return {name: cid for name, (cid, _app) in (await _newest_captures(sid)).items()}
 
 
-async def _reapply_app_writes(sid: str) -> int:
+async def _reapply_app_writes(sid: str, mid_turn_at: float = 0.0) -> int:
     """Put back the files an APP wrote since the last checkpoint, into a freshly hydrated workspace.
 
-    Hydrate restores the checkpoint, and the checkpoint is only ever taken when a TURN ends. So a
-    sheet somebody edited between turns is not in it: without this the agent would open the older
+    Hydrate restores the checkpoint, and the checkpoint is taken while a TURN runs or when it ends.
+    So a sheet somebody edited between turns is not in it: without this the agent would open the older
     copy, write it back, and the person's rows would be gone — the same loss the durable capture
     fixes for reads, arriving one turn later instead.
 
     The test is deliberately conservative: re-apply ONLY where the app's capture is the newest one
     for that filename. If the agent touched the same file in its last turn, its capture is newer,
     the checkpoint already holds it, and this leaves it alone. That way the repair can never be the
-    thing that overwrites the agent's work."""
+    thing that overwrites the agent's work.
+
+    `mid_turn_at`: the checkpoint restored was taken WHILE a turn ran, at that time (#505), and that
+    turn never ended: its sandbox died. The test above leans on the agent's edits being captured when
+    its turn ends, so here they are in the checkpoint and in no capture, and the app's older capture
+    still reads as the newest — re-applying it would put the app's copy over the agent's edit. An
+    app cannot write while a turn runs (_refuse_if_busy), so a capture written before the checkpoint
+    was taken is already in it, or the agent changed it since; only a newer one is put back."""
+    stamps: dict[str, float] = {}
     try:
-        caps = await _newest_captures(sid)
+        caps = ((await _capture_state(sid, stamps))[0] if mid_turn_at
+                else await _newest_captures(sid))
     except Exception:  # noqa: BLE001 — blob store unavailable: the turn still runs
         return 0
     n = 0
     for name, (cid, from_app) in caps.items():
         if not from_app or not _ws_path_allowed(name):    # an app's write of this kind from before the rule stays out
+            continue
+        if mid_turn_at and stamps.get(name, 0.0) <= mid_turn_at:
             continue
         try:
             got = await _container_file_bytes(sid, cid)
