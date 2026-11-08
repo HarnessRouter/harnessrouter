@@ -82,7 +82,7 @@ jobs:
       # and the driver's tests run it as a subprocess against a stub Managed API.
       # boto3 (botocore inside): the relay signs Bedrock calls itself, and its tests check every signature
       # against botocore's own for the same request; without it they skip.
-      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx boto3 "systemone-harness @ git+https://github.com/HarnessRouter/SystemOneHarness@3266a17537e283dc5539439835c0b4cab02bf5c0" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
+      - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx boto3 "systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/archive/3266a17537e283dc5539439835c0b4cab02bf5c0.tar.gz" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
       - run: python -m pytest runner/tests -q
 
   conformance:

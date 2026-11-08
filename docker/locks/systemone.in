@@ -1,0 +1,2 @@
+systemone-harness[browser] @ https://github.com/HarnessRouter/SystemOneHarness/archive/3266a17537e283dc5539439835c0b4cab02bf5c0.tar.gz
+playwright==1.64.1
