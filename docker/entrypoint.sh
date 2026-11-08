@@ -1089,14 +1089,17 @@ install_mimo() {
 
 # Pin the release archives independently of the download host's checksum files.
 RODER_PIN="${HR_RODER_VERSION:-0.4.8}"
+RODER_SHA="$(pin_sha RODER 0.4.8 "$RODER_PIN" "$(by_arch \
+  de6a8a642894164004d4fd434c6a6f44ec08657083bf2b1420a97f7f4fd00a31 \
+  978a84c872d22301036dd6f3d707559d1b9648bd9e6aa4149dd52c6456c68af5)")"
 install_roder() {
   case "$(uname -m)" in
-    x86_64) rd_arch="x86_64"; rd_expected="de6a8a642894164004d4fd434c6a6f44ec08657083bf2b1420a97f7f4fd00a31" ;;
-    aarch64|arm64) rd_arch="aarch64"; rd_expected="978a84c872d22301036dd6f3d707559d1b9648bd9e6aa4149dd52c6456c68af5" ;;
+    x86_64) rd_arch="x86_64" ;;
+    aarch64|arm64) rd_arch="aarch64" ;;
     *) echo "unsupported architecture for Roder: $(uname -m)"; return 1 ;;
   esac
   # An operator selecting a different release must supply that archive's trusted checksum.
-  if [ "$RODER_PIN" != "0.4.8" ]; then rd_expected="${HR_RODER_SHA256:-}"; fi
+  rd_expected="$RODER_SHA"
   if [[ ! "$rd_expected" =~ ^[0-9a-f]{64}$ ]]; then
     echo "Roder: set HR_RODER_SHA256 for version $RODER_PIN"; return 1
   fi
@@ -1680,9 +1683,9 @@ install_backends() {
     install_base mimo "MiMo Code" install_mimo || true
   fi
 
-  if wanted roder && [ "$("$(backend_bin roder)" --version 2>/dev/null | awk '{print $2}')" != "$RODER_PIN" ]; then
+  if wanted roder && ! current roder "$(ident "$RODER_PIN" "$RODER_SHA")"; then
     echo "[harnessrouter] installing Roder $RODER_PIN (MIT, version-pinned)…"
-    try_install "Roder" install_roder || true
+    install_base roder "Roder" install_roder || true
   fi
 
   if wanted jcode && ! current jcode "$(ident "$JCODE_PIN" "$JCODE_SHA")"; then

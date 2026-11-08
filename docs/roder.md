@@ -21,8 +21,9 @@ collects provider-reported model and usage independently of the CLI.
 
 Roder is opt-in until its live provider column is measured. Add `roder` to
 `HR_BACKENDS` to install the MIT-licensed `roder/v0.4.8` release. The installer
-checks the installed version and verifies its Linux archive against a SHA256
-committed in `docker/entrypoint.sh` before replacing the binary.
+checks the installed version and checksum stamp, then verifies its Linux archive
+against a SHA256 committed in `docker/entrypoint.sh` before replacing the binary.
+It stamps successful installs and removes stale binaries if replacement fails.
 
 To select another release, set `HR_RODER_VERSION` (without the `roder/v` prefix)
 and `HR_RODER_SHA256` to that architecture's trusted archive checksum.
