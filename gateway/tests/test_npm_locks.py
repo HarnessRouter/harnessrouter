@@ -70,6 +70,12 @@ def test_every_package_is_fetched_by_url_and_digest(name):
         assert key.startswith("node_modules/"), key
         assert entry.get("resolved", "").startswith("https://"), key
         assert entry.get("integrity", "").startswith("sha512-"), key
+        # The registry, or for minimax's own package the release archive its spec names; no other
+        # host and no git or github: shorthand.
+        if name == "minimax" and key == "node_modules/@minimax-ai/code":
+            assert entry["resolved"] == default_specs()["MINIMAX_SPEC"].split("@", 2)[2], key
+        else:
+            assert entry["resolved"].startswith("https://registry.npmjs.org/"), key
 
 
 @pytest.mark.parametrize("name", ["claude", "qwen", "pi-mcp-adapter", "minimax"])
@@ -100,3 +106,15 @@ def test_npm_ci_runs_no_install_scripts():
     assert '( cd "$nl_dir" && npm ci --ignore-scripts --no-audit --no-fund )' in SRC
     # The scripts that do run are named, one call each.
     assert re.findall(r"install_npm \w+ \"\$\w+\" (@[^\s;]+)", SRC) == ["@anthropic-ai/claude-code"]
+
+
+def test_the_one_install_script_is_claudes():
+    """Every locked npm install runs with --ignore-scripts; the only package whose own script runs is
+    Claude Code's (npm rebuild of exactly that package). A second name, on install_npm or on a direct
+    npm_locked call, or a second rebuild, fails here rather than widening what runs as root."""
+    code = "\n".join(l for l in SRC.splitlines() if not l.lstrip().startswith("#"))
+    calls = re.findall(r"\b(?:install_npm \w+ \"\$\w+\"|npm_locked [\w-]+)([^;|)\n]*)", code)
+    extra = [c.split("||")[0].strip() for c in calls]
+    assert [e for e in extra if e] == ["@anthropic-ai/claude-code"], calls
+    assert len(re.findall(r"\bnpm rebuild\b", code)) == 1
+    assert len(re.findall(r"\bnpm ci\b", code)) == 1 and "npm ci --ignore-scripts" in code
