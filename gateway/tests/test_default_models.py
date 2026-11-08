@@ -61,7 +61,9 @@ def test_the_console_preselects_the_catalogs_default():
 
 
 def test_gpt_6_1_sol_is_the_default_where_gpt_5_4_was_and_it_runs():
-    sol = sorted(b for b, e in gw._MODEL_CATALOG.items() if e["default"] == "gpt-6.1-sol")
+    # a base still qualifying its catalog (gw._STILL_QUALIFYING) has not run the five scenarios yet
+    sol = sorted(b for b, e in gw._MODEL_CATALOG.items()
+                 if e["default"] == "gpt-6.1-sol" and b not in gw._STILL_QUALIFYING)
     # where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter (2026-10-22; dcode 2026-10-27)
     assert sol == sorted(["codex", "hermes", "pi", "opencode", "kilo", "omp", "goose", "aider", "agentzero", "mimo",
                           "dcode"])

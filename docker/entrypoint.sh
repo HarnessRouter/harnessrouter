@@ -299,6 +299,8 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 # did not opt into is a row that fails on its first turn with no explanation. Disk is the
 # trade — jcode is a ~127 MB static Rust binary and the two Python bases bring their own venvs —
 # and an operator who wants them out sets HR_BACKENDS.
+# (A base left out is no longer a failing row: the list of what installed is exported to the
+# gateway as HR_BACKENDS_INSTALLED below, and the console does not offer the rest.)
 export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,zeroclaw,qoder,vibe,docker-agent,fast-agent,dcode}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
@@ -332,6 +334,7 @@ backend_bin() {
     # interpreter is what "installed" means here.
     qoder) echo "$TOOLS/qoder-venv/bin/python" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
+    roder)  echo "$TOOLS/bin/roder" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;
     opensquilla) echo "$TOOLS/opensquilla-venv/bin/opensquilla" ;;
     vibe) echo "$TOOLS/vibe-venv/bin/vibe" ;;
@@ -1073,6 +1076,41 @@ install_mimo() {
   fi
 }
 
+# Roder (MIT, RoderAI/roder) publishes one archive per Linux target, holding the binary and a
+# README. 0.4.8 is the release runner/roder_backend.py and runner/roder_driver.py were measured
+# against: its app-server protocol, its tool names (roder_backend.TOOLS) and what it writes under
+# RODER_DATA_DIR. The digests are committed here for omp's reason; computed from the two assets
+# (2026-11-08), they agree with the release's .sha256 files and GitHub's asset digests. Opt-in: not
+# in the default HR_BACKENDS until its live provider column is measured.
+RODER_PIN="${HR_RODER_VERSION:-0.4.8}"; RODER_PIN="${RODER_PIN#v}"
+RODER_SHA="$(pin_sha RODER 0.4.8 "$RODER_PIN" "$(by_arch \
+  de6a8a642894164004d4fd434c6a6f44ec08657083bf2b1420a97f7f4fd00a31 \
+  978a84c872d22301036dd6f3d707559d1b9648bd9e6aa4149dd52c6456c68af5)")"
+install_roder() {
+  case "$HR_ARCH" in
+    amd64) rd_arch="x86_64" ;;
+    arm64) rd_arch="aarch64" ;;
+    *) echo "unsupported architecture $HR_ARCH for Roder"; return 1 ;;
+  esac
+  rd_asset="roder-$rd_arch-unknown-linux-gnu"
+  rd_tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/RoderAI/roder/releases/download/roder/v${RODER_PIN}/$rd_asset.tar.gz" \
+    -o "$rd_tmp/roder.tar.gz" || { rm -rf "$rd_tmp"; return 1; }
+  check_sha "Roder $RODER_PIN" "$rd_tmp/roder.tar.gz" "$RODER_SHA" || { rm -rf "$rd_tmp"; return 1; }
+  tar -xzf "$rd_tmp/roder.tar.gz" --no-same-owner -C "$rd_tmp" "$rd_asset/roder" || { rm -rf "$rd_tmp"; return 1; }
+  # A Roder-only install on a fresh volume (HR_BACKENDS=roder) is the first to write here.
+  mkdir -p "$TOOLS/bin" && install -m 755 "$rd_tmp/$rd_asset/roder" "$TOOLS/bin/roder" \
+    || { rm -rf "$rd_tmp"; return 1; }
+  rm -rf "$rd_tmp"
+  # PROVE IT RUNS, and that it is the version that was pinned, as jcode's install does. Measured on
+  # 0.4.8: `roder --version` prints "roder 0.4.8", reads no stdin and writes nothing to HOME or the
+  # working directory.
+  rd_got="$("$TOOLS/bin/roder" --version </dev/null 2>/dev/null | awk '{print $2}')"
+  if [ "$rd_got" != "$RODER_PIN" ]; then
+    echo "Roder installed but reports '${rd_got:-nothing}', wanted $RODER_PIN"; rm -f "$TOOLS/bin/roder"; return 1
+  fi
+}
+
 # jcode (MIT, 1jehuang/jcode) publishes one prebuilt archive per target. v0.90.0 is the release
 # _build_jcode and _jcode_to_claude were measured against — the NDJSON event names, the per-request
 # `tokens` accounting, the resume error text and the tool ids all came out of this build. The
@@ -1750,6 +1788,12 @@ install_backends() {
     echo "[harnessrouter] installing MiMo Code $MIMO_PIN (MIT)…"
     install_base mimo "MiMo Code" install_mimo || true
   fi
+
+  if wanted roder && ! current roder "$(ident "$RODER_PIN" "$RODER_SHA")"; then
+    echo "[harnessrouter] installing Roder $RODER_PIN (MIT), ~102 MB…"
+    install_base roder "Roder" install_roder || true
+  fi
+
   if wanted jcode && ! current jcode "$(ident "$JCODE_PIN" "$JCODE_SHA")"; then
     echo "[harnessrouter] installing jcode $JCODE_PIN (MIT) — ~127 MB…"
     install_base jcode "jcode" install_jcode || true
@@ -1852,6 +1896,10 @@ for b in ${HR_BACKENDS//,/ }; do
   if [ -x "$(backend_bin "$b")" ]; then avail="$avail $b"; else missing="$missing $b"; fi
 done
 echo "[harnessrouter] data=$DATA_DIR  backends available:${avail:- none}"
+# The same list, for the gateway and the console: a base the catalog lists and this volume does not
+# hold (an opt-in one like roder, or one whose install failed) reads "not installed" there, and a
+# turn on it is refused in words, rather than offered as ready and failing at its first turn.
+export HR_BACKENDS_INSTALLED="$(echo $avail | tr ' ' ',')"
 if [ -n "$missing" ]; then
   echo "[harnessrouter] WARN: requested but not installed:$missing — those backends cannot run"
 fi
