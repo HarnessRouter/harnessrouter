@@ -64,7 +64,6 @@ import shlex
 import shutil
 import signal
 import sys
-import roder_backend
 import contextlib
 import ctypes
 import socket
@@ -92,6 +91,7 @@ import environments   # the read-only project layer a turn may name (runner/envi
 import reasoning      # how much a model thinks on a turn: levels and what sets them (runner/reasoning.py)
 import tracecontext   # the caller's W3C trace context: its checks and a child for the relay (#473)
 import ask_user_mcp   # the `ask_user` tool a base asks the person through, and what its arguments mean (#476)
+import roder_backend   # Roder's app-server base: its builder, tool table and stream (runner/roder_backend.py)
 
 app = FastAPI(title="harness-runner")
 
@@ -887,7 +887,15 @@ HARNESS_STATE = ".harness"
 # 3 s, the other two with no visible cost. NOT here: opencode's npm cache, whose rebuild cost a turn
 # 20 s. The CLI home is already out of the workspace's own git history (see _git_ensure), so the tar
 # is the one place these travelled.
-_REBUILT_CACHES = (".harness/home/.omp/natives", ".harness/home/.codex/.tmp", ".harness/home/.cache/pkg")
+_REBUILT_CACHES = (".harness/home/.omp/natives", ".harness/home/.codex/.tmp", ".harness/home/.cache/pkg",
+                   # Roder 0.4.8 under RODER_DATA_DIR (.harness/roder): its code index of the workspace
+                   # (code-index/<workspace hash>/code-index.sqlite3, extension-host context.rs), the
+                   # tool and skill discovery catalog it writes at every start (discovery/,
+                   # roder-tools discovery.rs) and its provider models cache (models-cache.json,
+                   # openai-responses provider.rs). Each is made again when missing. NOT here: its
+                   # threads (the conversation), memory/ and knowledge/ (what the agent saved), and
+                   # threads/discovery-state (a thread's promoted tools).
+                   ".harness/roder/code-index", ".harness/roder/discovery", ".harness/roder/models-cache.json")
 
 # .git history travels in the tarball, so these must be git-ignored too (see _git_ensure).
 # Persist conversation transcripts ($HOME -> .harness/home: ~/.claude/projects, ~/.codex/sessions)
@@ -1178,7 +1186,10 @@ _PER_TURN_CONFIG = (".harness/opencode.json", ".harness/kilo.json", ".harness/mc
                     ".harness/mcp-bridge/")
 # A base's own state directory outside the CLI home, which it rewrites on every turn (see
 # _git_ensure). Not in the checkpoint repo; in the tar like .harness/home.
-_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/", ".harness/zeroclaw/")
+_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/", ".harness/zeroclaw/",
+               # Roder's store: its threads, SQLite stores (analytics, memory, the code index) and
+               # discovery catalog change on every turn, as goose's do
+               ".harness/roder/")
 
 
 def _git_ensure(ws: str) -> None:
@@ -17492,7 +17503,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         elif backend == "roder":
             model = model or roder_backend.DEFAULT_MODEL
             cmd = roder_backend.build(req.provider, auth, model, req.prompt, cwd, env,
-                                      relay=_hermes_relay_route, resume_session_id=req.resume_session_id,
+                                      relay=_hermes_relay_route, driver_cmd=_driver_cmd,
+                                      resume_session_id=req.resume_session_id,
                                       mcp_servers=[{**s, "auth": None, "headers": _mcp_headers(s)}
                                                    for s in (req.mcp_servers or [])],
                                       tools_disabled=req.tools_disabled, thinking=_TURN_THINKING.get())

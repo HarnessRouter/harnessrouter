@@ -281,10 +281,11 @@ export const OOB: OobHarness[] = [
     tools: [], skills: [] },
 ];
 
-/** The built-in harnesses a person can pick: the ones the server's bases document lists. None until
+/** The built-in harnesses a person can pick: the ones the server's bases document lists, less any it
+ *  says this instance has not installed (an opt-in base, or one whose install failed). None until
  *  it has been read (useBasesRead says whether it could be). */
 export function offeredOob(bases: Record<string, BaseInfo> | null): OobHarness[] {
-  return OOB.filter((o) => o.status === 'ready' && !!bases?.[o.id]);
+  return OOB.filter((o) => o.status === 'ready' && !!bases?.[o.id] && bases[o.id].status !== 'not_installed');
 }
 
 /** A base by its id, or by the backend it runs: the gateway takes either for a setup's base, so a setup made through the
@@ -378,7 +379,8 @@ export function modelAvailable(backend: string | null | undefined, id: string): 
 export interface BaseTool { name: string; label: string; enforcement: 'hard' | 'instruction' }
 export interface BuiltinSkill { name: string; title: string; description: string; defaultEnabled: boolean; origin: string }
 export interface BaseInfo {
-  id: string; label: string; backend: string; status: string; systemPrompt: string;
+  /** `not_installed` for a base this instance does not hold, with `statusReason` saying so in words. */
+  id: string; label: string; backend: string; status: string; statusReason?: string; systemPrompt: string;
   defaultModel: string;
   /** `reasoning`: the thinking levels the model has, lowest first; empty or absent where it has
    *  none to offer. The control is drawn from this list and never from one kept here. */

@@ -53,7 +53,7 @@ def endpoint():
                 if entry["type"] == "message":
                     events.append({"type": "response.output_text.delta", "item_id": entry["id"],
                         "output_index": index, "content_index": 0, "delta": entry["content"][0]["text"]})
-                else:
+                elif entry["type"] == "function_call":
                     events.append({"type": "response.function_call_arguments.delta", "item_id": entry["id"],
                         "output_index": index, "delta": entry["arguments"]})
                 events.append({"type": "response.output_item.done", "output_index": index, "item": entry})
@@ -81,11 +81,13 @@ def message(text):
 
 
 def turn(endpoint, workspace, *, model="gpt-6.1-sol", resume=None, disabled=None, mcp=None, prompt="Remember NONCE-419", merged_stderr=False):
+    import server
     env = {**os.environ, "HOME": str(workspace / ".harness/home"), "HR_RODER_BIN": BINARY}
     pathlib.Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
     auth = SimpleNamespace(api_key="test-placeholder", base_url=f"http://127.0.0.1:{endpoint.server_port}/v1", api_format="responses")
     cmd = roder_backend.build("openai", auth, model, prompt, str(workspace), env,
-        relay=lambda b,k: (b,k), resume_session_id=resume, tools_disabled=disabled, mcp_servers=mcp)
+        relay=lambda b, k, **_: (b, k), driver_cmd=server._driver_cmd, resume_session_id=resume,
+        tools_disabled=disabled, mcp_servers=mcp)
     result = subprocess.run(cmd, cwd=workspace, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT if merged_stderr else subprocess.PIPE, text=True, timeout=40)
     events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
@@ -188,7 +190,8 @@ def test_real_binary_runs_through_the_runners_relay_and_result_collector(endpoin
     pathlib.Path(env["HOME"]).mkdir(parents=True)
     cmd = roder_backend.build("openai", server.Auth(api_key="provider-placeholder",
         base_url=f"http://127.0.0.1:{endpoint.server_port}/v1", api_format="responses"),
-        "gpt-6.1-sol", "Reply PROBE-OK", str(tmp_path), env, relay=server._hermes_relay_route)
+        "gpt-6.1-sol", "Reply PROBE-OK", str(tmp_path), env, relay=server._hermes_relay_route,
+        driver_cmd=server._driver_cmd)
     turn_id = "roder-qualification-" + uuid.uuid4().hex
     server._turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
                               "started": time.time(), "backend": "roder", "model": "gpt-6.1-sol"}
@@ -211,3 +214,129 @@ def test_current_model_ids_reach_the_responses_endpoint_unchanged(endpoint, tmp_
     events = turn(endpoint, tmp_path, model=model)
     assert events[-1]["subtype"] == "success", events
     assert endpoint.requests[-1]["model"] == model
+
+
+# ── the tool table (roder_backend.TOOLS and WITHHELD) against the pinned release ─────────────────
+
+def _tools_list(tmp_path, model):
+    """What the app-server answers to tools/list for `model` with NO allowlist: every built-in."""
+    root = tmp_path / model / ".harness" / "roder"
+    root.mkdir(parents=True)
+    (root / "config.toml").write_text(f'provider = "hr"\nmodel = {json.dumps(model)}\n'
+        'runtime_profile = "non_interactive"\n[providers.hr]\napi_key_env = "HR_RODER_KEY"\n'
+        'base_url = "http://127.0.0.1:9/v1"\n')
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(root.parent / "home"),
+           "RODER_CONFIG_DIR": str(root), "RODER_DATA_DIR": str(root), "HR_RODER_KEY": "placeholder"}
+    proc = subprocess.run([BINARY, "app-server"], cwd=root.parent.parent, env=env, timeout=40, text=True,
+        input=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}) + "\n",
+        capture_output=True)
+    for line in proc.stdout.splitlines():
+        if line.startswith("{") and json.loads(line).get("id") == 1:
+            return {tool["name"] for tool in json.loads(line)["result"]["tools"]}
+    raise AssertionError(proc.stderr[-2000:])
+
+
+def test_every_builtin_tool_of_the_release_is_placed_once(tmp_path):
+    """Each tool the pinned release has is behind exactly one switch or withheld: a release that
+    adds one fails here until it is placed, so no tool is offered that no switch reaches."""
+    offered = {n for names in roder_backend.TOOLS.values() for n in names}
+    known = offered | roder_backend.WITHHELD
+    assert not offered & roder_backend.WITHHELD
+    gpt = _tools_list(tmp_path, "gpt-6.1-sol")
+    claude = _tools_list(tmp_path, "claude-opus-5.5")
+    assert gpt | claude == known, (sorted((gpt | claude) - known), sorted(known - (gpt | claude)))
+    # the edit family is the model's: a gpt model is given apply_patch alone
+    assert claude - gpt == {"edit", "multi_edit", "write_file"}
+
+
+def _names(request):
+    return {tool.get("name") or tool.get("type") for tool in request["tools"]}
+
+
+def test_the_model_is_offered_the_switches_tools_and_none_withheld(endpoint, tmp_path):
+    events = turn(endpoint, tmp_path)
+    assert events[-1]["subtype"] == "success", events
+    names = _names(endpoint.requests[-1])
+    wire = {n.replace(".", "_") for names in roder_backend.TOOLS.values() for n in names}
+    assert names - {"web_search"} <= wire
+    assert {"exec_command", "shell", "apply_patch", "read_file", "update_plan"} <= names
+    assert not names & {n.replace(".", "_") for n in roder_backend.WITHHELD}
+    assert "web_search" in names                     # the provider's hosted search, on by default
+    turn(endpoint, tmp_path, disabled=["exec_command", "web_search"])
+    names = _names(endpoint.requests[-1])
+    assert not names & {"exec_command", "shell", "unified_exec", "write_stdin", "web_search"}
+
+
+@pytest.mark.parametrize("tool", ["shell", "echo"])
+def test_a_call_to_a_switched_off_or_withheld_tool_is_refused(endpoint, tmp_path, tool):
+    def output(body):
+        if any(entry.get("type") == "function_call_output" for entry in body["input"]):
+            return message("REFUSED-OK")
+        return [{"id": "fc_off", "call_id": "call_off", "type": "function_call", "name": tool,
+                 "arguments": json.dumps({"command": "touch ran.txt", "text": "x"}), "status": "completed"}]
+    endpoint.output = output
+    events = turn(endpoint, tmp_path, disabled=["exec_command"])
+    assert events[-1]["subtype"] == "success", events
+    sent = next(e for e in endpoint.requests[-1]["input"] if e.get("type") == "function_call_output")
+    assert "not permitted by the tool allowlist" in json.dumps(sent)
+    assert not (tmp_path / "ran.txt").exists()
+
+
+def test_a_followup_after_its_mcp_server_is_gone_keeps_the_thread(endpoint, tmp_path):
+    script = tmp_path / "mcp_fixture.py"
+    script.write_text('from mcp.server.fastmcp import FastMCP\nm = FastMCP("probe")\n@m.tool()\ndef echo(value: str) -> str:\n    return "MCP:" + value\nm.run(transport="stdio")\n')
+    first = turn(endpoint, tmp_path, mcp=[{"name": "probe", "command": sys.executable, "args": [str(script)]}])
+    assert first[-1]["subtype"] == "success", first
+    sid = first[0]["session_id"]
+
+    def output(body):
+        if any(entry.get("type") == "function_call_output" for entry in body["input"]):
+            return message("DETACHED-OK")
+        assert "mcp__probe__echo" in [tool.get("name") for tool in body["tools"]]
+        return [{"id": "fc_gone", "call_id": "call_gone", "type": "function_call", "name": "mcp__probe__echo",
+                 "arguments": '{"value":"419"}', "status": "completed"}]
+    endpoint.output = output
+    second = turn(endpoint, tmp_path, resume=sid, prompt="What was the nonce?")
+    assert second[-1]["subtype"] == "success", second
+    assert [e["session_id"] for e in second if e.get("subtype") == "init"] == [sid]
+    assert "NONCE-419" in json.dumps(endpoint.requests[-1]["input"])
+    sent = next(e for e in endpoint.requests[-1]["input"] if e.get("type") == "function_call_output")
+    assert "not available in this turn" in json.dumps(sent)
+
+
+def test_an_earlier_turns_reasoning_is_not_replayed_after_a_model_switch(endpoint, tmp_path):
+    """Through the runner's relay: Roder replays reasoning.encrypted_content with store:false, and
+    after a switch the new model cannot open what the old one minted. The route replays an earlier
+    turn as plain content, as dcode's does; the earlier turn's words still reach the model."""
+    import time
+    import uuid
+    import server
+
+    endpoint.output = lambda body: [{"id": "rs_probe", "type": "reasoning", "summary": [],
+                                     "encrypted_content": "ENC-419"}] + message("PROBE-OK")
+
+    def run(model, prompt, resume=None):
+        env = {**os.environ, "HOME": str(tmp_path / ".harness/home"), "HR_RODER_BIN": BINARY}
+        pathlib.Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
+        cmd = roder_backend.build("openai", server.Auth(api_key="provider-placeholder",
+            base_url=f"http://127.0.0.1:{endpoint.server_port}/v1", api_format="responses"),
+            model, prompt, str(tmp_path), env, relay=server._hermes_relay_route,
+            driver_cmd=server._driver_cmd, resume_session_id=resume)
+        turn_id = "roder-switch-" + uuid.uuid4().hex
+        server._turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
+                                  "started": time.time(), "backend": "roder", "model": model}
+        try:
+            server._run_turn_bg(turn_id, cmd, env, str(tmp_path), roder_backend.normalize, model,
+                                timeout_seconds=30, max_turns=4, count_steps=True)
+            return dict(server._turns[turn_id])
+        finally:
+            server._turns.pop(turn_id, None)
+
+    first = run("gpt-6.1-sol", "Remember NONCE-419")
+    assert first["status"] == "done", first
+    assert first["session_id"]
+    second = run("gpt-6-astra", "What was the nonce?", resume=first["session_id"])
+    assert second["status"] == "done", second
+    body = json.dumps(endpoint.requests[-1]["input"])
+    assert endpoint.requests[-1]["model"] == "gpt-6-astra"
+    assert "NONCE-419" in body and "ENC-419" not in body

@@ -1590,6 +1590,13 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # sends no body with the 404). A gemini model reaches this base through an aggregator that
     # serves /responses instead — which the Vercel column did, on nine gemini ids.
     ("harnessrouter", "dcode"): "tokenrouter",
+    # Roder drives the same Responses endpoints through its custom provider, so its rows are
+    # dcode's: OpenRouter and a custom Responses endpoint on `openai-api`, the aggregators on
+    # `tokenrouter`. No Anthropic or Google row, for dcode's reason.
+    ("openai", "roder"): "openai",             ("azure-foundry", "roder"): "azure",
+    ("openrouter", "roder"): "openai-api",     ("custom", "roder"): "openai-api",
+    ("tokenrouter", "roder"): "tokenrouter",   ("vercel", "roder"): "tokenrouter",
+    ("llmtr", "roder"): "tokenrouter",         ("harnessrouter", "roder"): "tokenrouter",
     # No vtcode rows: VT Code is not in this tree. It was built, measured (a column of 55 green
     # rows out of 56) and then taken out whole, because in `vtcode exec` a harness's MCP servers
     # cannot reach the model — the CLI spawns the server its config names and never sends
@@ -1761,10 +1768,6 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # jcode and opensquilla also have an Anthropic-Messages provider, used only for a connection
     # that IS Anthropic — a claude id on an aggregator stays on the relay so its served model
     # remains readable (see _build_jcode).
-    ("openai", "roder"): "openai", ("azure-foundry", "roder"): "azure",
-    ("tokenrouter", "roder"): "tokenrouter", ("custom", "roder"): "tokenrouter",
-    ("harnessrouter", "roder"): "tokenrouter", ("openrouter", "roder"): "tokenrouter",
-    ("vercel", "roder"): "tokenrouter", ("llmtr", "roder"): "tokenrouter",
     ("anthropic", "jcode"): "anthropic",       ("openai", "jcode"): "openai",
     ("azure-foundry", "jcode"): "azure",
     ("openrouter", "jcode"): "openai-api",
@@ -8854,8 +8857,6 @@ _MODEL_CATALOG["mimo"] = {"default": "gpt-6.1-sol", "models": list(_MODEL_CATALO
 # CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
 # only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
 # relay so its served model stays readable — see _build_jcode.)
-# Roder is opt-in pending its own live column. Start with one model for qualification.
-_MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": ["gpt-6.1-sol"]}
 # vibe (mistral-vibe) is the same shape: its `generic` backend is an OpenAI chat/completions
 # client and every keyed turn rides the relay, so its wire reach is kimi's. MEASURED on it so far
 # (2026-10-14/15, an OpenAI-compatible gateway through a recording proxy): claude-haiku-5.5 and
@@ -8885,6 +8886,17 @@ for _b in ("jcode", "opensquilla", "nanobot", "zeroclaw",
     # gpt-5.4 by default, but dcode: see _GPT_6_1_DEFAULT below
     _MODEL_CATALOG[_b] = {"default": "gpt-6.1-sol" if _b == "dcode" else "gpt-5.4",
                           "models": list(_MODEL_CATALOG["kimi"]["models"])}
+# Roder drives the Responses API as dcode does, but it is opt-in and still qualifying: it offers the
+# one model its process suite has run until its live provider column is measured, so it is named in
+# _STILL_QUALIFYING below rather than held to the family rules a measured base keeps.
+_MODEL_CATALOG["roder"] = {"default": "gpt-6.1-sol", "models": ["gpt-6.1-sol"]}
+# Bases still qualifying their wider catalog. Each offers only the models measured on it so far, and
+# its default was chosen for that start rather than measured across every provider column, so the
+# catalog-wide rules for a measured base (gpt-6.1-sol leads the gpt-6 family wherever it is offered,
+# and is the default where it ran all five matrix scenarios) do not apply to it yet. This is the one
+# place that exception is written; a base leaves the set when its live column is in.
+_STILL_QUALIFYING: frozenset[str] = frozenset({"roder"})
+
 # _GPT_6_1_DEFAULT: gpt-6.1-sol is the default where gpt-5.4 was (2026-10-22: it costs less per token for more),
 # on the bases where it ran all five matrix scenarios through OpenAI, Azure and TokenRouter: codex, hermes, pi,
 # opencode, kilo, omp, goose, aider, agentzero and mimo, and dcode, which drives the Responses API (2026-10-27,
@@ -9298,6 +9310,38 @@ def _conn_serves(conn: dict, friendly: str) -> bool:
     if not m:
         return True                      # no model requested: the connection default decides
     return m in table or m in table.values()
+
+
+def _installed_backends() -> frozenset[str] | None:
+    """The backends this instance installed, as docker/entrypoint.sh found them once its installs
+    were done: the list it prints as "backends available", exported as HR_BACKENDS_INSTALLED. None
+    where nothing installs bases at start (a runner started some other way, a hosted pool): an
+    absent list says nothing about what is installed, so nothing is withheld on it."""
+    raw = os.environ.get("HR_BACKENDS_INSTALLED")
+    if raw is None:
+        return None
+    return frozenset(b.strip() for b in raw.split(",") if b.strip())
+
+
+def _backend_installed(backend: str) -> bool:
+    """Whether a turn on `backend` can start here. A catalog base that is opt-in (roder) or whose
+    install failed is in the catalog on every instance and on the volume of only some."""
+    have = _installed_backends()
+    return have is None or str(backend or "") in have
+
+
+def _not_installed_reason(label: str, backend: str) -> str:
+    """What a person reads about a base this instance does not have, and what changes that."""
+    return (f"{label} is not installed on this instance. An administrator can add {backend} "
+            "to HR_BACKENDS and restart it.")
+
+
+def _require_installed(backend: str) -> None:
+    """Refuse a turn on a base this instance does not hold, in words and before anything is
+    allocated, rather than letting the runner fail to start it."""
+    if not _backend_installed(backend):
+        label = next((str(b["label"]) for b in _BASE_CATALOG.values() if b.get("backend") == backend), backend)
+        raise HTTPException(400, _not_installed_reason(label, backend))
 
 
 def _backend_of_builtin(harness_id: str) -> str:
@@ -11225,6 +11269,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # harness's fixed backend, not allowed to silently re-route to a different one.
     backend = (_backend_of_harness(hv) or _backend_of_builtin(harness_id)
                or _route_backend(model_req or body.model, body.backend))
+    _require_installed(backend)
     # Server-side model permission (CT-124): a model this backend cannot serve is refused here.
     model_req = await _resolve_model_policy(model_req, hv, backend, org)
     want_partial = _want_partial(backend, meta)
@@ -19712,10 +19757,29 @@ _BASE_CATALOG: dict[str, dict] = {
     "roder": {
         "label": "Roder", "backend": "roder", "status": "ready",
         "system_prompt": "You are Roder, an autonomous coding agent. Complete the task in the workspace.",
-        "tools": [("exec_command", "Shell"), ("read_file", "File Read"),
-                  ("write_file", "File Write"), ("edit", "Edit"), ("apply_patch", "Apply Patch"),
+        # What a 0.4.8 turn offers its model, read off the pinned release's app-server: 112 built-in
+        # tools, of which the runner withholds on every turn the 56 that cannot run in this sandbox
+        # or wait for a person (roder_backend.WITHHELD: the desktop browser and Jev tab families,
+        # Webwright, Zero, the media generators, which answer from a built-in fake provider, echo,
+        # request_user_input and exit_plan_mode). The rest are these switches, and each one is
+        # EVERY Roder tool that does its job (roder_backend.TOOLS, which test_roder_catalog.py pins
+        # to these ids): Shell is exec_command, shell, unified_exec and write_stdin; File Edit is
+        # apply_patch, edit, multi_edit and write_file, so with it off no file tool writes. Web
+        # Search is the provider's hosted search, switched off through Roder's own web_search mode.
+        "tools": [("exec_command", "Shell"), ("read_file", "File Read"), ("apply_patch", "File Edit"),
                   ("grep", "Search"), ("glob", "Glob"), ("list_files", "List Files"),
-                  ("update_plan", "Plan")],
+                  ("view_image", "View Image"), ("update_plan", "Plan"), ("spawn_agent", "Subagent"),
+                  ("memory_save", "Memory"), ("knowledge_save", "Knowledge"), ("create_goal", "Goal"),
+                  ("subscribe_event", "Events"), ("verification_review", "Verification"),
+                  ("read_artifact", "Output Artifacts"), ("discovery.search", "Tool Discovery"),
+                  ("design_read", "Design Canvas"), ("web_search", "Web Search")],
+        # "hard": the switches become Roder's runtime tools.allowlist, written before the process
+        # starts, which removes a tool from what the model is offered and refuses a call to it.
+        # MEASURED on 0.4.8 (runner/tests/test_roder_process.py): a switched-off tool is absent from
+        # the provider request on a resumed thread too, and a call the model makes anyway to a tool
+        # that is off (shell) or withheld (echo) is answered "... is not permitted by the tool
+        # allowlist" and nothing runs. The honest limit every base with a shell has: with File Edit
+        # off, the shell can still write a file.
         "tool_enforcement": "hard",
     },
     "opensquilla": {
@@ -21738,7 +21802,7 @@ async def _setup_bases(org: str) -> dict:
     bases: dict = {}
     views: dict[str, list[str]] = {}
     for bid, b in _BASE_CATALOG.items():
-        if b.get("status") != "ready":
+        if b.get("status") != "ready" or not _backend_installed(b["backend"]):
             continue
         backend = b["backend"]
         if backend not in views:
@@ -23114,9 +23178,14 @@ async def list_bases(request: Request) -> dict:
         cat = _MODEL_CATALOG.get(backend, {})
         # the same view every picker reads (see list_models): catalog, custom endpoints, additions
         view = await _harness_models_view({}, backend, await _servable_models(org, backend))
+        installed = _backend_installed(backend)
         out.append({
             "id": bid, "object": "harness.base", "label": b["label"], "backend": backend,
-            "status": b["status"], "systemPrompt": b["system_prompt"],
+            # "not_installed" for a base this instance does not hold, with the reason in words: the
+            # console does not offer it, rather than listing it ready to fail on its first turn
+            "status": b["status"] if installed else "not_installed",
+            **({} if installed else {"statusReason": _not_installed_reason(b["label"], backend)}),
+            "systemPrompt": b["system_prompt"],
             "defaultModel": cat.get("default", ""),
             # `reasoning`: the thinking levels the model has, lowest first; empty where none was
             # measured, and the console offers no level there (runner/reasoning.py has the table).

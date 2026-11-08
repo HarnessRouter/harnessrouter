@@ -9,6 +9,9 @@ import sys
 from roder_events import Events
 from roder_mcp import Mcp
 
+# The longest stderr line forwarded whole; the rest of a longer line is dropped up to its newline.
+STDERR_LINE_CAP = 8192
+
 
 def emit(event):
     print(json.dumps(event), flush=True)
@@ -72,54 +75,56 @@ class Rpc:
         return await future
 
 
-async def forward_stderr(process):
+def _forward(line):
+    text = line.decode(errors="replace").replace("\x07", "").strip()
+    if text:
+        print(text, file=sys.stderr, flush=True)
+
+
+async def forward_stderr(stream):
     # Roder's completion notification can be a bare terminal BEL. The runner merges this
     # driver's stderr into stdout; inheriting it would prefix our next JSON line with BEL and
     # make the runner drop turn/completed. Forward diagnostics only as complete, clean lines.
-    while line := await process.stderr.readline():
-        text = line.decode(errors="replace").replace("\x07", "").strip()
-        if text:
-            print(text, file=sys.stderr, flush=True)
+    # Read in chunks, never by readline: a line past the stream's limit would end this task, and an
+    # undrained stderr pipe would then stall the app-server on its next write. A long line keeps its
+    # first STDERR_LINE_CAP bytes and the rest is dropped up to its newline.
+    line, dropping = bytearray(), False
+    while chunk := await stream.read(65536):
+        while chunk:
+            end = chunk.find(b"\n")
+            part, chunk = (chunk, b"") if end < 0 else (chunk[:end], chunk[end + 1:])
+            if not dropping:
+                line.extend(part[:STDERR_LINE_CAP - len(line)])
+                dropping = len(line) >= STDERR_LINE_CAP
+            if end >= 0:
+                _forward(bytes(line))
+                line, dropping = bytearray(), False
+    if line:
+        _forward(bytes(line))
 
 
-async def configure_allowlist(job):
-    """Discover built-ins without inference, then apply Roder's runtime allowlist before start.
-
-    This also applies a changed policy to resumed threads. A non-matching sentinel denies every
-    built-in when all are disabled: an empty Roder allowlist means unrestricted.
-    """
-    process = await asyncio.create_subprocess_exec(os.environ.get("HR_RODER_BIN", "roder"),
-        "app-server", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE, limit=8 * 1024 * 1024)
-    rpc = Rpc(process)
-    reader = asyncio.create_task(rpc.read())
-    diagnostics = asyncio.create_task(forward_stderr(process))
-    try:
-        tools = (await rpc.request("tools/list", {})).get("tools", [])
-        disabled = set(job.get("tools_disabled") or [])
-        allowed = [tool["name"] for tool in tools if tool["name"] not in disabled]
-        config = pathlib.Path(os.environ["RODER_CONFIG_DIR"]) / "config.toml"
-        # The builder rewrites this file every turn, so this is exactly one tools table.
-        with config.open("a") as output:
-            output.write("\n[tools]\nallowlist = " + json.dumps(allowed or ["hr_no_builtin_tools"]) + "\n")
-    finally:
-        if process.returncode is None:
-            process.terminate()
-        await process.wait()
-        reader.cancel()
-        await asyncio.gather(reader, diagnostics, return_exceptions=True)
+async def stop(process):
+    """End the app-server: SIGTERM, then SIGKILL if it has not gone within five seconds."""
+    if process.returncode is None:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), 5)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
 
 
 async def run(job):
-    await configure_allowlist(job)
-    # No new process group: the runner's normal timeout/cancellation kills this driver AND the
-    # app-server, its commands and attached stdio MCP processes together.
+    # No new process group: the runner stops a turn by killing this driver's group AND every
+    # descendant it finds by parent pid (server._kill_proc_tree), which reaches the app-server and
+    # the commands it runs, and the stdio MCP servers too, which mcp 1.30.0 starts in a session of
+    # their own (start_new_session) and so outside the group.
     process = await asyncio.create_subprocess_exec(os.environ.get("HR_RODER_BIN", "roder"),
         "app-server", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE, limit=8 * 1024 * 1024)
     rpc = Rpc(process)
     reader = asyncio.create_task(rpc.read())
-    diagnostics = asyncio.create_task(forward_stderr(process))
+    diagnostics = asyncio.create_task(forward_stderr(process.stderr))
     events = Events()
     try:
         await rpc.request("initialize", {})
@@ -133,8 +138,19 @@ async def run(job):
                     if not stored.get("thread"):
                         emit({"type": "system", "subtype": "resume_lost", "requested_session_id": sid})
                         sid = None
-                    elif (stored["thread"].get("externalTools") or []) != mcp.tools:
-                        raise RuntimeError("MCP attachments changed; start a new Roder session")
+                    else:
+                        # Roder fixes a thread's external tools when it starts the thread and has no
+                        # call to replace them, so the conversation keeps the ones it began with. A
+                        # tool among them that is not attached now (its server is unreachable this
+                        # turn, or the tool was switched off) answers its calls with an error
+                        # (Mcp.call); one attached since cannot reach this thread, and the turn says so.
+                        started = {tool.get("name") for tool in stored["thread"].get("externalTools") or []}
+                        later = sorted({server for wire, server in mcp.servers.items() if wire not in started})
+                        if later:
+                            quoted = ", ".join(f'"{name}"' for name in later)
+                            emit({"type": "system", "subtype": "notice", "text":
+                                  f"This conversation keeps the MCP tools it started with, so tools added "
+                                  f"since from {quoted} are not available in it. A new session has them."})
                 except RpcError as error:
                     # Do not mislabel an arbitrary read/storage error as lost conversation state.
                     if "not found" not in str(error).lower() and "unknown thread" not in str(error).lower():
@@ -175,20 +191,18 @@ async def run(job):
                     for event in events.notification(method, p):
                         emit(event)
     finally:
-        if process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), 5)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+        await stop(process)
         reader.cancel()
         await asyncio.gather(reader, diagnostics, return_exceptions=True)
 
 
 def main():
     try:
-        asyncio.run(run(json.loads(os.environ["HR_RODER_JOB"])))
+        # Out of the environment before anything starts: the job carries MCP servers' bearer headers
+        # and stdio servers' env, and the app-server, every command the agent runs and every stdio
+        # MCP server would otherwise inherit it (server._driver_cmd; every driver pops it the same way).
+        job = json.loads(os.environ.pop("HR_DRIVER_JOB"))
+        asyncio.run(run(job))
         return 0
     except Exception as error:
         emit({"type": "result", "subtype": "error", "is_error": True, "result": str(error)})

@@ -4,6 +4,18 @@ import os
 import re
 from contextlib import AsyncExitStack
 
+DETACHED = ("This tool is not available in this turn: its MCP server could not be reached, "
+            "or the tool was switched off.")
+
+
+def stdio_env(server):
+    """A stdio server's environment: the turn's, without the runner's own HR_ names (the turn's
+    relay token, and the driver's job if it were still there), then the server's declared env. The
+    job carries every other server's bearer headers and env, and the relay token is the turn's
+    provider credential: neither is a stdio server's to read."""
+    inherited = {k: v for k, v in os.environ.items() if not k.upper().startswith("HR_")}
+    return {**inherited, **{str(k): str(v) for k, v in (server.get("env") or {}).items()}}
+
 
 async def serve(server, ready, queue):
     from mcp import ClientSession, StdioServerParameters
@@ -13,7 +25,7 @@ async def serve(server, ready, queue):
     try:
         if server.get("command"):
             transport = stdio_client(StdioServerParameters(command=server["command"],
-                args=server.get("args") or [], env={**os.environ, **(server.get("env") or {})}))
+                args=server.get("args") or [], env=stdio_env(server)))
         else:
             headers = dict(server.get("headers") or {})
             transport = (sse_client(server["url"], headers=headers, timeout=90)
@@ -49,6 +61,7 @@ class Mcp:
         self.tasks = []
         self.tools = []
         self.calls = {}
+        self.servers = {}     # wire tool name -> the MCP server it came from, by its harness name
 
     async def __aenter__(self):
         return self
@@ -82,8 +95,13 @@ class Mcp:
                 self.tools.append({"name": wire, "description": tool.description or "",
                                    "parameters": tool.inputSchema})
                 self.calls[wire] = (queue, task, tool.name)
+                self.servers[wire] = name
 
     async def call(self, call):
+        # A resumed thread keeps the external tools it started with (roder_driver.run); one that is
+        # not attached this turn is answered, never left to fail the turn.
+        if call.get("name") not in self.calls:
+            return {"output": DETACHED, "isError": True}
         queue, task, name = self.calls[call["name"]]
         if task.done():
             return {"output": "MCP server disconnected", "isError": True}
