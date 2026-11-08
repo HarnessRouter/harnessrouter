@@ -3788,6 +3788,8 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
             api = "anthropic-messages"
         elif auth.api_format == "openai":
             api = "openai-completions"
+        elif auth.api_format == "responses":
+            api = "openai-responses"
         elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
             api = "anthropic-messages"
         elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
@@ -4065,6 +4067,8 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
             api = "anthropic-messages"
         elif auth.api_format == "openai":
             api = "openai-completions"
+        elif auth.api_format == "responses":
+            api = "openai-responses"
         elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
             api = "anthropic-messages"
         elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
