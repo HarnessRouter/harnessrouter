@@ -5285,6 +5285,10 @@ UHP_CAPABILITIES = {
     # `input_response` item on the next request, chained on the response. Served to the bases in
     # _INPUT_REQUEST_BASES (GET /v1/bases says which).
     "input_requests": True,
+    # Sessions §1.1: `branch: true` beside previous_response_id starts a new session from that
+    # response's committed files and transcript (_branch_source, _branch_prepare). Optional at every
+    # class (VERSIONING: within a version only optional things are added), so it is a capability.
+    "session_branching": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 # The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py).

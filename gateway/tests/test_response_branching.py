@@ -186,6 +186,13 @@ def test_checkpoint_writes_only_the_point(env):
     assert asyncio.run(gw._blob_get(f"sessions/{env['sid']}/branch-head.json", kb=gw.RESP_BLOB_KB)) is None
 
 
+def test_discovery_reports_branching_as_a_capability(env):
+    """Optional at every class (VERSIONING): a client reads it before sending `branch: true`, and
+    the conformance suite holds only a server that reports it to B-01..B-06."""
+    assert gw.UHP_CAPABILITIES["session_branching"] is True
+    assert env["client"].get("/v1/uhp").json()["capabilities"]["session_branching"] is True
+
+
 def test_harness_scope_is_checked_before_checkpoint_availability(env):
     response = post(env, metadata={"harness_id": "another-harness"})
     assert response.status_code == 404

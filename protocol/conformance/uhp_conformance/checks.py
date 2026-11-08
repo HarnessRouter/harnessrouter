@@ -2922,7 +2922,17 @@ def me08(ctx):
     return f"{len(ids)} tree(s) removed"
 
 
-# Explicit response branching (Sessions §1.1). Four turns are shared by B-01..B-03 and B-05..B-06.
+# Explicit response branching (Sessions §1.1, capability `session_branching`). Four turns are
+# shared by B-01..B-03 and B-05..B-06.
+def _branching(ctx) -> None:
+    """Only a server that reports the capability is held to branching. One that does not may
+    ignore `branch` as every server did before it was added (Sessions §1.1), so a check that sent
+    it there would measure nothing, and a verdict it had at the previous suite must not change."""
+    caps = (ctx.state.get("discovery") or {}).get("capabilities") or {}
+    if not caps.get("session_branching"):
+        raise Skip("this server does not report the session_branching capability")
+
+
 def _branch_archive(ctx, sid):
     import io
     import zipfile
@@ -2935,6 +2945,7 @@ def _branch_archive(ctx, sid):
 
 
 def _branch_case(ctx):
+    _branching(ctx)
     if "branch_case" in ctx.state:
         return ctx.state["branch_case"]
     h = _harness(ctx)
@@ -3053,6 +3064,7 @@ def b06(ctx):
 @check("B-04", "A response still running cannot be a branch point", "full",
        f"{SPEC}/sessions.md#11-branching-from-an-earlier-response")
 def b04(ctx):
+    _branching(ctx)
     h = _harness(ctx)
     response = ctx.client.post("/v1/responses", body={
         "input": "Wait five seconds, then reply with exactly: done.", "background": True,

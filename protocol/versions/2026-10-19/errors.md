@@ -71,7 +71,7 @@ Rules:
 | `session_expired` | 404 | The session existed but is past its retention. |
 | `harness_mismatch` | 409 | The task named a different harness than the session it continues. |
 | `session_busy` | 409 | A task is already running in this session. |
-| `branch_unavailable` | 409 | The response named for a branch can't be one: it is still running, its checkpoint position was never recorded, or its commit is no longer in its session's history ([Sessions §1.1](sessions.md#11-branching-from-an-earlier-response)). No session is created. |
+| `branch_unavailable` | 409 | The response named for a branch can't be one: it is still running, its checkpoint position was never recorded, or its commit is no longer in its session's history ([Sessions §1.1](sessions.md#11-branching-from-an-earlier-response), capability `session_branching`). No session is created. |
 | `harness_busy` | 409 | A harness that retires its sessions with it has a task in progress; it is not retired mid-task ([Harnesses §5.3](harnesses.md#53-delete)). |
 | `plugin_conflict` | 409 | Two plugins share a name, or a component name collides across the harness and its plugins. `detail.component`, `detail.name` and `detail.between` say which. |
 | `idempotency_key_reused` | 409 | An `Idempotency-Key` came back with a different request than the one it was first sent with ([Harnesses §5.1](harnesses.md#51-create)). |

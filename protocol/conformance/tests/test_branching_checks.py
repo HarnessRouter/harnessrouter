@@ -84,10 +84,41 @@ class BranchServer:
         raise AssertionError(path)
 
 
-def run(check, defect=""):
-    ctx = Context(BranchServer(defect), state={"harness": {"id": "fixture"}})
+def run(check, defect="", capabilities=None):
+    if capabilities is None:
+        capabilities = {"session_branching": True}
+    ctx = Context(BranchServer(defect), state={"harness": {"id": "fixture"},
+                                               "discovery": {"capabilities": capabilities}})
     item = next(item for item in REGISTRY if item.id == check)
     return item.run(ctx)
+
+
+class Untouchable:
+    """A server the check must not call: one that does not report the capability."""
+
+    def post(self, path, **_):
+        raise AssertionError(f"POST {path} sent to a server without session_branching")
+
+    def get(self, path, **_):
+        raise AssertionError(f"GET {path} sent to a server without session_branching")
+
+
+@pytest.mark.parametrize("check", ["B-01", "B-02", "B-03", "B-04", "B-05", "B-06"])
+@pytest.mark.parametrize("capabilities", [{}, {"session_branching": False}])
+def test_a_server_without_the_capability_skips_and_is_never_asked(check, capabilities):
+    """Branching is optional at every class (VERSIONING: within a version only optional things are
+    added). A server that passed at the previous suite and does not report it keeps its verdict:
+    every B check skips, before a task is started or a branch is sent."""
+    ctx = Context(Untouchable(), state={"harness": {"id": "fixture"},
+                                        "discovery": {"capabilities": capabilities}})
+    result = next(item for item in REGISTRY if item.id == check).run(ctx)
+    assert result.outcome is Outcome.SKIP, result.detail
+    assert "session_branching" in result.detail
+
+
+def test_every_branch_check_is_gated_on_the_capability():
+    assert {item.id for item in REGISTRY if item.id.startswith("B-")} == {
+        "B-01", "B-02", "B-03", "B-04", "B-05", "B-06"}
 
 
 @pytest.mark.parametrize("check", ["B-01", "B-02", "B-03", "B-04", "B-05", "B-06"])
@@ -108,5 +139,5 @@ def test_specific_defects_fail(check, defect):
     assert result.outcome is Outcome.FAIL, result.detail
 
 
-def test_fresh_fixture_unavailable_checkpoint_fails_full_conformance():
+def test_refusing_a_fresh_fixtures_branch_fails_a_server_that_reports_branching():
     assert run("B-01", "unavailable").outcome is Outcome.FAIL

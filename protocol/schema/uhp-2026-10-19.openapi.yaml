@@ -1792,6 +1792,12 @@ components:
             the delete response states (`restorableUntil`) and removed after it. `false`, or absent:
             they are kept. See Harnesses §5.3.
         session_sharing: { type: boolean }
+        session_branching:
+          type: boolean
+          description: |
+            A task with `branch: true` beside `previous_response_id` starts a new session from that
+            response's committed files and transcript, leaving the original as it was. See Sessions §1.1.
+            Optional at every class.
         idempotency: { type: boolean }
         harness_idempotency:
           type: boolean
@@ -2184,7 +2190,7 @@ components:
         branch:
           type: boolean
           default: false
-          description: "Create a new session from the previous response's committed user files and transcript (Sessions §1.1). Only true opts in; null is the same as absent; true without previous_response_id, or any other non-boolean value, is 400 invalid_input (param branch)."
+          description: "Create a new session from the previous response's committed user files and transcript (Sessions §1.1), on a server that reports the session_branching capability. Only true opts in; null is the same as absent; true without previous_response_id, or any other non-boolean value, is 400 invalid_input (param branch)."
         instructions: { type: string }
         store: { type: boolean, default: true }
         max_output_tokens: { type: [integer, 'null'] }

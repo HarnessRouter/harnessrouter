@@ -43,7 +43,8 @@ item, or anything else, which passes the question over; the server says which ha
 
 ## 1.1. Branching from an earlier response
 
-A server claiming conformance class **Full** MUST support an explicit branch; other servers MAY:
+Capability `session_branching`, optional at every class. A server that reports it MUST support an
+explicit branch:
 
 ```json
 {
@@ -54,7 +55,7 @@ A server claiming conformance class **Full** MUST support an explicit branch; ot
 ```
 
 `branch` is a top-level request field, beside `previous_response_id`. With `true` and a
-previous response, the server MUST create a **new** session from that response's committed
+previous response, a server that reports `session_branching` MUST create a **new** session from that response's committed
 user files and the transcript up to and including it. The original session, its working files,
 and its transcript MUST remain unchanged. A session hint does not replace the branch point.
 Without `branch: true`, continuation is unchanged. `branch` is `true`, `false`, `null` or absent; `null` is the same as absent. Any
@@ -72,7 +73,7 @@ dependencies or native CLI state**. The conversation is supplied as its transcri
 branch does not require any base's native fork or resume feature. Imported history is kept
 in full; inference prompt limits do not truncate the stored transcript.
 
-A response still running cannot be a branch point. A server MUST return `409` with
+A response still running cannot be a branch point. Such a server MUST return `409` with
 `code: "branch_unavailable"` when that response has no recorded checkpoint, its commit is
 no longer in the session's history, or the committed files cannot be restored. This includes
 older responses whose checkpoint position was never recorded. `store: false` alone does not
@@ -99,10 +100,15 @@ already missing before the branch remains unavailable. References into excluded 
 or dependency paths remain unavailable in the branch. Imported transcript-only turns have no
 checkpoint of their own and return `branch_unavailable` when selected as a branch point.
 
-**Compatibility:** an older server may ignore `branch` and continue the original session.
-A client MUST check both the new session id and `metadata.branched_from` before treating a
-response as a branch. Such a check detects old-server behavior; it cannot undo a task that an
-old server already ran. Use branching only with an implementation known to support it.
+This section is additive. A server without the capability never returns `branch_unavailable` and
+never sets `branched_from`; like a server older than this section, it may ignore `branch` and
+continue the original session.
+
+**Compatibility:** a client MUST check `capabilities.session_branching`
+([Lifecycle §2](lifecycle.md#2-capability-discovery)) before sending `branch: true`, and SHOULD
+check both the new session id and `metadata.branched_from` before treating a response as a
+branch. The second check detects a server that ignored the field; it cannot undo a task that such
+a server already ran, which is why the capability is read first.
 
 ## 2. Listing sessions
 
