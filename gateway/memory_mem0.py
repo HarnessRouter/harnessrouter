@@ -46,6 +46,13 @@ API = "https://api.mem0.ai"
 TIMEOUT_S = 45
 # Tests set an httpx transport here so every call is exercised without an account.
 transport: httpx.BaseTransport | None = None
+# Every other call opens its connections through the gateway's checked network (app.py sets this), so an address
+# that passed the check when it was saved and later resolves somewhere internal (a DNS rebind) is refused at connect.
+checked_transport = None
+
+
+def _transport():
+    return transport if transport is not None else (checked_transport() if checked_transport else None)
 _RESERVED = "hr_"
 
 
@@ -75,13 +82,13 @@ async def check(api_key: str, base_url: str = "") -> str:
     """'' when mem0 accepts the key, else why not, in a sentence for the person connecting it."""
     if base_url:
         try:
-            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=_transport()) as c:
                 r = await c.get(base_url.rstrip("/") + "/configure", headers={"X-API-Key": api_key} if api_key else {})
         except httpx.HTTPError as e:
             return f"mem0 could not be reached at that address: {type(e).__name__}."
         return "" if r.status_code == 200 else f"mem0 refused the connection (HTTP {r.status_code})."
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+        async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=_transport()) as c:
             r = await c.get(API + "/v1/ping/", headers={"Authorization": f"Token {api_key}"})
     except httpx.HTTPError as e:
         return f"mem0 could not be reached: {type(e).__name__}."
@@ -143,7 +150,7 @@ class Mem0(mp.Provider):
     # ── the wire ──────────────────────────────────────────────────────────────────────────────
     async def _call(self, method: str, path: str, *, body=None, params=None, ok=(200,)) -> httpx.Response:
         try:
-            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=_transport()) as c:
                 r = await c.request(method, API + mp.vendor_path(path), json=body, params=params,
                                     headers={"Authorization": f"Token {self.key}", "Accept": "application/json"})
         except httpx.HTTPError as e:
@@ -510,7 +517,7 @@ class Mem0Server(Mem0):
 
     async def _call(self, method, path, *, body=None, params=None, ok=(200,)):
         try:
-            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=_transport()) as c:
                 r = await c.request(method, self.base + mp.vendor_path(path), json=body, params=params,
                                     headers={"X-API-Key": self.key, "Accept": "application/json"} if self.key else {"Accept": "application/json"})
         except httpx.HTTPError as e:

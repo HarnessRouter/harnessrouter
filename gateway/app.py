@@ -14069,6 +14069,12 @@ def _checked_transport(always: bool, limits: httpx.Limits | None = None) -> http
 # On a shared deployment that was a way into the private network; GitHub, Vercel and Microsoft are
 # public and pass the same check.
 plugs_plane.checked_transport = lambda: _checked_transport(False)
+# The memory vendors' clients likewise: a vendor's address is one a member typed, kept, and called on every read and
+# write after it, and what it answers is shown to the reader. Checked when saved (put_plug) and again at each connect here.
+# On a self-hosted instance the check refuses nothing (_CheckedNetwork with always=False), so there the client is left
+# as it was, which keeps its environment proxy: a box that reaches the Mem0 Platform through one still does.
+for _m in (memory_mem0, memory_graphiti, memory_hindsight, memory_reme):
+    _m.checked_transport = lambda: None if _pool_is_local() else _checked_transport(False)
 
 
 # One answer of the connection probe, at most. The server is whoever the caller named, so an answer

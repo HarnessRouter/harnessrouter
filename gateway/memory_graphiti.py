@@ -41,6 +41,13 @@ READ = "hr_read:"    # the name of the episode Graphiti reads a stated record as
 LINK = "hr_link"     # on an edge made for a record's reference, not for a fact
 # Tests set an httpx transport here so every call is exercised without a server.
 transport: httpx.BaseTransport | None = None
+# Every other call opens its connections through the gateway's checked network (app.py sets this), so an address
+# that passed the check when it was saved and later resolves somewhere internal (a DNS rebind) is refused at connect.
+checked_transport = None
+
+
+def _transport():
+    return transport if transport is not None else (checked_transport() if checked_transport else None)
 
 
 class GraphitiUnavailable(mp.MemoryError):
@@ -53,7 +60,7 @@ async def check(api_key: str, base_url: str = "") -> str:
     if not base_url:
         return "Graphiti needs the address of your server."
     try:
-        async with httpx.AsyncClient(timeout=20, transport=transport) as c:
+        async with httpx.AsyncClient(timeout=20, transport=_transport()) as c:
             r = await c.get(base_url.rstrip("/") + "/check", headers={"Authorization": f"Bearer {api_key}"} if api_key else {})
     except httpx.HTTPError as e:
         return f"Graphiti could not be reached at that address: {type(e).__name__}."
@@ -113,7 +120,7 @@ class Graphiti(mp.Provider):
     async def _call(self, method: str, path: str, *, body=None, params=None, ok=(200,)) -> httpx.Response:
         headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
         try:
-            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as c:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=_transport()) as c:
                 r = await c.request(method, self.base + mp.vendor_path(path), json=body, params=params, headers=headers)
         except httpx.HTTPError as e:
             raise GraphitiUnavailable(type(e).__name__)
