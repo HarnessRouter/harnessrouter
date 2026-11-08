@@ -171,6 +171,18 @@ def test_a_branch_sends_the_point_and_no_copy_of_the_sessions_latest_commit(env)
     assert "branch_head" not in restore[0]["params"]
 
 
+def test_a_branch_hands_the_runner_the_point_and_nothing_of_the_source_turn(env):
+    """The restore is told which commit and which base, and nothing of the source's turns: no turn
+    credential, no sealed value, no header. The branch's own turns get their own, as every turn does
+    (a turn's credential is bound to its session). The files carry none either: the runner restores
+    only the commit's tracked files, never `.harness` (runner/tests/test_response_branching.py)."""
+    response = post(env)
+    assert response.status_code == 200, response.text
+    restore = [c for c in env["calls"] if "restore_target" in c]
+    assert restore and set(restore[0]["params"]) == {"branch_commit", "branch_backend"}
+    assert restore[0]["restore_target"] != restore[0]["source"]
+
+
 def test_checkpoint_writes_only_the_point_and_reads_nothing_back(env, monkeypatch):
     """The turn's end used to read every response of the session and sort them, at every turn, to
     store the point's place; the place is read when a branch is made now."""
