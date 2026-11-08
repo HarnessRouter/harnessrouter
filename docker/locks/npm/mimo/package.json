@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "dependencies": {
+    "@mimo-ai/cli": "0.1.15"
+  }
+}
