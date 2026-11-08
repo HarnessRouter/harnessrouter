@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "dependencies": {
+    "cline": "3.0.60"
+  }
+}

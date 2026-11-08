@@ -611,17 +611,31 @@ KIMI_SHA="$(pin_sha KIMI 2.0.0 "$KIMI_PIN" "$(by_arch \
 # downloaded archive (2026-09-26). It is pinned HERE for kimi's reason: a checksum served from the
 # artifact's own origin adds nothing against a compromised origin.
 #
-# The digest covers the package. Its three dependencies (better-sqlite3 12.11.1, @vscode/ripgrep
-# 1.18.0, @larksuiteoapi/node-sdk 1.73.3) are exact versions resolved from npm at install time; their
-# own dependencies float within npm ranges, as for every npm-installed backend here. About 105 MB
-# installed, so it is in the default set. Requires Node >= 22.19 (the image's nodesource 22.x).
+# It installs from docker/locks/npm/minimax like the other npm bases: the lock names the archive by
+# URL and sha512 (the same bytes the digest above named; the archive's sha256 is
+# b83a27e2f8373c755f26a1dc02cf8ba1c1f1a1a9d889d752ff5527fb5af2f1c0), and its dependencies
+# (better-sqlite3 12.11.1, @vscode/ripgrep 1.18.0, @larksuiteoapi/node-sdk 1.73.3) with their whole
+# trees. About 105 MB installed, so it is in the default set. Requires Node >= 22.19 (the image's
+# nodesource 22.x).
 #
 # Everything runner/server.py's minimax code relies on (the exec stream-json schema, the
 # custom_provider selector, --session refusing an unknown id, the sqlite session store, the config
 # keys agents.default / skills.external, the two instruction files, the rm shim's trash) was
 # measured on THIS version.
 MINIMAX_PIN="${HR_MINIMAX_VERSION:-0.5.4}"; MINIMAX_PIN="${MINIMAX_PIN#v}"
-MINIMAX_SHA="$(pin_sha MINIMAX 0.5.4 "$MINIMAX_PIN" b83a27e2f8373c755f26a1dc02cf8ba1c1f1a1a9d889d752ff5527fb5af2f1c0)"
+MINIMAX_URL="https://github.com/MiniMax-AI/minimax-code/releases/download/v${MINIMAX_PIN}/minimax-code-${MINIMAX_PIN}.tar.gz"
+MINIMAX_SPEC="@minimax-ai/code@$MINIMAX_URL"
+# better-sqlite3's native binding (the CLI's session store is sqlite). Its install script is
+# `prebuild-install`, which fetches this same archive from the project's GitHub release and checks
+# nothing; with scripts off, it is fetched here and checked against a digest committed here. The
+# archive holds one file, build/Release/better_sqlite3.node, and it is the file prebuild-install
+# left in main's tree (measured: same sha256). It is built for one Node ABI (127 is Node 22), so a
+# new Node major in the image fails this install loudly instead of loading a mismatched binding.
+MINIMAX_SQLITE_PIN="12.11.1"
+MINIMAX_SQLITE_ABI="127"
+MINIMAX_SQLITE_SHA="$(by_arch \
+  94ce113ea2d9347fcd1cf8e46445cc271d1dbd02d05a64aa460442222f023b11 \
+  00f8035f4322c14ab4dbb3ee6f4b6c9ca25209fe2a77ac2759cd09dd42587d48)"
 # Kilo CLI (Kilo-Org/kilocode, MIT), an opencode fork, pinned to 7.8.1. The release archive from
 # GitHub, not npm's launcher package and not the vendor's install script: the archive is one
 # directory (the `kilo` binary beside bwrap, the sandbox helpers and the tree-sitter grammars it
@@ -881,18 +895,33 @@ install_kimi() {
 
 
 install_minimax() {
+  if ! npm_is_locked minimax "$MINIMAX_SPEC"; then
+    # An override: upstream's install form, optional deps included, install scripts allowed for
+    # better-sqlite3. An npm that predates allow-scripts warns about the flag and runs scripts anyway.
+    npm_unlocked minimax --include=optional --allow-scripts=better-sqlite3 "$MINIMAX_URL"
+    return
+  fi
+  npm_locked minimax || return 1
+  mm_bs="$TOOLS/npm/minimax/node_modules/better-sqlite3"
+  mm_fail() { [ -z "$1" ] || echo "$1"; rm -rf "${mm_tmp:-}" "$TOOLS/npm/minimax"; return 1; }
+  mm_abi="$(node -p process.versions.modules)"
+  [ "$mm_abi" = "$MINIMAX_SQLITE_ABI" ] \
+    || mm_fail "better-sqlite3 $MINIMAX_SQLITE_PIN: the digest here is for Node ABI $MINIMAX_SQLITE_ABI, this Node is $mm_abi" || return 1
+  [ -n "$MINIMAX_SQLITE_SHA" ] || mm_fail "better-sqlite3: no digest for $HR_ARCH" || return 1
+  [ "$(node -p 'require(process.argv[1]).version' "$mm_bs/package.json")" = "$MINIMAX_SQLITE_PIN" ] \
+    || mm_fail "the lock's better-sqlite3 is not $MINIMAX_SQLITE_PIN, which the digest here is for" || return 1
+  case "$HR_ARCH" in amd64) mm_arch="x64" ;; arm64) mm_arch="arm64" ;; esac
   mm_tmp="$(mktemp -d)"
-  mm_tgz="$mm_tmp/minimax-code-${MINIMAX_PIN}.tar.gz"
   curl -fsSL --proto '=https' \
-    "https://github.com/MiniMax-AI/minimax-code/releases/download/v${MINIMAX_PIN}/minimax-code-${MINIMAX_PIN}.tar.gz" \
-    -o "$mm_tgz" || { rm -rf "$mm_tmp"; return 1; }
-  check_sha "minimax $MINIMAX_PIN" "$mm_tgz" "$MINIMAX_SHA" || { rm -rf "$mm_tmp"; return 1; }
-  # Upstream's install form: optional deps included, install scripts allowed for better-sqlite3 (its
-  # prebuilt native binding; the CLI's session store is sqlite). An npm that predates allow-scripts
-  # warns about the flag and runs scripts anyway.
-  npm install -g --prefix "$TOOLS" --no-audit --no-fund --include=optional \
-    --allow-scripts=better-sqlite3 "$mm_tgz" || { rm -rf "$mm_tmp"; return 1; }
+    "https://github.com/WiseLibs/better-sqlite3/releases/download/v${MINIMAX_SQLITE_PIN}/better-sqlite3-v${MINIMAX_SQLITE_PIN}-node-v${mm_abi}-linux-${mm_arch}.tar.gz" \
+    -o "$mm_tmp/binding.tar.gz" || mm_fail "could not fetch better-sqlite3's binding" || return 1
+  check_sha "better-sqlite3 $MINIMAX_SQLITE_PIN" "$mm_tmp/binding.tar.gz" "$MINIMAX_SQLITE_SHA" || mm_fail "" || return 1
+  tar -xzf "$mm_tmp/binding.tar.gz" --no-same-owner -C "$mm_bs" build/Release/better_sqlite3.node \
+    || mm_fail "better-sqlite3's archive holds no build/Release/better_sqlite3.node" || return 1
   rm -rf "$mm_tmp"
+  # The proof: the binding loads and answers a query.
+  ( cd "$TOOLS/npm/minimax" && node -e 'new (require("better-sqlite3"))(":memory:").prepare("select 1").get()' ) \
+    || mm_fail "better-sqlite3's binding does not load" || return 1
 }
 
 install_kilo() {
@@ -1028,7 +1057,9 @@ install_omp() {
 # digest with every tarball and npm verifies it, which is why this one is an npm install rather
 # than a release-asset fetch with a digest of our own.
 install_mimo() {
-  npm install -g --prefix "$TOOLS" --no-audit --no-fund "@mimo-ai/cli@$MIMO_PIN" || return 1
+  # Its install script only caches the platform binary's path; the launcher finds the binary
+  # without it (measured: `mimo --version` answers from an --ignore-scripts tree).
+  install_npm mimo "$MIMO_SPEC" || return 1
   # MiMo performs a ONE-TIME SQLite migration and fetches an npm tree of ai-sdk packages on its
   # first run. Measured: the first turn on a fresh home took over nine minutes and printed nothing
   # before it was killed; the second, warm, answered in about twenty seconds. A turn is not where
@@ -1371,9 +1402,9 @@ if "load_sessions" not in src:
 }
 
 # ── the bases installed from npm or PyPI by version ──────────────────────────────────────────────
-# Pinned EXACTLY. npm checks each tarball against the integrity digest its registry serves, and pip
-# takes the exact version; neither yet covers a base's own dependency tree, which floats within the
-# ranges upstream declares until each has a lock (#623's second step).
+# Pinned EXACTLY. The npm bases' whole trees are in their locks (docker/locks/npm, see npm_locked
+# below); pip takes the exact version, and a PyPI base's own dependency tree floats within the ranges
+# upstream declares until it has a lock (#623's second step).
 #
 # Qwen Code and Pi were installed with no version at all, once per volume: what npm served on the day
 # the volume was created is what it ran (#623). Qwen Code 0.26.3 is the release #609 and #614 ran
@@ -1403,9 +1434,99 @@ MIMO_PIN="${HR_MIMO_VERSION:-0.1.15}"; MIMO_PIN="${MIMO_PIN#v}"
 # part of pi's identity: a volume with another adapter is reinstalled with this one.
 PI_MCP_PIN="${HR_PI_MCP_ADAPTER_VERSION:-3.1.0}"; PI_MCP_PIN="${PI_MCP_PIN#v}"
 npm_g() { npm install -g --prefix "$TOOLS" --no-audit --no-fund "$@"; }
+
+# The npm bases install from a LOCKFILE that ships in this image (/app/locks/npm/<name>/, a
+# package.json and the package-lock.json scripts/lock-npm.sh writes from it): the whole tree, every
+# package by version, by the URL it comes from and by the sha512 npm checks it against, installed
+# with `npm ci --ignore-scripts` into $TOOLS/npm/<name>. A tarball whose bytes differ, or a
+# dependency the lock does not name, fails the install. With scripts off, no package's install code
+# runs as root; the one that is needed is named where it is used (Claude Code's, which hard-links its
+# native binary out of a platform package the lock already holds).
+#
+# Measured (2026-11-08, amd64): for each of the nine, `npm ci` from its lock lands the same packages
+# at the same versions as main's `npm install -g` did that day. The differences are the packages npm
+# -g dropped on its own: musl builds (the lock carries their `libc`, so they are skipped the same way)
+# and gemini's node-pty 1.0.0, which has no prebuild and failed to compile with no compiler here, so
+# npm removed it; it is now in the tree unbuilt, and gemini loads @lydell/node-pty (prebuilt) first.
+#
+# An override (any version but the lock's) installs as before, with `npm install -g`, and its stamp
+# says "unverified".
+# npm_lock_spec <name>: the lock's direct dependencies as name@version, in package.json order.
+npm_lock_spec() {
+  node -e 'const d=require(process.argv[1]).dependencies||{};console.log(Object.entries(d).map(([k,v])=>k+"@"+v).join(" "))' \
+    "$HR_LOCKS_DIR/npm/$1/package.json" 2>/dev/null
+}
+npm_is_locked() { [ -n "$2" ] && [ "$2" = "$(npm_lock_spec "$1")" ]; }
+# npm_ident <name> <spec>: the stamp line for an npm base. A regenerated lock in a new image reaches
+# a volume that holds the base, the way a PyPI lock does.
+npm_ident() {
+  if npm_is_locked "$1" "$2"; then echo "npm $2 lock:$(file_sha "$HR_LOCKS_DIR/npm/$1/package-lock.json")"
+  else echo "npm $2 unverified"; fi
+}
+# npm_link_bins <dir>: $TOOLS/bin/<command> for each command a direct dependency declares, as npm -g
+# links them (relative symlinks). npm ci links bins into node_modules/.bin, not onto PATH.
+npm_link_bins() {
+  node -e '
+const fs = require("fs"), path = require("path");
+const [dir, bin] = process.argv.slice(1);
+fs.mkdirSync(bin, { recursive: true });
+for (const dep of Object.keys(require(path.join(dir, "package.json")).dependencies || {})) {
+  const pd = path.join(dir, "node_modules", dep), p = require(path.join(pd, "package.json"));
+  const b = typeof p.bin === "string" ? { [p.name.replace(/^@[^/]+\//, "")]: p.bin } : (p.bin || {});
+  for (const [cmd, file] of Object.entries(b)) {
+    const target = path.join(pd, file), link = path.join(bin, cmd);
+    fs.chmodSync(target, 0o755);
+    fs.rmSync(link, { force: true });
+    fs.symlinkSync(path.relative(bin, target), link);
+  }
+}' "$1" "$TOOLS/bin"
+}
+# npm_locked <name> [<package whose install script runs>…]: $TOOLS/npm/<name> from its lock. What a
+# previous `npm install -g` of the same packages left under $TOOLS/lib goes first.
+npm_locked() {
+  nl_name="$1"; shift
+  nl_src="$HR_LOCKS_DIR/npm/$nl_name"; nl_dir="$TOOLS/npm/$nl_name"
+  [ -f "$nl_src/package-lock.json" ] || { echo "$nl_name: no lockfile at $nl_src"; return 1; }
+  for nl_dep in $(npm_lock_spec "$nl_name"); do
+    nl_pkg="${nl_dep%@*}"; rm -rf "$TOOLS/lib/node_modules/$nl_pkg"
+    case "$nl_pkg" in @*/*) rmdir "$TOOLS/lib/node_modules/${nl_pkg%%/*}" 2>/dev/null || true ;; esac
+  done
+  rm -rf "$nl_dir"; mkdir -p "$nl_dir"
+  cp "$nl_src/package.json" "$nl_src/package-lock.json" "$nl_dir/" || { rm -rf "$nl_dir"; return 1; }
+  ( cd "$nl_dir" && npm ci --ignore-scripts --no-audit --no-fund ) || { rm -rf "$nl_dir"; return 1; }
+  if [ $# -gt 0 ]; then
+    ( cd "$nl_dir" && npm rebuild --foreground-scripts "$@" ) || { rm -rf "$nl_dir"; return 1; }
+  fi
+  npm_link_bins "$nl_dir" || { rm -rf "$nl_dir"; return 1; }
+}
+# npm_unlocked <name> <npm install -g arguments…>: an override, installed the way it always was.
+npm_unlocked() {
+  find "$TOOLS/bin" -maxdepth 1 -type l -lname "../npm/$1/*" -delete 2>/dev/null || true
+  rm -rf "$TOOLS/npm/$1"; shift
+  npm_g "$@"
+}
+# install_npm <name> <spec> [<package whose install script runs>…]
+install_npm() {
+  in_name="$1"; in_spec="$2"; shift 2
+  if npm_is_locked "$in_name" "$in_spec"; then npm_locked "$in_name" "$@"; else npm_unlocked "$in_name" "$in_spec"; fi
+}
+
+CLAUDE_SPEC="@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+QWEN_SPEC="@qwen-code/qwen-code@$QWEN_PIN"
+GEMINI_SPEC="@google/gemini-cli@$GEMINI_PIN"
+CLINE_SPEC="cline@$CLINE_PIN"
+CODEX_SPEC="@openai/codex@$CODEX_PIN"
+PI_SPEC="@earendil-works/pi-coding-agent@$PI_PIN"
+PI_MCP_SPEC="pi-mcp-adapter@$PI_MCP_PIN"
+MIMO_SPEC="@mimo-ai/cli@$MIMO_PIN"
+# Claude Code's install script copies its platform's native binary over the bin/claude.exe stub;
+# without it the command prints "native binary not installed". The binary comes from the lock.
+install_claude() { install_npm claude "$CLAUDE_SPEC" @anthropic-ai/claude-code; }
 install_pi() {
-  npm_g --ignore-scripts "@earendil-works/pi-coding-agent@$PI_PIN" || return 1
-  npm_g --ignore-scripts "pi-mcp-adapter@$PI_MCP_PIN" || return 1
+  if npm_is_locked pi "$PI_SPEC"; then npm_locked pi || return 1
+  else npm_unlocked pi --ignore-scripts "$PI_SPEC" || return 1; fi
+  if npm_is_locked pi-mcp-adapter "$PI_MCP_SPEC"; then npm_locked pi-mcp-adapter || return 1
+  else npm_unlocked pi-mcp-adapter --ignore-scripts "$PI_MCP_SPEC" || return 1; fi
 }
 
 # DeepSeek Harness, pinned EXACTLY, not 'latest': upstream is a developer preview that warns of
@@ -1533,13 +1654,13 @@ lock_ident() {
 # stamps existed reinstalls each base once, which is how what `latest` gave it is replaced.
 install_backends() {
   mkdir -p "$TOOLS"
-  # -g is what creates $TOOLS/bin/<cmd>; --prefix alone just drops a node_modules tree with no
-  # entry point, which npm reports as success (install_base checks the executable either way).
+  # The npm bases' $TOOLS/bin/<cmd> is a link npm_link_bins makes (or, for an override, the one npm -g
+  # makes); install_base checks the executable either way.
   # Claude Code: a model can require a minimum CLI (Claude Opus 5.5 needs 2.1.280; the API refuses
   # older ones), and a volume that installed the CLI once, months ago, would otherwise never learn it.
-  if wanted claude && ! current claude "npm @anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"; then
+  if wanted claude && ! current claude "$(npm_ident claude "$CLAUDE_SPEC")"; then
     echo "[harnessrouter] installing Claude Code $CLAUDE_CODE_VERSION (Anthropic's terms apply)…"
-    install_base claude "Claude Code" npm_g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" || true
+    install_base claude "Claude Code" install_claude || true
   fi
   # opencode is MIT, so unlike Claude Code and hermes it COULD be baked into the image. It is
   # installed here anyway so that every backend has ONE install path.
@@ -1551,23 +1672,23 @@ install_backends() {
     echo "[harnessrouter] installing Kilo CLI $KILO_PIN (MIT)…"
     install_base kilo "Kilo CLI" install_kilo || true
   fi
-  if wanted qwen && ! current qwen "npm @qwen-code/qwen-code@$QWEN_PIN"; then
+  if wanted qwen && ! current qwen "$(npm_ident qwen "$QWEN_SPEC")"; then
     echo "[harnessrouter] installing Qwen Code $QWEN_PIN (Apache-2.0)…"
-    install_base qwen "Qwen Code" npm_g "@qwen-code/qwen-code@$QWEN_PIN" || true
+    install_base qwen "Qwen Code" install_npm qwen "$QWEN_SPEC" || true
   fi
-  if wanted gemini && ! current gemini "npm @google/gemini-cli@$GEMINI_PIN"; then
+  if wanted gemini && ! current gemini "$(npm_ident gemini "$GEMINI_SPEC")"; then
     echo "[harnessrouter] installing Gemini CLI $GEMINI_PIN (Apache-2.0)…"
-    install_base gemini "Gemini CLI" npm_g "@google/gemini-cli@$GEMINI_PIN" || true
+    install_base gemini "Gemini CLI" install_npm gemini "$GEMINI_SPEC" || true
   fi
-  if wanted cline && ! current cline "npm cline@$CLINE_PIN"; then
+  if wanted cline && ! current cline "$(npm_ident cline "$CLINE_SPEC")"; then
     echo "[harnessrouter] installing Cline $CLINE_PIN (Apache-2.0)…"
-    install_base cline "Cline" npm_g "cline@$CLINE_PIN" || true
+    install_base cline "Cline" install_npm cline "$CLINE_SPEC" || true
   fi
-  if wanted codex && ! current codex "npm @openai/codex@$CODEX_PIN"; then
+  if wanted codex && ! current codex "$(npm_ident codex "$CODEX_SPEC")"; then
     echo "[harnessrouter] installing Codex $CODEX_PIN (Apache-2.0)…"
-    install_base codex "Codex" npm_g "@openai/codex@$CODEX_PIN" || true
+    install_base codex "Codex" install_npm codex "$CODEX_SPEC" || true
   fi
-  if wanted pi && ! current pi "npm @earendil-works/pi-coding-agent@$PI_PIN pi-mcp-adapter@$PI_MCP_PIN"; then
+  if wanted pi && ! current pi "$(npm_ident pi "$PI_SPEC") $(npm_ident pi-mcp-adapter "$PI_MCP_SPEC")"; then
     echo "[harnessrouter] installing Pi $PI_PIN and pi-mcp-adapter $PI_MCP_PIN (MIT)…"
     install_base pi "Pi" install_pi || true
   fi
@@ -1618,7 +1739,7 @@ install_backends() {
     echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT)…"
     install_base kimi "Kimi Code CLI" install_kimi || true
   fi
-  if wanted minimax && ! current minimax "$(ident "$MINIMAX_PIN" "$MINIMAX_SHA")"; then
+  if wanted minimax && ! current minimax "$(npm_ident minimax "$MINIMAX_SPEC")"; then
     echo "[harnessrouter] installing MiniMax Code $MINIMAX_PIN (MIT)…"
     install_base minimax "MiniMax Code" install_minimax || true
   fi
@@ -1626,7 +1747,7 @@ install_backends() {
     echo "[harnessrouter] installing Grok Build $GROK_PIN (Apache-2.0)…"
     install_base grok "Grok Build" install_grok || true
   fi
-  if wanted mimo && ! current mimo "npm @mimo-ai/cli@$MIMO_PIN"; then
+  if wanted mimo && ! current mimo "$(npm_ident mimo "$MIMO_SPEC")"; then
     echo "[harnessrouter] installing MiMo Code $MIMO_PIN (MIT)…"
     install_base mimo "MiMo Code" install_mimo || true
   fi
@@ -1706,7 +1827,11 @@ install_backends() {
   # Hermes otherwise tries to install its own dependencies mid-turn.
   export HERMES_DISABLE_LAZY_INSTALLS=1
   # Where the runner finds the MCP extension to mount (-e) on pi turns with MCP servers.
-  [ -d "$TOOLS/lib/node_modules/pi-mcp-adapter" ] && export HR_PI_MCP_EXT="$TOOLS/lib/node_modules/pi-mcp-adapter"
+  if [ -d "$TOOLS/npm/pi-mcp-adapter/node_modules/pi-mcp-adapter" ]; then
+    export HR_PI_MCP_EXT="$TOOLS/npm/pi-mcp-adapter/node_modules/pi-mcp-adapter"
+  elif [ -d "$TOOLS/lib/node_modules/pi-mcp-adapter" ]; then
+    export HR_PI_MCP_EXT="$TOOLS/lib/node_modules/pi-mcp-adapter"
+  fi
   [ -x "$TOOLS/dsh-venv/bin/python" ] && export HR_DSH_PYTHON="$TOOLS/dsh-venv/bin/python"
   # The last command is a test, and under `set -e` a false one as a function's last status aborts
   # the entrypoint (an instance without hermes once died here with no message), so it ends on true.
