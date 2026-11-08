@@ -1,0 +1,4 @@
+# aider-chat 0.86.2 pins idna==3.11; mcp 2.2.0 (the bridge's SDK) needs idna>=3.18 through httpx2. The
+# venv has always had mcp's: aider was installed first and `pip install mcp` replaced idna after it
+# (pip's own warning said so). Measured: that is the only package the second install moved.
+idna==3.20

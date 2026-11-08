@@ -458,9 +458,7 @@ install_opencode() {
 # Aider, Apache-2.0 (Aider-AI/aider), pinned to 0.86.2, plus the MCP bridge it needs.
 #
 # Its own venv, the dsh/hermes precedent: aider pins litellm and a large scientific stack, and must
-# not share the runner's interpreter. The version is pinned exactly and aider's own wheel pins every
-# dependency to a version, so the venv is the same one on every volume; there is no digest check
-# here, the release is trusted the way the other PyPI installs (dsh) are.
+# not share the runner's interpreter. Installed from docker/locks/aider.lock.txt, every file hashed.
 #
 # NOTE the Python floor: aider 0.86.2 declares Requires-Python <3.13,>=3.10. On an interpreter
 # outside that range pip does not fail — it silently offers an OLDER aider (0.82.3 was the highest
@@ -469,15 +467,23 @@ install_opencode() {
 #
 # The official MCP SDK goes in beside it: upstream aider has no MCP client at all, so
 # runner/aider_mcp_bridge.py is what lets a declared MCP server be reached and, therefore, measured.
-# Installed in this venv rather than globally because no other backend uses it.
+# Installed in this venv rather than globally because no other backend uses it. aider pins
+# idna==3.11 and the SDK needs idna>=3.18: the venv has always held the SDK's (it was installed second
+# and replaced it), and docker/locks/aider.overrides writes that down.
 AIDER_PIN="${HR_AIDER_VERSION:-0.86.2}"
+AIDER_MCP_PIN="${HR_MCP_SDK_VERSION:-2.2.0}"
+AIDER_REQS=("aider-chat==$AIDER_PIN" "mcp==$AIDER_MCP_PIN")
 install_aider() {
   am_py="${HR_AIDER_BASE_PYTHON:-python3}"
   # Sessions keep nothing in the venv, so a reinstall starts from an empty one.
-  rm -rf "$TOOLS/aider-venv"
-  "$am_py" -m venv "$TOOLS/aider-venv" || return 1
-  "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check \
-    "aider-chat==$AIDER_PIN" || return 1
+  if is_locked aider "${AIDER_REQS[@]}"; then
+    install_locked_venv aider "$am_py" "$TOOLS/aider-venv" aider.lock.txt || return 1
+  else
+    # An override, unlocked, in the order the overrides above describe: aider, then the SDK over it.
+    install_unlocked_venv aider "$am_py" "$TOOLS/aider-venv" "aider-chat==$AIDER_PIN" || return 1
+    "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir \
+      "mcp==$AIDER_MCP_PIN" || return 1
+  fi
   # The driver imports aider in process; prove the pinned version is importable before declaring the
   # install good, so a resolver that quietly picked another one fails HERE and not on a live turn.
   "$TOOLS/aider-venv/bin/python" -c '
@@ -486,47 +492,24 @@ want = sys.argv[1]
 if aider.__version__ != want:
     sys.exit("aider %s installed, wanted %s" % (aider.__version__, want))
 '  "$AIDER_PIN" || return 1
-  # aider's MCP client: the official MIT SDK, into the same venv. f/mcptools was the first choice
+  # aider's MCP client is the official MIT SDK, in the same venv. f/mcptools was the first choice
   # and is not usable here — it is a Go program that publishes NO binaries on any release (checked
   # through v0.7.1, every one has zero assets), so it would mean a Go toolchain in a python-slim
   # image for one command.
-  "$TOOLS/aider-venv/bin/pip" install -q --disable-pip-version-check \
-    "mcp==$AIDER_MCP_PIN" || return 1
+  "$TOOLS/aider-venv/bin/python" -c 'from mcp import StdioServerParameters; from mcp.client.client import Client' || return 1
 }
 
 # Qoder Cloud Agents' Python SDK, MIT (QoderAI/qoder-cloud-agents-sdk-python, PyPI `qca-sdk`), pinned
 # to 0.6.0. The qoder backend's runtime is Qoder's cloud; what this box needs is the client the
 # driver (runner/qoder_driver.py) speaks it with, in a venv of its own so its httpx/pydantic/anyio
-# stay off the runner's. VERIFIED the way cheetahclaws is: the wheel is downloaded on its own and
-# compared against the digest pinned here (PyPI's sha256 for qca_sdk-0.6.0-py3-none-any.whl,
-# 2026-10-16) before it is installed; an operator who overrides the version supplies HR_QODER_SHA256
-# for it, or is told the wheel is unverified. The import check asserts the client and the methods the
-# driver reaches for, so an SDK refactor fails the install here rather than the first live turn.
+# stay off the runner's. Installed from docker/locks/qoder.lock.txt, which holds the wheel's digest
+# (PyPI's sha256 for qca_sdk-0.6.0-py3-none-any.whl, the one this script used to check by hand) and
+# its dependencies'. The import check asserts the client and the methods the driver reaches for, so
+# an SDK refactor fails the install here rather than the first live turn.
 QODER_PIN="${HR_QODER_SDK_VERSION:-0.6.0}"
-if [ "$QODER_PIN" = "0.6.0" ]; then
-  QODER_SHA256="${HR_QODER_SHA256:-97d76fece7a489394e3dc237fece652bb6130f7cf5b1870aa6e9216e4ac8773f}"
-else
-  QODER_SHA256="${HR_QODER_SHA256:-}"
-fi
+QODER_REQS=("qca-sdk==$QODER_PIN")
 install_qoder() {
-  qd_py="${HR_QODER_BASE_PYTHON:-python3}"
-  rm -rf "$TOOLS/qoder-venv"
-  "$qd_py" -m venv "$TOOLS/qoder-venv" || return 1
-  qd_tmp="$(mktemp -d)"
-  "$TOOLS/qoder-venv/bin/pip" download -q --disable-pip-version-check --no-deps \
-    --only-binary=:all: -d "$qd_tmp" "qca-sdk==$QODER_PIN" || { rm -rf "$qd_tmp"; return 1; }
-  qd_whl="$qd_tmp/qca_sdk-$QODER_PIN-py3-none-any.whl"
-  [ -f "$qd_whl" ] || { echo "qca-sdk $QODER_PIN: no wheel was downloaded"; rm -rf "$qd_tmp"; return 1; }
-  if [ -n "$QODER_SHA256" ]; then
-    qd_have="$(sha256sum "$qd_whl" | awk '{print $1}')"
-    if [ "$QODER_SHA256" != "$qd_have" ]; then
-      echo "qca-sdk $QODER_PIN: wheel digest mismatch (want $QODER_SHA256, have $qd_have)"
-      rm -rf "$qd_tmp"; return 1
-    fi
-  fi
-  "$TOOLS/qoder-venv/bin/pip" install -q --disable-pip-version-check "$qd_whl" \
-    || { rm -rf "$qd_tmp"; return 1; }
-  rm -rf "$qd_tmp"
+  install_pinned_venv qoder "${HR_QODER_BASE_PYTHON:-python3}" "$TOOLS/qoder-venv" "" "${QODER_REQS[@]}" || return 1
   "$TOOLS/qoder-venv/bin/python" -c '
 import sys, importlib.metadata as md
 want = sys.argv[1]
@@ -563,38 +546,14 @@ for path in ("environments.create", "environments.delete", "environments.archive
 # playwright with a Chromium of its own; the driver withholds the four tools those extras serve
 # (WebBrowse, ReadPDF, ReadSpreadsheet, ReadImage) for as long as they are absent.
 #
-# VERIFIED, not only pinned. PyPI publishes the wheel's sha256, so the wheel is downloaded on its
-# own, compared against the digest pinned here (computed from the 3.5.88 release's
-# cheetahclaws-3.5.88-py3-none-any.whl, and equal to the one PyPI lists), and installed from that
-# file; an index entry can be replaced, a digest cannot. An operator who overrides the version
-# supplies HR_CHEETAHCLAWS_SHA256 for it, or is told the wheel is unverified (install_backends).
+# VERIFIED, not only pinned: installed from docker/locks/cheetahclaws.lock.txt, which holds the
+# wheel's digest (the one this script used to check by hand, equal to PyPI's) and its dependencies'.
 # The import check then asserts the symbols the driver reaches for, so an upstream refactor fails
 # the install here rather than the first live turn.
 CHEETAHCLAWS_PIN="${HR_CHEETAHCLAWS_VERSION:-3.5.88}"
-if [ "$CHEETAHCLAWS_PIN" = "3.5.88" ]; then
-  CHEETAHCLAWS_SHA256="${HR_CHEETAHCLAWS_SHA256:-6e9b46c0e2d125f700cc0b609464efe1a3fe0914cbd0ecad8e405a1c0fc4f9c0}"
-else
-  CHEETAHCLAWS_SHA256="${HR_CHEETAHCLAWS_SHA256:-}"
-fi
+CHEETAHCLAWS_REQS=("cheetahclaws==$CHEETAHCLAWS_PIN")
 install_cheetahclaws() {
-  cc_py="${HR_CHEETAHCLAWS_BASE_PYTHON:-python3}"
-  rm -rf "$TOOLS/cheetahclaws-venv"
-  "$cc_py" -m venv "$TOOLS/cheetahclaws-venv" || return 1
-  cc_tmp="$(mktemp -d)"
-  "$TOOLS/cheetahclaws-venv/bin/pip" download -q --disable-pip-version-check --no-deps \
-    --only-binary=:all: -d "$cc_tmp" "cheetahclaws==$CHEETAHCLAWS_PIN" || { rm -rf "$cc_tmp"; return 1; }
-  cc_whl="$cc_tmp/cheetahclaws-$CHEETAHCLAWS_PIN-py3-none-any.whl"
-  [ -f "$cc_whl" ] || { echo "cheetahclaws $CHEETAHCLAWS_PIN: no wheel was downloaded"; rm -rf "$cc_tmp"; return 1; }
-  if [ -n "$CHEETAHCLAWS_SHA256" ]; then
-    cc_have="$(sha256sum "$cc_whl" | awk '{print $1}')"
-    if [ "$CHEETAHCLAWS_SHA256" != "$cc_have" ]; then
-      echo "cheetahclaws $CHEETAHCLAWS_PIN: wheel digest mismatch (want $CHEETAHCLAWS_SHA256, have $cc_have)"
-      rm -rf "$cc_tmp"; return 1
-    fi
-  fi
-  "$TOOLS/cheetahclaws-venv/bin/pip" install -q --disable-pip-version-check "$cc_whl" \
-    || { rm -rf "$cc_tmp"; return 1; }
-  rm -rf "$cc_tmp"
+  install_pinned_venv cheetahclaws "${HR_CHEETAHCLAWS_BASE_PYTHON:-python3}" "$TOOLS/cheetahclaws-venv" "" "${CHEETAHCLAWS_REQS[@]}" || return 1
   "$TOOLS/cheetahclaws-venv/bin/python" -c '
 import sys, importlib.metadata as md
 want = sys.argv[1]
@@ -652,17 +611,31 @@ KIMI_SHA="$(pin_sha KIMI 2.0.0 "$KIMI_PIN" "$(by_arch \
 # downloaded archive (2026-09-26). It is pinned HERE for kimi's reason: a checksum served from the
 # artifact's own origin adds nothing against a compromised origin.
 #
-# The digest covers the package. Its three dependencies (better-sqlite3 12.11.1, @vscode/ripgrep
-# 1.18.0, @larksuiteoapi/node-sdk 1.73.3) are exact versions resolved from npm at install time; their
-# own dependencies float within npm ranges, as for every npm-installed backend here. About 105 MB
-# installed, so it is in the default set. Requires Node >= 22.19 (the image's nodesource 22.x).
+# It installs from docker/locks/npm/minimax like the other npm bases: the lock names the archive by
+# URL and sha512 (the same bytes the digest above named; the archive's sha256 is
+# b83a27e2f8373c755f26a1dc02cf8ba1c1f1a1a9d889d752ff5527fb5af2f1c0), and its dependencies
+# (better-sqlite3 12.11.1, @vscode/ripgrep 1.18.0, @larksuiteoapi/node-sdk 1.73.3) with their whole
+# trees. About 105 MB installed, so it is in the default set. Requires Node >= 22.19 (the image's
+# nodesource 22.x).
 #
 # Everything runner/server.py's minimax code relies on (the exec stream-json schema, the
 # custom_provider selector, --session refusing an unknown id, the sqlite session store, the config
 # keys agents.default / skills.external, the two instruction files, the rm shim's trash) was
 # measured on THIS version.
 MINIMAX_PIN="${HR_MINIMAX_VERSION:-0.5.4}"; MINIMAX_PIN="${MINIMAX_PIN#v}"
-MINIMAX_SHA="$(pin_sha MINIMAX 0.5.4 "$MINIMAX_PIN" b83a27e2f8373c755f26a1dc02cf8ba1c1f1a1a9d889d752ff5527fb5af2f1c0)"
+MINIMAX_URL="https://github.com/MiniMax-AI/minimax-code/releases/download/v${MINIMAX_PIN}/minimax-code-${MINIMAX_PIN}.tar.gz"
+MINIMAX_SPEC="@minimax-ai/code@$MINIMAX_URL"
+# better-sqlite3's native binding (the CLI's session store is sqlite). Its install script is
+# `prebuild-install`, which fetches this same archive from the project's GitHub release and checks
+# nothing; with scripts off, it is fetched here and checked against a digest committed here. The
+# archive holds one file, build/Release/better_sqlite3.node, and it is the file prebuild-install
+# left in main's tree (measured: same sha256). It is built for one Node ABI (127 is Node 22), so a
+# new Node major in the image fails this install loudly instead of loading a mismatched binding.
+MINIMAX_SQLITE_PIN="12.11.1"
+MINIMAX_SQLITE_ABI="127"
+MINIMAX_SQLITE_SHA="$(by_arch \
+  94ce113ea2d9347fcd1cf8e46445cc271d1dbd02d05a64aa460442222f023b11 \
+  00f8035f4322c14ab4dbb3ee6f4b6c9ca25209fe2a77ac2759cd09dd42587d48)"
 # Kilo CLI (Kilo-Org/kilocode, MIT), an opencode fork, pinned to 7.8.1. The release archive from
 # GitHub, not npm's launcher package and not the vendor's install script: the archive is one
 # directory (the `kilo` binary beside bwrap, the sandbox helpers and the tree-sitter grammars it
@@ -734,21 +707,26 @@ GROK_SHA="$(pin_sha GROK 1.0.41 "$GROK_PIN" "$(by_arch \
 # Own venv, the dsh/hermes precedent: it pins litellm, fastmcp, pydantic and a browser stack, and
 # must not share the runner's interpreter.
 # The System One Harness (github.com/HarnessRouter/SystemOneHarness, Apache-2.0): a loop over a
-# decision model, pinned by git tag. Its own venv on the data volume like openhands and aider: three
-# small dependencies (httpx, pyyaml, the MCP SDK), installed once and rebuilt when the pin moves.
-# The executable is the venv's python, which the runner hands runner/systemone_driver.py.
+# decision model. Its own venv on the data volume like openhands and aider, from
+# docker/locks/systemone.lock.txt, rebuilt when the pin or the lock moves. The executable is the
+# venv's python, which the runner hands runner/systemone_driver.py.
 SYSTEMONE_PIN="${HR_SYSTEMONE_VERSION:-0.4.0}"; SYSTEMONE_PIN="${SYSTEMONE_PIN#v}"
 # The COMMIT the v0.4.0 tag pointed at (2026-11-07), not the tag: a tag can be moved, a commit
-# cannot, and the tag is ours to move by mistake. An overridden version is fetched by its tag.
+# cannot, and the tag is ours to move by mistake. An overridden version is fetched by its tag. It is
+# GitHub's source archive of that commit, not a git checkout, because --require-hashes takes a file
+# with a digest and no VCS requirement; the lock holds the archive's sha256, and it is the one
+# distribution of this lock that is built here (setuptools, from build.lock.txt). A wheel published
+# with the release would remove even that.
 if [ "$SYSTEMONE_PIN" = "0.4.0" ]; then SYSTEMONE_REF=3266a17537e283dc5539439835c0b4cab02bf5c0; else SYSTEMONE_REF="v$SYSTEMONE_PIN"; fi
 # Playwright drives the browser environments; the version a fresh volume resolved on 0.38.2.
 SYSTEMONE_PLAYWRIGHT_PIN="${HR_SYSTEMONE_PLAYWRIGHT_VERSION:-1.64.1}"
 # HR_SYSTEMONE_SPEC overrides where pip takes the package from (a mirror, a fork, a local tree
-# copied into a derived image); the version proven below is the pin either way. The browser extra
+# copied into a derived image), unlocked; the version proven below is the pin either way. The browser extra
 # brings Browser Use, and with it the page and game environments; the Chromium they drive is
 # installed beside the venv on the data volume (Playwright's, world-readable), because the image
 # ships no browser and a session process cannot read root's cache.
-SYSTEMONE_SPEC="${HR_SYSTEMONE_SPEC:-systemone-harness[browser] @ git+https://github.com/HarnessRouter/SystemOneHarness@${SYSTEMONE_REF}}"
+SYSTEMONE_SPEC="${HR_SYSTEMONE_SPEC:-systemone-harness[browser] @ https://github.com/HarnessRouter/SystemOneHarness/archive/${SYSTEMONE_REF}.tar.gz}"
+SYSTEMONE_REQS=("$SYSTEMONE_SPEC" "playwright==$SYSTEMONE_PLAYWRIGHT_PIN")
 export PLAYWRIGHT_BROWSERS_PATH="$TOOLS/ms-playwright"
 # The libraries that Chromium links against live in the container, not on the volume the browser
 # is on, so a container recreated over a volume that already holds the browser has the binary and
@@ -765,9 +743,7 @@ chromium_libs() {
 install_systemone() {
   # A failed install leaves NO venv behind: the executable is the definition of installed, and a
   # venv whose pip step failed reported the base as available on a box where it could not run.
-  rm -rf "$TOOLS/systemone-venv"
-  "${HR_SYSTEMONE_BASE_PYTHON:-python3}" -m venv "$TOOLS/systemone-venv" || { rm -rf "$TOOLS/systemone-venv"; return 1; }
-  "$TOOLS/systemone-venv/bin/pip" install -q --disable-pip-version-check "$SYSTEMONE_SPEC" "playwright==$SYSTEMONE_PLAYWRIGHT_PIN" \
+  install_pinned_venv systemone "${HR_SYSTEMONE_BASE_PYTHON:-python3}" "$TOOLS/systemone-venv" systemone-harness "${SYSTEMONE_REQS[@]}" \
     || { rm -rf "$TOOLS/systemone-venv"; return 1; }
   if ! ls "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
     echo "[harnessrouter]   installing a Chromium for the System One base (Playwright's) under $PLAYWRIGHT_BROWSERS_PATH …"
@@ -827,20 +803,15 @@ install_agentzero() {
   grep -vE '^[[:space:]]*(#|$)' "$az_tmp/x/requirements.txt" | sed 's/[[:space:]]*#.*$//' \
     | grep -viE "$AGENTZERO_EXCLUDE" > "$az_tmp/requirements.harness.txt"
   echo "ipython==${HR_AGENTZERO_IPYTHON_VERSION:-9.17.1}" >> "$az_tmp/requirements.harness.txt"
-  rm -rf "$TOOLS/agentzero-venv" "$TOOLS/agentzero-src"
-  "${HR_AGENTZERO_BASE_PYTHON:-python3}" -m venv "$TOOLS/agentzero-venv" \
-    || { rm -rf "$az_tmp" "$TOOLS/agentzero-venv"; return 1; }
+  rm -rf "$TOOLS/agentzero-src"
   # The measured tree, not whatever the index resolves today: upstream floors a third of its
-  # requirements and pins no transitive dependency. The constraints describe 2.13 and nothing else,
-  # so an overridden version resolves freely (and says so).
-  az_constraints=()
-  if [ "$AGENTZERO_PIN" = "2.13" ] && [ -f /app/runner/agentzero-constraints.txt ]; then
-    az_constraints=(-c /app/runner/agentzero-constraints.txt)
-  else
-    echo "[harnessrouter]       Agent Zero's dependencies resolve unconstrained (no measured set for $AGENTZERO_PIN)."
-  fi
-  "$TOOLS/agentzero-venv/bin/pip" install -q --no-cache-dir --disable-pip-version-check \
-      -r "$az_tmp/requirements.harness.txt" "${az_constraints[@]}" \
+  # requirements and pins no transitive dependency. docker/locks/agentzero.in is the list just built
+  # from 2.13's archive, so the lock compiled from it (under runner/agentzero-constraints.txt, the
+  # tree the support matrix measured) is used only when this archive yields exactly that list. Two of
+  # its distributions publish no wheel and are built here. An overridden version resolves freely, and
+  # its stamp says so.
+  mapfile -t az_reqs < "$az_tmp/requirements.harness.txt"
+  install_pinned_venv agentzero "${HR_AGENTZERO_BASE_PYTHON:-python3}" "$TOOLS/agentzero-venv" crontab,flask-basicauth "${az_reqs[@]}" \
     || { rm -rf "$az_tmp" "$TOOLS/agentzero-venv"; return 1; }
   mv "$az_tmp/x" "$TOOLS/agentzero-src" && rm -rf "$az_tmp"
   # Turns run as the session's uid, which cannot write here: compile now, or every turn pays for it.
@@ -870,15 +841,14 @@ import IPython  # noqa: F401 - the python runtime
     && chmod 755 "$TOOLS/agentzero-venv/bin/agentzero-ready"
 }
 
+# BOTH openhands pins are the identity: a venv built before litellm was pinned holds the right
+# agent-server and the wrong litellm, which is the follow-up failure the litellm pin removes. One of
+# the lock's distributions (func-timeout) publishes no wheel and is built here.
+OPENHANDS_PIN="${HR_OPENHANDS_VERSION:-1.49.2}"
+OPENHANDS_LITELLM_PIN="${HR_OPENHANDS_LITELLM_VERSION:-1.94.3}"
+OPENHANDS_REQS=("openhands-agent-server==$OPENHANDS_PIN" "openhands-tools==$OPENHANDS_PIN" "openhands-sdk==$OPENHANDS_PIN" "litellm==$OPENHANDS_LITELLM_PIN")
 install_openhands() {
-  oh_py="${HR_OPENHANDS_BASE_PYTHON:-python3}"
-  rm -rf "$TOOLS/openhands-venv"
-  "$oh_py" -m venv "$TOOLS/openhands-venv" || return 1
-  "$TOOLS/openhands-venv/bin/pip" install -q --disable-pip-version-check \
-    "openhands-agent-server==${HR_OPENHANDS_VERSION:-1.49.2}" \
-    "openhands-tools==${HR_OPENHANDS_VERSION:-1.49.2}" \
-    "openhands-sdk==${HR_OPENHANDS_VERSION:-1.49.2}" \
-    "litellm==${HR_OPENHANDS_LITELLM_VERSION:-1.94.3}" || return 1
+  install_pinned_venv openhands "${HR_OPENHANDS_BASE_PYTHON:-python3}" "$TOOLS/openhands-venv" func-timeout "${OPENHANDS_REQS[@]}" || return 1
   # Prove the server can actually START, and that the litellm pin still buys what it is for, before
   # declaring the install good. Importing its api module is what catches the undeclared dependencies
   # above: the failure they cause is an import error at the first live turn, not a pip error here.
@@ -901,7 +871,7 @@ if "cache_creation_tokens" in details.model_fields_set and not hasattr(
         details, "cache_creation_tokens"):
     sys.exit("litellm %s and openhands-sdk %s disagree about cache_creation_tokens; "
              "hold litellm below 1.95.0" % (md.version("litellm"), md.version("openhands-sdk")))
-' "${HR_OPENHANDS_VERSION:-1.49.2}" || return 1
+' "$OPENHANDS_PIN" || return 1
   command -v tmux >/dev/null 2>&1 || { echo "openhands: the tmux binary is missing"; return 1; }
 }
 
@@ -925,18 +895,33 @@ install_kimi() {
 
 
 install_minimax() {
+  if ! npm_is_locked minimax "$MINIMAX_SPEC"; then
+    # An override: upstream's install form, optional deps included, install scripts allowed for
+    # better-sqlite3. An npm that predates allow-scripts warns about the flag and runs scripts anyway.
+    npm_unlocked minimax --include=optional --allow-scripts=better-sqlite3 "$MINIMAX_URL"
+    return
+  fi
+  npm_locked minimax || return 1
+  mm_bs="$TOOLS/npm/minimax/node_modules/better-sqlite3"
+  mm_fail() { [ -z "$1" ] || echo "$1"; rm -rf "${mm_tmp:-}" "$TOOLS/npm/minimax"; return 1; }
+  mm_abi="$(node -p process.versions.modules)"
+  [ "$mm_abi" = "$MINIMAX_SQLITE_ABI" ] \
+    || mm_fail "better-sqlite3 $MINIMAX_SQLITE_PIN: the digest here is for Node ABI $MINIMAX_SQLITE_ABI, this Node is $mm_abi" || return 1
+  [ -n "$MINIMAX_SQLITE_SHA" ] || mm_fail "better-sqlite3: no digest for $HR_ARCH" || return 1
+  [ "$(node -p 'require(process.argv[1]).version' "$mm_bs/package.json")" = "$MINIMAX_SQLITE_PIN" ] \
+    || mm_fail "the lock's better-sqlite3 is not $MINIMAX_SQLITE_PIN, which the digest here is for" || return 1
+  case "$HR_ARCH" in amd64) mm_arch="x64" ;; arm64) mm_arch="arm64" ;; esac
   mm_tmp="$(mktemp -d)"
-  mm_tgz="$mm_tmp/minimax-code-${MINIMAX_PIN}.tar.gz"
   curl -fsSL --proto '=https' \
-    "https://github.com/MiniMax-AI/minimax-code/releases/download/v${MINIMAX_PIN}/minimax-code-${MINIMAX_PIN}.tar.gz" \
-    -o "$mm_tgz" || { rm -rf "$mm_tmp"; return 1; }
-  check_sha "minimax $MINIMAX_PIN" "$mm_tgz" "$MINIMAX_SHA" || { rm -rf "$mm_tmp"; return 1; }
-  # Upstream's install form: optional deps included, install scripts allowed for better-sqlite3 (its
-  # prebuilt native binding; the CLI's session store is sqlite). An npm that predates allow-scripts
-  # warns about the flag and runs scripts anyway.
-  npm install -g --prefix "$TOOLS" --no-audit --no-fund --include=optional \
-    --allow-scripts=better-sqlite3 "$mm_tgz" || { rm -rf "$mm_tmp"; return 1; }
+    "https://github.com/WiseLibs/better-sqlite3/releases/download/v${MINIMAX_SQLITE_PIN}/better-sqlite3-v${MINIMAX_SQLITE_PIN}-node-v${mm_abi}-linux-${mm_arch}.tar.gz" \
+    -o "$mm_tmp/binding.tar.gz" || mm_fail "could not fetch better-sqlite3's binding" || return 1
+  check_sha "better-sqlite3 $MINIMAX_SQLITE_PIN" "$mm_tmp/binding.tar.gz" "$MINIMAX_SQLITE_SHA" || mm_fail "" || return 1
+  tar -xzf "$mm_tmp/binding.tar.gz" --no-same-owner -C "$mm_bs" build/Release/better_sqlite3.node \
+    || mm_fail "better-sqlite3's archive holds no build/Release/better_sqlite3.node" || return 1
   rm -rf "$mm_tmp"
+  # The proof: the binding loads and answers a query.
+  ( cd "$TOOLS/npm/minimax" && node -e 'new (require("better-sqlite3"))(":memory:").prepare("select 1").get()' ) \
+    || mm_fail "better-sqlite3's binding does not load" || return 1
 }
 
 install_kilo() {
@@ -1072,7 +1057,9 @@ install_omp() {
 # digest with every tarball and npm verifies it, which is why this one is an npm install rather
 # than a release-asset fetch with a digest of our own.
 install_mimo() {
-  npm install -g --prefix "$TOOLS" --no-audit --no-fund "@mimo-ai/cli@$MIMO_PIN" || return 1
+  # Its install script only caches the platform binary's path; the launcher finds the binary
+  # without it (measured: `mimo --version` answers from an --ignore-scripts tree).
+  install_npm mimo "$MIMO_SPEC" || return 1
   # MiMo performs a ONE-TIME SQLite migration and fetches an npm tree of ai-sdk packages on its
   # first run. Measured: the first turn on a fresh home took over nine minutes and printed nothing
   # before it was killed; the second, warm, answered in about twenty seconds. A turn is not where
@@ -1142,24 +1129,15 @@ install_jcode() {
 # THE WHEEL COMES FROM THE GITHUB RELEASE, NOT FROM PyPI. PyPI's `opensquilla` is stale at 0.3.0
 # while upstream ships 0.5.6, and 0.5.6 is the release the runner's code was measured against — the
 # agent CLI's flags, the v1 progress-event envelope, the transcript shape and the config keys. The
-# wheel's digest is committed here for omp's reason; computed from the v0.5.6 asset (2026-11-07), it
-# agrees with the release's SHA256SUMS and GitHub's asset digest. Its dependencies are resolved from
-# PyPI by version range until it has a lock (#623's second step).
+# lock (docker/locks/opensquilla.lock.txt) names the release asset by URL with its digest, for omp's
+# reason; computed from the v0.5.6 asset (2026-11-07), it agrees with the release's SHA256SUMS and
+# GitHub's asset digest. The lock holds its dependencies' digests too.
 OPENSQUILLA_PIN="${HR_OPENSQUILLA_VERSION:-0.5.6}"; OPENSQUILLA_PIN="${OPENSQUILLA_PIN#v}"
-OPENSQUILLA_SHA="$(pin_sha OPENSQUILLA 0.5.6 "$OPENSQUILLA_PIN" 74c78d38dc9d01f307413e03e291c19baeafc7cbb5b5144d19ce06728b443eeb)"
+OPENSQUILLA_REQS=("opensquilla @ https://github.com/TokenRhythm/opensquilla/releases/download/v${OPENSQUILLA_PIN}/opensquilla-${OPENSQUILLA_PIN}-py3-none-any.whl")
 install_opensquilla() {
   sq_ver="$OPENSQUILLA_PIN"
-  sq_whl="opensquilla-${sq_ver}-py3-none-any.whl"
-  sq_tmp="$(mktemp -d)"
-  curl -fsSL "https://github.com/TokenRhythm/opensquilla/releases/download/v${sq_ver}/$sq_whl" \
-    -o "$sq_tmp/$sq_whl" || { rm -rf "$sq_tmp"; return 1; }
-  check_sha "opensquilla $sq_ver" "$sq_tmp/$sq_whl" "$OPENSQUILLA_SHA" || { rm -rf "$sq_tmp"; return 1; }
-  rm -rf "$TOOLS/opensquilla-venv"
-  "${HR_OPENSQUILLA_BASE_PYTHON:-python3}" -m venv "$TOOLS/opensquilla-venv" \
-    || { rm -rf "$sq_tmp" "$TOOLS/opensquilla-venv"; return 1; }
-  "$TOOLS/opensquilla-venv/bin/pip" install -q --disable-pip-version-check "$sq_tmp/$sq_whl" \
-    || { rm -rf "$sq_tmp" "$TOOLS/opensquilla-venv"; return 1; }
-  rm -rf "$sq_tmp"
+  install_pinned_venv opensquilla "${HR_OPENSQUILLA_BASE_PYTHON:-python3}" "$TOOLS/opensquilla-venv" "" "${OPENSQUILLA_REQS[@]}" \
+    || { rm -rf "$TOOLS/opensquilla-venv"; return 1; }
   # A failed install leaves NO venv behind, and the version is PROVEN rather than assumed: the
   # wheel's name could be anything, and a base that reports installed and dies on its first turn is
   # the failure mode every installer here is written to avoid.
@@ -1173,14 +1151,12 @@ import opensquilla.cli.main  # noqa: F401 - the module `opensquilla agent` boots
 }
 
 # nanobot (MIT, HKUDS/nanobot) from PyPI as nanobot-ai, pinned to the release the driver was written
-# against. Its own venv, for opensquilla's reason.
+# against. Its own venv, for opensquilla's reason, from docker/locks/nanobot.lock.txt.
 NANOBOT_PIN="${HR_NANOBOT_VERSION:-0.3.5}"; NANOBOT_PIN="${NANOBOT_PIN#v}"
+NANOBOT_REQS=("nanobot-ai==$NANOBOT_PIN")
 install_nanobot() {
   nb_ver="$NANOBOT_PIN"
-  rm -rf "$TOOLS/nanobot-venv"
-  "${HR_NANOBOT_BASE_PYTHON:-python3}" -m venv "$TOOLS/nanobot-venv" \
-    || { rm -rf "$TOOLS/nanobot-venv"; return 1; }
-  "$TOOLS/nanobot-venv/bin/pip" install -q --disable-pip-version-check "nanobot-ai==$nb_ver" \
+  install_pinned_venv nanobot "${HR_NANOBOT_BASE_PYTHON:-python3}" "$TOOLS/nanobot-venv" "" "${NANOBOT_REQS[@]}" \
     || { rm -rf "$TOOLS/nanobot-venv"; return 1; }
   # Prove the SDK SURFACE the driver uses, not just that the package imports: the driver depends on
   # Nanobot.from_config and on seven STREAM_EVENT_* constants, and a release that renamed one of
@@ -1200,23 +1176,34 @@ for name in ("Nanobot", "STREAM_EVENT_TEXT_DELTA", "STREAM_EVENT_REASONING_DELTA
 ' "$nb_ver" || { rm -rf "$TOOLS/nanobot-venv"; return 1; }
 }
 
-# The three Python bases below (vibe, fast-agent, dcode) install from a LOCK FILE that ships inside
-# this image (/app/locks, written by `uv pip compile --universal --generate-hashes` from the .in file
-# beside it): every distribution of the whole dependency tree pinned by version AND by the sha256
-# PyPI recorded for each file, installed with `pip --require-hashes --no-deps`. A file whose bytes
-# differ, or a dependency the lock does not name, fails the install, and a base that failed to
-# install is not offered. The pins are part of the reviewed, digest-pinned image; nothing about them
-# is fetched at boot except the files themselves.
+# Every Python base installs from a LOCK FILE that ships inside this image (/app/locks, written by
+# scripts/lock-pypi.sh from the .in file beside it): every distribution of the whole dependency tree
+# pinned by version AND by the sha256 of each of its files, installed with `pip --require-hashes
+# --no-deps --only-binary=:all:`. A file whose bytes differ, or a dependency the lock does not name,
+# fails the install, and a base that failed to install is not offered. Wheels only, so no package's
+# build code runs here, except for the few distributions a base names that publish no wheel (an sdist,
+# or systemone's source archive); those are built with --no-build-isolation against setuptools from
+# build.lock.txt, because pip's isolated build would fetch its backend fresh and unhashed. The pins
+# are part of the reviewed, digest-pinned image; nothing about them is fetched at boot except the
+# files themselves (#623, step 2).
 HR_LOCKS_DIR="${HR_LOCKS_DIR:-/app/locks}"
 
-# install_locked_venv <label> <python> <venv> <lock>: a venv from <python>, filled from <lock> only.
+# install_locked_venv <label> <python> <venv> <lock> [<sdists>]: a venv from <python>, filled from
+# <lock> only. <sdists> (comma-separated) are the distributions of <lock> that are built here.
 install_locked_venv() {
-  lv_label="$1"; lv_py="$2"; lv_venv="$3"; lv_lock="$HR_LOCKS_DIR/$4"
+  lv_label="$1"; lv_py="$2"; lv_venv="$3"; lv_lock="$HR_LOCKS_DIR/$4"; lv_sdists="${5:-}"
   [ -f "$lv_lock" ] || { echo "$lv_label: no lock file at $lv_lock"; return 1; }
   rm -rf "$lv_venv"
-  "$lv_py" -m venv "$lv_venv" || { rm -rf "$lv_venv"; return 1; }
+  "$lv_py" -I -m venv "$lv_venv" || { rm -rf "$lv_venv"; return 1; }
+  lv_build=()
+  if [ -n "$lv_sdists" ]; then
+    "$lv_venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir \
+        --require-hashes --no-deps --only-binary=:all: -r "$HR_LOCKS_DIR/build.lock.txt" \
+      || { rm -rf "$lv_venv"; return 1; }
+    lv_build=(--no-binary="$lv_sdists" --no-build-isolation)
+  fi
   "$lv_venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir \
-      --require-hashes --no-deps -r "$lv_lock" \
+      --require-hashes --no-deps --only-binary=:all: "${lv_build[@]}" -r "$lv_lock" \
     || { rm -rf "$lv_venv"; return 1; }
 }
 
@@ -1226,9 +1213,31 @@ install_locked_venv() {
 install_unlocked_venv() {
   uv_label="$1"; uv_py="$2"; uv_venv="$3"; shift 3
   rm -rf "$uv_venv"
-  "$uv_py" -m venv "$uv_venv" || { rm -rf "$uv_venv"; return 1; }
+  "$uv_py" -I -m venv "$uv_venv" || { rm -rf "$uv_venv"; return 1; }
   "$uv_venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir "$@" \
     || { rm -rf "$uv_venv"; return 1; }
+}
+
+# lock_reqs <base>: the requirements <base>.lock.txt was compiled from, as one line.
+lock_reqs() { grep -vE '^[[:space:]]*(#|$)' "$HR_LOCKS_DIR/$1.in" 2>/dev/null | tr '\n' ' ' | sed 's/ *$//'; }
+# is_locked <base> <requirement…>: these are exactly the requirements <base>'s lock was compiled
+# from. Anything else is an operator's override, which no lock here covers.
+is_locked() { il_base="$1"; shift; [ -n "$*" ] && [ "$*" = "$(lock_reqs "$il_base")" ]; }
+# install_pinned_venv <base> <python> <venv> <sdists> <requirement…>: <base>'s lock for its own
+# pins, install_unlocked_venv for an override.
+install_pinned_venv() {
+  pv_base="$1"; pv_py="$2"; pv_venv="$3"; pv_sdists="$4"; shift 4
+  if is_locked "$pv_base" "$@"; then
+    install_locked_venv "$pv_base" "$pv_py" "$pv_venv" "$pv_base.lock.txt" "$pv_sdists"
+  else
+    install_unlocked_venv "$pv_base" "$pv_py" "$pv_venv" "$@"
+  fi
+}
+# pinned_ident <base> <requirement…>: the stamp line of a locked base. The lock's digest is in it, so
+# a regenerated lock in a new image reaches a volume that holds the base.
+pinned_ident() {
+  pi_base="$1"; shift
+  if is_locked "$pi_base" "$@"; then echo "$* lock:$(file_sha "$HR_LOCKS_DIR/$pi_base.lock.txt")"; else echo "$* unverified"; fi
 }
 
 # Mistral Vibe (Apache-2.0, mistralai/mistral-vibe) from PyPI, pinned to the release the runner's
@@ -1362,7 +1371,8 @@ install_dcode() {
     dc_py="$TOOLS/dcode-python/bin/python3"
   fi
   if [ "$dc_ver" = "$DCODE_LOCKED" ]; then
-    install_locked_venv "dcode" "$dc_py" "$TOOLS/dcode-venv" dcode.lock.txt || return 1
+    # forbiddenfruit publishes no wheel, so it is the one distribution built here.
+    install_locked_venv "dcode" "$dc_py" "$TOOLS/dcode-venv" dcode.lock.txt forbiddenfruit || return 1
   else
     install_unlocked_venv "dcode" "$dc_py" "$TOOLS/dcode-venv" "deepagents-code==$dc_ver" || return 1
   fi
@@ -1392,9 +1402,8 @@ if "load_sessions" not in src:
 }
 
 # ── the bases installed from npm or PyPI by version ──────────────────────────────────────────────
-# Pinned EXACTLY. npm checks each tarball against the integrity digest its registry serves, and pip
-# takes the exact version; neither yet covers a base's own dependency tree, which floats within the
-# ranges upstream declares until each has a lock (#623's second step).
+# Pinned EXACTLY, and each base's whole tree is in its lock: the npm bases' in docker/locks/npm (see
+# npm_locked below), the PyPI bases' in docker/locks/<base>.lock.txt (see install_locked_venv).
 #
 # Qwen Code and Pi were installed with no version at all, once per volume: what npm served on the day
 # the volume was created is what it ran (#623). Qwen Code 0.26.3 is the release #609 and #614 ran
@@ -1424,24 +1433,110 @@ MIMO_PIN="${HR_MIMO_VERSION:-0.1.15}"; MIMO_PIN="${MIMO_PIN#v}"
 # part of pi's identity: a volume with another adapter is reinstalled with this one.
 PI_MCP_PIN="${HR_PI_MCP_ADAPTER_VERSION:-3.1.0}"; PI_MCP_PIN="${PI_MCP_PIN#v}"
 npm_g() { npm install -g --prefix "$TOOLS" --no-audit --no-fund "$@"; }
-install_pi() {
-  npm_g --ignore-scripts "@earendil-works/pi-coding-agent@$PI_PIN" || return 1
-  npm_g --ignore-scripts "pi-mcp-adapter@$PI_MCP_PIN" || return 1
+
+# The npm bases install from a LOCKFILE that ships in this image (/app/locks/npm/<name>/, a
+# package.json and the package-lock.json scripts/lock-npm.sh writes from it): the whole tree, every
+# package by version, by the URL it comes from and by the sha512 npm checks it against, installed
+# with `npm ci --ignore-scripts` into $TOOLS/npm/<name>. A tarball whose bytes differ, or a
+# dependency the lock does not name, fails the install. With scripts off, no package's install code
+# runs as root; the one that is needed is named where it is used (Claude Code's, which hard-links its
+# native binary out of a platform package the lock already holds).
+#
+# Measured (2026-11-08, amd64): for each of the nine, `npm ci` from its lock lands the same packages
+# at the same versions as main's `npm install -g` did that day. The differences are the packages npm
+# -g dropped on its own: musl builds (the lock carries their `libc`, so they are skipped the same way)
+# and gemini's node-pty 1.0.0, which has no prebuild and failed to compile with no compiler here, so
+# npm removed it; it is now in the tree unbuilt, and gemini loads @lydell/node-pty (prebuilt) first.
+#
+# An override (any version but the lock's) installs as before, with `npm install -g`, and its stamp
+# says "unverified".
+# npm_lock_spec <name>: the lock's direct dependencies as name@version, in package.json order.
+npm_lock_spec() {
+  node -e 'const d=require(process.argv[1]).dependencies||{};console.log(Object.entries(d).map(([k,v])=>k+"@"+v).join(" "))' \
+    "$HR_LOCKS_DIR/npm/$1/package.json" 2>/dev/null
+}
+npm_is_locked() { [ -n "$2" ] && [ "$2" = "$(npm_lock_spec "$1")" ]; }
+# npm_ident <name> <spec>: the stamp line for an npm base. A regenerated lock in a new image reaches
+# a volume that holds the base, the way a PyPI lock does.
+npm_ident() {
+  if npm_is_locked "$1" "$2"; then echo "npm $2 lock:$(file_sha "$HR_LOCKS_DIR/npm/$1/package-lock.json")"
+  else echo "npm $2 unverified"; fi
+}
+# npm_link_bins <dir>: $TOOLS/bin/<command> for each command a direct dependency declares, as npm -g
+# links them (relative symlinks). npm ci links bins into node_modules/.bin, not onto PATH.
+npm_link_bins() {
+  node -e '
+const fs = require("fs"), path = require("path");
+const [dir, bin] = process.argv.slice(1);
+fs.mkdirSync(bin, { recursive: true });
+for (const dep of Object.keys(require(path.join(dir, "package.json")).dependencies || {})) {
+  const pd = path.join(dir, "node_modules", dep), p = require(path.join(pd, "package.json"));
+  const b = typeof p.bin === "string" ? { [p.name.replace(/^@[^/]+\//, "")]: p.bin } : (p.bin || {});
+  for (const [cmd, file] of Object.entries(b)) {
+    const target = path.join(pd, file), link = path.join(bin, cmd);
+    fs.chmodSync(target, 0o755);
+    fs.rmSync(link, { force: true });
+    fs.symlinkSync(path.relative(bin, target), link);
+  }
+}' "$1" "$TOOLS/bin"
+}
+# npm_locked <name> [<package whose install script runs>…]: $TOOLS/npm/<name> from its lock. What a
+# previous `npm install -g` of the same packages left under $TOOLS/lib goes first.
+npm_locked() {
+  nl_name="$1"; shift
+  nl_src="$HR_LOCKS_DIR/npm/$nl_name"; nl_dir="$TOOLS/npm/$nl_name"
+  [ -f "$nl_src/package-lock.json" ] || { echo "$nl_name: no lockfile at $nl_src"; return 1; }
+  for nl_dep in $(npm_lock_spec "$nl_name"); do
+    nl_pkg="${nl_dep%@*}"; rm -rf "$TOOLS/lib/node_modules/$nl_pkg"
+    case "$nl_pkg" in @*/*) rmdir "$TOOLS/lib/node_modules/${nl_pkg%%/*}" 2>/dev/null || true ;; esac
+  done
+  rm -rf "$nl_dir"; mkdir -p "$nl_dir"
+  cp "$nl_src/package.json" "$nl_src/package-lock.json" "$nl_dir/" || { rm -rf "$nl_dir"; return 1; }
+  ( cd "$nl_dir" && npm ci --ignore-scripts --no-audit --no-fund ) || { rm -rf "$nl_dir"; return 1; }
+  if [ $# -gt 0 ]; then
+    ( cd "$nl_dir" && npm rebuild --foreground-scripts "$@" ) || { rm -rf "$nl_dir"; return 1; }
+  fi
+  npm_link_bins "$nl_dir" || { rm -rf "$nl_dir"; return 1; }
+}
+# npm_unlocked <name> <npm install -g arguments…>: an override, installed the way it always was.
+npm_unlocked() {
+  find "$TOOLS/bin" -maxdepth 1 -type l -lname "../npm/$1/*" -delete 2>/dev/null || true
+  rm -rf "$TOOLS/npm/$1"; shift
+  npm_g "$@"
+}
+# install_npm <name> <spec> [<package whose install script runs>…]
+install_npm() {
+  in_name="$1"; in_spec="$2"; shift 2
+  if npm_is_locked "$in_name" "$in_spec"; then npm_locked "$in_name" "$@"; else npm_unlocked "$in_name" "$in_spec"; fi
 }
 
-# Aider's MCP client, the official SDK, beside it in its venv.
-AIDER_MCP_PIN="${HR_MCP_SDK_VERSION:-2.2.0}"
+CLAUDE_SPEC="@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+QWEN_SPEC="@qwen-code/qwen-code@$QWEN_PIN"
+GEMINI_SPEC="@google/gemini-cli@$GEMINI_PIN"
+CLINE_SPEC="cline@$CLINE_PIN"
+CODEX_SPEC="@openai/codex@$CODEX_PIN"
+PI_SPEC="@earendil-works/pi-coding-agent@$PI_PIN"
+PI_MCP_SPEC="pi-mcp-adapter@$PI_MCP_PIN"
+MIMO_SPEC="@mimo-ai/cli@$MIMO_PIN"
+# Claude Code's install script copies its platform's native binary over the bin/claude.exe stub;
+# without it the command prints "native binary not installed". The binary comes from the lock.
+install_claude() { install_npm claude "$CLAUDE_SPEC" @anthropic-ai/claude-code; }
+install_pi() {
+  if npm_is_locked pi "$PI_SPEC"; then npm_locked pi || return 1
+  else npm_unlocked pi --ignore-scripts "$PI_SPEC" || return 1; fi
+  if npm_is_locked pi-mcp-adapter "$PI_MCP_SPEC"; then npm_locked pi-mcp-adapter || return 1
+  else npm_unlocked pi-mcp-adapter --ignore-scripts "$PI_MCP_SPEC" || return 1; fi
+}
 
 # DeepSeek Harness, pinned EXACTLY, not 'latest': upstream is a developer preview that warns of
 # breaking changes, and the runner's driver/normalizer are written against these bytes. Own venv: its
 # dependency tree must not fight hermes's. pyyaml is the version a fresh volume resolved on 0.38.2.
+# From docker/locks/dsh.lock.txt; the runtime is a platform wheel, and the lock holds both.
 DSH_PIN="0.1.2rc1"
 DSH_PYYAML_PIN="6.0.3"
+DSH_REQS=("deepseek-harness-sdk==$DSH_PIN" "deepseek-harness-runtime-bin==$DSH_PIN" "pyyaml==$DSH_PYYAML_PIN")
 install_dsh() {
-  rm -rf "$TOOLS/dsh-venv"
-  "$PY" -I -m venv "$TOOLS/dsh-venv" || return 1
-  "$TOOLS/dsh-venv/bin/pip" install --no-cache-dir -q --disable-pip-version-check \
-    "deepseek-harness-sdk==$DSH_PIN" "deepseek-harness-runtime-bin==$DSH_PIN" "pyyaml==$DSH_PYYAML_PIN" || return 1
+  install_pinned_venv dsh "$PY" "$TOOLS/dsh-venv" "" "${DSH_REQS[@]}" || return 1
   # dsh-ready exists ONLY after the import check proved the runtime executable resolves — a venv
   # whose pip half-failed must not report the backend as available.
   "$TOOLS/dsh-venv/bin/python" -c 'import deepseek_harness, deepseek_harness_runtime, yaml; deepseek_harness_runtime.bundled_runtime_path()' || return 1
@@ -1460,6 +1555,8 @@ install_dsh() {
 # 2.0.0; with 2.x installed hermes silently drops every remote MCP server. 1.30.0 is the last 1.x and
 # the floor four advisories against older versions set.
 #
+# All of it, and hermes's whole tree, installs from docker/locks/hermes.lock.txt.
+#
 # These used to be repaired at every start (a `pip install` whenever an import failed); a stamp that
 # does not match now reinstalls from these pins instead, and the install proves both imports, so there
 # is no start-time pip at all. The breaker patch is part of the install for the same reason, and its
@@ -1471,12 +1568,10 @@ if [ -n "${HERMES_MCP_PIN:-}" ]; then
   echo "[harnessrouter] WARN: HERMES_MCP_PIN is no longer read; Hermes gets mcp ${HR_HERMES_MCP_VERSION:-1.30.0}. Set HR_HERMES_MCP_VERSION to an exact version to choose another."
 fi
 HERMES_MCP_PIN="${HR_HERMES_MCP_VERSION:-1.30.0}"
+HERMES_REQS=("hermes-agent[anthropic]==$HERMES_PIN" "boto3==$HERMES_BOTO3_PIN" "mcp==$HERMES_MCP_PIN")
 HERMES_BREAKER=/app/runner/patches/hermes_mcp_breaker.py
 install_hermes() {
-  rm -rf "$TOOLS/venv"
-  "$PY" -I -m venv "$TOOLS/venv" || return 1
-  "$TOOLS/venv/bin/pip" install --no-cache-dir -q --disable-pip-version-check \
-    "hermes-agent[anthropic]==$HERMES_PIN" "boto3==$HERMES_BOTO3_PIN" "mcp==$HERMES_MCP_PIN" || return 1
+  install_pinned_venv hermes "$PY" "$TOOLS/venv" "" "${HERMES_REQS[@]}" || return 1
   "$TOOLS/venv/bin/python" -c '
 import boto3  # noqa: F401 - the bedrock provider
 from mcp.client.streamable_http import streamablehttp_client  # noqa: F401 - the name hermes gates HTTP MCP on
@@ -1558,13 +1653,13 @@ lock_ident() {
 # stamps existed reinstalls each base once, which is how what `latest` gave it is replaced.
 install_backends() {
   mkdir -p "$TOOLS"
-  # -g is what creates $TOOLS/bin/<cmd>; --prefix alone just drops a node_modules tree with no
-  # entry point, which npm reports as success (install_base checks the executable either way).
+  # The npm bases' $TOOLS/bin/<cmd> is a link npm_link_bins makes (or, for an override, the one npm -g
+  # makes); install_base checks the executable either way.
   # Claude Code: a model can require a minimum CLI (Claude Opus 5.5 needs 2.1.280; the API refuses
   # older ones), and a volume that installed the CLI once, months ago, would otherwise never learn it.
-  if wanted claude && ! current claude "npm @anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"; then
+  if wanted claude && ! current claude "$(npm_ident claude "$CLAUDE_SPEC")"; then
     echo "[harnessrouter] installing Claude Code $CLAUDE_CODE_VERSION (Anthropic's terms apply)…"
-    install_base claude "Claude Code" npm_g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" || true
+    install_base claude "Claude Code" install_claude || true
   fi
   # opencode is MIT, so unlike Claude Code and hermes it COULD be baked into the image. It is
   # installed here anyway so that every backend has ONE install path.
@@ -1576,23 +1671,23 @@ install_backends() {
     echo "[harnessrouter] installing Kilo CLI $KILO_PIN (MIT)…"
     install_base kilo "Kilo CLI" install_kilo || true
   fi
-  if wanted qwen && ! current qwen "npm @qwen-code/qwen-code@$QWEN_PIN"; then
+  if wanted qwen && ! current qwen "$(npm_ident qwen "$QWEN_SPEC")"; then
     echo "[harnessrouter] installing Qwen Code $QWEN_PIN (Apache-2.0)…"
-    install_base qwen "Qwen Code" npm_g "@qwen-code/qwen-code@$QWEN_PIN" || true
+    install_base qwen "Qwen Code" install_npm qwen "$QWEN_SPEC" || true
   fi
-  if wanted gemini && ! current gemini "npm @google/gemini-cli@$GEMINI_PIN"; then
+  if wanted gemini && ! current gemini "$(npm_ident gemini "$GEMINI_SPEC")"; then
     echo "[harnessrouter] installing Gemini CLI $GEMINI_PIN (Apache-2.0)…"
-    install_base gemini "Gemini CLI" npm_g "@google/gemini-cli@$GEMINI_PIN" || true
+    install_base gemini "Gemini CLI" install_npm gemini "$GEMINI_SPEC" || true
   fi
-  if wanted cline && ! current cline "npm cline@$CLINE_PIN"; then
+  if wanted cline && ! current cline "$(npm_ident cline "$CLINE_SPEC")"; then
     echo "[harnessrouter] installing Cline $CLINE_PIN (Apache-2.0)…"
-    install_base cline "Cline" npm_g "cline@$CLINE_PIN" || true
+    install_base cline "Cline" install_npm cline "$CLINE_SPEC" || true
   fi
-  if wanted codex && ! current codex "npm @openai/codex@$CODEX_PIN"; then
+  if wanted codex && ! current codex "$(npm_ident codex "$CODEX_SPEC")"; then
     echo "[harnessrouter] installing Codex $CODEX_PIN (Apache-2.0)…"
-    install_base codex "Codex" npm_g "@openai/codex@$CODEX_PIN" || true
+    install_base codex "Codex" install_npm codex "$CODEX_SPEC" || true
   fi
-  if wanted pi && ! current pi "npm @earendil-works/pi-coding-agent@$PI_PIN pi-mcp-adapter@$PI_MCP_PIN"; then
+  if wanted pi && ! current pi "$(npm_ident pi "$PI_SPEC") $(npm_ident pi-mcp-adapter "$PI_MCP_SPEC")"; then
     echo "[harnessrouter] installing Pi $PI_PIN and pi-mcp-adapter $PI_MCP_PIN (MIT)…"
     install_base pi "Pi" install_pi || true
   fi
@@ -1604,33 +1699,36 @@ install_backends() {
     echo "[harnessrouter] installing goose $GOOSE_PIN (Apache-2.0)…"
     install_base goose "goose" install_goose || true
   fi
-  # BOTH openhands pins are the identity: a venv built before litellm was pinned holds the right
-  # agent-server and the wrong litellm, which is the follow-up failure the litellm pin removes.
-  OPENHANDS_PIN="${HR_OPENHANDS_VERSION:-1.49.2}"
-  OPENHANDS_LITELLM_PIN="${HR_OPENHANDS_LITELLM_VERSION:-1.94.3}"
-  if wanted openhands && ! current openhands "pypi openhands-agent-server==$OPENHANDS_PIN litellm==$OPENHANDS_LITELLM_PIN"; then
+  if wanted openhands && ! current openhands "$(pinned_ident openhands "${OPENHANDS_REQS[@]}")"; then
     echo "[harnessrouter] installing OpenHands agent-server $OPENHANDS_PIN (MIT) — ~666 MB, this takes a minute…"
     install_base openhands "OpenHands" install_openhands || true
   fi
-  if wanted systemone && ! current systemone "$SYSTEMONE_SPEC playwright==$SYSTEMONE_PLAYWRIGHT_PIN"; then
+  if wanted systemone && ! current systemone "$(pinned_ident systemone "${SYSTEMONE_REQS[@]}")"; then
     echo "[harnessrouter] installing System One Harness $SYSTEMONE_PIN (Apache-2.0)…"
     install_base systemone "System One Harness" install_systemone || true
   fi
   if wanted systemone && [ -x "$TOOLS/systemone-venv/bin/playwright" ]; then
     chromium_libs || echo "[harnessrouter]   WARNING: Chromium's system libraries could not be installed; the System One base's browser environments will not start until they are (retried on the next start)"
   fi
-  if wanted cheetahclaws && ! current cheetahclaws "$(ident "$CHEETAHCLAWS_PIN" "$CHEETAHCLAWS_SHA256")"; then
+  if wanted cheetahclaws && ! current cheetahclaws "$(pinned_ident cheetahclaws "${CHEETAHCLAWS_REQS[@]}")"; then
     echo "[harnessrouter] installing CheetahClaws $CHEETAHCLAWS_PIN (Apache-2.0)…"
     install_base cheetahclaws "CheetahClaws" install_cheetahclaws || true
   fi
   [ -x "$TOOLS/cheetahclaws-venv/bin/python" ] && export HR_CHEETAHCLAWS_PYTHON="$TOOLS/cheetahclaws-venv/bin/python"
-  if wanted qoder && ! current qoder "$(ident "$QODER_PIN" "$QODER_SHA256")"; then
+  if wanted qoder && ! current qoder "$(pinned_ident qoder "${QODER_REQS[@]}")"; then
     echo "[harnessrouter] installing the Qoder Cloud Agents SDK qca-sdk $QODER_PIN (MIT)…"
     install_base qoder "Qoder SDK" install_qoder || true
   fi
   [ -x "$TOOLS/qoder-venv/bin/python" ] && export HR_QODER_PYTHON="$TOOLS/qoder-venv/bin/python"
-  # The constraints that describe 2.13's tree ship in the image, so they are part of the identity.
-  if wanted agentzero && ! current agentzero "$(ident "$AGENTZERO_PIN" "$AGENTZERO_SHA") constraints:$(file_sha /app/runner/agentzero-constraints.txt)"; then
+  # The archive's digest and the lock its dependencies come from. The lock is used only when the
+  # archive yields the requirements it was compiled from, which the pinned archive does (its digest
+  # is checked first), so the pin and the default ipython are what decide it here.
+  if [ "$AGENTZERO_PIN" = "2.13" ] && [ "${HR_AGENTZERO_IPYTHON_VERSION:-9.17.1}" = "9.17.1" ]; then
+    AGENTZERO_DEPS="lock:$(file_sha "$HR_LOCKS_DIR/agentzero.lock.txt")"
+  else
+    AGENTZERO_DEPS="deps unverified"
+  fi
+  if wanted agentzero && ! current agentzero "$(ident "$AGENTZERO_PIN" "$AGENTZERO_SHA") $AGENTZERO_DEPS"; then
     echo "[harnessrouter] installing Agent Zero $AGENTZERO_PIN (MIT) — ~640 MB, this takes a minute or two…"
     install_base agentzero "Agent Zero" install_agentzero || true
   fi
@@ -1640,7 +1738,7 @@ install_backends() {
     echo "[harnessrouter] installing Kimi Code CLI $KIMI_PIN (MIT)…"
     install_base kimi "Kimi Code CLI" install_kimi || true
   fi
-  if wanted minimax && ! current minimax "$(ident "$MINIMAX_PIN" "$MINIMAX_SHA")"; then
+  if wanted minimax && ! current minimax "$(npm_ident minimax "$MINIMAX_SPEC")"; then
     echo "[harnessrouter] installing MiniMax Code $MINIMAX_PIN (MIT)…"
     install_base minimax "MiniMax Code" install_minimax || true
   fi
@@ -1648,7 +1746,7 @@ install_backends() {
     echo "[harnessrouter] installing Grok Build $GROK_PIN (Apache-2.0)…"
     install_base grok "Grok Build" install_grok || true
   fi
-  if wanted mimo && ! current mimo "npm @mimo-ai/cli@$MIMO_PIN"; then
+  if wanted mimo && ! current mimo "$(npm_ident mimo "$MIMO_SPEC")"; then
     echo "[harnessrouter] installing MiMo Code $MIMO_PIN (MIT)…"
     install_base mimo "MiMo Code" install_mimo || true
   fi
@@ -1656,11 +1754,11 @@ install_backends() {
     echo "[harnessrouter] installing jcode $JCODE_PIN (MIT) — ~127 MB…"
     install_base jcode "jcode" install_jcode || true
   fi
-  if wanted opensquilla && ! current opensquilla "$(ident "$OPENSQUILLA_PIN" "$OPENSQUILLA_SHA")"; then
+  if wanted opensquilla && ! current opensquilla "$(pinned_ident opensquilla "${OPENSQUILLA_REQS[@]}")"; then
     echo "[harnessrouter] installing OpenSquilla $OPENSQUILLA_PIN (Apache-2.0)…"
     install_base opensquilla "OpenSquilla" install_opensquilla || true
   fi
-  if wanted nanobot && ! current nanobot "pypi nanobot-ai==$NANOBOT_PIN"; then
+  if wanted nanobot && ! current nanobot "$(pinned_ident nanobot "${NANOBOT_REQS[@]}")"; then
     echo "[harnessrouter] installing nanobot $NANOBOT_PIN (MIT)…"
     install_base nanobot "nanobot" install_nanobot || true
   fi
@@ -1710,15 +1808,15 @@ install_backends() {
   # because the console offers every base the gateway's catalogue lists and a base that is listed
   # but not installed fails on its first task; an operator who does not want it leaves it out of
   # HR_BACKENDS, the same switch every backend has.
-  if wanted aider && ! current aider "pypi aider-chat==$AIDER_PIN mcp==$AIDER_MCP_PIN"; then
+  if wanted aider && ! current aider "$(pinned_ident aider "${AIDER_REQS[@]}")"; then
     echo "[harnessrouter] installing Aider $AIDER_PIN (Apache-2.0) — ~735 MB, this takes a minute…"
     install_base aider "Aider" install_aider || true
   fi
-  if wanted dsh && ! current dsh "pypi deepseek-harness-sdk==$DSH_PIN pyyaml==$DSH_PYYAML_PIN"; then
+  if wanted dsh && ! current dsh "$(pinned_ident dsh "${DSH_REQS[@]}")"; then
     echo "[harnessrouter] installing DeepSeek Harness $DSH_PIN (MIT, developer preview)…"
     install_base dsh "DeepSeek Harness" install_dsh || true
   fi
-  if wanted hermes && ! current hermes "pypi hermes-agent[anthropic]==$HERMES_PIN boto3==$HERMES_BOTO3_PIN mcp==$HERMES_MCP_PIN breaker:$(file_sha "$HERMES_BREAKER")"; then
+  if wanted hermes && ! current hermes "$(pinned_ident hermes "${HERMES_REQS[@]}") breaker:$(file_sha "$HERMES_BREAKER")"; then
     echo "[harnessrouter] installing Hermes $HERMES_PIN (check its upstream license before use)…"
     install_base hermes "Hermes" install_hermes || true
     [ -z "$HERMES_BREAKER_NOTE" ] || echo "[harnessrouter] WARNING: $HERMES_BREAKER_NOTE"
@@ -1728,7 +1826,11 @@ install_backends() {
   # Hermes otherwise tries to install its own dependencies mid-turn.
   export HERMES_DISABLE_LAZY_INSTALLS=1
   # Where the runner finds the MCP extension to mount (-e) on pi turns with MCP servers.
-  [ -d "$TOOLS/lib/node_modules/pi-mcp-adapter" ] && export HR_PI_MCP_EXT="$TOOLS/lib/node_modules/pi-mcp-adapter"
+  if [ -d "$TOOLS/npm/pi-mcp-adapter/node_modules/pi-mcp-adapter" ]; then
+    export HR_PI_MCP_EXT="$TOOLS/npm/pi-mcp-adapter/node_modules/pi-mcp-adapter"
+  elif [ -d "$TOOLS/lib/node_modules/pi-mcp-adapter" ]; then
+    export HR_PI_MCP_EXT="$TOOLS/lib/node_modules/pi-mcp-adapter"
+  fi
   [ -x "$TOOLS/dsh-venv/bin/python" ] && export HR_DSH_PYTHON="$TOOLS/dsh-venv/bin/python"
   # The last command is a test, and under `set -e` a false one as a function's last status aborts
   # the entrypoint (an instance without hermes once died here with no message), so it ends on true.

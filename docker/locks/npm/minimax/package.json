@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "dependencies": {
+    "@minimax-ai/code": "https://github.com/MiniMax-AI/minimax-code/releases/download/v0.5.4/minimax-code-0.5.4.tar.gz"
+  }
+}

@@ -1,0 +1,4 @@
+# The build backend for the few distributions a lock has to build from source (an sdist with no
+# wheel, or a source archive), installed from this lock first so the build runs with
+# --no-build-isolation: pip's isolated build would fetch setuptools fresh, unhashed.
+setuptools
