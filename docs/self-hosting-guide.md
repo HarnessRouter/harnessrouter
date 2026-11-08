@@ -339,6 +339,35 @@ the product's own table for that vendor, and a `models` row there only changes t
 model that table already lists. `model_map` routes a model id to the integration that serves it;
 a model with no route goes to the first integration that can serve it.
 
+**Request headers.** A gateway in front of the provider often wants a header beside the key:
+Cloudflare AI Gateway's `cf-aig-authorization`, Helicone's `Helicone-Auth`, Portkey's `x-portkey-*`,
+OpenRouter's `HTTP-Referer` and `X-Title`, or an internal gateway's project header. Put them in the
+row's `config.headers` (or `headers` on a connection set from the environment or with
+`PUT /v1/orgs/{org}/connections/{name}`):
+
+```json
+{"name": "cf-gateway", "provider": "custom",
+ "config": {"api_format": "openai", "base_url": "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/openai",
+            "api_key": "…", "headers": {"cf-aig-authorization": "Bearer …", "X-Project": "evals"}},
+ "models": [{"canonical": "gpt-5.5", "provider_id": "gpt-5.5"}]}
+```
+
+The gateway adds them to every model call it forwards on that connection, after the key, and the
+setup builder sends them too. They are never handed to the agent: a connection with headers goes
+through the gateway even under `HR_SANDBOX_TRUST=owner`, and a backend that only speaks its
+provider's native API (and so is not brokered) is refused on such a connection rather than run
+without them. A value is treated like the key: `GET` shows each name with its value redacted, a
+save that sends the redacted value back keeps the stored one, and a save that changes the endpoint
+or the provider asks for the values again. A header the gateway sets itself (`authorization`,
+`x-api-key`, `api-key`, `x-goog-api-key`, `host`, `content-type`, `content-length`, `connection`,
+`traceparent`, the relay's own names and the like), or that would speak for a client or a hop (`cookie`,
+`via`, `forwarded`, `proxy-*`, `x-forwarded-*`, `cf-connecting-ip` and Cloudflare's other `cf-*` markers),
+or AWS request signing (`x-amz-*`), cannot be set on a connection; names are compared in any case.
+Cloudflare AI Gateway's `cf-aig-*` and an Access service token's `cf-access-client-id` and
+`cf-access-client-secret` are yours to set. A value may not
+contain a line break, and a connection takes at most 20 headers, 8 KB together. Bedrock and Vertex
+sign their own requests, so their connections refuse headers when you save.
+
 </details>
 
 <details>
@@ -1044,6 +1073,9 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `HR_SANDBOX_TRUST` | `owner` | You own the box, the agent and the key, so the key is handed over directly rather than brokered. |
 | `HARNESS_WORKSPACE` | `/data/workspaces` | One directory per session, on the volume, so a restart doesn't discard work in flight. |
 | `HR_WS_MARKER_DIR` | `/data/ws-markers` | Which checkpoint each workspace holds, on the volume too. After a restart the next turn finds the workspace where the interrupted turn left it, instead of restoring the previous checkpoint over it. |
+| `HR_STEP_CHECKPOINT` | off | Off here: the workspace already sits on the volume and outlives a restart (`HARNESS_WORKSPACE`, `HR_WS_MARKER_DIR`). `1` also saves the workspace after each finished tool step while a task runs, so a sandbox that dies mid-task keeps the steps before it. Turn it on when the workspace lives somewhere a restart loses, such as `/tmp`. |
+| `HR_STEP_CHECKPOINT_EVERY_S` | `30` | With `HR_STEP_CHECKPOINT=1`, at most one save per this many seconds per session. A step that finishes inside the interval is saved when it ends, not dropped. |
+| `HR_STEP_CHECKPOINT_MAX_BYTES` | `268435456` | With `HR_STEP_CHECKPOINT=1`, a session whose last save was larger than this (256 MiB) is saved only when its task ends, since each save copies the whole workspace. |
 | `HR_WORKSPACE_TTL_HOURS` | `72` | Idle session workspaces are removed after this. They rehydrate from their checkpoint, so this costs time, not work. `0` keeps them forever. |
 | `HR_RELAY_UPSTREAM_TIMEOUT_S` | `600` | How long one model call may go without sending anything before the task is told the provider did not answer. Several model APIs send nothing while a model thinks (OpenAI's Chat Completions sends nothing at all), so a shorter wait cuts long thinking off. Lower it only if you would rather end a stuck call sooner than wait out a long think. It was `180` in 0.31.0 only. |
 | `HR_ENTRA_AUTHORITY` | `https://login.microsoftonline.com` | Where an Azure connection that signs in with Microsoft Entra asks for its token. A sovereign cloud names its own. |
