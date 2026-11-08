@@ -1402,9 +1402,8 @@ if "load_sessions" not in src:
 }
 
 # ── the bases installed from npm or PyPI by version ──────────────────────────────────────────────
-# Pinned EXACTLY. The npm bases' whole trees are in their locks (docker/locks/npm, see npm_locked
-# below); pip takes the exact version, and a PyPI base's own dependency tree floats within the ranges
-# upstream declares until it has a lock (#623's second step).
+# Pinned EXACTLY, and each base's whole tree is in its lock: the npm bases' in docker/locks/npm (see
+# npm_locked below), the PyPI bases' in docker/locks/<base>.lock.txt (see install_locked_venv).
 #
 # Qwen Code and Pi were installed with no version at all, once per volume: what npm served on the day
 # the volume was created is what it ran (#623). Qwen Code 0.26.3 is the release #609 and #614 ran
