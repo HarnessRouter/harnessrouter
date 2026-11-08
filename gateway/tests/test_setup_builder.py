@@ -736,3 +736,110 @@ def test_the_wires_follow_the_order_and_skip_a_model_with_no_connection(monkeypa
     assert gw._MODEL_CATALOG["hermes"]["default"] == "gpt-6.1-sol"
     assert [w["canonical"] for w in wires] == ["gpt-6.1-sol", "gpt-5.4"]       # deepseek-v4-pro runs, but has no connection here
     assert all(w["url"] == "https://api.openai.com/v1/chat/completions" for w in wires)
+
+
+# ── an organization's own connection, where organizations share the instance ─────────────────────
+# Held to the rule the model relay holds it to (test_broker_org_address): the address text is checked
+# before any socket, and the builder sends on the checked client, which classifies where the name points
+# when the socket opens and refuses this deployment's own networks. The operator's integrations, the
+# platform's connections and a single-operator install are unchanged.
+PUBLIC = "93.184.216.34"
+
+
+@pytest.fixture
+def org_wire(monkeypatch):
+    import socket
+
+    import httpcore
+    sockets: list = []
+    conns: dict = {}
+
+    async def doc():
+        return []
+
+    async def model_map():
+        return {}
+
+    async def chain(org, backend, explicit):
+        return ["mine"]
+
+    async def get_conn(org, name):
+        return conns["mine"]
+
+    async def resolve(host, port):
+        ip = {"llm.example.com": PUBLIC, "rebind.example.com": "10.1.2.3"}.get(host, host)
+        return [(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+
+    async def no_network(self, host, port, timeout=None, local_address=None, socket_options=None):
+        sockets.append((host, port))
+        raise httpcore.ConnectError("test: no network")
+    monkeypatch.setattr(gw, "_integrations_doc", doc)
+    monkeypatch.setattr(gw, "_effective_model_map", model_map)
+    monkeypatch.setattr(gw, "_resolve_chain", chain)
+    monkeypatch.setattr(gw, "_get_connection", get_conn)
+    monkeypatch.setattr(gw, "_conn_serves", lambda conn, canonical: True)
+    monkeypatch.setattr(gw, "_chain_refusal", lambda conn, base: "")
+    monkeypatch.setattr(gw, "_resolve", resolve)
+    monkeypatch.setattr(httpcore.AnyIOBackend, "connect_tcp", no_network)
+    monkeypatch.setattr(gw, "_pool_is_local", lambda: False)
+    gw._checked_clients.pop("relay", None)
+
+    def wire(base_url, tenant="org-a-tenant"):
+        conns["mine"] = ({"provider": "custom", "api_format": "openai", "base_url": base_url, "api_key": "sk-org"}, tenant)
+        return asyncio.run(gw._setup_build_model_wire(ORG_A, "gpt-5.4"))
+    yield wire, sockets, monkeypatch
+    gw._checked_clients.pop("relay", None)
+
+
+@pytest.mark.parametrize("base", ["http://127.0.0.1:8081/v1", "http://169.254.169.254/latest", "http://10.0.0.5/v1",
+                                  "http://192.168.1.10/v1", "http://[::1]:8080/v1", "https://rebind.example.com/v1"])
+def test_an_organizations_address_inside_this_deployment_is_refused_at_the_socket_on_the_builder_path(org_wire, base):
+    wire, sockets, _ = org_wire
+    w = wire(base)
+    assert w is not None and w["client"] is gw._relay_checked_client()
+
+    async def send():
+        return await w["client"].post(w["url"], headers=w["headers"], json={})
+    with pytest.raises(httpx.ConnectError) as e:
+        asyncio.run(send())
+    assert str(e.value).startswith("that address cannot be used: ") and sockets == []
+
+
+@pytest.mark.parametrize("base", ["https://user:pw@llm.example.com/v1", "https://llm.example.com/v1?x=",
+                                  "https://llm.example.com/v1#f", "ftp://llm.example.com/v1"])
+def test_an_organizations_address_that_cannot_be_used_as_written_is_skipped(org_wire, base, capsys):
+    wire, sockets, _ = org_wire
+    assert wire(base) is None and sockets == []
+    out = capsys.readouterr().out
+    assert "skipped an organization's connection" in out and "sk-org" not in out and "pw@" not in out
+
+
+def test_a_public_organization_address_opens_its_socket_to_the_address_classified(org_wire):
+    wire, sockets, _ = org_wire
+    w = wire("https://llm.example.com/v1")
+
+    async def send():
+        return await w["client"].post(w["url"], headers=w["headers"], json={})
+    with pytest.raises(httpx.ConnectError) as e:
+        asyncio.run(send())
+    assert "test: no network" in str(e.value) and sockets == [(PUBLIC, 443)]
+
+
+@pytest.mark.parametrize("case", ["platform", "pool_local"])
+def test_a_platform_connection_and_a_single_operator_install_are_unchanged(org_wire, case):
+    wire, _sockets, monkeypatch = org_wire
+    if case == "pool_local":
+        monkeypatch.setattr(gw, "_pool_is_local", lambda: True)
+    w = wire("http://10.0.0.5/v1", tenant=gw.GLOBAL_TENANT if case == "platform" else "org-a-tenant")
+    assert w is not None and "client" not in w and w["url"] == "http://10.0.0.5/v1/chat/completions"
+
+
+def test_the_builder_sends_on_the_client_its_wire_carries(env, monkeypatch):
+    own = FakeChat()
+
+    async def wires(org):
+        return [{**WIRE, "client": own}]
+    monkeypatch.setattr(gw, "_setup_build_wires", wires)
+    assert start(env).status_code == 200
+    assert settled(env)["status"] == "saved"
+    assert own.calls and not env["chat"].calls
