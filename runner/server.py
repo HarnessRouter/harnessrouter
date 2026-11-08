@@ -142,6 +142,11 @@ if _SESSION_UIDS and os.geteuid() != 0:
     raise RuntimeError("HR_SESSION_UIDS=1 requires the runner to run as root (it switches to a "
                        "per-session uid for every agent process); refusing to start on a shared uid")
 if _SESSION_UIDS:
+    # _fs_as changes a thread's filesystem uid and gid. Supplementary groups stay the process's, and root's hold
+    # group 0, so inside that scope a link the session planted still reached whatever group 0 could write. Root
+    # needs none of them (its capabilities decide outside the scope), and every session process is given its own
+    # list (_as_session).
+    os.setgroups([])
     _secured = environments.secure_store()   # environments from before per-environment groups
     if _secured:
         print(f"[runner] environments: {_secured} older environment(s) now readable by their own group only", flush=True)
@@ -3783,6 +3788,8 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
             api = "anthropic-messages"
         elif auth.api_format == "openai":
             api = "openai-completions"
+        elif auth.api_format == "responses":
+            api = "openai-responses"
         elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
             api = "anthropic-messages"
         elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
@@ -4060,6 +4067,8 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
             api = "anthropic-messages"
         elif auth.api_format == "openai":
             api = "openai-completions"
+        elif auth.api_format == "responses":
+            api = "openai-responses"
         elif pr == "anthropic" or (pr == "tokenrouter" and _PI_CLAUDE_MODEL.search(model or "")):
             api = "anthropic-messages"
         elif pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
@@ -15070,7 +15079,7 @@ def _evict_turns(now: float | None = None) -> int:
                 if tid not in _turns:
                     _turn_by_key.pop(key, None)
     return gone
-_turn_by_key: dict[str, str] = {}   # idempotency_key -> turn_id (dedup a retried /turn; see turn())
+_turn_by_key: dict[str, str] = {}   # "<identifier>\0<idempotency_key>" -> turn_id (dedup a retried /turn, per session; see turn())
 _turns_lock = threading.Lock()
 
 
@@ -17106,6 +17115,17 @@ class TurnReq(BaseModel):
     input_requests: bool = False            # claude: serve `ask_user`, and end the turn at its call (#476)
 
 
+def _session_tree_refused(e: OSError, ws: str) -> bool:
+    """Whether a turn could not start because of what is at a name in its own session's tree. The tree is the
+    agent's, so a link, a file where a directory goes or a changed mode stays until someone changes it, and a retry
+    meets it again. Anything else (a full disk, too many open files) is the runner's, and may pass."""
+    if not isinstance(e, (PermissionError, IsADirectoryError, NotADirectoryError, FileExistsError,
+                          FileNotFoundError)) and e.errno != errno.ELOOP:
+        return False
+    name = os.fspath(e.filename) if isinstance(e.filename, os.PathLike) else e.filename
+    return isinstance(name, str) and (name == ws or name.startswith(ws.rstrip("/") + "/"))
+
+
 @app.post("/turn")
 def turn(req: TurnReq, identifier: str = "") -> dict:
     """Start a turn. Its routes leave when its runner thread returns (_routes_end_with_turn), or here
@@ -17118,6 +17138,13 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         out = _start_turn(req, identifier)
         started = not out.get("deduplicated")
         return out
+    except OSError as e:
+        if not _session_tree_refused(e, req.cwd or _ws(identifier)):
+            raise
+        print(f"[turn] {identifier}: the session's tree refused a write: {type(e).__name__} {e.filename}", flush=True)
+        # A verdict, not a 500: the gateway waits a 5xx out over minutes, and no wait changes this.
+        raise HTTPException(409, "a file in this task's workspace can't be written, so it can't go on. "
+                                 "Start a new task.") from e
     finally:
         if not started:
             _relay_forget(tokens)
@@ -17129,11 +17156,13 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
 
     Idempotent by idempotency_key: the gateway retries this call on a lost/slow reply (a turn can
     take minutes to acknowledge), and without dedup each retry would start a SECOND CLI process in
-    this sandbox — the same request executed twice. A key seen before returns the existing turn."""
+    this sandbox — the same request executed twice. A key seen before returns the existing turn, to the session
+    that started it only: the map is keyed by session and key, so another session's key never names this turn."""
     key = (req.idempotency_key or "").strip()
+    dk = f"{identifier}\x00{key}" if key else ""
     if key:
         with _turns_lock:
-            prior_id = _turn_by_key.get(key)
+            prior_id = _turn_by_key.get(dk)
             if prior_id and prior_id in _turns:
                 r = _turns[prior_id]
                 return {"turn_id": prior_id, "status": r.get("status", "running"),
@@ -17528,12 +17557,12 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         # Double-check under the lock: a concurrent retry with the same key may have raced past the
         # top-of-handler check before this one recorded the key. If so, use the winner and let this
         # freshly-built cmd drop (no thread started for it).
-        if key and _turn_by_key.get(key) in _turns:
-            prior_id = _turn_by_key[key]; r = _turns[prior_id]
+        if key and _turn_by_key.get(dk) in _turns:
+            prior_id = _turn_by_key[dk]; r = _turns[prior_id]
             return {"turn_id": prior_id, "status": r.get("status", "running"),
                     "backend": r.get("backend", ""), "model": r.get("model", ""),
                     "host": socket.gethostname(), "deduplicated": True, "max_seconds": MAX_TURN_SECONDS}
-        _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False,
+        _turns[turn_id] = {"status": "running", "events": [], "result": "", "done": False, "identifier": identifier,
                            "backend": backend, "model": model, "started": time.time(),
                            "reasoning": turn_thinking,
                            # the flags of every route the turn registered (see _turn_route)
@@ -17549,7 +17578,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             _turns[turn_id]["events"].append({"type": "system", "subtype": "resume_lost", "_ts": time.time(),
                                               "requested_session_id": resume_lost})
         if key:
-            _turn_by_key[key] = turn_id
+            _turn_by_key[dk] = turn_id
     if use_appserver:
         threading.Thread(target=_routes_end_with_turn(_run_codex_appserver_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cwd, env, model, req.prompt, req.resume_session_id, req.timeout_seconds,
@@ -17666,13 +17695,20 @@ async def delete_workspace(identifier: str = "", body: WorkspaceDelete | None = 
     return out
 
 
+def _turn_of(turn_id: str, identifier: str) -> dict:
+    """A turn, only to the session that started it: another session's turn id reads as no turn at all.
+    The gateway sends the session's identifier on every call; a turn recorded without one (made in-process) is as before."""
+    rec = _turns.get(turn_id)
+    if not rec or (rec.get("identifier") and identifier != rec["identifier"]):
+        raise HTTPException(404, "turn not found")
+    return rec
+
+
 @app.post("/turn/{turn_id}/cancel")
-def cancel_turn(turn_id: str) -> dict:
+def cancel_turn(turn_id: str, identifier: str = "") -> dict:
     """Kill a running turn's CLI process on demand (user-initiated stop). The reader loop
     in _run_turn_bg then drains and finalizes the record with status='cancelled'."""
-    rec = _turns.get(turn_id)
-    if not rec:
-        raise HTTPException(404, "turn not found")
+    rec = _turn_of(turn_id, identifier)
     if rec.get("done"):
         return {"turn_id": turn_id, "status": rec["status"], "cancelled": False}
     rec["cancelled"] = True
@@ -17717,7 +17753,7 @@ def _turn_answer(turn_id: str, rec: dict, since: int, held: bool) -> dict:
 
 
 @app.get("/turn/{turn_id}")
-async def get_turn(turn_id: str, since: int = 0, wait: float = 0.0) -> dict:
+async def get_turn(turn_id: str, since: int = 0, wait: float = 0.0, identifier: str = "") -> dict:
     """Incremental turn status + normalized events (events[since:]). Polling also keeps the
     Timed sandbox alive (every request resets the idle cooldown).
 
@@ -17727,9 +17763,7 @@ async def get_turn(turn_id: str, since: int = 0, wait: float = 0.0) -> dict:
 
     The hold waits on the event loop, not on a worker thread: this one runner serves every session
     of an instance, and a thread held per running turn would leave none to start the next."""
-    rec = _turns.get(turn_id)
-    if not rec:
-        raise HTTPException(404, "turn not found")
+    rec = _turn_of(turn_id, identifier)
     if wait > 0:
         deadline = time.monotonic() + min(wait, _TURN_HOLD_MAX_S)
         while time.monotonic() < deadline and not rec["done"] and len(rec["events"]) <= since:

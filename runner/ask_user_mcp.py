@@ -59,8 +59,9 @@ def validate_request(inp, now: float | None = None) -> tuple[dict | None, str]:
 
     → ({kind, prompt, options?, expires_at?}, "") or (None, reason). The request a client reads
     is the gateway's (it adds the id); this is what the runner reports beside the turn's reason.
-    A `confirm` with no options gets yes and no; a `choice` needs at least two, each with an id and
-    a label, the ids distinct. An error goes back to the model as the tool's error, so it asks
+    A `confirm` with no options gets yes and no, and one with options needs at least two: a question
+    with one answer asks nothing. A `choice` needs at least two, each with an id and a label, the ids
+    distinct. An error goes back to the model as the tool's error, so it asks
     again properly; it does not end the turn."""
     if not isinstance(inp, dict):
         return None, "arguments must be an object"
@@ -93,6 +94,8 @@ def validate_request(inp, now: float | None = None) -> tuple[dict | None, str]:
             return None, "a choice needs at least two options"
         req["options"] = options
     elif kind == "confirm":
+        if len(options) == 1:
+            return None, "a confirm offers both answers, or no options for yes and no"
         req["options"] = options or [{"id": "yes", "label": "Yes"}, {"id": "no", "label": "No"}]
     elif options:
         return None, f"a {kind} question takes no options"

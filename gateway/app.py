@@ -887,6 +887,46 @@ def _relay_client() -> httpx.AsyncClient:
     return _relay_http
 
 
+def _relay_checked_client(fresh: bool = False) -> httpx.AsyncClient:
+    """The relay's two clients (_relay_client, _relay_fresh_client), for a connection an organization
+    supplied itself: the same timeouts and pool sizes, every socket opened through _CheckedNetwork,
+    which resolves the name once, refuses any internal answer and connects to the very address it
+    classified (a DNS rebind cannot swap it), and no redirect followed. Before, the relay sent an
+    organization's own base_url to whatever it resolved to, this deployment's own networks included."""
+    key = "relay-fresh" if fresh else "relay"
+    c = _checked_clients.get(key)
+    if c is None:
+        limits = (httpx.Limits(max_connections=100, max_keepalive_connections=0) if fresh
+                  else httpx.Limits(max_connections=400, max_keepalive_connections=100))
+        transport = httpx.AsyncHTTPTransport(limits=limits)
+        transport._pool._network_backend = _CheckedNetwork(always=False)
+        c = _checked_clients[key] = httpx.AsyncClient(
+            transport=transport, follow_redirects=False,
+            timeout=httpx.Timeout(connect=30, read=3600, write=600, pool=60))
+    return c
+
+
+def _org_endpoint_problem(url: str) -> str | None:
+    """What makes an address an organization typed for its own connection unusable here before any
+    socket opens, or None: not http(s), no host, a user name or password in it, or a query or a
+    fragment. With "?" at its end, the path this relay appends would turn into a query string, and a
+    call would reach any path of the host. Where the address points is classified when the socket
+    opens (_relay_checked_client)."""
+    try:
+        u = urllib.parse.urlsplit(str(url or "").strip())
+    except ValueError:
+        return "it is not a valid address"
+    if u.scheme not in ("http", "https"):
+        return "it must start with https://"
+    if not u.hostname:
+        return "it has no host"
+    if u.username or u.password or "@" in u.netloc:
+        return "it must not contain a user name or password"
+    if u.query or u.fragment or "?" in str(url) or "#" in str(url):
+        return "it must not contain ? or #"
+    return None
+
+
 def _tenant_sem(t: str) -> asyncio.Semaphore:
     return _tenant_sems.setdefault(t or "_", asyncio.Semaphore(_conc_limit("tenant")))
 
@@ -4774,8 +4814,14 @@ async def _broker_resolve(conn_name: str, org: str | None) -> dict | None:
         # provider here is the INTEGRATION's own type — it selects the upstream auth header, which
         # is all the broker needs (the runner-side wiring already happened at turn start).
         cfg["provider"] = (integ.get("provider") or "").lower()
+        # the integrations here are the operator's own (one document, the platform's): never an address an
+        # organization typed
+        cfg["_org_supplied"] = False
         return _with_provider_base(cfg)
-    conn, _ = await _get_connection(org, conn_name)
+    conn, src = await _get_connection(org, conn_name)
+    if conn:
+        # an address an organization typed (its own tenant's connection) is checked where the relay opens it
+        conn = {**conn, "_org_supplied": bool(src) and src != GLOBAL_TENANT}
     return _with_provider_base(conn)
 
 
@@ -4883,6 +4929,20 @@ async def _entra_token(conn: dict) -> str:
         return token
 
 
+async def _broker_send(rc: httpx.AsyncClient, req: httpx.Request, org_supplied: bool, sid: str) -> httpx.Response:
+    """The broker's send, first or again. Where an organization's own address resolved inside this deployment's
+    networks, _CheckedNetwork refused the socket: that is said as such, a 403 with the reason, on every send."""
+    try:
+        return await rc.send(req, stream=True)
+    except httpx.ConnectError as e:
+        why = str(e)
+        if not (org_supplied and why.startswith("that address cannot be used: ")):
+            raise
+        # the reason goes to the caller; the log line names the session only (nothing read off the connection)
+        print(f"[relay] refused an organization's connection address at the socket sid={sid}", flush=True)
+        raise HTTPException(403, f"This connection's address can't be used: {why.removeprefix('that address cannot be used: ')}.") from None
+
+
 @app.api_route("/v1/llm/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def llm_broker(path: str, request: Request):
     claims = _verify_turn_cred(_broker_token(request))
@@ -4897,6 +4957,14 @@ async def llm_broker(path: str, request: Request):
     base = _provider_base_url(str(conn.get("provider") or ""), str(conn.get("base_url") or ""))
     if not base:
         raise HTTPException(502, "connection has no base_url")
+    # An organization's own connection goes where its address resolves to only when that is outside this
+    # deployment's networks, and only as an address: _org_endpoint_problem now, _relay_checked_client at the socket.
+    org_supplied = bool(conn.get("_org_supplied")) and not _pool_is_local()
+    if org_supplied:
+        why = _org_endpoint_problem(base)
+        if why:
+            print(f"[relay] refused an organization's connection address as written sid={sid}", flush=True)
+            raise HTTPException(403, f"This connection's address can't be used: {why}.")
     # CLIs append their own version segment (…/v1/messages, …/v1/responses) while provider
     # base_urls already end in /v1 — collapse the duplicate rather than 404 upstream.
     suffix = path[3:] if path.startswith("v1/") else path
@@ -4929,9 +4997,9 @@ async def llm_broker(path: str, request: Request):
         body = _google_with_signatures(body, sid)
     if provider in _STRICT_GEMINI_CHANNELS and "gemini" in _body_model_name(body).lower():
         body = _with_gemini_schemas(body)
-    rc = _relay_client()
+    rc = _relay_checked_client() if org_supplied else _relay_client()
     req = rc.build_request(request.method, url, headers=headers, content=body or None)
-    up = await rc.send(req, stream=True)
+    up = await _broker_send(rc, req, org_supplied, sid)
     if provider == "google" and up.status_code == 400:
         # Google's OpenAI-compatible endpoint refuses a request that names any field it does not
         # know ("Unknown name \"store\": Cannot find field."), and the harnesses send OpenAI's
@@ -4946,7 +5014,7 @@ async def llm_broker(path: str, request: Request):
             body = _without_field(body, unknown)
             print(f"[broker] google refused field {unknown!r}; sent again without it sid={sid}", flush=True)
             req = rc.build_request(request.method, url, headers=headers, content=body or None)
-            up = await rc.send(req, stream=True)
+            up = await _broker_send(rc, req, org_supplied, sid)
             if up.status_code != 400:
                 break
             refused = await up.aread()
@@ -4972,7 +5040,7 @@ async def llm_broker(path: str, request: Request):
             print(f"[broker] {provider} refused reasoning_effort's thinking shape for {_body_model_name(body)!r}; "
                   f"sent again without it sid={sid}", flush=True)
             req = rc.build_request(request.method, url, headers=headers, content=body or None)
-            up = await rc.send(req, stream=True)
+            up = await _broker_send(rc, req, org_supplied, sid)
         else:
             return Response(content=refused, status_code=400, media_type=up.headers.get("content-type"),
                             headers={k: val for k, val in up.headers.items()
@@ -6258,11 +6326,9 @@ _CUSTOM_FORMAT_BACKENDS = {
                "vibe", "docker-agent", "fast-agent"},
     "anthropic": {"claude", "opencode", "kilo", "pi", "dsh", "omp", "goose", "hermes", "openhands",
                   "mimo"},
-    # The OpenAI Responses API: what codex speaks, and — since this batch — dcode, whose
-    # langchain-openai model posts to /v1/responses on every turn (measured through a recording
-    # proxy and again through the runner's own relay). A custom integration declaring
-    # chat/completions cannot serve it, which is why dcode is in this set and in neither other one.
-    "responses": {"codex", "dcode"},
+    # The OpenAI Responses API: codex and dcode use it natively; omp and pi can select it for a
+    # custom connection, whose explicit format takes precedence over model-family inference.
+    "responses": {"codex", "dcode", "omp", "pi"},
 }
 
 
@@ -7386,12 +7452,19 @@ async def _input_response_accept(org: str, prev_id: str, prev_rec: dict | None, 
 def _answer_prompt(acc: dict, secret_env: str | None) -> str:
     """The answer as the next turn's user message, carrying the question back with it, so the
     turn does not depend on the ask surviving in the base's transcript. A secret is never in the
-    message: the harness is told where in its environment the value is."""
-    q = acc.get("prompt") or ""
+    message: the harness is told where in its environment the value is.
+
+    The question and a choice's option ids are the model's own words, written after whatever it read
+    in the task, and this message reaches it as the person's. So they come back as quoted strings
+    that can't close their quotes or start a line of their own. What a person typed stays as typed."""
+    q = json.dumps(_import_text(acc.get("prompt")), ensure_ascii=False)
     if secret_env:
-        return (f'Answer to your question "{q}": a secret, in the environment variable {secret_env}. '
+        return (f'Answer to your question {q}: a secret, in the environment variable {secret_env}. '
                 "Read it from there when you need it; never print, repeat or store it.")
-    return f'Answer to your question "{q}": {acc.get("answer")}'
+    answer = acc.get("answer")
+    if acc.get("kind") in ("choice", "confirm"):
+        answer = json.dumps(_import_text(answer), ensure_ascii=False)
+    return f'Answer to your question {q}: {answer}'
 
 
 # ── a new task's earlier turns (Tasks §2.1, capability input_history) ───────────────────────────
@@ -9894,7 +9967,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
             rec["tried"].append({"connection": name, "tenant": src, "status": e.status, "error": e.detail})
             continue
         except Exception as e:  # noqa: BLE001
-            rec["tried"].append({"connection": name, "tenant": src, "error": str(e)[:200]})
+            # The connection was usable and the runner never took the turn. With no status this read as a
+            # connection skipped: "No connection on this account serves <model>", after five minutes of tries.
+            print(f"[turn] {sid}: the turn never started on {name}: {str(e)[:200]}", flush=True)
+            rec["tried"].append({"connection": name, "tenant": src, "status": 503,
+                                 "error": "it couldn't start here. Try again, and start a new task if it keeps failing."})
             continue
         rt = started.get("turn_id")
         rec.update(connection=name, runner_turn_id=rt, status="running")
@@ -13468,22 +13545,26 @@ async def revoke_key(org: str, kid: str, request: Request) -> dict:
 
 def _parse_jsonrpc(text: str) -> dict:
     """A streamable-HTTP MCP endpoint answers either as plain JSON or as SSE (`data: {…}`
-    lines). Return the first JSON-RPC object found, whichever form."""
+    events). Return the first JSON-RPC object found, whichever form."""
     t = (text or "").strip()
     if t.startswith("{"):
         try:
             return json.loads(t)
         except Exception:  # noqa: BLE001
             pass
-    for line in t.splitlines():
-        line = line.strip()
-        if line.startswith("data:"):
-            body = line[5:].strip()
-            if body.startswith("{"):
-                try:
-                    return json.loads(body)
-                except Exception:  # noqa: BLE001
-                    continue
+    # SSE joins all data fields in an event with LF before interpreting the payload.
+    # Keep accepting a final event without a blank line, as this complete-body probe
+    # did for single-line responses; it is not an incremental stream reader.
+    for event in t.replace("\r\n", "\n").replace("\r", "\n").split("\n\n"):
+        data = [line[5:].removeprefix(" ") for line in event.split("\n") if line.startswith("data:")]
+        if not data:
+            continue
+        try:
+            obj = json.loads("\n".join(data))
+        except Exception:  # noqa: BLE001 - a hostile server's nesting depth is a RecursionError
+            continue
+        if isinstance(obj, dict):
+            return obj
     return {}
 
 
@@ -13650,7 +13731,7 @@ async def _sql_peer_check(addr: str) -> str | None:
 
 sql_plane.PEER_CHECK = _sql_peer_check
 
-_checked_clients: dict[bool, httpx.AsyncClient] = {}
+_checked_clients: dict[bool | str, httpx.AsyncClient] = {}
 
 
 def _checked_http(always: bool = False) -> httpx.AsyncClient:
@@ -13680,6 +13761,33 @@ def _checked_transport(always: bool, limits: httpx.Limits | None = None) -> http
 plugs_plane.checked_transport = lambda: _checked_transport(False)
 
 
+# One answer of the connection probe, at most. The server is whoever the caller named, so an answer
+# that runs on (or an SSE stream that never ends) is a failed probe, not memory or a wait the gateway
+# gives it. A tools/list this large is far past any server's; 20 s is the probe's old per-read wait.
+_MCP_PROBE_MAX_BYTES = 4 * 1024 * 1024
+_MCP_PROBE_WAIT_S = 30
+
+
+class _McpProbeRefused(Exception):
+    pass
+
+
+async def _mcp_probe_post(c: httpx.AsyncClient, url: str, headers: dict, msg: dict) -> tuple[int, httpx.Headers, str]:
+    """POST one probe message; (status, headers, text) of an answer read to its end, within the caps."""
+    async def read() -> tuple[int, httpx.Headers, str]:
+        async with c.stream("POST", url, headers=headers, content=json.dumps(msg), timeout=20) as r:
+            buf = bytearray()
+            async for chunk in r.aiter_bytes():
+                buf += chunk
+                if len(buf) > _MCP_PROBE_MAX_BYTES:
+                    raise _McpProbeRefused(f"the answer is larger than {_MCP_PROBE_MAX_BYTES // (1024 * 1024)} MiB")
+            return r.status_code, r.headers, buf.decode(r.charset_encoding or "utf-8", "replace")
+    try:
+        return await asyncio.wait_for(read(), _MCP_PROBE_WAIT_S)
+    except asyncio.TimeoutError:
+        raise _McpProbeRefused(f"no complete answer within {_MCP_PROBE_WAIT_S} s") from None
+
+
 async def _mcp_list_tools(url: str, token: str) -> dict:
     """Probe a remote MCP server: initialize → notifications/initialized → tools/list. Returns
     {ok, server, tools:[{name,description}]} or {ok:false, error}. Used by the config UI's
@@ -13695,23 +13803,27 @@ async def _mcp_list_tools(url: str, token: str) -> dict:
             "params": {"protocolVersion": "2024-11-05", "capabilities": {},
                        "clientInfo": {"name": "harnessrouter", "version": "1"}}}
     try:
-        r = await c.post(url, headers=headers, content=json.dumps(init), timeout=20)
+        status, rh, text = await _mcp_probe_post(c, url, headers, init)
+    except _McpProbeRefused as e:
+        return {"ok": False, "error": f"initialize: {e}"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"unreachable: {str(e)[:140]}"}
-    if r.status_code >= 400:
-        return {"ok": False, "error": f"initialize returned HTTP {r.status_code}"}
-    init_res = _parse_jsonrpc(r.text)
+    if status >= 400:
+        return {"ok": False, "error": f"initialize returned HTTP {status}"}
+    init_res = _parse_jsonrpc(text)
     server = ((init_res.get("result") or {}).get("serverInfo") or {}).get("name") or ""
     h2 = dict(headers)
-    sid = r.headers.get("mcp-session-id")
+    sid = rh.get("mcp-session-id")
     if sid:
         h2["mcp-session-id"] = sid
     try:
-        await c.post(url, headers=h2, content=json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}), timeout=20)
-        r2 = await c.post(url, headers=h2, content=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}), timeout=20)
+        await _mcp_probe_post(c, url, h2, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+        _, _, text2 = await _mcp_probe_post(c, url, h2, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    except _McpProbeRefused as e:
+        return {"ok": False, "error": f"tools/list: {e}", "server": server}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"tools/list failed: {str(e)[:140]}"}
-    tl = _parse_jsonrpc(r2.text)
+    tl = _parse_jsonrpc(text2)
     if tl.get("error"):
         return {"ok": False, "error": str(tl["error"])[:160], "server": server}
     tools = [{"name": t.get("name", ""), "description": (t.get("description") or "")[:200]}

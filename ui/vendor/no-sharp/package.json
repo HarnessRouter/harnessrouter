@@ -1,0 +1,7 @@
+{
+  "name": "sharp",
+  "version": "0.0.0",
+  "description": "Stands in for sharp, which Next lists as optional for its image optimizer. This console doesn't optimize images (images.unoptimized), so the library and its LGPL native parts have no reason to be installed or shipped.",
+  "license": "Apache-2.0",
+  "main": "index.js"
+}
