@@ -27,9 +27,6 @@ FILES = ["docker/entrypoint.sh", "docker/install-skills.sh", "docker/install-kit
 
 # (file, a substring of the offending line, why it is accepted for now). Empty is the goal.
 ALLOWED: list[tuple[str, str, str]] = [
-    ("docker/entrypoint.sh", "requirements.harness.txt",
-     "Agent Zero: upstream's requirements under committed constraints, which pin versions but not "
-     "hashes; a hashed lock is #623's second step"),
     ("Dockerfile", "deb.nodesource.com/setup_22.x",
      "build time: NodeSource's apt setup script, run once in CI to add its signed apt repository"),
     ("Dockerfile", "pip install --no-cache-dir playwright",
