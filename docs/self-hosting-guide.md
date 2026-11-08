@@ -359,7 +359,11 @@ without them. A value is treated like the key: `GET` shows each name with its va
 save that sends the redacted value back keeps the stored one, and a save that changes the endpoint
 or the provider asks for the values again. A header the gateway sets itself (`authorization`,
 `x-api-key`, `api-key`, `x-goog-api-key`, `host`, `content-type`, `content-length`, `connection`,
-`traceparent`, the relay's own names and the like) cannot be set on a connection, a value may not
+`traceparent`, the relay's own names and the like), or that would speak for a client or a hop (`cookie`,
+`via`, `forwarded`, `proxy-*`, `x-forwarded-*`, `cf-connecting-ip` and Cloudflare's other `cf-*` markers),
+or AWS request signing (`x-amz-*`), cannot be set on a connection; names are compared in any case.
+Cloudflare AI Gateway's `cf-aig-*` and an Access service token's `cf-access-client-id` and
+`cf-access-client-secret` are yours to set. A value may not
 contain a line break, and a connection takes at most 20 headers, 8 KB together. Bedrock and Vertex
 sign their own requests, so their connections refuse headers when you save.
 

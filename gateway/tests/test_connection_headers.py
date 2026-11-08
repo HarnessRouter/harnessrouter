@@ -41,6 +41,30 @@ def test_a_header_the_gateway_sets_cannot_be_set_on_a_connection(name):
     assert "set by the gateway" in why, why
 
 
+# By name and by prefix, in any case, at write and again at send: our credential's names, a client's or a
+# hop's, request smuggling's, our own internal ones, AWS signing, and Cloudflare's own markers.
+DENIED = ["X-Amz-Date", "x-amz-security-token", "X-AMZ-Content-Sha256", "CF-Connecting-IP", "cf-ray", "Cf-Worker",
+          "CF-Access-Jwt-Assertion", "Via", "VIA", "Proxy-Foo", "PROXY-AUTHORIZATION", "X-Forwarded-Server",
+          "x-forwarded-prefix", "X-Internal-Key", "x-internal-anything", "X-Harness-Org", "x-hr-anything",
+          "Authorization", "API-KEY", "X-Api-Key", "X-Goog-Api-Key", "Cookie", "Host", "Content-Length",
+          "Transfer-Encoding", "Upgrade", "TE"]
+
+
+@pytest.mark.parametrize("name", DENIED)
+def test_a_denied_name_in_any_case_is_refused_at_write_and_not_sent(name, capsys):
+    assert "set by the gateway" in gw._conn_headers_error("custom", {name: "v"})
+    assert gw._conn_headers({"name": "c", "headers": {name: "v", "X-Ok": "fine"}}) == {"X-Ok": "fine"}
+    assert f"{name!r} not sent" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", ["cf-aig-authorization", "CF-AIG-Metadata", "CF-Access-Client-Id",
+                                  "cf-access-client-secret", "Ocp-Apim-Subscription-Key", "Helicone-Auth",
+                                  "x-portkey-api-key", "X-Project"])
+def test_a_customers_own_credential_for_their_own_address_is_allowed(name):
+    assert gw._conn_headers_error("custom", {name: "v"}) == ""
+    assert gw._conn_headers({"headers": {name: "v"}}) == {name: "v"}
+
+
 @pytest.mark.parametrize("headers,why", [
     ({"X-Project": "a\r\nAuthorization: Bearer stolen"}, "line break"),
     ({"X-Project": "a\nb"}, "line break"),

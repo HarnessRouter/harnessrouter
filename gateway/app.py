@@ -4216,8 +4216,16 @@ _HEADER_VALUE_BAD = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")         # a control 
 # What the gateway sets itself and a connection must never replace: the credential, the hop, the body's
 # framing, the turn's trace context, and our own names.
 _CONN_HEADERS_RESERVED = frozenset({*_BROKER_HOP, *_RELAY_OURS, "content-type", "content-encoding",
-                                    "accept-encoding", "te", "trailer", "upgrade", "expect",
+                                    "accept-encoding", "te", "trailer", "upgrade", "expect", "via",
                                     "proxy-connection", "traceparent", "tracestate", "baggage"})
+# And by prefix, in any case: our own names, a proxy's or a forwarding hop's (a connection speaks for no
+# client and no hop), AWS's request signing (Bedrock is refused below; no other provider reads them), and
+# Cloudflare's (the client address, the edge's request and worker markers, the Access assertion it hands
+# an origin). A customer's own extra credential for their own address is what this feature is for and stays
+# allowed: Cloudflare AI Gateway's cf-aig-authorization, an Access service token's cf-access-client-id and
+# -secret, an API management subscription key.
+_CONN_HEADERS_RESERVED_PREFIX = (*_RELAY_OURS_PREFIX, "x-internal-", "proxy-", "x-forwarded-", "x-amz-", "cf-")
+_CONN_HEADERS_CUSTOMER_PREFIX = ("cf-aig-", "cf-access-client-")
 # Providers whose requests are not the broker's to carry: Bedrock signs its own (a header added after
 # the signature is one the signature does not cover), Qoder's runtime and the media providers are other
 # APIs. Refused at write with the reason rather than saved and never sent.
@@ -4229,7 +4237,8 @@ def _conn_header_problem(name: str, value, carried_ok: bool) -> str:
     if not _HEADER_NAME_RE.match(name):
         return f"{name!r} is not a header name"
     low = name.lower()
-    if low in _CONN_HEADERS_RESERVED or low.startswith(_RELAY_OURS_PREFIX):
+    if low in _CONN_HEADERS_RESERVED or (low.startswith(_CONN_HEADERS_RESERVED_PREFIX)
+                                         and not low.startswith(_CONN_HEADERS_CUSTOMER_PREFIX)):
         return f"the {name} header is set by the gateway, not by a connection"
     if not isinstance(value, str):
         return f"the {name} header's value is text"
