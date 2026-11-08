@@ -1,19 +1,24 @@
 """A response branch reads its real Git tree, not the latest files or native CLI home."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import io
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import threading
+import zlib
 
 import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import server
-from branching import BranchUnavailable, restore
+import branching
+from branching import BranchRestoreFailed, BranchUnavailable, restore
 
 
 def git(where, *args):
@@ -288,19 +293,196 @@ def test_checkpoint_git_metadata_failure_keeps_user_files(runner, monkeypatch, f
         assert archive.extractfile("./user.txt").read() == b"must survive"
 
 
-def test_transient_restore_error_is_retryable_and_leaves_no_partial_target(runner, monkeypatch, history, tmp_path):
-    import branching
+def test_an_unexpected_restore_error_is_retryable_and_leaves_no_partial_target(runner, monkeypatch, history, tmp_path):
     source, first, latest = history
 
-    def disk_error(*args, **kwargs):
-        raise OSError("synthetic temporary disk error")
+    def unexpected(*args, **kwargs):
+        raise LookupError("synthetic unexpected failure")
 
-    monkeypatch.setattr(branching, "restore", disk_error)
+    monkeypatch.setattr(branching, "restore", unexpected)
     result = runner.post(f"/hydrate?identifier=transient&branch_commit={first}&branch_head={latest}",
                          content=checkpoint(source, tmp_path / "source.tgz").read_bytes())
     assert result.status_code == 503
     assert not Path(server._ws("transient")).exists()
     assert not server._ws_marker_path("transient").exists()
+
+
+@pytest.mark.parametrize("failure", [subprocess.TimeoutExpired(["git"], 120), FileNotFoundError("git"),
+                                     OSError(28, "No space left on device")])
+def test_a_git_timeout_or_disk_error_is_final_not_a_retried_503(history, tmp_path, monkeypatch, failure):
+    """A timeout used to escape restore() as itself, the runner answered 503, and the gateway's
+    _HYDRATE_PAUSES sent the whole checkpoint again seven times, each running every Git command
+    up to its 120 s limit again. It is BranchRestoreFailed now: not branch_unavailable (the point
+    may be fine) and not retried."""
+    source, first, latest = history
+    real = branching._git
+
+    def failing(repository, *args, **kwargs):
+        if args[0] == "index-pack":
+            raise failure
+        return real(repository, *args, **kwargs)
+
+    monkeypatch.setattr(branching, "_git", failing)
+    target = tmp_path / "branch"
+    with pytest.raises(BranchRestoreFailed):
+        restore(checkpoint(source, tmp_path / "checkpoint.tgz"), target, first, latest, tmp_path)
+    assert not target.exists()
+
+
+def test_the_runner_answers_a_restore_failure_with_a_status_the_gateway_does_not_resend(runner, monkeypatch, history, tmp_path):
+    source, first, latest = history
+
+    def timed_out(*args, **kwargs):
+        raise BranchRestoreFailed("branch restore did not finish: TimeoutExpired")
+
+    monkeypatch.setattr(branching, "restore", timed_out)
+    result = runner.post(f"/hydrate?identifier=slow&branch_commit={first}",
+                         content=checkpoint(source, tmp_path / "source.tgz").read_bytes())
+    assert result.status_code == 500 and result.json()["detail"] == "branch_restore_failed"
+    assert not Path(server._ws("slow")).exists()
+    assert not server._ws_marker_path("slow").exists()
+
+
+def _forge(repository: Path, oid: str, kind: bytes, body: bytes) -> None:
+    """Overwrite a loose object with other, well-formed bytes under its original name."""
+    path = repository / ".git/objects" / oid[:2] / oid[2:]
+    path.chmod(0o644)
+    path.write_bytes(zlib.compress(kind + b" " + str(len(body)).encode() + b"\0" + body))
+
+
+def test_a_forged_object_in_the_chosen_commit_is_refused(history, tmp_path):
+    """Git does not hash what it reads: a loose object holding other bytes than its name says is
+    read as those bytes. The chosen commit's objects are re-hashed (index-pack), so the branch is
+    refused rather than restoring bytes the commit never named."""
+    source, first, latest = history
+    blob = git(source, "rev-parse", f"{first}:answer.txt")
+    _forge(source, blob, b"blob", b"forged")
+    assert git(source, "cat-file", "-p", blob) == "forged"     # what an unchecked read returns
+    target = tmp_path / "branch"
+    with pytest.raises(BranchUnavailable):
+        restore(checkpoint(source, tmp_path / "checkpoint.tgz"), target, first, latest, tmp_path)
+    assert not target.exists()
+
+
+def test_a_forged_tree_in_the_chosen_commit_is_refused(history, tmp_path):
+    source, first, latest = history
+    tree = git(source, "rev-parse", f"{first}^{{tree}}")
+    other = git(source, "rev-parse", f"{latest}^{{tree}}")
+    raw = (source / ".git/objects" / other[:2] / other[2:]).read_bytes()
+    path = source / ".git/objects" / tree[:2] / tree[2:]
+    path.chmod(0o644)
+    path.write_bytes(raw)             # the latest tree's bytes, under turn one's tree's name
+    with pytest.raises(BranchUnavailable):
+        restore(checkpoint(source, tmp_path / "checkpoint.tgz"), tmp_path / "branch", first, latest, tmp_path)
+
+
+def test_a_missing_blob_in_the_chosen_commit_is_refused(history, tmp_path):
+    source, first, latest = history
+    blob = git(source, "rev-parse", f"{first}:run.sh")
+    (source / ".git/objects" / blob[:2] / blob[2:]).unlink()
+    with pytest.raises(BranchUnavailable):
+        restore(checkpoint(source, tmp_path / "checkpoint.tgz"), tmp_path / "branch", first, latest, tmp_path)
+
+
+def test_integrity_is_checked_for_the_chosen_commit_only(history, tmp_path):
+    """A damaged object the chosen commit does not name (here a later turn's file) is not read,
+    so it no longer refuses the branch: `git fsck --strict` over the whole store did."""
+    source, first, latest = history
+    later = git(source, "rev-parse", f"{latest}:future-3.txt")
+    _forge(source, later, b"blob", b"damaged later bytes")
+    target = tmp_path / "branch"
+    restore(checkpoint(source, tmp_path / "checkpoint.tgz"), target, first, latest, tmp_path)
+    assert (target / "answer.txt").read_text() == "turn one"
+
+
+def test_restore_runs_off_the_event_loop_and_its_write_identity_stays_on_its_thread(runner, monkeypatch, history, tmp_path):
+    """restore() runs in a worker thread (asyncio.to_thread). _fs_as sets the filesystem uid of
+    the calling thread only (setfsuid), so it has to be entered and left on the thread that
+    writes: it is, inside restore(), and the event loop's thread never takes it."""
+    source, first, latest = history
+    real_restore, real_fs_as = branching.restore, server._fs_as
+    seen = {"fs_as": []}
+
+    def spy(*args, **kwargs):
+        seen["thread"] = threading.get_ident()
+        try:
+            asyncio.get_running_loop()
+            seen["on_loop"] = True
+        except RuntimeError:
+            seen["on_loop"] = False
+        return real_restore(*args, **kwargs)
+
+    @contextlib.contextmanager
+    def fs_as(uid):
+        seen["fs_as"].append(("enter", threading.get_ident()))
+        with real_fs_as(uid):
+            yield
+        seen["fs_as"].append(("leave", threading.get_ident()))
+
+    monkeypatch.setattr(branching, "restore", spy)
+    monkeypatch.setattr(server, "_fs_as", fs_as)
+    result = runner.post(f"/hydrate?identifier=offloop&branch_commit={first}",
+                         content=checkpoint(source, tmp_path / "source.tgz").read_bytes())
+    assert result.status_code == 200, result.text
+    assert seen["on_loop"] is False
+    # restore()'s write wall, entered and left on its own thread; the setup after it (_git_ensure)
+    # takes its own on the loop's thread, as /hydrate does
+    on_restore_thread = [kind for kind, thread in seen["fs_as"] if thread == seen["thread"]]
+    assert on_restore_thread == ["enter", "leave"]
+    for thread in {thread for _, thread in seen["fs_as"]}:
+        kinds = [kind for kind, other in seen["fs_as"] if other == thread]
+        assert kinds.count("enter") == kinds.count("leave")
+    assert (Path(server._ws("offloop")) / "answer.txt").read_text() == "turn one"
+
+
+@pytest.fixture
+def pooled(runner, monkeypatch):
+    """A sandbox per session (HR_SANDBOX_PER_SESSION): the workspace is the root itself, and a
+    pooled sandbox is reused, so the root can hold what the last session left."""
+    monkeypatch.setattr(server, "_SANDBOX_PER_SESSION", True)
+    root = Path(server.WORKSPACE_ROOT)
+    assert Path(server._ws("any")) == root
+    (root / "leftover.txt").write_text("a prior session's file")
+    (root / "project").mkdir()
+    (root / "project/old.txt").write_text("a prior session's folder")
+    (root / ".git").mkdir()
+    return root
+
+
+def test_a_branch_on_a_reused_per_session_root_wipes_it_like_hydrate(runner, pooled, history, tmp_path):
+    """It used to be refused 409 (the target was not empty): every branch on a reused sandbox."""
+    source, first, latest = history
+    result = runner.post(f"/hydrate?identifier=pooled&branch_commit={first}",
+                         content=checkpoint(source, tmp_path / "source.tgz").read_bytes())
+    assert result.status_code == 200, result.text
+    assert result.json()["branched"] is True
+    assert (pooled / "answer.txt").read_text() == "turn one"
+    assert not (pooled / "leftover.txt").exists() and not (pooled / "project").exists()
+    assert not list(pooled.glob("future-*"))
+
+
+def test_a_failed_branch_on_a_per_session_root_empties_it_and_keeps_it(runner, pooled, history, tmp_path):
+    source, first, latest = history
+    result = runner.post(f"/hydrate?identifier=pooled-bad&branch_commit={'a' * 40}",
+                         content=checkpoint(source, tmp_path / "source.tgz").read_bytes())
+    assert result.status_code == 409
+    assert pooled.is_dir(), "the workspace root must never be removed"
+    assert not any(pooled.iterdir())
+    assert not server._ws_marker_path("pooled-bad").exists()
+
+
+def test_a_per_session_folder_with_leftovers_and_no_receipt_is_wiped_too(runner, history, tmp_path):
+    """Shared deployments: a folder under the branch's new id that holds files but no receipt is
+    not this branch's restore, and is wiped as /hydrate would."""
+    source, first, latest = history
+    folder = Path(server._ws("stale"))
+    folder.mkdir()
+    (folder / "leftover.txt").write_text("not this branch's")
+    result = runner.post(f"/hydrate?identifier=stale&branch_commit={first}",
+                         content=checkpoint(source, tmp_path / "source.tgz").read_bytes())
+    assert result.status_code == 200, result.text
+    assert (folder / "answer.txt").read_text() == "turn one"
+    assert not (folder / "leftover.txt").exists()
 
 
 @pytest.mark.asyncio
