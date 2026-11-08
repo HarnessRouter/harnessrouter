@@ -101,3 +101,20 @@ def test_only_named_distributions_are_built_from_source():
     assert "--no-build-isolation" in ENTRY  # the backend for those comes from build.lock.txt
     # the build backend's own lock holds setuptools and nothing it would fetch at build time
     assert [REQ.match(l).group(1) for l in _requirement_lines((LOCKS / "build.lock.txt").read_text())] == ["setuptools"]
+
+
+def test_no_lock_names_another_index_or_an_unnamed_url():
+    """A lock line is a distribution and its hashes, nothing else: an --index-url, --extra-index-url,
+    --find-links or --trusted-host in a lock would move where pip fetches from, under the same hashes'
+    authority. A direct URL is allowed only for the two distributions that have no PyPI release here:
+    opensquilla's release wheel and systemone's commit archive, both on github.com and both hashed."""
+    named = {"opensquilla": "https://github.com/TokenRhythm/opensquilla/releases/download/",
+             "systemone-harness": "https://github.com/HarnessRouter/SystemOneHarness/archive/"}
+    for path in sorted(LOCKS.glob("*.lock.txt")):
+        for line in path.read_text().splitlines():
+            s = line.strip()
+            assert not re.match(r"^(-i|-f|--index-url|--extra-index-url|--find-links|--trusted-host|--no-index)\b", s), \
+                f"{path.name}: {s}"
+            m = re.match(r"^(\S+?)(?:\[[^\]]*\])? @ (\S+)", s)
+            if m:
+                assert m.group(1) in named and m.group(2).startswith(named[m.group(1)]), f"{path.name}: {s}"
