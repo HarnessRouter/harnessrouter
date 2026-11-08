@@ -1,0 +1,5 @@
+# mistral-vibe 3.0.2 pins certifi==2026.7.22 and mcp==1.28.1. certifi 2026.10.19 drops the emSign root
+# certificates whose intermediate keys were compromised. mcp 1.30.0, the last 1.x, fixes the SDK's
+# redirect, session and token-audience bugs.
+certifi==2026.10.19
+mcp==1.30.0

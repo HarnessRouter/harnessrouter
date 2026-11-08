@@ -3,6 +3,8 @@
 # on. Upstream's requirements.txt pins some packages and floors others, and every transitive
 # dependency floats; installed with -c, a fresh volume next month gets this tree and not another.
 # Regenerate with the pin: bump AGENTZERO_PIN, install without -c, measure, then pip freeze.
+# Raised over that freeze for their security fixes: certifi 2026.10.19 and mcp 1.30.0 (mcp also through
+# docker/locks/agentzero.overrides, because upstream's requirements.txt pins it).
 a2wsgi==1.10.8
 aiofile==3.12.3
 aiohappyeyeballs==2.7.1
@@ -22,7 +24,7 @@ bidict==0.24.1
 blinker==1.9.0
 cachetools==7.2.0
 caio==0.12.9
-certifi==2026.7.22
+certifi==2026.10.19
 cffi==2.1.1
 chardet==5.2.0
 charset-normalizer==3.5.2
@@ -95,7 +97,7 @@ markdownify==1.1.0
 MarkupSafe==3.0.4
 marshmallow==3.26.2
 matplotlib-inline==0.2.2
-mcp==1.27.0
+mcp==1.30.0
 mdurl==0.1.2
 more-itertools==11.1.0
 multidict==6.9.1

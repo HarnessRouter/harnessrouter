@@ -2,3 +2,10 @@
 # venv has always had mcp's: aider was installed first and `pip install mcp` replaced idna after it
 # (pip's own warning said so). Measured: that is the only package the second install moved.
 idna==3.20
+# aider-chat 0.86.2 also pins certifi==2026.1.4, gitpython==3.1.46 and anyio==4.12.1, each older than its
+# security fixes. certifi 2026.10.19 drops the emSign root certificates whose intermediate keys were
+# compromised. GitPython 3.2.1 closes command-execution and file-access holes reachable from repository
+# content, and aider runs it on the session's repository. anyio 4.14.2 fixes TLS host-name encoding.
+certifi==2026.10.19
+gitpython==3.2.1
+anyio==4.14.2
