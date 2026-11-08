@@ -21480,11 +21480,22 @@ async def _setup_build_model_wire(org: str, canonical: str) -> dict | None:
         if w:
             return w
     for name in await _resolve_chain(org, setup_builder.BASE, None):
-        conn, _tenant = await _get_connection(org, name)
+        conn, src = await _get_connection(org, name)
         if not conn or not _conn_serves(conn, canonical) or _chain_refusal(conn, setup_builder.BASE):
             continue
         vendor = str(conn.get("provider") or "")
         w = _setup_build_wire(vendor, conn, _provider_model_id(vendor.lower(), canonical) or canonical, canonical)
+        if w and bool(src) and src != GLOBAL_TENANT and not _pool_is_local():
+            # An address an organization typed for its own connection, where organizations share this
+            # instance: held to the rule the model relay holds it to (llm_broker). Its text is checked
+            # here, and where it points when the socket opens: the builder sends it on the checked
+            # client, which refuses this deployment's own networks and follows no redirect. Before, the
+            # builder posted to it on the plain client, wherever it resolved.
+            why = _org_endpoint_problem(w["url"])
+            if why:
+                print(f"[setup-build] skipped an organization's connection: its address can't be used ({why})", flush=True)
+                continue
+            w["client"] = _relay_checked_client()
         if w:
             return w
     return None
