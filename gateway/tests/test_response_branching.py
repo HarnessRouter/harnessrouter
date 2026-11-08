@@ -8,6 +8,7 @@ import asyncio
 import json
 from pathlib import Path
 import sys
+import time
 import uuid
 
 import httpx
@@ -38,7 +39,7 @@ def env(monkeypatch):
 
     async def hydrate(target, params, *, source_sid=None):
         calls.append({"restore_target": target, "source": source_sid, "params": params})
-        return httpx.Response(200, json={"ok": True})
+        return httpx.Response(200, json={"ok": True, "restored": True, "branched": True})
 
     async def checkpoint(_, commit=True):
         return True, 100, "target-sha", "a" * 7, "a" * 40
@@ -71,11 +72,8 @@ def env(monkeypatch):
             if i == 0:
                 record["_pending_input"] = {"id": "question", "state": "pending"}
             await gw._resp_put(rid, record, org, sid, ids[i-1] if i else None, "completed", 1000.0 + i, True)
-        await gw._blob_put(f"responses/{ids[0]}.branch.json", json.dumps({
-            "response_id": ids[0], "session_id": sid, "commit": "1" * 40, "ws_sha": "old-sha", "turn_index": 0
-        }).encode(), kb=gw.RESP_BLOB_KB)
-        await gw._blob_put(f"sessions/{sid}/branch-head.json", json.dumps({
-            "commit": "3" * 40, "ws_sha": "source-sha"
+        await gw._blob_put(gw._branch_point_key(ids[0]), json.dumps({
+            "response_id": ids[0], "session_id": sid, "commit": "1" * 40, "ws_sha": "old-sha"
         }).encode(), kb=gw.RESP_BLOB_KB)
         return ids
 
@@ -129,9 +127,10 @@ def test_only_the_branching_response_names_its_origin(env):
 
 
 def test_the_turn_is_the_selected_responses_place_in_its_session(env):
+    """Read when the branch is made, from the session's responses in order: the point stores none."""
     point = {"response_id": env["ids"][2], "session_id": env["sid"], "commit": "3" * 40,
-             "ws_sha": "source-sha", "turn_index": 2}
-    asyncio.run(gw._blob_put(f"responses/{env['ids'][2]}.branch.json", json.dumps(point).encode(), kb=gw.RESP_BLOB_KB))
+             "ws_sha": "source-sha"}
+    asyncio.run(gw._blob_put(gw._branch_point_key(env["ids"][2]), json.dumps(point).encode(), kb=gw.RESP_BLOB_KB))
     response = post(env, previous_response_id=env["ids"][2])
     assert response.status_code == 200, response.text
     detail = env["client"].get(f"/v1/sessions/{response.json()['metadata']['session_id']}").json()
@@ -142,7 +141,7 @@ def test_the_turn_is_the_selected_responses_place_in_its_session(env):
 def test_unavailable_checkpoint_is_http409_before_any_target_work(env, change):
     async def alter():
         if change == "mapping":
-            await gw._blob_delete(f"responses/{env['ids'][0]}.branch.json", kb=gw.RESP_BLOB_KB)
+            await gw._blob_delete(gw._branch_point_key(env["ids"][0]), kb=gw.RESP_BLOB_KB)
         elif change == "running":
             record = await gw._resp_get(env["ids"][0])
             record["status"] = "in_progress"
@@ -150,8 +149,8 @@ def test_unavailable_checkpoint_is_http409_before_any_target_work(env, change):
         else:
             # main: the `invalid-head` case, a stored copy of the session's latest commit that was
             # not a full commit. No such copy is kept now; the stored point is what is checked.
-            await gw._blob_put(f"responses/{env['ids'][0]}.branch.json", json.dumps({
-                "response_id": env["ids"][0], "session_id": env["sid"], "commit": "invalid", "turn_index": 0
+            await gw._blob_put(gw._branch_point_key(env["ids"][0]), json.dumps({
+                "response_id": env["ids"][0], "session_id": env["sid"], "commit": "invalid"
             }).encode(), kb=gw.RESP_BLOB_KB)
     asyncio.run(alter())
     for mode in ({}, {"stream": True}, {"background": True}):
@@ -161,16 +160,10 @@ def test_unavailable_checkpoint_is_http409_before_any_target_work(env, change):
     assert not env["calls"]
 
 
-@pytest.mark.parametrize("head", ["missing", "stale"])
-def test_a_branch_needs_no_copy_of_the_sessions_latest_commit(env, head):
+def test_a_branch_sends_the_point_and_no_copy_of_the_sessions_latest_commit(env):
     """A copy of the latest commit beside the tarball fell out of step with it (a failed write, a
     branch racing a new turn's checkpoint) and made every point of the session 409. The runner
-    checks the point against the checkpoint's own HEAD, so nothing like it is read or sent."""
-    key = f"sessions/{env['sid']}/branch-head.json"
-    if head == "missing":
-        asyncio.run(gw._blob_delete(key, kb=gw.RESP_BLOB_KB))
-    else:
-        asyncio.run(gw._blob_put(key, json.dumps({"commit": "9" * 40}).encode(), kb=gw.RESP_BLOB_KB))
+    checks the point against the checkpoint's own HEAD, so nothing like it is kept or sent."""
     response = post(env)
     assert response.status_code == 200, response.text
     restore = [c for c in env["calls"] if "restore_target" in c]
@@ -178,12 +171,33 @@ def test_a_branch_needs_no_copy_of_the_sessions_latest_commit(env, head):
     assert "branch_head" not in restore[0]["params"]
 
 
-def test_checkpoint_writes_only_the_point(env):
-    asyncio.run(gw._blob_delete(f"sessions/{env['sid']}/branch-head.json", kb=gw.RESP_BLOB_KB))
+def test_checkpoint_writes_only_the_point_and_reads_nothing_back(env, monkeypatch):
+    """The turn's end used to read every response of the session and sort them, at every turn, to
+    store the point's place; the place is read when a branch is made now."""
+    async def no_read(*args, **kwargs):
+        raise AssertionError("a turn's checkpoint read the session's responses")
+
+    monkeypatch.setattr(gw.BACKING.graph, "find_strict", no_read)
     asyncio.run(gw._checkpoint(env["sid"], {}, response_id=env["ids"][1]))
-    point = json.loads(asyncio.run(gw._blob_get(f"responses/{env['ids'][1]}.branch.json", kb=gw.RESP_BLOB_KB)))
-    assert point["commit"] == "a" * 40 and point["turn_index"] == 1
-    assert asyncio.run(gw._blob_get(f"sessions/{env['sid']}/branch-head.json", kb=gw.RESP_BLOB_KB)) is None
+    point = json.loads(asyncio.run(gw._blob_get(gw._branch_point_key(env["ids"][1]), kb=gw.RESP_BLOB_KB)))
+    assert point == {"commit": "a" * 40, "ws_sha": "target-sha", "session_id": env["sid"],
+                     "response_id": env["ids"][1], "backend": ""}
+
+
+def test_the_point_has_its_own_prefix_not_the_response_records(env):
+    assert gw._branch_point_key("resp_x") == "branch-points/resp_x.json"
+    asyncio.run(gw._checkpoint(env["sid"], {}, response_id=env["ids"][1]))
+    assert asyncio.run(gw._blob_get(f"responses/{env['ids'][1]}.branch.json", kb=gw.RESP_BLOB_KB)) is None
+    listed = asyncio.run(gw._blob_list_all("responses/", kb=gw.RESP_BLOB_KB))
+    assert not [it for it in listed if "branch" in str(it.get("file_id"))]
+
+
+def test_a_mid_turn_checkpoint_never_saves_a_point(env):
+    """A mid-turn checkpoint (#505) commits nothing, and its turn has not ended."""
+    asyncio.run(gw._checkpoint(env["sid"], {}, mid_turn=True, response_id=env["ids"][1]))
+    assert asyncio.run(gw._blob_get(gw._branch_point_key(env["ids"][1]), kb=gw.RESP_BLOB_KB)) is None
+    asyncio.run(gw._checkpoint(env["sid"], {}, response_id=env["ids"][1]))
+    assert asyncio.run(gw._blob_get(gw._branch_point_key(env["ids"][1]), kb=gw.RESP_BLOB_KB)) is not None
 
 
 def test_discovery_reports_branching_as_a_capability(env):
@@ -245,9 +259,9 @@ def test_missing_full_commit_from_old_runner_writes_no_checkpoint_mapping(env, m
     async def checkpoint(_, commit=True):
         return True, 100, "source-sha", "1234567", ""
     monkeypatch.setattr(gw, "_checkpoint_relay", checkpoint)
-    asyncio.run(gw._blob_delete(f"responses/{env['ids'][0]}.branch.json", kb=gw.RESP_BLOB_KB))
+    asyncio.run(gw._blob_delete(gw._branch_point_key(env["ids"][0]), kb=gw.RESP_BLOB_KB))
     asyncio.run(gw._checkpoint(env["sid"], {}, response_id=env["ids"][0]))
-    assert asyncio.run(gw._blob_get(f"responses/{env['ids'][0]}.branch.json", kb=gw.RESP_BLOB_KB)) is None
+    assert asyncio.run(gw._blob_get(gw._branch_point_key(env["ids"][0]), kb=gw.RESP_BLOB_KB)) is None
 
 
 def test_app_checkpoint_rewrite_does_not_hide_a_valid_git_point(env):
@@ -261,7 +275,7 @@ def test_mapping_failure_does_not_poison_an_acknowledged_checkpoint(env, monkeyp
     original_put = gw._blob_put
 
     async def broken_mapping(key, data, **kwargs):
-        if key.endswith(".branch.json"):
+        if key == gw._branch_point_key(env["ids"][0]):
             raise OSError("synthetic metadata outage")
         return await original_put(key, data, **kwargs)
 
@@ -276,7 +290,7 @@ def test_mapping_failure_does_not_poison_an_acknowledged_checkpoint(env, monkeyp
 def test_deleted_source_is_404_and_private_mapping_is_removed(env):
     response = env["client"].delete(f"/v1/responses/{env['ids'][0]}")
     assert response.status_code == 200, response.text
-    assert asyncio.run(gw._blob_get(f"responses/{env['ids'][0]}.branch.json", kb=gw.RESP_BLOB_KB)) is None
+    assert asyncio.run(gw._blob_get(gw._branch_point_key(env["ids"][0]), kb=gw.RESP_BLOB_KB)) is None
     response = post(env)
     assert response.status_code == 404
     assert not env["calls"]
@@ -361,7 +375,7 @@ async def test_each_mode_has_its_index_before_the_terminal_checkpoint(env, monke
         else:
             body = response.json()
         for _ in range(100):
-            point = await gw._blob_get(f"responses/{body['id']}.branch.json", kb=gw.RESP_BLOB_KB)
+            point = await gw._blob_get(gw._branch_point_key(body["id"]), kb=gw.RESP_BLOB_KB)
             if point:
                 break
             await asyncio.sleep(0.01)
@@ -404,7 +418,6 @@ async def test_partial_import_failure_removes_target_records_and_releases_idempo
     async def checkpoint(target, commit=True):
         await gw._blob_put(gw._ws_blob(target), b"synthetic target checkpoint")
         await gw._blob_put(f"containers/{target}/cfile_partial", b"synthetic copied artifact", kb=gw.RESP_BLOB_KB)
-        await gw._blob_put(f"sessions/{target}/branch-head.json", b"{}", kb=gw.RESP_BLOB_KB)
         return True, 100, "target-sha", "a" * 7, "a" * 40
 
     monkeypatch.setattr(gw, "_imported_turns_put", partial)
@@ -419,7 +432,6 @@ async def test_partial_import_failure_removes_target_records_and_releases_idempo
     assert await gw._vertex_get(target) is None
     assert await gw._blob_get(gw._ws_blob(target)) is None
     assert await gw._blob_get(f"containers/{target}/cfile_partial", kb=gw.RESP_BLOB_KB) is None
-    assert await gw._blob_get(f"sessions/{target}/branch-head.json", kb=gw.RESP_BLOB_KB) is None
     assert not await gw.BACKING.graph.find_strict("HarnessResponse", {"session_id": target})
     assert await gw.control_store.idem_get(env["org"], gw._idem_sha(key)) is None
 
@@ -515,8 +527,8 @@ async def test_orphan_adoption_maps_its_checkpoint_and_keeps_input_chain_and_ori
     assert stored["previous_response_id"] == env["ids"][0]
     assert stored["metadata"]["branched_from"] == "resp_ancestor"
     assert stored["created_at"] == 1001
-    point = json.loads(await gw._blob_get(f"responses/{rid}.branch.json", kb=gw.RESP_BLOB_KB))
-    assert point["response_id"] == rid and point["turn_index"] == 1
+    point = json.loads(await gw._blob_get(gw._branch_point_key(rid), kb=gw.RESP_BLOB_KB))
+    assert point["response_id"] == rid and point["commit"] == "a" * 40
     terminal = [event for event in events if event.get("type") == "response.completed"]
     assert terminal and terminal[0]["response"]["metadata"]["branched_from"] == "resp_ancestor"
 
@@ -549,11 +561,16 @@ def test_source_read_outage_is_retryable_not_a_500(env, monkeypatch):
     assert response.json()["error"]["code"] == "server_error"
 
 
-@pytest.mark.parametrize("index", [None, "0", True, -1])
-def test_malformed_private_turn_index_is_unavailable_not_a_500(env, index):
-    point = {"response_id": env["ids"][0], "session_id": env["sid"], "commit": "1" * 40,
-             "ws_sha": "old-sha", "turn_index": index}
-    asyncio.run(gw._blob_put(f"responses/{env['ids'][0]}.branch.json", json.dumps(point).encode(), kb=gw.RESP_BLOB_KB))
+@pytest.mark.parametrize("malformed", ["list", "string", "null", "other-response", "other-session",
+                                       "int-commit", "list-commit", "no-commit"])
+def test_a_malformed_private_point_is_unavailable_not_a_500(env, malformed):
+    good = {"response_id": env["ids"][0], "session_id": env["sid"], "commit": "1" * 40}
+    point = {"list": [], "string": "point", "null": None,
+             "other-response": {**good, "response_id": "resp_other"},
+             "other-session": {**good, "session_id": "hsess_other"},
+             "int-commit": {**good, "commit": 1}, "list-commit": {**good, "commit": ["1" * 40]},
+             "no-commit": {k: v for k, v in good.items() if k != "commit"}}[malformed]
+    asyncio.run(gw._blob_put(gw._branch_point_key(env["ids"][0]), json.dumps(point).encode(), kb=gw.RESP_BLOB_KB))
     response = post(env)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "branch_unavailable"
@@ -562,8 +579,8 @@ def test_malformed_private_turn_index_is_unavailable_not_a_500(env, index):
 def test_deleted_earlier_response_is_not_reintroduced_by_branch(env):
     assert env["client"].delete(f"/v1/responses/{env['ids'][1]}").status_code == 200
     point = {"response_id": env["ids"][2], "session_id": env["sid"], "commit": "3" * 40,
-             "ws_sha": "source-sha", "turn_index": 2}
-    asyncio.run(gw._blob_put(f"responses/{env['ids'][2]}.branch.json", json.dumps(point).encode(), kb=gw.RESP_BLOB_KB))
+             "ws_sha": "source-sha"}
+    asyncio.run(gw._blob_put(gw._branch_point_key(env["ids"][2]), json.dumps(point).encode(), kb=gw.RESP_BLOB_KB))
     response = post(env, previous_response_id=env["ids"][2])
     assert response.status_code == 200, response.text
     turns = env["client"].get(f"/v1/sessions/{response.json()['metadata']['session_id']}/turns").json()["turns"]
@@ -576,3 +593,202 @@ def test_malformed_provenance_does_not_break_detail_or_continuation(env, origin)
     assert env["client"].get(f"/v1/sessions/{env['sid']}").status_code == 200
     response = post(env, branch=False)
     assert response.status_code == 200, response.text
+
+
+# ── the runner's confirmation (#639 review, item 2) ──────────────────────────────────────────
+
+def _purge_recorder(monkeypatch):
+    """The runner's folder for a session is removed by DELETE /workspace (_session_purge): record it."""
+    deleted = []
+
+    async def sandbox(path, sid, method="POST", **kwargs):
+        if path == "/workspace" and method == "DELETE":
+            deleted.append(sid)
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(gw, "POOL_ENDPOINT", "http://synthetic-runner.invalid")
+    monkeypatch.setattr(gw, "_sandbox", sandbox)
+    return deleted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", [{"ok": True}, {"ok": True, "restored": True},
+                                    {"ok": True, "branched": "true"}, {"ok": True, "branched": 1},
+                                    "not json", ["branched"]])
+async def test_a_restore_the_runner_does_not_confirm_is_no_branch(env, monkeypatch, answer):
+    """A runner from before branching ignores branch_commit, restores the source's latest workspace
+    whole and answers 200 {"ok": true}: a branch with the wrong files, in silence. Only
+    `branched: true` is a branch; anything else removes the new session and answers 503."""
+    checkpoints = []
+
+    async def old_runner(target, params, *, source_sid=None):
+        env["calls"].append({"restore_target": target, "source": source_sid, "params": params})
+        if isinstance(answer, str):
+            return httpx.Response(200, text=answer)
+        return httpx.Response(200, json=answer)
+
+    async def checkpoint(target, commit=True):
+        checkpoints.append(target)
+        return True, 100, "target-sha", "a" * 7, "a" * 40
+
+    deleted = _purge_recorder(monkeypatch)
+    monkeypatch.setattr(gw, "_hydrate_relay", old_runner)
+    monkeypatch.setattr(gw, "_checkpoint_relay", checkpoint)
+    key = "unconfirmed-" + env["sid"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gw.app), base_url="http://gateway") as client:
+        response = await client.post("/v1/responses", headers={"Idempotency-Key": key}, json={
+            "input": "different approach", "branch": True, "previous_response_id": env["ids"][0],
+            "metadata": {"harness_id": env["hid"]}})
+    assert response.status_code == 503, response.text
+    assert response.json()["error"]["code"] == "server_error"
+    assert "confirm" in response.json()["error"]["message"]
+    restores = [x for x in env["calls"] if "restore_target" in x]
+    assert len(restores) == 1, "an unconfirmed restore is not asked again"
+    target = restores[0]["restore_target"]
+    assert checkpoints == [], "nothing of the wrong workspace is saved"
+    assert deleted == [target], "the folder the runner restored is removed"
+    assert await gw._vertex_get(target) is None
+    assert not await gw.BACKING.graph.find_strict("HarnessResponse", {"session_id": target})
+    assert await gw.control_store.idem_get(env["org"], gw._idem_sha(key)) is None
+    sessions = await gw.BACKING.graph.find_strict("HarnessSession", {"tenant": env["org"]})
+    assert [s.get("id") for s in sessions] == [env["sid"]]
+
+
+# ── limits (#639 review, item 4) ─────────────────────────────────────────────────────────────
+
+def test_a_restore_that_ran_out_of_time_or_disk_is_not_resent(env, monkeypatch):
+    """The runner answers 500 branch_restore_failed for a Git timeout or a disk error. Resending
+    it repeats the whole upload and every Git command and meets the same limit: one attempt."""
+    attempts = []
+
+    async def failing(target, params, *, source_sid=None):
+        attempts.append(target)
+        return httpx.Response(500, json={"detail": "branch_restore_failed"})
+
+    deleted = _purge_recorder(monkeypatch)
+    monkeypatch.setattr(gw, "_hydrate_relay", failing)
+    monkeypatch.setattr(gw, "_HYDRATE_PAUSES", (0, 0, None))
+    response = post(env)
+    assert response.status_code == 503, response.text
+    assert response.json()["error"]["code"] == "server_error"
+    assert "limits" in response.json()["error"]["message"]
+    assert len(attempts) == 1
+    assert deleted == attempts
+
+
+def test_branch_preparation_has_one_deadline(env, monkeypatch):
+    """A restore that never answers (or resends that never end) is cut at the deadline: 503, and
+    the target is removed, before anything is acknowledged."""
+    started = []
+
+    async def hangs(target, params, *, source_sid=None):
+        started.append(target)
+        await asyncio.sleep(30)
+
+    deleted = _purge_recorder(monkeypatch)
+    monkeypatch.setattr(gw, "_hydrate_relay", hangs)
+    monkeypatch.setattr(gw, "BRANCH_PREPARE_TIMEOUT_S", 0.3)
+    began = time.monotonic()
+    response = post(env, background=True)
+    assert time.monotonic() - began < 10
+    assert response.status_code == 503, response.text
+    assert "in time" in response.json()["error"]["message"]
+    assert started and deleted == started
+    assert asyncio.run(gw._vertex_get(started[0])) is None
+
+
+def _stored_artifacts(env, count, size=10):
+    """`count` captured files cited by the first response, each `size` bytes."""
+    async def seed():
+        record = await gw._resp_get(env["ids"][0])
+        annotations = []
+        for i in range(count):
+            file_id = f"cfile_cap{i}"
+            await gw._blob_put(f"containers/{env['sid']}/{file_id}", bytes([65 + i]) * size, kb=gw.RESP_BLOB_KB)
+            await gw._blob_put(f"containers/{env['sid']}/{file_id}.meta", json.dumps({
+                "filename": f"out/file{i}.txt", "media_type": "text/plain", "written_at": 1000}).encode(),
+                kb=gw.RESP_BLOB_KB)
+            annotations.append({"type": "container_file_citation", "container_id": env["sid"],
+                                "file_id": file_id, "filename": f"out/file{i}.txt"})
+        record["output"][0]["content"][0]["annotations"] = annotations
+        await gw._resp_put(env["ids"][0], record, env["org"], env["sid"], None, "completed", 1000, True)
+    asyncio.run(seed())
+
+
+def _imported_citations(env, response):
+    target = response.json()["metadata"]["session_id"]
+    turns = asyncio.run(gw._session_turns_data(target))
+    copied = asyncio.run(gw._resp_get(turns["turns"][0]["id"]))
+    return target, copied["output"][0]["content"][0]["annotations"]
+
+
+def test_artifact_copies_stop_at_the_count_and_the_rest_name_their_path(env, monkeypatch):
+    monkeypatch.setattr(gw, "BRANCH_COPY_MAX_FILES", 2)
+    _stored_artifacts(env, 4)
+    response = post(env)
+    assert response.status_code == 200, response.text
+    target, citations = _imported_citations(env, response)
+    assert all(c["container_id"] == target for c in citations), "never an alias of the source"
+    copies = [c for c in citations if c["file_id"].startswith("cfile_")]
+    paths = [c for c in citations if c["file_id"].startswith("wf_")]
+    assert len(copies) == 2 and len(paths) == 2
+    for c in copies:
+        assert asyncio.run(gw._blob_get(f"containers/{target}/{c['file_id']}", kb=gw.RESP_BLOB_KB))
+    assert [gw._wf_path(c["file_id"]) for c in paths] == ["out/file2.txt", "out/file3.txt"]
+    listed = asyncio.run(gw._blob_list_all(f"containers/{target}/", kb=gw.RESP_BLOB_KB))
+    assert len([it for it in listed if not str(it.get("file_id")).endswith(".meta")]) == 2
+
+
+def test_artifact_copies_stop_at_the_total_bytes(env, monkeypatch):
+    monkeypatch.setattr(gw, "BRANCH_COPY_MAX_BYTES", 25)
+    _stored_artifacts(env, 3, size=10)                         # 10 + 10 fit, the third would not
+    response = post(env)
+    assert response.status_code == 200, response.text
+    target, citations = _imported_citations(env, response)
+    assert [c["file_id"].startswith("cfile_") for c in citations] == [True, True, False]
+    assert gw._wf_path(citations[2]["file_id"]) == "out/file2.txt"
+
+
+def test_artifact_caps_are_sane_by_default():
+    assert gw.BRANCH_COPY_MAX_FILES == 100
+    assert gw.BRANCH_COPY_MAX_BYTES == 256 * 1024 * 1024
+    assert gw.BRANCH_PREPARE_TIMEOUT_S == 300
+
+
+# ── a workspace's key (#639 review, item 8) ──────────────────────────────────────────────────
+
+def test_a_workspace_key_cannot_branch_another_workspaces_response(env, monkeypatch):
+    """A key held to one workspace reaches that workspace and nothing else of its organization
+    (test_workspace_scope.py). Branching names a response, so it is asked there too, before
+    anything says whether the response could be a branch point: not found, and no restore."""
+    key_a = {"org": env["org"], "member": "svc-a", "workspace": "space.a", "workspace_default": False,
+             "via": "api_key"}
+
+    async def principal(_):
+        return dict(key_a)
+
+    async def stamp():
+        # the harness is the key's workspace's, so the run itself is allowed; the response's
+        # session is another workspace's
+        await gw.BACKING.graph.upsert("Harness", env["hid"], {
+            "org": env["org"], "member": "fixture@example.invalid", "workspace": "space.a",
+            "name": env["hid"], "base": "claude-code", "custom": "1", "deleted": "0"})
+        await gw._vertex_upsert(env["sid"], {"workspace": "space.b"})
+
+    asyncio.run(stamp())
+    monkeypatch.setattr(gw, "_principal", principal)
+    sessions = asyncio.run(gw.BACKING.graph.find_strict("HarnessSession", {"tenant": env["org"]}))
+    for mode in ({}, {"stream": True}, {"background": True}):
+        response = post(env, **mode)
+        assert response.status_code == 404, response.text
+        assert response.json()["error"]["code"] in ("session_not_found", "response_not_found")
+    assert not env["calls"]
+    assert asyncio.run(gw.BACKING.graph.find_strict("HarnessSession", {"tenant": env["org"]})) == sessions
+    with pytest.raises(gw.HTTPException) as caught:
+        asyncio.run(gw._branch_source(env["ids"][0], env["org"], env["hid"], key_a))
+    assert caught.value.status_code == 404
+    # the same key, the same response, once the session is its workspace's: the scope was the refusal
+    asyncio.run(gw._vertex_upsert(env["sid"], {"workspace": "space.a"}))
+    response = post(env)
+    assert response.status_code == 200, response.text
+

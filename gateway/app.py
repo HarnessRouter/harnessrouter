@@ -944,9 +944,9 @@ def _runner_turn_recorded(sid: str) -> None:
 
 
 @contextlib.asynccontextmanager
-async def _turn_slot(org: str, sid: str):
+async def _turn_slot(org: str, sid: str, *, heartbeat: bool = True):
     """Both concurrency gates, held for the turn, with the session's heartbeat kept fresh while the
-    turn WAITS for them.
+    turn WAITS for them. The one place the gates are taken.
 
     A turn is marked `starting` when it is accepted, and on one container the gates admit as many
     turns as the box has cores, so a busy box queues the rest. A queued turn is alive, but it has no
@@ -961,10 +961,15 @@ async def _turn_slot(org: str, sid: str):
     sweep has neither a runner turn to ask nor a heartbeat from the poll loop, and "no runner turn on
     record" read a live turn restoring a large workspace as gone (CAT, 2026-10-21; restores past the
     120 s stale window were measured on the hosted service). It stops when the poll loop takes over
-    (_runner_turn_recorded) or the slot is released."""
+    (_runner_turn_recorded) or the slot is released.
+
+    `heartbeat=False` is a branch's preparation (_branch_prepare): the same capacity, taken before
+    its new session exists. Nothing sweeps a session that is not there yet, and a beat would write
+    the vertex of one that is not published, and never may be."""
     beat_s = max(1, _RECONCILE_STALE_S // 4)
     on_record = asyncio.Event()
-    _RUNNER_TURN_ON[sid] = on_record
+    if heartbeat:
+        _RUNNER_TURN_ON[sid] = on_record
 
     async def beat():
         while True:
@@ -978,13 +983,14 @@ async def _turn_slot(org: str, sid: str):
             except Exception:  # noqa: BLE001 — a missed beat is retried on the next one
                 pass
 
-    t = asyncio.create_task(beat())
+    t = asyncio.create_task(beat()) if heartbeat else None
     try:
         async with _global_sem(), _tenant_sem(org):
             yield
     finally:
         on_record.set()
-        t.cancel()
+        if t is not None:
+            t.cancel()
         if _RUNNER_TURN_ON.get(sid) is on_record:
             _RUNNER_TURN_ON.pop(sid, None)
 
@@ -2903,6 +2909,35 @@ def _hydrate_reason(rec: dict) -> str:
     return err or "unknown"
 
 
+def _branch_point_key(rid: str) -> str:
+    """Where a response's branch point is kept (Sessions §1.1), in the response store under a prefix
+    of its own: not beside the response records in responses/, whose namespace is theirs."""
+    return f"branch-points/{rid}.json"
+
+
+async def _branch_point_put(sid: str, rec: dict, response_id: str, git_commit: str, ws_sha: str) -> None:
+    """The commit an end-of-turn checkpoint closed on, kept as the response's branch point.
+
+    Only the point: the runner checks it against the HEAD of the checkpoint it is given, so no
+    copy of the session's latest commit is kept in step with the tarball (one was, written after
+    it, and a put that failed, or a branch that read it while a new turn checkpointed, made every
+    point 409 until the next turn). Nor is the response's place in its session: that is read when
+    a branch is made (_branch_prepare_inner reads and sorts the session's responses anyway), so a
+    turn's end reads nothing back from the store for it. Optional: a failure is recorded on the
+    turn's record, never raised, since the durable checkpoint has already succeeded. A runner that
+    sends no full commit (one from before branching) leaves no point, and a branch from this
+    response is then branch_unavailable."""
+    if not re.fullmatch(r"[0-9a-f]{40}", git_commit or ""):
+        return
+    point = {"commit": git_commit, "ws_sha": ws_sha, "session_id": sid,
+             "response_id": response_id, "backend": rec.get("backend") or ""}
+    try:
+        if not await _blob_put(_branch_point_key(response_id), json.dumps(point).encode(), kb=RESP_BLOB_KB):
+            rec["branch_checkpoint_unavailable"] = True
+    except Exception:  # noqa: BLE001
+        rec["branch_checkpoint_unavailable"] = True
+
+
 async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_id: str = "") -> None:
     """Pull the committed /workspace from the sandbox and persist it to durable blob storage.
 
@@ -2954,26 +2989,8 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_i
                 await _vertex_upsert(sid, {"checkpoint_bytes": str(nbytes), "git_head": git_head,
                                            "ws_sha": ws_sha,
                                            "ws_mid_turn_at": str(taken_at) if mid_turn else ""})
-                # The response's branch point (Sessions §1.1): the commit this turn ended on. Only
-                # the point is kept. The runner checks it against the HEAD of the checkpoint it is
-                # given, so no copy of the session's latest commit has to be kept in step with the
-                # tarball; one used to be, written after it, and a put that failed or a branch that
-                # read it while a new turn was checkpointing made every point 409 until next turn.
-                # Never for a mid-turn checkpoint: it commits nothing, and its turn has not ended.
-                try:
-                    if response_id and not mid_turn and re.fullmatch(r"[0-9a-f]{40}", git_commit):
-                        rows = await BACKING.graph.find_strict("HarnessResponse", {"session_id": sid})
-                        rows.sort(key=lambda row: float(row.get("created_at") or 0))
-                        ids = [str(row.get("id")) for row in rows]
-                        if response_id in ids:
-                            point = {"commit": git_commit, "ws_sha": ws_sha, "session_id": sid,
-                                     "turn_index": ids.index(response_id),
-                                     "response_id": response_id, "backend": rec.get("backend") or ""}
-                            if not await _blob_put(f"responses/{response_id}.branch.json",
-                                                   json.dumps(point).encode(), kb=RESP_BLOB_KB):
-                                rec["branch_checkpoint_unavailable"] = True
-                except Exception:  # Branch metadata is optional; the durable checkpoint succeeded.
-                    rec["branch_checkpoint_unavailable"] = True
+                if response_id and not mid_turn:
+                    await _branch_point_put(sid, rec, response_id, git_commit, ws_sha)
             else:
                 rec["checkpoint_error"] = "durable workspace upload failed; ws_sha not advanced"
     except Exception as e:  # noqa: BLE001
@@ -6179,7 +6196,7 @@ async def _session_purge(sid: str, v: dict | None, index: dict | None = None) ->
         for rid in await _session_records("HarnessResponse", "session_id", sid, index):
             _resp_cache_forget(rid)
             await _blob_delete(f"responses/{rid}.json", kb=RESP_BLOB_KB)
-            await _blob_delete(f"responses/{rid}.branch.json", kb=RESP_BLOB_KB)
+            await _blob_delete(_branch_point_key(rid), kb=RESP_BLOB_KB)
             await BACKING.graph.delete(rid, "HarnessResponse")
     # 3) everything stored under its id: the checkpoint and the media scene (sessions/<sid>/ in
     # the session store), the change list (sessions/<sid>/ in the response store), the files its
@@ -9825,14 +9842,13 @@ async def _branch_source(rid: str, org: str, harness_id: str, caller: dict) -> d
     if _UHP_STATUS.get(str(rec.get("status"))) not in {"completed", "failed", "cancelled", "incomplete"}:
         raise uhp_error(409, "branch_unavailable", "Only a completed response checkpoint can be branched.")
     try:
-        point_bytes = await _blob_get_or_raise(f"responses/{rid}.branch.json", kb=RESP_BLOB_KB)
+        point_bytes = await _blob_get_or_raise(_branch_point_key(rid), kb=RESP_BLOB_KB)
     except Exception as error:
         raise uhp_error(503, "server_error", "The checkpoint could not be read. Try again.") from error
     try:
         point = json.loads(point_bytes or b"null")
-        if (not point or point["response_id"] != rid or point["session_id"] != sid
-                or type(point.get("turn_index")) is not int or point["turn_index"] < 0
-                or not re.fullmatch(r"[0-9a-f]{40}", point["commit"])):
+        if (not isinstance(point, dict) or point["response_id"] != rid or point["session_id"] != sid
+                or not isinstance(point["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", point["commit"])):
             raise ValueError("missing checkpoint position")
     except (ValueError, TypeError, KeyError):
         raise uhp_error(409, "branch_unavailable", "This response has no restorable checkpoint.")
@@ -9841,11 +9857,27 @@ async def _branch_source(rid: str, org: str, harness_id: str, caller: dict) -> d
             "workspace": str(vertex.get("workspace") or "")}
 
 
+# A branch copies the files its imported turns captured (_branch_artifacts), so their citations do
+# not depend on the source session. Each capture is at most RESP_MAX_FILE_BYTES and a turn has up to
+# RESP_MAX_FILES of them, so a long session's copies had no bound but the session's length: bounded
+# now, in count and in bytes, inside the preparation's deadline. Past either bound a capture is not
+# copied: its citation names the file's path in the branch's restored files instead (as one of an
+# excluded file does), which reads what the branch point committed at that path, or not found.
+BRANCH_COPY_MAX_FILES = int(os.environ.get("HR_BRANCH_COPY_MAX_FILES", "100"))
+BRANCH_COPY_MAX_BYTES = int(os.environ.get("HR_BRANCH_COPY_MAX_BYTES", str(256 * 1024 * 1024)))
+# One deadline over a branch's whole preparation (_branch_prepare): the restore and its retries,
+# the new checkpoint, the copies and the imported turns. The request that asked waits on it in
+# every response mode, before anything is acknowledged.
+BRANCH_PREPARE_TIMEOUT_S = float(os.environ.get("HR_BRANCH_PREPARE_TIMEOUT_S", "300"))
+
+
 async def _branch_artifacts(history: list[dict], source: str, target: str,
                             org: str, caller: dict) -> list[dict]:
-    """Give imported citations target-owned paths or immutable copies, never source aliases."""
+    """Give imported citations target-owned paths or immutable copies, never source aliases.
+    At most BRANCH_COPY_MAX_FILES copies and BRANCH_COPY_MAX_BYTES in all; past them, the path."""
     result = json.loads(json.dumps(history))  # Never mutate cached original response records.
     copied: dict[tuple[str, str], str | None] = {}
+    budget = {"files": BRANCH_COPY_MAX_FILES, "bytes": BRANCH_COPY_MAX_BYTES}
 
     async def visit(value):
         if isinstance(value, list):
@@ -9880,9 +9912,15 @@ async def _branch_artifacts(history: list[dict], source: str, target: str,
                     if not _ws_visible(filename):
                         # Preserve the citation but never carry excluded bytes through an old capture.
                         copied[key] = _wf_id(filename)
+                    elif budget["files"] <= 0:
+                        copied[key] = _wf_id(filename)       # past the count: the path, unread
                     else:
                         data = await _blob_get_or_raise(f"containers/{container}/{file_id}", kb=RESP_BLOB_KB)
-                        if data is not None:
+                        if data is not None and len(data) > budget["bytes"]:
+                            copied[key] = _wf_id(filename)   # past the bytes: the path
+                        elif data is not None:
+                            budget["files"] -= 1
+                            budget["bytes"] -= len(data)
                             new_id = _rid("cfile")
                             # Imported captures must never be reapplied as later app edits.
                             meta["source"] = "branch"
@@ -9902,18 +9940,38 @@ async def _branch_artifacts(history: list[dict], source: str, target: str,
     return result
 
 
+def _uhp_raised(error: HTTPException) -> bool:
+    """An error this module raised through uhp_error, its message already the one to give."""
+    return isinstance(error.detail, dict) and bool(error.detail.get("__uhp__"))
+
+
 async def _branch_prepare(info: dict, target: str, org: str, member: str, backend: str,
                           harness_id: str, harness_name: str, workspace: str, caller: dict,
                           before: float, store: bool) -> list[dict]:
+    """_branch_prepare_inner under one deadline, BRANCH_PREPARE_TIMEOUT_S. Every failure is an
+    HTTP error: 409 branch_unavailable when the point can't be a branch, otherwise a retryable 503."""
     try:
-        return await _branch_prepare_inner(info, target, org, member, backend, harness_id,
-                                           harness_name, workspace, caller, before, store)
+        return await asyncio.wait_for(
+            _branch_prepare_inner(info, target, org, member, backend, harness_id, harness_name,
+                                  workspace, caller, before, store),
+            timeout=BRANCH_PREPARE_TIMEOUT_S)
+    except TimeoutError as error:
+        raise uhp_error(503, "server_error", "The branch could not be prepared in time. "
+                                             "No session was created. Try again.") from error
     except HTTPException as error:
-        if error.status_code >= 500:
+        if error.status_code >= 500 and not (error.status_code == 503 and _uhp_raised(error)):
             raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.") from error
         raise
     except Exception as error:
         raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.") from error
+
+
+def _runner_said(response: httpx.Response, key: str):
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001
+        return None
+    return body.get(key) if isinstance(body, dict) else None
 
 
 async def _branch_prepare_inner(info: dict, target: str, org: str, member: str, backend: str,
@@ -9928,6 +9986,9 @@ async def _branch_prepare_inner(info: dict, target: str, org: str, member: str, 
     ids = [str(row.get("id")) for row in rows]
     if rid not in ids:
         raise uhp_error(409, "branch_unavailable", "The response's original history is unavailable.")
+    # Where the point stands in its session, from 1 (Sessions §3): its place among these rows,
+    # read here rather than at every turn's end (_branch_point_put).
+    position = ids.index(rid) + 1
     history = []
     for row in rows[:ids.index(rid) + 1]:
         response_id = str(row.get("id"))
@@ -9955,26 +10016,40 @@ async def _branch_prepare_inner(info: dict, target: str, org: str, member: str, 
         history.append({"user": user, "assistant": assistant, "input": rec.get("_input") or [],
                         "output": rec.get("output") or []})
     # No `branch_head`: the runner checks the point against the HEAD of the checkpoint it is
-    # sent, whichever turn last wrote it (see _checkpoint).
+    # sent, whichever turn last wrote it (see _branch_point_put).
     params = {"branch_commit": point["commit"],
               "branch_backend": info["backend"]}
-    response = None
-    for pause in _HYDRATE_PAUSES:
-        try:
-            response = await _hydrate_relay(target, params, source_sid=source_sid)
-            if response.status_code == 409:
-                raise uhp_error(409, "branch_unavailable", "The committed files cannot be restored.")
-            if response.status_code < 400:
-                break
-        except HTTPException:
-            raise
-        except Exception:
-            response = None
-        if pause is not None:
-            await asyncio.sleep(pause)
-    if response is None or response.status_code >= 400:
-        raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.")
     try:
+        # From the first restore on, a failure removes whatever the target holds (the cleanup
+        # below), the sandbox's folder included: a refusal, a deadline, an unconfirmed restore.
+        response = None
+        for pause in _HYDRATE_PAUSES:
+            try:
+                response = await _hydrate_relay(target, params, source_sid=source_sid)
+                if response.status_code == 409:
+                    raise uhp_error(409, "branch_unavailable", "The committed files cannot be restored.")
+                if response.status_code < 400:
+                    break
+                if _runner_said(response, "detail") == "branch_restore_failed":
+                    # The restore ran past its time or out of disk: the same again on a resend,
+                    # after the whole upload again, so it is not resent.
+                    raise uhp_error(503, "server_error", "The branch's files could not be restored "
+                                                         "within the server's limits. Try again later.")
+            except HTTPException:
+                raise
+            except Exception:
+                response = None
+            if pause is not None:
+                await asyncio.sleep(pause)
+        if response is None or response.status_code >= 400:
+            raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.")
+        if _runner_said(response, "branched") is not True:
+            # A sandbox from before branching ignores branch_commit, restores the source's latest
+            # workspace whole and answers 200: a branch with the wrong files, in silence. Only a
+            # sandbox that restored the point says `branched: true`.
+            raise uhp_error(503, "server_error", "The branch could not be prepared: the sandbox did not "
+                                                 "confirm it restored this response's files, and may "
+                                                 "predate branching. No session was created.")
         ok, nbytes, ws_sha, git_head, _ = await _checkpoint_relay(target)
         if not ok or not nbytes:
             raise uhp_error(503, "server_error", "The branch workspace could not be saved.")
@@ -9990,7 +10065,7 @@ async def _branch_prepare_inner(info: dict, target: str, org: str, member: str, 
         await _vertex_upsert(target, {"ws_sha": ws_sha, "git_head": git_head,
                                       "checkpoint_bytes": str(nbytes),
                                       "branched_from": json.dumps({"response_id": rid, "session_id": source_sid,
-                                                                   "turn": point["turn_index"] + 1})})
+                                                                   "turn": position})})
         await _vg_edge("BRANCHED_FROM", target, rid)
         _session_trace[target]["branched_from"] = rid
         return history
@@ -10923,7 +10998,7 @@ async def _retention_remove(kind: str, item: dict, ctx: dict) -> str | None:
     elif kind == "responses":
         _resp_cache_forget(iid)
         await _blob_delete(f"responses/{iid}.json", kb=RESP_BLOB_KB)
-        await _blob_delete(f"responses/{iid}.branch.json", kb=RESP_BLOB_KB)
+        await _blob_delete(_branch_point_key(iid), kb=RESP_BLOB_KB)
         await BACKING.graph.delete(iid, "HarnessResponse")
     elif kind == "harnesses":
         org = str(row.get("org") or "")
@@ -11663,8 +11738,8 @@ async def create_response(body: CreateResponseBody, request: Request):
             return await _idem_replay(str(existing.get("resp_id") or ""), bool(body.stream))
     if branching:
         try:
-            # Use the same capacity gates, without publishing a heartbeat-only session.
-            async with _global_sem(), _tenant_sem(org):
+            # The same capacity gates as a turn, without publishing a heartbeat-only session.
+            async with _turn_slot(org, sid, heartbeat=False):
                 history = await _branch_prepare(branch_info, sid, org, member, backend, harness_id,
                                                 harness_name, branch_info["workspace"], principal,
                                                 created_at, body.store)
@@ -12349,7 +12424,7 @@ async def delete_response(response_id: str, request: Request):
     try:
         _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
-        await _blob_delete(f"responses/{response_id}.branch.json", kb=RESP_BLOB_KB)
+        await _blob_delete(_branch_point_key(response_id), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
     await _vg_upsert("HarnessResponse", response_id, {"status": "deleted", "deleted_at": str(now)})

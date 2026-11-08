@@ -137,11 +137,45 @@ def test_the_accept_time_write_stamps_the_heartbeat():
     i = src.index('"running_response_id": resp_id, "runner_turn_id": "",')
     assert '"heartbeat": str(time.time())' in src[i:i + 200]
     assert src.count("async with _turn_slot(org, sid):") == 3
-    # The turn slot owns normal execution admission. Branch preparation also needs capacity,
-    # before it publishes a session or can start the turn's heartbeat/lease.
-    assert src.count("async with _global_sem(), _tenant_sem(org):") == 2
-    handler = src[src.index("async def create_response"):src.index('@app.get("/v1/responses/{response_id}")')]
-    assert handler.count("async with _global_sem(), _tenant_sem(org):") == 1
+    assert src.count("async with _global_sem(), _tenant_sem(org):") == 1   # inside _turn_slot only
+    slot = src[src.index("async def _turn_slot("):src.index("def _pool_is_local(")]
+    assert "async with _global_sem(), _tenant_sem(org):" in slot
+    # a branch's preparation takes the same gates, through the slot, without its heartbeat
+    assert src.count("async with _turn_slot(org, sid, heartbeat=False):") == 1
+
+
+def test_a_branch_preparation_holds_the_gates_and_writes_no_heartbeat(monkeypatch):
+    """Its session does not exist yet: a beat would write the vertex of one not published, and
+    maybe never published. It still waits for, and holds, the same gates as a turn."""
+    beats: list = []
+
+    async def _vup(sid, props):
+        beats.append(props)
+
+    monkeypatch.setattr(gw, "_vertex_upsert", _vup)
+    monkeypatch.setattr(gw, "_RECONCILE_STALE_S", 4)          # one beat a second, if it beat
+
+    async def main():
+        g = _gates(monkeypatch)
+        await g.acquire()                                      # the box is full
+        admitted = asyncio.Event()
+
+        async def prepare():
+            async with gw._turn_slot("org", "hsess-new", heartbeat=False):
+                admitted.set()
+                assert g.locked()                              # it holds the gate while it prepares
+                await asyncio.sleep(1.5)
+
+        task = asyncio.create_task(prepare())
+        await asyncio.sleep(2.5)                               # queued, past two beat intervals
+        assert not admitted.is_set()
+        g.release()
+        await asyncio.wait_for(admitted.wait(), 2)
+        await task
+
+    asyncio.run(main())
+    assert beats == []
+    assert gw._RUNNER_TURN_ON.get("hsess-new") is None
 
 
 def test_a_restore_that_hangs_past_the_cap_settles_at_the_cap_though_the_slot_still_beats(monkeypatch):

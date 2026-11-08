@@ -80,7 +80,9 @@ older responses whose checkpoint position was never recorded. `store: false` alo
 make a response ineligible: the same response-record and checkpoint availability checks apply. It MUST NOT substitute the
 latest workspace. Unknown or inaccessible sessions follow the ordinary `404` scope rules;
 transient preparation failures are retryable `503` errors. Preparation failures are HTTP
-errors in every response mode, before a background acknowledgment or stream is accepted.
+errors in every response mode, before a background acknowledgment or stream is accepted. The
+reference bounds a branch's whole preparation by one deadline (300 seconds, configurable); past
+it, the answer is `503` and no session is created.
 An `input_response` together with `branch` is `400 invalid_input` (`param: "branch"`):
 branching neither answers nor voids the original question, which stays pending in the original
 session.
@@ -95,7 +97,10 @@ makes that checkpoint unavailable; it is never restored partially. The source's 
 hooks, alternate object stores and native CLI credentials are never imported. A successful branch
 has its own durable checkpoint, so it can continue after a gateway or sandbox restart.
 Imported workspace-file citations resolve against the new session. Captured artifact bytes are
-copied into its storage, so deleting the source does not break those imported artifacts. A citation
+copied into its storage, so deleting the source does not break those imported artifacts. The
+reference copies at most 100 captured files and 256 MiB in all (both configurable); a citation past
+either bound names the file's path in the branch's restored files instead, and reads what the
+branch point committed at that path, or is not found. A citation
 already missing before the branch remains unavailable. References into excluded state, credential
 or dependency paths remain unavailable in the branch. Imported transcript-only turns have no
 checkpoint of their own and return `branch_unavailable` when selected as a branch point.
