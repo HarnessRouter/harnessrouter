@@ -4856,7 +4856,10 @@ def _refusal_message(conn: dict | None, err: str) -> str:
     """What a turn says when the provider refused the org's own connection. A connection that signs
     in with Microsoft Entra has no key: what was refused is the application, by Entra (a wrong
     directory, id or secret) or by the resource (no role on it), and the provider's words say which."""
-    provider = str((conn or {}).get("provider") or "your provider")
+    # The vendor the operator connected, not the name the runner speaks it as: an integration's
+    # connection carries the runner's wiring (`provider`, e.g. "tokenrouter" for any OpenAI-format
+    # custom endpoint on some bases) and keeps the vendor in `_vendor`.
+    provider = str((conn or {}).get("_vendor") or (conn or {}).get("provider") or "your provider")
     what = "connection" if str((conn or {}).get("auth") or "").strip().lower() == "entra" else "key"
     return f"Your {provider} {what} was refused: {err or 'the provider returned an error'}"
 
