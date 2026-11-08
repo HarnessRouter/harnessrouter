@@ -61,6 +61,7 @@ credentials. The document MUST NOT contain anything principal-specific.
     "input_history": false,
     "input_requests": true,
     "session_sharing": true,
+    "session_branching": true,
     "idempotency": true,
     "harness_idempotency": true,
     "plugins": true,

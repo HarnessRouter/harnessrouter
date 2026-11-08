@@ -85,6 +85,21 @@ jobs:
       - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx boto3 "systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/archive/3266a17537e283dc5539439835c0b4cab02bf5c0.tar.gz" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
       - run: python -m pytest runner/tests -q
 
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            gateway/requirements.txt
+            runner/requirements.txt
+      # Real gateway + HTTP runner + Git, with a synthetic executable at the provider boundary.
+      - run: pip install -r gateway/requirements.txt -r runner/requirements.txt pytest pytest-asyncio httpx
+      - run: python -m pytest tests/integration -q
+
   conformance:
     runs-on: ubuntu-latest
     steps:

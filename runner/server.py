@@ -16413,10 +16413,10 @@ def _ws_marker_get(identifier: str) -> str:
 
 
 def _ws_marker_clear(identifier: str) -> None:
-    try:
-        _ws_marker_path(identifier).unlink()
-    except OSError:
-        pass
+    marker = _ws_marker_path(identifier)
+    for path in (marker, pathlib.Path(str(marker) + ".branch.json")):
+        with contextlib.suppress(OSError):
+            path.unlink()
 
 
 def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
@@ -16438,6 +16438,132 @@ def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
     return False
 
 
+def _ws_wipe(ws_path: pathlib.Path) -> None:
+    """Everything in a workspace folder removed, the folder itself kept. Warm-pool sandboxes are
+    REUSED across sessions, so the folder may hold a prior session's files (incl. another
+    tenant's); with HR_SANDBOX_PER_SESSION it is the workspace root itself (_ws), which is never
+    removed. /hydrate and a branch's restore both start from this."""
+    for child in ws_path.iterdir():
+        try:
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _hydrate_branch(request: Request, identifier: str) -> dict:
+    """A new session from committed user files; never import another session's CLI home.
+
+    Only this handler answers `branched: true`, and the gateway takes nothing else for a branch: a
+    runner from before branching ignores `branch_commit`, restores the source's latest workspace
+    whole and answers 200, which would be a branch with the wrong files.
+
+    The target is wiped first, as /hydrate wipes it, unless it is this branch's own restore
+    already (its receipt). A pooled sandbox reused across sessions, or the workspace root itself
+    under HR_SANDBOX_PER_SESSION, holds whatever the last session left there, and refusing it
+    refused every branch on such a sandbox. A failure empties the target again and removes it only
+    where it is a per-session folder: the workspace root is never removed."""
+    from branching import BranchRestoreFailed, BranchUnavailable, restore
+
+    selected = request.query_params.get("branch_commit", "")
+    latest = request.query_params.get("branch_head", "")
+    if request.query_params.get("probe"):
+        raise HTTPException(409, "branch_unavailable")
+    fd, spool_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)
+    target = None
+    touched = complete = False
+    nbytes = 0
+    try:
+        try:
+            with os.fdopen(fd, "wb") as output:
+                async for chunk in request.stream():
+                    output.write(chunk)
+                    nbytes += len(chunk)
+        except Exception as error:
+            raise HTTPException(400, "branch body incomplete") from error
+        if not nbytes:
+            raise HTTPException(409, "branch_unavailable")
+        ws = _ws(identifier)
+        target = pathlib.Path(ws)
+        receipt = pathlib.Path(str(_ws_marker_path(identifier)) + ".branch.json")
+        if target.exists() and any(target.iterdir()):
+            try:
+                previous = json.loads(receipt.read_text())
+            except (OSError, ValueError):
+                previous = None
+            if previous is not None:
+                # This folder is this branch's: the same restore again (a resend after a lost
+                # answer) is done already. Anything else means the session has moved on since (a
+                # checkpoint advanced its marker), and a late resend must not wipe its work.
+                try:
+                    if (previous["commit"] == selected and previous["head"] == latest
+                            and _ws_holds(identifier, target, previous["sha"])):
+                        return {"ok": True, "restored": True, "branched": True}
+                except (KeyError, TypeError):
+                    pass
+                raise HTTPException(409, "branch_unavailable")
+        # A truncated upload never gets here. From here a failure empties the target again.
+        touched = True
+        _ws_marker_clear(identifier)          # first, as /hydrate: nothing vouches for a half restore
+        target.mkdir(parents=True, exist_ok=True)
+        _ws_wipe(target)
+        _isolate_session(ws)
+        # Off the event loop: the restore runs Git and reads and writes whole archives, minutes
+        # for a large one, and every other session on this runner waited behind it. _fs_as is per
+        # thread (setfsuid) and is entered and left inside restore(), on the worker thread that
+        # writes, so the write wall holds there and no other thread's identity changes.
+        work = asyncio.ensure_future(asyncio.to_thread(
+            restore, pathlib.Path(spool_path), target, selected, latest, pathlib.Path(SPOOL_DIR),
+            write_context=lambda: _fs_as(_session_uid(ws)),
+            excluded=(*CHECKPOINT_EXCLUDE, *("./" + p for p in (*_PER_TURN_CONFIG, *_STATE_DIRS)))))
+        try:
+            branch_sha = await asyncio.shield(work)
+        except asyncio.CancelledError:
+            # A thread can't be stopped: the cleanup below waits for it, or it would write into
+            # a folder already emptied.
+            await asyncio.wait([work])
+            raise
+        _git_ensure(ws)
+        if request.query_params.get("branch_backend") == "nanobot":
+            with _fs_as(_session_uid(ws)):
+                # Regenerate public file-root metadata; never import the source's .harness state.
+                _agent_subdir_set(ws, _NANOBOT_WS)
+                _git_exclude(ws, [f"{_NANOBOT_WS}/.nanobot/", f"{_NANOBOT_WS}/skills/",
+                                  f"{_NANOBOT_WS}/memory/", f"{_NANOBOT_WS}/AGENTS.md"],
+                             "nanobot's own machinery, never the task's output")
+        _ws_marker_set(identifier, branch_sha)
+        if _ws_marker_get(identifier) != branch_sha:
+            raise OSError("branch marker could not be saved")
+        receipt_fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(receipt_fd, "w") as output:
+            json.dump({"commit": selected, "head": latest, "sha": branch_sha}, output)
+        complete = True
+        return {"ok": True, "restored": True, "branched": True}
+    except BranchUnavailable as error:
+        raise HTTPException(409, "branch_unavailable") from error
+    except BranchRestoreFailed as error:
+        # Not 503, which the gateway resends (_HYDRATE_PAUSES, seven times): a restore that ran
+        # out of time or disk does the same again, after the whole upload again.
+        raise HTTPException(500, "branch_restore_failed") from error
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(503, "branch restore temporarily unavailable") from error
+    finally:
+        if touched and not complete:
+            _ws_marker_clear(identifier)       # the marker and the receipt
+            with contextlib.suppress(OSError):
+                _ws_wipe(target)
+            if not _SANDBOX_PER_SESSION and os.path.realpath(target) not in (
+                    os.path.realpath(WORKSPACE_ROOT), "/"):
+                with contextlib.suppress(OSError):
+                    target.rmdir()
+        with contextlib.suppress(OSError):
+            os.unlink(spool_path)
+
+
 @app.post("/hydrate")
 async def hydrate(request: Request, identifier: str = "") -> dict:
     """Restore /workspace from a checkpoint tarball (the request body). Empty body = a fresh
@@ -16448,6 +16574,8 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
     materializes in the sandbox's ~2 GiB RAM. sha256 folds over the incoming stream; untar reads
     from the spooled file. CRITICALLY, the spool completes BEFORE the workspace wipe — a truncated
     upload (client disconnect) raises during spooling and leaves the current workspace untouched."""
+    if "branch_commit" in request.query_params:
+        return await _hydrate_branch(request, identifier)
     _reap_workspaces(keep=_SID_SAFE.sub("_", (identifier or "").strip())[:120] or "_default")
     ws = _ws(identifier)
     ws_path = pathlib.Path(ws)
@@ -16491,14 +16619,7 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         # The marker goes first: a restart in the middle of the wipe or the untar must not leave it
         # vouching for a half-restored folder, now that it outlives a restart.
         _ws_marker_clear(identifier)
-        for child in ws_path.iterdir():
-            try:
-                if child.is_dir() and not child.is_symlink():
-                    shutil.rmtree(child, ignore_errors=True)
-                else:
-                    child.unlink()
-            except Exception:  # noqa: BLE001
-                pass
+        _ws_wipe(ws_path)
         restored = False
         if nbytes:
             with open(spool_path, "rb") as tar_in:
@@ -16545,6 +16666,18 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: 
     if commit != "0":
         _git(ws, "add", "-A")
         _git(ws, "commit", "-q", "-m", f"checkpoint {int(time.time())}", "--allow-empty")
+    # Both identities are read before archiving; Git metadata that can't be read must not lose the
+    # workspace. The full commit is the turn's branch point (the gateway's _branch_point_put), so it
+    # is sent only for a checkpoint that committed: a mid-turn tarball is not the HEAD commit's tree.
+    head = full_commit = ""
+    try:
+        if commit != "0":
+            full_commit = _git(ws, "rev-parse", "HEAD").stdout.strip()
+            if not re.fullmatch(r"[0-9a-f]{40}", full_commit):
+                full_commit = ""
+        head = _git(ws, "rev-parse", "--short", "HEAD").stdout.strip()
+    except Exception:
+        head = full_commit = ""
     excl = [f"--exclude={p}" for p in CHECKPOINT_EXCLUDE]
     fd, tar_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
     try:
@@ -16560,11 +16693,11 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: 
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 h.update(chunk)
                 nbytes += len(chunk)
-        head = _git(ws, "rev-parse", "--short", "HEAD").stdout.strip()
         _ws_marker_set(identifier, h.hexdigest())   # this session now HOLDS this checkpoint
         background_tasks.add_task(os.unlink, tar_path)   # cleanup after the response streams out
         return FileResponse(tar_path, media_type="application/gzip", background=background_tasks,
-                            headers={"X-Checkpoint-Bytes": str(nbytes), "X-Git-Head": head})
+                            headers={"X-Checkpoint-Bytes": str(nbytes), "X-Git-Head": head,
+                                     "X-Git-Commit": full_commit})
     except HTTPException:
         raise
     except Exception:
