@@ -46,7 +46,7 @@ def _defaults() -> dict[str, str]:
 
 def test_every_base_installed_from_a_lock_has_one():
     code = "\n".join(l for l in ENTRY.splitlines() if not l.lstrip().startswith("#"))
-    used = set(re.findall(r'(?:install_pinned_venv|is_locked) ([a-z][a-z0-9-]*) ', code))
+    used = set(re.findall(r'\b(?:install_pinned_venv|is_locked) ([a-z][a-z0-9-]*) ', code))
     used = {u for u in used if not u.startswith('"')}
     for base in sorted(used | set(PINNED)):
         assert (LOCKS / f"{base}.in").is_file(), f"docker/locks/{base}.in is missing"
