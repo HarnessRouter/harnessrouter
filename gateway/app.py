@@ -1360,7 +1360,11 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
     # (see _entra_token). What it holds is not a key to hand over but an application's secret that
     # buys a token good for about an hour, and a turn may run for six: the broker asks again when
     # the token ages, on every call, and the agent never holds the token or the secret.
-    if SANDBOX_TRUST == "owner" and not _entra_conn(conn):
+    #
+    # A connection that carries request headers is brokered here too, for the same reason: a header
+    # value is often a gateway's credential (cf-aig-authorization, Helicone-Auth), and the broker is
+    # the one place every base's requests pass, so the agent never holds it (see _conn_headers).
+    if SANDBOX_TRUST == "owner" and not _entra_conn(conn) and not _conn_headers(conn):
         for field in _SECRET_AUTH_FIELDS:
             if conn.get(field) is not None:
                 out[field] = conn[field]
@@ -1368,8 +1372,10 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
 
     backend = str(conn.get("backend") or "")
     if backend in _NATIVE_ONLY_BACKENDS:
+        why = ("its connection carries request headers, which only the broker sends"
+               if SANDBOX_TRUST == "owner" else "HR_SANDBOX_TRUST=owner runs it")
         print(f"[broker] refusing to build sandbox auth for backend={backend!r}: it speaks the "
-              f"provider's native API, which is not brokered (HR_SANDBOX_TRUST=owner runs it)", flush=True)
+              f"provider's native API, which is not brokered ({why})", flush=True)
         return None
     # Normalised: a connection saved as "TokenRouter" must not skip brokering on a casing mismatch.
     provider = str(conn.get("provider") or "").strip().lower()
@@ -1402,7 +1408,10 @@ def _sandbox_broker_origin() -> str:
 def _conn_public(conn: dict) -> dict:
     """Connection metadata with secret fields stripped (for admin listing)."""
     secret = {"api_key", "aws_secret_access_key", "aws_session_token", "aws_bearer_token", "gcp_sa_json"}
-    return {k: v for k, v in conn.items() if k not in secret}
+    out = {k: v for k, v in conn.items() if k not in secret and k != "headers"}
+    if _conn_headers_public(conn.get("headers")):
+        out["headers"] = _conn_headers_public(conn.get("headers"))
+    return out
 
 
 # ── token-provider integrations (global model→provider routing) ──────────────────────
@@ -2197,7 +2206,12 @@ async def _blob_put(file_id: str, data: bytes, kb: str = BLOB_KB) -> bool:
     return await BACKING.blob.put(kb, file_id, data)
 
 
-async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
+def _ckpt_params(sid: str, commit: bool) -> dict:
+    """The runner's /checkpoint query. commit=0 takes the tarball without committing (mid-turn)."""
+    return {"identifier": sid} if commit else {"identifier": sid, "commit": "0"}
+
+
+async def _checkpoint_relay(sid: str, commit: bool = True) -> tuple[bool, int, str, str]:
     """Stream the workspace tar from the runner /checkpoint straight into the VG blob PUT without
     ever holding the whole tarball in gateway memory (HR-INF-015). Folds sha256 + byte count over
     the stream as it flows. Returns (ok, nbytes, ws_sha, git_head). A 1 GiB workspace no longer
@@ -2213,7 +2227,7 @@ async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
         # laptop workspace is not the GB-scale tarball the streaming path exists for.
         try:
             rc0 = _relay_client()
-            r0 = await rc0.get(f"{POOL_ENDPOINT}/checkpoint", params={"identifier": sid},
+            r0 = await rc0.get(f"{POOL_ENDPOINT}/checkpoint", params=_ckpt_params(sid, commit),
                                headers=_pool_headers())
             if r0.status_code >= 400 or not r0.content:
                 return False, 0, "", ""
@@ -2229,7 +2243,7 @@ async def _checkpoint_relay(sid: str) -> tuple[bool, int, str, str]:
 
     async def _pipe():
         nonlocal nbytes, git_head
-        req = rc.build_request("GET", f"{POOL_ENDPOINT}/checkpoint", params={"identifier": sid},
+        req = rc.build_request("GET", f"{POOL_ENDPOINT}/checkpoint", params=_ckpt_params(sid, commit),
                                headers=_pool_headers())
         resp = await rc.send(req, stream=True)
         try:
@@ -2860,11 +2874,12 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
             if pause is not None:
                 await asyncio.sleep(pause)
         if rec["hydrated"]:
-            # The workspace is now EXACTLY the checkpoint, which is only ever taken at the end of a
-            # turn. Anything an app wrote since then has just been wiped out of it, so put it back
+            # The workspace is now EXACTLY the checkpoint, which is taken at the end of a turn (or
+            # during one, #505). Anything an app wrote since then has just been wiped out of it, so put it back
             # before the agent opens the file. The warm-resume branch above returns early and never
             # reaches this: that workspace was never wiped, so it still holds those writes.
-            rec["app_writes_reapplied"] = await _reapply_app_writes(sid)
+            rec["app_writes_reapplied"] = await _reapply_app_writes(
+                sid, float(v.get("ws_mid_turn_at") or 0))
         if not rec["hydrated"] and want_sha:
             # A checkpoint EXISTED (ws_sha on the vertex) but restoring it failed, every time. The turn
             # must not run on this workspace (the caller refuses it), and this turn must never
@@ -2886,8 +2901,15 @@ def _hydrate_reason(rec: dict) -> str:
     return err or "unknown"
 
 
-async def _checkpoint(sid: str, rec: dict) -> None:
-    """Pull the committed /workspace from the sandbox and persist it to durable blob storage."""
+async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False) -> None:
+    """Pull the committed /workspace from the sandbox and persist it to durable blob storage.
+
+    `mid_turn`: taken after a tool step while the turn runs (_step_checkpoint_maybe, #505). It does
+    not commit, and the session records when it was taken (ws_mid_turn_at, read by
+    _reapply_app_writes). The end-of-turn checkpoint first settles any mid-turn one, so it is
+    always the last write, and clears the stamp."""
+    if not mid_turn:
+        await _step_checkpoint_settle(sid)
     _ws_tar_evict(sid)             # workspace changed — next file open refetches
     _WS_FILES_CACHE.pop(sid, None)
     _bus_publish("_ctrl", "_ctrl", "", sid, "", {"type": "hr.ctrl.ws_invalidate"})  # all replicas
@@ -2913,7 +2935,8 @@ async def _checkpoint(sid: str, rec: dict) -> None:
             except Exception:  # noqa: BLE001
                 pass
         # Stream runner tar -> VG blob without buffering the whole workspace (HR-INF-015).
-        ok, nbytes, ws_sha, git_head = await _checkpoint_relay(sid)
+        taken_at = time.time()     # before the tar: what an app wrote before this is in it
+        ok, nbytes, ws_sha, git_head = await _checkpoint_relay(sid, commit=not mid_turn)
         if nbytes > 0:
             rec["checkpoint_bytes"] = nbytes
             rec["checkpointed"] = ok
@@ -2923,11 +2946,120 @@ async def _checkpoint(sid: str, rec: dict) -> None:
             if ok:
                 rec["ws_sha"] = ws_sha
                 await _vertex_upsert(sid, {"checkpoint_bytes": str(nbytes), "git_head": git_head,
-                                           "ws_sha": ws_sha})
+                                           "ws_sha": ws_sha,
+                                           "ws_mid_turn_at": str(taken_at) if mid_turn else ""})
             else:
                 rec["checkpoint_error"] = "durable workspace upload failed; ws_sha not advanced"
     except Exception as e:  # noqa: BLE001
         rec["checkpoint_error"] = str(e)[:200]
+
+
+# ── checkpoints while a turn runs (#505) ──────────────────────────────────────────
+# A workspace was checkpointed only when its turn ended, so a sandbox that died mid-turn took every
+# step since the last turn with it: hosted, the workspace and its marker live in the sandbox's /tmp.
+# A checkpoint is now also taken after a completed tool step, in the background, one at a time per
+# session and at most one per interval. A step inside the interval is not dropped: it is saved when
+# the interval ends, so the last step before a long one (a build, a sleep) is in a checkpoint too.
+# Self-hosted, the workspace on /data already outlives a restart (#530), so the default is on only
+# where the workspace is a checkpoint tarball (the vg backing).
+_STEP_CKPT = os.environ.get("HR_STEP_CHECKPOINT", "").strip().lower()
+STEP_CKPT_EVERY_S = float(os.environ.get("HR_STEP_CHECKPOINT_EVERY_S", "30"))
+# A workspace whose checkpoint is bigger than this is checkpointed when the turn ends only: the
+# tarball is pulled and uploaded whole each time.
+STEP_CKPT_MAX_BYTES = int(os.environ.get("HR_STEP_CHECKPOINT_MAX_BYTES", str(256 * 1024 * 1024)))
+# sid -> the running turn's worker: {"rec" (the turn's record), "task", "dirty" (a step not yet
+# saved), "busy" (a checkpoint is being written), "last" (when the last one started), "off" (over
+# the size limit)}
+_step_ckpt: dict[str, dict] = {}
+
+
+def _step_ckpt_enabled() -> bool:
+    if _STEP_CKPT in ("1", "true", "on", "yes"):
+        return True
+    if _STEP_CKPT in ("0", "false", "off", "no"):
+        return False
+    return BACKING.mode == "vg"
+
+
+def _tool_step_done(events: list) -> bool:
+    """Whether these events finish a tool step: a tool's result, in the Claude-shaped stream every
+    normaliser emits (the block _blocks_from_canonical turns into a tool_result)."""
+    for ev in events:
+        if not isinstance(ev, dict) or ev.get("type") != "user":
+            continue
+        content = (ev.get("message") or {}).get("content")
+        if isinstance(content, list) and any(isinstance(c, dict) and c.get("type") == "tool_result"
+                                             for c in content):
+            return True
+    return False
+
+
+def _step_checkpoint_maybe(sid: str, rec: dict, events: list) -> None:
+    """Called with each batch of a running turn's events. Never waits: the stream is not held for a
+    tarball."""
+    if not events or not _step_ckpt_enabled() or not _tool_step_done(events):
+        return
+    st = _step_ckpt.get(sid)
+    if st is None or st["rec"] is not rec:
+        # A new turn starts its own; a worker an earlier turn left behind (it ended without the
+        # end-of-turn checkpoint that settles it) is stopped unless it is writing.
+        if st is not None and st["task"] is not None and not st["busy"]:
+            st["task"].cancel()
+        st = _step_ckpt[sid] = {"rec": rec, "task": None, "dirty": False, "busy": False,
+                                "last": 0.0, "off": False}
+    if st["off"]:
+        return
+    st["dirty"] = True
+    if st["task"] is None or st["task"].done():
+        st["task"] = asyncio.create_task(_step_checkpoint_run(sid, rec, st))
+
+
+async def _step_checkpoint_run(sid: str, rec: dict, st: dict) -> None:
+    try:
+        while st["dirty"] and not st["off"]:
+            wait = st["last"] + STEP_CKPT_EVERY_S - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            st["dirty"] = False
+            st["last"] = time.time()
+            st["busy"] = True
+            try:
+                await _step_checkpoint(sid, rec, st)
+            finally:
+                st["busy"] = False
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:  # noqa: BLE001 — a mid-turn checkpoint never fails the turn
+        print(f"[checkpoint] mid-turn sid={sid} {type(e).__name__}: {str(e)[:160]}", flush=True)
+
+
+async def _step_checkpoint(sid: str, rec: dict, st: dict) -> None:
+    size = rec.get("_step_ckpt_bytes")
+    if size is None:
+        size = int(float(((await _vertex_get(sid)) or {}).get("checkpoint_bytes") or 0))
+    if size > STEP_CKPT_MAX_BYTES:
+        st["off"] = True
+        return
+    # Written into a record of its own: a mid-turn outcome must not stand in for the turn's
+    # (checkpoint_error is never cleared by a later success). The guards it reads are the turn's.
+    out = {k: rec[k] for k in ("lease_fence", "tenant", "hydrate_failed_with_checkpoint") if k in rec}
+    await _checkpoint(sid, out, mid_turn=True)
+    rec["_step_ckpt_bytes"] = int(out.get("checkpoint_bytes") or size)
+    if out.get("checkpointed"):
+        rec["step_checkpoints"] = int(rec.get("step_checkpoints") or 0) + 1
+
+
+async def _step_checkpoint_settle(sid: str) -> None:
+    """Before the end-of-turn checkpoint: one being written is waited for, so the end-of-turn one is
+    the last write; one waiting out its interval is dropped, since the end-of-turn one covers it."""
+    st = _step_ckpt.pop(sid, None)
+    t = st["task"] if st else None
+    if t is None or t.done():
+        return
+    st["dirty"] = False
+    if not st["busy"]:
+        t.cancel()
+    await asyncio.wait({t})
 
 
 # ── HarnessSession vertex (best-effort; never blocks a turn) ──────────────────────
@@ -3237,6 +3369,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
                             _emit(oev)
                     except Exception:  # noqa: BLE001
                         continue
+                _step_checkpoint_maybe(sid, rec, new)    # as on the primary loop (#505)
                 # Advance the durable per-turn cursor as WE harvest, so if this adopter also dies a
                 # third replica resumes correctly (adoption chains without re-flushing).
                 try:
@@ -4191,6 +4324,120 @@ def _relay_out_headers(incoming) -> dict:
     return out
 
 
+# ── request headers on a connection ─────────────────────────────────────────────────────────
+# A gateway in front of a provider often wants a header beside the key: Cloudflare AI Gateway's
+# cf-aig-authorization, Helicone's Helicone-Auth, Portkey's x-portkey-*, OpenRouter's HTTP-Referer and
+# X-Title, an internal gateway's X-Project. A connection carries them as `headers`, and the broker adds
+# them to every request it forwards on that connection. They are applied HERE and nowhere else: every
+# base reaches its provider through the broker (the loopback relay forwards to it), so this is one place
+# rather than one per CLI. A header value is often a credential, so it is held the way the key is: never
+# handed to the sandbox (a connection with headers is brokered in owner trust too, see _auth_from_conn),
+# masked on read, and typed again when the connection's address changes.
+_CONN_HEADERS_MAX = 20
+_CONN_HEADERS_MAX_BYTES = 8192
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")     # a token, RFC 9110 §5.6.2
+_HEADER_VALUE_BAD = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")         # a control character (a tab is allowed)
+# What the gateway sets itself and a connection must never replace: the credential, the hop, the body's
+# framing, the turn's trace context, and our own names.
+_CONN_HEADERS_RESERVED = frozenset({*_BROKER_HOP, *_RELAY_OURS, "content-type", "content-encoding",
+                                    "accept-encoding", "te", "trailer", "upgrade", "expect", "via",
+                                    "proxy-connection", "traceparent", "tracestate", "baggage"})
+# And by prefix, in any case: our own names, a proxy's or a forwarding hop's (a connection speaks for no
+# client and no hop), AWS's request signing (Bedrock is refused below; no other provider reads them), and
+# Cloudflare's (the client address, the edge's request and worker markers, the Access assertion it hands
+# an origin). A customer's own extra credential for their own address is what this feature is for and stays
+# allowed: Cloudflare AI Gateway's cf-aig-authorization, an Access service token's cf-access-client-id and
+# -secret, an API management subscription key.
+_CONN_HEADERS_RESERVED_PREFIX = (*_RELAY_OURS_PREFIX, "x-internal-", "proxy-", "x-forwarded-", "x-amz-", "cf-")
+_CONN_HEADERS_CUSTOMER_PREFIX = ("cf-aig-", "cf-access-client-")
+# Providers whose requests are not the broker's to carry: Bedrock signs its own (a header added after
+# the signature is one the signature does not cover), Qoder's runtime and the media providers are other
+# APIs. Refused at write with the reason rather than saved and never sent.
+_CONN_HEADERS_REFUSED_PROVIDERS = frozenset({"bedrock", "vertex", "qoder", "elevenlabs"})
+
+
+def _conn_header_problem(name: str, value, carried_ok: bool) -> str:
+    """Why one header cannot be sent, "" when it can."""
+    if not _HEADER_NAME_RE.match(name):
+        return f"{name!r} is not a header name"
+    low = name.lower()
+    if low in _CONN_HEADERS_RESERVED or (low.startswith(_CONN_HEADERS_RESERVED_PREFIX)
+                                         and not low.startswith(_CONN_HEADERS_CUSTOMER_PREFIX)):
+        return f"the {name} header is set by the gateway, not by a connection"
+    if not isinstance(value, str):
+        return f"the {name} header's value is text"
+    if value == _SECRET_SENTINEL:
+        return "" if carried_ok else f"the {name} header has no value"
+    if not value.strip():
+        return f"the {name} header has no value"
+    if _HEADER_VALUE_BAD.search(value):
+        return f"the {name} header's value holds a line break or another control character"
+    return ""
+
+
+def _conn_headers_error(provider: str, headers, carried_ok: bool = True) -> str:
+    """Why a connection's headers cannot be saved, "" when they can. `carried_ok` accepts the sentinel
+    for a value the console did not see (an integration's saved header, kept on an unchanged save)."""
+    if headers is None or headers == {}:
+        return ""
+    if not isinstance(headers, dict):
+        return "headers is an object of header names and their values"
+    prov = str(provider or "").strip().lower()
+    if prov in _CONN_HEADERS_REFUSED_PROVIDERS:
+        return f"request headers are not available on a {prov} connection, which the model broker does not carry"
+    if len(headers) > _CONN_HEADERS_MAX:
+        return f"at most {_CONN_HEADERS_MAX} request headers"
+    seen: set[str] = set()
+    size = 0
+    for k, v in headers.items():
+        name = str(k).strip()
+        why = _conn_header_problem(name, v, carried_ok)
+        if why:
+            return why
+        if name.lower() in seen:
+            return f"the {name} header is given twice"
+        seen.add(name.lower())
+        size += len(name) + len(v)
+    if size > _CONN_HEADERS_MAX_BYTES:
+        return f"the request headers are longer than {_CONN_HEADERS_MAX_BYTES} bytes together"
+    return ""
+
+
+def _conn_headers(conn: dict | None) -> dict[str, str]:
+    """The connection's headers as they go upstream. Each is checked again here, not only at write: a
+    connection can arrive from an environment connector or a store written before the check, and a name
+    that slipped through must never replace the key's header or forge a second line."""
+    raw = (conn or {}).get("headers")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        name = str(k).strip()
+        if _conn_header_problem(name, v, carried_ok=False) or name.lower() in {n.lower() for n in out}:
+            print(f"[broker] connection {str((conn or {}).get('name') or '')!r}: header {name!r} not sent "
+                  f"(not a header the gateway lets a connection set)", flush=True)
+            continue
+        out[name] = v.strip()
+    return out
+
+
+def _with_conn_headers(headers: dict, conn: dict | None) -> dict:
+    """`headers` with the connection's own on top: a connection's header replaces the client's header of
+    the same name, in whatever case either was written."""
+    for name, value in _conn_headers(conn).items():
+        for k in [k for k in headers if k.lower() == name.lower()]:
+            del headers[k]
+        headers[name] = value
+    return headers
+
+
+def _conn_headers_public(headers) -> dict | None:
+    """A connection's headers as a reader sees them: the names, each value the sentinel."""
+    if not isinstance(headers, dict) or not headers:
+        return None
+    return {str(k): _SECRET_SENTINEL for k in headers}
+
+
 # What the broker removes from a request, by request shape and by key, and nothing else:
 #
 # * Anthropic-shape requests (the `messages` path): the extended-thinking controls. Measured 400s:
@@ -4866,6 +5113,9 @@ async def llm_broker(path: str, request: Request):
         headers["x-api-key"] = key
     else:
         headers["authorization"] = f"Bearer {key}"
+    # The connection's own headers (a gateway's project or auth header), after the credential: none of
+    # them may name the credential's header, so none can replace it.
+    _with_conn_headers(headers, conn)
 
     body = _strip_unsupported(await request.body(), provider=provider, byok=True, path=suffix,
                               keep_thinking=bool(_turn_cred_level(_broker_token(request))))
@@ -5937,11 +6187,20 @@ class ConnBody(BaseModel):
     gcp_region: str | None = None
     gcp_sa_json: str | None = None
     wire_api: str | None = None
+    # Request headers the broker adds upstream (see _conn_headers): {name: value}.
+    headers: dict[str, str] | None = None
 
 
 @app.put("/v1/orgs/{org}/connections/{name}", dependencies=[Depends(_internal_only)])
 async def put_connection(org: str, name: str, body: ConnBody) -> dict:
+    why = _conn_headers_error(body.provider, body.headers, carried_ok=False)
+    if why:
+        raise HTTPException(400, f"connection '{name}': {why}")
     conn = {"name": name, **{k: v for k, v in body.model_dump().items() if v is not None}}
+    if conn.get("headers"):
+        conn["headers"] = {str(k).strip(): v.strip() for k, v in conn["headers"].items()}
+    else:
+        conn.pop("headers", None)
     await _vault_put_credential(org, f"harness-conn-{name}", json.dumps(conn), "api_key")
     return {"ok": True, "org": org, "connection": _conn_public(conn)}
 
@@ -6327,6 +6586,10 @@ def _integration_public(integ: dict) -> dict:
     for k in _INTEGRATION_SECRET_FIELDS:
         if cfg.get(k):
             cfg[k] = _SECRET_SENTINEL
+    if "headers" in cfg:
+        hdrs = _conn_headers_public(cfg.pop("headers"))
+        if hdrs:
+            cfg["headers"] = hdrs
     return {**integ, "config": cfg,
             "models": [{"canonical": c, "provider_id": v}
                        for c, v in _integration_models(integ).items()],
@@ -6554,6 +6817,27 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
                     raise HTTPException(400, f"integration '{name}': missing {k}")
                 cfg[k] = prior_cfg[k]
                 carried.append(k)
+        # Request headers (see _conn_headers). A value is a secret like the key: it comes back as the
+        # sentinel, and the sentinel saves the stored value under that name again.
+        if "headers" in cfg:
+            why = _conn_headers_error(provider, cfg["headers"])
+            if why:
+                raise HTTPException(400, f"integration '{name}': {why}")
+            prior_h = {str(k).lower(): v for k, v in (prior_cfg.get("headers") or {}).items()}
+            kept: dict[str, str] = {}
+            for k, v in cfg["headers"].items():
+                hname = str(k).strip()
+                if v == _SECRET_SENTINEL:
+                    if not prior_h.get(hname.lower()):
+                        raise HTTPException(400, f"integration '{name}': type the {hname} header's value")
+                    kept[hname] = prior_h[hname.lower()]
+                    carried.append(f"headers.{hname}")
+                else:
+                    kept[hname] = v.strip()
+            if kept:
+                cfg["headers"] = kept
+            else:
+                cfg.pop("headers")
         # A stored key goes only where it was typed for. A save that kept it while changing the address (or the
         # provider) sent the key on to wherever the new one pointed, read by nobody but spent by its new owner: the
         # hosted service refuses it, and so does this one. The address compared is the effective one, the
@@ -6563,7 +6847,9 @@ async def admin_integrations_put(body: IntegrationsBody, request: Request) -> di
             def _addr(c: dict, prov: str) -> str:
                 return str(c.get("base_url") or (_PROVIDER_CATALOG.get(prov) or {}).get("base_url") or "").strip().rstrip("/")
             if prior_provider != provider or _addr(cfg, provider) != _addr(prior_cfg, prior_provider):
-                raise HTTPException(400, f"integration '{name}': its address changed, so type its key again to save it.")
+                raise HTTPException(400, f"integration '{name}': its address changed, so type its key again to save it."
+                                    if any(not c.startswith("headers.") for c in carried) else
+                                    f"integration '{name}': its address changed, so type its header values again to save it.")
         # How the connection signs in: an API key (nothing said, as before) or Microsoft Entra.
         how = str(cfg.get("auth") or "").strip().lower()
         if how in ("", "key", "api_key"):
@@ -9949,6 +10235,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
                         await emit(oev)
                 fed_upto = n_total
                 pending.extend(new)
+                _step_checkpoint_maybe(sid, rec, new)    # a finished tool step is saved (#505)
             # HR-INF-014: the durable trace is the authority and must not lose events. It is written
             # once per interval rather than once per answer (a stream of token deltas would otherwise
             # be a chunk each), and at the turn's end; a failed write keeps `pending` for the next.
@@ -12478,8 +12765,10 @@ async def _newest_captures(sid: str) -> dict[str, tuple[str, bool]]:
     return (await _capture_state(sid))[0]
 
 
-async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[str, float]]:
-    """(_newest_captures, the tombstones: path -> when it was removed).
+async def _capture_state(sid: str, stamps: dict[str, float] | None = None
+                         ) -> tuple[dict[str, tuple[str, bool]], dict[str, float]]:
+    """(_newest_captures, the tombstones: path -> when it was removed). `stamps`, when given, is
+    filled with when each returned capture was written.
 
     The captures are the window they always were (a first page of 200 metas). The tombstones are
     kept under their own prefix and read IN FULL: inside that window a tombstone could fall out of
@@ -12521,6 +12810,8 @@ async def _capture_state(sid: str) -> tuple[dict[str, tuple[str, bool]], dict[st
                            meta.get("source") == "app")
     if tombs:
         out = {n: v for n, v in out.items() if not _tombstoned(n, newest[n], tombs)}
+    if stamps is not None:
+        stamps.update({n: newest[n] for n in out})
     return out, tombs
 
 
@@ -12614,25 +12905,36 @@ async def _cfile_by_name(sid: str) -> dict[str, str]:
     return {name: cid for name, (cid, _app) in (await _newest_captures(sid)).items()}
 
 
-async def _reapply_app_writes(sid: str) -> int:
+async def _reapply_app_writes(sid: str, mid_turn_at: float = 0.0) -> int:
     """Put back the files an APP wrote since the last checkpoint, into a freshly hydrated workspace.
 
-    Hydrate restores the checkpoint, and the checkpoint is only ever taken when a TURN ends. So a
-    sheet somebody edited between turns is not in it: without this the agent would open the older
+    Hydrate restores the checkpoint, and the checkpoint is taken while a TURN runs or when it ends.
+    So a sheet somebody edited between turns is not in it: without this the agent would open the older
     copy, write it back, and the person's rows would be gone — the same loss the durable capture
     fixes for reads, arriving one turn later instead.
 
     The test is deliberately conservative: re-apply ONLY where the app's capture is the newest one
     for that filename. If the agent touched the same file in its last turn, its capture is newer,
     the checkpoint already holds it, and this leaves it alone. That way the repair can never be the
-    thing that overwrites the agent's work."""
+    thing that overwrites the agent's work.
+
+    `mid_turn_at`: the checkpoint restored was taken WHILE a turn ran, at that time (#505), and that
+    turn never ended: its sandbox died. The test above leans on the agent's edits being captured when
+    its turn ends, so here they are in the checkpoint and in no capture, and the app's older capture
+    still reads as the newest — re-applying it would put the app's copy over the agent's edit. An
+    app cannot write while a turn runs (_refuse_if_busy), so a capture written before the checkpoint
+    was taken is already in it, or the agent changed it since; only a newer one is put back."""
+    stamps: dict[str, float] = {}
     try:
-        caps = await _newest_captures(sid)
+        caps = ((await _capture_state(sid, stamps))[0] if mid_turn_at
+                else await _newest_captures(sid))
     except Exception:  # noqa: BLE001 — blob store unavailable: the turn still runs
         return 0
     n = 0
     for name, (cid, from_app) in caps.items():
         if not from_app or not _ws_path_allowed(name):    # an app's write of this kind from before the rule stays out
+            continue
+        if mid_turn_at and stamps.get(name, 0.0) <= mid_turn_at:
             continue
         try:
             got = await _container_file_bytes(sid, cid)
@@ -21463,6 +21765,9 @@ def _setup_build_wire(vendor: str, cfg: dict, model_id: str, canonical: str) -> 
         return None
     full = vendor == "custom" and str(cfg.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
     header = {"api-key": key} if vendor in ("azure", "azure-foundry") else {"authorization": f"Bearer {key}"}
+    # The builder calls the provider from here rather than through the broker, so it adds the
+    # connection's headers itself, after the key's, which none of them may name.
+    _with_conn_headers(header, cfg)
     return {"url": base if full else f"{base}/chat/completions", "headers": header,
             "model": model_id or canonical, "canonical": canonical, "route": vendor}
 
@@ -21480,11 +21785,22 @@ async def _setup_build_model_wire(org: str, canonical: str) -> dict | None:
         if w:
             return w
     for name in await _resolve_chain(org, setup_builder.BASE, None):
-        conn, _tenant = await _get_connection(org, name)
+        conn, src = await _get_connection(org, name)
         if not conn or not _conn_serves(conn, canonical) or _chain_refusal(conn, setup_builder.BASE):
             continue
         vendor = str(conn.get("provider") or "")
         w = _setup_build_wire(vendor, conn, _provider_model_id(vendor.lower(), canonical) or canonical, canonical)
+        if w and bool(src) and src != GLOBAL_TENANT and not _pool_is_local():
+            # An address an organization typed for its own connection, where organizations share this
+            # instance: held to the rule the model relay holds it to (llm_broker). Its text is checked
+            # here, and where it points when the socket opens: the builder sends it on the checked
+            # client, which refuses this deployment's own networks and follows no redirect. Before, the
+            # builder posted to it on the plain client, wherever it resolved.
+            why = _org_endpoint_problem(w["url"])
+            if why:
+                print(f"[setup-build] skipped an organization's connection: its address can't be used ({why})", flush=True)
+                continue
+            w["client"] = _relay_checked_client()
         if w:
             return w
     return None

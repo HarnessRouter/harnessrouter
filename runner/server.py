@@ -16526,19 +16526,25 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
 
 
 @app.get("/checkpoint")
-def checkpoint(background_tasks: BackgroundTasks, identifier: str = "") -> Response:
+def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: str = "1") -> Response:
     """Commit /workspace and return it as a gzip tarball (secrets/scratch excluded). The gateway
     persists this to durable blob storage; the next turn's /hydrate restores it on any sandbox.
 
     Spools the tar to LOCAL DISK instead of a RAM buffer (HR-INF-015): a big (GB) workspace no
     longer materializes the whole tarball in the sandbox's ~2 GiB RAM alongside the CLI. tar writes
     straight to a temp file; sha256 is folded over a chunked read of that file; FileResponse then
-    streams it to the gateway. The temp file is removed after the response is sent."""
+    streams it to the gateway. The temp file is removed after the response is sent.
+
+    `commit=0` is a checkpoint taken while the turn runs (the gateway's _step_checkpoint, #505):
+    the tarball only. A commit there would stage and commit the agent's work under its feet, so its
+    own `git status` and `git diff` go quiet halfway through, and `git add` can meet the agent's own
+    git on .git/index.lock. The uncommitted state travels as it is and is restored as it was."""
     _reap_spool()   # clear any spool file leaked by a prior mid-stream disconnect
     ws = _ws(identifier)
     _git_ensure(ws)
-    _git(ws, "add", "-A")
-    _git(ws, "commit", "-q", "-m", f"checkpoint {int(time.time())}", "--allow-empty")
+    if commit != "0":
+        _git(ws, "add", "-A")
+        _git(ws, "commit", "-q", "-m", f"checkpoint {int(time.time())}", "--allow-empty")
     excl = [f"--exclude={p}" for p in CHECKPOINT_EXCLUDE]
     fd, tar_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
     try:
