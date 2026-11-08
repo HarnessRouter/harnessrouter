@@ -2,5 +2,8 @@
   "private": true,
   "dependencies": {
     "@qwen-code/qwen-code": "0.26.3"
+  },
+  "overrides": {
+    "sharp": "0.35.5"
   }
 }
