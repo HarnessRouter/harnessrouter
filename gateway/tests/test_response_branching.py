@@ -40,7 +40,7 @@ def env(monkeypatch):
         calls.append({"restore_target": target, "source": source_sid, "params": params})
         return httpx.Response(200, json={"ok": True})
 
-    async def checkpoint(_):
+    async def checkpoint(_, commit=True):
         return True, 100, "target-sha", "a" * 7, "a" * 40
 
     async def none(*_, **__):
@@ -235,7 +235,7 @@ def test_false_and_absent_branch_preserve_existing_idempotency_hash():
 
 
 def test_missing_full_commit_from_old_runner_writes_no_checkpoint_mapping(env, monkeypatch):
-    async def checkpoint(_):
+    async def checkpoint(_, commit=True):
         return True, 100, "source-sha", "1234567", ""
     monkeypatch.setattr(gw, "_checkpoint_relay", checkpoint)
     asyncio.run(gw._blob_delete(f"responses/{env['ids'][0]}.branch.json", kb=gw.RESP_BLOB_KB))
@@ -394,7 +394,7 @@ async def test_partial_import_failure_removes_target_records_and_releases_idempo
         await real_import(turns[:1], **kwargs)
         raise gw.uhp_error(503, "server_error", "synthetic partial import failure")
 
-    async def checkpoint(target):
+    async def checkpoint(target, commit=True):
         await gw._blob_put(gw._ws_blob(target), b"synthetic target checkpoint")
         await gw._blob_put(f"containers/{target}/cfile_partial", b"synthetic copied artifact", kb=gw.RESP_BLOB_KB)
         await gw._blob_put(f"sessions/{target}/branch-head.json", b"{}", kb=gw.RESP_BLOB_KB)
@@ -435,7 +435,7 @@ async def test_imported_tools_redacted_input_and_artifacts_are_owned_by_target(e
     await gw._blob_put(f"containers/{env['sid']}/cfile_stored.meta", json.dumps({
         "filename": "stored.txt", "media_type": "text/plain", "written_at": 1000}).encode(), kb=gw.RESP_BLOB_KB)
 
-    async def checkpoint(target):
+    async def checkpoint(target, commit=True):
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w:gz") as archive:
             member = tarfile.TarInfo("./user.txt");member.size = 3

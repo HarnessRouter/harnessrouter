@@ -46,6 +46,6 @@ def test_each_lock_pins_the_installers_version_with_hashes():
 
 
 def test_the_installer_installs_from_the_lock_with_hashes_required():
-    assert "--require-hashes --no-deps -r \"$lv_lock\"" in ENTRY
+    assert '--require-hashes --no-deps --only-binary=:all: "${lv_build[@]}" -r "$lv_lock"' in ENTRY
     assert 'HR_LOCKS_DIR="${HR_LOCKS_DIR:-/app/locks}"' in ENTRY
     assert "COPY docker/locks/ /app/locks/" in (ROOT / "Dockerfile").read_text()

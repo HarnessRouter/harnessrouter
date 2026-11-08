@@ -476,6 +476,9 @@ async def build(job: str, inv: dict, base_req: str, model_req: str, *, conn: dic
     messages = [{"role": "system", "content": system(inv, base_req, model_req, lang) + DOCUMENTS.replace("{data}", data)},
                 {"role": "user", "content": TASK}]
     headers = {**conn["headers"], "content-type": "application/json"}
+    # A wire on an address an organization typed carries the client it must be sent on (app.py
+    # _setup_build_model_wire: the checked one, where organizations share the instance).
+    client = conn.get("client") or client
     came, answered, sent = "", 0, 0
     # A provider that refuses the call's shape (a 400) is asked once more in the plainest one: tool
     # choice "auto" and no reasoning sent back. Neither is measured against every connection the model

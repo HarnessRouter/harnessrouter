@@ -169,16 +169,39 @@ jobs:
           # ("claude did not install"), three candidates running. Twelve minutes, and a timeout says
           # so rather than naming a base.
           for i in $(seq 1 144); do
-            docker logs smoke 2>&1 | grep -q "backends available" && break
+            # grep reads the whole log (no -q): -q exits at the first match, docker logs is then cut off
+            # writing the lines after it, and pipefail fails the pipeline although the line was there
+            # (0.38.6's amd64 gate, a second start up in ten seconds, failed exactly so).
+            docker logs smoke 2>&1 | grep "backends available" >/dev/null && break
             sleep 5
           done
           docker logs smoke 2>&1 | tail -30
           LINE=$(docker logs smoke 2>&1 | grep "backends available" | tail -1 || true)
           [ -n "$LINE" ] || { echo "::error::the installs did not finish within 12 minutes on ${{ matrix.arch }}"; exit 1; }
           echo "$LINE"
-          for b in claude codex hermes pi dsh; do
-            echo "$LINE" | grep -q "$b" || { echo "::error::$b did not install on ${{ matrix.arch }}"; exit 1; }
+          # EVERY default base, read from the entrypoint rather than listed here: this checked five
+          # of thirty, and an installer that fails is one WARN line and a base that quietly leaves
+          # the catalogue, on one architecture only (#623). Each must also carry its stamp.
+          DEFAULT=$(sed -n 's/^export HR_BACKENDS="\${HR_BACKENDS:-\(.*\)}"$/\1/p' docker/entrypoint.sh)
+          [ -n "$DEFAULT" ] || { echo "::error::could not read the default HR_BACKENDS from docker/entrypoint.sh"; exit 1; }
+          AVAIL=" ${LINE#*backends available:} "
+          bad=""
+          for b in ${DEFAULT//,/ }; do
+            case "$AVAIL" in *" $b "*) ;; *) bad="$bad $b" ;; esac
+            docker exec smoke test -s "/data/agent-tools/.versions/$b" || bad="$bad $b(no stamp)"
           done
+          [ -z "$bad" ] || { echo "::error::did not install on ${{ matrix.arch }}:$bad"; exit 1; }
+          # A second start installs nothing and runs nothing to find that out: the stamps are read.
+          SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          docker restart smoke >/dev/null
+          for i in $(seq 1 60); do
+            docker logs --since "$SINCE" smoke 2>&1 | grep 'backends available' >/dev/null && break
+            sleep 5
+          done
+          docker logs --since "$SINCE" smoke 2>&1 | grep 'backends available' >/dev/null \
+            || { echo "::error::the second start did not come up within 5 minutes on ${{ matrix.arch }}"; exit 1; }
+          AGAIN=$(docker logs --since "$SINCE" smoke 2>&1 | sed '/backends available/q' | grep -E '\] (installing|WARN)' || true)
+          [ -z "$AGAIN" ] || { echo "$AGAIN"; echo "::error::the second start on ${{ matrix.arch }} reinstalled or warned"; exit 1; }
           docker exec smoke ls /opt/harnessrouter/kits
           # What this image actually holds, not what a lockfile asked for: a build once copied an LGPL library in
           # that nobody had asked for by name, and NOTICE said otherwise for three months.
