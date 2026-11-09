@@ -49,8 +49,8 @@ export function colorFor(label) {
   return FALLBACK_PALETTE[hash(String(label || '')) % FALLBACK_PALETTE.length];
 }
 
-// Stylesheet, light surface.
-const STYLE = [
+// Stylesheet, light surface. A memory's cover is drawn with it too (coverShot.js), so it looks as the Schema tab does.
+export const CANVAS_STYLE = [
   {
     selector: 'node',
     style: {
@@ -304,7 +304,7 @@ const CytoscapeCanvas = forwardRef(function CytoscapeCanvas({
     const cy = cytoscape({
       container: containerRef.current,
       elements: [],
-      style: STYLE,
+      style: CANVAS_STYLE,
       layout: { name: 'preset' },
       wheelSensitivity: 0.25,
       minZoom: 0.1,

@@ -5,7 +5,7 @@
 import { act, forwardRef, useImperativeHandle } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CAPS, memory } from '../fixtures';
-import type { Provider } from '@/lib/memories';
+import type { Memory, Provider } from '@/lib/memories';
 
 type CanvasProps = Record<string, (...a: unknown[]) => unknown> & { elements: { data: Record<string, unknown>; position?: { x: number; y: number }; classes?: string }[]; edgeDrawEnabled: boolean };
 let canvasProps: CanvasProps;
@@ -20,6 +20,8 @@ jest.mock('./iconCatalog.jsx', () => ({
   getIconUrl: (name: string) => `data:image/svg+xml;utf8,${name}`,
 }));
 jest.mock('@/lib/hfetch', () => ({ harnessFetch: jest.fn() }));
+const drawCover = jest.fn();
+jest.mock('./coverShot', () => ({ drawCover: (...a: unknown[]) => drawCover(...a) }));
 jest.mock('@/lib/harness', () => ({ gwHeaders: () => ({}), listCustom: jest.fn(async () => []) }));
 jest.mock('@/lib/auth', () => ({ getSession: () => null }));
 jest.mock('@/lib/edition', () => ({ LOCAL_MEMBER: 'local@localhost' }));
@@ -31,6 +33,7 @@ jest.mock('../../setup/settingsModel', () => ({
 import { harnessFetch } from '@/lib/hfetch';
 import { schemaIn, schemaOut } from '../schemaModel';
 import { useSchemaDoc } from '../useSchemaDoc';
+import { coverGraphOf, coverSig } from '../cover';
 import { SchemaEditor } from './SchemaEditor.jsx';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, requestAnimationFrame: (f: () => void) => setTimeout(f, 0) });
@@ -61,11 +64,11 @@ const q = (s: string) => el.querySelector(s) as HTMLElement;
 const panel = () => el.querySelector('.dg-detail') as HTMLElement;
 const tools = () => el.querySelector('.dg-canvas-tools') as HTMLElement;
 
-function Page({ provider, ro = false, onOpenData = () => {} }: { provider: Provider; ro?: boolean; onOpenData?: (t: string) => void }) {
+function Page({ provider, ro = false, onOpenData = () => {}, m = {} }: { provider: Provider; ro?: boolean; onOpenData?: (t: string) => void; m?: Partial<Memory> }) {
   const doc = useSchemaDoc('hmem_1', provider);
-  return <div id="hrui"><SchemaEditor memory={memory({ name: 'Customers', provider: provider.id })} provider={provider} doc={doc} ro={ro} countOf={() => 2} onOpenData={onOpenData} /></div>;
+  return <div id="hrui"><SchemaEditor memory={memory({ name: 'Customers', provider: provider.id, ...m })} provider={provider} doc={doc} ro={ro} countOf={() => 2} onOpenData={onOpenData} /></div>;
 }
-async function open(provider: Provider, props: { ro?: boolean; onOpenData?: (t: string) => void } = {}) {
+async function open(provider: Provider, props: { ro?: boolean; onOpenData?: (t: string) => void; m?: Partial<Memory> } = {}) {
   await act(async () => { root.render(<Page provider={provider} {...props} />); });
   await flush();
 }
@@ -559,5 +562,69 @@ describe('what the provider makes itself is drawn, locked, beside what a person 
     expect(edges().map((e) => `${e.data.source} ${e.data.caption} ${e.data.target}`)).toEqual(['note came from episode']);
     expect(el.textContent).toContain('Built into ReMe: Episode and Note. It takes no schema, so nothing here can be changed.');
     expect(el.textContent).not.toContain('The other types');
+  });
+});
+
+describe('the memory’s cover is the drawing the tab shows', () => {
+  const PIC = new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' });
+  let covers: { url: string; sig: string; body: unknown }[];
+  beforeEach(() => {
+    covers = [];
+    drawCover.mockReset();
+    drawCover.mockResolvedValue(PIC);
+    Object.assign(window, { CanvasRenderingContext2D: function CanvasRenderingContext2D() { /* a canvas to draw on */ } });
+    Object.assign(URL, { createObjectURL: jest.fn(() => 'blob:drawn'), revokeObjectURL: jest.fn() });
+    const answer = (harnessFetch as jest.Mock).getMockImplementation() as (u: string, i: { method: string; body?: unknown; headers?: Record<string, string> }) => unknown;
+    (harnessFetch as jest.Mock).mockImplementation(async (url: string, init: { method: string; body?: unknown; headers?: Record<string, string> }) => {
+      if (url.includes('/cover') && init.method === 'PUT') {
+        covers.push({ url, sig: init.headers?.['x-cover-sig'] || '', body: init.body });
+        return { ok: true, json: async () => ({ cover_at: 7, cover_sig: init.headers?.['x-cover-sig'] }) };
+      }
+      return answer(url, init);
+    });
+  });
+  afterEach(() => { delete (window as { CanvasRenderingContext2D?: unknown }).CanvasRenderingContext2D; });
+
+  it('once the schema is read, it is drawn and kept, with which drawing it shows', async () => {
+    await open(CAPS.graphiti, { m: { id: 'hmem_c1' } });
+    expect(drawCover).not.toHaveBeenCalled();
+    await later(1400);
+    expect(drawCover).toHaveBeenCalledTimes(1);
+    const g = drawCover.mock.calls[0][0] as { vertex_types: { label: string }[] };
+    expect(g.vertex_types.map((v) => v.label)).toEqual(['Company', 'Person']);
+    expect(covers).toHaveLength(1);
+    expect(covers[0].url).toBe('/api/harness/v1/memories/hmem_c1/cover');
+    expect(covers[0].body).toBe(PIC);
+    expect(covers[0].sig).toBe(coverSig(coverGraphOf(schemaIn(stored as never), CAPS.graphiti)));
+  });
+  it('the kept one already shows this drawing: nothing is drawn again', async () => {
+    const sig = coverSig(coverGraphOf(schemaIn(stored as never), CAPS.graphiti));
+    await open(CAPS.graphiti, { m: { id: 'hmem_c2', cover_at: 3, cover_sig: sig } });
+    await later(1400);
+    expect(drawCover).not.toHaveBeenCalled();
+    expect(covers).toEqual([]);
+  });
+  it('someone who may only read the memory makes none', async () => {
+    await open(CAPS.graphiti, { m: { id: 'hmem_c3', privileges: ['read'] } });
+    await later(1400);
+    expect(drawCover).not.toHaveBeenCalled();
+    expect(covers).toEqual([]);
+  });
+  it('a change to the schema, once saved, makes it again', async () => {
+    await open(CAPS.graphiti, { m: { id: 'hmem_c4' } });
+    await later(1400);
+    expect(covers).toHaveLength(1);
+    // a link's colour, changed and saved: the drawing differs, so another is made once it has settled
+    await act(async () => { canvasProps.onTapEdge('e', { edgeLabel: 'WORKS_AT' }); });
+    await flush();
+    await click(q('button[aria-label="Color #14B8A6"]'));
+    await later(700);
+    expect(covers).toHaveLength(1);
+    await click(button('Save'));
+    await later(1400);
+    expect(puts).toHaveLength(1);
+    expect(covers).toHaveLength(2);
+    expect(covers[1].sig).not.toBe(covers[0].sig);
+    expect((drawCover.mock.calls[1][0] as { edge_types: { ui: { color?: string } }[] }).edge_types[0].ui.color).toBe('#14B8A6');
   });
 });

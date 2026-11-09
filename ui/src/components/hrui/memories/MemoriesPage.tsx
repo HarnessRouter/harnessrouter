@@ -1,48 +1,39 @@
 'use client';
-// Memories (docs: the design's memoriesView): one card per memory, each with the picture of its schema, the engine that
-// keeps it, which setups use it and when it was last used. Search narrows by name, description, engine or setup, and
-// the list is in the order it was last used (the memories spec, C3). Every figure is the service's; what a service before
-// 0.40 doesn't say (who uses it, when) is not drawn. Connecting an engine, and finding the ones running beside this
+// Memories (docs: the design's memoriesView): one card per memory, each with its picture, the engine that keeps it,
+// which setups use it and when it was last used. Search narrows by name, description, engine or setup, and the list is
+// in the order it was last used (the memories spec, C3). Every figure is the service's; what a service before 0.40
+// doesn't say (who uses it, when) is not drawn. Connecting an engine, and finding the ones running beside this
 // instance, are under More. With no engine connected the page says so in one sentence and leads to connecting one.
+//
+// A card's picture (Richard 11-09) is its schema graph as the Schema tab draws it, kept by the service and only loaded
+// here, or the memory's brick where there is no graph (cover.ts). The page reads nothing else for it: the covers still
+// missing are made after it has settled, one at a time, in the background.
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { findEngines, getSchema, labelOf, listMemories, listRecords, type Memory, type Provider } from '@/lib/memories';
+import { findEngines, getSchema, listMemories, type Memory } from '@/lib/memories';
 import { ago } from '../setups';
 import { plain } from '../setup/settingsModel';
 import { Skel, SkCards, SkHead } from '../Skel';
 import { toast } from '../toast';
-import { hasSchema, schemaLabels } from './caps';
-import { CardArt, Ghost, MiniArt, saysNothing } from './CardArt';
-import { listChildren } from './tree/api';
-import { concepts } from './graph/builtin';
-import { DOTS, engineOf, msOf, pool, PLUS, SEARCH, shownName, speaksUse, useDismiss, useProviders, X } from './parts';
+import { hasSchema } from './caps';
+import { Ghost } from './CardArt';
+import { canDraw, coverGraphOf, drawnCover, isGraph, keepCover, picKindOf, type Drawn } from './cover';
+import { MemoryArt } from './MemoryArt';
+import { DOTS, engineOf, msOf, PLUS, SEARCH, shownName, speaksUse, useDismiss, useProviders, X } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
 import { ChooseServiceSheet, NewMemorySheet, UseInSheet } from './sheets';
 import { vendorName } from './vendors';
 import './memories.css';
 
-/** What a memory's picture draws (Richard 11-06): labels as the designed chips where a person set them; otherwise the
- *  provider's own concepts with any types a person set, as the Schema tab draws them. */
-const pictureOf = (f: { schema?: LSchema | null } | undefined, p: Provider | null | undefined) => {
-  const asLabels = schemaLabels(p) && !!f?.schema?.types.length;
-  return { s: asLabels ? f?.schema : concepts(f?.schema, p), labels: asLabels };
-};
+/** How long the page rests, once read, before it makes any cover still missing. */
+const SETTLE_MS = 900;
+/** A moment the browser has nothing else to do, between two covers. */
+const idle = () => new Promise<void>((r) => {
+  const w = window as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => void };
+  if (w.requestIdleCallback) w.requestIdleCallback(() => r(), { timeout: 600 }); else setTimeout(r, 40);
+});
 
-// `recent`: what a memory with no schema to draw shows on its card, the first few records it keeps (or, where it keeps
-// each person apart and holds nothing itself, the first few people), and `count` how many of them there are, where known
-interface Facts { schema?: LSchema | null; recent?: string[] | null; count?: number | null }
-const FIRST = 3;
-/** The first few things a memory keeps, for its card: its own records, or the people below it where it has none. */
-async function firstWords(m: Memory): Promise<{ lines: string[]; count: number | null } | null> {
-  try {
-    const d = await listRecords(m.id, { limit: FIRST });
-    const lines = d.data.map(labelOf).filter(Boolean);
-    if (lines.length || !m.children?.count) return { lines, count: d.next ? null : lines.length };
-    const kids = await listChildren(m.id);
-    return { lines: kids.slice(0, FIRST).map(shownName), count: kids.length };
-  } catch { return null; }
-}
 type Open = { k: 'new'; picked?: string } | { k: 'choose'; then?: 'new' } | { k: 'use'; m: Memory } | null;
 type Sort = 'recent' | 'name';
 const enc = encodeURIComponent;
@@ -78,7 +69,9 @@ export function MemoriesPage() {
   const { providers, failed: providersFailed, reload: reloadProviders } = useProviders();
   const [list, setList] = useState<Memory[] | null>(null);
   const [failed, setFailed] = useState(false);
-  const [facts, setFacts] = useState<Record<string, Facts>>({});
+  // covers made in this visit, and memories found to have no graph to picture (their brick shows)
+  const [drawn, setDrawn] = useState<Record<string, Drawn>>({});
+  const [flat, setFlat] = useState<Record<string, true>>({});
   const [open, setOpen] = useState<Open>(null);
   const [vm, setVm] = useState<View>('cards');
   const [q, setQ] = useState('');
@@ -106,22 +99,45 @@ export function MemoriesPage() {
     const p = (providers || []).find((x) => x.id === m.provider) || null;
     return p && m.builtin !== undefined ? { ...p, schema: { ...p.schema, builtin: m.builtin || undefined } } : p;
   }, [providers]);
+  // The covers still missing, made one at a time once the page has settled: the schema where the engine reads one (its
+  // only read), drawn offscreen as the Schema tab draws it, kept where this person may write the memory, and shown.
   useEffect(() => {
-    if (!list || !providers) return;
-    let live = true;
-    void pool(list, 4, async (m) => {
-      const withSchema = hasSchema(providerOf(m));
-      // the picture's own reads only: a schema where one is read, and the first records where a service has no schema
-      // and its own concepts would draw nothing worth drawing (one type, related to nothing: Mem0's "Fact")
-      const p = providerOf(m);
-      const [schema, recent] = await Promise.all([
-        withSchema ? getSchema(m.id).then(schemaIn).catch(() => null) : Promise.resolve(null),
-        !withSchema && saysNothing(concepts(null, p)) ? firstWords(m) : Promise.resolve(null),
-      ]);
-      if (live) setFacts((f) => ({ ...f, [m.id]: { schema, recent: recent?.lines ?? null, count: recent?.count ?? null } }));
+    if (!list || !providers || !canDraw()) return undefined;
+    const todo = list.filter((m) => {
+      const k = picKindOf(m, providerOf(m));
+      return (k === 'graph' || k === 'maybe') && !drawnCover(m.id);
     });
-    return () => { live = false; };
+    if (!todo.length) return undefined;
+    let live = true;
+    const t = setTimeout(() => {
+      void (async () => {
+        for (const m of todo) {
+          await idle();
+          if (!live) return;
+          const p = providerOf(m);
+          let schema: LSchema | null = null, read = true;
+          if (hasSchema(p)) {
+            try { schema = schemaIn(await getSchema(m.id)); } catch { read = false; }
+          }
+          if (!live) return;
+          const g = coverGraphOf(schema, p);
+          if (!isGraph(g)) {
+            if (read) setFlat((f) => ({ ...f, [m.id]: true }));
+            continue;
+          }
+          try {
+            // a schema that couldn't be read draws what the engine makes, for this visit only: never kept
+            const d = await keepCover(m, g, read && !!m.privileges?.includes('write'));
+            if (live && d) setDrawn((x) => ({ ...x, [m.id]: d }));
+          } catch { /* this one waits for the next visit */ }
+        }
+      })();
+    }, SETTLE_MS);
+    return () => { live = false; clearTimeout(t); };
   }, [list, providers, providerOf]);
+  const art = (m: Memory, mini?: boolean) => (
+    <MemoryArt m={m} kind={flat[m.id] ? 'brick' : picKindOf(m, providerOf(m))} drawn={drawn[m.id] || drawnCover(m.id)} mini={mini} />
+  );
 
   const created = (m: Memory) => {
     toast(`${m.name} created.`);
@@ -242,12 +258,12 @@ export function MemoriesPage() {
         <div className="rows-head mm-rows-g"><span>Name</span><span>Description</span></div>
         <div className="rows mm-rows">
           {shown.map((m) => {
-            const p = providerOf(m), f = facts[m.id];
+            const p = providerOf(m);
             return (
               <div key={m.id} className="mm-roww">
                 <Link href={`/memories/${enc(m.id)}`} className="row mm-rows-g mm-row">
                   <span className="t with-mini">
-                    <span className="mm-mini-box">{f ? <MiniArt {...pictureOf(f, p)} records={f.count ?? f.recent?.length ?? null} /> : null}</span>
+                    <span className="mm-mini-box">{art(m, true)}</span>
                     <span className="mm-rn">
                       <span className="mm-ct"><b>{shownName(m)}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
                       <small className="sub2 mm-cp">{engineLine(m)}</small>
@@ -267,11 +283,11 @@ export function MemoriesPage() {
     body = (
       <div className="cards mm-cards">
         {shown.map((m) => {
-          const p = providerOf(m), f = facts[m.id];
+          const p = providerOf(m);
           return (
             <div key={m.id} className="mm-cardw">
               <Link href={`/memories/${enc(m.id)}`} className="card mm-card">
-                <span className="mm-art"><CardArt {...pictureOf(f, p)} records={f?.count ?? f?.recent?.length ?? null} recent={f?.recent} pending={!f} /></span>
+                <span className="mm-art">{art(m)}</span>
                 <span className="mm-cb">
                   <span className="mm-ct"><b>{shownName(m)}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
                   <span className="mm-cp">{engineLine(m)}</span>
