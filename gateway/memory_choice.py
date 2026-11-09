@@ -229,6 +229,22 @@ def choose(*, running=None, **agent) -> Choice:
     fits, sc = scores(**agent)
     if fits == NONE:
         return Choice(None, SHARED, REASON[NONE], NONE)
+    return _among(fits, sc, running)
+
+
+def for_memory(*, running=None, name: str = "", description: str = "") -> Choice:
+    """The engine for a memory a person makes by hand (New memory), read from its name and description the way an
+    agent is read (choose), with one difference: a memory always has an engine. Words that say "works on what it is
+    given" mean nothing for a memory, so the nature that fits next keeps it, or, when nothing else was said, the one
+    an agent that says nothing gets. The console asks this as the name is typed (GET /v1/memories/choose)."""
+    fits, sc = scores(name=name, description=description)
+    if fits == NONE:
+        fits = _best({**sc, NONE: 0.0})
+    return _among(fits, sc, running)
+
+
+def _among(fits: str, sc: dict[str, float], running) -> Choice:
+    """The engine for the nature that fits (an engine's, or '' when nothing was said) among the ones running."""
     best = fits or MEM0
     why = REASON[best] if fits else UNSAID
     scope = scope_of(fits)

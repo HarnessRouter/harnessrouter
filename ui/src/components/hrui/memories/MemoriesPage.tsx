@@ -116,17 +116,19 @@ export function MemoriesPage() {
     toast(`${m.name} created.`);
     router.push(`/memories/${enc(m.id)}?tab=data`);
   };
-  /** Look for engines running beside this instance, and say which were connected: the providers read before and after. */
+  /** Look for engines running beside this instance, and say which were connected (the providers read before and
+   *  after), then, in the service's words, any that is running and needs its key, or that couldn't be connected. */
   const find = async () => {
     setMore(false);
     if (finding) return;
     setFinding(true);
     const before = new Set((providers || []).filter((p) => p.connected).map((p) => p.id));
     try {
-      await findEngines();
+      const said = await findEngines();
       const after = (await reloadProviders()) || [];
       const found = after.filter((p) => p.connected && !before.has(p.id)).map((p) => vendorName(p.id));
-      toast(found.length ? `${found.join(', ')} connected.` : 'No new engine found running here.');
+      const more = said.filter((x) => x.state === 'running' || x.state === 'refused').map((x) => x.message).filter(Boolean);
+      toast([found.length ? `${found.join(', ')} connected.` : more.length ? '' : 'No new engine found running here.', ...more].filter(Boolean).join(' '));
     } catch (e) { toast(plain(e, 'Engines could not be looked for just now. Try again.')); }
     finally { setFinding(false); }
   };

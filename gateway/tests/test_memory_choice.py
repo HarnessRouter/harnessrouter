@@ -163,3 +163,32 @@ def test_an_engine_named_by_the_caller_keeps_the_scope_of_the_agents_nature():
 def test_tools_count_by_their_name_whatever_the_shape():
     fits, _ = mc.scores(name="Agent", tools=[{"name": "salesforce"}, "hubspot"])
     assert fits == mc.GRAPHITI
+
+
+# ── a memory made by hand (New memory, GET /v1/memories/choose) ─────────────────────────────────
+MEMORIES = [
+    ("Customer preferences", "", mc.MEM0),
+    ("Competitor research", "Who our competitors are and how that changes.", mc.GRAPHITI),
+    ("Deployment incidents", "Lessons from each outage.", mc.HINDSIGHT),
+    ("Team handbook", "The wiki people read and edit.", mc.REME),
+]
+
+
+@pytest.mark.parametrize("name,description,engine", MEMORIES, ids=[m[0] for m in MEMORIES])
+def test_a_memory_is_read_by_the_same_words_as_an_agent(name, description, engine):
+    c = mc.for_memory(name=name, description=description)
+    assert c.engine == engine and c.reason == mc.REASON[engine]
+    assert c == mc.choose(name=name, description=description), "one reading, for a memory and for an agent"
+
+
+def test_a_memory_always_has_an_engine():
+    # words that say "works on what it is given" mean nothing for a memory: the next that fits keeps it, or the default
+    assert mc.for_memory(name="Translations").engine == mc.MEM0 and mc.for_memory(name="Translations").reason == mc.UNSAID
+    assert mc.for_memory(name="Translated research notes").engine == mc.GRAPHITI
+    assert mc.choose(name="Translations").engine is None
+
+
+def test_a_memory_falls_back_and_says_so_and_says_how_to_start_one():
+    c = mc.for_memory(name="Competitor research", running=["mem0", "reme"])
+    assert c.engine in ("mem0", "reme") and c.reason.endswith(f"Graphiti fits best; it isn't running here, so {mc.LABEL[c.engine]} keeps it for now.")
+    assert mc.for_memory(name="Anything", running=[]) == mc.Choice(None, mc.PER_USER, mc.NO_ENGINE, "")

@@ -22,6 +22,7 @@ import memory_choice  # noqa: E402
 import memory_fixture  # noqa: E402
 import memory_graphiti  # noqa: E402
 import memory_hindsight  # noqa: E402
+import memory_live  # noqa: E402
 import memory_mem0  # noqa: E402
 import memory_plane  # noqa: E402
 import memory_reme  # noqa: E402
@@ -387,8 +388,11 @@ def test_the_turn_says_what_was_remembered(client, per_person):
     run(gw._memories_observe(ORG, hid, sid, run(gw._harness_vertex(hid)), {"user_text": "I am vegetarian.", "model": "m"},
                              "Noted.", resp_id=rid))
     turn = run(gw._session_turns_data(sid))["turns"][0]
-    # the record the agent kept is counted; mem0 is still drawing facts from the task, and says so
-    assert turn["memory"] == {"remembered": 1, "records": [made["remembered"]["id"]], "pending": True}
+    # the record the agent kept is counted, with the memory it is in (this person's: a link opens it there); mem0 is
+    # still drawing facts from the task, and says so
+    kept = {"id": made["remembered"]["id"], "memory_id": made["remembered"]["memory_id"]}
+    assert turn["memory"] == {"remembered": 1, "records": [kept], "pending": True}
+    assert kept["memory_id"] != per_person[1], "kept in the person's own memory, not the agent's"
 
 
 def test_a_finished_task_on_an_engine_that_keeps_at_once_is_counted(client):
@@ -404,7 +408,97 @@ def test_a_finished_task_on_an_engine_that_keeps_at_once_is_counted(client):
     with pytest.MonkeyPatch.context() as mp_:
         mp_.setattr(memory_fixture.FixtureProvider, "observe", derive)
         run(gw._memories_observe(ORG, h["id"], sid, run(gw._harness_vertex(h["id"])), {"user_text": "x", "model": "m"}, "y", resp_id=rid))
-    assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {"remembered": 1, "records": ["hrec_derived1"]}
+    assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {"remembered": 1, "records": [{"id": "hrec_derived1", "memory_id": mid}]}
+
+
+def _told(mid: str) -> list[dict]:
+    ch = memory_live._channels.get(mid)
+    return list(ch.kept) if ch else []
+
+
+def test_what_an_engine_draws_later_is_counted_when_its_job_settles(client):
+    mid = client.post("/v1/memories", headers=ADA, json={"provider": "fixture", "name": "Later"}).json()["id"]
+    h = _agent(client, name="Later user", memory={"id": mid}, prompt="Keep notes for the team.").json()
+    sid, _tok = _session(h["id"])
+    rid = "resp_" + uuid.uuid4().hex[:12]
+    run(gw._resp_put(rid, {"id": rid, "status": "completed", "output": [], "_input": [{"content": "hi"}]},
+                     ORG, sid, None, "completed", time.time(), True))
+    asked = []
+
+    async def later(self, m, episodes, writer):
+        return {"records": [], "job": {"id": "job_later1", "status": "pending"}}
+
+    async def job(self, m, job_id):
+        asked.append(job_id)
+        return {"id": job_id, "status": "completed", "error": "",
+                "records": [{"id": "hrec_drawn1", "type": "fact"}, {"id": "hrec_ep1", "type": "episode"}]}
+
+    async def go():
+        await gw._memories_observe(ORG, h["id"], sid, await gw._harness_vertex(h["id"]), {"user_text": "x", "model": "m"}, "y",
+                                   resp_id=rid)
+        first = (await gw._session_turns_data(sid))["turns"][0]["memory"]
+        told = len(_told(mid))
+        await asyncio.gather(*list(gw._NOTE_JOBS))
+        return first, (await gw._session_turns_data(sid))["turns"][0]["memory"], _told(mid)[told:]
+    with pytest.MonkeyPatch.context() as mp_:
+        mp_.setattr(memory_fixture.FixtureProvider, "observe", later)
+        mp_.setattr(memory_fixture.FixtureProvider, "job", job, raising=False)
+        first, settled, told = run(go())
+    assert first == {"remembered": 0, "records": [], "pending": True}
+    assert settled == {"remembered": 1, "records": [{"id": "hrec_drawn1", "memory_id": mid}]} and asked == ["job_later1"]
+    # the memory says something changed once the turn's note is written, so a page watching it reads the turn again
+    assert [(e["type"], e["record_ids"]) for e in told] == [("records.changed", [])]
+
+
+def test_a_write_to_a_persons_memory_is_told_on_the_agents_memory_and_says_nothing_of_what(client, per_person):
+    hid, shared = per_person
+    sid, dana = _session(hid, {"user": "dana@guests.example"})
+    before = len(_told(shared))
+    made, err = _call(client, dana, "memory_remember", content="Dana is allergic to peanuts.")
+    assert not err
+    node, record = made["remembered"]["memory_id"], made["remembered"]["id"]
+    up = _told(shared)[before:]
+    assert [(e["type"], e["record_ids"], e["below"], e["memory_id"]) for e in up] == [("records.changed", [], True, shared)]
+    said = json.dumps(up)
+    for never in ("peanut", "dana", node, record, "written_by"):
+        assert never not in said.lower(), never
+    # the person's memory itself says which record, as every memory does
+    assert (_told(node)[-1]["type"], _told(node)[-1]["record_id"]) == ("record.created", record)
+    # and once the turn's note is written, the agent's memory hears again, so the turn is read with its note
+    rid = "resp_" + uuid.uuid4().hex[:12]
+    run(gw._resp_put(rid, {"id": rid, "status": "completed", "output": [], "_input": [{"content": "hi"}]},
+                     ORG, sid, None, "completed", time.time(), True))
+    before = len(_told(shared))
+    run(gw._memories_note_kept(ORG, sid, rid))
+    assert [(e["type"], e["record_ids"], e["below"]) for e in _told(shared)[before:]] == [("records.changed", [], True)]
+    assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {"remembered": 1, "records": [{"id": record, "memory_id": node}]}
+
+
+# ── New memory: the engine chosen by the one scorer ──────────────────────────────────────────
+def test_new_memory_is_given_its_engine_by_the_same_reading_an_agent_gets(client):
+    choose = lambda headers=ADA, **q: client.get("/v1/memories/choose", params=q, headers=headers)   # noqa: E731
+    got = choose(name="Customer preferences", description="What each customer likes.").json()
+    assert got == {"engine": "mem0", "scope": "per_user", "reason": memory_choice.REASON["mem0"]}
+    # Graphiti fits best and isn't running here: the next best that is keeps it, and the reason says so
+    got = choose(name="Competitor research timeline").json()
+    assert got["engine"] == "mem0" and got["scope"] == "shared"
+    assert got["reason"].endswith("Graphiti fits best; it isn't running here, so Mem0 keeps it for now.")
+    # a memory always has an engine, even one whose words say "works on what it is given"
+    assert choose(name="Translations").json()["engine"] == "mem0"
+    # nothing connected: no engine, and the command that starts one
+    assert choose(headers={**ADA, "x-harness-org": "provorg-empty"}, name="Anything").json() == {
+        "engine": None, "scope": "per_user", "reason": memory_choice.NO_ENGINE}
+    # it makes nothing
+    assert all(x["name"] != "Customer preferences" for x in client.get("/v1/memories", params={"counts": "false"}, headers=ADA).json()["data"])
+
+
+def test_new_memorys_choice_reads_the_callers_own_workspace_and_needs_a_credential(client):
+    held = _key(client, ws="ws.choose")
+    # mem0 is connected for the default workspace only: a key held to another reads its own, whatever it names
+    for h in (held, {**held, "x-harness-workspace": "default"}):
+        assert client.get("/v1/memories/choose", params={"name": "Customer preferences"}, headers=h).json()["engine"] is None
+    assert client.get("/v1/memories/choose", params={"name": "Customer preferences"}, headers=ADA).json()["engine"] == "mem0"
+    assert client.get("/v1/memories/choose", params={"name": "x"}).status_code == 401
 
 
 # ── the list: search, recently used, who uses each ───────────────────────────────────────────
@@ -436,12 +530,18 @@ def test_the_builder_is_told_memory_is_the_platforms_and_its_save_provisions(cli
                                inv, "claude-code", "m", {}, "help guests")
     assert cfg["memoryHint"] == "each guest's dietary needs"
     p = {"org": ORG, "member": "ada@example.com", "workspace": ""}
+    # what the card says before the save: chosen the way the save chooses, and nothing made by saying it
+    count = len(client.get("/v1/memories", params={"counts": "false"}, headers=ADA).json()["data"])
+    said = run(gw._setup_build_memory(p, cfg))
+    assert said == {"engine": "mem0", "scope": "per_user", "reason": memory_choice.REASON["mem0"]}
+    assert len(client.get("/v1/memories", params={"counts": "false"}, headers=ADA).json()["data"]) == count
     hid = gw._rid("chrn")
     run(gw._setup_build_save(p, {**cfg, "model": ""}, hid, {}))
     v = run(gw._harness_vertex(hid))
     info = json.loads(v["memory_info"])
     assert info["engine"] == "mem0" and info["scope"] == "per_user" and v["memory_hint"] == "each guest's dietary needs"
     assert v["memory_default"] == info["id"]
+    assert (info["engine"], info["scope"], v["memory_reason"]) == (said["engine"], said["scope"], said["reason"])
 
 
 # ── the instructions ─────────────────────────────────────────────────────────────────────────

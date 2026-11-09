@@ -3,15 +3,17 @@
 // from them, and can be changed), Use in (give a memory to a setup, which then remembers there), Connect (an engine's
 // address and a key, tried by the service at once), the list of engines to connect, and Rename. Each is the console's
 // Sheet.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { listCustom } from '@/lib/harness';
-import { connectProvider, createMemory, listProviderPlugs, setAgentMemory, updateMemory, type Memory, type Provider } from '@/lib/memories';
+import {
+  chooseEngine, connectProvider, createMemory, listProviderPlugs, setAgentMemory, updateMemory, type EngineChoice, type Memory, type Provider,
+} from '@/lib/memories';
 import { Sheet, SheetTop } from '../Sheet';
 import { Skel, SkLine } from '../Skel';
 import { plain } from '../setup/settingsModel';
 import { serviceFacts, shapeOf } from './caps';
 import { KindArt, type Kind } from './CardArt';
-import { chooseEngine, GUIDE, VENDORS, vendorName } from './vendors';
+import { GUIDE, VENDORS, vendorName } from './vendors';
 
 /** Connecting one engine: its address and, optionally, its key. The service tries both, and its
  *  refusal is shown here in its own words. */
@@ -137,9 +139,33 @@ export function ChooseServiceSheet({ providers, onClose, onConnected }: { provid
   );
 }
 
-/** New memory: a name and, if you like, a description. The engine is chosen for you from them (vendors.ts
- *  chooseEngine, the reading the service gives an agent), shown with why, and can be changed under Engine to any
- *  engine that is connected. Connecting another lives on the page, under More. */
+/** How long typing rests before the service is asked which engine fits what was typed. */
+const CHOOSE_AFTER_MS = 300;
+
+/** The service's choice of engine for a new memory with this name and description (GET /v1/memories/choose): asked
+ *  when the sheet opens and again once typing rests. undefined until it first answers; `failed` when it couldn't. */
+function useEngineChoice(name: string, desc: string, on: boolean) {
+  const [choice, setChoice] = useState<EngineChoice | undefined>(undefined);
+  const [failed, setFailed] = useState(false);
+  const [again, setAgain] = useState(0);
+  const asked = useRef(0);
+  const answered = useRef(false);
+  useEffect(() => {
+    if (!on) return undefined;
+    const n = ++asked.current;
+    const ask = () => chooseEngine(name, desc)
+      .then((c) => { answered.current = true; if (asked.current === n) { setChoice(c); setFailed(false); } })
+      .catch(() => { if (asked.current === n) setFailed(true); });
+    // until it first answers each question goes at once, so the sheet opens with its engine; then typing rests first
+    const t = setTimeout(() => void ask(), answered.current ? CHOOSE_AFTER_MS : 0);
+    return () => clearTimeout(t);
+  }, [name, desc, on, again]);
+  return { choice, failed, retry: () => setAgain((x) => x + 1) };
+}
+
+/** New memory: a name and, if you like, a description. The engine is chosen for you from them by the service (the
+ *  same reading an agent gets, GET /v1/memories/choose), shown with why, and can be changed under Engine to any engine
+ *  that is connected. Connecting another lives on the page, under More. */
 export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCreated, onConnect }: {
   providers: Provider[] | null; failed: boolean; retry: () => void; picked?: string;
   onClose: () => void; onCreated: (m: Memory, p: Provider) => void;
@@ -153,9 +179,9 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const open = useMemo(() => (providers || []).filter((p) => p.connected), [providers]);
-  const auto = chooseEngine(`${name} ${desc}`, open.map((p) => p.id));
-  const sel = open.find((p) => p.id === chosen) || open.find((p) => p.id === auto?.id) || null;
-  const why = sel && sel.id === chosen ? VENDORS[sel.id]?.line || '' : auto?.why || '';
+  const { choice: auto, failed: choiceFailed, retry: chooseAgain } = useEngineChoice(name, desc, open.length > 0);
+  const sel = open.find((p) => p.id === chosen) || open.find((p) => !!auto?.engine && p.id === auto.engine) || null;
+  const why = sel && sel.id === chosen ? VENDORS[sel.id]?.line || '' : auto?.reason || '';
   const go = async () => {
     if (!sel || !name.trim() || busy) return;
     setBusy(true); setErr('');
@@ -179,26 +205,33 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
         <div className="set-f mm-eng">
           <div className="mm-kept-h">
             <span className="set-lb" id="mmCrEng">Engine</span>
-            {sel && open.length > 1 ? <button type="button" className="link-q inl" aria-expanded={changing} aria-controls="mmCrEngs" onClick={() => setChanging(!changing)}>{changing ? 'Done' : 'Change'}</button> : null}
+            {open.length > 1 || (open.length && !sel && auto) ? <button type="button" className="link-q inl" aria-expanded={changing} aria-controls="mmCrEngs" onClick={() => setChanging(!changing)}>{changing ? 'Done' : 'Change'}</button> : null}
           </div>
           {failed ? (
             <p className="mm-err" role="alert">The engines could not be read just now. <button type="button" className="link-q inl" onClick={retry}>Try again</button></p>
           ) : !providers ? (
             <Skel label="Reading the engines"><SkLine w="40%" h={13} /><SkLine w="70%" h={11} style={{ marginTop: 8 }} /></Skel>
-          ) : !sel ? (
+          ) : !open.length ? (
             <p className="set-help mm-eng-none">No engine is connected yet. {onConnect ? <button type="button" className="link-q inl" onClick={onConnect}>Connect an engine</button> : null}</p>
           ) : (
             <>
-              {changing ? null : (
-                <div className="mm-eng-now" aria-labelledby="mmCrEng">
+              {changing ? null : sel ? (
+                <div className="mm-eng-now" aria-labelledby="mmCrEng" aria-live="polite">
                   <span className="grow"><b>{vendorName(sel.id)}</b>{why ? <small>{why}</small> : null}</span>
                 </div>
+              ) : choiceFailed ? (
+                <p className="mm-err" role="alert">The engine couldn’t be chosen just now. <button type="button" className="link-q inl" onClick={chooseAgain}>Try again</button></p>
+              ) : !auto ? (
+                <Skel label="Choosing the engine"><SkLine w="40%" h={13} /><SkLine w="70%" h={11} style={{ marginTop: 8 }} /></Skel>
+              ) : (
+                // connected, and none answering now: the service says why, and Change still offers them
+                <p className="set-help mm-eng-none" role="status">{auto.reason}</p>
               )}
               {changing ? (
                 <div className="mm-prov mm-eng-list" id="mmCrEngs" role="radiogroup" aria-labelledby="mmCrEng" onKeyDown={onKey}>
-                  {open.map((p) => (
-                    <button key={p.id} type="button" role="radio" aria-checked={sel.id === p.id} tabIndex={sel.id === p.id ? 0 : -1} data-sv={p.id}
-                      className={`mm-pv-o${sel.id === p.id ? ' on' : ''}`} onClick={() => setChosen(p.id)}>
+                  {open.map((p, i) => (
+                    <button key={p.id} type="button" role="radio" aria-checked={sel?.id === p.id} tabIndex={(sel ? sel.id === p.id : i === 0) ? 0 : -1} data-sv={p.id}
+                      className={`mm-pv-o${sel?.id === p.id ? ' on' : ''}`} onClick={() => setChosen(p.id)}>
                       <i className="mm-sv-dot" aria-hidden="true" /><Says p={p} />
                     </button>
                   ))}

@@ -15,6 +15,7 @@ jest.mock('../toast', () => ({ toast: jest.fn() }));
 import { harnessFetch } from '@/lib/hfetch';
 import { rowOf } from '../setups';
 import { Assembly, withRecord, type AssemblyState } from './Assembly';
+import { readRecord } from './compose';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const CFG = { name: 'Personalized customer support', instructions: 'You serve customers.', exampleTask: 'Hi', base: 'hermes', baseName: 'Hermes', model: 'gpt-5.4',
@@ -49,7 +50,7 @@ describe('the memory line', () => {
     let mem: unknown = OWN;
     const s = service({
       'GET /v1/harnesses/chrn_t': () => ({ id: 'chrn_t', memory: mem }),
-      'PUT /v1/harnesses/chrn_t/memory': (c: { body: unknown }) => { mem = c.body === 'none' ? null : mem; return { id: 'chrn_t', memory: mem, memory_reason: 'Turned off here.' }; },
+      'PUT /v1/harnesses/chrn_t/memory': (c: { body: { memory?: unknown } }) => { mem = c.body?.memory === 'none' ? null : mem; return { id: 'chrn_t', memory: mem, memory_reason: 'Turned off here.' }; },
       'GET /v1/memories/providers': { data: [CAPS.mem0, CAPS.graphiti] },
       'GET /v1/harnesses/chrn_t/memories': { object: 'harness.memories', principal: 'member:chrn_t', default_memory_id: null, observe: false, data: [] },
     });
@@ -61,7 +62,7 @@ describe('the memory line', () => {
     expect(Array.from(el.querySelectorAll('.am-pop .mm-mi b')).map((b) => b.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight', 'ReMe', 'None']);
     await act(async () => { (Array.from(el.querySelectorAll('.am-pop .mm-mi')).find((b) => b.textContent?.startsWith('None')) as HTMLButtonElement).click(); });
     await flush();
-    expect(s.sent('PUT', '/v1/harnesses/chrn_t/memory')[0].body).toBe('none');
+    expect(s.sent('PUT', '/v1/harnesses/chrn_t/memory')[0].body).toEqual({ memory: 'none' });
     expect(el.querySelector('.am-line')?.textContent).toBe('Memory: None, turned off here. Change');
   });
 
@@ -71,6 +72,20 @@ describe('the memory line', () => {
     await act(async () => { root.render(<Assembly s={withRecord(SAVED, rowOf(H(), 'Hermes', [], false))} />); });
     await flush();
     expect(el.querySelector('.am-line')).toBeNull();
+  });
+
+  test('the build’s record, as the service writes it while it saves, draws the proposed line', async () => {
+    const raw = { key: 'k-build-1', status: 'building', step: 'saving',
+      config: { name: CFG.name, instructions: CFG.instructions, base: 'hermes', model: 'gpt-5.4', skills: [], plugins: [], connectionsNeeded: [],
+        memoryHint: 'each customer’s plan', memory: { engine: 'graphiti', scope: 'shared', reason: 'It tracks people, things and how they relate over time.' } } };
+    const rec = readRecord(raw, { base: 'auto', model: 'auto', baseName: '' });
+    await act(async () => { root.render(<Assembly s={{ cfg: rec!.config!, savedAt: null, plugins: {}, done: false }} />); });
+    expect(el.querySelector('.am-line')?.textContent).toBe('Memory: Graphiti, it tracks people, things and how they relate over time.');
+    // none running: the service's reason, with no engine
+    const none = readRecord({ ...raw, config: { ...raw.config, memory: { engine: null, scope: 'per_user', reason: 'No memory engine is running here; one command starts them: deploy/memories/up.sh' } } },
+      { base: 'auto', model: 'auto', baseName: '' });
+    await act(async () => { root.render(<Assembly s={{ cfg: none!.config!, savedAt: null, plugins: {}, done: false }} />); });
+    expect(el.querySelector('.am-line')?.textContent).toBe('Memory: None, no memory engine is running here; one command starts them: deploy/memories/up.sh');
   });
 
   test('before the setup exists, the line is what the build proposes, with nothing to change yet', async () => {

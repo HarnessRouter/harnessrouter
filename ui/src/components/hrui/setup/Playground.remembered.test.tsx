@@ -66,7 +66,7 @@ async function open(turn: object, harness: object) {
 const OWN = { memory: { id: 'hmem_a', name: 'Support', engine: 'mem0', scope: 'per_user', reason: '' } };
 
 test('a turn that remembered says how much, linked to the first record it kept in the agent’s memory', async () => {
-  await open({ memory: { remembered: 3, records: ['r1', 'r2', 'r3'] } }, OWN);
+  await open({ memory: { remembered: 3, records: ['r1', 'r2', 'r3'].map((id) => ({ id, memory_id: 'hmem_a' })) } }, OWN);
   const a = el.querySelector('.turn-foot .pg-mem') as HTMLAnchorElement;
   expect(a.textContent).toBe('Remembered 3 things');
   expect(a.getAttribute('href')).toBe('/memories/hmem_a?tab=data&record=r1');
@@ -77,6 +77,31 @@ test('a record kept in a person’s own memory is opened there', async () => {
   const a = el.querySelector('.turn-foot .pg-mem') as HTMLAnchorElement;
   expect(a.textContent).toBe('Remembered 1 thing');
   expect(a.getAttribute('href')).toBe('/memories/hmem_dana?tab=data&record=r9');
+});
+
+test('kept after the turn ended, in a person’s memory below the agent’s: the line comes when the agent’s memory says so', async () => {
+  // the agent's memory is the one open here; a person's memory below it tells it that something changed, and nothing more
+  const sources: FakeSource[] = [];
+  class FakeSource {
+    on: Record<string, (e: { data: string }) => void> = {};
+    constructor(public url: string) { sources.push(this); }
+    addEventListener(kind: string, f: (e: { data: string }) => void) { this.on[kind] = f; }
+    close() { /* nothing open */ }
+  }
+  Object.assign(globalThis, { EventSource: FakeSource });
+  try {
+    await open({}, OWN);
+    expect(el.querySelector('.pg-mem')).toBeNull();
+    const es = sources.find((s) => s.url === '/api/harness/v1/memories/hmem_a/events');
+    expect(es).toBeTruthy();
+    (loadSessionTurns as jest.Mock).mockResolvedValue({ turns: [{ id: 'resp_1', memory: { remembered: 1, records: [{ id: 'r9', memory_id: 'hmem_dana' }] } }] });
+    await act(async () => { es!.on['records.changed']({ data: JSON.stringify({ id: 4, type: 'records.changed', memory_id: 'hmem_a', record_ids: [], below: true }) }); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 900)); });
+    await flush();
+    expect(el.querySelector('.turn-foot .pg-mem')?.getAttribute('href')).toBe('/memories/hmem_dana?tab=data&record=r9');
+  } finally {
+    delete (globalThis as { EventSource?: unknown }).EventSource;
+  }
 });
 
 test('nothing kept, or nothing said of it: no line', async () => {

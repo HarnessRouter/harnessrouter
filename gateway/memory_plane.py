@@ -273,8 +273,11 @@ async def provider_of(memory: dict) -> Provider:
     p = PROVIDERS.get(str(memory.get("provider") or ""))
     if p is None:
         raise MemoryError(503, "memory_unavailable", "This memory's provider is not connected.")
-    # Every writer comes through here, so this is where a write gets told to whoever has the memory open.
-    return Announced(await p.bind(str(memory.get("org") or ""), str(memory.get("workspace") or "") or "default"))
+    # Every writer comes through here, so this is where a write gets told to whoever has the memory open. A person's
+    # memory is watched from the agent's memory above it (what a person looking at the agent has open): that hears
+    # that something below changed, and nothing of what (memory_live.tell).
+    above = (str(memory["end_user_of"]),) if memory.get("end_user_of") else ()
+    return Announced(await p.bind(str(memory.get("org") or ""), str(memory.get("workspace") or "") or "default"), above)
 
 
 def field_of(record: dict, field: str):

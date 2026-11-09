@@ -80,6 +80,13 @@ test('the whole shape: a sub memory as a folder, then a group per kind, with cou
   expect(row('Facts').querySelector('.mt-count')?.textContent).toBe('1');
   expect(el.querySelector('[role=tree]')).not.toBeNull();
 });
+test('a person’s memory below an agent’s is listed by the person the service names, never by its hashed name', async () => {
+  // the shape GET /v1/memories?parent= answers its manager: `end_user` beside a name that is a hash of it
+  const t = open({ subs: [sub({ id: 'hmem_p', name: '5d41402abc4b2a76b9719d91', restricted: true, end_user: 'dana@guests.example' })] });
+  await mount(t.props);
+  expect(said()).toEqual(['1:dana@guests.example']);
+});
+
 test('a sub memory reads itself only when it is opened, and its record opens with its memory', async () => {
   const t = open({ subs: [sub()], routes: subRoutes });
   await mount(t.props);

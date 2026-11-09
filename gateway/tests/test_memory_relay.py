@@ -211,7 +211,7 @@ def test_a_credential_follows_the_secret_key_it_is_derived_from(relay, monkeypat
 
 @pytest.mark.parametrize("method,path", [("GET", "/v1/harnesses"), ("POST", "/v1/responses"), ("GET", "/v1/memories"),
                                          ("GET", "/v1/plugs"), ("POST", "/v1/memories"), ("POST", "/v1/mcp/memories"),
-                                         ("GET", "/v1/memory-services")])
+                                         ("GET", "/v1/memory-services"), ("GET", "/v1/memories/choose")])
 def test_a_memory_service_credential_reaches_nothing_but_the_relay(relay, method, path):
     """Not as a key, and not beside the internal key a console in front of the gateway attaches to what it relays."""
     c, service, sent, _keys = relay

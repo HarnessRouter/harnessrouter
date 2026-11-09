@@ -22,7 +22,8 @@ class Local:
         self.pr = [f"member:{hid}"] + ([self.person["principal"]] if self.person else [])
         self.wpr = [self.person["principal"]] if self.person else self.pr
         self.writer = mp.writer_of(hid, agent=True)
-        self.kept: list[str] = []          # what this agent kept with memory_remember through this seam
+        # what this agent kept with memory_remember through this seam, each {"id", "memory_id"}: a turn's record links them
+        self.kept: list[dict] = []
 
     async def _do(self, coro):
         try:
@@ -146,7 +147,8 @@ class Local:
         async def go():
             prov, _ = await self._prov(mid, "write")
             made = await self._wrote(mid, mp.remember(prov, mid, mp._record_in(record), self.writer))
-            self.kept.append(str(made.get("id") or ""))
+            if made.get("id"):
+                self.kept.append({"id": str(made["id"]), "memory_id": str(mid)})
             return {**await mp.present(self.org, mid, made, self.pr), **{k: made[k] for k in ("closed", "conflicts") if k in made}}
         return await self._do(go())
 

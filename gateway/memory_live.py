@@ -10,6 +10,11 @@ it missed; one that was away too long is told `reset` and reads everything again
 
 One process holds the channels, as one process holds the sessions. Nothing here survives a restart, and
 nothing needs to: every client reads again when it reconnects.
+
+A memory kept for one person of an agent's (memory_plane.end_user_node) sits below the agent's memory, and that is
+the memory a person watching the agent has open. So a change to a person's memory is told on the agent's memory too,
+as `records.changed` with no record and no person named (`below: true`): that something below changed, so a reader
+reads again under its own privileges, which never reach a person's memory it may not read.
 """
 from __future__ import annotations
 
@@ -66,6 +71,15 @@ def publish(mid: str, kind: str, **fields) -> None:
         log.warning("memory event not told: %s", type(e).__name__)
 
 
+def tell(mid: str, kind: str, above=(), **fields) -> None:
+    """`publish` on this memory, and on each memory `above` it that hears of what changes below (a person's memory,
+    the agent's): there, only that something below changed, never which record or whose."""
+    publish(mid, kind, **fields)
+    for up in above or ():
+        if up and up != mid:
+            publish(up, "records.changed", record_ids=[], below=True)
+
+
 def _drain(q: asyncio.Queue) -> None:
     while not q.empty():
         q.get_nowait()
@@ -106,16 +120,17 @@ def readers(mid: str) -> int:
     return len(ch.readers) if ch else 0
 
 
-async def _watch_job(prov, mid: str, job_id: str) -> None:
+async def _watch_job(prov, mid: str, job_id: str, above=()) -> None:
     """A provider that derives after it answers has nobody to tell when it's done, so it's asked, and only
-    while someone has the memory open: a job nobody is waiting for costs the provider nothing."""
+    while someone has the memory open (or a memory above that hears of it): a job nobody is waiting for costs the
+    provider nothing."""
     end = time.monotonic() + _JOB_MAX_S
     wait = 1.0
     try:
         while time.monotonic() < end:
             await asyncio.sleep(wait)
             wait = min(wait * 1.6, 15.0)
-            if not readers(mid):
+            if not readers(mid) and not any(readers(up) for up in above or ()):
                 continue
             try:
                 job = await prov.job(mid, job_id)
@@ -125,19 +140,19 @@ async def _watch_job(prov, mid: str, job_id: str) -> None:
             if not job:
                 return
             if str(job.get("status")) in _SETTLED:
-                publish(mid, "records.changed", record_ids=[str(r.get("id")) for r in job.get("records") or [] if r.get("id")],
-                        job=job_id, status=str(job.get("status")))
+                tell(mid, "records.changed", above, record_ids=[str(r.get("id")) for r in job.get("records") or [] if r.get("id")],
+                     job=job_id, status=str(job.get("status")))
                 return
     finally:
         _jobs.pop(job_id, None)
 
 
-def _watch(prov, mid: str, job: dict | None) -> None:
+def _watch(prov, mid: str, job: dict | None, above=()) -> None:
     job_id = str((job or {}).get("id") or "")
     if not job_id or job_id in _jobs or len(_jobs) >= _JOBS_MAX:
         return
     try:
-        _jobs[job_id] = asyncio.get_running_loop().create_task(_watch_job(prov, mid, job_id))
+        _jobs[job_id] = asyncio.get_running_loop().create_task(_watch_job(prov, mid, job_id, above))
     except RuntimeError:
         pass
 
@@ -173,13 +188,15 @@ class _record_lock:
 
 
 class Announced:
-    """A provider as its callers use it. Every write it answers is told to the memory's readers; everything
-    else passes through untouched."""
+    """A provider as its callers use it. Every write it answers is told to the memory's readers (and, for a
+    person's memory, that something changed to the readers of the memory `above` it); everything else passes
+    through untouched."""
 
-    __slots__ = ("_p",)
+    __slots__ = ("_p", "_above")
 
-    def __init__(self, provider) -> None:
+    def __init__(self, provider, above=()) -> None:
         self._p = provider
+        self._above = tuple(x for x in above or () if x)
 
     def __getattr__(self, name):
         return getattr(self._p, name)
@@ -189,7 +206,7 @@ class Announced:
 
     async def remember(self, mid, record, writer):
         made = await self._p.remember(mid, record, writer)
-        publish(mid, "record.created", record_id=str(made.get("id") or ""), version=made.get("version"), written_by=writer)
+        tell(mid, "record.created", self._above, record_id=str(made.get("id") or ""), version=made.get("version"), written_by=writer)
         return made
 
     async def revise(self, mid, rid, patch, writer, expected: int | None = None):
@@ -203,45 +220,45 @@ class Announced:
                 if cur is not None and have is not None and int(have) != int(expected):
                     raise VersionMoved(int(have))
             made = await self._p.revise(mid, rid, patch, writer)
-        publish(mid, "record.revised", record_id=str(made.get("id") or rid), version=made.get("version"), written_by=writer,
-                fields=sorted(patch))
+        tell(mid, "record.revised", self._above, record_id=str(made.get("id") or rid), version=made.get("version"), written_by=writer,
+             fields=sorted(patch))
         return made
 
     async def forget(self, mid, rid, writer):
         out = await self._p.forget(mid, rid, writer)
-        publish(mid, "record.forgotten", record_id=rid, written_by=writer)
+        tell(mid, "record.forgotten", self._above, record_id=rid, written_by=writer)
         return out
 
     async def close_episode(self, mid, rid, writer):
         out = await self._p.close_episode(mid, rid, writer)
-        publish(mid, "record.forgotten", record_id=rid, written_by=writer)
+        tell(mid, "record.forgotten", self._above, record_id=rid, written_by=writer)
         return out
 
     async def erase(self, mid, rids):
         out = await self._p.erase(mid, rids)
-        publish(mid, "records.erased", record_ids=[str(x) for x in rids])
+        tell(mid, "records.erased", self._above, record_ids=[str(x) for x in rids])
         return out
 
     async def observe(self, mid, episodes, writer):
         made = await self._p.observe(mid, episodes, writer)
         job = made.get("job")
-        publish(mid, "records.changed", record_ids=[str(r.get("id")) for r in made.get("records") or [] if r.get("id")],
-                written_by=writer, **({"job": str(job.get("id")), "status": str(job.get("status"))} if job else {}))
+        tell(mid, "records.changed", self._above, record_ids=[str(r.get("id")) for r in made.get("records") or [] if r.get("id")],
+             written_by=writer, **({"job": str(job.get("id")), "status": str(job.get("status"))} if job else {}))
         if job:
-            _watch(self._p, mid, job)
+            _watch(self._p, mid, job, self._above)
         return made
 
     async def operate(self, mid, rid, name, body, writer):
         out = await self._p.operate(mid, rid, name, body, writer)
-        publish(mid, "record.revised", record_id=rid, written_by=writer, fields=["operation"])
+        tell(mid, "record.revised", self._above, record_id=rid, written_by=writer, fields=["operation"])
         return out
 
     async def consolidate(self, mid, budget, why):
         out = await self._p.consolidate(mid, budget, why)
-        publish(mid, "records.changed", record_ids=[])
+        tell(mid, "records.changed", self._above, record_ids=[])
         return out
 
     async def revert_consolidation(self, mid, run, writer):
         out = await self._p.revert_consolidation(mid, run, writer)
-        publish(mid, "records.changed", record_ids=[], written_by=writer)
+        tell(mid, "records.changed", self._above, record_ids=[], written_by=writer)
         return out

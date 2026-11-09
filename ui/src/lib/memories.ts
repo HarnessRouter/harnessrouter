@@ -17,13 +17,13 @@ export interface Memory {
   engine?: string;
   /** The setups that use it, by name. */
   used_by?: { harness_id: string; name: string }[];
-  /** When an agent last read or wrote it (ISO time or epoch seconds). */
+  /** When an agent last read or wrote it (the service gives epoch ms; null: never). */
   last_used_at?: string | number | null;
-  /** One plain sentence on the last thing that failed here, and when; and when something last worked. */
+  /** One plain sentence on the last thing that failed here, and when; and when something last worked (epoch ms). */
   last_error?: string | null; last_error_at?: string | number | null; last_ok_at?: string | number | null;
-  /** A memory kept for one person of an agent that keeps each person's memory apart: who that person is. */
-  user?: string | null;
-  scope?: 'per_user' | 'shared';
+  /** A memory kept for one person of an agent that keeps each person's memory apart: who that person is, as the
+   *  agent's caller named them (the task's `user`). Said only to whoever manages the memory, never to the agent. */
+  end_user?: string;
 }
 export interface Writer { kind: string; id: string; type?: 'human' | 'agent'; on_behalf_of?: string; consolidation_id?: string }
 export interface ContentPart { type: string; text?: string; role?: string; file?: { id: string; name?: string; media_type?: string; bytes?: number }; text_source?: string }
@@ -173,11 +173,15 @@ export const setHarnessMemories = (hid: string, b: { default_memory_id?: string 
 /** What a setup's agent is given: `auto` lets the service choose, `none` gives it nothing, an engine by name, or a
  *  memory that already exists. */
 export type MemoryChoice = 'auto' | 'none' | { engine: string } | { id: string };
+/** The agent's memory: on a setup, the one it was given (`id` set); on a build not yet saved, the one its save will
+ *  give (`id` ''), chosen and not yet made. */
 export interface AgentMemory { id: string; name: string; engine: string; scope: 'per_user' | 'shared'; reason: string }
 /** The agent's memory and why (`memory` null: none, and `reason` says why). */
 export interface AgentMemoryRead { memory: AgentMemory | null; reason: string }
-/** The memory a harness record names, read leniently; undefined where the record says nothing of it (a service before
- *  0.40), so a page says nothing rather than "none". */
+/** The memory a harness record names (`memory: {id, name, engine, scope, reason, observe}`, or `memory: null` and
+ *  `memory_reason`), or the one a build's record proposes (`memory: {engine, scope, reason}`, `engine` null for none),
+ *  read leniently; undefined where the record says nothing of it (a service before 0.40), so a page says nothing
+ *  rather than "none". */
 export function agentMemoryOf(raw: unknown): AgentMemoryRead | undefined {
   if (!raw || typeof raw !== 'object' || !('memory' in raw)) return undefined;
   const r = raw as { memory?: unknown; memory_reason?: unknown };
@@ -186,28 +190,43 @@ export function agentMemoryOf(raw: unknown): AgentMemoryRead | undefined {
   if (!m || typeof m !== 'object') return { memory: null, reason: why };
   const o = m as Record<string, unknown>;
   const id = typeof o.id === 'string' ? o.id : '';
-  if (!id) return { memory: null, reason: why };
+  const engine = typeof o.engine === 'string' ? o.engine : '';
+  const said = typeof o.reason === 'string' ? o.reason : '';
+  if (!id && !engine) return { memory: null, reason: said || why };
   return {
-    memory: {
-      id, name: String(o.name || ''), engine: String(o.engine || o.provider || ''),
-      scope: o.scope === 'per_user' ? 'per_user' : 'shared', reason: typeof o.reason === 'string' ? o.reason : '',
-    },
-    reason: typeof o.reason === 'string' ? o.reason : why,
+    memory: { id, name: String(o.name || ''), engine, scope: o.scope === 'per_user' ? 'per_user' : 'shared', reason: said },
+    reason: said || why,
   };
 }
 /** A setup's own memory as its record says (undefined: the service doesn't say, before 0.40). */
 export const getAgentMemory = (hid: string) => call<unknown>('GET', `/v1/harnesses/${encodeURIComponent(hid)}`).then(agentMemoryOf);
-/** Give the agent its memory, or another one, or none. Changing the engine makes a new memory and moves the agent to
- *  it; the one before is kept, unattached. The answer is read again, so what is drawn is what was saved. */
+/** Give the agent its memory, or another one, or none (PUT /v1/harnesses/{hid}/memory, `{memory}`). Changing the
+ *  engine makes a new memory and moves the agent to it; the one before is kept, unattached. The answer is read again,
+ *  so what is drawn is what was saved. */
 export async function setAgentMemory(hid: string, choice: MemoryChoice): Promise<AgentMemoryRead | undefined> {
-  const out = await call<unknown>('PUT', `/v1/harnesses/${encodeURIComponent(hid)}/memory`, choice);
+  const out = await call<unknown>('PUT', `/v1/harnesses/${encodeURIComponent(hid)}/memory`, { memory: choice });
   return agentMemoryOf(out) || getAgentMemory(hid);
 }
-/** Look for the engines running beside this instance and connect each one found (an instance with one operator). */
-export const findEngines = () => call<unknown>('POST', '/v1/memory-services/discover');
+/** What looking for engines found, one line each: `connected` (found and connected now, or before), `running` (it
+ *  answers, and needs the key the command that started it has), `not_running`, or `refused` (with why). */
+export interface EngineFound { engine: string; state: 'connected' | 'running' | 'not_running' | 'refused' | string; message: string }
+/** Look for the engines running beside this instance and connect each one found that needs no key (an instance with
+ *  one operator). */
+export const findEngines = () => call<{ data?: EngineFound[] }>('POST', '/v1/memory-services/discover')
+  .then((d) => (Array.isArray(d?.data) ? d.data : []));
+/** The engine a new memory with this name and description gets, and why: the service's own reading (the one an agent
+ *  gets), among the engines connected and answering here. `engine` null: none is running, and `reason` says how to
+ *  start one. */
+export interface EngineChoice { engine: string | null; scope: 'per_user' | 'shared'; reason: string }
+export const chooseEngine = (name: string, description: string) =>
+  call<Partial<EngineChoice> | null>('GET', `/v1/memories/choose${q({ name: name.trim(), description: description.trim() })}`)
+    .then((d): EngineChoice => ({
+      engine: typeof d?.engine === 'string' && d.engine ? d.engine : null,
+      scope: d?.scope === 'per_user' ? 'per_user' : 'shared', reason: typeof d?.reason === 'string' ? d.reason : '',
+    }));
 
-/** What a finished task kept, on its turn record (`memory: {remembered, records}`), read leniently: the records may be
- *  ids or `{id, memory_id}`. Null where the turn kept nothing or says nothing of it. */
+/** What a finished task kept, on its turn record (`memory: {remembered, records: [{id, memory_id}], pending?}`), read
+ *  leniently: a record may also be a bare id. Null where the turn kept nothing or says nothing of it. */
 export interface Remembered { count: number; records: { id: string; memory_id?: string }[]; memoryId: string }
 export function rememberedOf(turn: unknown): Remembered | null {
   const m = turn && typeof turn === 'object' ? (turn as { memory?: unknown }).memory : null;
@@ -229,17 +248,11 @@ export function rememberedOf(turn: unknown): Remembered | null {
 // ── presentation ────────────────────────────────────────────────────────────────────────────
 /** The engine that keeps a memory. */
 export const engineOf = (m: Pick<Memory, 'provider' | 'engine'>) => m.engine || m.provider;
-/** The person a memory kept for one person belongs to, as the service stored them; '' for any other memory. */
-export const userOf = (m: Pick<Memory, 'user'> & { attributes?: unknown; properties?: unknown; metadata?: unknown }): string => {
-  if (typeof m.user === 'string' && m.user.trim()) return m.user.trim();
-  for (const bag of [m.properties, m.metadata, m.attributes]) {
-    const u = bag && typeof bag === 'object' ? (bag as { user?: unknown }).user : null;
-    if (typeof u === 'string' && u.trim()) return u.trim();
-  }
-  return '';
-};
+/** The person a memory kept for one person belongs to, as the service gives it to whoever manages the memory
+ *  (`end_user`); '' for any other memory, and for a reader the service doesn't tell. */
+export const userOf = (m: Pick<Memory, 'end_user'>): string => (typeof m.end_user === 'string' ? m.end_user.trim() : '');
 /** How a memory is named in a list: a person's memory by that person, any other by its name. */
-export const shownName = (m: Pick<Memory, 'name' | 'user'>) => userOf(m) || m.name;
+export const shownName = (m: Pick<Memory, 'name' | 'end_user'>) => userOf(m) || m.name;
 /** Every word of a record's content, in order. */
 export const bodyOf = (r: Pick<MemoryRecord, 'content'>) => (r.content || []).filter((p) => p.type === 'text').map((p) => p.text || '').filter(Boolean).join('\n\n');
 /** The line a record is listed by: its title, or how its content begins. */

@@ -11,6 +11,7 @@ import uuid
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+import memory_choice
 import memory_live
 import memory_plane as mp
 
@@ -23,18 +24,20 @@ _uhp_error = None
 _file_bytes = None          # app.py's reader of an uploaded file's bytes, bound by install()
 _on_grant = None            # app.py's hook after a grant is written, bound by install()
 _used_by = None             # app.py's answer to which agents use each memory, bound by install()
+_engines_running = None     # app.py's answer to which engines are connected for a workspace and answering, bound by install()
 
 
 def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None, on_grant=None, workspace_of=None,
-            used_by=None) -> None:
+            used_by=None, engines_running=None) -> None:
     """Bind the gateway's principal resolver, error envelope, graph backing and file store, and
     mount the routes. `on_grant(org, principal)` runs after a grant is written: the gateway uses
     it to give an agent that was just let into its first memory the tools to use it. `workspace_of` is the
     plug routes' own rule for which workspace a call is about, so the two can't disagree. `used_by(org, caller)`
-    answers {memory id: [{harness_id, name}]}: the agents the caller may see that hold a grant on each."""
-    global _principal, _uhp_error, _file_bytes, _on_grant, _workspace_of, _used_by
+    answers {memory id: [{harness_id, name}]}: the agents the caller may see that hold a grant on each.
+    `engines_running(org, workspace)` answers the engines connected there that answer now (memory_choice reads it)."""
+    global _principal, _uhp_error, _file_bytes, _on_grant, _workspace_of, _used_by, _engines_running
     _principal, _uhp_error, mp.GRAPH, mp.FILES, _file_bytes, _on_grant = principal, uhp_error, graph, file_meta, file_bytes, on_grant
-    _workspace_of, _used_by = workspace_of, used_by
+    _workspace_of, _used_by, _engines_running = workspace_of, used_by, engines_running
     if os.environ.get("HR_MEMORY_FIXTURE") == "1" and "fixture" not in mp.PROVIDERS:
         import memory_fixture
         mp.PROVIDERS["fixture"] = memory_fixture.FixtureProvider()
@@ -187,6 +190,19 @@ async def types(request: Request) -> dict:
     core = [{"type": t, "core": True} for t in mp.CORE_TYPES]
     ext = [dict(t, provider=pid) for pid, p in sorted(mp.PROVIDERS.items()) for t in await p.types()]
     return {"object": "list", "data": core + ext}
+
+
+@router.get("/v1/memories/choose")
+@guarded
+async def choose(request: Request, name: str = "", description: str = "") -> dict:
+    """The engine a new memory with this name and description gets, and why (memory_choice.for_memory): the one
+    reading of what a memory is for, here and for an agent, so New memory shows it as the name is typed. It reads
+    nothing but the words given and which engines are connected for the caller's own workspace and answering now;
+    it makes nothing and takes no id. `engine` null: none is running here, and `reason` says how to start one."""
+    org, _, ws, _ = await _who(request)
+    running = list(await _engines_running(org, ws or "default")) if _engines_running else []
+    c = memory_choice.for_memory(running=running, name=name[:mp._NAME_MAX * 2], description=description[:mp._DESC_MAX])
+    return {"engine": c.engine, "scope": c.scope, "reason": c.reason}
 
 
 # ── the tree ──────────────────────────────────────────────────────────────────────────────────

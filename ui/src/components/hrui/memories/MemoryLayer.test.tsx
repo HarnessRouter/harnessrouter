@@ -251,9 +251,13 @@ describe('Remember: one switch, where the service gives the agent its own memory
     return backend({ data: state.memory ? [held('m1', 'Photo cut', true, true)] : [], def: state.memory ? 'm1' : null, all: [memory({ id: 'm1', name: 'Photo cut', provider: 'mem0' })], providers: [CAPS.mem0, CAPS.graphiti], extra: {
       [`GET /v1/harnesses/${H}`]: () => ({ id: H, ...state }),
       [`PUT /v1/harnesses/${H}/memory`]: (c: { body: unknown }) => {
-        if (c.body === 'none') { state.memory = null; state.memory_reason = 'Turned off.'; }
-        else if (c.body === 'auto' || (c.body as { id?: string }).id) state.memory = OWN;
-        else state.memory = { ...OWN, id: 'm9', engine: (c.body as { engine: string }).engine, scope: 'shared', reason: 'It tracks people, things and how they relate over time.' };
+        // the service takes {"memory": …} (and `observe`), and refuses anything else, as the gateway does
+        const b = c.body as { memory?: unknown } | null;
+        if (!b || typeof b !== 'object' || !('memory' in b)) return { $status: 422, error: { code: 'invalid_input', message: 'Send {"memory": …}.' } };
+        const m = b.memory;
+        if (m === 'none') { state.memory = null; state.memory_reason = 'Turned off.'; }
+        else if (m === 'auto' || (m as { id?: string }).id) state.memory = OWN;
+        else state.memory = { ...OWN, id: 'm9', engine: (m as { engine: string }).engine, scope: 'shared', reason: 'It tracks people, things and how they relate over time.' };
         return { id: H, ...state };
       },
       ...extra,
@@ -281,11 +285,11 @@ describe('Remember: one switch, where the service gives the agent its own memory
     const s = contract({ memory: OWN });
     await draw();
     await press(remember());
-    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toBe('none');
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toEqual({ memory: 'none' });
     expect(remember().getAttribute('aria-pressed')).toBe('false');
     expect(el.textContent).toContain('Turned off.');
     await press(remember());
-    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[1].body).toEqual({ id: 'm1' });
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[1].body).toEqual({ memory: { id: 'm1' } });
     expect(remember().getAttribute('aria-pressed')).toBe('true');
   });
   test('off from the start: on asks the service to choose', async () => {
@@ -293,7 +297,7 @@ describe('Remember: one switch, where the service gives the agent its own memory
     await draw();
     expect(el.textContent).toContain('memory would add nothing');
     await press(remember());
-    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toBe('auto');
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toEqual({ memory: 'auto' });
   });
   test('Change offers the four engines and None, and an engine not running here is shown, not offered', async () => {
     const s = contract({ memory: OWN });
@@ -304,7 +308,7 @@ describe('Remember: one switch, where the service gives the agent its own memory
     expect((items[2] as HTMLButtonElement).disabled).toBe(true);
     expect(items[2].textContent).toContain('Not running here');
     await press(items[1] as HTMLElement);
-    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toEqual({ engine: 'graphiti' });
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toEqual({ memory: { engine: 'graphiti' } });
     expect(fact('Engine')).toContain('Graphiti');
     expect(fact('Scope')).toBe('Shared');
   });

@@ -509,7 +509,7 @@ describe('who uses it', () => {
     await click(button('Use in…'));
     expect(page().querySelector('#mmUse')?.textContent).toBe('Use Brand kits in…');
     await click(button('Use here'));
-    expect(s.sent('PUT', '/v1/harnesses/chrn_a/memory')[0].body).toEqual({ id: 'hmem_1' });
+    expect(s.sent('PUT', '/v1/harnesses/chrn_a/memory')[0].body).toEqual({ memory: { id: 'hmem_1' } });
   });
   test('a service before 0.40 says nothing of it: no Use in, the old way stays', async () => {
     open({ provider: CAPS.mem0, records: [record()] });

@@ -58,6 +58,7 @@ import browser_plane         # the browser surface: a cloud browser over CDP beh
 import sql_plane             # the read-only SQL data plane (gate, row cap, introspection)
 import memory_routes        # the Harness Memories sub-protocol (tree, access, provider seam)
 import memory_plane
+import memory_live          # what changes in a memory, told to whoever has it open
 import memory_tools
 import memory_local
 import memory_graphiti
@@ -10920,7 +10921,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         _inflight.add(_t)
         _t.add_done_callback(_inflight.discard)
     elif harness_id and "memories" in rec:
-        _t = asyncio.create_task(_memories_note(sid, translator.resp_id, []))
+        _t = asyncio.create_task(_memories_note_kept(org, sid, translator.resp_id))
         _inflight.add(_t)
         _t.add_done_callback(_inflight.discard)
     return status, produced, rec
@@ -21195,7 +21196,7 @@ async def _memory_used_by(org: str, caller: dict) -> dict[str, list[dict]]:
 
 memory_routes.install(app, _principal, uhp_error, BACKING.graph, _memory_file_meta, _memory_file_bytes,
                       on_grant=lambda org, principal: _memories_on_grant(org, principal), workspace_of=_plug_workspace,
-                      used_by=_memory_used_by)
+                      used_by=_memory_used_by, engines_running=lambda org, ws: _memory_engines_running(org, ws))
 memory_plane.PROVIDERS.update({"mem0": memory_mem0.Mem0(), "graphiti": memory_graphiti.Graphiti(),
                                "hindsight": memory_hindsight.Hindsight(), "reme": memory_reme.ReMe()})
 _MEMORY_CHECKS = {"mem0": memory_mem0.check, "graphiti": memory_graphiti.check,
@@ -21718,8 +21719,8 @@ async def memories_mcp(request: Request):
         _memory_corrected.add(sid)
     if seam.kept:
         # what the agent kept in this turn, for the turn's record (_memories_note)
-        kept = [str(x) for x in _json_list(((await _vertex_get(sid)) or {}).get("memory_kept")) if x] + [x for x in seam.kept if x]
-        await _vertex_upsert(sid, {"memory_kept": json.dumps(kept[-200:])})
+        kept = _kept_records(_json_list(((await _vertex_get(sid)) or {}).get("memory_kept"))) + _kept_records(seam.kept)
+        await _vertex_upsert(sid, {"memory_kept": json.dumps(kept[-200:], separators=(",", ":"))})
     return _jsonrpc_result(rid, _tool_text(text, is_error))
 
 
@@ -21816,9 +21817,13 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
     memory the harness writes by default (in a person's task, that person's own). No model runs here; what the
     provider derives from it, and when, is the provider's. Best-effort: a memory that cannot take the episode never
     fails the turn it describes, and a slow one never holds it: the turn doesn't wait for this. How it went is kept
-    on the memory (last_ok_at, last_error), and what it kept on the turn (_memories_note)."""
-    made_ids: list[str] = []
-    pending = False
+    on the memory (last_ok_at, last_error), and what it kept on the turn (_memories_note). An engine that draws from
+    the task after it answers (a job) has its records counted on the turn when the job settles (_memories_note_job)."""
+    made: list[dict] = []
+    job: dict | None = None
+    prov, mid = None, ""
+    # what the agent kept with its tools in this turn, read now: the next turn starts afresh (_memories_person_begin)
+    kept = await _memories_kept(sid)
     try:
         if ((await _memories_settings(hid, org, hv)) or {}).get("observe", True) is False:
             return
@@ -21830,7 +21835,8 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
             return
         m, _ = await memory_plane.need(org, mid, seam.wpr, "write")
         try:
-            made = await memory_plane.observe(await memory_plane.provider_of(m), mid, [{
+            prov = await memory_plane.provider_of(m)
+            out = await memory_plane.observe(prov, mid, [{
                 "content": [{"type": "text", "role": role, "text": text}
                             for role, text in (("user", str(rec.get("user_text") or "")), ("assistant", answer)) if text.strip()],
                 "attributes": {"session_id": sid, "model": str(rec.get("model") or ""), "kind": "turn"}}],
@@ -21840,25 +21846,106 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
             raise
         await memory_plane.mark(org, mid)
         await memory_plane.used(org, m)
-        made_ids = [str(r.get("id")) for r in made.get("records") or [] if r.get("id") and r.get("type") != "episode"]
-        pending = bool(made.get("job"))
+        made = _derived_records(out.get("records"), mid)
+        job = out.get("job") if isinstance(out.get("job"), dict) and out["job"].get("id") else None
         print(f"[memories] {sid}: the turn was observed into {mid}", flush=True)
     except Exception as e:  # noqa: BLE001
         print(f"[memories] observe after a turn of {sid} was not taken: {type(e).__name__}: {e}"[:300], flush=True)
     finally:
-        await _memories_note(sid, resp_id, made_ids, pending)
+        await _memories_note(org, sid, resp_id, kept, made, pending=bool(job))
+    if job and resp_id and prov is not None and len(_NOTE_JOBS) < _NOTE_JOBS_MAX:
+        t = asyncio.create_task(_memories_note_job(org, sid, resp_id, prov, mid, str(job["id"]), kept))
+        _NOTE_JOBS.add(t)
+        t.add_done_callback(_NOTE_JOBS.discard)
 
 
-async def _memories_note(sid: str, resp_id: str, made: list[str], pending: bool = False) -> None:
-    """The turn's record says what memory kept in it: what the agent kept with its tools and what the finished task
-    left, {"remembered": n, "records": [ids]}, and `pending` while the engine is still drawing from it."""
+def _kept_records(xs) -> list[dict]:
+    """Records a turn kept, each {"id", "memory_id"}, read leniently from what a session holds."""
+    out = []
+    for x in xs or []:
+        if isinstance(x, dict) and str(x.get("id") or ""):
+            out.append({"id": str(x["id"]), **({"memory_id": str(x["memory_id"])} if x.get("memory_id") else {})})
+        elif isinstance(x, str) and x:
+            out.append({"id": x})
+    return out
+
+
+def _derived_records(records, mid: str) -> list[dict]:
+    """What an engine drew from a finished task, as a turn links it: every record but the episode it was given."""
+    return [{"id": str(r["id"]), "memory_id": mid} for r in records or []
+            if isinstance(r, dict) and r.get("id") and r.get("type") != "episode"]
+
+
+async def _memories_kept(sid: str) -> list[dict]:
+    """What the agent kept with its tools in this session's current turn (memories_mcp writes it)."""
     try:
-        kept = [str(x) for x in _json_list(((await _vertex_get(sid)) or {}).get("memory_kept")) if x] if sid else []
-        records = list(dict.fromkeys([*kept, *made]))
-        if resp_id and (records or pending):
-            await _turn_memory_note(resp_id, {"remembered": len(records), "records": records, **({"pending": True} if pending else {})})
+        return _kept_records(_json_list(((await _vertex_get(sid)) or {}).get("memory_kept"))) if sid else []
+    except Exception as e:  # noqa: BLE001 - the turn's note says less, and never fails the turn
+        print(f"[memories] {sid}: what the turn kept was not read: {type(e).__name__}", flush=True)
+        return []
+
+
+async def _memories_note(org: str, sid: str, resp_id: str, kept: list[dict], made: list[dict], pending: bool = False) -> None:
+    """The turn's record says what memory kept in it: what the agent kept with its tools and what the finished task
+    left, {"remembered": n, "records": [{"id", "memory_id"}]}, and `pending` while the engine is still drawing from
+    it. Each record names the memory it is in, so a person reading the turn can open it there. Once written, the
+    memories they are in say something changed (memory_live.tell: a person's memory also tells the agent's memory
+    above it, without saying what), so a page watching the agent's memory reads the turn again and finds the note."""
+    try:
+        seen, records = set(), []
+        for r in [*kept, *made]:
+            k = (r.get("memory_id") or "", r["id"])
+            if k not in seen:
+                seen.add(k)
+                records.append(r)
+        if not resp_id or not (records or pending):
+            return
+        await _turn_memory_note(resp_id, {"remembered": len(records), "records": records, **({"pending": True} if pending else {})})
+        for mid in dict.fromkeys(str(r.get("memory_id") or "") for r in records):
+            m = await memory_plane._load(org, mid) if mid else None
+            if m:
+                memory_live.tell(mid, "records.changed", (str(m["end_user_of"]),) if m.get("end_user_of") else (), record_ids=[])
     except Exception as e:  # noqa: BLE001 - the turn's note never fails the turn
         print(f"[memories] {sid}: the turn's memory note was not written: {type(e).__name__}", flush=True)
+
+
+# An engine that draws from a finished task after it answers (Mem0's platform, Hindsight) answers a job; what it drew
+# is counted on the turn once the job settles. Asked with growing pauses for as long as a job may take, at most this
+# many turns at once on this replica (past that, the turn keeps "pending" and the memory still holds what was drawn).
+_NOTE_JOBS: set = set()
+_NOTE_JOBS_MAX = 128
+_NOTE_JOB_MAX_S = float(os.environ.get("HR_MEMORY_NOTE_JOB_MAX_S", "900"))
+
+
+async def _memories_note_job(org: str, sid: str, resp_id: str, prov, mid: str, job_id: str, kept: list[dict]) -> None:
+    """A turn whose engine answered a job: its note written again once the job settles, with what the engine drew, and
+    no longer pending (also when the engine forgets the job or it outlasts the wait). A replica that stops first
+    leaves the note pending; what the engine drew is in the memory all the same."""
+    end, wait = time.monotonic() + _NOTE_JOB_MAX_S, 1.0
+    made: list[dict] = []
+    while time.monotonic() < end:
+        await asyncio.sleep(min(wait, max(0.0, end - time.monotonic())))
+        wait = min(wait * 1.6, 15.0)
+        try:
+            job = await prov.job(mid, job_id)
+        except Exception as e:  # noqa: BLE001 - asked again after the next pause
+            print(f"[memories] {sid}: a job's state was not read: {type(e).__name__}", flush=True)
+            continue
+        if not job:
+            break                          # the engine no longer knows it: what was noted stands, no longer pending
+        status = str(job.get("status") or "")
+        if status == "completed":
+            made = _derived_records(job.get("records"), mid)
+            break
+        if status == "failed":
+            await memory_plane.mark(org, mid, str(job.get("error") or "") or "The engine could not draw anything from a finished task.")
+            break
+    await _memories_note(org, sid, resp_id, kept, made)
+
+
+async def _memories_note_kept(org: str, sid: str, resp_id: str) -> None:
+    """A turn that kept nothing after it (it didn't complete, or nothing is observed): what the agent kept with its tools."""
+    await _memories_note(org, sid, resp_id, await _memories_kept(sid), [])
 
 
 # ── Environments (UHP 2026-09-28, Environments chapter) ───────────────────────────────────────
@@ -23693,6 +23780,19 @@ async def _setup_build_save(p: dict, cfg: dict, hid: str, ctx: dict) -> dict:
     return {"name": name, "attached": attached}
 
 
+async def _setup_build_memory(p: dict, cfg: dict) -> dict:
+    """The memory the agent a build saves will get, and why: {engine, scope, reason}, chosen the way the save chooses
+    it (memory_choice over the engines connected in the person's workspace and answering, from the same words: its
+    name, instructions, the goal's hint, its servers and skills), so the card says it while the setup is saved. Nothing
+    is made here; the save provisions it (_harness_create_as, memory "auto")."""
+    words = {"name": str(cfg.get("name") or ""), "instructions": str(cfg.get("instructions") or ""),
+             "hint": str(cfg.get("memoryHint") or "")[:1000],
+             "tools": [str(x.get("name") or "") for x in cfg.get("mcpServers") or [] if isinstance(x, dict)],
+             "skills": [str(x.get("name") or "") for x in cfg.get("skills") or [] if isinstance(x, dict)]}
+    c = memory_choice.choose(running=await _memory_engines_running(str(p["org"]), _memory_ws_of(p)), **words)
+    return {"engine": c.engine, "scope": c.scope, "reason": c.reason}
+
+
 def _setup_build_member(p: dict) -> str:
     """Whose builds these are: the person signed in."""
     raw = str(p.get("member") or "")
@@ -23728,7 +23828,8 @@ async def setup_build_start(body: SetupBuildBody, request: Request) -> dict:
              "find": lambda q: asyncio.sleep(0, result=[]),
              "conn": lambda: _setup_build_wires(org), "client": _client(),
              "save": lambda cfg, hid: _setup_build_save(p, cfg, hid, ctx),
-             "exists": lambda hid: _setup_build_exists(org, hid)}
+             "exists": lambda hid: _setup_build_exists(org, hid),
+             "propose": lambda cfg: _setup_build_memory(p, cfg)}
     try:
         return await setup_builder.start(org, who, body.key, body.job, body.base, body.model, bases=bases, run_parts=parts)
     except setup_builder.BadKey:

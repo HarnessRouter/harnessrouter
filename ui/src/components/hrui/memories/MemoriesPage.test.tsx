@@ -125,28 +125,64 @@ describe('nothing connected', () => {
   test('Find engines asks the service to look, and says which it connected, from what it reads after', async () => {
     let found = false;
     const s = backend({
-      'GET /v1/memories/providers': () => ({ data: allProviders(found ? { ...NONE, mem0: true, reme: true } : NONE) }),
-      'POST /v1/memory-services/discover': () => { found = true; return { object: 'list' }; },
+      'GET /v1/memories/providers': () => ({ data: allProviders(found ? { ...NONE, hindsight: true, reme: true } : NONE) }),
+      // the service's own answer: one line per engine of the bundled stack
+      'POST /v1/memory-services/discover': () => { found = true; return { object: 'list', data: [
+        { engine: 'mem0', state: 'not_running', message: 'Mem0 isn\'t running here.' },
+        { engine: 'graphiti', state: 'not_running', message: 'Graphiti isn\'t running here.' },
+        { engine: 'hindsight', state: 'connected', message: 'Hindsight was found and connected.' },
+        { engine: 'reme', state: 'connected', message: 'ReMe was found and connected.' },
+      ] }; },
     });
     await open();
     await press('Find engines');
     expect(s.sent('POST', '/v1/memory-services/discover')).toHaveLength(1);
-    expect(toast).toHaveBeenCalledWith('Mem0, ReMe connected.');
+    expect(s.sent('POST', '/v1/memory-services/discover')[0].body).toBeUndefined();
+    expect(toast).toHaveBeenCalledWith('Hindsight, ReMe connected.');
+  });
+
+  test('an engine running that needs its key, or one refused, is said in the service’s words', async () => {
+    backend({
+      'GET /v1/memories/providers': { data: allProviders(NONE) },
+      'POST /v1/memory-services/discover': { object: 'list', data: [
+        { engine: 'mem0', state: 'running', message: 'Mem0 is running. Connect it with deploy/memories/up.sh, which has its key.' },
+        { engine: 'reme', state: 'refused', message: 'ReMe answers, but it can\'t read with a model: it has no working model key.' },
+        { engine: 'hindsight', state: 'not_running', message: 'Hindsight isn\'t running here.' },
+      ] },
+    });
+    await open();
+    await press('Find engines');
+    expect(toast).toHaveBeenCalledWith('Mem0 is running. Connect it with deploy/memories/up.sh, which has its key. '
+      + 'ReMe answers, but it can\'t read with a model: it has no working model key.');
   });
 });
 
 describe('New memory: a name, a description if you like, and the engine chosen for you', () => {
   const connected = { ...NONE, mem0: true, graphiti: true, hindsight: true };
-  const start = async (on: Record<string, boolean> = connected) => {
+  // the service's answers (GET /v1/memories/choose), by the name asked about: the console reads them, it never scores
+  const PEOPLE = 'It serves people, so it keeps each person’s facts and preferences, separately per person.';
+  const CHOICES: Record<string, { engine: string | null; scope: string; reason: string }> = {
+    '': { engine: 'mem0', scope: 'per_user', reason: 'Nothing about it says otherwise, so it keeps each person’s facts and preferences, separately per person.' },
+    'Customer preferences': { engine: 'mem0', scope: 'per_user', reason: PEOPLE },
+    'Account research': { engine: 'graphiti', scope: 'shared', reason: 'It tracks people, things and how they relate over time.' },
+    'Incident lessons': { engine: 'hindsight', scope: 'shared', reason: 'It learns from its own work, consolidating experience into lessons.' },
+    Accounts: { engine: 'mem0', scope: 'per_user', reason: PEOPLE },
+  };
+  const asked = (c: { path: string }) => new URLSearchParams(c.path.split('?')[1] || '');
+  const start = async (on: Record<string, boolean> = connected, choose: (name: string) => unknown = (n) => CHOICES[n] || CHOICES['']) => {
     const s = backend({
       'GET /v1/memories/providers': { data: allProviders(on) },
       'GET /v1/memories': { data: [memory()] },
+      'GET /v1/memories/choose': (c: { path: string }) => choose(asked(c).get('name') || ''),
       'POST /v1/memories': (c: { body: { name: string; provider: string } }) => memory({ id: 'hmem_new', name: c.body.name, provider: c.body.provider }),
     });
     await open();
     await press('New memory');
+    await rest();
     return s;
   };
+  // typing rests before the service is asked again
+  const rest = async () => { await act(async () => { await new Promise((r) => setTimeout(r, 350)); }); await flush(); };
   const chosen = () => page().querySelector('.mm-eng-now b')?.textContent;
 
   test('nothing to compare and nothing to lock: no Kept by, no Fixed once created', async () => {
@@ -157,22 +193,50 @@ describe('New memory: a name, a description if you like, and the engine chosen f
     expect(page().querySelector('label[for=mmCrDesc]')?.textContent).toContain('optional');
   });
 
-  test('the engine follows what the memory is for, and says why', async () => {
-    await start();
-    await type('#mmCrName', 'Customer preferences');
+  test('the service chooses the engine from what the memory is for, as typing rests, and says why', async () => {
+    const s = await start();
     expect(chosen()).toBe('Mem0');
-    expect(page().querySelector('.mm-eng-now small')?.textContent).toContain('each person');
+    await type('#mmCrName', 'Customer preferences');
+    await type('#mmCrDesc', 'What each customer likes.');
+    await rest();
+    expect(chosen()).toBe('Mem0');
+    expect(page().querySelector('.mm-eng-now small')?.textContent).toBe(PEOPLE);
+    const sent = s.sent('GET', '/v1/memories/choose');
+    const last = sent[sent.length - 1];
+    expect([asked(last).get('name'), asked(last).get('description')]).toEqual(['Customer preferences', 'What each customer likes.']);
     await type('#mmCrName', 'Account research');
+    await type('#mmCrDesc', '');
+    await rest();
     expect(chosen()).toBe('Graphiti');
     await type('#mmCrName', 'Incident lessons');
+    await rest();
     expect(chosen()).toBe('Hindsight');
+    // one question per pause in the typing, never one per key
+    expect(s.sent('GET', '/v1/memories/choose').length).toBeLessThanOrEqual(5);
   });
 
-  test('the best fit not running here: the next one that is, and the reason says so', async () => {
-    await start({ ...NONE, mem0: true, graphiti: true });
-    await type('#mmCrName', 'Team wiki');
+  test('no engine answering here: the service says so in its words, and Change still offers the connected ones', async () => {
+    const s = await start({ ...NONE, mem0: true, graphiti: true }, () => ({ engine: null, scope: 'per_user', reason: 'No memory engine is running here; one command starts them: deploy/memories/up.sh' }));
+    expect(chosen()).toBeUndefined();
+    expect(page().querySelector('.mm-eng-none')?.textContent).toBe('No memory engine is running here; one command starts them: deploy/memories/up.sh');
+    await type('#mmCrName', 'Accounts');
+    expect(button('Create')?.disabled).toBe(true);
+    await press('Change');
+    await act(async () => { (page().querySelector('[data-sv=graphiti]') as HTMLButtonElement).click(); });
+    await press('Done');
+    expect(chosen()).toBe('Graphiti');
+    await press('Create');
+    expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe('graphiti');
+  });
+
+  test('a choice the service could not make is said, and asked again on Try again', async () => {
+    let up = false;
+    await start(connected, () => (up ? CHOICES.Accounts : { $status: 503, error: { message: 'Not now.' } }));
+    expect(page().querySelector('.mm-eng .mm-err')?.textContent).toContain('The engine couldn’t be chosen just now.');
+    up = true;
+    await press('Try again');
+    await rest();
     expect(chosen()).toBe('Mem0');
-    expect(page().querySelector('.mm-eng-now small')?.textContent).toBe('ReMe fits best; it isn’t running here, so Mem0 keeps it for now.');
   });
 
   test('Change offers the connected engines only, as a group of radio buttons, and the choice is what gets created', async () => {
@@ -284,7 +348,7 @@ describe('the cards', () => {
     await open();
     await press('Use in…');
     await press('Use here');
-    expect(s.sent('PUT', '/v1/harnesses/chrn_a/memory')[0].body).toEqual({ id: 'c' });
+    expect(s.sent('PUT', '/v1/harnesses/chrn_a/memory')[0].body).toEqual({ memory: { id: 'c' } });
     expect(toast).toHaveBeenCalledWith('Photo cut remembers in Idle now.');
   });
 
