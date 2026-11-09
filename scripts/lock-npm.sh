@@ -30,7 +30,7 @@ dir="$root/docker/locks/npm/$name"
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 cp "$dir/package.json" "$tmp/"
-( cd "$tmp" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund "${before[@]}" >/dev/null )
+( cd "$tmp" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund ${before[@]+"${before[@]}"} >/dev/null )
 
 # name@version of every platform package (one that declares os or cpu), for the libc lookup.
 node -e '

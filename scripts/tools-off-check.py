@@ -28,6 +28,10 @@ reached the model request; the first turn's words are in the continued turn's re
 conversation went on); and no process's command line held the prompt's words or the edited
 instructions while the request was open (read as this script's user, another uid than the turn's).
 
+With --api-format the connection declares an API format, as a custom connection does (openai,
+responses or anthropic), and --model names the model the turn asks for. --verbose then lists each
+request's top-level fields beside its path, so what a base sends on that format can be read off.
+
 The turn is started on the runner directly (POST /turn), with the list the gateway would pass it: the
 gateway hands a harness's disabled_tools to the runner as they are stored (tools_disabled), so this
 is the same turn a harness starts, minus the gateway's routing. That is the point: on an instance
@@ -82,6 +86,12 @@ class Seen:
     look_for: tuple[str, ...] = ()
     marks: list[str] = []                  # --prompt-route: each turn's own words, looked for everywhere
     mcp_hits = 0
+
+
+class Conn:
+    """The connection every turn is given, past its stand-in base and key: --api-format and --model."""
+    api_format = ""
+    model = ""
 
 
 MEMORIES_PATH = "/v1/mcp/memories"
@@ -251,6 +261,9 @@ class StandHandler(http.server.BaseHTTPRequestHandler):
                 "block": BLOCK.encode() in raw,
                 "opening": opening(body),
                 "found": [w for w in (*Seen.look_for, *marks) if w.encode() in raw],
+                "fields": sorted(body),
+                "shape": {k: body[k] for k in ("model", "stream", "store", "reasoning", "include",
+                                               "reasoning_effort", "tool_choice") if k in body},
                 "on_cmdline": held})
         ctype, data = model_body(path, body)
         self._send(200, ctype, data)
@@ -324,7 +337,8 @@ def run_base(x: dict, stand: str, key: str, runner: str, made: list, disable: li
     tag = backend + ("~baseline" if baseline else "")
     row = {"base": base, "backend": backend, "tag": tag, "off": off, "status": "", "error": "",
            "enforcement": sorted({str(t.get("enforcement")) for t in (x.get("tools") or []) if isinstance(t, dict)})}
-    model = x.get("defaultModel") or next((m.get("id") for m in x.get("models") or [] if isinstance(m, dict)), "stand-in")
+    model = Conn.model or x.get("defaultModel") or \
+        next((m.get("id") for m in x.get("models") or [] if isinstance(m, dict)), "stand-in")
     base_url = f"{stand}/{tag}/v1"
     if backend == "gemini":
         # The runner sends gemini to Google's native API unless the base is a provider that serves
@@ -338,7 +352,8 @@ def run_base(x: dict, stand: str, key: str, runner: str, made: list, disable: li
     hdr = {"x-harness-internal": key}
     body = {"backend": backend, "provider": PROVIDER.get(backend, "openai-api"), "model": model,
             "prompt": prompt, "timeout_seconds": TURN_S - 30, "max_turns": 5,
-            "auth": {"api_key": f"tools-off-check-{uuid.uuid4().hex}", "base_url": base_url},
+            "auth": {"api_key": f"tools-off-check-{uuid.uuid4().hex}", "base_url": base_url,
+                     **({"api_format": Conn.api_format} if Conn.api_format else {})},
             "tools_disabled": off, "agent_doc": agent_doc, "idempotency_key": uuid.uuid4().hex,
             "mcp_servers": ([{"name": "memories", "url": stand + MEMORIES_PATH, "transport": "http"}] if memory else []),
             # the gateway's default for codex on this image (HARNESS_CODEX_APPSERVER=1)
@@ -433,7 +448,11 @@ def main() -> int:
     ap.add_argument("--look-for", default="", help="comma-separated words to find anywhere in each request")
     ap.add_argument("--prompt-route", action="store_true",
                     help="a first and a continued turn per base: the prompt reaches the model, off every command line")
+    ap.add_argument("--api-format", default="", choices=["", "openai", "responses", "anthropic"],
+                    help="the API format the connection declares, as a custom connection does")
+    ap.add_argument("--model", default="", help="the model the turn asks for (default: the base's own default)")
     args = ap.parse_args()
+    Conn.api_format, Conn.model = args.api_format, args.model
 
     for _ in range(90):
         if call("GET", "/healthz", {}, timeout=5)[0] == 200:
@@ -520,6 +539,8 @@ def main() -> int:
                 print(f"      request {i + 1} {c['path']} block {'yes' if c['block'] else 'no'} "
                       f"tools ({len(c['tools'])}): {', '.join(c['tools']) or '-'}", flush=True)
                 print(f"        system prompt opens: {c['opening'] or '-'}", flush=True)
+                print(f"        fields: {', '.join(c['fields'])}", flush=True)
+                print(f"        {json.dumps(c['shape'])}", flush=True)
                 if Seen.look_for:
                     print(f"        found in the request: {', '.join(c['found']) or 'none of ' + ', '.join(Seen.look_for)}", flush=True)
     if args.platform_memory:

@@ -274,7 +274,7 @@ integration there is nothing to set.
 <summary>Your own endpoint: a proxy or a gateway that names its models its own way</summary>
 
 Pick the **Custom** provider. It asks for the API format the endpoint speaks (OpenAI Chat
-Completions, OpenAI Responses for Codex, or Anthropic Messages), the endpoint URL, the key, and
+Completions, OpenAI Responses, or Anthropic Messages), the endpoint URL, the key, and
 the **models** it serves. In **Model**, type any id, including one absent from the suggested
 catalog. Each row pairs that id, which a harness picks, with the name this endpoint wants on the wire. That
 name is an arbitrary string per row and is sent verbatim: a bare vendor id, a deployment alias, a
@@ -283,13 +283,24 @@ name a proxy expects is a fact about that proxy and nothing else. If only **Name
 is filled in, the console also uses it as the model id when saving; completely empty rows are skipped.
 
 The form lists the compatible harness bases below the model rows for the selected API format.
-Choose one of those bases to use the model. If another connection serves the same id, select
-this connection under **Model routing**. Model ids are entered manually; the form does not fetch
-the endpoint's model list.
+Choose one of those bases to use the model. Pi and Oh My Pi take all three formats and call the API
+the connection declares, whatever the model id: on a Responses connection they post to
+`<endpoint>/responses`. That is the format to pick for a model the endpoint refuses on Chat
+Completions when a request carries both tools and a reasoning effort. If another connection serves
+the same id, select this connection under **Model routing**. Model ids are entered manually; the
+form does not fetch the endpoint's model list.
 
 The mapping is a property of the connection, not of a harness: a harness picks a model by its id,
 the connection decides how that id is written for its endpoint. Two harnesses that need different
 vocabularies on one endpoint are two connections to it.
+
+**Use Full URL.** When the endpoint URL is the complete request URL (a gateway route such as
+`https://llm.internal/teams/a/invoke`), set **Use Full URL** to **Use as it is** (`"full_url": "1"`
+in the integrations document). Every model call for the connection's API format then goes to that
+URL exactly, with nothing appended, whichever harness makes it. Any other call a harness makes on
+the side (a model list, a token count, a conversation compaction) has no address on such a
+connection and is answered `404` without being sent. Like a connection with request headers, it goes
+through the gateway even under `HR_SANDBOX_TRUST=owner`, so its key is never handed to the agent.
 
 **Disabled built-in tools.** Some endpoints refuse an agent's built-in tools per model (a proxy
 that answers `400 The following tool is not allowed for model 'gpt-5.5': web_search` to Codex).
