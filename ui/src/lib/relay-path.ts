@@ -7,23 +7,44 @@
 // kept since 11-05: refuse an empty segment, a dot part ('.' or '..', as a whole segment or as any
 // '/'-separated part of one), a backslash, a control character, and a slash or whitespace at either
 // end. A name with a slash or a space inside it still passes, as the file routes need
-// (/v1/sessions/{id}/files/{path}, /v1/environments/{id}/files/{path} take one). Beyond the hosted
-// rule: a dot part written %2e counts as a dot, since fetch() reads it as one after Next's decode.
+// (/v1/sessions/{id}/files/{path}, /v1/environments/{id}/files/{path} take one).
+//
+// Every check reads a segment FULLY decoded (CAT, via the pentest session): decoded to a fixed point, at
+// most five rounds, so a dot, slash, backslash or control character encoded any number of times up to that
+// is seen for what it is (%25252e is '.'). A segment still changing after five rounds, or whose escapes do
+// not decode as UTF-8 (%E0%A4, or an overlong '.' such as %C0%AE), is refused. A '%' that does not begin
+// an escape is a character of the name ("50% off.pdf"), as it is to the gateway. Nothing here changes
+// what is forwarded: a relay sends the segments as it always has.
 
-const isDot = (part: string) => {
-  const p = part.replace(/%2e/gi, '.');
-  return p === '.' || p === '..';
-};
+const ROUNDS = 5;
 
-/** Whether a decoded segment could be read by the gateway's URL as another path. */
-export function oddSegment(s: string): boolean {
-  return typeof s !== 'string' || s === '' || /^[\s/]|[\s/]$/.test(s) || /[\x00-\x1f\x7f\\]/.test(s)
-    || s.split('/').some(isDot);
+/** A value decoded to a fixed point, or null when it cannot be: still changing after five rounds, or an
+ *  escape run that is not UTF-8. */
+export function fullyDecoded(value: string): string | null {
+  let cur = value;
+  for (let round = 0; round <= ROUNDS; round++) {
+    let next: string;
+    try {
+      next = cur.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => decodeURIComponent(run));
+    } catch {
+      return null;
+    }
+    if (next === cur) return cur;
+    cur = next;
+  }
+  return null;
 }
 
-/** The first segment of a relayed path as the gateway routes it: the gateway decodes the path once more,
- *  so `internal%2Fx` and a double-encoded `%2569nternal` both arrive there under /internal. */
+/** Whether a segment could be read by the gateway's URL as another path, judged fully decoded. */
+export function oddSegment(s: string): boolean {
+  if (typeof s !== 'string') return true;
+  const d = fullyDecoded(s);
+  return d === null || d === '' || /^[\s/]|[\s/]$/.test(d) || /[\x00-\x1f\x7f\\]/.test(d)
+    || d.split('/').some((p) => p === '.' || p === '..');
+}
+
+/** The first segment of a relayed path as the gateway routes it, judged fully decoded: `internal%2Fx`,
+ *  a double-encoded `%2569nternal` and deeper ones all arrive under /internal. Call after oddSegment. */
 export function gatewayFirstSegment(segments: readonly string[]): string {
-  const joined = segments.join('/').replace(/%([0-9a-fA-F]{2})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
-  return joined.split('/')[0];
+  return segments.map((x) => fullyDecoded(x) ?? x).join('/').split('/')[0];
 }
