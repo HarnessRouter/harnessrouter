@@ -9723,8 +9723,39 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
 CLINE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 
 
+# Cline's own tool catalogue (3.0.60, the binary's tool ids and the names each puts in a request): the
+# "editor" id is sent as `apply_patch` for a model whose route edits by patch (gpt-5.4, measured: the
+# request carried apply_patch and no editor), and the "teams" id is these eighteen names.
+_CLINE_EDITOR_NAMES = ("editor", "apply_patch")
+_CLINE_TEAM_TOOLS = ("team_spawn_teammate", "team_shutdown_teammate", "team_status", "team_task",
+                     "team_run_task", "team_cancel_run", "team_list_runs", "team_await_runs",
+                     "team_send_message", "team_broadcast", "team_read_mailbox", "team_mission_log",
+                     "team_cleanup", "team_create_outcome", "team_attach_outcome_fragment",
+                     "team_review_outcome_fragment", "team_finalize_outcome", "team_list_outcomes")
+
+
+def _cline_disabled_tools(tools_disabled: list[str] | None) -> list[str]:
+    """The names for cline's `disabledTools`: the harness's, the editor's other name, and, with any
+    tool off, the team tools.
+
+    3.0.60 filters every tool list it builds by this setting's names (the lead's, and a spawn_agent
+    subagent's) EXCEPT a teammate's: team_spawn_teammate starts one with the full built-in tool set
+    whatever is switched off, so a switched-off tool would come straight back through a teammate.
+    The team tools go with any switched-off tool for that reason (and with Subagent, since a
+    teammate is another agent). Without team_spawn_teammate no teammate can start; the rest of the
+    family is useless without one."""
+    off = _tool_names_off(tools_disabled)
+    if not off:
+        return []
+    names = set(off)
+    if names & set(_CLINE_EDITOR_NAMES):
+        names |= set(_CLINE_EDITOR_NAMES)
+    names |= set(_CLINE_TEAM_TOOLS)
+    return sorted(names)
+
+
 def _cline_settings(home: pathlib.Path, base_url: str, api_key: str, model: str,
-                    mcp_servers: list[dict] | None) -> None:
+                    mcp_servers: list[dict] | None, tools_disabled: list[str] | None = None) -> None:
     """~/.cline/data/settings/{providers.json, cline_mcp_settings.json} under the redirected HOME.
 
     Written directly rather than through `cline auth` — the file is trivial, and a subprocess per
@@ -9774,11 +9805,31 @@ def _cline_settings(home: pathlib.Path, base_url: str, api_key: str, model: str,
             entry["transport"]["headers"] = hdrs
         servers[name] = entry
     (sdir / "cline_mcp_settings.json").write_text(json.dumps({"mcpServers": servers}, indent=2))
+    # Disabled tools: `disabledTools` in global-settings.json, beside providers.json, which 3.0.60's
+    # session builder applies to the tool list before the model sees it (E$/zj over
+    # resolveDisabledToolNames). --auto-approve decides how an offered tool's call is approved, a
+    # separate question, so the filter holds under it. Written every turn, since HOME is checkpointed
+    # and a list from an earlier turn must not outlive the harness's; anything else cline keeps in
+    # the file stays.
+    gs = sdir / "global-settings.json"
+    try:
+        cur = json.loads(gs.read_text()) if gs.exists() else {}
+    except (OSError, ValueError):
+        cur = {}
+    cur = cur if isinstance(cur, dict) else {}
+    off = _cline_disabled_tools(tools_disabled)
+    if off:
+        cur["disabledTools"] = off
+    else:
+        cur.pop("disabledTools", None)
+    if cur or gs.exists():
+        gs.write_text(json.dumps(cur, indent=2))
 
 
 def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                  resume_session_id: str | None = None,
-                 mcp_servers: list[dict] | None = None) -> list[str]:
+                 mcp_servers: list[dict] | None = None,
+                 tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "openai-api"
     if pr not in CLINE_PROVIDERS:
         raise HTTPException(400, f"unknown cline provider '{pr}' (one of {sorted(CLINE_PROVIDERS)})")
@@ -9793,7 +9844,7 @@ def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     home = pathlib.Path(cwd) / ".harness" / "home"
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)          # sessions/settings/db live INSIDE the checkpointed workspace
-    _cline_settings(home, auth.base_url, auth.api_key or "", model, mcp_servers)
+    _cline_settings(home, auth.base_url, auth.api_key or "", model, mcp_servers, tools_disabled)
     # A prompt with no whitespace is parsed as a SUBCOMMAND ("Unknown command or unquoted
     # prompt: hi") and `--` does not rescue it. A trailing newline does, verified on 3.0.60,
     # and is invisible to the model.
@@ -17334,11 +17385,11 @@ def capabilities(identifier: str = "") -> dict:
 #   dsh         — no per-tool switch on the wire.
 #   opensquilla — `--permissions` picks a posture (restricted / bypass / full); there is no
 #                 per-tool deny list anywhere on its agent CLI.
-#   cline       — no per-tool switch was found headless.
-# Qwen Code and Gemini CLI have one each in their settings file (_qwen_settings, _gemini_settings).
+# Qwen Code, Gemini CLI and Cline have one each in a settings file (_qwen_settings, _gemini_settings,
+# _cline_settings).
 # The gateway's catalog says the same thing per base (tool_enforcement "instruction" for exactly
 # these), and gateway/tests/test_tool_enforcement_parity.py holds the two together.
-_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "opensquilla", "cline"})
+_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "opensquilla"})
 
 
 def _disabled_tools_note(backend: str, tools_disabled: list[str] | None) -> str:
@@ -17715,7 +17766,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         elif backend == "cline":
             model = model or CLINE_DEFAULT_MODEL
             cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
-                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled)
         elif backend == "goose":
             model = model or GOOSE_DEFAULT_MODEL
             cmd = _build_goose(req.provider, auth, model, req.prompt, cwd, env,

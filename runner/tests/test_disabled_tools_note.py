@@ -18,13 +18,11 @@ from server import (BACKENDS, _TOOLS_OFF_BY_REQUEST, _agent_doc_path,  # noqa: E
 OFF = ["run_shell_command", "write_file (writes a file)", "editor"]
 
 
-def test_cline_is_asked():
-    assert "cline" in _TOOLS_OFF_BY_REQUEST
-
-
-def test_qwen_withholds_rather_than_asks():
-    """Its settings file's permissions.deny is a real switch (test_qwen_build.py)."""
-    assert "qwen" not in _TOOLS_OFF_BY_REQUEST and _disabled_tools_note("qwen", OFF) == ""
+@pytest.mark.parametrize("backend", ["qwen", "gemini", "cline"])
+def test_qwen_gemini_and_cline_withhold_rather_than_ask(backend):
+    """Each has a real switch in a settings file (test_qwen_build.py, test_gemini_build.py,
+    test_cline_backend.py)."""
+    assert backend not in _TOOLS_OFF_BY_REQUEST and _disabled_tools_note(backend, OFF) == ""
 
 
 @pytest.mark.parametrize("backend", sorted(_TOOLS_OFF_BY_REQUEST))

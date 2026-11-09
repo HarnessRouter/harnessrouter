@@ -20677,13 +20677,18 @@ _BASE_CATALOG: dict[str, dict] = {
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
         # From the tools array a live 3.0.60 run sent its provider (captured at a stub upstream).
-        # The CLI exposes no per-tool kill switch headless, so disabling is an instruction to the
-        # model — the codex/hermes/dsh/qwen tier, not claude's hard deny.
+        # "editor" is sent as apply_patch for a model whose route edits by patch; switching Editor
+        # off withholds both names.
         "tools": [("run_commands", "Shell"), ("read_files", "File Read"),
                   ("editor", "Editor"), ("search_codebase", "Search"),
                   ("fetch_web_content", "Web Fetch"), ("ask_question", "Question"),
                   ("spawn_agent", "Subagent")],
-        "tool_enforcement": "instruction",
+        # "hard": the runner writes the disabled list into cline's global-settings.json
+        # `disabledTools`, which 3.0.60 applies to every tool list it builds, a subagent's included,
+        # except a teammate's, so with any tool off the team tools go too (_cline_disabled_tools).
+        # Until this the switch did nothing here at all: measured on 0.40.0 with all seven off, six
+        # were still in the request and nothing asked the model not to use them.
+        "tool_enforcement": "hard",
     },
     "mimo": {
         "label": "MiMo Code", "backend": "mimo", "status": "ready",

@@ -161,3 +161,56 @@ def test_a_crash_before_run_result_still_yields_a_result():
     out = _cline_eof(state, 1)
     assert out and out[0]["is_error"] is True
     assert "exited 1" in out[0]["result"] or state.get("_cl_error", "") in out[0]["result"]
+
+
+# ── disabled tools: disabledTools in global-settings.json ─────────────────────────────────────
+# Measured on 0.40.0 with every catalog tool off: six of seven still in the request and nothing
+# asked (the seventh, editor, was sent as apply_patch). 3.0.60 filters each tool list it builds by
+# this setting, except a teammate's, which is started with the full tool set.
+from server import _CLINE_TEAM_TOOLS, _cline_disabled_tools  # noqa: E402
+
+
+def _global(env):
+    p = pathlib.Path(env["HOME"]) / ".cline" / "data" / "settings" / "global-settings.json"
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+def test_disabled_tools_land_in_global_settings_beside_providers():
+    _, _, env = _argv(tools_disabled=["run_commands", "read_files (reads files)"])
+    off = _global(env)["disabledTools"]
+    assert {"run_commands", "read_files"} <= set(off)
+    assert "read_files (reads files)" not in off
+
+
+def test_editor_off_withholds_the_patch_tool_too():
+    """gpt-5.4's route edits through apply_patch: the request carried apply_patch and no editor."""
+    assert {"editor", "apply_patch"} <= set(_cline_disabled_tools(["editor"]))
+    assert "apply_patch" not in _cline_disabled_tools(["run_commands"])
+
+
+def test_any_tool_off_closes_the_teammate_door():
+    """A teammate gets the full tool set whatever is off, so the team tools go with any switched-off
+    tool, Subagent included."""
+    for one in (["ask_question"], ["spawn_agent"]):
+        assert set(_CLINE_TEAM_TOOLS) <= set(_cline_disabled_tools(one))
+    assert "team_spawn_teammate" in _CLINE_TEAM_TOOLS and len(_CLINE_TEAM_TOOLS) == 18
+
+
+def test_nothing_off_writes_nothing_and_clears_an_earlier_list():
+    """HOME is checkpointed, so a list from an earlier turn must not outlive the harness's; the
+    rest of what cline keeps in the file stays."""
+    d = tempfile.mkdtemp()
+    env: dict = {}
+    _build_cline("openai-api", Auth(api_key="", base_url="https://r.example/v1"), "gpt-5.4", "go", d, env)
+    assert _global(env) is None
+    _build_cline("openai-api", Auth(api_key="", base_url="https://r.example/v1"), "gpt-5.4", "go", d, env,
+                 tools_disabled=["run_commands"])
+    p = pathlib.Path(env["HOME"]) / ".cline" / "data" / "settings" / "global-settings.json"
+    p.write_text(json.dumps({**json.loads(p.read_text()), "telemetryOptOut": True}))
+    _build_cline("openai-api", Auth(api_key="", base_url="https://r.example/v1"), "gpt-5.4", "go", d, env)
+    assert _global(env) == {"telemetryOptOut": True}
+
+
+def test_disabled_tools_never_reach_the_command_line():
+    cmd, _, _ = _argv(tools_disabled=["run_commands"])
+    assert "run_commands" not in " ".join(cmd) and "--auto-approve" in cmd
