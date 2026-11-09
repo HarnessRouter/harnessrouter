@@ -1,5 +1,5 @@
-// Nothing on anything else in a schema's drawing: what a provider makes is set out as a figure no line crosses, and any
-// link that would pass under a type it doesn't join, or whose name would sit on something, bows clear of it.
+// Nothing on anything else in a schema's drawing: what a provider makes is set out as a figure no line crosses, and the
+// check says where a straight link would pass under a type it doesn't join, or a name would sit on something.
 import { figure, withBuiltin, type BGraph } from './builtin';
 import { sizesAt, untangle, type UEdge, type UNode } from './untangle';
 import type { Provider } from '@/lib/memories';
@@ -33,14 +33,16 @@ test.each([
   const p = { id: 'x', schema: { mode: 'guides', builtin: { types: types.map((name) => ({ name, description: '' })),
     relations: (rels as string[][]).map(([name, from, to]) => ({ name, from, to, description: '' })) } } } as Provider;
   const g = withBuiltin({ vertex_types: [], edge_types: [] }, p) as BGraph;
-  const nodes = g.vertex_types.map((v) => N(v.label, v.ui.position!.x, v.ui.position!.y, g.titles?.[v.label] || v.label));
+  // named as the canvas names them, with a count: the longest a name gets there (schemaCaption)
+  const nodes = g.vertex_types.map((v) => N(v.label, v.ui.position!.x, v.ui.position!.y, `${g.titles?.[v.label] || v.label}\nBuilt in · 1,234 records`));
   const edges = g.edge_types.flatMap((e) => e.connections.map((c) => E(c.from_type, c.to_type, e.label)));
-  for (const k of [1, 1.5, 2, 2.6, 3.2]) {
-    const out = untangle(nodes, edges, sizesAt(k));
-    expect([k, out.clashes]).toEqual([k, 0]);
-    // at the sizes the Schema tab draws, every link is straight; drawn larger for a card, a name may need one to bow
-    if (k <= 1.5) expect([k, out.bows.size]).toEqual([k, 0]);
-  }
+  // the canvas draws every link straight (and the cover is the canvas). It draws types at their own size (k 1) unless a
+  // pane is too small to hold the graph at 80%, which this figure never is from 390 px up: there, nothing needs a bow
+  const out = untangle(nodes, edges, sizesAt(1));
+  expect([out.clashes, out.bows.size]).toEqual([0, 0]);
+  // and with an everyday count, a little larger too
+  const everyday = nodes.map((n) => ({ ...n, caption: n.caption.replace('1,234 records', '2 records') }));
+  expect([untangle(everyday, edges, sizesAt(1.25)).clashes, untangle(everyday, edges, sizesAt(1.25)).bows.size]).toEqual([0, 0]);
 });
 
 test('a link that would pass under a type it doesn’t join bows round it', () => {

@@ -1,56 +1,40 @@
 'use client';
-// A memory's cover: its schema drawn as the Schema tab draws it, with the same canvas, stylesheet, positions and links
-// set clear of what they'd cross (untangle.ts), then exported as a picture. It is drawn offscreen, with nothing over it
-// (no toolbar, panel or selection), on a clear background so it sits on the card's own in either theme, and cropped
-// tight to the graph and its names.
+// A memory's cover: its schema exactly as the Schema tab's canvas draws it (Richard 11-09, "let the cover exactly follow
+// what's on canvas"): the same elements (buildSchemaElements), the same names (schemaCaption), the same stylesheet
+// (CANVAS_STYLE) at its own sizes, the same positions and the same straight links. One thing differs on purpose: a
+// type's name says "Built in" as the canvas does, but not how many records are of it, which the canvas reads live and
+// a stored picture couldn't keep true.
 //
-// Sized for the card it is shown on (memories.css .mm-art, a card on a wide screen): the graph fills four fifths of the
-// box in the direction that limits it, and its names read at 11 px or more there. As the Schema tab does on a narrow
-// pane, the types and names are drawn larger than the positions alone would make them, but never so large that
-// anything lands on anything else. Loaded only when a cover is to be made.
+// It is drawn offscreen with nothing over it (no toolbar, panel or selection), on a clear background so it sits on the
+// card's own in either theme, cropped to the graph and its names, and exported at the scale that makes it fill four
+// fifths of a card's picture box (memories.css .mm-art) in the direction that limits it, twice that for sharp screens.
+// Nothing is drawn larger or moved to read better: what the card shows is what the canvas shows. Loaded only when a
+// cover is to be made.
 import cytoscape from 'cytoscape';
 import { CANVAS_STYLE } from './CytoscapeCanvas.jsx';
-import { buildSchemaElements } from './schemaElements';
+import { buildSchemaElements, schemaCaption } from './schemaElements';
 import { loadCatalog, needsCatalog } from './graphIcons.jsx';
-import { untangleCanvas } from './untangle';
 
-/** A card's picture box on a wide screen, the part of it the graph fills, and how large its names read there. */
+/** A card's picture box on a wide screen, and the part of it the graph fills. */
 export const CARD = { w: 268, h: 236 };
 export const FILL = 0.8;
-export const MIN_NAME_PX = 11.5;
 /** The picture is exported at twice the size it is seen, for sharp screens. */
 const SHARP = 2;
-const MOST_K = 4;
-// the stylesheet's sizes, as the Schema tab scales them (fitCanvas)
-const BASE = { node: 38, font: 10, icon: 18, text: 140, edge: 1.4, edgeText: 120 };
 /** The most a cover may be (the service refuses more). */
 const MOST = 512 * 1024;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** The drawing at `k` times its stylesheet sizes, its links set clear: how large it would be seen, and its clashes. */
-function drawnAt(cy, k) {
-  cy.batch(() => {
-    cy.nodes().style({ width: BASE.node * k, height: BASE.node * k, 'font-size': BASE.font * k, 'background-width': BASE.icon * k, 'background-height': BASE.icon * k, 'text-max-width': BASE.text * k });
-    cy.edges().style({ width: BASE.edge * k, 'font-size': BASE.font * k, 'text-max-width': BASE.edgeText * k });
-  });
-  const clashes = untangleCanvas(cy, k);
-  const bb = cy.elements().boundingBox();
-  const seen = Math.min((CARD.w * FILL) / Math.max(1, bb.w), (CARD.h * FILL) / Math.max(1, bb.h));
-  return { k, seen, clashes, namePx: BASE.font * k * seen, w: bb.w, h: bb.h };
-}
-
-/** The size to draw at: the smallest that makes the names read at MIN_NAME_PX on the card, or else the largest that puts
- *  nothing on anything that wasn't already. */
-function settle(cy) {
-  let best = drawnAt(cy, 1);
-  for (let k = 1.1; best.namePx < MIN_NAME_PX && k <= MOST_K + 1e-9; k = Math.round(k * 110) / 100) {
-    const at = drawnAt(cy, k);
-    if (at.clashes > best.clashes) break;
-    best = at;
-  }
-  return drawnAt(cy, best.k);
-}
+/** The cover's elements: the canvas's own, each type named as the canvas names it, less the live count. */
+export const coverElements = (graph) => buildSchemaElements(graph, null, null, (label, d) => schemaCaption(graph, label, d, ''));
+/** The cover's options for the canvas library: its stylesheet is the Schema tab's own. */
+export const coverOptions = (container, elements) => ({
+  container, elements, style: CANVAS_STYLE, layout: { name: 'preset' },
+  autoungrabify: true, autounselectify: true, userZoomingEnabled: false, userPanningEnabled: false, boxSelectionEnabled: false,
+  textureOnViewport: false, pixelRatio: 1, minZoom: 0.01, maxZoom: 8,
+});
+/** The export scale: the graph's own bounds (model units) filling FILL of the card box where it's limited. */
+export const coverScale = (bb) => Math.min((CARD.w * FILL) / Math.max(1, bb.w), (CARD.h * FILL) / Math.max(1, bb.h));
 
 /** Until every icon the drawing names is loaded, or a second has gone. */
 async function iconsLoaded(cy) {
@@ -70,27 +54,22 @@ export let lastFrame = null;
 export async function drawCover(graph) {
   const icons = (graph?.vertex_types || []).map((v) => v.ui && v.ui.icon);
   if (needsCatalog(icons)) await loadCatalog();
-  // each type by its title, as the tab names it; no record counts, which change and would date the picture
-  const captionOf = (label, d) => (graph.titles && graph.titles[label]) || String((d && d.name) || label).replace(/_/g, ' ');
   const box = document.createElement('div');
   box.setAttribute('aria-hidden', 'true');
   Object.assign(box.style, { position: 'fixed', left: '-10000px', top: '0', width: `${CARD.w}px`, height: `${CARD.h}px`, pointerEvents: 'none', opacity: '0', zIndex: '-1' });
   document.body.appendChild(box);
-  const cy = cytoscape({
-    container: box, elements: buildSchemaElements(graph, null, null, captionOf), style: CANVAS_STYLE, layout: { name: 'preset' },
-    autoungrabify: true, autounselectify: true, userZoomingEnabled: false, userPanningEnabled: false, boxSelectionEnabled: false,
-    textureOnViewport: false, pixelRatio: 1, minZoom: 0.01, maxZoom: 8,
-  });
+  const cy = cytoscape(coverOptions(box, coverElements(graph)));
   try {
     cy.fit(undefined, 0);
     // a first drawing asks for the icons; the picture is taken once they have come
     cy.png({ output: 'base64uri', scale: 0.1 });
     await iconsLoaded(cy);
-    const at = settle(cy);
-    lastFrame = at;
-    // the whole graph and its names, nothing around them, at twice the size it is seen
-    let pic = await cy.png({ output: 'blob-promise', full: true, scale: at.seen * SHARP });
-    if (pic.size > MOST) pic = await cy.png({ output: 'blob-promise', full: true, scale: at.seen });
+    const bb = cy.elements().boundingBox();
+    const seen = coverScale(bb);
+    lastFrame = { seen, w: bb.w, h: bb.h, namePx: 10 * seen };
+    // the whole graph and its names, nothing around them
+    let pic = await cy.png({ output: 'blob-promise', full: true, scale: seen * SHARP });
+    if (pic.size > MOST) pic = await cy.png({ output: 'blob-promise', full: true, scale: seen });
     return pic;
   } finally {
     cy.destroy();

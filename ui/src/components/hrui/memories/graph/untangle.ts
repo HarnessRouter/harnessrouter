@@ -1,9 +1,8 @@
-// Nothing on anything else, in a schema's drawing (the Schema tab and a memory's cover): a link never passes under a type
-// it doesn't join, and a link's name never sits on a type, a type's name or another link's name. Where the straight line
-// would, the link bows to one side, as little as it takes (cytoscape's unbundled bezier, its one control point
-// `control-point-distances` from the middle, along the left-hand normal of source to target, which puts the curve's
-// middle, and its name, half that far out). Types stay where they were put: two a person set on top of each other stay
-// so, and are counted as a clash, which the cover reads to stop drawing larger.
+// Nothing on anything else, in a schema's drawing: whether a link would pass under a type it doesn't join, or a link's
+// name would sit on a type, a type's name or another link's name, and how far a link would have to bow to clear it. The
+// canvas draws every link straight (Richard 11-09: "edge shouldn't be curve"), so this is the check a layout is held to,
+// not something applied to it: what a provider makes itself is set out (builtin.ts figure) so that nothing needs a bow
+// at the sizes the canvas draws, and its test says so.
 //
 // Sizes are the canvas stylesheet's (CytoscapeCanvas.jsx) at `k` times, as the tab and the cover draw them.
 export interface UNode { id: string; x: number; y: number; caption: string }
@@ -129,23 +128,4 @@ export function untangle(nodes: UNode[], edges: UEdge[], s: USizes): { bows: Map
     if (best.box) placed.push(best.box);
   }
   return { bows, clashes };
-}
-
-interface CyLike {
-  nodes(): { map<T>(f: (n: CyEle) => T): T[] };
-  edges(): { map<T>(f: (e: CyEle) => T): T[]; forEach(f: (e: CyEle) => void): void };
-  batch(f: () => void): void;
-}
-interface CyEle { id(): string; position(): { x: number; y: number }; data(k: string): unknown; style(o: Record<string, unknown>): void; removeStyle(names: string): void }
-/** Bow the canvas's links as `untangle` says, at the size it is drawn (`k`); answers the clashes left. */
-export function untangleCanvas(cy: CyLike, k: number): number {
-  const nodes = cy.nodes().map((n) => ({ id: n.id(), ...n.position(), caption: String(n.data('caption') || '') }));
-  const edges = cy.edges().map((e) => ({ id: e.id(), source: String(e.data('source')), target: String(e.data('target')), caption: String(e.data('caption') || '') }));
-  const { bows, clashes } = untangle(nodes, edges, sizesAt(k));
-  cy.batch(() => cy.edges().forEach((e) => {
-    const d = bows.get(e.id());
-    if (d) e.style({ 'curve-style': 'unbundled-bezier', 'control-point-distances': d, 'control-point-weights': 0.5 });
-    else e.removeStyle('curve-style control-point-distances control-point-weights');
-  }));
-  return clashes;
 }

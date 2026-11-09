@@ -105,7 +105,9 @@ describe('the canvas and its toolbar, as the original has them', () => {
     expect(nodes()[0].position).toEqual({ x: 100, y: 100 });
     expect(String(nodes()[0].data.iconUrl)).toMatch(/^data:image\/svg/);
     expect(edges()[0].data).toMatchObject({ source: 'Person', target: 'Company', caption: 'WORKS_AT', edgeLabel: 'WORKS_AT', lineColor: '#ef4444' });
-    expect(el.textContent).toContain('Graphiti uses these types to decide what to pull out of each task.');
+    // the canvas is the whole pane: no explanation under it, for any engine (Richard 11-09)
+    expect(el.textContent).not.toContain('uses these types to decide');
+    expect(el.querySelector('.mm-guide')).toBeNull();
   });
   it('has the pencil, + Type and the expand, and nothing else until there is something to save', async () => {
     await open(CAPS.graphiti);
@@ -356,7 +358,7 @@ describe('where something can\'t change, the same panel shows all of it, not edi
   it('labels: a name and what it means can change, the rest shows, and only those two are written', async () => {
     stored = { types: [{ name: 'Company', description: 'A customer.' }] };
     await open(CAPS.hindsight);
-    expect(el.textContent).toContain('Facts pulled out of each task get the labels that fit them.');
+    expect(el.textContent).not.toContain('Facts pulled out of each task');
     expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Inspect selected type', '+ Label', 'expand']);
     expect(canvasProps.edgeDrawEnabled).toBe(false);
     await act(async () => { canvasProps.onTapNode('Company'); });
@@ -385,7 +387,7 @@ describe('where something can\'t change, the same panel shows all of it, not edi
       };
       const seen: string[] = [];
       await open(CAPS.mem0, { onOpenData: (t) => seen.push(t) });
-      expect(el.textContent).toContain('Mem0 decides for itself what to keep, and takes no schema');
+      expect(el.textContent).not.toContain('decides for itself');
       expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Inspect selected type', 'Read only', 'expand']);
       expect(nodes().map((n) => n.data.id).sort()).toEqual(['entity', 'fact', 'note']);
       expect(nodes().find((n) => n.data.id === 'fact')?.data.caption).toBe('Fact\n2 records');
@@ -412,7 +414,7 @@ describe('where something can\'t change, the same panel shows all of it, not edi
     it('says so when nothing is kept yet, and when it can\'t be read', async () => {
       await open(CAPS.reme);
       expect(el.textContent).toContain('Nothing is kept here yet.');
-      expect(el.textContent).toContain('ReMe decides for itself');
+      expect(el.textContent).not.toContain('decides for itself');
       await act(async () => { root.unmount(); });
       root = createRoot(el);
       (harnessFetch as jest.Mock).mockImplementation(async () => ({ ok: false, status: 500, json: async () => ({}) }));
@@ -451,11 +453,11 @@ describe('nothing here looks editable where the vendor takes no schema', () => {
     expect(el.innerHTML).not.toContain(editIcon);
     expect(el.textContent).toContain('Read only');
   });
-  test('a vendor a schema guides keeps the pencil, and says a change applies from here on', async () => {
+  test('a vendor a schema guides keeps the pencil, and nothing on the canvas explains it (Richard 11-09)', async () => {
     await open(CAPS.graphiti);
     expect(el.innerHTML).toContain(editIcon);
     expect(el.textContent).not.toContain('Read only');
-    expect(el.textContent).toContain('A change applies from here on: what’s already kept stays as it is.');
+    expect(el.textContent).not.toContain('A change applies from here on');
   });
   test('someone who may only read sees no pencil on a vendor that takes a schema', async () => {
     await open(CAPS.graphiti, { ro: true });
@@ -496,7 +498,7 @@ describe('what the provider makes itself is drawn, locked, beside what a person 
     expect(Math.max(node('fact').position.x, node('entity').position.x, node('episode').position.x)).toBeLessThan(100);
     const made = edges().filter((e) => String(e.classes || '').includes('builtin')).map((e) => `${e.data.source} ${e.data.caption} ${e.data.target}`).sort();
     expect(made).toEqual(['entity came from episode', 'fact about entity', 'fact came from episode']);
-    expect(el.textContent).toContain('Built into Graphiti: Episode, Entity and Fact. Graphiti uses these types to decide what to pull out of each task.');
+    expect(el.textContent).not.toContain('Built into');
   });
   it('a built-in type or link opens read only and says why, and nothing about it is written', async () => {
     await open(graphiti);
@@ -536,27 +538,24 @@ describe('what the provider makes itself is drawn, locked, beside what a person 
     const sources = Array.from(q('.sp-graph-addtype select[aria-label="Source"]').querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value).filter(Boolean);
     expect(sources).toEqual(['Company', 'Person']);
   });
-  it('with none of their own yet, the starting points sit beside what Graphiti makes, not over it', async () => {
+  it('with none of their own yet, the canvas is the whole pane: no panel of starting points under it', async () => {
     stored = { types: [], relations: [] };
     await open(graphiti);
     expect(q('.mm-sch-empty')).toBeNull();
-    expect(q('.mm-sch-own')?.textContent).toContain('Add your own types');
-    // under the graph in the page's flow, never inside the canvas it would cover; and nothing folded away
-    expect(q('.dg-canvas .mm-sch-own')).toBeNull();
-    expect(q('.mgv.has-own > .dg-body + .mm-sch-own')).not.toBeNull();
-    expect(q('.mm-sch-own [aria-expanded]')).toBeNull();
+    // nothing under the graph or over it: no panel, no caption (Richard 11-09)
+    expect(q('.mm-sch-own')).toBeNull();
+    expect(el.textContent).not.toContain('Add your own types');
+    expect(el.querySelector('.mgv > .dg-body + *')).toBeNull();
     // what Graphiti makes is a triangle, never three in a line: Episode on top, Fact and Entity beneath it
     const p = (id: string) => (nodes().find((n) => n.data.id === id)?.position as { x: number; y: number });
     expect(p('episode').y).toBeLessThan(p('fact').y);
     expect(p('fact').y).toBe(p('entity').y);
     const area = (p('fact').x - p('episode').x) * (p('entity').y - p('episode').y) - (p('entity').x - p('episode').x) * (p('fact').y - p('episode').y);
     expect(Math.abs(area)).toBeGreaterThan(10000);
-    await click(Array.from(el.querySelectorAll('.mm-start')).find((b) => (b.textContent || '').startsWith('Customers')) as Element);
-    await later(20);
-    expect(nodes()).toHaveLength(6);
-    expect(puts).toHaveLength(1);
-    expect(q('.mm-sch-own')).toBeNull();
-    expect(q('.mgv.has-own')).toBeNull();
+    // + Type is the one-type form, as it was
+    await click(button('+ Type'));
+    expect(el.querySelector('.sp-graph-addtype .mm-start')).toBeNull();
+    expect(q('.sp-graph-addtype').textContent).toContain('New type');
   });
   it('Mem0: the one type it makes, locked, and what writers stated beside it', async () => {
     const rec = (id: string, type: string) => ({ record: { id, object: 'memory.record', memory_id: 'hmem_1', type, title: id, content: [], attributes: {}, references: [] }, memory: { id: 'hmem_1', name: 'x' } });
@@ -564,15 +563,14 @@ describe('what the provider makes itself is drawn, locked, beside what a person 
     await open(mem0);
     expect(node('fact').data.caption).toBe('Fact\nBuilt in · 2 records');
     expect(node('note').data.caption).toBe('Note\n1 record');
-    expect(el.textContent).toContain('Built into Mem0: Fact. It takes no schema, so nothing here can be changed. The other types are what writers stated in this memory.');
+    expect(el.textContent).not.toContain('Built into');
   });
   it('ReMe with nothing kept yet still shows what it makes', async () => {
     await open(reme);
     expect(el.textContent).not.toContain('Nothing is kept here yet.');
     expect(nodes().map((n) => n.data.id).sort()).toEqual(['episode', 'note']);
     expect(edges().map((e) => `${e.data.source} ${e.data.caption} ${e.data.target}`)).toEqual(['note came from episode']);
-    expect(el.textContent).toContain('Built into ReMe: Episode and Note. It takes no schema, so nothing here can be changed.');
-    expect(el.textContent).not.toContain('The other types');
+    expect(el.textContent).not.toContain('Built into');
   });
 });
 

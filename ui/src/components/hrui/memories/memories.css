@@ -268,7 +268,6 @@
 #hrui .mm-foot{position:absolute;left:50%;transform:translateX(-50%);bottom:12px;z-index:2;width:min(620px,calc(100% - 32px));display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center;pointer-events:none}
 #hrui .mm-foot .mm-sstat button{pointer-events:auto}
 #hrui .mm-foot .mm-hint{position:static;transform:none;white-space:normal;margin:0}
-#hrui .mm-guide{margin:0;font-size:13px;color:var(--muted);line-height:1.4}
 #hrui .mm-sstat{margin:0;font-size:12px;color:var(--faint)}
 #hrui .mm-sstat.bad{color:var(--bad)}
 #hrui .mm-err{margin:8px 0 12px;font-size:13px;line-height:1.5;color:var(--bad)}
@@ -382,16 +381,7 @@
 
 /* The Schema tab beside what a provider makes itself (drawn locked, "Built in"): where a person's own types or labels go,
    and the note on a built-in type that says why it can't be changed. */
-/* "Add your own types": under the graph in the page's flow, never over it. The graph keeps room of its own first; where
-   the two don't fit (a phone), the pane scrolls and the graph comes first */
-#hrui .mgv.has-own{overflow-y:auto;overflow-x:hidden}
-#hrui .mgv.has-own>.dg-body{flex:1 0 auto;min-height:max(300px,52vh)}
-#hrui .mm-sch-own{flex:none;box-sizing:border-box;width:min(640px,calc(100% - 32px));margin:14px auto 18px;display:flex;flex-direction:column;gap:6px;padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:var(--bg);text-align:left}
-#hrui .mm-sch-own b{font-size:14px;font-weight:600}
-#hrui .mm-sch-own>span{font-size:13px;color:var(--muted);line-height:1.5}
-#hrui .mm-sch-own .mm-starts{margin-top:6px}
 #hrui .mm-locked{margin:0 0 14px;padding:8px 10px;border-radius:8px;background:var(--surface);font-size:12.5px;color:var(--muted);line-height:1.5}
-@media (max-width:720px){#hrui .mm-sch-own{padding:12px;margin:12px auto 16px}#hrui .mm-sch-own .mm-starts{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 /* New memory. The service is fixed once created, so it is chosen from a comparison: a column a service,
    the same facts in every column so they read across, an unconnected one drawn unbuilt (dashed). */
@@ -642,3 +632,4 @@
 #hrui .mm-stand-t small{font-size:12.5px;line-height:1.45;color:var(--muted);text-wrap:pretty}
 #hrui .mm-stand .tog,#hrui .mm-stand .btn{flex:none}
 @media (max-width:560px){#hrui .mm-stand{flex-wrap:wrap}#hrui .mm-stand .btn{margin-left:auto}}
+
