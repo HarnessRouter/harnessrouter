@@ -69,6 +69,11 @@ async def _who(request: Request) -> tuple[str, str, str, list[str]]:
     return org, str(p.get("member") or ""), _workspace_of(request, p), principals_of(p)
 
 
+def _writer(request: Request) -> dict:
+    """Who this call writes as: the principal that authenticated it (memory_plane.writer_of_caller), set by _who."""
+    return mp.writer_of_caller(getattr(request.state, "hr_caller", {}) or {})
+
+
 async def _json(request: Request) -> dict:
     try:
         body = await request.json()
@@ -398,7 +403,7 @@ async def observe(mid: str, request: Request) -> dict:
 
     async def write():
         try:
-            made = await mp.observe(prov, mid, eps, mp.writer_of(member))
+            made = await mp.observe(prov, mid, eps, _writer(request))
         except mp.MemoryError as e:
             await mp.mark(org, mid, e.message)
             raise
@@ -465,7 +470,7 @@ async def remember(mid: str, request: Request) -> dict:
 
     async def write():
         try:
-            made = await mp.remember(prov, mid, rec_in, mp.writer_of(member))
+            made = await mp.remember(prov, mid, rec_in, _writer(request))
         except mp.MemoryError as e:
             await mp.mark(org, mid, e.message)
             raise
@@ -507,10 +512,11 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
     # `If-Match` is the version the writer read: named, a write that crossed another is refused rather than losing it
     match = (request.headers.get("if-match") or "").strip().strip('"')
     try:
-        made = await mp.revise(prov, mid, rid, patch, mp.writer_of(member), expected=int(match) if match.isdigit() else None)
+        made = await mp.revise(prov, mid, rid, patch, _writer(request), expected=int(match) if match.isdigit() else None)
     except memory_live.VersionMoved as e:
         raise mp.MemoryError(412, "memory_version_moved", f"Someone else changed this record: it is at version {e.version} now.", "version")
-    await mp.keep_on_both_ends(prov, mid, made, {"kind": "provider", "id": prov.id, "on_behalf_of": f"member:{member}"})
+    w = _writer(request)
+    await mp.keep_on_both_ends(prov, mid, made, {"kind": "provider", "id": prov.id, "on_behalf_of": f"{w['kind']}:{w['id']}"})
     return await mp.present(org, mid, made, pr)
 
 
@@ -519,7 +525,7 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
 async def forget(mid: str, rid: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "write")
-    return await mp.present(org, mid, await mp.forget(await mp.provider_of(m), mid, rid, mp.writer_of(member)), pr)
+    return await mp.present(org, mid, await mp.forget(await mp.provider_of(m), mid, rid, _writer(request)), pr)
 
 
 @router.post("/v1/memories/{mid}/erase")
@@ -662,7 +668,7 @@ async def define_query(mid: str, name: str, request: Request) -> dict:
         raise _uhp_error(422, "memory_invalid", "A named query has a name of letters, digits and underscores, a body, and requires read or write.")
     q = {"name": name, "description": str(b.get("description") or ""), "params": b.get("params") or {"type": "object"},
          "requires": b.get("requires", "read"), "language": str(b.get("language") or ""), "body": str(b["body"]),
-         "defined_by": mp.writer_of(member)}
+         "defined_by": _writer(request)}
     return await (await mp.provider_of(m)).define_query(mid, q)
 
 
@@ -677,7 +683,7 @@ async def run_query(mid: str, name: str, request: Request) -> dict:
         raise _uhp_error(404, "memory_not_found", "No such query on this memory.", "name")
     if q.get("requires", "read") not in privs:
         raise _uhp_error(403, "memory_forbidden", f"This query needs `{q['requires']}` on the memory.")
-    return await _answer(org, m, pr, await mp.run_query(prov, mid, q, (await _json(request)).get("params") or {}, mp.writer_of(member)))
+    return await _answer(org, m, pr, await mp.run_query(prov, mid, q, (await _json(request)).get("params") or {}, _writer(request)))
 
 
 @router.post("/v1/memories/{mid}/query")
@@ -695,7 +701,7 @@ async def free_query(mid: str, request: Request) -> dict:
         raise _uhp_error(403, "memory_forbidden", "A query that writes needs `write` on the memory.")
     if not b.get("statement"):
         raise _uhp_error(422, "memory_invalid", "Give the statement to run.", "statement")
-    res = await mp.free_query(prov, mid, str(b.get("language") or ""), str(b["statement"]), b.get("params") or {}, write, mp.writer_of(member))
+    res = await mp.free_query(prov, mid, str(b.get("language") or ""), str(b["statement"]), b.get("params") or {}, write, _writer(request))
     if "results" not in res:           # the provider's own rows, as they are
         return {"object": "memory.query", "rows": res.get("rows") or [], "degraded": res.get("degraded") or []}
     return await _answer(org, m, pr, res)
@@ -712,7 +718,7 @@ async def operate(mid: str, rid: str, name: str, request: Request) -> dict:
     if needs not in privs:
         raise _uhp_error(403, "memory_forbidden", f"This operation needs `{needs}` on the memory.")
     return {"object": "memory.operation", "name": name,
-            "result": await mp.operate(prov, mid, rid, name, await _json(request), mp.writer_of(member), needs)}
+            "result": await mp.operate(prov, mid, rid, name, await _json(request), _writer(request), needs)}
 
 
 # ── snapshots: a name for an instant ──────────────────────────────────────────────────────────
@@ -790,4 +796,4 @@ async def consolidation_changes(mid: str, run: str, request: Request) -> dict:
 async def revert(mid: str, run: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "delete")
-    return await (await mp.provider_of(m)).revert_consolidation(mid, run, mp.writer_of(member))
+    return await (await mp.provider_of(m)).revert_consolidation(mid, run, _writer(request))

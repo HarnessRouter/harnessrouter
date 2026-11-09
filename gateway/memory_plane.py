@@ -1009,10 +1009,11 @@ async def _facts_about(prov: Provider, mid: str, subject: str, predicate) -> lis
 # drop an agent's `standing` before it gets here and say so (memory_tools.NOTE_STANDING); this is what holds when
 # anything else carries it. A person's own key writes as that person.
 def is_agent(writer: dict | None) -> bool:
-    """Whether a write is an agent's: a member that is an agent (writer_of(..., agent=True), what the agent tools write
-    as), a service, or a key an agent holds for someone (`delegated`)."""
+    """Whether a write is not a person's: a member that is an agent (writer_of(..., agent=True), what the agent tools
+    write as, and writer_of_caller for an agent's own member id), a service (a key minted for no one), or a key an agent
+    holds for someone (`delegated`)."""
     w = writer if isinstance(writer, dict) else {}
-    return (w.get("kind") == "member" and w.get("type") == "agent") or w.get("kind") == "service" or bool(w.get("delegated"))
+    return (w.get("kind") == "member" and w.get("type") == "agent") or w.get("kind") in (SERVICE, "service") or bool(w.get("delegated"))
 
 
 def _names_standing(*things, words: bool = True) -> bool:
@@ -1481,6 +1482,23 @@ def writer_of(member: str, agent: bool = False) -> dict:
     """Stamped here from the authenticated caller; a client's own `written_by` is never read. A
     person and an agent are both members; `type` says which, for a reader who wants to know."""
     return {"kind": "member", "id": member, "type": "agent" if agent else "human"}
+
+
+SERVICE = "x.service"       # a writer with no member behind it: a key minted for no one (§3: a server's own kind is x.)
+AGENT_MEMBER_PREFIX = "chrn_"   # an agent's member id is its harness's id (memory_local: member:<harness id>)
+
+
+def writer_of_caller(caller: dict) -> dict:
+    """Who a REST caller writes as, from the principal that authenticated, never from the route: a person is a signed-in
+    console session (the console's trusted call, which names its member) or an API key a person holds. A key minted for
+    no one is a service, an agent's own member id or a run's credential an agent: each stamped as what it is, and
+    is_agent holds the standing rule for it."""
+    member = str(caller.get("member") or "")
+    if caller.get("calibration") or member.startswith("calibrator:"):
+        return {"kind": "member", "id": member, "type": "agent"}
+    if not member:
+        return {"kind": SERVICE, "id": str(caller.get("key_id") or "unnamed")}
+    return writer_of(member, agent=member.startswith(AGENT_MEMBER_PREFIX))
 
 
 def parts_of(content, *, empty_ok: bool = False) -> list[dict]:
