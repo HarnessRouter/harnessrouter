@@ -1039,9 +1039,8 @@ docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
 Aider, OpenHands and Agent Zero are the largest of the set: each environment is 600-700 MB and takes
-a minute or two to install on a fresh volume. All three are in the default list anyway, because the
-console offers every base the catalogue lists and a base that did not install fails on its first
-task; leave any of them out of `HR_BACKENDS` if you will not use it.
+a minute or two to install on a fresh volume. All three are in the default list; leave any of them
+out of `HR_BACKENDS` if you will not use it, and the console stops offering it.
 
 Agent Zero (`agentzero`) is a framework rather than a CLI, so it is installed from its tagged source
 archive (digest-pinned) into a virtualenv rather than from a package registry: 569 MB of virtualenv
@@ -1049,9 +1048,10 @@ and 69 MB of source, 83 seconds on a fresh volume (measured on Linux arm64). It 
 dependency pins, minus the packages that serve only what this base switches off (local embeddings and
 speech, which would bring torch; document parsing; the browser; its messaging integrations).
 
-A backend that fails to install is not fatal: the others still work. The console offers every
-base the gateway's catalogue lists, so a task on a backend that did not install fails on its
-first turn; the container's log names the install that failed.
+A backend that fails to install is not fatal: the others still work. A base this instance has not
+installed (one left out of `HR_BACKENDS`, or one whose install failed) reads "not installed": the
+console does not offer it, and a task on a harness built on it is refused with that reason. The
+container's log names the install that failed.
 
 Chromium is genuinely an image layer, so it stays a build flag:
 
@@ -1076,6 +1076,9 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `HR_STEP_CHECKPOINT` | off | Off here: the workspace already sits on the volume and outlives a restart (`HARNESS_WORKSPACE`, `HR_WS_MARKER_DIR`). `1` also saves the workspace after each finished tool step while a task runs, so a sandbox that dies mid-task keeps the steps before it. Turn it on when the workspace lives somewhere a restart loses, such as `/tmp`. |
 | `HR_STEP_CHECKPOINT_EVERY_S` | `30` | With `HR_STEP_CHECKPOINT=1`, at most one save per this many seconds per session. A step that finishes inside the interval is saved when it ends, not dropped. |
 | `HR_STEP_CHECKPOINT_MAX_BYTES` | `268435456` | With `HR_STEP_CHECKPOINT=1`, a session whose last save was larger than this (256 MiB) is saved only when its task ends, since each save copies the whole workspace. |
+| `HR_BRANCH_PREPARE_TIMEOUT_S` | `300` | How long a branch (`branch: true`) may take to prepare its new session: restoring the chosen response's files, saving them, and copying its turns and their files. Past it the request is answered `503` and no session is created. |
+| `HR_BRANCH_COPY_MAX_FILES` | `100` | A branch copies the files its earlier turns attached, so they stay readable if the original task is deleted. At most this many; past it, an attachment names the file's path in the branch's files instead. |
+| `HR_BRANCH_COPY_MAX_BYTES` | `268435456` | The same, at most this many bytes in all (256 MiB). |
 | `HR_WORKSPACE_TTL_HOURS` | `72` | Idle session workspaces are removed after this. They rehydrate from their checkpoint, so this costs time, not work. `0` keeps them forever. |
 | `HR_RELAY_UPSTREAM_TIMEOUT_S` | `600` | How long one model call may go without sending anything before the task is told the provider did not answer. Several model APIs send nothing while a model thinks (OpenAI's Chat Completions sends nothing at all), so a shorter wait cuts long thinking off. Lower it only if you would rather end a stuck call sooner than wait out a long think. It was `180` in 0.31.0 only. |
 | `HR_ENTRA_AUTHORITY` | `https://login.microsoftonline.com` | Where an Azure connection that signs in with Microsoft Entra asks for its token. A sovereign cloud names its own. |
@@ -1421,3 +1424,11 @@ Apache-2.0, see [LICENSE](../LICENSE). Third-party notices are in [NOTICE](../NO
 
 The agent CLIs are **not** redistributed here; they are installed on first run under their own
 licenses. Review them before enabling a backend.
+
+
+### Roder
+
+Set `HR_BACKENDS=roder` for a Roder-only installation. Roder uses its native app-server
+and a Responses connection (OpenAI, Azure Foundry, OpenRouter, Vercel, LLMTR, TokenRouter, HarnessRouter, or a custom
+endpoint with `api_format=responses`). See [Roder setup and verification](roder.md) for
+installation, session state, tool policy, MCP, and qualification limits.

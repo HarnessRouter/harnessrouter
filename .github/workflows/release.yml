@@ -169,7 +169,10 @@ jobs:
           # ("claude did not install"), three candidates running. Twelve minutes, and a timeout says
           # so rather than naming a base.
           for i in $(seq 1 144); do
-            docker logs smoke 2>&1 | grep -q "backends available" && break
+            # grep reads the whole log (no -q): -q exits at the first match, docker logs is then cut off
+            # writing the lines after it, and pipefail fails the pipeline although the line was there
+            # (0.38.6's amd64 gate, a second start up in ten seconds, failed exactly so).
+            docker logs smoke 2>&1 | grep "backends available" >/dev/null && break
             sleep 5
           done
           docker logs smoke 2>&1 | tail -30
@@ -192,10 +195,10 @@ jobs:
           SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           docker restart smoke >/dev/null
           for i in $(seq 1 60); do
-            docker logs --since "$SINCE" smoke 2>&1 | grep -q 'backends available' && break
+            docker logs --since "$SINCE" smoke 2>&1 | grep 'backends available' >/dev/null && break
             sleep 5
           done
-          docker logs --since "$SINCE" smoke 2>&1 | grep -q 'backends available' \
+          docker logs --since "$SINCE" smoke 2>&1 | grep 'backends available' >/dev/null \
             || { echo "::error::the second start did not come up within 5 minutes on ${{ matrix.arch }}"; exit 1; }
           AGAIN=$(docker logs --since "$SINCE" smoke 2>&1 | sed '/backends available/q' | grep -E '\] (installing|WARN)' || true)
           [ -z "$AGAIN" ] || { echo "$AGAIN"; echo "::error::the second start on ${{ matrix.arch }} reinstalled or warned"; exit 1; }

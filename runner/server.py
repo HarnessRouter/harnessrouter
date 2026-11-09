@@ -91,6 +91,7 @@ import environments   # the read-only project layer a turn may name (runner/envi
 import reasoning      # how much a model thinks on a turn: levels and what sets them (runner/reasoning.py)
 import tracecontext   # the caller's W3C trace context: its checks and a child for the relay (#473)
 import ask_user_mcp   # the `ask_user` tool a base asks the person through, and what its arguments mean (#476)
+import roder_backend   # Roder's app-server base: its builder, tool table and stream (runner/roder_backend.py)
 
 app = FastAPI(title="harness-runner")
 
@@ -886,12 +887,21 @@ HARNESS_STATE = ".harness"
 # 3 s, the other two with no visible cost. NOT here: opencode's npm cache, whose rebuild cost a turn
 # 20 s. The CLI home is already out of the workspace's own git history (see _git_ensure), so the tar
 # is the one place these travelled.
-_REBUILT_CACHES = (".harness/home/.omp/natives", ".harness/home/.codex/.tmp", ".harness/home/.cache/pkg")
+_REBUILT_CACHES = (".harness/home/.omp/natives", ".harness/home/.codex/.tmp", ".harness/home/.cache/pkg",
+                   # Roder 0.4.8 under RODER_DATA_DIR (.harness/roder): its code index of the workspace
+                   # (code-index/<workspace hash>/code-index.sqlite3, extension-host context.rs), the
+                   # tool and skill discovery catalog it writes at every start (discovery/,
+                   # roder-tools discovery.rs) and its provider models cache (models-cache.json,
+                   # openai-responses provider.rs). Each is made again when missing. NOT here: its
+                   # threads (the conversation), memory/ and knowledge/ (what the agent saved), and
+                   # threads/discovery-state (a thread's promoted tools).
+                   ".harness/roder/code-index", ".harness/roder/discovery", ".harness/roder/models-cache.json")
 
 # .git history travels in the tarball, so these must be git-ignored too (see _git_ensure).
 # Persist conversation transcripts ($HOME -> .harness/home: ~/.claude/projects, ~/.codex/sessions)
 # so --resume survives sandbox recycling — but NEVER persist credentials inside them.
 CHECKPOINT_EXCLUDE = [*(f"./{c}" for c in _REBUILT_CACHES),
+                      "./.harness/roder/auth", "./.harness/roder/config.toml",
                       "./tmp", "./.gcp-sa.json", "./.codex", "./.credentials.json",
                       "./.harness/claude/.credentials.json",
                       "./.harness/home/.claude/.credentials.json",
@@ -1176,7 +1186,10 @@ _PER_TURN_CONFIG = (".harness/opencode.json", ".harness/kilo.json", ".harness/mc
                     ".harness/mcp-bridge/")
 # A base's own state directory outside the CLI home, which it rewrites on every turn (see
 # _git_ensure). Not in the checkpoint repo; in the tar like .harness/home.
-_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/", ".harness/zeroclaw/")
+_STATE_DIRS = (".harness/nanobot/", ".harness/opensquilla/", ".harness/goose/", ".harness/zeroclaw/",
+               # Roder's store: its threads, SQLite stores (analytics, memory, the code index) and
+               # discovery catalog change on every turn, as goose's do
+               ".harness/roder/")
 
 
 def _git_ensure(ws: str) -> None:
@@ -1238,6 +1251,7 @@ def _write_gitignore(gi: pathlib.Path) -> None:
         ".harness/agentzero/base/usr/.env", ".harness/agentzero/base/usr/secrets.env",
         *_PER_TURN_CONFIG,
         # this batch — the same files CHECKPOINT_EXCLUDE drops from the tarball
+        ".harness/roder/auth/", ".harness/roder/config.toml",
         ".harness/home/.jcode/auth.json", ".harness/home/.jcode/credentials.json",
         ".harness/home/.config/jcode/",
         ".harness/opensquilla/.env", ".harness/opensquilla/secrets.toml",
@@ -1706,6 +1720,9 @@ def _write_skills(cwd: str, skills: list[dict], backend: str = "claude") -> list
         # us here too — one directory, named in mimo.json.
         rootrels = [".harness/skills"]
         entryroot = ".harness/skills"
+    elif backend == "roder":
+        rootrels = [".harness/home/.codex/skills"]
+        entryroot = ".harness/home/.codex/skills"
     elif backend == "jcode":
         # ~/.jcode/skills/<name>/SKILL.md — jcode's GLOBAL skills root (tool/skill.rs names it
         # first), and $HOME is already <cwd>/.harness/home, so this is both inside a loader path
@@ -2298,7 +2315,7 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
                                    # fast-agent has no instruction-file convention at all: the
                                    # file the runner writes is passed as the agent's instruction
                                    # with -i, which is aider's arrangement, so the name is ours.
-                                   "fast-agent")
+                                   "fast-agent", "roder")
         else "CLAUDE.md")
 
 
@@ -14994,6 +15011,9 @@ BACKENDS = {
     # same relationship omp has to pi.
     "mimo": {"providers": sorted(MIMO_PROVIDERS), "default_model": MIMO_DEFAULT_MODEL,
              "normalize": _opencode_to_claude},
+    # Roder runs its native app-server through a separate one-turn driver.
+    "roder": {"providers": sorted(roder_backend.PROVIDERS), "default_model": roder_backend.DEFAULT_MODEL,
+              "normalize": roder_backend.normalize},
     # jcode's NDJSON is its OWN schema (src/cli/commands.rs emit_ndjson_event), including a `tokens`
     # event the turn has to ACCUMULATE because its own `done.usage` holds only the last request's.
     "jcode": {"providers": sorted(JCODE_PROVIDERS), "default_model": JCODE_DEFAULT_MODEL,
@@ -15233,7 +15253,7 @@ def _kill_capped(proc: subprocess.Popen, rec: dict) -> None:
 # CLI's own. jcode is absent too — its counter in _jcode_to_claude predates this one and emits
 # jcode's own usage, so it stays.
 _GENERIC_STEP_BUDGET = {"codex", "dsh", "pi", "omp", "qwen", "gemini", "cline",
-                        "opencode", "mimo", "kilo", "qoder"}
+                        "opencode", "mimo", "kilo", "qoder", "roder"}
 
 
 # ── a question for the person ends the turn (UHP Tasks §3.2, #476) ──────────────────────────────
@@ -16413,10 +16433,10 @@ def _ws_marker_get(identifier: str) -> str:
 
 
 def _ws_marker_clear(identifier: str) -> None:
-    try:
-        _ws_marker_path(identifier).unlink()
-    except OSError:
-        pass
+    marker = _ws_marker_path(identifier)
+    for path in (marker, pathlib.Path(str(marker) + ".branch.json")):
+        with contextlib.suppress(OSError):
+            path.unlink()
 
 
 def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
@@ -16438,6 +16458,132 @@ def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
     return False
 
 
+def _ws_wipe(ws_path: pathlib.Path) -> None:
+    """Everything in a workspace folder removed, the folder itself kept. Warm-pool sandboxes are
+    REUSED across sessions, so the folder may hold a prior session's files (incl. another
+    tenant's); with HR_SANDBOX_PER_SESSION it is the workspace root itself (_ws), which is never
+    removed. /hydrate and a branch's restore both start from this."""
+    for child in ws_path.iterdir():
+        try:
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _hydrate_branch(request: Request, identifier: str) -> dict:
+    """A new session from committed user files; never import another session's CLI home.
+
+    Only this handler answers `branched: true`, and the gateway takes nothing else for a branch: a
+    runner from before branching ignores `branch_commit`, restores the source's latest workspace
+    whole and answers 200, which would be a branch with the wrong files.
+
+    The target is wiped first, as /hydrate wipes it, unless it is this branch's own restore
+    already (its receipt). A pooled sandbox reused across sessions, or the workspace root itself
+    under HR_SANDBOX_PER_SESSION, holds whatever the last session left there, and refusing it
+    refused every branch on such a sandbox. A failure empties the target again and removes it only
+    where it is a per-session folder: the workspace root is never removed."""
+    from branching import BranchRestoreFailed, BranchUnavailable, restore
+
+    selected = request.query_params.get("branch_commit", "")
+    latest = request.query_params.get("branch_head", "")
+    if request.query_params.get("probe"):
+        raise HTTPException(409, "branch_unavailable")
+    fd, spool_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)
+    target = None
+    touched = complete = False
+    nbytes = 0
+    try:
+        try:
+            with os.fdopen(fd, "wb") as output:
+                async for chunk in request.stream():
+                    output.write(chunk)
+                    nbytes += len(chunk)
+        except Exception as error:
+            raise HTTPException(400, "branch body incomplete") from error
+        if not nbytes:
+            raise HTTPException(409, "branch_unavailable")
+        ws = _ws(identifier)
+        target = pathlib.Path(ws)
+        receipt = pathlib.Path(str(_ws_marker_path(identifier)) + ".branch.json")
+        if target.exists() and any(target.iterdir()):
+            try:
+                previous = json.loads(receipt.read_text())
+            except (OSError, ValueError):
+                previous = None
+            if previous is not None:
+                # This folder is this branch's: the same restore again (a resend after a lost
+                # answer) is done already. Anything else means the session has moved on since (a
+                # checkpoint advanced its marker), and a late resend must not wipe its work.
+                try:
+                    if (previous["commit"] == selected and previous["head"] == latest
+                            and _ws_holds(identifier, target, previous["sha"])):
+                        return {"ok": True, "restored": True, "branched": True}
+                except (KeyError, TypeError):
+                    pass
+                raise HTTPException(409, "branch_unavailable")
+        # A truncated upload never gets here. From here a failure empties the target again.
+        touched = True
+        _ws_marker_clear(identifier)          # first, as /hydrate: nothing vouches for a half restore
+        target.mkdir(parents=True, exist_ok=True)
+        _ws_wipe(target)
+        _isolate_session(ws)
+        # Off the event loop: the restore runs Git and reads and writes whole archives, minutes
+        # for a large one, and every other session on this runner waited behind it. _fs_as is per
+        # thread (setfsuid) and is entered and left inside restore(), on the worker thread that
+        # writes, so the write wall holds there and no other thread's identity changes.
+        work = asyncio.ensure_future(asyncio.to_thread(
+            restore, pathlib.Path(spool_path), target, selected, latest, pathlib.Path(SPOOL_DIR),
+            write_context=lambda: _fs_as(_session_uid(ws)),
+            excluded=(*CHECKPOINT_EXCLUDE, *("./" + p for p in (*_PER_TURN_CONFIG, *_STATE_DIRS)))))
+        try:
+            branch_sha = await asyncio.shield(work)
+        except asyncio.CancelledError:
+            # A thread can't be stopped: the cleanup below waits for it, or it would write into
+            # a folder already emptied.
+            await asyncio.wait([work])
+            raise
+        _git_ensure(ws)
+        if request.query_params.get("branch_backend") == "nanobot":
+            with _fs_as(_session_uid(ws)):
+                # Regenerate public file-root metadata; never import the source's .harness state.
+                _agent_subdir_set(ws, _NANOBOT_WS)
+                _git_exclude(ws, [f"{_NANOBOT_WS}/.nanobot/", f"{_NANOBOT_WS}/skills/",
+                                  f"{_NANOBOT_WS}/memory/", f"{_NANOBOT_WS}/AGENTS.md"],
+                             "nanobot's own machinery, never the task's output")
+        _ws_marker_set(identifier, branch_sha)
+        if _ws_marker_get(identifier) != branch_sha:
+            raise OSError("branch marker could not be saved")
+        receipt_fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(receipt_fd, "w") as output:
+            json.dump({"commit": selected, "head": latest, "sha": branch_sha}, output)
+        complete = True
+        return {"ok": True, "restored": True, "branched": True}
+    except BranchUnavailable as error:
+        raise HTTPException(409, "branch_unavailable") from error
+    except BranchRestoreFailed as error:
+        # Not 503, which the gateway resends (_HYDRATE_PAUSES, seven times): a restore that ran
+        # out of time or disk does the same again, after the whole upload again.
+        raise HTTPException(500, "branch_restore_failed") from error
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(503, "branch restore temporarily unavailable") from error
+    finally:
+        if touched and not complete:
+            _ws_marker_clear(identifier)       # the marker and the receipt
+            with contextlib.suppress(OSError):
+                _ws_wipe(target)
+            if not _SANDBOX_PER_SESSION and os.path.realpath(target) not in (
+                    os.path.realpath(WORKSPACE_ROOT), "/"):
+                with contextlib.suppress(OSError):
+                    target.rmdir()
+        with contextlib.suppress(OSError):
+            os.unlink(spool_path)
+
+
 @app.post("/hydrate")
 async def hydrate(request: Request, identifier: str = "") -> dict:
     """Restore /workspace from a checkpoint tarball (the request body). Empty body = a fresh
@@ -16448,6 +16594,8 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
     materializes in the sandbox's ~2 GiB RAM. sha256 folds over the incoming stream; untar reads
     from the spooled file. CRITICALLY, the spool completes BEFORE the workspace wipe — a truncated
     upload (client disconnect) raises during spooling and leaves the current workspace untouched."""
+    if "branch_commit" in request.query_params:
+        return await _hydrate_branch(request, identifier)
     _reap_workspaces(keep=_SID_SAFE.sub("_", (identifier or "").strip())[:120] or "_default")
     ws = _ws(identifier)
     ws_path = pathlib.Path(ws)
@@ -16491,14 +16639,7 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         # The marker goes first: a restart in the middle of the wipe or the untar must not leave it
         # vouching for a half-restored folder, now that it outlives a restart.
         _ws_marker_clear(identifier)
-        for child in ws_path.iterdir():
-            try:
-                if child.is_dir() and not child.is_symlink():
-                    shutil.rmtree(child, ignore_errors=True)
-                else:
-                    child.unlink()
-            except Exception:  # noqa: BLE001
-                pass
+        _ws_wipe(ws_path)
         restored = False
         if nbytes:
             with open(spool_path, "rb") as tar_in:
@@ -16545,6 +16686,18 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: 
     if commit != "0":
         _git(ws, "add", "-A")
         _git(ws, "commit", "-q", "-m", f"checkpoint {int(time.time())}", "--allow-empty")
+    # Both identities are read before archiving; Git metadata that can't be read must not lose the
+    # workspace. The full commit is the turn's branch point (the gateway's _branch_point_put), so it
+    # is sent only for a checkpoint that committed: a mid-turn tarball is not the HEAD commit's tree.
+    head = full_commit = ""
+    try:
+        if commit != "0":
+            full_commit = _git(ws, "rev-parse", "HEAD").stdout.strip()
+            if not re.fullmatch(r"[0-9a-f]{40}", full_commit):
+                full_commit = ""
+        head = _git(ws, "rev-parse", "--short", "HEAD").stdout.strip()
+    except Exception:
+        head = full_commit = ""
     excl = [f"--exclude={p}" for p in CHECKPOINT_EXCLUDE]
     fd, tar_path = tempfile.mkstemp(suffix=".tgz", dir=SPOOL_DIR)   # OUTSIDE the workspace
     try:
@@ -16560,11 +16713,11 @@ def checkpoint(background_tasks: BackgroundTasks, identifier: str = "", commit: 
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 h.update(chunk)
                 nbytes += len(chunk)
-        head = _git(ws, "rev-parse", "--short", "HEAD").stdout.strip()
         _ws_marker_set(identifier, h.hexdigest())   # this session now HOLDS this checkpoint
         background_tasks.add_task(os.unlink, tar_path)   # cleanup after the response streams out
         return FileResponse(tar_path, media_type="application/gzip", background=background_tasks,
-                            headers={"X-Checkpoint-Bytes": str(nbytes), "X-Git-Head": head})
+                            headers={"X-Checkpoint-Bytes": str(nbytes), "X-Git-Head": head,
+                                     "X-Git-Commit": full_commit})
     except HTTPException:
         raise
     except Exception:
@@ -17480,6 +17633,14 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             cmd = _build_mimo(req.provider, auth, model, req.prompt, cwd, env,
                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                               skills_dir=skills_dir, tools_disabled=req.tools_disabled)
+        elif backend == "roder":
+            model = model or roder_backend.DEFAULT_MODEL
+            cmd = roder_backend.build(req.provider, auth, model, req.prompt, cwd, env,
+                                      relay=_hermes_relay_route, driver_cmd=_driver_cmd,
+                                      resume_session_id=req.resume_session_id,
+                                      mcp_servers=[{**s, "auth": None, "headers": _mcp_headers(s)}
+                                                   for s in (req.mcp_servers or [])],
+                                      tools_disabled=req.tools_disabled, thinking=_TURN_THINKING.get())
         elif backend == "jcode":
             model = model or JCODE_DEFAULT_MODEL
             cmd = _build_jcode(req.provider, auth, model, req.prompt, cwd, env,
