@@ -92,6 +92,52 @@ afterEach(async () => {
   jest.useRealTimers();
 });
 
+describe('a branch (issue #477)', () => {
+  test('a turn the record says was imported reads imported, both halves of it; any other does not', () => {
+    const { msgs } = C.msgsFromTurns([turn({ imported: true }), turn({ id: 'r2' })]);
+    expect(msgs.map((m) => m.imported)).toEqual([true, true, undefined, undefined]);
+  });
+
+  test('the message sent with branchFrom asks for a branch from that response, and names no session', async () => {
+    mockChat.stream.mockImplementation(async (_o: StreamOpts, h: StreamHandlers) => { h.onCreated?.('r9'); h.onSession?.('s-new'); h.onDone?.('completed', {}); return 'r9'; });
+    await render(<Conv sid={null} />);
+    await act(async () => { await api.send('Try another way', [], { branchFrom: 'r2' }); });
+    const opts = mockChat.stream.mock.calls[0][0] as StreamOpts;
+    expect(opts.previousResponseId).toBe('r2');
+    expect(opts.branch).toBe(true);
+    expect(opts.sessionHint).toBeFalsy();
+  });
+
+  test('a message sent without it never asks for one', async () => {
+    mockChat.stream.mockImplementation(async (_o: StreamOpts, h: StreamHandlers) => { h.onCreated?.('r9'); h.onSession?.('s-new'); h.onDone?.('completed', {}); return 'r9'; });
+    await render(<Conv sid={null} />);
+    await act(async () => { await api.send('Hello'); });
+    expect((mockChat.stream.mock.calls[0][0] as StreamOpts).branch).toBeUndefined();
+  });
+
+  test('the turn after the branch continues the branch: its own response, no branch', async () => {
+    // the stream stays open across a render, as a real one does: the conversation moves onto its
+    // session between the session's arrival and the end of the turn
+    let handlers: StreamHandlers = {};
+    let end: (id: string) => void = () => {};
+    mockChat.stream.mockImplementationOnce((_o: StreamOpts, h: StreamHandlers) => {
+      handlers = h; h.onCreated?.('r9'); h.onSession?.('s-new');
+      return new Promise((r) => { end = r; });
+    }).mockImplementation(async () => 'r10');
+    mockChat.load.mockResolvedValue(record([]));
+    await render(<Conv sid={null} />);
+    await act(async () => { await api.send('Try another way', [], { branchFrom: 'r2' }); });
+    await tick();
+    await act(async () => { handlers.onDone?.('completed', {}); end('r9'); });
+    await tick();
+    await act(async () => { await api.send('And then?'); });
+    const opts = mockChat.stream.mock.calls[1][0] as StreamOpts;
+    expect(opts.previousResponseId).toBe('r9');
+    expect(opts.branch).toBeUndefined();
+    expect(opts.sessionHint).toBe('s-new');
+  });
+});
+
 describe('a turn’s state as the record says it', () => {
   test.each(['queued', 'starting', 'running', 'in_progress'])('%s is live: running', (s) => {
     expect(C.turnStatus(s)).toBe('running');
