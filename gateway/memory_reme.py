@@ -86,6 +86,9 @@ def _folder(attrs: dict) -> str:
 
 class ReMe(mp.Provider):
     id = "reme"
+    # A finished task is kept as a note of its own (episodes/<id>.md), one a person reads and edits: it is what ReMe kept,
+    # so a turn counts it (app.py's _derived_records). Other engines' episodes are the input, and what they drew counts.
+    episode_is_kept = True
 
     def __init__(self, base_url: str = "", api_key: str = "", by_meaning: bool = False):
         self.base, self.key, self.by_meaning = base_url.rstrip("/"), api_key, by_meaning

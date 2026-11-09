@@ -4366,6 +4366,46 @@ def _mcp_through_relay(servers: list[dict] | None) -> list[dict]:
     return out
 
 
+# The platform's own memory reaches an agent as the gateway's memories server, always at this path on the gateway
+# (gateway/app.py _memories_ensure: <origin>/v1/mcp/memories), whatever name the entry took. Read off the address the
+# gateway sent: the relay gives the session its own address for it (_mcp_through_relay).
+_PLATFORM_MEMORY_PATH = "/v1/mcp/memories"
+
+
+def _has_platform_memory(servers: list[dict] | None) -> bool:
+    for s in servers or []:
+        try:
+            path = urllib.parse.urlsplit(str((s or {}).get("url") or "")).path
+        except ValueError:
+            continue
+        if path.rstrip("/") == _PLATFORM_MEMORY_PATH:
+            return True
+    return False
+
+
+# A base's own persistent memory tools, withheld when the platform's memory is attached: with two memories the model
+# also saved into the one only the base can read, which the console never shows (Hermes on sslip, 11-09; hermes is
+# switched off in its own config, _hermes_prepare_env). Only bases whose switch withholds the tool from the model are
+# here, by the names that switch takes: cheetahclaws' measured Memory* tools (CHEETAHCLAWS_TOOLS) through its
+# `disabled_tools`, and Roder's memory and knowledge stores through its allowlist (roder_backend.TOOLS; a switch id
+# takes its whole family). Already off on every turn, whatever is attached: jcode `memory`, grok GROK_MEMORY=0,
+# agentzero's `_memory` plugin, dcode's memory auto-save, zeroclaw's memory tools (not on its allowlist), and
+# docker-agent's memory toolset (never declared).
+_OWN_MEMORY_TOOLS: dict[str, tuple[str, ...]] = {
+    "cheetahclaws": ("MemoryDelete", "MemoryList", "MemorySave", "MemorySearch", "MemoryVerify"),
+    "roder": ("memory_save", "knowledge_save"),
+}
+
+
+def _own_memory_off(backend: str, tools_disabled: list[str] | None) -> list[str] | None:
+    """The turn's withheld tools with the base's own memory tools added (_OWN_MEMORY_TOOLS)."""
+    names = _OWN_MEMORY_TOOLS.get(backend)
+    if not names:
+        return tools_disabled
+    have = list(tools_disabled or [])
+    return have + [n for n in names if n not in have]
+
+
 class _QuietHTTPServer(http.server.ThreadingHTTPServer):
     """A client that goes away mid-call is ordinary here, and a traceback is not a place to risk a url."""
     daemon_threads = True
@@ -8290,10 +8330,17 @@ _HERMES_DEFAULT_BASE = {"anthropic": "https://api.anthropic.com/v1", "openai-api
                         "openrouter": "https://openrouter.ai/api/v1"}
 
 
+# hermes' own memory, as toolsets (hermes-agent 0.19.0 toolsets.py): `memory` (its MEMORY.md and USER.md, injected
+# into its prompt) and `session_search` (a search over its past conversations). Off when the platform's memory is
+# attached: with both, hermes also called its own memory tool, once failing silently ("Unknown action 'None'") and
+# once saving into its private store, which nobody sees in the console (sslip, 11-09).
+_HERMES_OWN_MEMORY_TOOLSETS = ("memory", "session_search")
+
+
 def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
                         model: str = "", max_turns: int | None = None,
                         mcp_servers: list[dict] | None = None,
-                        vision_auth: dict | None = None) -> list[str]:
+                        vision_auth: dict | None = None, own_memory_off: bool = False) -> list[str]:
     """Point HERMES_HOME inside the checkpointed workspace home (CODEX_HOME precedent) so the
     conversation state (state.db) survives sandbox recycling, and inject provider creds as env.
     Writes config.yaml fresh each turn (harness config is the source of truth, like the agent doc).
@@ -8332,6 +8379,12 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     if max_turns:
         # hermes 0.19.0 has no --max-turns CLI flag; agent.max_turns in config.yaml is the knob.
         cfg["agent"]["max_turns"] = int(max_turns)
+    if own_memory_off:
+        # The toolsets come out of what the model is offered (agent.disabled_toolsets, read by the chat path a turn
+        # with MCP servers takes), and the store behind them is off too (memory.*_enabled: no MEMORY.md or USER.md
+        # in its prompt, and no background review writing to them).
+        cfg["agent"]["disabled_toolsets"] = list(_HERMES_OWN_MEMORY_TOOLSETS)
+        cfg["memory"] = {"memory_enabled": False, "user_profile_enabled": False}
     if vision_auth and vision_auth.get("model"):
         # hermes asks its image questions separately from the conversation (vision_analyze, the
         # browser tools) and, left alone, asks the model the harness writes with. That made a
@@ -17355,6 +17408,11 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         # becomes a launcher every backend writer below already knows how to hand to its CLI.
         plugin_roots = _write_plugins(cwd, req.plugins)
         servers = req.mcp_servers if req.backend in _MCP_AGENT_RUNS_ELSEWHERE else _mcp_through_relay(req.mcp_servers)
+        # whether the platform's memory is attached, from the address the gateway sent (only its path is read): the
+        # base's own memory tools are then withheld (_own_memory_off; hermes in its config, below)
+        platform_memory = _has_platform_memory(req.mcp_servers)
+        if platform_memory:
+            req.tools_disabled = _own_memory_off(backend, req.tools_disabled)
         req.mcp_servers = _sse_bridges(cwd, _plugin_launchers(cwd, servers), req.backend)
         # A package that is also a Claude Code plugin reaches the claude CLI whole through
         # --plugin-dir, which loads its skills/ itself; folding those skills into the skills
@@ -17492,7 +17550,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             hermes_provider = _hermes_resolve_provider(req.provider, auth)
             hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
                                              max_turns=req.max_turns, mcp_servers=req.mcp_servers,
-                                             vision_auth=req.vision_auth)
+                                             vision_auth=req.vision_auth, own_memory_off=platform_memory)
         elif backend == "dsh":
             model = model or DSH_DEFAULT_MODEL
             cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,

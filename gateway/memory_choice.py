@@ -78,13 +78,21 @@ _WORDS: dict[str, list[tuple[str, float]]] = {
     ],
     GRAPHITI: [
         (r"research\w*", 2), (r"accounts?", 2), (r"crm", 3), (r"projects?", 1.5), (r"investigat\w*", 2),
-        (r"monitor\w*", 2), (r"competit\w*", 2), (r"timelines?", 2), (r"relationships?", 2), (r"entit(?:y|ies)", 2),
+        (r"monitor\w*", 2), (r"competit\w*", 2), (r"timelines?", 3), (r"relationships?", 3), (r"entit(?:y|ies)", 2),
         (r"track(?:s|ing|er|ers)?", 1.5), (r"deals?", 1.5), (r"stakeholders?", 1.5), (r"intelligence", 1.5),
         (r"genealog\w*", 2), (r"portfolios?", 1.5), (r"suppliers?", 1.5), (r"prospects?", 1.5), (r"leads", 1),
+        (r"chronolog\w*", 2), (r"dependenc(?:y|ies)", 2), (r"interdependen\w*", 3), (r"relations", 2),
         (r"knowledge graph", 3), (r"due diligence", 2), (r"supply chain", 1.5), (r"over time", 2),
-        (r"who,? what,? (?:and )?when", 3), (r"how (?:they|things|people|companies) relate", 3),
-        (r"sales pipelines?", 3), (r"account (?:manager|management|executive|plans?)\w*", 3),
+        (r"who,? what,? (?:and )?when", 3), (r"sales pipelines?", 3), (r"account (?:manager|management|executive|plans?)\w*", 3),
         (r"market (?:research|intelligence|watch)", 3),
+        # How things relate and change, however it is put (sslip, 11-09: each of these stayed on Mem0). "Between"
+        # outweighs a person-serving word in the name: "an assistant that keeps the links between teams" tracks links.
+        (r"how (?:\w+ ){0,3}(?:relates?|related|connect(?:s|ed)?|depends?|interacts?|fit together|link(?:s|ed)?)", 3),
+        (r"(?:relat(?:e|es|ed)|depend(?:s|ed)?|connect(?:s|ed)?|interact(?:s|ed)?) (?:to |on |with )?(?:each other|one another)", 3),
+        (r"(?:relationships?|connections?|links?|dependenc(?:y|ies)) between", 3.5),
+        (r"dependency (?:graph|map|tree)s?", 3), (r"what changed(?:,? and)? when", 3), (r"what changed", 2),
+        (r"when (?:\w+ ){0,3}changed", 2), (r"who knows (?:whom|who)", 3), (r"who reports to (?:whom|who)", 3),
+        (r"who works with (?:whom|who)", 3), (r"who did what", 3), (r"by whom", 2), (r"org(?:anization(?:al)?)? charts?", 3),
     ],
     HINDSIGHT: [
         (r"cod(?:e|es|ing|er|ers)", 2), (r"programm\w*", 2), (r"software", 1.5), (r"developers?", 1.5),
@@ -222,17 +230,18 @@ class Choice:
     fits: str               # the nature that fits best: none, an engine, or '' when nothing was said
 
 
-def choose(*, running=None, **agent) -> Choice:
-    """The engine for this agent among the ones `running` here (connected and answering; None means all of
+def choose(*, running=None, failing=None, **agent) -> Choice:
+    """The engine for this agent among the ones `running` here (connected, answering and writing; None means all of
     them), its scope, and why. When the one that fits best isn't running, the next best that is keeps it, and
-    the reason says so. With none running there is no memory, and the reason says how to start them."""
+    the reason says so. With none running there is no memory, and the reason says how to start them. `failing`
+    ({engine: why}) names the engines that answer but whose writes are failing, so the reason says that instead."""
     fits, sc = scores(**agent)
     if fits == NONE:
         return Choice(None, SHARED, REASON[NONE], NONE)
-    return _among(fits, sc, running)
+    return _among(fits, sc, running, failing)
 
 
-def for_memory(*, running=None, name: str = "", description: str = "") -> Choice:
+def for_memory(*, running=None, failing=None, name: str = "", description: str = "") -> Choice:
     """The engine for a memory a person makes by hand (New memory), read from its name and description the way an
     agent is read (choose), with one difference: a memory always has an engine. Words that say "works on what it is
     given" mean nothing for a memory, so the nature that fits next keeps it, or, when nothing else was said, the one
@@ -240,21 +249,27 @@ def for_memory(*, running=None, name: str = "", description: str = "") -> Choice
     fits, sc = scores(name=name, description=description)
     if fits == NONE:
         fits = _best({**sc, NONE: 0.0})
-    return _among(fits, sc, running)
+    return _among(fits, sc, running, failing)
 
 
-def _among(fits: str, sc: dict[str, float], running) -> Choice:
+def _among(fits: str, sc: dict[str, float], running, failing=None) -> Choice:
     """The engine for the nature that fits (an engine's, or '' when nothing was said) among the ones running."""
     best = fits or MEM0
     why = REASON[best] if fits else UNSAID
     scope = scope_of(fits)
-    up = list(ENGINES) if running is None else [e for e in ENGINES if e in set(running)]
+    failing = {e: str(w or "") for e, w in (failing or {}).items() if e in ENGINES}
+    up = list(ENGINES) if running is None else [e for e in ENGINES if e in set(running) and e not in failing]
     if best in up:
         return Choice(best, scope, why, fits)
     if not up:
+        if failing:
+            e = best if best in failing else next(iter(failing))
+            return Choice(None, scope, f"No memory engine here can keep anything right now. {LABEL[e]}: "
+                                       f"{failing[e].rstrip('.') or 'its last writes failed'}.", fits)
         return Choice(None, scope, NO_ENGINE, fits)
     alt = sorted(up, key=lambda e: (-sc.get(e, 0.0), ORDER.index(e)))[0]
-    return Choice(alt, scope, f"{why} {LABEL[best]} fits best; it isn't running here, so {LABEL[alt]} keeps it for now.", fits)
+    down = "it can't keep anything here right now" if best in failing else "it isn't running here"
+    return Choice(alt, scope, f"{why} {LABEL[best]} fits best; {down}, so {LABEL[alt]} keeps it for now.", fits)
 
 
 def for_engine(engine: str, **agent) -> Choice:

@@ -10516,12 +10516,15 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         await _vertex_upsert(sid, {"memory": task_memory})     # the session keeps it: its tools and its observation read it
     await _memories_person_begin(org, harness_id, hv, sid, task_person or {}, translator, rec)
     _mem_seam = await _memories_seam(harness_id, org, hv, sid) if harness_id else None
+    # what the agent already knows that may matter for this turn, recalled for it before it starts (in a person's
+    # task, that person's and the agent's own; never when memory is off for the task: no seam)
+    _mem_known, _mem_recalled = await _memories_known_at_start(_mem_seam, user_text, sid)
     _mem_section, _mem_primed = ("", {}) if _mem_seam is None else await memory_tools.doc_section(
         _mem_seam, kept_after=((await _memories_settings(harness_id, org, hv)) or {}).get("observe", True) is not False,
-        person=bool(_mem_seam.person))
+        person=bool(_mem_seam.person), known=_mem_known)
     if _mem_section:
         agent_doc = (agent_doc + "\n\n" + _mem_section).strip()
-        rec["memories"] = {"primed_tokens": _mem_primed}
+        rec["memories"] = {"primed_tokens": _mem_primed, **({"recalled_at_start": _mem_recalled} if _mem_recalled else {})}
     status = "failed"
     # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
@@ -18698,7 +18701,8 @@ async def _plug_save(org: str, workspace: str, plug_type: str, body: PlugBody) -
         if refusal:
             refusal = memory_plane.clean_text(refusal)
             for m in await BACKING.graph.find("Memory", {"org": org, "workspace": workspace, "provider": plug_type}):
-                await memory_plane.mark(org, str(m["id"]), refusal)        # the memories on it say why, where they are read
+                # the memories on it say why, where they are read; it isn't a write that failed: what worked still does
+                await memory_plane.mark(org, str(m["id"]), refusal, write=False)
             raise uhp_error(422, "memory_invalid", refusal, "secrets.api_key" if given else "config.base_url")
     for field, value in (body.secrets or {}).items():
         if field not in form["secrets"]:
@@ -18812,9 +18816,15 @@ async def _memory_discover(org: str, workspace: str) -> list[dict]:
     if not _pool_is_local():
         raise uhp_error(403, "forbidden", "Engines are found only on an instance with one operator.")
     out = []
+    failing = await _memory_engines_failing(org, workspace)
     for engine, url in _MEMORY_STACK.items():
         label = memory_choice.LABEL[engine]
         status, _rec = await _plug_lookup_local(org, workspace, engine)
+        if status == "connected" and engine in failing:
+            # connected and answering is not working: its writes have been failing, so agents are not given it
+            out.append({"engine": engine, "state": "failing", "reason": failing[engine],
+                        "message": _memory_engine_failing_words(engine, failing[engine])})
+            continue
         if status == "connected":
             out.append({"engine": engine, "state": "connected", "message": f"{label} is connected."})
             continue
@@ -20954,13 +20964,14 @@ def _json_obj(s) -> dict:
 
 
 def _harness_memory_view(v: dict) -> dict:
-    """`memory` ({id, name, engine, scope, reason, observe}) or `memory: null` and `memory_reason`, as the harness
-    keeps them (_memory_provision). Nothing for a harness made before; its memories are still at /memories."""
+    """`memory` ({id, name, engine, scope, reason, observe, provisioned}) or `memory: null` and `memory_reason`, as the
+    harness keeps them (_memory_provision). `provisioned`: the memory was made for this agent, and is deleted with it
+    when no other agent uses it (_harness_delete). Nothing for a harness made before; its memories are at /memories."""
     info, reason = _json_obj(v.get("memory_info")), str(v.get("memory_reason") or "")
     if info.get("id"):
         return {"memory": {"id": info["id"], "name": str(info.get("name") or ""), "engine": str(info.get("engine") or ""),
                            "scope": str(info.get("scope") or memory_choice.SHARED), "reason": reason,
-                           "observe": str(v.get("memory_observe") or "1") != "0"}}
+                           "observe": str(v.get("memory_observe") or "1") != "0", "provisioned": info.get("provisioned") is True}}
     if reason:
         return {"memory": None, "memory_reason": reason}
     return {}
@@ -21176,7 +21187,9 @@ async def _memory_file_bytes(org: str, file_id: str) -> bytes | None:
 
 async def _memory_used_by(org: str, caller: dict) -> dict[str, list[dict]]:
     """{memory id: [{harness_id, name}]}: the agents holding a grant on each memory, as far as this caller may see
-    agents (a key held to a workspace sees that workspace's). One read of the grants and one of the harnesses."""
+    agents (a key held to a workspace sees that workspace's). A person's memory below an agent's (memory_plane's
+    end_user_node) is used by whoever uses the agent's memory: its own grant is that person's, never an agent's, and
+    it read "Not used yet" while its agent wrote to it. One read each of the grants, the harnesses and the memories."""
     agents = {str(r["id"]): str(r.get("name") or "") for r in await _vg_list_by_org("Harness", org)
               if r.get("id") and str(r.get("deleted")) not in ("1", "true", "True") and _scope_keeps(caller, r.get("workspace"))}
     out: dict[str, list[dict]] = {}
@@ -21191,6 +21204,11 @@ async def _memory_used_by(org: str, caller: dict) -> dict[str, list[dict]]:
             rows.append({"harness_id": hid, "name": agents[hid]})
     for rows in out.values():
         rows.sort(key=lambda x: (x["name"].casefold(), x["harness_id"]))
+    if out:
+        for m in await BACKING.graph.find("Memory", {"org": org}):
+            above = str(m.get("end_user_of") or "")
+            if above in out and str(m.get("deleted") or "0") != "1" and m.get("id"):
+                out.setdefault(str(m["id"]), list(out[above]))
     return out
 
 
@@ -21444,8 +21462,17 @@ def _memory_ws_of(p: dict) -> str:
 
 
 async def _memory_engines_running(org: str, ws: str) -> list[str]:
-    """The engines connected for this workspace that answer now, each asked at most once a minute and for a few
-    seconds: one that is down never holds up making an agent."""
+    """The engines connected for this workspace that answer now AND can write: each one's health asked at most once a
+    minute and for a few seconds (one that is down never holds up making an agent), and none whose writes have been
+    failing (_memory_engines_failing). A health route alone answered while every write failed with HTTP 500 (a dead
+    model key), and auto-choice picked Graphiti and Hindsight there."""
+    return (await _memory_engines_state(org, ws))[0]
+
+
+async def _memory_engines_state(org: str, ws: str) -> tuple[list[str], dict[str, str]]:
+    """(the engines answering and writing here, {engine: why} for those that answer but whose writes are failing)."""
+    failing = await _memory_engines_failing(org, ws)
+
     async def one(e: str) -> str:
         if e not in memory_plane.PROVIDERS or e not in _MEMORY_CHECKS:
             return ""
@@ -21462,7 +21489,36 @@ async def _memory_engines_running(org: str, ws: str) -> list[str]:
             why = type(err).__name__
         _ENGINE_UP[(org, ws, e)] = (time.time(), not why)
         return "" if why else e
-    return [e for e in await asyncio.gather(*(one(e) for e in memory_choice.ENGINES)) if e]
+    up = [e for e in await asyncio.gather(*(one(e) for e in memory_choice.ENGINES)) if e]
+    return [e for e in up if e not in failing], {e: why for e, why in failing.items() if e in up}
+
+
+_ENGINE_FAILING_S = 600.0     # how far back a write that failed makes an engine "not answering"
+
+
+async def _memory_engines_failing(org: str, ws: str) -> dict[str, str]:
+    """{engine: the last failure, in words} for each engine whose newest write failure on any memory it keeps for this
+    workspace is from the last ten minutes and newer than its newest success. Read off the memories (memory_plane.mark
+    keeps write_error_at and last_ok_at on each), so every replica reads the same. A key someone pasted and was refused
+    is not a write that failed: the connection that worked is kept, and still works."""
+    now_ms, ws = time.time() * 1000, ws or "default"
+    err: dict[str, tuple[int, str]] = {}
+    ok: dict[str, int] = {}
+    for m in await BACKING.graph.find("Memory", {"org": org}):
+        if str(m.get("deleted") or "0") == "1" or (str(m.get("workspace") or "") or "default") != ws:
+            continue
+        e = str(m.get("provider") or "")
+        at = memory_plane._ms_or_none(m.get("write_error_at")) or 0
+        if at > err.get(e, (0, ""))[0]:
+            err[e] = (at, str(m.get("last_error") or ""))
+        ok[e] = max(ok.get(e, 0), memory_plane._ms_or_none(m.get("last_ok_at")) or 0)
+    return {e: why or "Its last writes failed." for e, (at, why) in err.items()
+            if now_ms - at < _ENGINE_FAILING_S * 1000 and at > ok.get(e, 0)}
+
+
+def _memory_engine_failing_words(engine: str, why: str) -> str:
+    label = memory_choice.LABEL.get(engine, engine)
+    return f"{label} is running, but it couldn't keep anything in the last few minutes: {str(why or '').rstrip('.')}."
 
 
 async def _memory_agent_words(org: str, hid: str, v: dict, hint: str = "") -> dict:
@@ -21487,12 +21543,29 @@ def _json_list(s) -> list:
     return d if isinstance(d, list) else []
 
 
+# A memory the gateway makes for an agent is made by a person, who then manages it (and grants the agent on it). A key
+# no person made can't be that person: before, the memory was made and the grant then failed ("No memory with that
+# id"), leaving a memory nobody calling the API could see or delete. So it is refused before anything is made.
+_MEMORY_NO_PERSON = ("This key has no person behind it, so it can't own a memory. Use a key made by a person, or create "
+                     "the agent from the console.")
+
+
+def _memory_no_person() -> HTTPException:
+    return uhp_error(422, "memory_no_owner", _MEMORY_NO_PERSON, "memory")
+
+
 async def _memory_ask_check(org: str, ws: str, ask: tuple[str, str], p: dict) -> None:
     """An engine or a memory the caller named is checked before anything is made, and refused in words."""
     kind, value = ask
-    if kind == "engine" and value not in await _memory_engines_running(org, ws):
-        raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here. Start it with "
-                        f"{memory_choice.START_COMMAND} and connect it, or leave memory on auto.", "memory.engine")
+    if kind == "engine" and not str(p.get("member") or ""):
+        raise _memory_no_person()
+    if kind == "engine":
+        running, failing = await _memory_engines_state(org, ws)
+        if value in failing:
+            raise uhp_error(422, "memory_unavailable", _memory_engine_failing_words(value, failing[value]), "memory.engine")
+        if value not in running:
+            raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here. Start it with "
+                            f"{memory_choice.START_COMMAND} and connect it, or leave memory on auto.", "memory.engine")
     if kind == "id":
         who = memory_routes.principals_of(p)
         m = await memory_plane._load(org, value)
@@ -21523,6 +21596,7 @@ async def _memory_provision(org: str, p: dict, hid: str, ask: tuple[str, str], h
     ws = ws or _memory_ws_of(p)
     who, member = memory_routes.principals_of(p), str(p.get("member") or "")
     current = _json_obj(v.get("memory_info"))
+    made: dict | None = None            # a memory made here, for this agent
     words = await _memory_agent_words(org, hid, v, hint or str(v.get("memory_hint") or ""))
 
     async def none(reason: str) -> None:
@@ -21539,35 +21613,64 @@ async def _memory_provision(org: str, p: dict, hid: str, ask: tuple[str, str], h
         choice = memory_choice.for_engine(str(m.get("provider") or ""), **words)
         reason = f"It uses {m.get('name') or 'the memory'}, which was chosen for it."
     else:
-        running = await _memory_engines_running(org, ws)
+        running, failing = await _memory_engines_state(org, ws)
         if kind == "engine":
+            if value in failing:
+                raise uhp_error(422, "memory_unavailable", _memory_engine_failing_words(value, failing[value]), "memory.engine")
             if value not in running:
                 raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here.", "memory.engine")
             choice = memory_choice.for_engine(value, **words)
         else:
-            choice = memory_choice.choose(running=running, **words)
+            choice = memory_choice.choose(running=running, failing=failing, **words)
         reason = choice.reason
         if choice.engine is None:
             return await none(reason)
         m = await memory_plane._load(org, str(current.get("id") or "")) if current.get("id") else None
         if not m or str(m.get("provider") or "") != choice.engine:
-            # named after the agent, made by the person who made it: they manage it like any memory of theirs
+            if not member:
+                raise _memory_no_person()          # before anything is made (_MEMORY_NO_PERSON)
+            # named after the agent, made by the person who made it: they manage it like any memory of theirs. It
+            # says which agent it was made for, so it goes with that agent when nothing else uses it (_harness_delete).
             m = await memory_plane.create(org, member, ws, who, name=str(v.get("name") or "Agent")[:120],
                                           description=f"What {str(v.get('name') or 'this agent')[:80]} remembers from its work.",
-                                          provider=choice.engine)
+                                          provider=choice.engine, extra={"provisioned_for": hid})
+            made = m
     mid = str(m["id"])
-    # read and write, through the grant path, adding to whatever the agent already held there
-    have = await memory_plane.held_on(org, mid, _agent(hid))
-    await memory_plane.grant(org, mid, who, _agent(hid), sorted({"read", "write", *have}, key=memory_plane.PRIVILEGES.index),
-                             member or "server")
-    await _memories_on_grant(org, _agent(hid))
+    try:
+        # read and write, through the grant path, adding to whatever the agent already held there
+        have = await memory_plane.held_on(org, mid, _agent(hid))
+        await memory_plane.grant(org, mid, who, _agent(hid), sorted({"read", "write", *have}, key=memory_plane.PRIVILEGES.index),
+                                 member or "server")
+        await _memories_on_grant(org, _agent(hid))
+        await _memories_ensure(org, hid, await _vertex_get(hid) or v, {"default_memory_id": mid, "observe": True})
+        info = {"id": mid, "name": str(m.get("name") or ""), "engine": str(m.get("provider") or ""), "scope": choice.scope,
+                "provisioned": str(m.get("provisioned_for") or "") == hid}
+        await _vg_upsert("Harness", hid, {"memory_info": json.dumps(info, separators=(",", ":")), "memory_reason": reason,
+                                          "memory_scope": choice.scope, **({"memory_hint": str(hint)[:1000]} if hint else {})})
+    except Exception:
+        if made is not None:
+            # nothing made here is left behind for nobody: the agent's grant, the memory, and its place as the default
+            await _memory_unmake(org, hid, made, str(v.get("memory_default") or ""))
+        raise
     if current.get("id") and str(current["id"]) != mid:
         await _memory_detach(org, hid, current)
-    await _memories_ensure(org, hid, await _vertex_get(hid) or v, {"default_memory_id": mid, "observe": True})
-    info = {"id": mid, "name": str(m.get("name") or ""), "engine": str(m.get("provider") or ""), "scope": choice.scope}
-    await _vg_upsert("Harness", hid, {"memory_info": json.dumps(info, separators=(",", ":")), "memory_reason": reason,
-                                      "memory_scope": choice.scope, **({"memory_hint": str(hint)[:1000]} if hint else {})})
     print(f"[memories] {hid}: given {mid} on {info['engine']} ({choice.scope})", flush=True)
+
+
+async def _memory_unmake(org: str, hid: str, m: dict, default_before: str) -> None:
+    """A memory provisioning made, taken back after a later step failed. Each part is tried whatever the others did."""
+    mid = str(m["id"])
+    for what, step in (("its grant", memory_plane.ungrant(org, mid, _agent(hid))),
+                       ("the memory", memory_plane.unmake(org, m))):
+        try:
+            await step
+        except Exception as e:  # noqa: BLE001
+            print(f"[memories] {hid}: {what} on {mid} was not taken back: {type(e).__name__}", flush=True)
+    try:
+        if str(((await _vertex_get(hid)) or {}).get("memory_default") or "") == mid:
+            await _vg_upsert("Harness", hid, {"memory_default": default_before})
+    except Exception as e:  # noqa: BLE001
+        print(f"[memories] {hid}: its default memory was not put back: {type(e).__name__}", flush=True)
 
 
 async def _memory_provision_new(org: str, p: dict, hid: str, ask: tuple[str, str], hint: str, ws: str) -> None:
@@ -21578,8 +21681,8 @@ async def _memory_provision_new(org: str, p: dict, hid: str, ask: tuple[str, str
         why = (e.detail.get("message") if isinstance(getattr(e, "detail", None), dict) else
                getattr(e, "message", "") or str(getattr(e, "detail", "") or "")) or type(e).__name__
         print(f"[memories] {hid}: no memory was given: {type(e).__name__}: {why}"[:300], flush=True)
-        await _vg_upsert("Harness", hid, {"memory_info": "", "memory_reason": " ".join(
-            f"The memory couldn't be made just now: {memory_plane.clean_text(str(why))}".split())[:300]})
+        said = why if why == _MEMORY_NO_PERSON else f"The memory couldn't be made just now: {memory_plane.clean_text(str(why))}"
+        await _vg_upsert("Harness", hid, {"memory_info": "", "memory_reason": " ".join(said.split())[:300]})
 
 
 async def _harness_memory_live(org: str, v: dict) -> dict:
@@ -21590,7 +21693,8 @@ async def _harness_memory_live(org: str, v: dict) -> dict:
         cur = await memory_plane._load(org, m["id"])
         if not cur:
             return {"memory": None, "memory_reason": "Its memory was deleted."}
-        view["memory"] = {**m, "name": str(cur.get("name") or m["name"])}
+        view["memory"] = {**m, "name": str(cur.get("name") or m["name"]),
+                          "provisioned": bool(v.get("id")) and str(cur.get("provisioned_for") or "") == str(v["id"])}
     return view
 
 
@@ -21711,7 +21815,8 @@ async def memories_mcp(request: Request):
             return _jsonrpc_result(rid, {"tools": []})
         return _jsonrpc_result(rid, _tool_text("Memory is off for this task: no person was named for it.", True))
     if method == "tools/list":
-        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(await seam.entries(), await seam.offers())})
+        kept_after = ((await _memories_settings(hid, org, v)) or {}).get("observe", True) is not False
+        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(await seam.entries(), await seam.offers(), kept_after)})
     args = params.get("arguments") or {}
     tool = str(params.get("name") or "")
     text, is_error = await memory_tools.call(seam, tool, args if isinstance(args, dict) else {})
@@ -21733,6 +21838,29 @@ async def _memories_seam(hid: str, org: str, hv: dict | None, sid: str = ""):
     person = _json_obj(sv.get("memory_person"))
     return memory_local.Local(org, hid, await _harness_memories(hid, org, hv, sid=sid),
                               person=person if person.get("node") and person.get("principal") else None)
+
+
+# How long the turn waits for what its agent already knows (memory_tools.recall_at_start). Past it, or on any error,
+# the turn runs without it, and says so once in the log: a slow engine never holds a turn up.
+_RECALL_AT_START_S = float(os.environ.get("HR_MEMORY_RECALL_AT_START_S", "3"))
+
+
+async def _memories_known_at_start(seam, text: str, sid: str) -> tuple[str, int]:
+    """(the Memory section's block of what the agent already knows that may matter for this turn, how many findings),
+    recalled with the turn's own words through the task's seam, so per-person reach is exactly the recall tool's.
+    ("", 0) when memory is off for the task (no seam), there are no words, nothing was found, or it took too long."""
+    if seam is None or not str(text or "").strip():
+        return "", 0
+    try:
+        found = await asyncio.wait_for(memory_tools.recall_at_start(seam, str(text)), _RECALL_AT_START_S)
+    except asyncio.TimeoutError:
+        print(f"[memories] {sid}: the turn starts without what its agent already knows: recall took over "
+              f"{_RECALL_AT_START_S:g} s", flush=True)
+        return "", 0
+    except Exception as e:  # noqa: BLE001 - the turn runs without it
+        print(f"[memories] {sid}: the turn starts without what its agent already knows: {type(e).__name__}", flush=True)
+        return "", 0
+    return memory_tools.known_block(found)
 
 
 _NO_END_USER = "no end user named"
@@ -21822,6 +21950,8 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
     made: list[dict] = []
     job: dict | None = None
     prov, mid = None, ""
+    # whether the task was sent to be kept (the note then always settles: what came, nothing, or why it failed)
+    sent, failed = False, ""
     # what the agent kept with its tools in this turn, read now: the next turn starts afresh (_memories_person_begin)
     kept = await _memories_kept(sid)
     try:
@@ -21833,6 +21963,7 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
         mid = next((e["memory_id"] for e in seam._entries if e.get("default")), "")
         if not mid or not (str(rec.get("user_text") or "").strip() or answer.strip()):
             return
+        sent = True
         m, _ = await memory_plane.need(org, mid, seam.wpr, "write")
         try:
             prov = await memory_plane.provider_of(m)
@@ -21846,13 +21977,15 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
             raise
         await memory_plane.mark(org, mid)
         await memory_plane.used(org, m)
-        made = _derived_records(out.get("records"), mid)
+        made = _derived_records(out.get("records"), mid, episodes=bool(getattr(prov, "episode_is_kept", False)))
         job = out.get("job") if isinstance(out.get("job"), dict) and out["job"].get("id") else None
         print(f"[memories] {sid}: the turn was observed into {mid}", flush=True)
     except Exception as e:  # noqa: BLE001
         print(f"[memories] observe after a turn of {sid} was not taken: {type(e).__name__}: {e}"[:300], flush=True)
+        failed = _memory_save_failed(getattr(e, "message", "") or (str(e) if isinstance(e, memory_plane.MemoryError) else ""))
     finally:
-        await _memories_note(org, sid, resp_id, kept, made, pending=bool(job))
+        await _memories_note(org, sid, resp_id, kept, made, pending=bool(job), failed=failed if sent else "",
+                             settle=sent, at=mid)
     if job and resp_id and prov is not None and len(_NOTE_JOBS) < _NOTE_JOBS_MAX:
         t = asyncio.create_task(_memories_note_job(org, sid, resp_id, prov, mid, str(job["id"]), kept))
         _NOTE_JOBS.add(t)
@@ -21870,10 +22003,18 @@ def _kept_records(xs) -> list[dict]:
     return out
 
 
-def _derived_records(records, mid: str) -> list[dict]:
-    """What an engine drew from a finished task, as a turn links it: every record but the episode it was given."""
+def _derived_records(records, mid: str, episodes: bool = False) -> list[dict]:
+    """What an engine kept from a finished task, as a turn links it: every record it drew, and not the episode it was
+    given, unless the engine keeps that episode as a record a person reads (`episodes`: ReMe keeps it as a note, and
+    a ReMe turn read "memory: null" while its episode sat in the memory)."""
     return [{"id": str(r["id"]), "memory_id": mid} for r in records or []
-            if isinstance(r, dict) and r.get("id") and r.get("type") != "episode"]
+            if isinstance(r, dict) and r.get("id") and (episodes or r.get("type") != "episode")]
+
+
+def _memory_save_failed(said: str) -> str:
+    """Why a finished task wasn't kept, one plain sentence for the turn's note (redacted as the memory's last_error is)."""
+    said = " ".join(memory_plane.clean_text(str(said or "")).split()).rstrip(".")
+    return (f"This conversation wasn't kept: {said}." if said else "This conversation wasn't kept.")[:300]
 
 
 async def _memories_kept(sid: str) -> list[dict]:
@@ -21885,12 +22026,15 @@ async def _memories_kept(sid: str) -> list[dict]:
         return []
 
 
-async def _memories_note(org: str, sid: str, resp_id: str, kept: list[dict], made: list[dict], pending: bool = False) -> None:
+async def _memories_note(org: str, sid: str, resp_id: str, kept: list[dict], made: list[dict], pending: bool = False,
+                         failed: str = "", settle: bool = False, at: str = "") -> None:
     """The turn's record says what memory kept in it: what the agent kept with its tools and what the finished task
-    left, {"remembered": n, "records": [{"id", "memory_id"}]}, and `pending` while the engine is still drawing from
-    it. Each record names the memory it is in, so a person reading the turn can open it there. Once written, the
-    memories they are in say something changed (memory_live.tell: a person's memory also tells the agent's memory
-    above it, without saying what), so a page watching the agent's memory reads the turn again and finds the note."""
+    left, {"remembered": n, "records": [{"id", "memory_id"}], "pending": bool}, `pending` while the engine is still
+    drawing from it. A task that was sent to be kept (`settle`) always gets its note, so it never stays pending: what
+    came, `remembered: 0` when nothing did, or `failed: true` and `reason` when the save failed. Each record names
+    the memory it is in, so a person reading the turn can open it there. Once written, the memories they are in (and
+    `at`, where the task was sent) say something changed (memory_live.tell: a person's memory also tells the agent's
+    memory above it, without saying what), so a page watching the agent's memory reads the turn again."""
     try:
         seen, records = set(), []
         for r in [*kept, *made]:
@@ -21898,10 +22042,13 @@ async def _memories_note(org: str, sid: str, resp_id: str, kept: list[dict], mad
             if k not in seen:
                 seen.add(k)
                 records.append(r)
-        if not resp_id or not (records or pending):
+        if not resp_id or not (records or pending or failed or settle):
             return
-        await _turn_memory_note(resp_id, {"remembered": len(records), "records": records, **({"pending": True} if pending else {})})
-        for mid in dict.fromkeys(str(r.get("memory_id") or "") for r in records):
+        note = {"remembered": len(records), "records": records, "pending": bool(pending) and not failed}
+        if failed:
+            note.update(failed=True, reason=failed)
+        await _turn_memory_note(resp_id, note)
+        for mid in dict.fromkeys([*(str(r.get("memory_id") or "") for r in records), str(at or "")]):
             m = await memory_plane._load(org, mid) if mid else None
             if m:
                 memory_live.tell(mid, "records.changed", (str(m["end_user_of"]),) if m.get("end_user_of") else (), record_ids=[])
@@ -21919,10 +22066,12 @@ _NOTE_JOB_MAX_S = float(os.environ.get("HR_MEMORY_NOTE_JOB_MAX_S", "900"))
 
 async def _memories_note_job(org: str, sid: str, resp_id: str, prov, mid: str, job_id: str, kept: list[dict]) -> None:
     """A turn whose engine answered a job: its note written again once the job settles, with what the engine drew, and
-    no longer pending (also when the engine forgets the job or it outlasts the wait). A replica that stops first
-    leaves the note pending; what the engine drew is in the memory all the same."""
+    no longer pending: `remembered: 0` when it drew nothing, `failed` and why when the job failed, and settled also
+    when the engine forgets the job or it outlasts the wait. A replica that stops first leaves the note pending; what
+    the engine drew is in the memory all the same."""
     end, wait = time.monotonic() + _NOTE_JOB_MAX_S, 1.0
     made: list[dict] = []
+    failed = ""
     while time.monotonic() < end:
         await asyncio.sleep(min(wait, max(0.0, end - time.monotonic())))
         wait = min(wait * 1.6, 15.0)
@@ -21935,12 +22084,14 @@ async def _memories_note_job(org: str, sid: str, resp_id: str, prov, mid: str, j
             break                          # the engine no longer knows it: what was noted stands, no longer pending
         status = str(job.get("status") or "")
         if status == "completed":
-            made = _derived_records(job.get("records"), mid)
+            made = _derived_records(job.get("records"), mid, episodes=bool(getattr(prov, "episode_is_kept", False)))
             break
         if status == "failed":
-            await memory_plane.mark(org, mid, str(job.get("error") or "") or "The engine could not draw anything from a finished task.")
+            why = str(job.get("error") or "") or "The engine could not draw anything from a finished task."
+            await memory_plane.mark(org, mid, why)
+            failed = _memory_save_failed(why)
             break
-    await _memories_note(org, sid, resp_id, kept, made)
+    await _memories_note(org, sid, resp_id, kept, made, failed=failed, settle=True, at=mid)
 
 
 async def _memories_note_kept(org: str, sid: str, resp_id: str) -> None:
@@ -23021,7 +23172,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     await _require_offered_model(org, body.base, body.default_model)
     memory_ws = _plug_workspace(request, p)
     memory_ask = _memory_ask(body.memory)
-    await _memory_ask_check(org, memory_ws, memory_ask, p)
+    await _memory_ask_check(org, memory_ws, memory_ask, {**p, "member": member})
     body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, p)
@@ -23144,21 +23295,57 @@ async def delete_harness(org: str, hid: str, request: Request) -> dict:
     _caller = await _owned_org(request, org)
     # V1C02-005: only delete a harness that belongs to the caller's org.
     cur = await _harness_in_reach(_caller, hid, deleted_ok=True)
-    await _harness_delete(org, hid, cur)
-    return {"id": hid, "deleted": True}
+    who = {**_caller, "member": _caller.get("member") or request.headers.get("x-harness-member", "")}
+    return {"id": hid, "deleted": True, **await _harness_delete(org, hid, cur, who)}
 
 
-async def _harness_delete(org: str, hid: str, v: dict) -> None:
+async def _harness_delete(org: str, hid: str, v: dict, caller: dict | None = None) -> dict:
     """The one delete both routes call. The harness is kept 30 days, restorable, and then removed
     with its plugin packages by the retention sweep (Richard's rule, 2026-10-08); the sessions and
     responses that used it are not touched (Harnesses §5.3). What cannot wait goes now: a deleted
     agent must not still be holding a database password, and must not still be spending at a
-    provider. A second delete keeps the first one's time, so it cannot extend the 30 days."""
+    provider. A second delete keeps the first one's time, so it cannot extend the 30 days.
+    The memory made for it goes with it when nothing else uses it (_harness_memory_goes): what
+    happened is in the answer, `memory_deleted` or `memory_kept`."""
     v = await _mcp_migrate(org, hid, v)
     if str(v.get("deleted")) not in ("1", "true", "True") or not v.get("deleted_at"):
         await _vg_upsert("Harness", hid, {"deleted": "1", "deleted_at": str(_now_ms())})
     await _hosted_scrub_removed(org, hid, _mcp_list(v), [])
     await _media_harness_purge(hid)
+    return await _harness_memory_goes(org, hid, v, caller or {})
+
+
+_MEMORY_KEPT_IN_USE = "used by another agent"
+_MEMORY_KEPT_NOT_YOURS = "only whoever manages it can delete it"
+
+
+async def _harness_memory_goes(org: str, hid: str, v: dict, caller: dict) -> dict:
+    """A deleted agent's memory, when it was made for that agent (`provisioned_for`): deleted with the people's
+    memories below it, through the memory delete every caller goes through, unless another agent still uses it (holds
+    a grant on it or below it). {"memory_deleted": id}, {"memory_kept": why}, or {} for a memory someone chose for
+    the agent, which is theirs and stays. Never fails the agent's delete: it is already deleted."""
+    mid = str(_json_obj(v.get("memory_info")).get("id") or "")
+    try:
+        m = await memory_plane._load(org, mid) if mid else None
+        if not m or str(m.get("provisioned_for") or "") != hid:
+            return {}
+        live = {str(r["id"]) for r in await _vg_list_by_org("Harness", org)
+                if r.get("id") and str(r["id"]) != hid and str(r.get("deleted")) not in ("1", "true", "True")}
+        tree = {mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid))}
+        for g in await BACKING.graph.find("MemoryGrant", {"org": org}):
+            principal = str(g.get("principal") or "")
+            if str(g.get("memory_id") or "") in tree and principal.startswith("member:") and principal[7:] in live \
+                    and str(g.get("deleted") or "0") != "1" and json.loads(g.get("privileges") or "[]"):
+                return {"memory_kept": _MEMORY_KEPT_IN_USE}
+        try:
+            gone = await memory_plane.delete(org, mid, memory_routes.principals_of(caller))
+        except memory_plane.MemoryError:
+            return {"memory_kept": _MEMORY_KEPT_NOT_YOURS}
+        print(f"[memories] {hid}: its memory {mid} went with it ({len(gone)} with the people's memories below)", flush=True)
+        return {"memory_deleted": mid}
+    except Exception as e:  # noqa: BLE001 - the agent is deleted whatever happens to its memory
+        print(f"[memories] {hid}: its memory was not deleted with it: {type(e).__name__}", flush=True)
+        return {"memory_kept": "it couldn't be deleted just now"}
 
 
 # ── workspaces: the DIRECTORY, server-side (fix for the localStorage split-brain) ──────
@@ -23789,7 +23976,8 @@ async def _setup_build_memory(p: dict, cfg: dict) -> dict:
              "hint": str(cfg.get("memoryHint") or "")[:1000],
              "tools": [str(x.get("name") or "") for x in cfg.get("mcpServers") or [] if isinstance(x, dict)],
              "skills": [str(x.get("name") or "") for x in cfg.get("skills") or [] if isinstance(x, dict)]}
-    c = memory_choice.choose(running=await _memory_engines_running(str(p["org"]), _memory_ws_of(p)), **words)
+    running, failing = await _memory_engines_state(str(p["org"]), _memory_ws_of(p))
+    c = memory_choice.choose(running=running, failing=failing, **words)
     return {"engine": c.engine, "scope": c.scope, "reason": c.reason}
 
 
@@ -25001,5 +25189,4 @@ async def delete_harness_public(hid: str, request: Request) -> dict:
     _caller = await _pub_principal(request)
     org = _caller["org"]
     v = await _harness_in_reach(_caller, hid, deleted_ok=True)
-    await _harness_delete(org, hid, v)
-    return {"id": hid, "deleted": True}
+    return {"id": hid, "deleted": True, **await _harness_delete(org, hid, v, _caller)}

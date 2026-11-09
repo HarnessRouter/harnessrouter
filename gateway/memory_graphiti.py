@@ -147,7 +147,11 @@ class Graphiti(mp.Provider):
         rtype = str(a.get("hr_type") or "entity")
         body = str((a.get("hr_text") if stated and a.get("hr_text") is not None else n.get("summary")) or "")
         refs = js("hr_refs", "[]") + self._from(mid, n.get("episodes") or [], copies, NODE + str(n["uuid"]))
-        return {"id": NODE + str(n["uuid"]), "type": rtype, "title": str(a.get("hr_title") if stated else n.get("name") or "") or "",
+        # A stated record kept without a title has no `hr_title`, so its title is empty. str() of the missing value
+        # read "None", and the console showed that word as the record's heading (sslip, 11-09).
+        title = a.get("hr_title") if stated else n.get("name")
+        title = "" if title is None or (stated and str(title) == "None") else str(title)
+        return {"id": NODE + str(n["uuid"]), "type": rtype, "title": title,
                 "content": [{"type": "text", "text": body}] if body else [], "attributes": attrs, "references": refs, "version": version,
                 "status": status, "supersedes": version - 1 if version > 1 else None,
                 "time": {"valid_from": a.get("hr_valid_from"), "valid_to": a.get("hr_valid_to"), "written_at": a.get("hr_written_at") or n.get("created_at"),

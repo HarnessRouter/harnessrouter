@@ -297,6 +297,18 @@ def test_forgetting_or_erasing_what_was_stated_takes_what_graphiti_read_in_it(wi
     assert out["erased"] == ["node_n_s"] and state["deleted"] == ["ep_c"], "the copy goes, and only the copy"
 
 
+def test_a_record_kept_without_a_title_has_an_empty_title_never_the_word_none(wired, monkeypatch):
+    state, answer = _reads_its_copy(monkeypatch)
+    wired(memory_graphiti, answer)
+    g = memory_graphiti.Graphiti("http://vendor.test", "", ORG)
+    rec = run(g.remember("m", {"type": "fact", "content": [{"type": "text", "text": "Dana prefers mornings."}]}, WRITER))
+    assert rec["title"] == "" and "hr_title" not in state["nodes"]["n_s"]["attributes"]
+    rows = {r["id"]: r for r in run(g.list("m", {"limit": 50}))["records"]}
+    assert rows["node_n_s"]["title"] == "" and rows["node_n_s"]["content"][0]["text"] == "Dana prefers mornings."
+    # an entity Graphiti found keeps the name it found
+    assert rows["node_n_c"]["title"] == "Caroline"
+
+
 def test_forgetting_an_episode_closes_it_and_keeps_its_trace(wired):
     """It holds what was said, so a forgotten thing left in it would still be in the memory."""
     episodes = [{"uuid": "ep1", "name": "x", "content": "the title is Wren", "created_at": "2026-11-04T00:00:00Z"}]

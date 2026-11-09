@@ -39,6 +39,18 @@ CASES = [
     ("Incident investigator", "Investigates fraud cases and builds a timeline of who did what.", "", (), mc.GRAPHITI, mc.SHARED),
     ("Project monitor", "Monitors our projects and reports what changed this week.", "", ("linear",), mc.GRAPHITI, mc.SHARED),
     ("Due diligence", "Maps a company's owners, subsidiaries and their relationships over time.", "", (), mc.GRAPHITI, mc.SHARED),
+    # how things relate and change, however it is put (each stayed on Mem0 on sslip, 11-09)
+    ("Feature map", "Explains how features relate to each other.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Product assistant", "Explains how our features relate and depend on each other.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Release history", "Answers what changed when, across our releases.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Team assistant", "Keeps the relationships between teams, partners and vendors.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Launch assistant", "Keeps the launch timeline: what was decided, by whom and when.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Intro helper", "Finds who knows whom so we can ask for an introduction.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Platform helper", "Answers questions about the dependencies between our microservices.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Org chart", "Knows who reports to whom and how the teams connect.", "", (), mc.GRAPHITI, mc.SHARED),
+    # ... and those words don't pull away an agent whose nature is plainly something else
+    ("Dating coach", "Helps each user think through their relationships.", "", (), mc.MEM0, mc.PER_USER),
+    ("Date extractor", "Extracts a timeline of dates from the given document.", "", (), mc.NONE, mc.SHARED),
     # gets better at its own work: Hindsight
     ("Bug fixer", "Fixes failing tests in our repository and opens a pull request.", "", ("github",), mc.HINDSIGHT, mc.SHARED),
     ("Deploy helper", "Deploys services to Kubernetes and rolls back on errors.", "", (), mc.HINDSIGHT, mc.SHARED),
@@ -163,6 +175,17 @@ def test_an_engine_named_by_the_caller_keeps_the_scope_of_the_agents_nature():
 def test_tools_count_by_their_name_whatever_the_shape():
     fits, _ = mc.scores(name="Agent", tools=[{"name": "salesforce"}, "hubspot"])
     assert fits == mc.GRAPHITI
+
+
+# ── an engine that answers but can't write ───────────────────────────────────────────────────────
+def test_an_engine_whose_writes_fail_is_passed_over_and_the_reason_says_why():
+    got = mc.choose(name="Market research", description="Researches competitors over time.", running=["mem0", "graphiti"],
+                    failing={"graphiti": "Graphiti did not answer: HTTP 500"})
+    assert got.engine == mc.MEM0 and got.scope == mc.SHARED
+    assert got.reason == mc.REASON[mc.GRAPHITI] + " Graphiti fits best; it can't keep anything here right now, so Mem0 keeps it for now."
+    got = mc.choose(name="Support replies", running=["mem0"], failing={"mem0": "mem0 did not answer: HTTP 500."})
+    assert got.engine is None and got.reason == "No memory engine here can keep anything right now. Mem0: mem0 did not answer: HTTP 500."
+    assert mc.for_memory(name="Customer preferences", running=["mem0", "reme"], failing={"mem0": "x"}).engine == mc.REME
 
 
 # ── a memory made by hand (New memory, GET /v1/memories/choose) ─────────────────────────────────

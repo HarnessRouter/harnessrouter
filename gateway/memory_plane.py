@@ -459,14 +459,15 @@ def _clean(name, description) -> tuple[str, str]:
 
 
 async def create(org: str, member: str, workspace: str, principals: list[str], *, name, description="",
-                 parent_id=None, restricted=False, provider="") -> dict:
+                 parent_id=None, restricted=False, provider="", extra: dict | None = None) -> dict:
+    """`extra`: the server's own properties for the memory (app.py's `provisioned_for`), never a caller's."""
     name, description = _clean(name, description)
     prov = str(provider or "").strip()
     parent = None
     if parent_id:
         parent, _ = await need(org, str(parent_id), principals, "create")
         prov = prov or str(parent.get("provider") or "")
-    return await _make(org, member, workspace, name, description, parent, restricted, prov)
+    return await _make(org, member, workspace, name, description, parent, restricted, prov, extra=extra)
 
 
 async def _make(org: str, member: str, workspace: str, name: str, description: str, parent: dict | None,
@@ -541,15 +542,23 @@ async def end_user_node(org: str, parent: dict, user: str) -> tuple[dict, str]:
 # engine reached (an observe, a remember, a connect), with `last_error_at`; `last_ok_at` is the last time one
 # worked. A reader compares the two. `last_used_at` is the last time an agent read or wrote it. Written at
 # most once a minute per memory and kind on this replica: a busy memory is not a write per call.
+# `write_error_at` is when a write through the engine last failed (`write`: not a connection someone was refused
+# while the working one stayed): app.py reads it, against `last_ok_at`, to tell an engine that answers but can't keep
+# anything (_memory_engines_failing).
 _MARKED: dict[tuple[str, str], float] = {}
 MARK_EVERY_S = 60.0
 
 
-async def mark(org: str, mid: str, error: str = "", *, used: bool = False) -> None:
+async def mark(org: str, mid: str, error: str = "", *, used: bool = False, write: bool = True) -> None:
     now = time.time()
     if error:
+        at = _now_ms()
         props = {"last_error": " ".join(str(REDACT(error) if REDACT else error).split())[:300] or "It failed.",
-                 "last_error_at": _now_ms()}
+                 "last_error_at": at, **({"write_error_at": at} if write else {})}
+        # the next success anywhere is written at once, not up to a minute later: whether an engine is failing is read
+        # off the newest failure and the newest success of its memories
+        for k in [k for k in _MARKED if k[1] == "ok"]:
+            _MARKED.pop(k, None)
     else:
         key = (mid, "used" if used else "ok")
         if now - _MARKED.get(key, 0.0) < MARK_EVERY_S:
@@ -649,6 +658,13 @@ async def update(org: str, mid: str, principals: list[str], patch: dict) -> dict
 
 async def delete(org: str, mid: str, principals: list[str]) -> list[str]:
     m, _ = await need(org, mid, principals, "delete")
+    return await unmake(org, m)
+
+
+async def unmake(org: str, m: dict) -> list[str]:
+    """The memory and everything below it gone, at its engine and here: `delete` once access is checked, and the
+    server's own undoing of a memory it made a moment ago (app.py's provisioning, when a later step failed)."""
+    mid = str(m["id"])
     gone = []
     for x in [m] + await _subtree(org, mid):
         try:
