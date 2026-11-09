@@ -13,7 +13,7 @@ import { deleteMemory, forgetRecord, labelOf, recall, recordHref, type Memory, t
 import { ConfirmSheet } from '../../Sheet';
 import { plain } from '../../setup/settingsModel';
 import { toast } from '../../toast';
-import { canForget, hasFolders, hasHistory, kindOf, labelsOf, schemaGuides, schemaLabels, servesForget, standingOf } from '../caps';
+import { canForget, hasFolders, hasHistory, kindOf, labelsOf, schemaGuides, schemaLabels, servesForget, standingOf, NOTED } from '../caps';
 import type { RecordsRead } from '../DataTab';
 import { Dot, DOTS, FILTER, FOLDER, FOLDER_OPEN, MmIco, PLUS, SEARCH, shownName, userOf, X } from '../parts';
 import { typeLabel, type LSchema } from '../schemaModel';
@@ -55,9 +55,7 @@ const FRESH_MS = 700;
 function standTag(r: MemoryRecord): ReactNode {
   const st = standingOf(r);
   if (st === 'person') return <small className="mt-mark mt-stand">Standing</small>;
-  if (st === 'agent') return <small className="mt-mark mt-noted">Noted by an agent as standing</small>;
-  if (st === 'other') return <small className="mt-mark mt-noted">Noted as standing</small>;
-  return null;
+  return st ? <small className="mt-mark mt-noted">{NOTED[st].tag}</small> : null;
 }
 const short = (r: MemoryRecord) => { const l = labelOf(r) || 'this record'; return l.length > 60 ? `${l.slice(0, 59).trim()}…` : l; };
 const storeKey = (id: string) => `hr.memories.tree.${id}`;
