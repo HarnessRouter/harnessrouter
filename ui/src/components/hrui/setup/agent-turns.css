@@ -28,6 +28,8 @@
 /* what a turn remembered (Playground.tsx): a quiet link to the records, in the turn's own line */
 #hrui .pg-turn-meta .pg-mem { color: var(--accent); text-decoration: none; }
 #hrui .pg-turn-meta .pg-mem:hover { text-decoration: underline; }
+/* what its memory searches found (the steps above say what): the line's own words, not a link */
+#hrui .pg-turn-meta .pg-recalled, #hrui .pg-turn-meta .pg-recalled:hover { color: inherit; text-decoration: none; }
 /* a reply's two actions at the end of its line (Playground.tsx): copy its ID, copy a request that
    carries on from it. The console's small icon buttons, quiet until the pointer or focus is on one. */
 #hrui .pg-turn-meta .pg-acts { display: inline-flex; align-items: center; gap: 2px; }

@@ -3,6 +3,8 @@
 // components/hrui/memories.
 import { harnessFetch } from '@/lib/hfetch';
 import { gwHeaders } from '@/lib/harness';
+import { getSession } from '@/lib/auth';
+import { LOCAL_MEMBER } from '@/lib/edition';
 
 export type Privilege = 'read' | 'write' | 'create' | 'delete';
 
@@ -245,14 +247,35 @@ export function rememberedOf(turn: unknown): Remembered | null {
   return { count: n, records, memoryId: typeof o.memory_id === 'string' ? o.memory_id : records.find((r) => r.memory_id)?.memory_id || '' };
 }
 
+/** Where a record opens. `top` is the memory a person comes from (an agent's own); a record of a memory below it (a
+ *  person's own) opens on that page, open in it (`in`), so the person keeps their place and Back is the agent's memory.
+ *  Without a `top`, or for a record of `top` itself, the record's own memory's page. */
+export function recordHref(top: string, mid: string, rid?: string): string {
+  const e = encodeURIComponent;
+  const inside = !!top && !!mid && mid !== top;
+  return `/memories/${e(inside ? top : mid || top)}?tab=data${inside ? `&in=${e(mid)}` : ''}${rid ? `&record=${e(rid)}` : ''}`;
+}
+
 // ── presentation ────────────────────────────────────────────────────────────────────────────
 /** The engine that keeps a memory. */
 export const engineOf = (m: Pick<Memory, 'provider' | 'engine'>) => m.engine || m.provider;
 /** The person a memory kept for one person belongs to, as the service gives it to whoever manages the memory
  *  (`end_user`); '' for any other memory, and for a reader the service doesn't tell. */
 export const userOf = (m: Pick<Memory, 'end_user'>): string => (typeof m.end_user === 'string' ? m.end_user.trim() : '');
+/** How the console's own tasks are named where they are a person's: a test sent from here runs as the console member
+ *  (the gateway takes them as the task's end user when the task names nobody else), which reads as an address, not as
+ *  anyone. */
+export const CONSOLE_PERSON = 'You (this console)';
+/** The person a task's `user` names, as a person reads it: the console member is "You (this console)", anyone else
+ *  is the string their app sent. */
+export function personName(user: string): string {
+  const u = (user || '').trim();
+  if (!u) return '';
+  const me = getSession()?.member;
+  return u === LOCAL_MEMBER || (!!me && (u === me.email || u === me.id)) ? CONSOLE_PERSON : u;
+}
 /** How a memory is named in a list: a person's memory by that person, any other by its name. */
-export const shownName = (m: Pick<Memory, 'name' | 'end_user'>) => userOf(m) || m.name;
+export const shownName = (m: Pick<Memory, 'name' | 'end_user'>) => personName(userOf(m)) || m.name;
 /** Every word of a record's content, in order. */
 export const bodyOf = (r: Pick<MemoryRecord, 'content'>) => (r.content || []).filter((p) => p.type === 'text').map((p) => p.text || '').filter(Boolean).join('\n\n');
 /** The line a record is listed by: its title, or how its content begins. */

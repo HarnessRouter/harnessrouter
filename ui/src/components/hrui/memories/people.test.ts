@@ -1,7 +1,7 @@
 // A memory kept for one person is listed by that person's name, as the service gives it to whoever manages the memory
 // (`end_user`), never by the hash it is named by (the memories spec, A4 and C5). The engine a new memory gets is the
 // service's to say (GET /v1/memories/choose), so nothing here reads what a memory is for.
-import { agentMemoryOf, rememberedOf, shownName, userOf } from '@/lib/memories';
+import { agentMemoryOf, CONSOLE_PERSON, personName, rememberedOf, shownName, userOf } from '@/lib/memories';
 import * as vendors from './vendors';
 import { scopeWord } from './vendors';
 
@@ -11,6 +11,15 @@ test('a person’s memory is shown by the person the service names in end_user',
   expect(userOf({ end_user: '  ' })).toBe('');
   // what the service never sends is never read: a bare `user` is not who a memory is for
   expect(shownName({ name: '9f2c41aa', user: 'Sam' } as never)).toBe('9f2c41aa');
+});
+
+test('the console’s own test identity reads as you, never as its address; anyone else keeps the string their app sent', () => {
+  // a task sent from this console names nobody, so the gateway takes the console member as its person
+  expect(shownName({ name: '1f0c9a', end_user: 'local@localhost' })).toBe('You (this console)');
+  expect(CONSOLE_PERSON).toBe('You (this console)');
+  expect(personName(' local@localhost ')).toBe('You (this console)');
+  expect(personName('user_8812')).toBe('user_8812');
+  expect(personName('')).toBe('');
 });
 
 test('the console keeps no copy of the engine scorer: the service chooses', () => {

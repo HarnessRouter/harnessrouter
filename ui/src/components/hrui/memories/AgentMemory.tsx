@@ -19,6 +19,12 @@ export function lineOf(r: AgentMemoryRead): { engine: string; why: string } {
   return r.memory ? { engine: vendorName(r.memory.engine), why: r.memory.reason || r.reason } : { engine: 'None', why: r.reason };
 }
 
+/** Read a setup's memory again and tell every view of it (after something else changed it: a rename it followed). */
+export async function announceAgentMemory(hid: string): Promise<void> {
+  const r = await getAgentMemory(hid);
+  if (r) window.dispatchEvent(new CustomEvent(SAID, { detail: { hid, r } }));
+}
+
 /** One setup's memory: undefined while it is read, or where the service doesn't say (`said` false). Every view of the
  *  same setup hears a change made in any of them. */
 export function useAgentMemory(hid: string | null | undefined) {

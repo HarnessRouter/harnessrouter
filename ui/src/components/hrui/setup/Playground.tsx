@@ -48,7 +48,8 @@ import { workingNow } from './stackLive';
 import { sec } from './fmt';
 import { Md } from './TaskThread';
 import Link from 'next/link';
-import { rememberedOf, type Remembered } from '@/lib/memories';
+import { recordHref, rememberedOf, type Remembered } from '@/lib/memories';
+import { recalledIn, recalledLine } from './memorySteps';
 import { useAgentMemory } from '../memories/AgentMemory';
 import { useMemoryEvents } from '../memories/editor/useMemoryEvents';
 const MAX_FILE = 25 * 1024 * 1024;
@@ -391,15 +392,18 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     if (rec0) bits.push(<span key="rec" className="replay-tag">Recorded</span>);
     if (note) bits.push(<span key="m">{r.baseName} · <span className="mono">{note}</span></span>);
     if (end) bits.push(<span key="e">{end}</span>);
-    // what this turn remembered, linked to where it was kept
+    // what this turn's memory searches found, read from the searches themselves (memorySteps.ts)
+    const recalled = m.status !== 'running' ? recalledLine(recalledIn(m)) : '';
+    if (recalled) bits.push(<span key="rcl" className="pg-mem pg-recalled">{recalled}</span>);
+    // what this turn remembered, linked to where it was kept: a record in a person's memory opens on the agent's
+    // memory's page, the person's record open in it, so Back is the agent's memory
     const kept = m.status !== 'running' ? turnMem[t] : null;
     if (kept) {
       const said = `Remembered ${kept.count} ${kept.count === 1 ? 'thing' : 'things'}`;
       const mid = kept.memoryId || memoryId;
       const rec = kept.records[0];
       bits.push(mid ? (
-        <Link key="mem" className="pg-mem" href={`/memories/${encodeURIComponent(rec?.memory_id || mid)}?tab=data${rec ? `&record=${encodeURIComponent(rec.id)}` : ''}`}
-          title="Open what it remembered">{said}</Link>
+        <Link key="mem" className="pg-mem" href={recordHref(memoryId, rec?.memory_id || mid, rec?.id)} title="Open what it remembered">{said}</Link>
       ) : <span key="mem" className="pg-mem">{said}</span>);
     }
     // its actions, after the words, once it has finished: the reply itself as Markdown (the one most
