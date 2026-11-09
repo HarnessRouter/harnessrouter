@@ -9372,10 +9372,11 @@ def _build_minimax(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
         cmd += ["--max-steps", str(int(max_turns))]
     if resume_session_id and _minimax_has_session(home, resume_session_id):
         cmd += ["--session", resume_session_id]
-    # The prompt is handed over on stdin, not on the command line (_prompt_handover): `exec` with no prompt
-    # argument reads it from stdin (run-exec-command).
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): `--input -` is
+    # exec's one way to read it there (run-exec-command: "A prompt, --input -, or at least one --file is
+    # required"; measured on a stand-in turn, without it exec refuses).
     _prompt_handover(cwd, prompt, stdin=True)
-    return cmd
+    return cmd + ["--input", "-"]
 
 
 # ── grok ─────────────────────────────────────────────────────────────────────────────────────────
@@ -10189,6 +10190,9 @@ def _cline_settings(home: pathlib.Path, base_url: str, api_key: str, model: str,
         gs.write_text(json.dumps(cur, indent=2))
 
 
+CLINE_STDIN_ARG = " "   # cline's prompt argument when the prompt is on stdin: see _build_cline
+
+
 def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                  resume_session_id: str | None = None,
                  mcp_servers: list[dict] | None = None,
@@ -10208,9 +10212,13 @@ def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)          # sessions/settings/db live INSIDE the checkpointed workspace
     _cline_settings(home, auth.base_url, auth.api_key or "", model, mcp_servers, tools_disabled)
-    # The prompt is handed over on stdin, not on the command line (_prompt_handover): headless, cline
-    # takes piped stdin as the prompt. On the command line a prompt with no whitespace was parsed as a
-    # SUBCOMMAND ("Unknown command or unquoted prompt: hi"); on stdin it is only the prompt.
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover). 3.0.60 reads piped
+    # stdin only after --json has insisted on a prompt argument ("JSON output mode requires a prompt
+    # argument or piped stdin", checked before stdin is read; measured on a stand-in turn), and joins the
+    # two as `${argument}\n\n${stdin}`. So the argument is one space: it carries none of the task, and
+    # what the model reads is the prompt after a blank line. On the command line a prompt with no
+    # whitespace was parsed as a SUBCOMMAND ("Unknown command or unquoted prompt: hi"); on stdin it is
+    # only the prompt.
     _prompt_handover(cwd, prompt, stdin=True)
     # NO resume flag, deliberately. 3.0.60's `--json --id <session>` refuses every way of passing
     # a prompt (argument, =form, piped stdin — all verified individually, and the identical argv
@@ -10220,7 +10228,7 @@ def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     # lights up here with no storage work.
     # `-z` (background hub daemon) must never be added: one process per turn is the runner's
     # execution model, and the hub is a resident service with its own update/restart lifecycle.
-    return ["cline", "--json", "--auto-approve", "true",
+    return ["cline", CLINE_STDIN_ARG, "--json", "--auto-approve", "true",
             "-c", cwd, "-P", "openai-compatible", "-m", model]
 
 
@@ -14877,10 +14885,12 @@ def _build_docker_agent(provider: str, auth: Auth, model: str, prompt: str, cwd:
            # that id, so there is no mapping to keep and no second identifier to lose.
            "--session", sid,
            "--session-db", str(_docker_agent_session_db(cwd)),
-           # The prompt is handed over by file, not on the command line (_prompt_handover):
-           # --prompt-file appends the file to the message, and there is no other message.
-           "--prompt-file", _prompt_handover(cwd, prompt),
            str(cfg)]
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): with no message
+    # argument, `run` takes its message from stdin when stdin is not a terminal. Its --prompt-file adds a
+    # file to the agent's instructions and is not a message (measured on a stand-in turn: "no message
+    # provided and stdin is not a terminal").
+    _prompt_handover(cwd, prompt, stdin=True)
     return cmd
 
 

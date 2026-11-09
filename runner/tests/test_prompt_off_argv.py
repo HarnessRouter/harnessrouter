@@ -57,8 +57,9 @@ def _file_named_in(cmd: list[str], d: str) -> pathlib.Path:
     return files[0]
 
 
-STDIN = ["claude", "codex", "pi", "omp", "qwen", "gemini", "cline", "opencode", "mimo", "kilo", "minimax"]
-BY_PATH = ["grok", "goose", "vibe", "docker-agent", "opensquilla"]
+STDIN = ["claude", "codex", "pi", "omp", "qwen", "gemini", "cline", "opencode", "mimo", "kilo", "minimax",
+         "docker-agent"]
+BY_PATH = ["grok", "goose", "vibe", "opensquilla"]
 
 
 def _folder_is_private(d: str) -> None:
@@ -97,7 +98,6 @@ def test_the_flags_each_cli_reads_the_file_with():
     flags = {"grok": lambda c, p: f"--prompt-file={p}" in c,
              "goose": lambda c, p: c[c.index("-i") + 1] == p,
              "vibe": lambda c, p: c[c.index("--prompt-file") + 1] == p,
-             "docker-agent": lambda c, p: c[c.index("--prompt-file") + 1] == p,
              "opensquilla": lambda c, p: c[1:5] == [server.PROMPT_LAUNCHER, p, "opensquilla.cli.main:app",
                                                     server.OPENSQUILLA_BIN] and server.PROMPT_ARG in c}
     for backend, ok in flags.items():
@@ -279,4 +279,19 @@ def test_a_file_read_by_its_path_goes_once_the_cli_has_read_it(tmp_path):
             break
         time.sleep(0.05)
     assert not pathlib.Path(path).exists()
+    server._prompt_discard(held)
+
+
+def test_the_stdin_flags_each_cli_needs():
+    """minimax's exec reads stdin only under `--input -`; cline's --json wants an argument before it reads
+    stdin, so it gets one space, which carries nothing of the task; docker-agent's message comes from stdin
+    when it has no message argument, and --prompt-file (an instruction file, not a message) is not used."""
+    cmd, held, _ = _build("minimax")
+    assert cmd[-2:] == ["--input", "-"]
+    server._prompt_discard(held)
+    cmd, held, _ = _build("cline")
+    assert cmd[1] == server.CLINE_STDIN_ARG == " " and not cmd[1].strip()
+    server._prompt_discard(held)
+    cmd, held, _ = _build("docker-agent")
+    assert "--prompt-file" not in cmd and cmd[-1].endswith("/agent.yaml")    # the agent file, then no message
     server._prompt_discard(held)
