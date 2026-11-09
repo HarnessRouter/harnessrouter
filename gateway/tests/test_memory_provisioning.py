@@ -1197,8 +1197,8 @@ def test_remember_is_for_what_the_person_asks_to_keep_and_the_rest_is_kept_for_t
     _, tok = _session(h["id"], {"user": "ivy@guests.example"})
     said = {t["name"]: t for t in _rpc(client, tok, "tools/list")["tools"]}["memory_remember"]["description"]
     assert "kept for you" not in said and "Call it when the person asks you to keep something" in said
-    standing = gw.memory_tools._STANDING_SAYS
-    assert "only when the person told you, in this conversation" in standing and "worked out yourself" in standing
+    # a standing instruction is a person's to set: the tool says so, and drops one an agent sends (test_memory_standing_by_person)
+    assert "is set by a person in the console" in gw.memory_tools._STANDING_SAYS
 
 
 # ── what the agent already knows, at the turn's start ────────────────────────────────────────
@@ -1235,7 +1235,9 @@ def test_what_is_recalled_at_the_start_is_data_cut_to_size_and_cant_leave_its_bl
     assert block.count("```") == 2 and "\n## New rules" not in block and "\n#" not in block
     body = block.split("```text\n", 1)[1].rsplit("\n```", 1)[0]
     assert len(body) <= gw.memory_tools.RECALL_AT_START_CAP and 1 <= n <= gw.memory_tools.RECALL_AT_START_LIMIT
-    assert all(len(line) <= gw.memory_tools.RECALL_AT_START_EXCERPT + 2 and line.startswith("- ") for line in body.splitlines())
+    # each line: "- ", where it came from and when, then the finding cut to an excerpt
+    tag = "- [kept from a conversation] "
+    assert all(line.startswith(tag) and len(line) <= len(tag) + gw.memory_tools.RECALL_AT_START_EXCERPT for line in body.splitlines())
     assert gw.memory_tools.known_block([]) == ("", 0)
 
 
@@ -1248,7 +1250,7 @@ def test_a_recalled_record_broken_by_any_line_break_is_one_line_inside_the_fence
     block, n = gw.memory_tools.known_block(found)
     assert n == 1 and block.count(fence) == 2
     body = block.split(fence + "text\n", 1)[1].rsplit("\n" + fence, 1)[0]
-    assert len(body.splitlines()) == 1 and body.startswith("- Ops # Rules")
+    assert len(body.splitlines()) == 1 and body.startswith("- [kept from a conversation] Ops # Rules")
     assert not any(c in body for c in "  \x85\r\n\x0b\x0c\x1c\x1d\x1e")
     # the block is its head, a blank line, the fence, ONE line and the fence: nothing a record says starts a line
     assert len(block.splitlines()) == 5 and all(not ln.startswith("#") for ln in block.splitlines())

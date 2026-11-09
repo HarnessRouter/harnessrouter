@@ -293,7 +293,8 @@ class ReMe(mp.Provider):
         memory's folder before anything else can read it there. A failure here costs the note, not the episode."""
         msgs = [{"name": str(p.get("role") or "user"), "role": p.get("role") if p.get("role") in ("user", "assistant", "system") else "user", "content": p["text"]} for p in parts]
         try:
-            d = await self._call("auto_memory", {"messages": msgs, "session_id": f"{mid}_{rid}"})
+            # memory_hint: ReMe's own guidance for the note its agent writes ("Extra hint" in its auto_memory prompt)
+            d = await self._call("auto_memory", {"messages": msgs, "session_id": f"{mid}_{rid}", "memory_hint": mp.EXTRACTION_GUIDE})
         except mp.MemoryError:
             return None
         made = str((d.get("metadata") or {}).get("path") or "")

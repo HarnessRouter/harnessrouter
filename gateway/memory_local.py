@@ -12,10 +12,14 @@ from __future__ import annotations
 import asyncio
 
 import memory_plane as mp
-from memory_tools import Refused
+from memory_tools import REFUSE_STANDING, Refused, set_by_a_person
 
 
 PERSON_NAME = "This person's memory"
+
+
+def _no_standing(attrs):
+    return {k: v for k, v in attrs.items() if k != "standing"} if isinstance(attrs, dict) else attrs
 
 
 class Local:
@@ -24,11 +28,13 @@ class Local:
     start asks for neither (app.py's _memories_turn_start), and a tool list doesn't ask for counts."""
 
     def __init__(self, org: str, hid: str, entries: list[dict], person: dict | None = None, *,
-                 counts: bool = True, around: bool = True):
+                 counts: bool = True, around: bool = True, session: str = ""):
         self.org, self.hid, self._entries, self.person = org, hid, entries, person or None
         self.pr = [f"member:{hid}"] + ([self.person["principal"]] if self.person else [])
         self.wpr = [self.person["principal"]] if self.person else self.pr
-        self.writer = mp.writer_of(hid, agent=True)
+        # what the agent keeps names the task it was kept in (`session`), as what a finished turn sends does: a later
+        # turn of the same task leaves it out of what it recalls at its start (memory_tools.same_session)
+        self.writer = {**mp.writer_of(hid, agent=True), **({"session_id": session} if session else {})}
         self.counts, self.around = counts, around
         # what this agent kept with memory_remember through this seam, each {"id", "memory_id"}: a turn's record links them
         self.kept: list[dict] = []
@@ -171,10 +177,20 @@ class Local:
             return [await mp.present(self.org, mid, h, self.pr) for h in await prov.history(mid, rid)]
         return await self._do(go())
 
+    async def _not_a_persons_standing(self, prov, mid, rid):
+        """An agent never changes or closes a standing instruction a person set (memory_tools.REFUSE_STANDING): it would
+        rewrite what every agent sharing the memory is told, or, since the version an agent writes is the agent's, take
+        it out of their instructions."""
+        cur = await prov.get(mid, rid)
+        if cur and set_by_a_person(cur):
+            raise Refused("memory_forbidden", REFUSE_STANDING)
+
     async def remember(self, mid, record):
         async def go():
             prov, _ = await self._prov(mid, "write")
-            made = await self._wrote(mid, mp.remember(prov, mid, mp._record_in(record), self.writer))
+            # the tools drop an agent's `standing` and say so (memory_tools.call); this seam never writes one either
+            record_ = {**record, "attributes": _no_standing(record.get("attributes"))} if "attributes" in record else record
+            made = await self._wrote(mid, mp.remember(prov, mid, mp._record_in(record_), self.writer))
             if made.get("id"):
                 self.kept.append({"id": str(made["id"]), "memory_id": str(mid)})
             return {**await mp.present(self.org, mid, made, self.pr), **{k: made[k] for k in ("closed", "conflicts") if k in made}}
@@ -193,13 +209,16 @@ class Local:
             if "content" in patch2:
                 patch2["content"] = mp._clean_parts(patch2["content"])
             if isinstance(patch2.get("attributes"), dict):
-                patch2["attributes"] = {k: mp.clean_text(v) if isinstance(v, str) else v for k, v in patch2["attributes"].items()}
+                patch2["attributes"] = {k: mp.clean_text(v) if isinstance(v, str) else v
+                                        for k, v in _no_standing(patch2["attributes"]).items()}
+            await self._not_a_persons_standing(prov, mid, rid)
             return await mp.present(self.org, mid, await self._wrote(mid, prov.revise(mid, rid, patch2, self.writer)), self.pr)
         return await self._do(go())
 
     async def forget(self, mid, rid):
         async def go():
             prov, _ = await self._prov(mid, "write")
+            await self._not_a_persons_standing(prov, mid, rid)
             return await mp.forget(prov, mid, rid, self.writer)
         return await self._do(go())
 
@@ -234,6 +253,8 @@ class Local:
                 _, privs = await self._prov(mid, "write")
             if needs not in privs or (needs == "write" and not any(e.get("access") == "write" for e in self._entries)):
                 raise Refused("memory_forbidden", f"That operation needs `{needs}` on the memory.")
+            if needs == "write":
+                await self._not_a_persons_standing(prov, mid, rid)
             return await prov.operate(mid, rid, name, body, self.writer)
         return await self._do(go())
 

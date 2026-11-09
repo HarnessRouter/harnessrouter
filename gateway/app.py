@@ -22090,7 +22090,7 @@ async def _memories_seam(hid: str, org: str, hv: dict | None, sid: str = "", *, 
     person = _json_obj(sv.get("memory_person"))
     return memory_local.Local(org, hid, await _harness_memories(hid, org, hv, sid=sid),
                               person=person if person.get("node") and person.get("principal") else None,
-                              counts=counts, around=around)
+                              counts=counts, around=around, session=sid)
 
 
 async def _memories_turn_start(hid: str, org: str, hv: dict | None, sid: str, text: str) -> tuple[str, dict, int]:
@@ -22143,7 +22143,7 @@ async def _memories_known_at_start(seam, text: str, sid: str) -> tuple[str, int]
     if seam is None or not str(text or "").strip():
         return "", 0
     try:
-        found = await asyncio.wait_for(memory_tools.recall_at_start(seam, str(text)), _RECALL_AT_START_S)
+        found = await asyncio.wait_for(memory_tools.recall_at_start(seam, str(text), session=sid), _RECALL_AT_START_S)
     except asyncio.TimeoutError:
         print(f"[memories] {sid}: the turn starts without what its agent already knows: recall took over "
               f"{_RECALL_AT_START_S:g} s", flush=True)

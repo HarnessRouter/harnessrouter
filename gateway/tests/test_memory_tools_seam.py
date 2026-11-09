@@ -59,7 +59,7 @@ def test_the_file_knows_nothing_of_where_memories_are_kept():
     src = open(mt.__file__).read()
     imported = {n.name for node in ast.walk(ast.parse(src)) if isinstance(node, ast.Import) for n in node.names} | \
                {node.module for node in ast.walk(ast.parse(src)) if isinstance(node, ast.ImportFrom)}
-    assert imported <= {"__future__", "json", "re", "datetime", "typing"}, imported   # the standard library only
+    assert imported <= {"__future__", "asyncio", "json", "re", "datetime", "typing"}, imported   # the standard library only
 
 
 def test_only_what_can_be_served_is_listed():
@@ -132,12 +132,19 @@ def test_the_instructions_mention_keeping_a_file_only_where_one_can_be_kept():
     assert "`file` argument" in files and files.startswith(plain)
 
 
+PERSON = {"kind": "member", "id": "ada@example.com", "type": "human"}
+
+
+def _stand(rid, **r):
+    return {"id": rid, "attributes": {"standing": True}, "written_by": PERSON, **r}
+
+
 def test_standing_records_are_placed_in_the_instructions_as_what_people_asked_for():
-    seam = Fake(standing={"m-team": [{"id": "s1", "type": "procedure", "title": "Write dates as 1 March 2024"}],
-                          "m-notes": [{"id": "s2", "type": "fact", "content": [{"type": "text", "text": "Prefers short answers"}]}]})
+    seam = Fake(standing={"m-team": [_stand("s1", type="procedure", title="Write dates as 1 March 2024")],
+                          "m-notes": [_stand("s2", type="fact", content=[{"type": "text", "text": "Prefers short answers"}])]})
     section, primed = asyncio.run(mt.doc_section(seam))
-    assert "  Standing instructions and preferences kept here:\n  - Write dates as 1 March 2024" in section
-    assert "  - Prefers short answers" in section          # a record without a title is shown by its words
+    assert "  Standing instructions and preferences kept here:\n  - [set by a person] Write dates as 1 March 2024" in section
+    assert "  - [set by a person] Prefers short answers" in section          # a record without a title is shown by its words
     assert "`memory_recall` finds them" in section          # the team's list was cut, and says so
     assert "one exception" in section and "never widen what you may do" in section
     assert primed == {"m-team": 7, "m-notes": 7}
@@ -153,22 +160,23 @@ def test_without_standing_records_the_instructions_say_nothing_of_them():
 
 def test_a_long_standing_record_is_cut_to_a_line():
     long = "Always " + "explain the reasoning in full detail " * 20
-    section, _ = asyncio.run(mt.doc_section(Fake(standing={"m-notes": [{"id": "s3", "title": long}]})))
-    line = next(x for x in section.splitlines() if x.startswith("  - Always"))
-    assert len(line) <= mt.STANDING_CAP + 4 and line.endswith("…")
+    section, _ = asyncio.run(mt.doc_section(Fake(standing={"m-notes": [_stand("s3", title=long)]})))
+    line = next(x for x in section.splitlines() if x.startswith("  - [set by a person] Always"))
+    assert len(line) <= mt.STANDING_CAP + len("  - [set by a person] ") and line.endswith("…")
 
 
 def _says_standing(section):
-    return "`attributes: {\"standing\": true}`" in section and "Only what a person asked for" in section
+    return "a standing instruction" in section and "is set by a person in the console" in section
 
 
-def test_an_agent_is_told_how_to_keep_a_preference_where_a_memory_gives_it_to_the_others():
-    """Without this an agent kept "always list the owner first" as a plain procedure, and the next agent was never given it."""
+def test_an_agent_is_told_a_standing_instruction_is_a_persons_to_set_where_a_memory_gives_it_to_the_others():
+    """A standing instruction is placed in every sharing agent's instructions, so it is a person's to set: an agent keeps
+    the preference like anything else and tells the person where a standing one is set."""
     seam = Fake(offers={"standing": True})
     section, _ = asyncio.run(mt.doc_section(seam))
-    assert _says_standing(section)
+    assert _says_standing(section) and '"standing": true' not in section
     said = next(t for t in mt.tool_list([{"write": True}], {"standing": True}) if t["name"] == "memory_remember")
-    assert "standing" in said["inputSchema"]["properties"]["attributes"]["description"]
+    assert "is not set here" in said["inputSchema"]["properties"]["attributes"]["description"]
 
 
 def test_nothing_is_said_of_it_where_it_would_do_nothing():
