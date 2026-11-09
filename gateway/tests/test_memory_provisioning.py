@@ -408,7 +408,7 @@ def test_a_finished_task_on_an_engine_that_keeps_at_once_is_counted(client):
     with pytest.MonkeyPatch.context() as mp_:
         mp_.setattr(memory_fixture.FixtureProvider, "observe", derive)
         run(gw._memories_observe(ORG, h["id"], sid, run(gw._harness_vertex(h["id"])), {"user_text": "x", "model": "m"}, "y", resp_id=rid))
-    assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {"remembered": 1, "records": [{"id": "hrec_derived1", "memory_id": mid}]}
+    assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {"remembered": 1, "records": [{"id": "hrec_derived1", "memory_id": mid}], "pending": False}
 
 
 def _told(mid: str) -> list[dict]:
@@ -445,9 +445,97 @@ def test_what_an_engine_draws_later_is_counted_when_its_job_settles(client):
         mp_.setattr(memory_fixture.FixtureProvider, "job", job, raising=False)
         first, settled, told = run(go())
     assert first == {"remembered": 0, "records": [], "pending": True}
-    assert settled == {"remembered": 1, "records": [{"id": "hrec_drawn1", "memory_id": mid}]} and asked == ["job_later1"]
+    assert settled == {"remembered": 1, "records": [{"id": "hrec_drawn1", "memory_id": mid}], "pending": False} and asked == ["job_later1"]
     # the memory says something changed once the turn's note is written, so a page watching it reads the turn again
     assert [(e["type"], e["record_ids"]) for e in told] == [("records.changed", [])]
+
+
+def _observed_turn(client, name: str) -> tuple[str, str, str]:
+    """An agent on the fixture engine, a session of it, and a turn record: (harness id, session id, turn id)."""
+    mid = client.post("/v1/memories", headers=ADA, json={"provider": "fixture", "name": name}).json()["id"]
+    h = _agent(client, name=name, memory={"id": mid}, prompt="Keep notes for the team.").json()
+    sid, _tok = _session(h["id"])
+    rid = "resp_" + uuid.uuid4().hex[:12]
+    run(gw._resp_put(rid, {"id": rid, "status": "completed", "output": [], "_input": [{"content": "hi"}]},
+                     ORG, sid, None, "completed", time.time(), True))
+    return h["id"], sid, rid
+
+
+@pytest.mark.parametrize("settles", ["nothing", "failed", "forgotten"])
+def test_a_turn_sent_to_be_kept_never_stays_pending(client, settles):
+    hid, sid, rid = _observed_turn(client, f"Settles {settles}")
+
+    async def later(self, m, episodes, writer):
+        return {"records": [], "job": {"id": "job_" + settles, "status": "pending"}}
+
+    async def job(self, m, job_id):
+        if settles == "forgotten":
+            return None
+        if settles == "failed":
+            return {"id": job_id, "status": "failed", "error": "The model key was refused (HTTP 401).", "records": []}
+        return {"id": job_id, "status": "completed", "error": "", "records": [{"id": "hrec_ep9", "type": "episode"}]}
+
+    async def go():
+        await gw._memories_observe(ORG, hid, sid, await gw._harness_vertex(hid), {"user_text": "x", "model": "m"}, "y", resp_id=rid)
+        await asyncio.gather(*list(gw._NOTE_JOBS))
+        return (await gw._session_turns_data(sid))["turns"][0]["memory"]
+    with pytest.MonkeyPatch.context() as mp_:
+        mp_.setattr(memory_fixture.FixtureProvider, "observe", later)
+        mp_.setattr(memory_fixture.FixtureProvider, "job", job, raising=False)
+        note = run(go())
+    if settles == "failed":
+        assert note == {"remembered": 0, "records": [], "pending": False, "failed": True,
+                        "reason": "This conversation wasn't kept: The model key was refused (HTTP 401)."}
+    else:
+        assert note == {"remembered": 0, "records": [], "pending": False}
+
+
+def test_a_turn_whose_engine_kept_nothing_at_once_says_so(client):
+    hid, sid, rid = _observed_turn(client, "Kept nothing")
+
+    async def nothing(self, m, episodes, writer):
+        return {"records": [], "job": None}
+    with pytest.MonkeyPatch.context() as mp_:
+        mp_.setattr(memory_fixture.FixtureProvider, "observe", nothing)
+        run(gw._memories_observe(ORG, hid, sid, run(gw._harness_vertex(hid)), {"user_text": "x", "model": "m"}, "y", resp_id=rid))
+    assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {"remembered": 0, "records": [], "pending": False}
+
+
+def test_a_save_that_fails_says_so_on_the_turn(client):
+    hid, sid, rid = _observed_turn(client, "Save fails")
+
+    async def down(self, m, episodes, writer):
+        raise memory_graphiti.GraphitiUnavailable("the episode was not taken")
+    with pytest.MonkeyPatch.context() as mp_:
+        mp_.setattr(memory_fixture.FixtureProvider, "observe", down)
+        run(gw._memories_observe(ORG, hid, sid, run(gw._harness_vertex(hid)), {"user_text": "x", "model": "m"}, "y", resp_id=rid))
+    assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {
+        "remembered": 0, "records": [], "pending": False, "failed": True,
+        "reason": "This conversation wasn't kept: Graphiti did not answer: the episode was not taken."}
+
+
+def test_a_turn_that_wasnt_sent_to_be_kept_gets_no_note(client):
+    hid, sid, rid = _observed_turn(client, "Not kept")
+    client.put(f"/v1/harnesses/{hid}/memory", headers=ADA, json={"observe": False})
+    run(gw._memories_observe(ORG, hid, sid, run(gw._harness_vertex(hid)), {"user_text": "x", "model": "m"}, "y", resp_id=rid))
+    assert run(gw._session_turns_data(sid))["turns"][0].get("memory") is None
+
+
+def test_a_reme_turn_counts_the_episode_reme_keeps_as_its_record(client, monkeypatch):
+    hid, sid, rid = _observed_turn(client, "ReMe notes")
+    # ReMe kept the episode as a note of its own and drew nothing more from it (its auto note made no file)
+    monkeypatch.setattr(memory_reme, "transport", httpx.MockTransport(lambda req: httpx.Response(200, json={"success": True, "metadata": {}})))
+    reme = memory_reme.ReMe("http://reme.test")
+
+    async def provider_of(m):
+        return reme
+    monkeypatch.setattr(memory_plane, "provider_of", provider_of)
+    run(gw._memories_observe(ORG, hid, sid, run(gw._harness_vertex(hid)), {"user_text": "Our launch is May 7.", "model": "m"},
+                             "Noted.", resp_id=rid))
+    note = run(gw._session_turns_data(sid))["turns"][0]["memory"]
+    mid = run(gw._harness_vertex(hid))["memory_default"]
+    assert note["remembered"] == 1 and note["pending"] is False and note["records"][0]["memory_id"] == mid
+    assert note["records"][0]["id"].startswith("hrec_")
 
 
 def test_a_write_to_a_persons_memory_is_told_on_the_agents_memory_and_says_nothing_of_what(client, per_person):
@@ -471,7 +559,7 @@ def test_a_write_to_a_persons_memory_is_told_on_the_agents_memory_and_says_nothi
     before = len(_told(shared))
     run(gw._memories_note_kept(ORG, sid, rid))
     assert [(e["type"], e["record_ids"], e["below"]) for e in _told(shared)[before:]] == [("records.changed", [], True)]
-    assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {"remembered": 1, "records": [{"id": record, "memory_id": node}]}
+    assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {"remembered": 1, "records": [{"id": record, "memory_id": node}], "pending": False}
 
 
 # ── New memory: the engine chosen by the one scorer ──────────────────────────────────────────

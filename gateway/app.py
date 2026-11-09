@@ -21822,6 +21822,8 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
     made: list[dict] = []
     job: dict | None = None
     prov, mid = None, ""
+    # whether the task was sent to be kept (the note then always settles: what came, nothing, or why it failed)
+    sent, failed = False, ""
     # what the agent kept with its tools in this turn, read now: the next turn starts afresh (_memories_person_begin)
     kept = await _memories_kept(sid)
     try:
@@ -21833,6 +21835,7 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
         mid = next((e["memory_id"] for e in seam._entries if e.get("default")), "")
         if not mid or not (str(rec.get("user_text") or "").strip() or answer.strip()):
             return
+        sent = True
         m, _ = await memory_plane.need(org, mid, seam.wpr, "write")
         try:
             prov = await memory_plane.provider_of(m)
@@ -21846,13 +21849,15 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
             raise
         await memory_plane.mark(org, mid)
         await memory_plane.used(org, m)
-        made = _derived_records(out.get("records"), mid)
+        made = _derived_records(out.get("records"), mid, episodes=bool(getattr(prov, "episode_is_kept", False)))
         job = out.get("job") if isinstance(out.get("job"), dict) and out["job"].get("id") else None
         print(f"[memories] {sid}: the turn was observed into {mid}", flush=True)
     except Exception as e:  # noqa: BLE001
         print(f"[memories] observe after a turn of {sid} was not taken: {type(e).__name__}: {e}"[:300], flush=True)
+        failed = _memory_save_failed(getattr(e, "message", "") or (str(e) if isinstance(e, memory_plane.MemoryError) else ""))
     finally:
-        await _memories_note(org, sid, resp_id, kept, made, pending=bool(job))
+        await _memories_note(org, sid, resp_id, kept, made, pending=bool(job), failed=failed if sent else "",
+                             settle=sent, at=mid)
     if job and resp_id and prov is not None and len(_NOTE_JOBS) < _NOTE_JOBS_MAX:
         t = asyncio.create_task(_memories_note_job(org, sid, resp_id, prov, mid, str(job["id"]), kept))
         _NOTE_JOBS.add(t)
@@ -21870,10 +21875,18 @@ def _kept_records(xs) -> list[dict]:
     return out
 
 
-def _derived_records(records, mid: str) -> list[dict]:
-    """What an engine drew from a finished task, as a turn links it: every record but the episode it was given."""
+def _derived_records(records, mid: str, episodes: bool = False) -> list[dict]:
+    """What an engine kept from a finished task, as a turn links it: every record it drew, and not the episode it was
+    given, unless the engine keeps that episode as a record a person reads (`episodes`: ReMe keeps it as a note, and
+    a ReMe turn read "memory: null" while its episode sat in the memory)."""
     return [{"id": str(r["id"]), "memory_id": mid} for r in records or []
-            if isinstance(r, dict) and r.get("id") and r.get("type") != "episode"]
+            if isinstance(r, dict) and r.get("id") and (episodes or r.get("type") != "episode")]
+
+
+def _memory_save_failed(said: str) -> str:
+    """Why a finished task wasn't kept, one plain sentence for the turn's note (redacted as the memory's last_error is)."""
+    said = " ".join(memory_plane.clean_text(str(said or "")).split()).rstrip(".")
+    return (f"This conversation wasn't kept: {said}." if said else "This conversation wasn't kept.")[:300]
 
 
 async def _memories_kept(sid: str) -> list[dict]:
@@ -21885,12 +21898,15 @@ async def _memories_kept(sid: str) -> list[dict]:
         return []
 
 
-async def _memories_note(org: str, sid: str, resp_id: str, kept: list[dict], made: list[dict], pending: bool = False) -> None:
+async def _memories_note(org: str, sid: str, resp_id: str, kept: list[dict], made: list[dict], pending: bool = False,
+                         failed: str = "", settle: bool = False, at: str = "") -> None:
     """The turn's record says what memory kept in it: what the agent kept with its tools and what the finished task
-    left, {"remembered": n, "records": [{"id", "memory_id"}]}, and `pending` while the engine is still drawing from
-    it. Each record names the memory it is in, so a person reading the turn can open it there. Once written, the
-    memories they are in say something changed (memory_live.tell: a person's memory also tells the agent's memory
-    above it, without saying what), so a page watching the agent's memory reads the turn again and finds the note."""
+    left, {"remembered": n, "records": [{"id", "memory_id"}], "pending": bool}, `pending` while the engine is still
+    drawing from it. A task that was sent to be kept (`settle`) always gets its note, so it never stays pending: what
+    came, `remembered: 0` when nothing did, or `failed: true` and `reason` when the save failed. Each record names
+    the memory it is in, so a person reading the turn can open it there. Once written, the memories they are in (and
+    `at`, where the task was sent) say something changed (memory_live.tell: a person's memory also tells the agent's
+    memory above it, without saying what), so a page watching the agent's memory reads the turn again."""
     try:
         seen, records = set(), []
         for r in [*kept, *made]:
@@ -21898,10 +21914,13 @@ async def _memories_note(org: str, sid: str, resp_id: str, kept: list[dict], mad
             if k not in seen:
                 seen.add(k)
                 records.append(r)
-        if not resp_id or not (records or pending):
+        if not resp_id or not (records or pending or failed or settle):
             return
-        await _turn_memory_note(resp_id, {"remembered": len(records), "records": records, **({"pending": True} if pending else {})})
-        for mid in dict.fromkeys(str(r.get("memory_id") or "") for r in records):
+        note = {"remembered": len(records), "records": records, "pending": bool(pending) and not failed}
+        if failed:
+            note.update(failed=True, reason=failed)
+        await _turn_memory_note(resp_id, note)
+        for mid in dict.fromkeys([*(str(r.get("memory_id") or "") for r in records), str(at or "")]):
             m = await memory_plane._load(org, mid) if mid else None
             if m:
                 memory_live.tell(mid, "records.changed", (str(m["end_user_of"]),) if m.get("end_user_of") else (), record_ids=[])
@@ -21919,10 +21938,12 @@ _NOTE_JOB_MAX_S = float(os.environ.get("HR_MEMORY_NOTE_JOB_MAX_S", "900"))
 
 async def _memories_note_job(org: str, sid: str, resp_id: str, prov, mid: str, job_id: str, kept: list[dict]) -> None:
     """A turn whose engine answered a job: its note written again once the job settles, with what the engine drew, and
-    no longer pending (also when the engine forgets the job or it outlasts the wait). A replica that stops first
-    leaves the note pending; what the engine drew is in the memory all the same."""
+    no longer pending: `remembered: 0` when it drew nothing, `failed` and why when the job failed, and settled also
+    when the engine forgets the job or it outlasts the wait. A replica that stops first leaves the note pending; what
+    the engine drew is in the memory all the same."""
     end, wait = time.monotonic() + _NOTE_JOB_MAX_S, 1.0
     made: list[dict] = []
+    failed = ""
     while time.monotonic() < end:
         await asyncio.sleep(min(wait, max(0.0, end - time.monotonic())))
         wait = min(wait * 1.6, 15.0)
@@ -21935,12 +21956,14 @@ async def _memories_note_job(org: str, sid: str, resp_id: str, prov, mid: str, j
             break                          # the engine no longer knows it: what was noted stands, no longer pending
         status = str(job.get("status") or "")
         if status == "completed":
-            made = _derived_records(job.get("records"), mid)
+            made = _derived_records(job.get("records"), mid, episodes=bool(getattr(prov, "episode_is_kept", False)))
             break
         if status == "failed":
-            await memory_plane.mark(org, mid, str(job.get("error") or "") or "The engine could not draw anything from a finished task.")
+            why = str(job.get("error") or "") or "The engine could not draw anything from a finished task."
+            await memory_plane.mark(org, mid, why)
+            failed = _memory_save_failed(why)
             break
-    await _memories_note(org, sid, resp_id, kept, made)
+    await _memories_note(org, sid, resp_id, kept, made, failed=failed, settle=True, at=mid)
 
 
 async def _memories_note_kept(org: str, sid: str, resp_id: str) -> None:
