@@ -200,7 +200,7 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
       ) : null}
       {mine && asking ? (
         <ConfirmSheet id="amEngAsk" tone="primary" title={`Use ${vendorName(asking)} for ${name}?`} confirmLabel={`Use ${vendorName(asking)}`} busy={own.busy}
-          body={`${name} gets a new memory kept by ${vendorName(asking)} and remembers there from its next task. ${mine.name || 'The memory it has now'} is kept, with everything in it, under Memories.`}
+          body={`${name} gets a new memory kept by ${vendorName(asking)} and remembers there from its next task. Its current memory stays under Memories, with everything in it.`}
           onClose={() => { if (!own.busy) setAsking(''); }}
           onConfirm={() => { const e = asking; void setOwn({ engine: e }, 'Engine changed. The memory before is kept.').then(() => setAsking('')); }} />
       ) : null}
