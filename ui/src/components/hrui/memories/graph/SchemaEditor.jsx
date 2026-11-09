@@ -229,9 +229,12 @@ function TypeDetail({
       </div>
       <div className="dg-detail-b">
         {lockedLine ? <p className="mm-locked" role="note">{lockedLine}</p> : null}
+        {/* a schema of names and descriptions only (schema.mode "labels") offers those two, and nothing it would not read */}
+        {caps.plain ? null : (<>
         <div className="dg-field-label">Color</div>
         <ColorPicker value={ring} onPick={setColor} disabled={!caps.color}/>
-        {isVertex && (<>
+        </>)}
+        {isVertex && !caps.plain && (<>
           <div className="dg-field-label" style={{ marginTop: 16 }}>Icon</div>
           <IconPicker value={iconName} onPick={setIcon} disabled={!caps.icon}/>
           {savedProps.length > 0 && (<>
@@ -277,6 +280,7 @@ function TypeDetail({
           {relationsLine ? <div className="stat-lbl" style={{ marginTop: 8 }}>{relationsLine}</div> : null}
         </>)}
 
+        {caps.plain ? null : (<>
         <hr className="hr"/>
         <div className="dg-field-label">Properties</div>
         {savedProps.length === 0 && draftProps.length === 0 ? <div className="stat-lbl" style={{ marginBottom: 8 }}>no properties yet</div> : (
@@ -313,6 +317,7 @@ function TypeDetail({
           </div>
         ) : null}
         {isVertex && caps.typesLine ? <div className="stat-lbl" style={{ marginTop: 8 }}>{TYPES_LINE}</div> : null}
+        </>)}
 
         {count != null ? (<>
           <hr className="hr"/>
@@ -359,8 +364,8 @@ function normalizeEdgeLabel(v) {
     .slice(0, 64);
 }
 
-function AddTypeForm({ onCreate, busy, onClose, vertexLabels = [], edges = true, word = 'type' }) {
-  const [d, setD] = useState({ label: '', kind: 'vertex', color: SWATCHES[0], from_type: '', to_type: '' });
+function AddTypeForm({ onCreate, busy, onClose, vertexLabels = [], edges = true, word = 'type', plain = false }) {
+  const [d, setD] = useState({ label: '', kind: 'vertex', color: SWATCHES[0], from_type: '', to_type: '', description: '' });
   const isEdge = d.kind === 'edge';
   // An edge type needs its two endpoints up front: without them it renders nowhere on the canvas, which is how
   // "created but invisible" bugs felt.
@@ -368,10 +373,31 @@ function AddTypeForm({ onCreate, busy, onClose, vertexLabels = [], edges = true,
   function commit() {
     if (!canCreate) return;
     onCreate({
-      label: d.label.trim(), kind: d.kind, color: d.color,
+      label: d.label.trim(), kind: d.kind, color: d.color, description: d.description.trim(),
       connections: isEdge ? [{ from_type: d.from_type, to_type: d.to_type }] : undefined,
     });
     onClose();
+  }
+  if (plain) {
+    // a schema of names and descriptions only: the two things the engine reads, one per row, and nothing else
+    return (
+      <div className="sp-graph-addtype card"
+           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); } }}>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 10 }}>New {word}</div>
+        <label className="dg-field-label" htmlFor="sgNewName">Name</label>
+        <input id="sgNewName" className="input sm" autoFocus value={d.label} autoComplete="off"
+               onChange={(e) => setD({ ...d, label: e.target.value })}
+               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
+               style={{ marginBottom: 8 }}/>
+        <label className="dg-field-label" htmlFor="sgNewDesc">Description</label>
+        <textarea id="sgNewDesc" className="input sm" rows={2} value={d.description}
+                  onChange={(e) => setD({ ...d, description: e.target.value })}/>
+        <div style={{ display: 'flex', gap: 6, marginTop: 12, justifyContent: 'flex-end' }}>
+          <button type="button" className="btn sm" disabled={busy} onClick={onClose}>Cancel</button>
+          <button type="button" className="btn sm primary" disabled={busy || !canCreate} onClick={commit}>Create</button>
+        </div>
+      </div>
+    );
   }
   return (
     // Escape closes the popover from anywhere inside it.
@@ -517,7 +543,7 @@ function fitCanvas(ref) {
 const fitSoon = (ref) => requestAnimationFrame(() => requestAnimationFrame(() => { fitCanvas(ref); setTimeout(() => fitCanvas(ref), 60); }));
 
 /** The pane. `graph` is what it draws, `caps` what may change, and `doc` where a change goes (none for what a provider holds on its own). */
-function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed, retry, countOf, onOpenData, placeholder }) {
+function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed, retry, countOf, onOpenData, placeholder, noTypes = '' }) {
   const [schemaSel, setSchemaSel] = useState(null);   // { kind, label }
   const [edit, setEdit] = useState(false);
   const [addType, setAddType] = useState(false);
@@ -570,7 +596,7 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
   }, [graph]);
   const titleOfType = (v) => graph?.titles?.[v.label] || typeLabel(v.label);
 
-  const createType = useCallback(({ label, kind, color, connections }) => {
+  const createType = useCallback(({ label, kind, color, connections, description = '' }) => {
     if (kind === 'vertex') {
       const name = typeNameOf(label);
       if (saved?.types.some((t) => t.name === name)) { toast(`A ${word} called ${typeLabel(name)} is already here.`); return; }
@@ -581,7 +607,7 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
       const at = known.size ? arrive(nodes, [], known).get('new') : { x: 470, y: 320 };
       const id = uid('t');
       apply((d) => {
-        d.types.push({ id, name, description: '', properties: [], color: color || MM_COLORS[0], icon: 'box', x: Math.round(at.x), y: Math.round(at.y), caption: 'title' });
+        d.types.push({ id, name, description, properties: [], color: color || MM_COLORS[0], icon: 'box', x: Math.round(at.x), y: Math.round(at.y), caption: 'title' });
       });
       setSchemaSel({ kind: 'vertex', label: name });
       setEdit(true);
@@ -740,9 +766,15 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
         <div className="dg-body" ref={bodyRef}>
           <div className="dg-canvas">
             <div className="dg-canvas-tools" style={{ zIndex: edit ? 4 : undefined }}>
-              <button className={'pane-btn' + (edit ? ' active' : '')} onClick={() => setEdit(!edit)} title={caps.any ? 'Inspect / edit selected type' : 'Inspect selected type'} aria-label="Inspect selected type" aria-pressed={edit}>{(caps.any ? I.pencil : I.info)}</button>
+              {noTypes ? (
+                // Richard 11-09: "If not supported, should disable this +Type button". Off, not hidden, saying why.
+                <button type="button" className="pane-btn" disabled title={noTypes} aria-label="Edit types">{I.pencil}</button>
+              ) : (
+                <button className={'pane-btn' + (edit ? ' active' : '')} onClick={() => setEdit(!edit)} title={caps.any ? 'Inspect / edit selected type' : 'Inspect selected type'} aria-label="Inspect selected type" aria-pressed={edit}>{(caps.any ? I.pencil : I.info)}</button>
+              )}
               {caps.any ? null : <span className="pill neutral" title="This can be read here, not changed">Read only</span>}
-              {caps.add ? <button type="button" className="btn sm" onClick={() => setAddType((v) => !v)} title="Add a type">+ Type</button> : null}
+              {caps.add ? <button type="button" className="btn sm" onClick={() => setAddType((v) => !v)} title="Add a type">+ Type</button>
+                : noTypes ? <button type="button" className="btn sm" disabled title={noTypes}>+ Type</button> : null}
               <button className={'pane-btn' + (expanded ? ' active' : '')} onClick={() => setExpanded((v) => !v)} title={expanded ? 'restore' : 'expand'} aria-label={expanded ? 'restore' : 'expand'} aria-pressed={expanded}>{expanded ? I.cornersIn : I.cornersOut}</button>
               {caps.any && schemaDirty && (
                 <>
@@ -804,7 +836,7 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
             ) : null}
             {addType && (
               <div className="sp-graph-addtype-wrap">
-                <AddTypeForm onCreate={createType} busy={busy} onClose={() => setAddType(false)} vertexLabels={((graph && graph.vertex_types) || []).filter((v) => !v.builtin).map((v) => v.label)} edges={!!caps.conns} word={word}/>
+                <AddTypeForm onCreate={createType} busy={busy} onClose={() => setAddType(false)} vertexLabels={((graph && graph.vertex_types) || []).filter((v) => !v.builtin).map((v) => v.label)} edges={!!caps.conns} word={word} plain={!!caps.plain}/>
               </div>
             )}
             <div className="mm-foot">
@@ -815,7 +847,7 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
             <TypeDetail
               graph={graph} sel={schemaSel} draft={selDraft} onDraft={updateSelDraft}
               compact={compact} onClose={() => setEdit(false)}
-              caps={selLocked ? NOTHING : caps} count={selCount}
+              caps={selLocked ? { ...NOTHING, plain: !!caps.plain } : caps} count={selCount}
               lockedLine={selLocked ? `Built into ${vendor}, so it can't be changed here.` : ''}
               onOpenData={schemaSel && schemaSel.kind === 'vertex' ? () => onOpenData(schemaSel.label) : null}
               relationsLine={caps.conns && !selLocked ? ((graph?.edge_types || []).length ? RELATIONS_LINE : NO_RELATIONS_LINE) : ''}
@@ -870,17 +902,17 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
   );
 }
 
-const NOTHING = { any: false, name: false, description: false, color: false, icon: false, caption: false, props: false, conns: false, del: false, add: false, position: false, typesLine: false };
+const NOTHING = { any: false, name: false, description: false, color: false, icon: false, caption: false, props: false, conns: false, del: false, add: false, position: false, typesLine: false, plain: false };
 
 function WrittenSchema({ memory, provider, doc, ro, countOf, onOpenData }) {
   const guides = schemaGuides(provider);
   const caps = useMemo(() => {
-    if (ro) return { ...NOTHING, typesLine: guides };
+    if (ro) return { ...NOTHING, typesLine: guides, plain: !guides };
     if (guides) {
       return { any: true, name: true, description: true, color: true, icon: true, caption: hasProperties(provider), props: hasProperties(provider), conns: hasRelations(provider), del: true, add: true, position: true, typesLine: true };
     }
     // a label has a name and what it means, and the provider reads nothing more
-    return { ...NOTHING, any: true, name: true, description: true, del: true, add: true };
+    return { ...NOTHING, any: true, name: true, description: true, del: true, add: true, plain: true };
   }, [ro, guides, provider]);
   // what the provider makes itself, drawn locked, beside what a person sets
   const graph = useMemo(() => (doc.schema ? withBuiltin(graphOf(doc.schema), provider) : null), [doc.schema, provider]);
@@ -892,6 +924,14 @@ function WrittenSchema({ memory, provider, doc, ro, countOf, onOpenData }) {
       loading={!doc.schema && !doc.failed} failed={!doc.schema && doc.failed ? 'The schema could not be read just now.' : ''}
       retry={doc.retry} countOf={count} onOpenData={onOpenData} />
   );
+}
+
+/** Why there is no type to add or edit where a provider reads no schema (schema.mode "none"), in the person's words: what
+ *  it keeps, the built-in type its others come from (or its first), from what it declares, never from its name. */
+export function noTypesLine(provider) {
+  const b = builtinOf(provider);
+  const kept = (b?.relations || []).find((r) => r.name === 'derived_from')?.from || b?.types?.[0]?.name || '';
+  return `${vendorName(provider.id)} keeps ${kept ? kindInfo(kept, null).many.toLowerCase() : 'records'} without types of its own.`;
 }
 
 /** A provider that decides for itself: what this memory holds, read from its records, in the same panel, not editable. */
@@ -920,7 +960,7 @@ function HeldSchema({ memory, provider, onOpenData }) {
   // counted from the records read: where they were cut short, no count is shown rather than one too low
   const count = useCallback((key) => (held && !state.truncated && held.count[key] != null ? held.count[key] : null), [held, state.truncated]);
   return (
-    <SchemaPane memory={memory} provider={provider} graph={held ? held.graph : (state.loading ? null : withBuiltin({ vertex_types: [], edge_types: [] }, provider))} caps={NOTHING}
+    <SchemaPane memory={memory} provider={provider} graph={held ? held.graph : (state.loading ? null : withBuiltin({ vertex_types: [], edge_types: [] }, provider))} caps={NOTHING} noTypes={noTypesLine(provider)}
       loading={state.loading} failed={state.failed ? 'What this memory holds could not be read just now.' : ''} retry={read}
       countOf={count} onOpenData={onOpenData} />
   );
