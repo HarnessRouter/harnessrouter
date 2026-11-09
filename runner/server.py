@@ -2319,9 +2319,11 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         else "CLAUDE.md")
 
 
-# The most of an instruction file a changed-instructions note carries itself. The note rides in the
-# CLI's argv with the message, and one argument is capped at 128 KiB on Linux; a larger file is named
-# for the agent to read instead.
+# The largest instruction file a changed-instructions note carries. The note rides in the CLI's argv
+# with the message (or in the driver's job, one environment string), and one is capped at 128 KiB on
+# Linux. A larger file gets no note at all, and the turn says so in the log: the continued task keeps
+# the instructions it started with, and a new task reads the edit. Never a note that points at the
+# file instead: the workspace is the agent's to write, and a note says it replaces the instructions.
 _NOTE_INLINE_MAX = 64 * 1024
 
 # Bases whose resumed conversation keeps the instruction file it read when the conversation began,
@@ -2361,23 +2363,17 @@ def _doc_without_recall(text: str | None) -> str | None:
     return None if text is None else _KNOWN_BLOCK.sub("", text)
 
 
-def _instructions_changed_note(doc_name: str, text: str, path: str = "") -> str:
+def _instructions_changed_note(doc_name: str, text: str) -> str:
     """What a resumed conversation is handed, ahead of its message, when the instructions changed
     since it began and the base keeps the copy it read then: the current file, said to replace that
     copy. The shape Claude Code, Codex and dsh give an edited file in a resumed session on their own
     (the new copy after the old one, and the old one named stale), and what Kimi Code tells its model
-    when the file changes while it runs, with the contents here rather than a request to read them."""
-    body = text.strip()
-    if len(body.encode()) > _NOTE_INLINE_MAX:
-        return ("<system-reminder>\n"
-                f"The {doc_name} instructions changed after this conversation started. The copy in your "
-                f"system prompt is stale and is replaced by the current file: read {path or doc_name} "
-                "now and follow it.\n"
-                "</system-reminder>\n\n")
+    when the file changes while it runs, with the contents here rather than a request to read them.
+    `text` is the runner's composed file (_compose_agent_doc), within _NOTE_INLINE_MAX (_start_turn)."""
     return ("<system-reminder>\n"
             f"The {doc_name} instructions changed after this conversation started. The contents below "
             "replace the copy in your system prompt, which is stale: follow these.\n\n"
-            f"{body}\n"
+            f"{text.strip()}\n"
             "</system-reminder>\n\n")
 
 
@@ -8868,7 +8864,7 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     # beside it); stream-json is one message per line. The process's cwd is the workspace.
     resuming = bool(resume_session_id) and _kimi_has_session(home, resume_session_id)
     if resuming and instructions and instructions.strip():
-        prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "kimi"))) + prompt
+        prompt = _instructions_changed_note("AGENTS.md", instructions) + prompt
     cmd = ["kimi", "-p", prompt, "--output-format", "stream-json"]
     if resuming:
         cmd += ["-r", resume_session_id]
@@ -9354,7 +9350,7 @@ def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # The conversation carries the AGENTS.md it read on its first turn (its first message, as
         # always-applied workspace rules) and a resumed one reads none again: an edit is handed over
         # with the message (_PINNED_INSTRUCTIONS).
-        prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "grok"))) + prompt
+        prompt = _instructions_changed_note("AGENTS.md", instructions) + prompt
     # `--single=<prompt>` so a prompt that begins with a dash is the prompt, not a flag (measured).
     cmd = ["grok", f"--single={prompt}", "-m", _GROK_MODEL_KEY,
            "--output-format", "streaming-messages-json", "--always-approve"]
@@ -10372,7 +10368,7 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
             # Unlike opencode, mimo pins a session's system prompt, AGENTS.md included, in its
             # prefix snapshot for the provider's cache, so a resumed session reads none again: an
             # edit is handed over with the message (_PINNED_INSTRUCTIONS).
-            prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "mimo"))) + prompt
+            prompt = _instructions_changed_note("AGENTS.md", instructions) + prompt
     elif resume_session_id:
         # opencode's guard, unchanged: naming a session this database does not hold exits 1 before
         # the first event, and since every later turn passes the same dead id the conversation
@@ -11834,8 +11830,7 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
         # context and its system prompt event, and a resumed one loads none again: an edit is handed
         # over with the message. Only the driver knows whether the conversation is resumed (it asks
         # the agent-server), so it adds this then and only then (_PINNED_INSTRUCTIONS).
-        job["instructions_changed"] = _instructions_changed_note(
-            "AGENTS.md", instructions, str(_agent_doc_path(cwd, "openhands")))
+        job["instructions_changed"] = _instructions_changed_note("AGENTS.md", instructions)
     return _driver_cmd(OPENHANDS_PYTHON, OPENHANDS_DRIVER, job, env)
 
 
@@ -14685,7 +14680,7 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
         # The agent's memory middleware reads AGENTS.md into the thread's checkpointed state once, and
         # a resumed thread keeps that copy: an edit is handed over with the message
         # (_PINNED_INSTRUCTIONS).
-        prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "dcode"))) + prompt
+        prompt = _instructions_changed_note("AGENTS.md", instructions) + prompt
     # The driver speaks ACP to that process and claude's stream-json to the runner.
     job = {"argv": cmd, "cwd": str(pathlib.Path(cwd).resolve()),
            # The task rides the protocol, not the command line: ACP takes it in session/prompt.
@@ -17663,6 +17658,11 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
     # file on disk, the same trust as any new session reading its instruction file.
     changed_doc = (doc_body or None) if (
         doc_changed and req.resume_session_id and backend in _PINNED_INSTRUCTIONS) else None
+    if changed_doc and len(changed_doc.encode()) > _NOTE_INLINE_MAX:
+        print(f"[instructions] {backend} session {identifier}: the edited instructions ({len(changed_doc.encode())} "
+              f"bytes) are too large to hand to a continued turn, so this task keeps the instructions it started "
+              f"with; a new task uses the edit", flush=True)
+        changed_doc = None
     # The harness's own variables under the runner's, so nothing a caller names shadows the
     # runner's credentials or paths; the platform's HR_ names come after and win (below).
     env = {**_caller_env(req.env), **_child_env()}

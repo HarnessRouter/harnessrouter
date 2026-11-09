@@ -137,10 +137,17 @@ def test_a_kimi_turn_that_starts_a_conversation_gets_no_note(turn):
         "a new conversation reads the current file itself"
 
 
-def test_a_note_too_long_for_one_argument_names_the_file_instead():
-    big = "x" * (server._NOTE_INLINE_MAX + 1)
-    note = server._instructions_changed_note("AGENTS.md", big, "/w/AGENTS.md")
-    assert big not in note and "/w/AGENTS.md" in note and "stale" in note
+def test_instructions_too_large_for_a_note_get_none_and_the_log_says_so(turn, capsys):
+    """Never a note that points at the workspace file instead: the agent can write it."""
+    turn("kimi", "Rule A.")
+    _kimi_session(turn.ws, "ks1")
+    capsys.readouterr()
+    cmd = turn("kimi", "Rule B. " + "x" * server._NOTE_INLINE_MAX, resume="ks1")
+    assert cmd[cmd.index("-p") + 1] == "next message" and cmd[cmd.index("-r") + 1] == "ks1"
+    log = capsys.readouterr().out
+    assert "kimi session sess-1" in log and "keeps the instructions it started with" in log
+    cmd = turn("kimi", "Rule C.", resume="ks1")
+    assert "Rule C." in cmd[cmd.index("-p") + 1], "the next edit that fits is handed over as before"
 
 
 # ── the other bases that keep their first copy: the current file ahead of the message ────────
