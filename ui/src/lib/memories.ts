@@ -227,15 +227,25 @@ export const chooseEngine = (name: string, description: string) =>
       scope: d?.scope === 'per_user' ? 'per_user' : 'shared', reason: typeof d?.reason === 'string' ? d.reason : '',
     }));
 
+/** Why a save failed, as the turn's note gives it: the service's bare reason. A note written before the gateway sent
+ *  it bare reads "This conversation wasn't kept: <reason>." and that sentence comes off, so the line never says it
+ *  twice; '' where no reason came. */
+export function failedReason(raw: unknown): string {
+  const t = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : '';
+  return t.replace(/^this conversation wasn['’]t kept\s*[:.]?\s*/i, '').replace(/\.$/, '').trim();
+}
+/** A failed save as its turn's line says it. */
+export const failedLine = (reason: string) => (reason ? `Couldn't remember this one: ${reason}` : "Couldn't remember this one");
 /** What a finished task kept, on its turn record (`memory: {remembered, records: [{id, memory_id}], pending?}`), read
- *  leniently: a record may also be a bare id. Null where the turn kept nothing or says nothing of it. */
-export interface Remembered { count: number; records: { id: string; memory_id?: string }[]; memoryId: string; failed?: string }
+ *  leniently: a record may also be a bare id. Null where the turn kept nothing or says nothing of it. A save that
+ *  failed is `failed`, with the service's reason ('' where it gave none). */
+export interface Remembered { count: number; records: { id: string; memory_id?: string }[]; memoryId: string; failed?: true; reason?: string }
 export function rememberedOf(turn: unknown): Remembered | null {
   const m = turn && typeof turn === 'object' ? (turn as { memory?: unknown }).memory : null;
   if (!m || typeof m !== 'object') return null;
   const o = m as { remembered?: unknown; records?: unknown; memory_id?: unknown; failed?: unknown; reason?: unknown };
-  // a save that failed says so on its turn, in the service's own words (never a silent miss)
-  if (o.failed === true) return { count: 0, records: [], memoryId: '', failed: typeof o.reason === 'string' && o.reason.trim() ? o.reason.trim() : 'the memory could not be reached' };
+  // a save that failed says so on its turn, in the service's own words (never a silent miss, never a guessed cause)
+  if (o.failed === true) return { count: 0, records: [], memoryId: '', failed: true, reason: failedReason(o.reason) };
   const n = typeof o.remembered === 'number' && Number.isFinite(o.remembered) ? o.remembered : 0;
   if (n <= 0) return null;
   const records = (Array.isArray(o.records) ? o.records : []).flatMap((x) => {
@@ -247,6 +257,13 @@ export function rememberedOf(turn: unknown): Remembered | null {
     return [];
   });
   return { count: n, records, memoryId: typeof o.memory_id === 'string' ? o.memory_id : records.find((r) => r.memory_id)?.memory_id || '' };
+}
+/** How many things the platform recalled for a turn as it began (what the agent already knew that could matter
+ *  there), as its record says (`memory.recalled_at_start`); 0 where it recalled nothing or the record doesn't say. */
+export function recalledAtStartOf(turn: unknown): number {
+  const m = turn && typeof turn === 'object' ? (turn as { memory?: unknown }).memory : null;
+  const n = m && typeof m === 'object' ? (m as { recalled_at_start?: unknown }).recalled_at_start : undefined;
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
 /** Where a record opens. `top` is the memory a person comes from (an agent's own); a record of a memory below it (a

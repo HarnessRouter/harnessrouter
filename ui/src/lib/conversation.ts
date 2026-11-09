@@ -100,6 +100,9 @@ export interface AsstMsg { role: 'assistant'; blocks: Block[]; files: RespFile[]
   incompleteDetail?: string;
   /** Seconds this turn took, when the gateway kept it. */
   elapsed?: number;
+  /** Whole seconds from when its record says it began to when it ended (turnSpan), for a finished turn read from
+   *  its record; absent where the record doesn't say both. */
+  span?: number;
   /** an earlier turn brought with the task's first request (see UserMsg) */
   imported?: true;
   /** The turn's clock: the same events folded by reifyui's reduceTurn as they arrived, so a view can
@@ -141,6 +144,14 @@ export function carryClocks(server: Msg[], local: Msg[]): Msg[] {
   });
 }
 
+/** How long a finished turn took, as its record says: its end less its start, both whole Unix seconds; undefined where
+ *  the record doesn't say both (a running turn has no end), or says them out of order. */
+export function turnSpan(t: Pick<SessionTurn, 'created_at' | 'completed_at'>): number | undefined {
+  const a = t.created_at, b = t.completed_at;
+  return typeof a === 'number' && typeof b === 'number' && Number.isFinite(a) && Number.isFinite(b) && a > 0 && b >= a
+    ? Math.round(b - a) : undefined;
+}
+
 export function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boolean } {
   const m: Msg[] = [];
   let running = false;
@@ -164,7 +175,8 @@ export function msgsFromTurns(turns: SessionTurn[]): { msgs: Msg[]; running: boo
       incompleteReason: (t as { incomplete_reason?: string }).incomplete_reason || undefined,
       incompleteDetail: (t as { incomplete_detail?: string }).incomplete_detail || undefined,
       inputRequest: (t as { input_request?: InputRequest }).input_request || undefined,
-      elapsed: typeof t.elapsed === 'number' ? t.elapsed : undefined });
+      elapsed: typeof t.elapsed === 'number' ? t.elapsed : undefined,
+      ...(st !== 'running' && turnSpan(t) !== undefined ? { span: turnSpan(t) } : {}) });
   }
   return { msgs: m, running };
 }

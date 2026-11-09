@@ -48,11 +48,16 @@ import { workingNow } from './stackLive';
 import { sec } from './fmt';
 import { Md } from './TaskThread';
 import Link from 'next/link';
-import { recordHref, rememberedOf, type Remembered } from '@/lib/memories';
-import { recalledIn, recalledLine } from './memorySteps';
+import { failedLine, recalledAtStartOf, recordHref, rememberedOf, type Remembered } from '@/lib/memories';
+import { recalledIn, recalledLine, recalledTitle } from './memorySteps';
 import { useAgentMemory } from '../memories/AgentMemory';
 import { useMemoryEvents } from '../memories/editor/useMemoryEvents';
 const MAX_FILE = 25 * 1024 * 1024;
+
+/** What memory did in each turn, as the turns' records say: what it kept (or that keeping it failed), and how many
+ *  things the platform recalled for it as it began. */
+interface TurnMemory { kept: Remembered | null; atStart: number }
+const memoryOfTurns = (turns: unknown[]): TurnMemory[] => turns.map((t) => ({ kept: rememberedOf(t), atStart: recalledAtStartOf(t) }));
 const ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,application/json,.md,.csv,.txt,.json,.pdf';
 
 const CHEV = <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>;
@@ -121,7 +126,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   // each turn's response ID, as the record has it (read with the record, and again as a turn ends)
   const [turnIds, setTurnIds] = useState<string[]>([]);
   // what each turn remembered, as its record says once the task's memory has kept it (0.40: `memory` on the turn)
-  const [turnMem, setTurnMem] = useState<(Remembered | null)[]>([]);
+  const [turnMem, setTurnMem] = useState<TurnMemory[]>([]);
   const seenRef = useRef(onSeen);
   seenRef.current = onSeen;
   const fromRecord = useRef(false);
@@ -140,7 +145,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
         return String(x._model || (x.served_model ? x.served_model.split('/').pop() : '') || '');
       }));
       setTurnIds(turns.map((x) => String(x.id || '')));
-      setTurnMem(turns.map(rememberedOf));
+      setTurnMem(memoryOfTurns(turns));
     }).catch(() => { if (alive) t = setTimeout(() => void read(n + 1), Math.min(30_000, 2000 * 2 ** n)); });
     void read(0);
     return () => { alive = false; if (t) clearTimeout(t); };
@@ -198,7 +203,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     if (!was || conv.busy || !live) return undefined;
     let alive = true, t: ReturnType<typeof setTimeout> | undefined;
     // a read that fails keeps the IDs already read, and is read again shortly (at most three more times)
-    const read = (n: number) => loadSessionTurns(live).then(({ turns }) => { if (alive) { setTurnIds(turns.map((x) => String(x.id || ''))); setTurnMem(turns.map(rememberedOf)); } })
+    const read = (n: number) => loadSessionTurns(live).then(({ turns }) => { if (alive) { setTurnIds(turns.map((x) => String(x.id || ''))); setTurnMem(memoryOfTurns(turns)); } })
       .catch(() => { if (alive && n < 3) t = setTimeout(() => void read(n + 1), 1000 * 2 ** n); });
     void read(0);
     return () => { alive = false; if (t) clearTimeout(t); };
@@ -212,7 +217,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     if (!live || !/^record|^records/.test(e.type)) return;
     clearTimeout(memRead.current);
     memRead.current = setTimeout(() => {
-      loadSessionTurns(live).then(({ turns }) => setTurnMem(turns.map(rememberedOf))).catch(() => { /* read again on its next write */ });
+      loadSessionTurns(live).then(({ turns }) => setTurnMem(memoryOfTurns(turns))).catch(() => { /* read again on its next write */ });
     }, 800);
   });
   const started = conv.msgs.length > 0 || !!resume || !!top;
@@ -386,20 +391,26 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     // a recorded run says the time it took when it ran, however fast it is played
     const rec0 = replayed && t === 0 && !!recording;
     const took = rec0 && recording ? recording.durMs : ms;
-    const end = m.status === 'done' ? (took != null && took >= 0 ? `Done in ${sec(took)}` : 'Done') : '';
+    // a turn read back from its record with no figure of its own: from when the record says it began to when it ended,
+    // in the whole seconds the record keeps (conversation.ts turnSpan)
+    const end = m.status === 'done' ? (took != null && took >= 0 ? `Done in ${sec(took)}` : m.span ? `Done in ${m.span} s` : 'Done') : '';
     const rid = turnIds[t] || '';
     const bits: React.ReactNode[] = [];
     if (rec0) bits.push(<span key="rec" className="replay-tag">Recorded</span>);
     if (note) bits.push(<span key="m">{r.baseName} · <span className="mono">{note}</span></span>);
     if (end) bits.push(<span key="e">{end}</span>);
-    // what this turn's memory searches found, read from the searches themselves (memorySteps.ts)
-    const recalled = m.status !== 'running' ? recalledLine(recalledIn(m)) : '';
-    if (recalled) bits.push(<span key="rcl" className="pg-mem pg-recalled">{recalled}</span>);
+    // what this turn recalled: what its memory searches found, read from the searches themselves (memorySteps.ts), and
+    // what the platform recalled for it as it began, which its record counts (there is no step for that)
+    const done = m.status !== 'running';
+    const found = done ? recalledIn(m) : null, atStart = done ? turnMem[t]?.atStart || 0 : 0;
+    const recalled = recalledLine(found, atStart);
+    if (recalled) bits.push(<span key="rcl" className="pg-mem pg-recalled" title={recalledTitle(found, atStart)}>{recalled}</span>);
     // what this turn remembered, linked to where it was kept: a record in a person's memory opens on the agent's
     // memory's page, the person's record open in it, so Back is the agent's memory
-    const kept = m.status !== 'running' ? turnMem[t] : null;
+    const kept = done ? turnMem[t]?.kept || null : null;
     if (kept?.failed) {
-      bits.push(<span key="mem" className="pg-mem pg-mem-failed" title={kept.failed}>{`Couldn't remember this one: ${kept.failed}`}</span>);
+      const said = failedLine(kept.reason || '');
+      bits.push(<span key="mem" className="pg-mem pg-mem-failed" title={said}>{said}</span>);
     } else if (kept) {
       const said = `Remembered ${kept.count} ${kept.count === 1 ? 'thing' : 'things'}`;
       const mid = kept.memoryId || memoryId;
