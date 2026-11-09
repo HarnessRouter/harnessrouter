@@ -14,7 +14,6 @@ import { useEffect, useState } from 'react';
 import { harnessFetch } from '@/lib/hfetch';
 import { getSession } from '@/lib/auth';
 import { appendWorkspaceQuery, workspaceHeaders } from '@/lib/workspace';
-import { SELF_HOSTED } from '@/lib/edition';
 
 export interface OobHarness {
   id: string;
@@ -295,16 +294,6 @@ export function offeredOob(bases: Record<string, BaseInfo> | null): OobHarness[]
  *  API can carry `claude` where the console names the base `claude-code` (its setups read "claude", with no mark). */
 export const oobById = (id: string) => OOB.find((o) => o.id === id) || OOB.find((o) => o.backend === id) || null;
 
-/** The line said wherever a person picks or sees one of these agent harnesses as a setup's. Their CLIs take a
- *  task's prompt only as an argument, and a process's arguments are what `ps` lists on the box; the runner hands
- *  every other agent harness its prompt by file or stdin. Said always on a self-hosted instance, until each has
- *  a way in that is not its command line. Hosted runs one session per sandbox, so no other task shares it. */
-const PROMPT_ON_COMMAND_LINE = new Set<OobHarness['backend']>(['jcode', 'kimi']);
-export const PROMPT_SEEN_NOTE = 'With this agent, other tasks on the same machine can see what it’s asked while it works.';
-export function promptSeenNote(base: string | null | undefined): string | null {
-  const backend = base ? oobById(base)?.backend : null;
-  return SELF_HOSTED && backend && PROMPT_ON_COMMAND_LINE.has(backend) ? PROMPT_SEEN_NOTE : null;
-}
 
 // ── model catalog: the GATEWAY owns it, this file does not ────────────────────────────
 // The `models` / `defaultModel` fields above are the pre-fetch placeholder only (so first paint
