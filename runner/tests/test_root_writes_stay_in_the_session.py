@@ -458,60 +458,6 @@ def test_whether_a_conversation_is_there_is_asked_as_the_session(monkeypatch):
     assert server._resume_lost("opensquilla", [], "hsessothertoken", str(ws)) == "hsessothertoken"
 
 
-# ── the blackboard sidecar's files, made when a session is hydrated ───────────────────────────
-class _TalkingSidecar(_StubProc):
-    """A sidecar that says something on its way up, into the log it was handed."""
-
-    def __init__(self, cmd, **kw):
-        super().__init__(cmd, **kw)
-        out = kw.get("stdout")
-        if out is not None:
-            out.write(b"the sidecar's own words\n")
-            out.flush()
-
-
-def _sidecar_session(monkeypatch) -> tuple[str, pathlib.Path]:
-    root = tempfile.mkdtemp(prefix="hrroot-")
-    os.chmod(root, 0o751)
-    monkeypatch.setattr(server, "_SESSION_UIDS", True)
-    monkeypatch.setattr(server, "WORKSPACE_ROOT", root)
-    monkeypatch.setattr(server, "_ws", lambda identifier="": os.path.join(root, identifier or "s1"))
-    monkeypatch.setattr(server, "_SIDECAR_JS", __file__)          # present, so the sidecar is started
-    monkeypatch.setattr(server.subprocess, "Popen", lambda cmd, *a, **kw: _TalkingSidecar(cmd, **kw))
-    ident = "hsesssidecar"
-    ws = pathlib.Path(root, ident)
-    ws.mkdir()
-    os.chown(ws, UID, UID)
-    os.chmod(ws, 0o700)
-    return ident, ws
-
-
-def test_the_sidecar_log_is_opened_as_the_session(monkeypatch):
-    ident, ws = _sidecar_session(monkeypatch)
-    d, victim = _victim(dir_mode=0o755)
-    _plant(ws, ".harness/sidecar.log", victim)
-    st = os.stat(victim)
-    server._start_sidecar(ident, "http://collab.example", "room-1")
-    _assert_clean_file(d, victim, st)
-
-
-def test_the_blackboard_folder_is_made_as_the_session(monkeypatch):
-    ident, ws = _sidecar_session(monkeypatch)
-    d, victim = _victim(dir_mode=0o755)
-    (ws / ".harness").symlink_to(d)                 # the whole state folder, swapped for a folder of root's
-    os.lchown(ws / ".harness", UID, UID)
-    st = os.stat(victim)
-    server._start_sidecar(ident, "http://collab.example", "room-1")
-    _assert_clean_file(d, victim, st)
-
-
-def _assert_clean_file(d: str, victim: pathlib.Path, st) -> None:
-    assert victim.read_text() == "root's own", "the file of root's was written through the link"
-    now = os.stat(victim)
-    assert (now.st_uid, now.st_gid, now.st_mode & 0o7777) == (st.st_uid, st.st_gid, st.st_mode & 0o7777)
-    assert sorted(os.listdir(d)) == ["victim"], f"written beside it: {sorted(os.listdir(d))}"
-
-
 # ── the prompt is handed over by file or stdin, never on the command line ─────────────────────
 # A process's command line is what `ps` lists. Each turn below is started for real, as the session, with a
 # stand-in under the CLI's own name that records what it was handed and then waits. Meanwhile, as another uid:

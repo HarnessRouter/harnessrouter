@@ -40,8 +40,7 @@ Backends + providers (registry-driven — pi was added as exactly that one entry
     - tokenrouter   : models.json, api by model family (claude -> anthropic-messages)
 
 Creds are injected per-session via env (pool secrets) or a body `auth` override for spikes.
-Phase 0b: buffered turn. SSE streaming, git hydrate/commit, mid-turn /input, and the Node
-Yjs sidecar layer on next.
+Phase 0b: buffered turn. SSE streaming, git hydrate/commit and mid-turn /input on next.
 """
 from __future__ import annotations
 
@@ -122,8 +121,8 @@ _SANDBOX_PER_SESSION = os.environ.get("HR_SANDBOX_PER_SESSION", "").strip().lowe
 # THE SESSION WRITE-WALL, the second deployment invariant, declared by the self-hosted entrypoint
 # (HR_SESSION_UIDS=1). One runner serves every session there, so "the session workspace" cannot be
 # a sandbox boundary the way it is on a per-session sandbox; it has to be a permission boundary.
-# The runner runs as root and every process that acts for a session (the agent CLI, its sidecar,
-# git, tar) runs as that session's OWN uid, which owns its session directory and nothing else:
+# The runner runs as root and every process that acts for a session (the agent CLI, git, tar)
+# runs as that session's OWN uid, which owns its session directory and nothing else:
 # the workspace root, the data volume, the product's processes and the shared scratch directories
 # belong to other uids. A deliverable written to "/tmp/X", to the workspace parent or into another
 # session's directory is then not lost and not stolen: it fails with EACCES at the write, the one
@@ -1122,55 +1121,6 @@ AZURE_OPENAI_BASE_URL = os.environ.get("AZURE_OPENAI_BASE_URL", "")
 # Hard wall-clock cap per turn — resource-abuse protection. A runaway/abusive run is killed
 # at this many seconds (default 6h). The agent finishing earlier ends the turn promptly.
 MAX_TURN_SECONDS = int(os.environ.get("MAX_TURN_SECONDS", "21600"))
-
-# ── Yjs blackboard sidecar (realtime co-edit; bridges a workspace file <-> a Hocuspocus room) ──
-# The sidecar is a Node child process baked into the image at /app/sidecar. It is (re)started per
-# session from /hydrate with the session's COLLAB_URL + room (passed as query params by the gateway).
-_SIDECAR_JS = "/app/sidecar/sidecar.mjs"
-_BLACKBOARD_REL = os.path.join(HARNESS_STATE, "BLACKBOARD.md")   # /workspace/.harness/BLACKBOARD.md
-_sidecars: dict[str, dict] = {}          # session id -> {proc, room, error}
-_sidecar_lock = threading.Lock()
-
-
-def _start_sidecar(sid: str, collab_url: str, room: str, token: str = "") -> None:
-    """(Re)start the blackboard sidecar for THIS session. Kill+respawn on every hydrate — a reused
-    warm-pool sandbox may carry a prior tenant's sidecar (same isolation reasoning as the /workspace
-    wipe). Best-effort: a sidecar failure must never affect the turn."""
-    ws = _ws(sid)
-    file = os.path.join(ws, _BLACKBOARD_REL)
-    with _sidecar_lock:
-        entry = _sidecars.setdefault(sid, {"proc": None, "room": None})
-        old = entry.get("proc")
-        if old is not None and old.poll() is None:
-            try:
-                old.terminate()
-            except Exception:  # noqa: BLE001
-                pass
-        if not (collab_url and room and os.path.exists(_SIDECAR_JS)):
-            entry.update(proc=None, room=None)
-            return
-        try:
-            # As the session: the blackboard and the log are in its tree, and a link it planted at either name,
-            # or at the folder holding them, leads nowhere it could not write itself. The log stays open for the
-            # sidecar, which runs as the session too.
-            with _fs_as(_session_uid(ws)):
-                pathlib.Path(file).parent.mkdir(parents=True, exist_ok=True)
-                if not pathlib.Path(file).exists():
-                    pathlib.Path(file).write_text("")
-                logf = open(os.path.join(ws, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
-            env = {**_child_env(), "COLLAB_URL": collab_url, "ROOM": room,
-                   "BLACKBOARD_FILE": file, "COLLAB_TOKEN": token or ""}
-            entry.update(proc=subprocess.Popen(["node", _SIDECAR_JS], cwd=ws, env=env,
-                                               stdout=logf, stderr=logf, **_as_session(ws)),
-                         room=room, error=None)
-        except Exception as e:  # noqa: BLE001
-            entry.update(proc=None, room=None, error=str(e)[:200])
-
-
-def _sidecar_alive(sid: str = "") -> bool:
-    p = (_sidecars.get(sid) or {}).get("proc")
-    return bool(p is not None and p.poll() is None)
-
 
 def _ver(cmd: list[str]) -> str:
     try:
@@ -17083,8 +17033,7 @@ def _run_hermes_proc(turn_id: str, cwd: str, env: dict, model: str, provider: st
 # ── HTTP surface ─────────────────────────────────────────────────────────────────
 @app.get("/healthz")
 def healthz() -> dict:
-    return {"ok": True, "host": socket.gethostname(),
-            "sidecars": sum(1 for s in _sidecars if _sidecar_alive(s))}
+    return {"ok": True, "host": socket.gethostname()}
 
 
 @app.get("/backends")
@@ -17335,14 +17284,7 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         probe = request.query_params.get("probe", "")
         if probe and nbytes == 0:
             if _ws_holds(identifier, ws_path, probe):
-                collab_url = request.query_params.get("collab_url", "")
-                room = request.query_params.get("room", "")
-                if collab_url and room:
-                    _start_sidecar(identifier, collab_url, room,
-                                   request.query_params.get("collab_token", ""))
-                return {"ok": True, "skipped": True, "restored": False,
-                        "sidecar": _sidecar_alive(identifier),
-                        "room": (_sidecars.get(identifier) or {}).get("room")}
+                return {"ok": True, "skipped": True, "restored": False}
             return {"ok": True, "skipped": False}
         # Warm-pool sandboxes are REUSED across sessions, so /workspace may hold a PRIOR session's
         # files (incl. another tenant's). Wipe it before restoring so this session starts from
@@ -17366,15 +17308,8 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         except OSError:
             pass
     _git_ensure(ws)
-    # (Re)start the realtime blackboard sidecar for this session if the gateway passed a room.
-    collab_url = request.query_params.get("collab_url", "")
-    room = request.query_params.get("room", "")
-    if collab_url and room:
-        _start_sidecar(identifier, collab_url, room, request.query_params.get("collab_token", ""))
     n = sum(1 for p in pathlib.Path(ws).rglob("*") if ".git" not in p.parts)
-    return {"ok": True, "restored": restored, "bytes_in": nbytes, "files": n, "workspace": ws,
-            "sidecar": _sidecar_alive(identifier),
-            "room": (_sidecars.get(identifier) or {}).get("room")}
+    return {"ok": True, "restored": restored, "bytes_in": nbytes, "files": n, "workspace": ws}
 
 
 @app.get("/checkpoint")
