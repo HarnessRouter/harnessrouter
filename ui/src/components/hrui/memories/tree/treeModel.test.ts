@@ -1,4 +1,4 @@
-import { buildRows, CAP, groupKey, kindsToWrite, memoryKey, recordOfKind, treeKey, type BranchView, type Row } from './treeModel';
+import { buildRows, CAP, groupKey, kindsToWrite, meaningHits, memoryKey, rankOf, recordOfKind, treeKey, type BranchView, type Found, type Row } from './treeModel';
 import { CAPS, memory, record } from '../fixtures';
 import type { Memory, MemoryRecord } from '@/lib/memories';
 import { schemaIn } from '../schemaModel';
@@ -95,4 +95,32 @@ test('what can be written follows the provider and the schema', () => {
   expect(kindsToWrite(CAPS.mem0, null).map((k) => k.key)).toEqual(['note', 'fact', 'procedure', 'entity']);
   expect(recordOfKind('Company', CAPS.graphiti, schema)).toEqual({ type: 'entity', attributes: { entity_type: 'Company' } });
   expect(recordOfKind('note', CAPS.graphiti, schema)).toEqual({ type: 'note', attributes: {} });
+});
+
+// A search by meaning (the polish round, C7): the engine's order, and only what it found that matches.
+const R = (id: string) => ({ id, title: id, content: [], type: 'fact' }) as unknown as MemoryRecord;
+const F = (pairs: [string, number | null, string[]?][]): Found[] => pairs.map(([id, score, why]) => ({ record: R(id), score, why: why || ['query'] }));
+const ids = (l: MemoryRecord[]) => l.map((r) => r.id);
+
+test('an engine that ranks everything: what stands out is found, the rest is not', () => {
+  // measured (11-09): on the subject 0.75 and 0.71, everything else 0.08 to 0.17
+  expect(ids(meaningHits(F([['a', 0.7535], ['b', 0.7119], ['c', 0.1351], ['d', 0.1283], ['e', 0.0853]])))).toEqual(['a', 'b']);
+  // on no subject: every record alike and low, so nothing is found
+  expect(ids(meaningHits(F([['a', 0.14], ['b', 0.12], ['c', 0.1], ['d', 0.08]])))).toEqual([]);
+  // by meaning alone, one record well above the rest
+  expect(ids(meaningHits(F([['a', 0.3], ['b', 0.13], ['c', 0.12], ['d', 0.1]])))).toEqual(['a']);
+  // every record on the subject: all of them
+  expect(ids(meaningHits(F([['a', 0.45], ['b', 0.42], ['c', 0.4], ['d', 0.38]])))).toEqual(['a', 'b', 'c', 'd']);
+});
+test('what the engine found by the words themselves is always a find', () => {
+  expect(ids(meaningHits(F([['a', 0.14, ['query', 'text']], ['b', 0.12], ['c', 0.1], ['d', 0.08]])))).toEqual(['a']);
+});
+test('an engine that gives no scores, or only its places, is taken at its word', () => {
+  expect(ids(meaningHits(F([['a', null], ['b', null]])))).toEqual(['a', 'b']);
+  expect(ids(meaningHits(F([['a', 1], ['b', 0.75], ['c', 0.5], ['d', 0.25]])))).toEqual(['a', 'b', 'c', 'd']);
+  expect(ids(meaningHits([]))).toEqual([]);
+});
+test('a search’s order: the engine’s finds in its order, then the rest by name', () => {
+  const cmp = rankOf([R('z'), R('a')]);
+  expect(ids([R('b'), R('a'), R('c'), R('z')].sort(cmp))).toEqual(['z', 'a', 'b', 'c']);
 });

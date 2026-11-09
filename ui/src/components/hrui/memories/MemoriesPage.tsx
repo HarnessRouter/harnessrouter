@@ -12,8 +12,9 @@ import { ago } from '../setups';
 import { plain } from '../setup/settingsModel';
 import { Skel, SkCards, SkHead } from '../Skel';
 import { toast } from '../toast';
-import { builtinOf, hasSchema, schemaLabels } from './caps';
-import { CardArt, Ghost, MiniArt } from './CardArt';
+import { hasSchema, schemaLabels } from './caps';
+import { CardArt, Ghost, MiniArt, saysNothing } from './CardArt';
+import { listChildren } from './tree/api';
 import { concepts } from './graph/builtin';
 import { DOTS, engineOf, msOf, pool, PLUS, SEARCH, shownName, speaksUse, useDismiss, useProviders, X } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
@@ -21,8 +22,6 @@ import { ChooseServiceSheet, NewMemorySheet, UseInSheet } from './sheets';
 import { vendorName } from './vendors';
 import './memories.css';
 
-/** How many types a provider makes itself. */
-const made = (p: Provider | null | undefined) => builtinOf(p)?.types.length || 0;
 /** What a memory's picture draws (Richard 11-06): labels as Vivian's chips where a person set them; otherwise the
  *  provider's own concepts with any types a person set, as the Schema tab draws them. */
 const pictureOf = (f: { schema?: LSchema | null } | undefined, p: Provider | null | undefined) => {
@@ -30,8 +29,20 @@ const pictureOf = (f: { schema?: LSchema | null } | undefined, p: Provider | nul
   return { s: asLabels ? f?.schema : concepts(f?.schema, p), labels: asLabels };
 };
 
-// `recent`: what a memory with no schema to draw shows on its card, the first few records it keeps
-interface Facts { schema?: LSchema | null; recent?: string[] | null }
+// `recent`: what a memory with no schema to draw shows on its card, the first few records it keeps (or, where it keeps
+// each person apart and holds nothing itself, the first few people), and `count` how many of them there are, where known
+interface Facts { schema?: LSchema | null; recent?: string[] | null; count?: number | null }
+const FIRST = 3;
+/** The first few things a memory keeps, for its card: its own records, or the people below it where it has none. */
+async function firstWords(m: Memory): Promise<{ lines: string[]; count: number | null } | null> {
+  try {
+    const d = await listRecords(m.id, { limit: FIRST });
+    const lines = d.data.map(labelOf).filter(Boolean);
+    if (lines.length || !m.children?.count) return { lines, count: d.next ? null : lines.length };
+    const kids = await listChildren(m.id);
+    return { lines: kids.slice(0, FIRST).map(shownName), count: kids.length };
+  } catch { return null; }
+}
 type Open = { k: 'new'; picked?: string } | { k: 'choose'; then?: 'new' } | { k: 'use'; m: Memory } | null;
 type Sort = 'recent' | 'name';
 const enc = encodeURIComponent;
@@ -100,14 +111,14 @@ export function MemoriesPage() {
     let live = true;
     void pool(list, 4, async (m) => {
       const withSchema = hasSchema(providerOf(m));
-      // the picture's own reads only: a schema where one is read, and the first records where a service has neither
-      // a schema nor concepts of its own to draw
+      // the picture's own reads only: a schema where one is read, and the first records where a service has no schema
+      // and its own concepts would draw nothing worth drawing (one type, related to nothing: Mem0's "Fact")
       const p = providerOf(m);
       const [schema, recent] = await Promise.all([
         withSchema ? getSchema(m.id).then(schemaIn).catch(() => null) : Promise.resolve(null),
-        !withSchema && !made(p) ? listRecords(m.id, { limit: 3 }).then((d) => d.data.map(labelOf).filter(Boolean)).catch(() => null) : Promise.resolve(null),
+        !withSchema && saysNothing(concepts(null, p)) ? firstWords(m) : Promise.resolve(null),
       ]);
-      if (live) setFacts((f) => ({ ...f, [m.id]: { schema, recent } }));
+      if (live) setFacts((f) => ({ ...f, [m.id]: { schema, recent: recent?.lines ?? null, count: recent?.count ?? null } }));
     });
     return () => { live = false; };
   }, [list, providers, providerOf]);
@@ -236,7 +247,7 @@ export function MemoriesPage() {
               <div key={m.id} className="mm-roww">
                 <Link href={`/memories/${enc(m.id)}`} className="row mm-rows-g mm-row">
                   <span className="t with-mini">
-                    <span className="mm-mini-box">{f ? <MiniArt {...pictureOf(f, p)} records={f.recent?.length ?? null} /> : null}</span>
+                    <span className="mm-mini-box">{f ? <MiniArt {...pictureOf(f, p)} records={f.count ?? f.recent?.length ?? null} /> : null}</span>
                     <span className="mm-rn">
                       <span className="mm-ct"><b>{shownName(m)}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
                       <small className="sub2 mm-cp">{engineLine(m)}</small>
@@ -260,7 +271,7 @@ export function MemoriesPage() {
           return (
             <div key={m.id} className="mm-cardw">
               <Link href={`/memories/${enc(m.id)}`} className="card mm-card">
-                <span className="mm-art"><CardArt {...pictureOf(f, p)} records={f?.recent?.length ?? null} recent={f?.recent} pending={!f} /></span>
+                <span className="mm-art"><CardArt {...pictureOf(f, p)} records={f?.count ?? f?.recent?.length ?? null} recent={f?.recent} pending={!f} /></span>
                 <span className="mm-cb">
                   <span className="mm-ct"><b>{shownName(m)}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
                   <span className="mm-cp">{engineLine(m)}</span>

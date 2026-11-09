@@ -54,8 +54,12 @@ const contentWith = (r: MemoryRecord, text: string): ContentPart[] => [
   ...(r.content || []).filter((p) => p.type !== 'text'),
 ];
 
-export function RecordDoc({ memory, provider, record, schema, setups, links, folders, onSaved, onGone }: {
-  memory: Memory; provider: Provider | null; record: MemoryRecord; schema: LSchema | null; setups: Map<string, string> | null;
+export function RecordDoc({ memory, above, provider, record, schema, setups, links, folders, onSaved, onGone }: {
+  memory: Memory;
+  /** the memory page it is open on, where that isn't its own: a person's record open on their agent's memory reads
+   *  "<agent's memory> › <person>" */
+  above?: string;
+  provider: Provider | null; record: MemoryRecord; schema: LSchema | null; setups: Map<string, string> | null;
   links: number; folders: string[]; onSaved: (r: MemoryRecord) => void; onGone: (id: string) => void;
 }) {
   const isNew = !record.id;
@@ -177,7 +181,7 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
       else { toast(`${short(record)} erased`); onGone(record.id); }
     } catch (e) { setRefused(plain(e, 'It was not erased. Try again.')); } finally { setBusy(false); }
   };
-  const move = (path: string) => { setPop(''); void write({ attributes: { folder: path } }); toast(path ? `Moved to ${path}` : `Moved to ${memory.name}`); };
+  const move = (path: string) => { setPop(''); void write({ attributes: { folder: path } }); toast(path ? `Moved to ${path}` : `Moved to ${shownName(memory)}`); };
 
   const sentence = sentenceFirst({ type: record.type, title });
   const writable = open && (isNew || (!!state?.canWrite && !state?.gone));
@@ -218,7 +222,8 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
   return (
     <>
       <div className="mm-doc-bar" ref={barPops}>
-        <div className="mm-crumbs">
+        <div className={`mm-crumbs${above ? ' has-up' : ''}`}>
+          {above ? <span className="mm-crw"><span className="mm-cr mm-cr-up">{above}</span><span className="mm-crs" aria-hidden="true">›</span></span> : null}
           <span className="mm-cr">{shownName(memory)}</span>
           {crumbs.split('/').filter(Boolean).map((c, i) => <span key={i} className="mm-crw"><span className="mm-crs">/</span><span className="mm-cr">{c}</span></span>)}
         </div>
@@ -257,7 +262,7 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
                   <>
                     <label className="mm-mv"><span>Move to</span>
                       <select className="set-in slim" value={folderOf({ attributes: attrs })} onChange={(e) => move(e.target.value)}>
-                        <option value="">{memory.name}</option>
+                        <option value="">{shownName(memory)}</option>
                         {folders.map((f) => <option key={f} value={f}>{f.split('/').join(' / ')}</option>)}
                       </select>
                     </label>

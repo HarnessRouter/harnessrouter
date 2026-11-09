@@ -3,7 +3,7 @@
 // the first records where there is no schema, and an unbuilt shape where nothing is kept yet.
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { CardArt } from './CardArt';
+import { CardArt, MiniArt, saysNothing } from './CardArt';
 import { concepts } from './graph/builtin';
 import type { LSchema } from './schemaModel';
 
@@ -74,4 +74,18 @@ test("a vendor's concepts: nothing drawn on anything else, and a name above a ty
   const top = discs.reduce((m, d, i) => (d.y < discs[m].y ? i : m), 0);
   expect(n(names[top], 'y')).toBeLessThan(discs[top].y);
   for (const [i, d] of discs.entries()) if (i !== top) expect(n(names[i], 'y')).toBeGreaterThan(d.y);
+});
+
+test('one type related to nothing draws no diagram: what is kept is drawn instead (Mem0’s "Fact")', () => {
+  const one: LSchema = { types: [T('t1', 'Fact', 0, 0)], relations: [] };
+  expect(saysNothing(one)).toBe(true);
+  expect(saysNothing(schema)).toBe(false);
+  const h = draw(<CardArt s={one} labels={false} records={2} recent={['User’s name is Dana', 'Prefers email']} />);
+  expect(h.querySelector('.mm-ca-type')).toBeNull();
+  expect(Array.from(h.querySelectorAll('.mm-ca-row span')).map((r) => r.textContent)).toEqual(['User’s name is Dana', 'Prefers email']);
+  expect(draw(<CardArt s={one} labels={false} records={0} />).querySelector('.mm-ca-ghost')).not.toBeNull();
+  // the list's small picture likewise: no lone dot
+  expect(draw(<MiniArt s={one} labels={false} records={2} />).querySelectorAll('rect')).toHaveLength(2);
+  // a vocabulary of one label is still the label a person set
+  expect(draw(<CardArt s={one} labels records={2} />).querySelector('.mm-ca-chip')?.textContent).toBe('Fact');
 });

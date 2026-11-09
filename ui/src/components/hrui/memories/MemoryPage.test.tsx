@@ -548,3 +548,92 @@ describe('finding in it', () => {
     expect(tree).not.toContain('On the Team plan');
   });
 });
+
+// An agent's memory that keeps each person apart (the polish round, C1, C2, C8, C9): it holds nothing itself, and each
+// person's records are in their own memory below it.
+describe('an agent’s memory that keeps each person apart', () => {
+  const agent = () => memory({ provider: 'mem0', engine: 'mem0', records: { count: 0 }, children: { count: 1 }, used_by: [{ harness_id: 'chrn_a', name: 'Photo cut' }] });
+  const person = (o: Partial<Memory> = {}) => memory({ id: 'hmem_p', name: '5d41402abc4b2a76', end_user: 'local@localhost', provider: 'mem0', engine: 'mem0', parent_id: 'hmem_1', ancestors: ['hmem_1'],
+    restricted: true, records: { count: 2 }, children: { count: 0 }, used_by: [], last_used_at: 1762650000000, ...o });
+  const facts = [
+    record({ id: 'f1', memory_id: 'hmem_p', type: 'fact', title: '', content: [{ type: 'text', text: 'User’s name is Dana' }], written_by: { kind: 'provider', id: 'mem0' } }),
+    record({ id: 'f2', memory_id: 'hmem_p', type: 'fact', title: '', content: [{ type: 'text', text: 'User prefers email, never phone' }], written_by: { kind: 'provider', id: 'mem0' } }),
+  ];
+  const routes = (p = person()) => ({
+    'GET /v1/memories': (c: { path: string }) => ({ data: c.path.includes('hmem_1') ? [p] : [] }),
+    'GET /v1/memories/hmem_p': p,
+    'GET /v1/memories/hmem_p/grants': { data: [] },
+    'GET /v1/memories/hmem_p/records': { data: facts, next: null },
+    'GET /v1/memories/hmem_p/records/f2': facts[1],
+    'GET /v1/memories/hmem_p/schema': { types: [], relations: [] },
+  });
+  const row = (t: string) => Array.from(page().querySelectorAll<HTMLElement>('[role=treeitem]')).find((r) => r.querySelector('.mt-lbl')?.textContent === t);
+
+  test('with its people’s records below it, it never says nothing is kept; the console’s own person reads as you', async () => {
+    open({ provider: CAPS.mem0, memory: agent(), records: [], extra: routes() });
+    await draw();
+    expect(page().querySelector('.mm-doc-empty h2')?.textContent).toBe('Pick a record');
+    expect(page().querySelector('.mm-doc-empty')?.textContent).toContain('under their name');
+    expect(page().textContent).not.toContain('Nothing kept yet');
+    expect(row('You (this console)')).toBeTruthy();
+    expect(page().textContent).not.toContain('local@localhost');
+  });
+  test('truly empty below too: then it says so', async () => {
+    open({ provider: CAPS.mem0, memory: agent(), records: [], extra: routes(person({ records: { count: 0 } })) });
+    await draw();
+    expect(page().querySelector('.mm-doc-empty h2')?.textContent).toBe('Nothing kept yet');
+  });
+  test('a person’s record opens here, in their memory, under "agent’s memory › person"', async () => {
+    open({ provider: CAPS.mem0, memory: agent(), records: [], extra: routes() });
+    await draw();
+    await click(row('You (this console)'));
+    await click(row('User prefers email, never phone'));
+    // still this memory's page: its own name on top, and where the record is said above it
+    expect(page().querySelector('.ag-name')?.textContent).toBe('Brand kits');
+    const crumbs = page().querySelector('.mm-crumbs.has-up');
+    expect(Array.from(crumbs?.querySelectorAll('.mm-cr') || []).map((c) => c.textContent)).toEqual(['Brand kits', 'You (this console)']);
+    // the record itself, live, in the person's memory
+    expect(liveDoc().url.split('?')[0]).toBe('/api/memlive/hmem_p/f2');
+  });
+  test('a link to a person’s record (?in=) opens it on the agent’s memory', async () => {
+    open({ provider: CAPS.mem0, memory: agent(), records: [], extra: routes() });
+    await act(async () => { root.render(<MemoryPage id="hmem_1" tabParam="data" recordParam="f2" inParam="hmem_p" onTab={onTab} />); });
+    await flush();
+    expect(page().querySelector('.mm-crumbs.has-up')?.textContent).toContain('You (this console)');
+    expect(liveDoc().url.split('?')[0]).toBe('/api/memlive/hmem_p/f2');
+  });
+  test('a person’s own page: Back is the agent’s memory, used by whoever uses it, and when this person’s was last used', async () => {
+    const s = service({
+      'GET /v1/memories/providers': { data: [CAPS.mem0] },
+      'GET /v1/memories/hmem_1': agent(),
+      ...routes(),
+    });
+    (harnessFetch as jest.Mock).mockImplementation(s.fetcher);
+    await act(async () => { root.render(<MemoryPage id="hmem_p" tabParam={null} recordParam={null} onTab={onTab} />); });
+    await flush();
+    expect(page().querySelector('.ag-name')?.textContent).toBe('You (this console)');
+    expect(page().querySelector('.ag-back')?.getAttribute('href')).toBe('/memories/hmem_1?tab=data');
+    expect(page().querySelector('.mm-up')?.textContent).toBe('Brand kits·Used 2 d ago');
+    expect(button('Used by 1 setup')).toBeTruthy();
+    expect(button('Not used yet')).toBeUndefined();
+  });
+});
+
+describe('narrow: it opens on the list, never on an empty record', () => {
+  const wide = Element.prototype.getBoundingClientRect;
+  beforeEach(() => { Element.prototype.getBoundingClientRect = () => ({ width: 390, height: 800, top: 0, left: 0, right: 390, bottom: 800, x: 0, y: 0, toJSON: () => ({}) }); });
+  afterEach(() => { Element.prototype.getBoundingClientRect = wide; });
+  const tab = (id: string) => page().querySelector(`#rc-t-${id}`) as HTMLButtonElement;
+  test('nothing open: the Records tab', async () => {
+    open({ provider: CAPS.mem0, memory: memory({ provider: 'mem0', records: { count: 0 }, children: { count: 1 } }), records: [],
+      extra: { 'GET /v1/memories': { data: [memory({ id: 'hmem_p', parent_id: 'hmem_1', end_user: 'Dana', records: { count: 3 } })] } } });
+    await draw();
+    expect(tab('tree').getAttribute('aria-selected')).toBe('true');
+    expect(tab('doc').getAttribute('aria-selected')).toBe('false');
+  });
+  test('sent to a record: that record', async () => {
+    open({ provider: CAPS.mem0, records: [record({ id: 'r', title: 'Mine' })] });
+    await draw('data', 'r');
+    expect(tab('doc').getAttribute('aria-selected')).toBe('true');
+  });
+});

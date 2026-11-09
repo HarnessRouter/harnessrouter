@@ -323,6 +323,11 @@
 #hrui .mm-file{font-size:13px;padding:6px 10px;border:1px solid var(--line);border-radius:9px;color:var(--fg)}
 #hrui .mm-file:hover{border-color:var(--faint)}
 #hrui .mm-crw{display:inline-flex;align-items:center;gap:6px;min-width:0}
+/* a person's record open on their agent's memory: where it is ("Support › Dana") stays at every width, each name giving
+   way before the bar's actions do */
+#hrui .mm-crumbs.has-up .mm-crw,#hrui .mm-crumbs.has-up .mm-cr{flex:0 1 auto;min-width:0}
+#hrui .mm-crumbs.has-up .mm-cr-up{color:var(--faint)}
+@media (max-width:860px){#hrui .mm-crumbs.has-up{display:flex}}
 #hrui .mm-doc-alt{margin-top:12px}
 /* a link's row: what it links to first, the word second */
 #hrui .mm-lb{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
@@ -583,8 +588,11 @@
 #hrui .mm-use-list{display:flex;flex-direction:column;max-height:min(52vh,420px);overflow:auto;border:1px solid var(--line);border-radius:12px}
 #hrui .mm-use-row{display:flex;align-items:center;gap:12px;min-height:48px;padding:6px 8px 6px 14px;border-bottom:1px solid var(--line)}
 #hrui .mm-use-row:last-child{border-bottom:0}
-#hrui .mm-use-row b{flex:1;min-width:0;font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#hrui .mm-use-row small{flex:none;font-size:12.5px;color:var(--faint);padding-right:6px}
+/* a setup: its name, and under it the memory it has now */
+#hrui .mm-use-n{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+#hrui .mm-use-row b{display:block;min-width:0;font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .mm-use-n small{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .mm-use-here{flex:none;font-size:12.5px;color:var(--faint);padding-right:6px}
 #hrui .mm-use-row .btn{flex:none}
 #hrui .mm-use-list>.set-help{margin:12px 14px}
 
