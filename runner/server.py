@@ -1145,12 +1145,16 @@ def _start_sidecar(sid: str, collab_url: str, room: str, token: str = "") -> Non
             entry.update(proc=None, room=None)
             return
         try:
-            pathlib.Path(file).parent.mkdir(parents=True, exist_ok=True)
-            if not pathlib.Path(file).exists():
-                pathlib.Path(file).write_text("")
+            # As the session: the blackboard and the log are in its tree, and a link it planted at either name,
+            # or at the folder holding them, leads nowhere it could not write itself. The log stays open for the
+            # sidecar, which runs as the session too.
+            with _fs_as(_session_uid(ws)):
+                pathlib.Path(file).parent.mkdir(parents=True, exist_ok=True)
+                if not pathlib.Path(file).exists():
+                    pathlib.Path(file).write_text("")
+                logf = open(os.path.join(ws, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
             env = {**_child_env(), "COLLAB_URL": collab_url, "ROOM": room,
                    "BLACKBOARD_FILE": file, "COLLAB_TOKEN": token or ""}
-            logf = open(os.path.join(ws, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
             entry.update(proc=subprocess.Popen(["node", _SIDECAR_JS], cwd=ws, env=env,
                                                stdout=logf, stderr=logf, **_as_session(ws)),
                          room=room, error=None)
