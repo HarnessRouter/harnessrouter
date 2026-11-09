@@ -2987,6 +2987,17 @@ def _claude_thinking_env(model: str) -> dict:
     return env
 
 
+# Claude Code 2.1.280's built-in tools, by the names its permission rules take, read off the pinned
+# release's own tool definitions. The gateway's catalog offers switches only from these (or from an
+# id in _CLAUDE_TOOL_RENAMES), which gateway/tests/test_catalog_tool_names.py holds.
+CLAUDE_TOOLS = ("Agent", "AskUserQuestion", "Bash", "Edit", "EnterPlanMode", "ExitPlanMode", "Glob", "Grep",
+                "LSP", "NotebookEdit", "Read", "Skill", "TaskCreate", "TaskGet", "TaskList", "TaskStop",
+                "TaskUpdate", "TodoWrite", "ToolSearch", "WebFetch", "WebSearch", "Write")
+# A catalog id that is a tool's earlier name, and the name the tool has now. "Task" is the subagent
+# tool before it became Agent: harnesses store the catalog's id, so the id stays, and the deny list is
+# written with the current name rather than relying on the CLI's own table of old names.
+_CLAUDE_TOOL_RENAMES = {"Task": "Agent"}
+
 
 def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns: int,
                   cwd: str, env: dict, resume_session_id: str | None = None,
@@ -3112,7 +3123,8 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
     # Reconciled on EVERY turn, not only when something is off: HOME is checkpointed, so a deny list an
     # earlier turn wrote stayed in the file after the harness switched the tool back on, and the tool
     # stayed withheld. Anything else the file holds is left as it is.
-    names = [t.split(" (")[0].strip() for t in (disallowed_tools or []) if t and t.strip()]
+    names = list(dict.fromkeys(_CLAUDE_TOOL_RENAMES.get(n, n) for n in
+                               (t.split(" (")[0].strip() for t in (disallowed_tools or []) if t and t.strip())))
     settings_path = cfg_dir / "settings.json"
     try:
         current = json.loads(settings_path.read_text()) if settings_path.exists() else {}
@@ -3266,10 +3278,21 @@ def _codex_web_search_off(tools_disabled: list[str] | None) -> bool:
                for x in (tools_disabled or []) if x and x.strip())
 
 
+# The core tools a codex 0.154 turn offers its model, read off the pinned release (its multi-agent,
+# MCP-resource and plugin tools aside). The shell is exec_command, with write_stdin, under unified
+# exec; apply_patch is not offered on a custom Responses endpoint (_CODEX_CUSTOM_EDITING). The
+# gateway's catalog offers switches only from these and _CODEX_SHELL_NAMES, which
+# gateway/tests/test_catalog_tool_names.py holds.
+CODEX_TOOLS = ("apply_patch", "exec_command", "update_plan", "view_image", "web_search", "write_stdin")
+# The names that switch the shell off: the catalog's id ("shell", which harnesses store) and the one
+# 0.154 sends the model.
+_CODEX_SHELL_NAMES = frozenset({"shell", "exec_command"})
+
+
 def _codex_shell_off(tools_disabled: list[str] | None) -> bool:
     """Whether the turn's disabled list names codex's shell, by the catalog's name or the one 0.154
     sends the model (exec_command, with write_stdin, under unified exec)."""
-    return bool({t.lower() for t in _tool_names_off(tools_disabled)} & {"shell", "exec_command"})
+    return bool({t.lower() for t in _tool_names_off(tools_disabled)} & _CODEX_SHELL_NAMES)
 
 
 def _codex_flag(value: str | bool | None) -> bool | None:
@@ -12771,6 +12794,24 @@ _jcode_to_claude.eof = _jcode_eof   # type: ignore[attr-defined]
 # — which does carry them — is written once, after the run (cli/agent_cmd.py `_write_jsonl`), by
 # which time the call has already been reported. Said here rather than left to be discovered.
 OPENSQUILLA_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
+# Every tool 0.5.6 registers (its tools/builtin, @tool(name=...)), read off the pinned wheel. A turn is
+# offered a subset, by configuration. The CLI has no per-tool switch, so a disabled tool is asked off in
+# the agent doc by this name; the gateway's catalog offers switches only from these, which
+# gateway/tests/test_catalog_tool_names.py holds.
+OPENSQUILLA_TOOLS = (
+    "agents_list", "apply_patch", "audio_config", "audio_provider_capabilities", "background_process",
+    "browser", "canvas", "create_goal", "create_source", "cron", "dubbing_download", "dubbing_generate",
+    "dubbing_status", "edit_file", "edit_source", "exec_command", "execute_code", "gateway", "get_goal",
+    "git_commit", "git_diff", "git_log", "git_status", "glob_search", "grep_search", "http_request", "image",
+    "image_generate", "install_skill_deps", "list_dir", "memory_delete", "memory_get", "memory_save",
+    "memory_search", "message", "music_generate", "nodes", "open_workspace_preview", "pdf", "process",
+    "publish_artifact", "read_file", "read_source", "read_spreadsheet", "request_user_input",
+    "retrieve_tool_result", "router_control", "session_search", "session_status", "sessions_history",
+    "sessions_list", "sessions_send", "sessions_spawn", "sessions_yield", "skill_create", "skill_delete",
+    "skill_edit", "skill_install_community", "skill_list", "skill_search_community", "skill_view",
+    "song_generate", "source_symbols", "subagents", "submit_plan", "tool_search", "tts", "update_goal",
+    "update_plan", "voice_clone", "voice_convert", "voice_search", "web_discover", "web_fetch", "web_search",
+    "write_file", "write_scratch")
 
 # Its own name for the key of the generic OpenAI-compatible provider (`custom`), and of the generic
 # Messages one. The driver puts the relay's per-turn placeholder here, in the ENVIRONMENT, which is
@@ -17986,7 +18027,7 @@ def capabilities(identifier: str = "") -> dict:
 # a tool off and got neither believes it is off. Qwen Code and Cline were in neither group, and an
 # operator who switched every tool off on them watched the agent use them all.
 #   codex       — web_search and the shell have switches (_codex_web_search_off, _codex_shell_off);
-#                 the catalog's other names are not tools codex 0.154 offers, so they are asked.
+#                 apply_patch, update_plan and view_image have none in 0.154, so they are asked.
 #   hermes      — switches toolsets, not tools. A toolset whose every tool is off is switched off,
 #                 so those tools are withheld (_hermes_toolsets_off: terminal, the four file tools
 #                 together, the web tools); read_file alone, say, is asked.

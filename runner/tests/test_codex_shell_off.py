@@ -1,8 +1,8 @@
 """codex's shell has a switch of its own: `[features] shell_tool = false` (codex 0.154's feature table).
 
 Measured on 0.40.0 with every catalog tool off: codex still offered exec_command and write_stdin, its
-shell under unified exec, and only the agent doc asked. The catalog's other names (apply_patch,
-read_file, write_file, git) are not tools 0.154 offers on these connections, so they stay asked.
+shell under unified exec, and only the agent doc asked. The catalog's other names without a switch
+(apply_patch, update_plan, view_image) stay asked; web_search has its own switch.
 """
 import pathlib
 import sys

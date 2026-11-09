@@ -20220,7 +20220,7 @@ def _builtin_default_skills(seen: set[str] | None = None) -> list[dict]:
 # `tools` carries BOTH the real name and how far disabling it actually goes, because those differ by
 # runtime and the console must not imply a guarantee the runtime cannot keep (see the protocol's
 # harnesses.md §4.3):
-#   hard        — the CLI enforces it (claude: --disallowedTools takes these exact names).
+#   hard        — the CLI enforces it (claude: a permissions.deny rule takes these exact names).
 #   instruction — no per-tool switch exists; the name is written into the agent doc as a request.
 _BASE_CATALOG: dict[str, dict] = {
     "codex": {
@@ -20229,8 +20229,13 @@ _BASE_CATALOG: dict[str, dict] = {
                           "a real git workspace with shell access, reading and editing files and "
                           "running commands to complete the task, returning reviewable diffs and "
                           "results."),
-        "tools": [("shell", "Shell"), ("apply_patch", "Apply Patch"), ("read_file", "File Read"),
-                  ("write_file", "File Write"), ("git", "Git")],
+        # The core tools a codex 0.154 turn offers (the runner's CODEX_TOOLS). "shell" is the id
+        # harnesses store for the shell, which 0.154 sends the model as exec_command and write_stdin;
+        # the runner switches it off by either name, and web_search too. apply_patch, update_plan and
+        # view_image have no switch, so the base stays "instruction". It has no read_file, write_file
+        # or git tool: reading, writing and git go through the shell.
+        "tools": [("shell", "Shell"), ("apply_patch", "Apply Patch"), ("update_plan", "Plan"),
+                  ("view_image", "View Image"), ("web_search", "Web Search")],
         "tool_enforcement": "instruction",
     },
     "claude-code": {
@@ -20238,11 +20243,14 @@ _BASE_CATALOG: dict[str, dict] = {
         "system_prompt": ("You are Claude Code, an agentic coding assistant. You work on a real "
                           "local git working tree with bash, edit files, run tests, and use "
                           "sub-agents to complete engineering tasks end to end."),
-        # These are the names Claude Code's --disallowedTools accepts. They are the real thing, not
-        # display labels: a label with a suffix would silently fail to match and disable nothing.
+        # These are the names a permissions.deny rule takes (the runner's CLAUDE_TOOLS, 2.1.280). They
+        # are the real thing, not display labels: a label with a suffix would silently fail to match
+        # and disable nothing. "Task" is the subagent tool's earlier name and the id harnesses store;
+        # the runner writes it as Agent (_CLAUDE_TOOL_RENAMES). NotebookEdit writes files too, so with
+        # Edit and Write off it is the one left that does.
         "tools": [("Bash", "Bash"), ("Read", "Read"), ("Edit", "Edit"), ("Write", "Write"),
-                  ("Grep", "Grep"), ("Glob", "Glob"), ("WebFetch", "WebFetch"),
-                  ("WebSearch", "WebSearch"), ("Task", "Task (subagents)")],
+                  ("NotebookEdit", "Notebook Edit"), ("Grep", "Grep"), ("Glob", "Glob"),
+                  ("WebFetch", "WebFetch"), ("WebSearch", "WebSearch"), ("Task", "Subagents")],
         "tool_enforcement": "hard",
         "input_requests": True,     # the runner serves `ask_user` here (Tasks §3.2, #476)
     },
@@ -20774,12 +20782,13 @@ _BASE_CATALOG: dict[str, dict] = {
         "system_prompt": ("You are OpenSquilla, an autonomous agent. You work on a real git "
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
-        # The tool names its own turns record (measured: write_file, read_file). Its agent CLI has
-        # NO per-tool deny list — `--permissions` chooses a posture (restricted / bypass / full) —
-        # so this list is deliberately short: it names what a turn was seen to call rather than
-        # advertising a switch for every tool in the runtime when none of them can be withheld.
-        "tools": [("exec", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
-                  ("edit_file", "Edit"), ("list_dir", "List"), ("grep", "Search"),
+        # Tool names as 0.5.6 registers them (the runner's OPENSQUILLA_TOOLS): the shell is
+        # exec_command and content search is grep_search. Its agent CLI has NO per-tool deny list —
+        # `--permissions` chooses a posture (restricted / bypass / full) — so this list is
+        # deliberately short: the everyday tools, rather than a switch for every tool in the runtime
+        # when none of them can be withheld.
+        "tools": [("exec_command", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("list_dir", "List"), ("grep_search", "Search"),
                   ("web_search", "Web Search"), ("web_fetch", "Web Fetch")],
         # "instruction", and for a stated reason rather than for lack of looking: there is no deny
         # list on `opensquilla agent`, so the disabled set reaches the model as a line in AGENTS.md

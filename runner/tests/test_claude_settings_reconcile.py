@@ -26,6 +26,13 @@ def test_a_tool_switched_back_on_is_no_longer_denied(tmp_path):
     assert "permissions" not in _turn(tmp_path, disallowed_tools=[])
 
 
+def test_the_subagent_id_harnesses_store_is_denied_by_the_tools_name_now(tmp_path):
+    """"Task" is the catalog's id for the subagent tool, which Claude Code 2.1.280 names Agent: the deny
+    list carries Agent, once, whichever of the two a harness holds."""
+    assert _turn(tmp_path, disallowed_tools=["Bash", "Task"])["permissions"]["deny"] == ["Bash", "Agent"]
+    assert _turn(tmp_path, disallowed_tools=["Task", "Agent"])["permissions"]["deny"] == ["Agent"]
+
+
 def test_nothing_off_on_a_fresh_session_writes_no_file(tmp_path):
     assert _turn(tmp_path) is None
 
