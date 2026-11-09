@@ -62,19 +62,43 @@ def test_the_scripts_default_pins_are_the_ones_each_lock_was_compiled_from():
             f"{compiled_from!r}; every volume would install it unverified")
 
 
+def _overrides(base: str) -> dict[str, str]:
+    """docker/locks/<base>.overrides, which scripts/lock-pypi.sh passes as --override, by name."""
+    path = LOCKS / f"{base}.overrides"
+    if not path.is_file():
+        return {}
+    return {_norm(n): v for n, v in (l.split("==", 1) for l in _requirement_lines(path.read_text()))}
+
+
+def _pinned(lock: str) -> dict[str, str]:
+    return {_norm(n): v for n, v in re.findall(r"^(\S+)==(\S+) ", lock, re.M)}
+
+
 def test_each_lock_holds_its_direct_pins():
     for base in LOCKED:
         lock = (LOCKS / f"{base}.lock.txt").read_text()
+        # An override wins over a direct pin too: agentzero.in is upstream's list as it stands, with its
+        # mcp==1.27.0, and the lock holds the override's mcp.
+        overrides = _overrides(base)
         for req in _requirement_lines((LOCKS / f"{base}.in").read_text()):
             m = REQ.match(req)
             if not m:   # a range (Agent Zero's floors): the constraints decide it, the lock records it
                 continue
             name = re.sub(r"\[.*\]", "", m.group(1))
             if m.group(2):
-                pinned = {_norm(n): v for n, v in re.findall(r"^(\S+)==(\S+) ", lock, re.M)}
-                assert pinned.get(_norm(name)) == m.group(2), f"{base}.lock.txt does not pin {name}=={m.group(2)}"
+                want = overrides.get(_norm(name), m.group(2))
+                assert _pinned(lock).get(_norm(name)) == want, f"{base}.lock.txt does not pin {name}=={want}"
             elif m.group(3):
                 assert f"{name} @ {m.group(3)} " in lock, f"{base}.lock.txt does not name {m.group(3)}"
+
+
+def test_each_lock_holds_its_overrides():
+    """An override added and not re-locked would change nothing a volume installs."""
+    for path in sorted(LOCKS.glob("*.overrides")):
+        base = path.name[: -len(".overrides")]
+        pinned = _pinned((LOCKS / f"{base}.lock.txt").read_text())
+        for name, version in _overrides(base).items():
+            assert pinned.get(name) == version, f"{base}.lock.txt does not pin {name}=={version} ({path.name})"
 
 
 def test_every_distribution_in_every_lock_is_hashed():

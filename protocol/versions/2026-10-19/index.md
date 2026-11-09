@@ -127,6 +127,12 @@ Against `2026-10-04`, one rule changes and the rest is additive.
   `input_response` item on the next task, chained on that response. Three refusals name what went
   wrong with an answer (`input_not_pending`, `input_request_expired`, `input_response_invalid`),
   and a secret answer never enters the conversation. A server without the capability never asks.
+- **A task can branch from an earlier response** ([Sessions §1.1](sessions.md#11-branching-from-an-earlier-response)),
+  added after publication and additive: with the `session_branching` capability, `branch: true`
+  beside `previous_response_id` starts a new session from that response's committed files and the
+  transcript up to it, and leaves the original as it was. The response that branched carries
+  `metadata.branched_from`, and the new session's detail names its origin. A point that can't be
+  one is `409 branch_unavailable`. A server without the capability never branches.
 - **Each turn says when it began and ended** ([Sessions §3](sessions.md#3-inspecting-a-session)),
   added after publication and additive: a session's turns carry `created_at` and `completed_at` in
   Unix seconds, `completed_at` `null` while the turn runs or when its end is not known.
