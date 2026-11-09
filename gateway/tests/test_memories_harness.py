@@ -323,12 +323,12 @@ def _a_finished_turn(monkeypatch, world, sid):
     monkeypatch.setattr(gw, "RESP_POLL_S", 0)
     monkeypatch.setattr(gw.control_store, "enabled", lambda: False)
 
-    async def section(local):
+    async def section(local, **kw):
         return "## Memory", 3
     monkeypatch.setattr(gw.memory_tools, "doc_section", section)
     began = []
 
-    async def takes_forever(org, hid, sid, hv, rec, answer):
+    async def takes_forever(org, hid, sid, hv, rec, answer, **kw):
         began.append((hid, sid))
         await asyncio.sleep(3600)
     monkeypatch.setattr(gw, "_memories_observe", takes_forever)

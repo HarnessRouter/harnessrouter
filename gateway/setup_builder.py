@@ -111,6 +111,7 @@ APP = "app:"               # an app's id as the builder sees it (a plugin may sh
 BUILDING, SAVED, FAILED = "building", "saved", "failed"
 READING, WRITING, SAVING = "reading", "writing", "saving"
 
+MEMORY_HINT_MAX = 300      # characters of what the goal says to remember
 R_UNAVAILABLE = "The setup couldn’t be built just now. Nothing was saved. Try again."
 R_TIMEOUT = "Building the setup took too long. Nothing was saved. Try again."
 R_BUDGET = "Many setups were built here in the last hour. Nothing was saved. Try again later."
@@ -173,6 +174,11 @@ SYSTEM = (
     "Attach a connected app or plugin whenever the job reads from it or writes to it. None is a fine answer.\n"
     "- connections_needed{apps_needed}: services the job cannot do without that are not connected yet. "
     "Usually none, and never one that is connected.\n"
+    "- memory_hint: who the harness should remember and what about them, in a few words taken from the team's "
+    "goal (\"each customer's plan and past issues\", \"the lessons of each deployment\"), or empty when the job "
+    "needs no memory. The platform gives the harness its memory and the rules for using it: never write memory "
+    "policy or mechanisms into the instructions, no plugin, file or tool for memory, and never require an "
+    "identifier before recalling.\n"
     "- base and model, when asked: {default} on its default model fits most jobs; choose another only when "
     "the job clearly fits it better.{language}"
 )
@@ -264,6 +270,7 @@ def configure_schema(inv: dict, base_req: str, model_req: str, seen: dict) -> di
         props["connections_needed"] = _arr(sorted(inv["connect"]), "Plugins not connected that the job cannot work without.", MAX_NEEDS)
     if seen:
         props["apps_needed"] = _arr([APP + a for a in sorted(seen)], "Apps found with find_apps, not connected, that the job cannot work without.", MAX_NEEDS)
+    props["memory_hint"] = {"type": "string", "description": "Who the harness should remember and what about them, from the team's goal; empty for none."}
     return {"type": "object", "properties": props, "required": required, "additionalProperties": False}
 
 
@@ -364,6 +371,8 @@ def settle(args: dict, inv: dict, base_req: str, model_req: str, seen: dict, job
         "mcpServers": [{"id": k, "name": inv["mcp"][k]["name"]} for k in servers],
         "environment": {"id": env, "name": inv["environments"][env]["name"]} if env else None,
         "connectionsNeeded": needs,
+        # what the goal says to remember, for the engine the server chooses when it saves (memory_choice)
+        "memoryHint": sx._line(args.get("memory_hint"), MEMORY_HINT_MAX),
     }
 
 

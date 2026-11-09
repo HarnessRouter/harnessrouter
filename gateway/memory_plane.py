@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
 import json
 import re
 import time
@@ -52,7 +53,14 @@ CREDENTIALS = None
 # file store, `await FILES(org, file_id) -> {"name", "media_type", "bytes"} | None` (None for a
 # file that does not exist or is not this caller's).
 FILES = None
+# How what is kept is cleaned of credentials before any provider sees it: app.py binds the gateway's own
+# redaction (its keys and the shapes of everyone's), `REDACT(text) -> text`. Every writer goes through
+# `remember` and `observe` below, a person's request and an agent's tool and a finished task alike.
+REDACT = None
 _ROLES = ("user", "assistant", "system", "tool")
+# A record whose title starts with this is the gateway's own probe of an engine (app.py's connect check): it is
+# written into a memory of its own and deleted at once, and neither a recall nor a listing ever answers with one.
+PROBE_PREFIX = "hr-probe:"
 
 
 class MemoryError(Exception):
@@ -399,9 +407,21 @@ async def out(org: str, memory: dict, principals: list[str], privs: list[str] | 
             "description": memory.get("description") or "",
             "parent_id": parent if parent and parent in anc else None, "ancestors": anc,
             "restricted": str(memory.get("restricted") or "0") == "1",
-            "provider": memory.get("provider") or "", "privileges": privs,
+            "provider": memory.get("provider") or "", "engine": memory.get("provider") or "", "privileges": privs,
             "records": {"count": n}, "children": {"count": kids},
-            "createdAt": int(memory.get("created_at") or 0), "updatedAt": int(memory.get("updated_at") or 0)}
+            "createdAt": int(memory.get("created_at") or 0), "updatedAt": int(memory.get("updated_at") or 0),
+            "last_used_at": _ms_or_none(memory.get("last_used_at")), "last_ok_at": _ms_or_none(memory.get("last_ok_at")),
+            "last_error": str(memory.get("last_error") or "") or None, "last_error_at": _ms_or_none(memory.get("last_error_at")),
+            # who a person's memory is for: the operator's to see (they may delete it), never the agent's
+            **({"end_user": str(memory["end_user"])} if memory.get("end_user") and "delete" in privs else {})}
+
+
+def _ms_or_none(v) -> int | None:
+    try:
+        n = int(str(v or "0"))
+    except ValueError:
+        return None
+    return n or None
 
 
 def _brief(o: dict) -> dict:
@@ -439,23 +459,146 @@ async def create(org: str, member: str, workspace: str, principals: list[str], *
                  parent_id=None, restricted=False, provider="") -> dict:
     name, description = _clean(name, description)
     prov = str(provider or "").strip()
-    anc: list[str] = []
+    parent = None
     if parent_id:
         parent, _ = await need(org, str(parent_id), principals, "create")
-        anc = _anc(parent) + [str(parent["id"])]
         prov = prov or str(parent.get("provider") or "")
+    return await _make(org, member, workspace, name, description, parent, restricted, prov)
+
+
+async def _make(org: str, member: str, workspace: str, name: str, description: str, parent: dict | None,
+                restricted: bool, prov: str, mid: str = "", extra: dict | None = None) -> dict:
+    """The memory written: the provider told first, then the tree. Access is the caller's to have checked."""
     if prov not in PROVIDERS:
         raise MemoryError(422, "memory_invalid",
                           "Name a connected memory provider." if prov else
                           "No memory provider is connected: connect one, then create the memory.", "provider")
     bound = await PROVIDERS[prov].bind(org, workspace or "default")     # refuses when the workspace has not connected it
-    mid, now = "hmem_" + uuid.uuid4().hex, _now_ms()
+    anc = (_anc(parent) + [str(parent["id"])]) if parent else []
+    mid, now = mid or "hmem_" + uuid.uuid4().hex, _now_ms()
     props = {"org": org, "workspace": workspace, "name": name, "description": description,
-             "parent_id": str(parent_id or ""), "anc": ",".join(anc), "restricted": "1" if restricted else "0",
-             "provider": prov, "created_by": member, "created_at": now, "updated_at": now, "deleted": "0"}
+             "parent_id": str((parent or {}).get("id") or ""), "anc": ",".join(anc), "restricted": "1" if restricted else "0",
+             "provider": prov, "created_by": member, "created_at": now, "updated_at": now, "deleted": "0", **(extra or {})}
     await bound.create(mid, {"id": mid, **props})
     await GRAPH.upsert("Memory", mid, props, raise_on_fail=True)
     return {"id": mid, **props}
+
+
+# ── one person's memory under an agent's ─────────────────────────────────────────────────────────
+# An agent that serves many people keeps what it learns about each in a memory of that person's own, below
+# the agent's memory: restricted, so nothing granted above or beside reaches it, made the first time that
+# person's task needs it. Its id and name come from a hash of who the person is, so a second task for the
+# same person finds the same memory, from any replica, and two first tasks at once make one. The person's
+# own string is a property the operator sees (they created the agent's memory, so they hold all four on
+# this one too); the agent sees "this person's memory".
+#
+# Who reaches it is one principal, `x.enduser:<agent memory id>.<hash>`, granted read and write on it and
+# on nothing else. A task for that person acts as the agent AND that principal: it reads the agent's memory
+# and its own person's, never another person's (each is restricted, and granted to another principal), and
+# it writes only where that principal may, which is its own person's memory. The agent alone, outside any
+# person's task, reaches no person's memory at all.
+END_USER_KIND = "x.enduser"
+_PERSON_DESC = "This person's memory: what they told the agent and what it learned about them."
+
+
+def end_user_hash(user: str) -> str:
+    return hashlib.sha256(str(user).encode()).hexdigest()[:24]
+
+
+def end_user_principal(parent_id: str, user: str) -> str:
+    return f"{END_USER_KIND}:{parent_id}.{end_user_hash(user)}"
+
+
+def end_user_mid(parent_id: str, user: str) -> str:
+    return "hmem_" + hashlib.sha256(f"{parent_id}\n{end_user_hash(user)}".encode()).hexdigest()[:32]
+
+
+async def end_user_node(org: str, parent: dict, user: str) -> tuple[dict, str]:
+    """(this person's memory under `parent`, the principal that reaches it), made on first use. A trusted
+    path: the caller has resolved the agent, its memory and the person; nothing here takes a caller's word."""
+    user = str(user or "").strip()
+    if not user:
+        raise MemoryError(422, "memory_invalid", "A person's memory needs to know who the person is.", "user")
+    pid = str(parent["id"])
+    principal, mid = end_user_principal(pid, user), end_user_mid(pid, user)
+    node = await _load(org, mid)
+    if node is None:
+        node = await _make(org, str(parent.get("created_by") or ""), str(parent.get("workspace") or ""),
+                           end_user_hash(user), _PERSON_DESC, parent, True, str(parent.get("provider") or ""), mid=mid,
+                           extra={"end_user": user[:_NAME_MAX * 4], "end_user_hash": end_user_hash(user), "end_user_of": pid})
+    if not any(str(g.get("principal") or "") == principal and str(g.get("deleted") or "0") != "1"
+               and set(json.loads(g.get("privileges") or "[]")) >= {"read", "write"}
+               for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid})):
+        await _put_grant(org, mid, principal, ["read", "write"], "server")
+    return node, principal
+
+
+# ── what a memory says about its own health, and when it was last used ──────────────────────────
+# `last_error` is one plain sentence for the last thing that failed when this memory was written to or its
+# engine reached (an observe, a remember, a connect), with `last_error_at`; `last_ok_at` is the last time one
+# worked. A reader compares the two. `last_used_at` is the last time an agent read or wrote it. Written at
+# most once a minute per memory and kind on this replica: a busy memory is not a write per call.
+_MARKED: dict[tuple[str, str], float] = {}
+MARK_EVERY_S = 60.0
+
+
+async def mark(org: str, mid: str, error: str = "", *, used: bool = False) -> None:
+    now = time.time()
+    if error:
+        props = {"last_error": " ".join(str(REDACT(error) if REDACT else error).split())[:300] or "It failed.",
+                 "last_error_at": _now_ms()}
+    else:
+        key = (mid, "used" if used else "ok")
+        if now - _MARKED.get(key, 0.0) < MARK_EVERY_S:
+            return
+        _MARKED[key] = now
+        props = {"last_used_at" if used else "last_ok_at": _now_ms()}
+    try:
+        if await _load(org, mid):
+            await GRAPH.upsert("Memory", mid, props)
+    except Exception:  # noqa: BLE001 - a health note never fails what it describes
+        pass
+
+
+async def used(org: str, memory: dict) -> None:
+    """An agent read or wrote this memory: it and the memory a person's memory is under, both."""
+    await mark(org, str(memory["id"]), used=True)
+    if memory.get("end_user_of"):
+        await mark(org, str(memory["end_user_of"]), used=True)
+
+
+def is_probe(record: dict) -> bool:
+    return str((record or {}).get("title") or "").startswith(PROBE_PREFIX)
+
+
+def clean_text(text: str) -> str:
+    return REDACT(text) if REDACT and text else text
+
+
+def _clean_parts(parts):
+    if isinstance(parts, str):
+        return clean_text(parts)
+    out = []
+    for p in parts or []:
+        if isinstance(p, dict) and isinstance(p.get("text"), str):
+            p = {**p, "text": clean_text(p["text"])}
+        out.append(p)
+    return out
+
+
+def clean_record(record: dict) -> dict:
+    """A record with every credential in its words taken out: the title, each text part, each attribute
+    that is text. What a person pasted into a conversation is not what a memory keeps."""
+    if not REDACT:
+        return record
+    attrs = {k: (clean_text(v) if isinstance(v, str) else v) for k, v in (record.get("attributes") or {}).items()}
+    return {**record, "title": clean_text(str(record.get("title") or "")), "content": _clean_parts(record.get("content")),
+            "attributes": attrs}
+
+
+async def observe(prov: "Provider", mid: str, episodes: list[dict], writer: dict) -> dict:
+    """Episodes kept, cleaned first. Every observer comes through here: a person's request and a finished task."""
+    return await prov.observe(mid, [{**e, "content": _clean_parts(e.get("content"))} for e in episodes], writer)
 
 
 async def _subtree(org: str, mid: str) -> list[dict]:
@@ -608,6 +751,7 @@ async def recall(org: str, memories: list[dict], req: dict) -> dict:
             if d not in degraded:
                 degraded.append(d)
         abstains.append(bool(res.get("abstain")))
+    results = [r for r in results if not is_probe(r.get("record") or {})]
     results.sort(key=lambda x: -(x.get("score") or 0))
     results = results[: int(req.get("limit") or 8)]
     return {"results": results + await _other_sides(memories, results), "degraded": degraded,
@@ -675,6 +819,7 @@ async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict
     provider that declares `holds`, takes its place among the others on its subject and predicate (§4.4),
     and the answer says what that did. That logic is here because it reads only what every provider keeps:
     the attributes, the references and the world time of a stated fact."""
+    record = clean_record(record)
     a = record.get("attributes") or {}
     if a.get("stated_at") and not (record.get("time") or {}).get("valid_from"):
         record = {**record, "time": {**(record.get("time") or {}), "valid_from": a["stated_at"]}}
@@ -766,7 +911,8 @@ async def graph(org: str, memory: dict, principals: list[str], *, around: str = 
         while len(recs) < GRAPH_SCAN:
             page = await prov.list(mid, {"types": None, "as_of": None, "include": "active", "limit": 200, "cursor": cursor})
             for r in page.get("records") or []:
-                recs[(mid, str(r["id"]))] = r
+                if not is_probe(r):
+                    recs[(mid, str(r["id"]))] = r
             cursor = page.get("next") or ""
             if not cursor:
                 break
@@ -933,6 +1079,10 @@ async def grant(org: str, mid: str, principals: list[str], principal: str, privi
         raise MemoryError(422, "memory_invalid", "A principal is `<kind>:<id>`: a member (a person or an agent) or a group.", "principal")
     if not privs:
         raise MemoryError(422, "memory_invalid", "Name at least one of read, write, create, delete.", "privileges")
+    return await _put_grant(org, mid, principal, privs, by)
+
+
+async def _put_grant(org: str, mid: str, principal: str, privs: list[str], by: str) -> dict:
     for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid, "principal": principal}):
         if str(g.get("deleted") or "0") != "1":        # one grant per principal per node: it is replaced
             await GRAPH.upsert("MemoryGrant", str(g["id"]), {"privileges": json.dumps(privs)}, raise_on_fail=True)
@@ -996,6 +1146,23 @@ async def grant_counts(org: str) -> dict[str, int]:
         if any(p in PRIVILEGES for p in json.loads(g.get("privileges") or "[]")):
             held.setdefault(str(g.get("principal") or ""), set()).add(mid)
     return {who: len(mids) for who, mids in held.items()}
+
+
+async def ungrant(org: str, mid: str, principal: str) -> None:
+    """The grant this principal holds ON this memory taken away, by the server: an agent moved off the memory it
+    was given (app.py's memory provisioning). It only ever narrows; widening goes through `grant`."""
+    for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid, "principal": principal}):
+        if str(g.get("deleted") or "0") != "1":
+            await GRAPH.upsert("MemoryGrant", str(g["id"]), {"deleted": "1"}, raise_on_fail=True)
+
+
+async def held_on(org: str, mid: str, principal: str) -> list[str]:
+    """What this principal's own grant on this memory gives (not what it inherits)."""
+    out: set[str] = set()
+    for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid, "principal": principal}):
+        if str(g.get("deleted") or "0") != "1":
+            out.update(p for p in json.loads(g.get("privileges") or "[]") if p in PRIVILEGES)
+    return [p for p in PRIVILEGES if p in out]
 
 
 async def revoke(org: str, mid: str, principals: list[str], gid: str) -> None:

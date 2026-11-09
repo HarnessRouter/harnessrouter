@@ -1,18 +1,28 @@
 """The agent tools' seam bound to this gateway's own memory plane: the agent is the principal
 `member:<harness id>`, every call goes through memory_plane's one access check, and every answer
 is presented to that reader. `entries` is what app.py worked out the agent holds (its grants, its
-default, the memory a task named)."""
+default, the memory a task named).
+
+In a task for one person of an agent that keeps each person apart (`person`), the reader is the agent AND
+that person's principal (memory_plane.end_user_node), and the writer is that principal alone. So the task
+reads the agent's memory and its own person's, never another person's, and writes only its own person's:
+one person's task can't plant a "fact" where the next person's recall would read it."""
 from __future__ import annotations
 
 import memory_plane as mp
 from memory_tools import Refused
 
 
+PERSON_NAME = "This person's memory"
+
+
 class Local:
-    def __init__(self, org: str, hid: str, entries: list[dict]):
-        self.org, self.hid, self._entries = org, hid, entries
-        self.pr = [f"member:{hid}"]
+    def __init__(self, org: str, hid: str, entries: list[dict], person: dict | None = None):
+        self.org, self.hid, self._entries, self.person = org, hid, entries, person or None
+        self.pr = [f"member:{hid}"] + ([self.person["principal"]] if self.person else [])
+        self.wpr = [self.person["principal"]] if self.person else self.pr
         self.writer = mp.writer_of(hid, agent=True)
+        self.kept: list[str] = []          # what this agent kept with memory_remember through this seam
 
     async def _do(self, coro):
         try:
@@ -26,8 +36,10 @@ class Local:
             m = await mp._load(self.org, str(e.get("memory_id") or ""))
             privs = await mp.effective(self.org, m, self.pr) if m else []
             if m and "read" in privs:
-                out.append({"memory": mp._brief(await mp.out(self.org, m, self.pr, privs)),
-                            "write": e.get("access") == "write", "default": bool(e.get("default"))})
+                brief = mp._brief(await mp.out(self.org, m, self.pr, privs))
+                if self.person and str(m["id"]) == self.person["node"]:
+                    brief = {**brief, "name": PERSON_NAME}        # who it is, the agent isn't told
+                out.append({"memory": brief, "write": e.get("access") == "write", "default": bool(e.get("default"))})
         return out
 
     async def offers(self) -> dict:
@@ -65,7 +77,16 @@ class Local:
         async def go():
             m, _ = await mp.need(self.org, mid, self.pr, "read")
             reach, cut = await mp.reach_below(self.org, m, self.pr, body.get("depth"))
+            if self.person and mid == self.person["node"]:
+                # a person's memory is read with the agent's own: what it knows for everyone, and about them
+                shared = await mp._load(self.org, self.person["shared"])
+                if shared and "read" in await mp.effective(self.org, shared, self.pr) and \
+                        str(shared["id"]) not in {str(x["id"]) for x in reach}:
+                    reach.append(shared)
             names = {str(x["id"]): x.get("name") or "" for x in reach}
+            if self.person:
+                names[self.person["node"]] = PERSON_NAME
+            await mp.used(self.org, m)
             res = await mp.recall(self.org, reach, {k: body.get(k) for k in ("query", "text", "filters", "types", "limit")})
             if cut:
                 res["degraded"].append(f"subtree:capped_at_{mp.RECALL_MAX_MEMORIES}_memories")
@@ -87,8 +108,26 @@ class Local:
         return await self._do(go())
 
     async def _prov(self, mid, privilege):
-        m, privs = await mp.need(self.org, mid, self.pr, privilege)
-        return await mp.provider_of(m), privs
+        m, privs = await mp.need(self.org, mid, self.wpr if privilege == "write" else self.pr, privilege)
+        try:
+            return await mp.provider_of(m), privs
+        except mp.MemoryError as e:
+            await mp.mark(self.org, mid, e.message)      # its engine isn't connected or reached: said on the memory
+            raise
+
+    async def _wrote(self, mid, coro):
+        """A write through the agent's tools, its outcome kept on the memory (memory_plane.mark)."""
+        try:
+            out = await coro
+        except mp.MemoryError as e:
+            if e.code not in ("memory_not_found", "memory_forbidden", "memory_invalid", "memory_record_not_found"):
+                await mp.mark(self.org, mid, e.message)
+            raise
+        await mp.mark(self.org, mid)
+        m = await mp._load(self.org, mid)
+        if m:
+            await mp.used(self.org, m)
+        return out
 
     async def get(self, mid, rid):
         async def go():
@@ -106,7 +145,8 @@ class Local:
     async def remember(self, mid, record):
         async def go():
             prov, _ = await self._prov(mid, "write")
-            made = await mp.remember(prov, mid, mp._record_in(record), self.writer)
+            made = await self._wrote(mid, mp.remember(prov, mid, mp._record_in(record), self.writer))
+            self.kept.append(str(made.get("id") or ""))
             return {**await mp.present(self.org, mid, made, self.pr), **{k: made[k] for k in ("closed", "conflicts") if k in made}}
         return await self._do(go())
 
@@ -118,7 +158,13 @@ class Local:
                 patch2["title"] = mp.title_of(patch2["title"])
             if "content" in patch2:
                 patch2["content"] = mp.parts_of(patch2["content"])
-            return await mp.present(self.org, mid, await prov.revise(mid, rid, patch2, self.writer), self.pr)
+            if "title" in patch2:
+                patch2["title"] = mp.clean_text(patch2["title"])
+            if "content" in patch2:
+                patch2["content"] = mp._clean_parts(patch2["content"])
+            if isinstance(patch2.get("attributes"), dict):
+                patch2["attributes"] = {k: mp.clean_text(v) if isinstance(v, str) else v for k, v in patch2["attributes"].items()}
+            return await mp.present(self.org, mid, await self._wrote(mid, prov.revise(mid, rid, patch2, self.writer)), self.pr)
         return await self._do(go())
 
     async def forget(self, mid, rid):
@@ -133,6 +179,8 @@ class Local:
             q = next((x for x in await prov.queries(mid) if x["name"] == name), None)
             if not q:
                 raise Refused("memory_invalid", "No such query on this memory.")
+            if q.get("requires", "read") == "write":
+                _, privs = await self._prov(mid, "write")
             if q.get("requires", "read") not in privs:
                 raise Refused("memory_forbidden", f"That query needs `{q['requires']}` on the memory.")
             res = await prov.run_query(mid, name, params)
@@ -152,6 +200,8 @@ class Local:
         async def go():
             prov, privs = await self._prov(mid, "read")
             needs = await prov.operation_requires(mid, rid, name)
+            if needs == "write":
+                _, privs = await self._prov(mid, "write")
             if needs not in privs or (needs == "write" and not any(e.get("access") == "write" for e in self._entries)):
                 raise Refused("memory_forbidden", f"That operation needs `{needs}` on the memory.")
             return await prov.operate(mid, rid, name, body, self.writer)

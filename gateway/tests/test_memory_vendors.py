@@ -48,6 +48,15 @@ class Wire:
         return [c for c in self.calls if c["path"].endswith(path_end)]
 
 
+@pytest.fixture(autouse=True)
+def _connect_answers_alone(monkeypatch):
+    """These stubs answer one route each, as the vendor's health route answered; the record a connection writes, reads
+    back and deletes is held to real answers in test_memory_provisioning.py (the round trip)."""
+    async def kept(engine, key, base, org):
+        return ""
+    monkeypatch.setattr(gw, "_memory_round_trip", kept)
+
+
 @pytest.fixture
 def wired(monkeypatch):
     def use(module, answer):

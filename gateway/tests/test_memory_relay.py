@@ -174,3 +174,75 @@ def test_the_operators_own_tools_take_a_credential_on_the_same_terms(relay):
     tok = service(vendor="operator", embedding_model="text-embedding-3-small")["credential"]
     assert c.post("/v1/llm/v1/chat/completions", headers={"authorization": f"Bearer {tok}"}, json={"model": "gpt-4o-mini", "messages": []}).status_code == 200
     assert c.post("/v1/llm/v1/chat/completions", headers={"authorization": f"Bearer {tok}"}, json={"model": "gpt-4.1-mini", "messages": []}).status_code == 403
+
+
+# ── what a credential is signed with, and where it reaches ────────────────────────────────────
+def _embed(c, tok, extra=None):
+    return c.post("/v1/llm/v1/embeddings", headers={"authorization": f"Bearer {tok}", **(extra or {})},
+                  json={"model": "text-embedding-3-small", "input": ["hi"]})
+
+
+def test_a_credential_outlives_a_restart_that_makes_a_new_internal_key(relay, monkeypatch):
+    """The self-hosted entrypoint makes a new internal key at every start; a credential signed with it stopped working
+    at the first restart, and every engine stopped reading in silence."""
+    c, service, _sent, _keys = relay
+    s = service()
+    monkeypatch.setattr(gw, "INTERNAL_KEY", "k-test-after-a-restart")
+    assert _embed(c, s["credential"]).status_code == 200
+    # withdrawn is withdrawn, whatever the key
+    assert c.post(f"/v1/memory-services/{s['id']}/revoke", headers={"x-harness-internal": "k-test-after-a-restart"}).status_code == 200
+    assert _embed(c, s["credential"]).status_code == 401
+
+
+def test_a_credential_signed_with_the_internal_key_is_not_one(relay):
+    c, service, sent, _keys = relay
+    s = service()
+    for key in (b"k-test", os.environ["HR_SECRET_KEY"].encode()):
+        assert _embed(c, memory_relay.mint(key, s["id"])).status_code == 401
+    assert not sent
+
+
+def test_a_credential_follows_the_secret_key_it_is_derived_from(relay, monkeypatch):
+    c, service, _sent, _keys = relay
+    tok = service()["credential"]
+    monkeypatch.setenv("HR_SECRET_KEY", "another-passphrase-entirely")
+    assert _embed(c, tok).status_code == 401
+
+
+@pytest.mark.parametrize("method,path", [("GET", "/v1/harnesses"), ("POST", "/v1/responses"), ("GET", "/v1/memories"),
+                                         ("GET", "/v1/plugs"), ("POST", "/v1/memories"), ("POST", "/v1/mcp/memories"),
+                                         ("GET", "/v1/memory-services")])
+def test_a_memory_service_credential_reaches_nothing_but_the_relay(relay, method, path):
+    """Not as a key, and not beside the internal key a console in front of the gateway attaches to what it relays."""
+    c, service, sent, _keys = relay
+    tok = service()["credential"]
+    console = {"x-harness-internal": "k-test", "x-harness-org": "local", "x-harness-member": "local@localhost"}
+    for extra in ({}, console):
+        r = c.request(method, path, headers={"authorization": f"Bearer {tok}", **extra},
+                      json={"model": "m", "input": "x", "jsonrpc": "2.0", "id": 1, "method": "tools/list"} if method == "POST" else None)
+        assert r.status_code == 401, (method, path, extra, r.text)
+    assert not sent
+
+
+def test_through_a_console_in_front_it_is_still_the_relay_and_still_only_the_relay(relay):
+    c, service, sent, _keys = relay
+    tok = service()["credential"]
+    console = {"x-harness-internal": "k-test", "x-harness-org": "local", "x-harness-member": "local@localhost"}
+    assert _embed(c, tok, console).status_code == 200
+    r = c.get("/v1/llm/v1/models", headers={"authorization": f"Bearer {tok}", **console})
+    assert r.status_code == 403 and len(sent) == 1
+
+
+def test_a_service_is_served_by_this_instances_keys_and_never_an_organizations_connection(relay, monkeypatch):
+    c, service, sent, keys = relay
+    tok = service()["credential"]
+    looked = []
+
+    async def connection(*a, **kw):
+        looked.append(a)
+        return ({"provider": "openai", "api_key": "sk-org-own-key-SENTINEL"}, "org-a")
+    monkeypatch.setattr(gw, "_get_connection", connection)
+    monkeypatch.setattr(gw, "_broker_resolve", connection)
+    keys["list"] = []
+    r = _embed(c, tok)
+    assert r.status_code == 502 and not looked and not sent

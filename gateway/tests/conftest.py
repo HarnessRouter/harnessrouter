@@ -22,4 +22,6 @@ os.environ.update({
     "HR_POOL_AUTH": "none",
     "HR_IDENTITY_MODE": "off",
     "HR_MEDIA_SWEEP_S": "3600",
+    # no memory engines are looked for at start: a test that wants them asks (_memory_discover), against its own stubs
+    "HR_MEMORY_DISCOVER": "0",
 })
