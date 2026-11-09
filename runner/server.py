@@ -3189,6 +3189,12 @@ def _codex_web_search_off(tools_disabled: list[str] | None) -> bool:
                for x in (tools_disabled or []) if x and x.strip())
 
 
+def _codex_shell_off(tools_disabled: list[str] | None) -> bool:
+    """Whether the turn's disabled list names codex's shell, by the catalog's name or the one 0.154
+    sends the model (exec_command, with write_stdin, under unified exec)."""
+    return bool({t.lower() for t in _tool_names_off(tools_disabled)} & {"shell", "exec_command"})
+
+
 def _codex_flag(value: str | bool | None) -> bool | None:
     """Parse a connection's optional on/off flag, preserving an unset value."""
     if value is None or (isinstance(value, str) and not value.strip()):
@@ -3326,6 +3332,11 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         # nothing). It goes before the first table header: appended at the end it would belong
         # to the last table and switch nothing (measured on rc.1: the tool stayed in the request).
         cfg = _codex_insert_top_level(cfg, 'web_search = "disabled"')
+    if _codex_shell_off(tools_disabled):
+        # The shell is a feature in codex 0.154's own table (`codex features list`: shell_tool), and
+        # off it takes the shell family out of the tools codex builds (exec_command and write_stdin
+        # under unified exec). A table of its own, so it never lands inside another one.
+        cfg += "[features]\nshell_tool = false\n"
     if resume:
         # A resumed session keeps the provider id it started under; Codex looks that id up in the
         # config and refuses to load without it ("Model provider `azure` not found", a July
@@ -17411,7 +17422,8 @@ def capabilities(identifier: str = "") -> dict:
 # requires the request rather than silence wherever a block is not possible: an operator who switched
 # a tool off and got neither believes it is off. Qwen Code and Cline were in neither group, and an
 # operator who switched every tool off on them watched the agent use them all.
-#   codex       — the one built-in with a switch is web_search (_codex_web_search_off).
+#   codex       — web_search and the shell have switches (_codex_web_search_off, _codex_shell_off);
+#                 the catalog's other names are not tools codex 0.154 offers, so they are asked.
 #   hermes      — switches toolsets, not tools. A toolset whose every tool is off is switched off,
 #                 so those tools are withheld (_hermes_toolsets_off: terminal, the four file tools
 #                 together, the web tools); read_file alone, say, is asked.
