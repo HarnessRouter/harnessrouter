@@ -328,7 +328,8 @@ describe('Remember: one switch, where the service gives the agent its own memory
     expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)).toHaveLength(0);
     const ask = document.querySelector('.sheet') as HTMLElement;
     expect(ask.querySelector('#amEngAskh')?.textContent).toBe('Use Graphiti for Photo cut?');
-    expect(ask.querySelector('#amEngAskp')?.textContent).toBe('Photo cut gets a new memory kept by Graphiti and remembers there from its next task. Photo cut is kept, with everything in it, under Memories.');
+    // the agent's memory is named after the agent, so the memory it has now is said as such, never by that name
+    expect(ask.querySelector('#amEngAskp')?.textContent).toBe('Photo cut gets a new memory kept by Graphiti and remembers there from its next task. Its current memory stays under Memories, with everything in it.');
     // Cancel changes nothing
     await press(Array.from(ask.querySelectorAll('button')).find((b) => b.textContent === 'Cancel') as HTMLElement);
     expect(document.querySelector('#amEngAskh')).toBeNull();

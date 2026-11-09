@@ -541,11 +541,22 @@ describe('what the provider makes itself is drawn, locked, beside what a person 
     await open(graphiti);
     expect(q('.mm-sch-empty')).toBeNull();
     expect(q('.mm-sch-own')?.textContent).toContain('Add your own types');
+    // under the graph in the page's flow, never inside the canvas it would cover; and nothing folded away
+    expect(q('.dg-canvas .mm-sch-own')).toBeNull();
+    expect(q('.mgv.has-own > .dg-body + .mm-sch-own')).not.toBeNull();
+    expect(q('.mm-sch-own [aria-expanded]')).toBeNull();
+    // what Graphiti makes is a triangle, never three in a line: Episode on top, Fact and Entity beneath it
+    const p = (id: string) => (nodes().find((n) => n.data.id === id)?.position as { x: number; y: number });
+    expect(p('episode').y).toBeLessThan(p('fact').y);
+    expect(p('fact').y).toBe(p('entity').y);
+    const area = (p('fact').x - p('episode').x) * (p('entity').y - p('episode').y) - (p('entity').x - p('episode').x) * (p('fact').y - p('episode').y);
+    expect(Math.abs(area)).toBeGreaterThan(10000);
     await click(Array.from(el.querySelectorAll('.mm-start')).find((b) => (b.textContent || '').startsWith('Customers')) as Element);
     await later(20);
     expect(nodes()).toHaveLength(6);
     expect(puts).toHaveLength(1);
     expect(q('.mm-sch-own')).toBeNull();
+    expect(q('.mgv.has-own')).toBeNull();
   });
   it('Mem0: the one type it makes, locked, and what writers stated beside it', async () => {
     const rec = (id: string, type: string) => ({ record: { id, object: 'memory.record', memory_id: 'hmem_1', type, title: id, content: [], attributes: {}, references: [] }, memory: { id: 'hmem_1', name: 'x' } });

@@ -22,6 +22,7 @@ import { arrive, footprint, initialLayout } from './layout';
 import { applyDrafts, cloneSchema, graphOf, heldGraph, newRelation } from './schemaDraft';
 import { builtinTitles, withBuiltin } from './builtin';
 import { buildSchemaElements } from './schemaElements';
+import { untangleCanvas } from './untangle';
 import { coverGraphOf, useCoverKeeper } from '../cover';
 import './graph.css';
 
@@ -499,9 +500,17 @@ function fitCanvas(ref) {
     const k = Math.max(1, Math.min(2.4, 0.8 / cy.zoom()));
     cy.batch(() => {
       cy.nodes().style({ width: 38 * k, height: 38 * k, 'font-size': 10 * k, 'background-width': 18 * k, 'background-height': 18 * k, 'text-max-width': 140 * k });
-      cy.edges().style({ width: 1.4 * k, 'font-size': 10 * k });
+      cy.edges().style({ width: 1.4 * k, 'font-size': 10 * k, 'text-max-width': 120 * k });
     });
+    cy.scratch('_k', k);
+    untangleCanvas(cy, k);
   } catch { /* gone */ }
+}
+/** Links clear of every type and name they don't belong on, at the size the canvas draws them now (untangle.ts). */
+function untangleNow(ref) {
+  const cy = ref.current?.getCy?.();
+  if (!cy || cy.nodes().length === 0) return;
+  try { untangleCanvas(cy, cy.scratch('_k') || 1); } catch { /* gone */ }
 }
 const fitSoon = (ref) => requestAnimationFrame(() => requestAnimationFrame(() => { fitCanvas(ref); setTimeout(() => fitCanvas(ref), 60); }));
 
@@ -653,6 +662,7 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
   const onSchemaNodeDragEnd = useCallback((cyNodeId, pos) => {
     if (!caps.position || !cyNodeId || !pos) return;
     setPositionDrafts((p) => ({ ...p, [cyNodeId]: { x: Math.round(pos.x), y: Math.round(pos.y) } }));
+    untangleNow(schemaRef);
   }, [caps.position]);
 
   // RULE: any panel appearing/disappearing changes the canvas's available size, so it must recalculate and re-center.
@@ -686,6 +696,8 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
     return `${graph?.titles?.[label] || typeLabel(d?.name || label)}${sub ? `\n${sub}` : ''}`;
   }, [countOf, graph]);
   const schemaElements = useMemo(() => buildSchemaElements(graph, positionDrafts, typeDrafts, captionOf), [graph, positionDrafts, typeDrafts, captionOf, catalog]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the canvas has the new elements by now (its own effect ran first): their links are set clear of what they'd cross
+  useEffect(() => { untangleNow(schemaRef); }, [schemaElements]);
   const vertexColorByLabel = useMemo(() => {
     const m = {};
     for (const v of ((graph && graph.vertex_types) || [])) m[v.label] = (v.ui && v.ui.color) || colorFor(v.label).ring;
@@ -720,12 +732,15 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
   const empty = !loading && !failed && graph && !schemaElements.length;
   // only what the provider makes is here: a person's own types go beside it
   const onlyBuiltin = !loading && !failed && graph && schemaElements.length > 0 && !(graph.vertex_types || []).some((v) => !v.builtin);
+  const ownPanel = onlyBuiltin && caps.add && !addType;
+  // the panel under the graph takes its height from the canvas: frame the graph again in what is left
+  useEffect(() => { fitSoon(schemaRef); }, [ownPanel]);
   const selType = schemaSel ? ((schemaSel.kind === 'vertex' ? graph?.vertex_types : graph?.edge_types) || []).find((x) => x.label === schemaSel.label) : null;
   const selLocked = !!selType?.builtin;
 
   return (
     <>
-      <div className={`mgv${expanded ? ' is-max' : ''}`}>
+      <div className={`mgv${expanded ? ' is-max' : ''}${ownPanel ? ' has-own' : ''}`}>
         <div className="dg-body" ref={bodyRef}>
           <div className="dg-canvas">
             <div className="dg-canvas-tools" style={{ zIndex: edit ? 4 : undefined }}>
@@ -791,24 +806,6 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
                 </div>
               )
             ) : null}
-            {onlyBuiltin && caps.add && !addType ? (
-              <div className="mm-sch-own mgv-live">
-                <b>{schemaGuides(provider) ? 'Add your own types' : 'Add your own labels'}</b>
-                <span>{schemaGuides(provider) ? `${vendor} looks for them in what it reads, beside what it makes itself.` : `${vendor} tags each fact it learns with the ones that fit.`}</span>
-                {schemaGuides(provider) ? (
-                  <div className="mm-starts">
-                    {MM_STARTS.map(([n, sub], i) => (
-                      <button key={n} type="button" className="mm-start" onClick={() => {
-                        const fresh = startSchema(i, provider);
-                        apply((d) => { d.types = fresh.types; d.relations = fresh.relations; });
-                        toast(`Started from ${n}. Rename or remove anything.`);
-                      }}><span className="mm-start-pic"><StarterArt s={startSchema(i, provider)} /></span><b>{n}</b><small>{sub}</small></button>
-                    ))}
-                    <button type="button" className="mm-start" onClick={() => setAddType(true)}><span className="mm-start-pic"><StarterArt s={null} /></span><b>Blank</b><small>Start with one type</small></button>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
             {addType && (
               <div className="sp-graph-addtype-wrap">
                 <AddTypeForm onCreate={createType} busy={busy} onClose={() => setAddType(false)} vertexLabels={((graph && graph.vertex_types) || []).filter((v) => !v.builtin).map((v) => v.label)} edges={!!caps.conns} word={word}/>
@@ -836,6 +833,25 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
             />
           )}
         </div>
+        {/* below the graph, in the page's flow, never over it: on a phone the graph comes first and this scrolls under it */}
+        {ownPanel ? (
+          <div className="mm-sch-own mgv-live">
+            <b>{schemaGuides(provider) ? 'Add your own types' : 'Add your own labels'}</b>
+            <span>{schemaGuides(provider) ? `${vendor} looks for them in what it reads, beside what it makes itself.` : `${vendor} tags each fact it learns with the ones that fit.`}</span>
+            {schemaGuides(provider) ? (
+              <div className="mm-starts">
+                {MM_STARTS.map(([n, sub], i) => (
+                  <button key={n} type="button" className="mm-start" onClick={() => {
+                    const fresh = startSchema(i, provider);
+                    apply((d) => { d.types = fresh.types; d.relations = fresh.relations; });
+                    toast(`Started from ${n}. Rename or remove anything.`);
+                  }}><span className="mm-start-pic"><StarterArt s={startSchema(i, provider)} /></span><b>{n}</b><small>{sub}</small></button>
+                ))}
+                <button type="button" className="mm-start" onClick={() => setAddType(true)}><span className="mm-start-pic"><StarterArt s={null} /></span><b>Blank</b><small>Start with one type</small></button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       {confirm?.kind === 'prop' ? (
         <ConfirmSheet id="mmDp" title={`Delete field "${confirm.p.name}"`} confirmLabel="Delete"
