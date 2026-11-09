@@ -355,18 +355,23 @@ describe('where something can\'t change, the same panel shows all of it, not edi
     expect(panel().querySelector('button[aria-label="Remove"]')).toBeNull();
     expect(panel().querySelector('button[aria-label="Add endpoint"]')).toBeNull();
   });
-  it('labels: a name and what it means can change, the rest shows, and only those two are written', async () => {
+  it('labels: a type is a name and what it means, only those two are offered and written, and nothing relates (Richard 11-09)', async () => {
     stored = { types: [{ name: 'Company', description: 'A customer.' }] };
     await open(CAPS.hindsight);
     expect(el.textContent).not.toContain('Facts pulled out of each task');
     expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Inspect selected type', '+ Type', 'expand']);
+    // dragging from one type to another draws nothing
     expect(canvasProps.edgeDrawEnabled).toBe(false);
     await act(async () => { canvasProps.onTapNode('Company'); });
     await flush();
     const p = panel();
-    expect((p.querySelector('button[aria-label^="Color #"]') as HTMLButtonElement).disabled).toBe(true);
-    expect((p.querySelector('.icon-combo-trigger') as HTMLButtonElement).disabled).toBe(true);
-    expect(p.textContent).toContain('no properties yet');
+    expect(p.querySelector('input[aria-label="Name"]')).toBeTruthy();
+    expect(p.querySelector('textarea[aria-label="Description"]')).toBeTruthy();
+    expect(p.querySelector('button[aria-label^="Color #"]')).toBeNull();
+    expect(p.querySelector('.icon-combo-trigger')).toBeNull();
+    expect(Array.from(p.querySelectorAll('.dg-field-label')).map((x) => x.textContent)).toEqual([]);
+    expect(p.textContent).not.toContain('Properties');
+    expect(p.textContent).not.toContain('no properties yet');
     expect(button('+ Add property')).toBeUndefined();
     await type(p.querySelector('textarea[aria-label="Description"]') as Element, 'Someone who pays.');
     await later(700);
@@ -374,10 +379,19 @@ describe('where something can\'t change, the same panel shows all of it, not edi
     await click(button('Save'));
     await later(20);
     expect(puts[0]).toEqual({ types: [{ name: 'Company', description: 'Someone who pays.' }] });
-    // its entries are types, as on every engine (Richard 11-09: "make them consistent called schema")
+    // its entries are types, as on every engine (Richard 11-09: "make them consistent called schema"); the new one is a
+    // name and a description, one per row, and no colour, no vertex or edge
     await click(button('+ Type'));
-    expect(q('.sp-graph-addtype').textContent).toContain('New type');
+    const form = q('.sp-graph-addtype');
+    expect(Array.from(form.querySelectorAll('label')).map((x) => x.textContent)).toEqual(['Name', 'Description']);
+    expect(form.textContent).toContain('New type');
     expect(button('Edge')).toBeUndefined();
+    expect(form.querySelector('button[aria-label^="Color #"]')).toBeNull();
+    await type(form.querySelector('#sgNewName') as Element, 'Billing');
+    await type(form.querySelector('#sgNewDesc') as Element, 'Money owed or paid.');
+    await click(Array.from(form.querySelectorAll('button')).find((b) => b.textContent === 'Create') as Element);
+    await later(20);
+    expect(puts.pop()).toEqual({ types: [{ name: 'Company', description: 'Someone who pays.' }, { name: 'Billing', description: 'Money owed or paid.' }] });
   });
   describe('a provider that decides for itself', () => {
     const rec = (id: string, type: string, attributes: Record<string, unknown> = {}) => ({ record: { id, object: 'memory.record', memory_id: 'hmem_1', type, title: id, content: [], attributes, references: [] }, memory: { id: 'hmem_1', name: 'x' } });
@@ -389,7 +403,7 @@ describe('where something can\'t change, the same panel shows all of it, not edi
       const seen: string[] = [];
       await open(CAPS.mem0, { onOpenData: (t) => seen.push(t) });
       expect(el.textContent).not.toContain('decides for itself');
-      expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Inspect selected type', 'Read only', 'expand']);
+      expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Edit types', 'Read only', '+ Type', 'expand']);
       expect(nodes().map((n) => n.data.id).sort()).toEqual(['entity', 'fact', 'note']);
       expect(nodes().find((n) => n.data.id === 'fact')?.data.caption).toBe('Fact\n2 records');
       await act(async () => { canvasProps.onTapNode('fact'); });
@@ -447,12 +461,36 @@ describe('a schema with no saved places', () => {
   });
 });
 
-describe('nothing here looks editable where the vendor takes no schema', () => {
+describe('where the engine reads no schema (schema.mode "none"), the pencil and + Type are there and off, saying why', () => {
   const editIcon = 'M16 4l4 4-11 11H5v-4z';
-  test.each([['Mem0', 'mem0'], ['ReMe', 'reme']])('%s has no pencil and says it is read only', async (_name, id) => {
-    await open(CAPS[id]);
-    expect(el.innerHTML).not.toContain(editIcon);
+  const mem0 = { ...CAPS.mem0, schema: { mode: 'none', builtin: { types: [{ name: 'fact', description: 'A short fact.' }], relations: [] } } } as Provider;
+  const reme = { ...CAPS.reme, schema: { mode: 'none', builtin: { types: [{ name: 'episode', description: 'A conversation.' }, { name: 'note', description: 'A note.' }], relations: [{ name: 'derived_from', from: 'note', to: 'episode', description: '' }] } } } as Provider;
+  test.each([
+    ['Mem0', mem0, 'Mem0 keeps facts without types of its own.'],
+    ['ReMe', reme, 'ReMe keeps notes without types of its own.'],
+  ])('%s (Richard 11-09: "If not supported, should disable this +Type button")', async (_name, provider, why) => {
+    await open(provider);
+    const pencil = tools().querySelector('button[aria-label="Edit types"]') as HTMLButtonElement;
+    expect(pencil.disabled).toBe(true);
+    expect(pencil.title).toBe(why);
+    expect(pencil.innerHTML).toContain(editIcon);
+    const add = button('+ Type');
+    expect(add.disabled).toBe(true);
+    expect(add.title).toBe(why);
     expect(el.textContent).toContain('Read only');
+    await click(add);
+    expect(el.querySelector('.sp-graph-addtype')).toBeNull();
+    // the built-in shape is still drawn, to read
+    expect(nodes().length).toBeGreaterThan(0);
+    expect(puts).toEqual([]);
+  });
+  test('the reason comes from what the engine declares, never from its name', async () => {
+    const other = { ...CAPS.mem0, id: 'acme-memory', schema: { mode: 'none' } } as Provider;
+    await open(other);
+    expect(button('+ Type').title).toBe('acme-memory keeps records without types of its own.');
+    await act(async () => { root.unmount(); }); root = createRoot(el);
+    await open({ ...CAPS.reme, schema: { mode: 'guides', properties: true, relations: true } } as Provider);
+    expect(button('+ Type').disabled).toBe(false);
   });
   test('a vendor a schema guides keeps the pencil, and nothing on the canvas explains it (Richard 11-09)', async () => {
     await open(CAPS.graphiti);
