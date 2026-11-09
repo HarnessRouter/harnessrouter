@@ -130,7 +130,7 @@ The memory tools are the same on every vendor, and what differs by base is how e
 
 - Not every base on every vendor. That would be about a thousand turns, for tools that are the same on each.
 - How well any vendor recalls. This is whether the integration is right, not a benchmark, and we make no claim about which is best.
-- The schema findings in the [vendor guide](../deploy/memories/README.md) come from a few paragraphs, repeated, not a corpus.
+- The schema findings in [Memory engines](memories-engines.md#does-a-memory-need-a-schema) come from a few paragraphs, repeated, not a corpus.
 
 ## What the matrix found on the way, and what was changed
 

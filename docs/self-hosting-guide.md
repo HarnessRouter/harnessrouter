@@ -897,20 +897,64 @@ vendor's figure on the session row).
 
 ## Memories
 
-Agents can keep what they learn and read what you tell them, across sessions. HarnessRouter keeps no memory of its own: a memory lives with a vendor you connect, and agents reach it through the same tools whichever one it is.
+One command, then every new agent remembers: what each person told it, what it learned doing its work, what it was asked to keep. You can always see what an agent remembers and why, and change or delete it, under **Memories** in the console.
 
-Four open source vendors can run beside your instance, each with one compose profile. From a clone of this repository:
+### Start the memory engines
 
-```sh
-cd deploy/memories
-cp .env.example .env     # then fill it in
-docker compose --profile graphiti up -d
-docker network connect harnessrouter-memories <your HarnessRouter container>
+```bash
+docker cp harnessrouter:/app/deploy/memories .
+./memories/up.sh
 ```
 
-Then open **Memories** in the console, connect the vendor with the address the [vendor guide](../deploy/memories/README.md) gives, and create a memory. A connection is tried before it's kept. Run the `docker network connect` line again whenever you recreate the HarnessRouter container.
+The first line copies the engines' folder out of the image, so there is nothing to clone (in a clone it's `deploy/memories`). The second starts four open source memory engines beside your instance, puts HarnessRouter on their network, waits until each one answers and connects each one. It finds your HarnessRouter container by itself; if you run more than one, name it with `HR_CONTAINER=<name> ./memories/up.sh`. The first start builds two engines and downloads the others, so it takes several minutes and a few GB of disk.
 
-Vendors differ in what a memory is, and the console shows only what the one you chose can do. A schema, for one, appears only where something reads it. The [vendor guide](../deploy/memories/README.md) says what each does and what we measured.
+- `./memories/up.sh mem0 hindsight` starts only the engines you name.
+- Run it again at any time: it keeps what works and repairs what doesn't.
+- `./memories/up.sh --down` stops them, and keeps what they remember.
+
+**No second key.** The engines read and search with your instance's own model keys. `up.sh` asks HarnessRouter for one credential per engine. A credential reaches only HarnessRouter's model relay, only for its engine's two models, and HarnessRouter can withdraw it. It is kept in `memories/.env` on your machine, with the engines' other generated secrets, at mode 600. The engines use `gpt-4o-mini` and `text-embedding-3-small` unless you choose others in that file, so connect a model provider that serves both first (step 5 above: OpenAI, Azure OpenAI, Vercel AI Gateway and OpenRouter do). If none does yet, `up.sh` says so and starts nothing.
+
+### Keep HarnessRouter on their network
+
+`up.sh` adds the running container to the `harnessrouter-memories` network. A container you make again (to upgrade, or to change a setting) keeps it only if its `docker run` says so:
+
+```bash
+docker run -d --name harnessrouter \
+  -p 127.0.0.1:3000:3000 \
+  -v harnessrouter:/data \
+  --network harnessrouter-memories \
+  harnessrouter/harnessrouter
+```
+
+The network stays when the engines stop, so this line works whether they run or not. Then run `./memories/up.sh` once more: it checks that each engine still answers and that its credential still works.
+
+<details>
+<summary>The same with Docker Compose</summary>
+
+Add the network to the HarnessRouter service in the repository's `docker-compose.yml`:
+
+```yaml
+services:
+  harnessrouter:
+    networks: [default, memories]
+
+networks:
+  memories:
+    name: harnessrouter-memories
+    external: true
+```
+
+</details>
+
+### What agents remember
+
+Each agent you create from then on gets its own memory, named after it, on the engine that suits what it does: separate facts for each person for an agent that serves people, a graph for one that tracks things that change, lessons for one that should get better at its work, notes for one whose memory people read, and none for one that only transforms what it's given. The console shows the choice and the reason, and **Change** picks another engine or none. After a task, what mattered in it is kept, and the agent recalls it before answering the next time.
+
+**Separately for each person.** For an agent that serves people, memory is kept separately for each person, identified by the task's `user`. Send your own authenticated user id there, never text the person types, because the `user` decides whose memory a task reads. A task sent with an API key and no `user` runs without memory.
+
+**Personal data.** The user ids you send are stored with each person's memory, as data you hold about them. When someone asks you to delete what an agent remembers about them, delete their memory: in the console, open the agent's memory, where each person's memory is listed under it, and delete theirs; or with the API, `DELETE /v1/memories/{id}`, where `GET /v1/memories?ancestor=<the agent's memory id>` lists each person's memory and its id. Deleting a memory deletes what its engine holds for it too, so do it while the engines run.
+
+What each engine is, its licence, its addresses and files, and how to run them by hand: [Memory engines](memories-engines.md).
 
 ## Environments
 
