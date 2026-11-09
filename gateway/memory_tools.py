@@ -625,20 +625,26 @@ def _when(ts, now: datetime) -> str:
     return "over a year ago"
 
 
-def provenance(r: dict, now: datetime | None = None) -> str:
+def provenance(r: dict, now: datetime | None = None, yours: bool = False) -> str:
     """Where a finding came from and when, so it reads as a past note and never as this conversation's order: a fact,
     a note or an observation an engine drew is "kept 3 days ago from a conversation"; what an agent or a person
-    wrote down with the tools is "noted by an agent 2 hours ago"; a raw conversation is "a conversation 5 days ago"."""
+    wrote down with the tools is "noted by an agent 2 hours ago"; a raw conversation is "a conversation 5 days ago".
+
+    `yours`: it is in the memory of the person this task is for, so it is about them, and says so ("kept 3 days ago
+    from your earlier conversations", "noted for you by an agent"). Told only "from a conversation", a model answered
+    a guest "your notes say you like oolong (recorded for a guest named Alice, so tell me if that's not you)"
+    (0.41.0's e2e), though RULE_PERSON says whose memory it is."""
     when = _when((r.get("time") or {}).get("written_at") if isinstance(r.get("time"), dict) else None,
                  now or datetime.now(timezone.utc))
     w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
     if str(r.get("type") or "") == "episode":
-        return " ".join(x for x in ("a conversation", when) if x)
-    if w.get("kind") == "member":
-        return " ".join(x for x in ("noted by", "an agent" if w.get("type") == "agent" else "a person", when) if x)
-    if w.get("kind") in _SERVICES:
-        return " ".join(x for x in ("noted by a service", when) if x)
-    return f"kept {when} from a conversation" if when else "kept from a conversation"
+        return " ".join(x for x in ("your conversation" if yours else "a conversation", when) if x)
+    by = ("an agent" if w.get("type") == "agent" else "a person") if w.get("kind") == "member" else \
+        "a service" if w.get("kind") in _SERVICES else ""
+    if by:
+        return " ".join(x for x in ("noted for you by" if yours else "noted by", by, when) if x)
+    where = "your earlier conversations" if yours else "a conversation"
+    return f"kept {when} from {where}" if when else f"kept from {where}"
 
 
 # A line that tells the assistant what to do, as an engine may keep it from what a person said ("Reply with exactly
@@ -649,13 +655,15 @@ _ASKED = re.compile(r"^(?:please\s+)?(?:(?:reply|respond|answer)\s+(?:with|in|on
                     r"say\s+(?:only|exactly|just)\b|(?:always|never|do not|don't)\s+\w|make sure\b|remember to\b)", re.I)
 
 
-def as_past(words: str, persons: bool = True) -> str:
+def as_past(words: str, persons: bool = True, yours: bool = False) -> str:
     """A line that reads as an instruction to the assistant, framed as a request made once (_ASKED); any other as it is.
     `persons`: the words were drawn from a person's own (an engine's reading of what they said, or what a person wrote),
-    so "the person asked once:"; what an agent wrote down is "a request, noted once:", which claims nobody asked."""
+    so "the person asked once:", and "you asked once:" where they are this task's person's (`yours`, provenance); what
+    an agent wrote down is "a request, noted once:", which claims nobody asked."""
     if not _ASKED.match(words):
         return words
-    return ("the person asked once: " if persons else "a request, noted once: ") + words[:1].lower() + words[1:]
+    said = ("you asked once: " if yours else "the person asked once: ") if persons else "a request, noted once: "
+    return said + words[:1].lower() + words[1:]
 
 
 _SERVICES = ("x.service", "service")      # a writer with no person behind it (memory_plane.writer_of_caller)
@@ -672,12 +680,13 @@ def _by_no_person(r: dict) -> bool:
     return _by_an_agent(r) or w.get("kind") in _SERVICES
 
 
-def known_block(results: list[dict], now: datetime | None = None) -> tuple[str, int]:
+def known_block(results: list[dict], now: datetime | None = None, yours: str = "") -> tuple[str, int]:
     """(the block for the Memory section, how many findings it holds): each finding one line, cut to an excerpt, the
     whole cut to about 2 KB, inside a fence and under a head that says it is data from earlier conversations and that
     this conversation comes first. Each line opens with where it came from and when (provenance), and a line that
     tells the assistant what to do is framed as what was asked once (as_past). Its words are flattened to one line
-    and can't close the fence, so nothing a record says reads as a heading or a rule.
+    and can't close the fence, so nothing a record says reads as a heading or a rule. `yours`: in a person's task, the id
+    of that person's own memory; what was found there says it is theirs (provenance).
 
     What was drawn from a conversation (facts, observations, notes) comes before the conversation itself: a raw
     episode or transcript is placed only when nothing else was found. The same words said twice (an engine's fact
@@ -690,13 +699,14 @@ def known_block(results: list[dict], now: datetime | None = None) -> tuple[str, 
         if not same or any(f" {same} " in f" {s} " for s in seen):
             continue
         seen.append(same)
-        (raw if is_raw else drawn).append((words if is_raw else as_past(words, not _by_no_person(rec)), rec))
+        mine = bool(yours) and str((x.get("memory") or {}).get("id") or rec.get("memory_id") or "") == yours
+        (raw if is_raw else drawn).append((words if is_raw else as_past(words, not _by_no_person(rec), mine), rec, mine))
     lines, used = [], 0
-    for words, rec in (drawn or raw)[:RECALL_AT_START_LIMIT]:
+    for words, rec, mine in (drawn or raw)[:RECALL_AT_START_LIMIT]:
         words = words.replace("```", "'''")
         if len(words) > RECALL_AT_START_EXCERPT:
             words = words[: RECALL_AT_START_EXCERPT - 1].rstrip() + "…"
-        line = f"- [{provenance(rec, now)}] {words}"
+        line = f"- [{provenance(rec, now, mine)}] {words}"
         if lines and used + len(line) + 1 > RECALL_AT_START_CAP:
             break
         lines.append(line[:RECALL_AT_START_CAP])

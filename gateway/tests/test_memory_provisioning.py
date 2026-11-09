@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -1219,6 +1220,11 @@ def test_what_the_agent_knows_at_the_start_is_this_persons_and_everyones_never_a
     block, n = known({"user": "mia@guests.example"})
     assert block.startswith(gw.memory_tools.KNOWN_HEAD) and n == 2
     assert "Mia is allergic to lavender oil." in block and "The spa opens at nine." in block and "hot stone" not in block
+    # what is in Mia's own memory says it is hers, so the agent uses it without asking who she is; what the agent
+    # knows for everyone doesn't
+    assert re.search(r"\n- \[noted for you by an agent[^\]]*\] Mia is allergic to lavender oil\.\n", block), block
+    assert re.search(r"\n- \[noted by a person[^\]]*\] The spa opens at nine\.\n", block), block
+    print("\n--- the block a person's task is given ---\n" + block)
     block, _ = known({"user": "noa@guests.example"})
     assert "hot stone" in block and "lavender" not in block
     # memory skipped for the task (an API key that named nobody): nothing is recalled, nothing is asked of the engine
