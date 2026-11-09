@@ -12,6 +12,18 @@ export interface Memory {
   records: { count: number | null }; children?: { count: number }; createdAt?: number; updatedAt?: number;
   /** In a list: what the memory's provider makes itself, as the memory's own workspace reaches it (null: nothing). */
   builtin?: BuiltinSchema | null;
+  // From 0.40 (the memories contract, A7 and A9). A gateway before it leaves them out, and the pages then say nothing of them.
+  /** The engine that keeps it: the same as `provider`, named for people. */
+  engine?: string;
+  /** The setups that use it, by name. */
+  used_by?: { harness_id: string; name: string }[];
+  /** When an agent last read or wrote it (ISO time or epoch seconds). */
+  last_used_at?: string | number | null;
+  /** One plain sentence on the last thing that failed here, and when; and when something last worked. */
+  last_error?: string | null; last_error_at?: string | number | null; last_ok_at?: string | number | null;
+  /** A memory kept for one person of an agent that keeps each person's memory apart: who that person is. */
+  user?: string | null;
+  scope?: 'per_user' | 'shared';
 }
 export interface Writer { kind: string; id: string; type?: 'human' | 'agent'; on_behalf_of?: string; consolidation_id?: string }
 export interface ContentPart { type: string; text?: string; role?: string; file?: { id: string; name?: string; media_type?: string; bytes?: number }; text_source?: string }
@@ -110,8 +122,11 @@ export const connectProvider = (type: string, b: { baseUrl: string; apiKey: stri
   });
 
 // ── memories ────────────────────────────────────────────────────────────────────────────────
-/** `counts: false`: no record counts (null), so the list is one read and asks no memory service anything. */
-export const listMemories = (o: { counts?: boolean } = {}) => call<{ data: Memory[] }>('GET', `/v1/memories${o.counts === false ? '?counts=false' : ''}`).then((d) => d.data);
+/** `counts: false`: no record counts (null), so the list is one read and asks no memory service anything. `q` finds by
+ *  name or description and `sort: 'recent'` puts the last used first, where the service takes them (a service before
+ *  0.40 answers the whole list in its own order, and the page narrows and orders it itself). */
+export const listMemories = (o: { counts?: boolean; q?: string; sort?: 'recent' } = {}) =>
+  call<{ data: Memory[] }>('GET', `/v1/memories${q({ counts: o.counts === false ? 'false' : undefined, q: o.q?.trim() || undefined, sort: o.sort })}`).then((d) => d.data);
 export const getMemory = (id: string) => call<Memory>('GET', M(id));
 export const createMemory = (b: { name: string; description?: string; provider: string }) => call<Memory>('POST', '/v1/memories', b);
 export const updateMemory = (id: string, b: { name?: string; description?: string }) => call<Memory>('PUT', M(id), b);
@@ -154,7 +169,77 @@ const H = (hid: string) => `/v1/harnesses/${encodeURIComponent(hid)}/memories`;
 export const getHarnessMemories = (hid: string) => call<HarnessMemories>('GET', H(hid));
 export const setHarnessMemories = (hid: string, b: { default_memory_id?: string | null; observe?: boolean }) => call<HarnessMemories>('PUT', H(hid), b);
 
+// ── an agent's own memory (0.40: the platform chooses and provisions it) ──────────────────────
+/** What a setup's agent is given: `auto` lets the service choose, `none` gives it nothing, an engine by name, or a
+ *  memory that already exists. */
+export type MemoryChoice = 'auto' | 'none' | { engine: string } | { id: string };
+export interface AgentMemory { id: string; name: string; engine: string; scope: 'per_user' | 'shared'; reason: string }
+/** The agent's memory and why (`memory` null: none, and `reason` says why). */
+export interface AgentMemoryRead { memory: AgentMemory | null; reason: string }
+/** The memory a harness record names, read leniently; undefined where the record says nothing of it (a service before
+ *  0.40), so a page says nothing rather than "none". */
+export function agentMemoryOf(raw: unknown): AgentMemoryRead | undefined {
+  if (!raw || typeof raw !== 'object' || !('memory' in raw)) return undefined;
+  const r = raw as { memory?: unknown; memory_reason?: unknown };
+  const m = r.memory;
+  const why = typeof r.memory_reason === 'string' ? r.memory_reason : '';
+  if (!m || typeof m !== 'object') return { memory: null, reason: why };
+  const o = m as Record<string, unknown>;
+  const id = typeof o.id === 'string' ? o.id : '';
+  if (!id) return { memory: null, reason: why };
+  return {
+    memory: {
+      id, name: String(o.name || ''), engine: String(o.engine || o.provider || ''),
+      scope: o.scope === 'per_user' ? 'per_user' : 'shared', reason: typeof o.reason === 'string' ? o.reason : '',
+    },
+    reason: typeof o.reason === 'string' ? o.reason : why,
+  };
+}
+/** A setup's own memory as its record says (undefined: the service doesn't say, before 0.40). */
+export const getAgentMemory = (hid: string) => call<unknown>('GET', `/v1/harnesses/${encodeURIComponent(hid)}`).then(agentMemoryOf);
+/** Give the agent its memory, or another one, or none. Changing the engine makes a new memory and moves the agent to
+ *  it; the one before is kept, unattached. The answer is read again, so what is drawn is what was saved. */
+export async function setAgentMemory(hid: string, choice: MemoryChoice): Promise<AgentMemoryRead | undefined> {
+  const out = await call<unknown>('PUT', `/v1/harnesses/${encodeURIComponent(hid)}/memory`, choice);
+  return agentMemoryOf(out) || getAgentMemory(hid);
+}
+/** Look for the engines running beside this instance and connect each one found (an instance with one operator). */
+export const findEngines = () => call<unknown>('POST', '/v1/memory-services/discover');
+
+/** What a finished task kept, on its turn record (`memory: {remembered, records}`), read leniently: the records may be
+ *  ids or `{id, memory_id}`. Null where the turn kept nothing or says nothing of it. */
+export interface Remembered { count: number; records: { id: string; memory_id?: string }[]; memoryId: string }
+export function rememberedOf(turn: unknown): Remembered | null {
+  const m = turn && typeof turn === 'object' ? (turn as { memory?: unknown }).memory : null;
+  if (!m || typeof m !== 'object') return null;
+  const o = m as { remembered?: unknown; records?: unknown; memory_id?: unknown };
+  const n = typeof o.remembered === 'number' && Number.isFinite(o.remembered) ? o.remembered : 0;
+  if (n <= 0) return null;
+  const records = (Array.isArray(o.records) ? o.records : []).flatMap((x) => {
+    if (typeof x === 'string' && x) return [{ id: x }];
+    if (x && typeof x === 'object' && typeof (x as { id?: unknown }).id === 'string') {
+      const r = x as { id: string; memory_id?: unknown };
+      return [{ id: r.id, ...(typeof r.memory_id === 'string' && r.memory_id ? { memory_id: r.memory_id } : {}) }];
+    }
+    return [];
+  });
+  return { count: n, records, memoryId: typeof o.memory_id === 'string' ? o.memory_id : records.find((r) => r.memory_id)?.memory_id || '' };
+}
+
 // ── presentation ────────────────────────────────────────────────────────────────────────────
+/** The engine that keeps a memory. */
+export const engineOf = (m: Pick<Memory, 'provider' | 'engine'>) => m.engine || m.provider;
+/** The person a memory kept for one person belongs to, as the service stored them; '' for any other memory. */
+export const userOf = (m: Pick<Memory, 'user'> & { attributes?: unknown; properties?: unknown; metadata?: unknown }): string => {
+  if (typeof m.user === 'string' && m.user.trim()) return m.user.trim();
+  for (const bag of [m.properties, m.metadata, m.attributes]) {
+    const u = bag && typeof bag === 'object' ? (bag as { user?: unknown }).user : null;
+    if (typeof u === 'string' && u.trim()) return u.trim();
+  }
+  return '';
+};
+/** How a memory is named in a list: a person's memory by that person, any other by its name. */
+export const shownName = (m: Pick<Memory, 'name' | 'user'>) => userOf(m) || m.name;
 /** Every word of a record's content, in order. */
 export const bodyOf = (r: Pick<MemoryRecord, 'content'>) => (r.content || []).filter((p) => p.type === 'text').map((p) => p.text || '').filter(Boolean).join('\n\n');
 /** The line a record is listed by: its title, or how its content begins. */

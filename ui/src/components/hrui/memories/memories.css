@@ -508,3 +508,115 @@
 #hrui .mm-nd-sheet .mm-nf{margin-bottom:6px}
 #hrui .mm-nf textarea.set-in{resize:vertical;min-height:40px}
 #hrui .mm-nf .set-f{align-self:start}
+
+/* ---- memories without friction (the memories spec, C) ---- */
+/* An agent's own memory, one line: on a new setup's save card and wherever its engine is changed (AgentMemory.tsx) */
+#hrui .am-line{margin:12px 2px 0;font-size:13.5px;line-height:1.55;color:var(--muted);text-wrap:pretty}
+#hrui .am-line .am-k{color:var(--faint)}
+#hrui .am-line b{color:var(--fg);font-weight:600}
+#hrui .am-line .am-menu{vertical-align:baseline;margin-left:4px}
+#hrui .am-pop{min-width:260px;max-width:min(320px,calc(100vw - 32px))}
+#hrui .am-pop .mm-mi:disabled{cursor:default}
+#hrui .am-pop .mm-mi:disabled:not(.on){opacity:.55}
+#hrui .am-pop .mm-mi.on b::after{content:" ✓";color:var(--accent)}
+#hrui .am-pop .mm-mi.on:disabled b{color:var(--fg)}#hrui .am-pop .mm-mi.on:disabled small{color:var(--muted)}
+#hrui .mm-eng .mm-kept-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px}
+/* Settings › Memory: the one switch, then the engine, the scope and the memory under it, then More */
+#hrui .am-rem .cap-row .grow small{white-space:normal;text-wrap:pretty}
+#hrui .am-facts{display:flex;flex-direction:column;gap:2px;margin:12px 0 0;padding:0 2px}
+#hrui .am-facts>div{display:grid;grid-template-columns:96px minmax(0,1fr);gap:10px;align-items:baseline;min-height:30px}
+#hrui .am-facts dt{font-size:13px;color:var(--faint)}
+#hrui .am-facts dd{margin:0;font-size:14px;color:var(--fg);display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;min-width:0;overflow-wrap:anywhere;line-height:1.5}
+#hrui .am-facts .am-open{font-weight:500}
+#hrui .am-sk{gap:12px}
+#hrui .am-sk .grow{display:flex;flex-direction:column}
+#hrui .am-more-b{display:flex;align-items:center;gap:10px;width:100%;margin:6px 0 0;padding:12px 2px;border-top:1px solid var(--line);text-align:left;color:var(--fg)}
+#hrui .am-more-b span{font-size:14px;font-weight:600}
+#hrui .am-more-b small{flex:1;min-width:0;font-size:12.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .am-chev{flex:none;width:8px;height:8px;border-right:1.6px solid var(--muted);border-bottom:1.6px solid var(--muted);transform:rotate(45deg) translateY(-2px);transition:transform .15s}
+#hrui .am-more-b[aria-expanded="true"] .am-chev{transform:rotate(225deg) translateY(-2px)}
+#hrui .am-more{padding-top:4px}
+
+/* Memories: search and order above the list, who uses each memory on its card, Use in beside it */
+#hrui .mm-top .top-actions{flex-wrap:nowrap}
+#hrui .mm-more{width:40px;height:40px;border:1px solid var(--line);border-radius:999px;display:inline-grid;place-items:center;color:var(--muted)}
+#hrui .mm-more:hover,#hrui .mm-more[aria-expanded="true"]{color:var(--fg);background:var(--surface)}
+#hrui .mm-top .mm-pop{min-width:250px}
+#hrui .mm-ltools{display:flex;align-items:center;gap:12px;margin:-8px 0 20px}
+#hrui .mm-lfind{max-width:420px;padding:8px 12px;border-radius:12px}
+#hrui .mm-lfind input{font-size:14px}
+#hrui .mm-lfind input::-webkit-search-cancel-button{display:none}
+#hrui .mm-sort{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:13px;color:var(--faint);flex:none}
+#hrui .mm-sort select{width:auto;min-width:150px}
+#hrui .mm-cardw{position:relative;display:flex;min-width:0}
+#hrui .mm-cardw>.mm-card{flex:1;min-width:0}
+#hrui .mm-ub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin-top:6px;min-height:24px;font-size:12px;color:var(--faint);min-width:0}
+#hrui .mm-ub.none{font-style:normal}
+#hrui .mm-uc{display:inline-block;max-width:150px;padding:2px 8px;border-radius:999px;background:var(--surface);color:var(--muted);font-size:12px;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .mm-uc.more{color:var(--faint)}
+#hrui .mm-cardw>.mm-usein{position:absolute;right:14px;bottom:14px;z-index:1}
+#hrui .mm-roww{position:relative;display:flex;align-items:center;min-width:0}
+#hrui .mm-roww>.mm-row{flex:1;min-width:0}
+#hrui .mm-roww>.mm-usein{flex:none;margin:0 10px 0 6px}
+#hrui .mm-rn .mm-ub{margin-top:4px;font-family:var(--sans);font-weight:400;white-space:normal}
+#hrui .mm-rows .mm-roww{border-bottom:1px solid var(--line)}
+#hrui .mm-rows .mm-roww>.mm-row{border-bottom:0}
+
+/* New memory: a name, a description if you like, and the engine chosen for you, changeable */
+#hrui .mm-new-mem{width:min(560px,100%)}
+#hrui .mm-new-f{display:flex;flex-direction:column;min-height:0}
+#hrui .mm-opt{font-weight:400;color:var(--faint);margin-left:4px}
+#hrui .mm-eng{margin-top:6px}
+#hrui .mm-eng-now{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+#hrui .mm-eng-now .grow{flex:1;min-width:0}
+#hrui .mm-eng-now b{display:block;font-size:14px;font-weight:600}
+#hrui .mm-eng-now small{display:block;margin-top:2px;font-size:12.5px;line-height:1.45;color:var(--muted);text-wrap:pretty}
+#hrui .mm-eng-now .link-q{flex:none;margin-top:1px}
+#hrui .mm-eng-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+#hrui .mm-eng-list .mm-pv-o{padding:10px 12px}
+#hrui .mm-eng-none{margin:0}
+#hrui .mm-new-act{position:sticky;bottom:0;margin-top:14px;padding-top:12px;background:var(--bg);z-index:2}
+
+/* Use in: the workspace's setups, each with Use here */
+#hrui .mm-use{width:min(480px,100%)}
+#hrui .mm-use-q{width:100%;margin:0 0 10px}
+#hrui .mm-use-list{display:flex;flex-direction:column;max-height:min(52vh,420px);overflow:auto;border:1px solid var(--line);border-radius:12px}
+#hrui .mm-use-row{display:flex;align-items:center;gap:12px;min-height:48px;padding:6px 8px 6px 14px;border-bottom:1px solid var(--line)}
+#hrui .mm-use-row:last-child{border-bottom:0}
+#hrui .mm-use-row b{flex:1;min-width:0;font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .mm-use-row small{flex:none;font-size:12.5px;color:var(--faint);padding-right:6px}
+#hrui .mm-use-row .btn{flex:none}
+#hrui .mm-use-list>.set-help{margin:12px 14px}
+
+/* A record: what it says reads as text, not as a heading; what the engine kept beside it is under Details */
+#hrui .mm-sentence,#hrui .mm-bodyed.mm-sentence{font-family:inherit;font-size:17px;font-weight:450;line-height:1.6;letter-spacing:0;color:var(--fg)}
+#hrui .mm-title{font-size:24px;letter-spacing:-.3px;line-height:1.25;overflow-wrap:anywhere;text-wrap:pretty}
+#hrui .mm-prow .mm-pv{min-width:0;overflow-wrap:anywhere}
+#hrui .mm-details{margin:28px 0 0;border-top:1px solid var(--line);padding-top:10px}
+#hrui .mm-details summary{cursor:pointer;font-size:13px;color:var(--faint);padding:6px 0;list-style:none;display:inline-flex;align-items:center;gap:8px}
+#hrui .mm-details summary::-webkit-details-marker{display:none}
+#hrui .mm-details summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+#hrui .mm-details[open] summary::before{transform:rotate(45deg)}
+#hrui .mm-details summary:hover{color:var(--muted)}
+#hrui .mm-props-d{margin:6px 0 0;padding-bottom:0;border-bottom:0}
+#hrui .mm-props-d .mm-pv{font-size:13px;font-family:var(--mono);color:var(--muted)}
+#hrui .mm-failing{margin:12px 20px 0}
+#hrui .mm-failing small{color:var(--muted)}
+
+@media (max-width:860px){
+  #hrui .mm-title{font-size:21px}
+  #hrui .mm-sentence,#hrui .mm-bodyed.mm-sentence{font-size:16px}
+}
+@media (max-width:560px){
+  #hrui .mm-top{flex-wrap:nowrap;align-items:center}
+  #hrui .mm-top .vm-seg{display:none}
+  #hrui .mm-top .top-actions{gap:8px}
+  #hrui .mm-top .top-actions .btn.primary{padding-left:14px;padding-right:14px}
+  #hrui .mm-ltools{flex-wrap:wrap}
+  #hrui .mm-lfind{max-width:none;flex-basis:100%}
+  #hrui .mm-sort{margin-left:0}
+  #hrui .am-facts>div{grid-template-columns:76px minmax(0,1fr)}
+  #hrui .mm-roww{flex-wrap:wrap}
+  #hrui .mm-roww>.mm-row{flex-basis:100%}
+  #hrui .mm-roww>.mm-usein{margin:0 0 10px 64px}
+}

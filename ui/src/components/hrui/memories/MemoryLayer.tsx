@@ -1,21 +1,31 @@
 'use client';
-// A setup's Settings, Memory: every memory this person can see, one row each, with a switch that gives it to this
-// setup or takes it away, the way the Tools list works. Where it's on, how far the agent may go and whether it's where
-// the agent writes by default sit quietly beside the switch. Whether finished tasks are kept is below. Access is a grant
-// on the memory to the setup's own principal, and these changes apply at once: nothing here waits for Save.
+// A setup's Settings, Memory. One switch, Remember (the memories spec, C2): on, the agent has its own memory, reads and
+// writes it, writes there by default and keeps what matters from each finished task; under it, the engine that keeps it,
+// whether each person's memory is kept apart, and the memory itself. The service chooses and provisions that memory
+// (PUT /v1/harnesses/{hid}/memory), so nobody picks a vendor, names a memory or finds a second switch.
+//
+// More holds the rest, as before: every memory this person can see, one row each, with a switch that gives it to this
+// setup or takes it away, the way the Tools list works; where it's on, whether the agent may only recall from it and
+// whether it's where the agent writes by default sit quietly beside the switch; and whether finished tasks are kept.
+// Access is a grant on the memory to the setup's own principal, and these changes apply at once: nothing here waits for
+// Save. A service before 0.40 says nothing of an agent's own memory: there is no Remember switch then, and the rows are
+// the page.
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   getHarnessMemories, grant, listGrants, listMemories, revokeGrant, setHarnessMemories,
-  type HarnessMemories, type Memory, type Provider,
+  type AgentMemoryRead, type HarnessMemories, type Memory, type Provider,
 } from '@/lib/memories';
+import Link from 'next/link';
 import { partIcon } from '../bricks';
 import { announceHarnessMemories } from '../setup/harnessMemories';
 import { plain, plural } from '../setup/settingsModel';
+import { Skel, SkLine } from '../Skel';
 import { toast } from '../toast';
+import { EngineMenu, lineOf, useAgentMemory } from './AgentMemory';
 import { keepLine, keepsTasks } from './caps';
 import { memoriesWord, PLUS, useProviders } from './parts';
-import { vendorName } from './vendors';
+import { scopeWord, vendorName } from './vendors';
 import './memories.css';
 import { Markup } from '../Markup';
 
@@ -25,12 +35,28 @@ const OPEN_IC = <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stro
 /** Past this many, a search is worth its row. */
 const FIND_FROM = 4;
 
-/** The Memory layer's line in the layers list. */
-export const memorySummary = (d: HarnessMemories | null | undefined) => {
+/** The Memory layer's line in the layers list: the engine and how it keeps people apart where the service says (0.40),
+ *  else how many memories the agent holds. */
+export const memorySummary = (d: HarnessMemories | null | undefined, own?: AgentMemoryRead) => {
+  if (own) return own.memory ? `${vendorName(own.memory.engine)} · ${scopeWord(own.memory.scope)}` : 'None';
   if (!d) return '';
   if (!d.data.length) return 'None';
   return `${memoriesWord(d.data.length)}${d.observe && d.default_memory_id ? ' · keeps tasks' : ''}`;
 };
+
+/** The layer while it is read: its switch and lines, drawn as they will stand. */
+function LayerSkel() {
+  return (
+    <Skel label="Loading memory">
+      <div className="lg-sub mm-layer">
+        <div className="cap-list"><div className="cap-row mm-sl am-sk">
+          <SkLine w={30} h={30} r={8} /><span className="grow"><SkLine w="28%" h={13} /><SkLine w="72%" h={11} style={{ marginTop: 8 }} /></span><SkLine w={56} h={26} r={13} />
+        </div></div>
+        <div className="am-facts">{[46, 38, 52].map((w, i) => <div key={i}><SkLine w={70} h={11} /><SkLine w={`${w}%`} h={11} /></div>)}</div>
+      </div>
+    </Skel>
+  );
+}
 
 interface Row { id: string; name: string; provider: string; records: number | null; privileges: string[]; parent: string; from: string }
 
@@ -49,6 +75,11 @@ function reachedThrough(m: Memory, by: Map<string, Memory>, held: Set<string>): 
 export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; onRead?: (d: HarnessMemories) => void }) {
   const router = useRouter();
   const { providers } = useProviders();
+  const own = useAgentMemory(hid);
+  const [more, setMore] = useState(false);
+  // the memory Remember last gave in this visit: turned on again, the agent goes back to it rather than to a new one
+  const last = useRef('');
+  if (own.read?.memory) last.current = own.read.memory.id;
   const [d, setD] = useState<HarnessMemories | null>(null);
   const [all, setAll] = useState<Memory[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -118,7 +149,7 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
   }, 'The access was not changed. Try again.');
 
   if (failed) return <div className="empty-list ws-fail" role="alert">This setup’s memories could not be read just now. <button type="button" className="link-q inl" onClick={() => void read()}>Try again</button></div>;
-  if (!d) return null;
+  if (!d || own.said === null) return <LayerSkel />;
 
   const def = d.data.find((x) => x.id === d.default_memory_id) || null;
   const providerOf = (mid: string): Provider | null => {
@@ -130,11 +161,41 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
   const showKeep = !def || !providers || keepsTasks(defProvider);
   const needle = q.trim().toLowerCase();
   const shown = rows.filter((r) => !needle || r.name.toLowerCase().includes(needle) || (r.provider && vendorName(r.provider).toLowerCase().includes(needle)));
-  return (
+
+  // ── Remember: the agent's own memory, chosen and provisioned by the service ──────────────
+  const mine = own.read?.memory || null;
+  const remembering = !!mine;
+  const OFF = 'Remember is off. Each task starts from nothing.';
+  const setOwn = async (c: Parameters<typeof own.set>[0], done?: string) => { if (await own.set(c, done)) await read(); };
+  const remember = own.said && own.read ? (
+    <div className="lg-sub mm-layer am-rem">
+      <div className="cap-list">
+        <div className={`cap-row mm-sl${remembering ? '' : ' off'}`}>
+          <Markup className="cap-ic" html={partIcon(remembering ? 'built' : 'empty', 'memory')} />
+          <span className="grow"><b>Remember</b>
+            <small>{remembering ? 'It recalls what it knows before it answers, and keeps what matters from each finished task.' : own.read.reason || 'Each task starts from nothing.'}</small>
+          </span>
+          <button type="button" className={`tog${remembering ? ' on' : ''}`} aria-pressed={remembering} aria-label="Remember" disabled={own.busy || busy}
+            onClick={() => void (remembering ? setOwn('none', OFF) : setOwn(last.current ? { id: last.current } : 'auto'))}><i />{remembering ? 'On' : 'Off'}</button>
+        </div>
+      </div>
+      {mine ? (
+        <dl className="am-facts">
+          <div><dt>Engine</dt><dd><span>{lineOf(own.read).engine}</span>
+            <EngineMenu current={mine.engine} busy={own.busy || busy} onPick={(c) => void setOwn(c, c === 'none' ? OFF : 'Engine changed. The memory before is kept.')} /></dd></div>
+          {mine.reason ? <div><dt>Why</dt><dd>{mine.reason}</dd></div> : null}
+          <div><dt>Scope</dt><dd>{scopeWord(mine.scope)}</dd></div>
+          <div><dt>Memory</dt><dd><Link className="link-q inl am-open" href={`/memories/${encodeURIComponent(mine.id)}`}>{mine.name || 'Open'}</Link></dd></div>
+        </dl>
+      ) : null}
+    </div>
+  ) : null;
+  // the rows and the finished-task switch: the whole layer before 0.40, and More under Remember after it
+  const rest = (
     <>
       <div className="lg-sub mm-layer">
         <div className="lg-sub-h">
-          <h3>Memories{d.data.length ? <span className="muted">{`${d.data.length} on`}</span> : null}</h3>
+          <h3>{remember ? 'Memories it can use' : 'Memories'}{d.data.length ? <span className="muted">{`${d.data.length} on`}</span> : null}</h3>
           <button type="button" className="btn small" onClick={() => router.push('/memories?new=1')}>{PLUS}New memory</button>
         </div>
         {rows.length >= FIND_FROM ? (
@@ -159,8 +220,8 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
                   <span className="mm-sl-c mm-sl-acc">
                     {mine ? (
                       <select className="mm-acc-q" aria-label={`What this setup may do with ${m.name}`} disabled={busy || !mayChange} value={w ? 'w' : 'r'} onChange={(e) => void setAccess(m.id, e.target.value === 'w')}>
-                        <option value="r">Reads</option>
-                        <option value="w">Reads and writes</option>
+                        <option value="r">Recall only</option>
+                        <option value="w">Recall and remember</option>
                       </select>
                     ) : null}
                   </span>
@@ -178,15 +239,15 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
             })}
           </div>
         ) : <p className="set-help" role="status">Nothing here matches that.</p>}
-        <p className="set-help mm-sl-help">Reading lets it recall records. Writing also lets it remember, revise and forget them. Erasing is never up to an agent. Changes here apply right away.</p>
+        <p className="set-help mm-sl-help">Recall lets it read records. Remember also lets it keep, revise and forget them. Erasing is never up to an agent. Changes here apply right away.</p>
       </div>
       {showKeep ? (
         <div className="lg-sub mm-layer">
-          <div className="lg-sub-h"><h3>Remember tasks</h3></div>
+          <div className="lg-sub-h"><h3>Finished tasks</h3></div>
           <div className="cap-list">
             <div className="cap-row mm-sl">
-              <span className="grow"><b>Keep every finished task</b><small>{def ? keepLine(defProvider, def.name) : 'Needs a default memory: one it can write.'}</small></span>
-              <button type="button" className={`tog${d.observe && def ? ' on' : ''}`} aria-pressed={!!(d.observe && def)} aria-label="Keep every finished task" disabled={!def || busy}
+              <span className="grow"><b>Keep finished tasks</b><small>{def ? keepLine(defProvider, def.name) : 'Needs a default memory: one it can write.'}</small></span>
+              <button type="button" className={`tog${d.observe && def ? ' on' : ''}`} aria-pressed={!!(d.observe && def)} aria-label="Keep finished tasks" disabled={!def || busy}
                 onClick={() => void run(() => setHarnessMemories(hid, { observe: !d.observe }), 'That was not changed. Try again.')}><i />{d.observe && def ? 'On' : 'Off'}</button>
               {/* the arrow's column, empty here, so this switch lines up with the memories' switches above */}
               <span className="mm-sl-c mm-sl-open" aria-hidden="true" />
@@ -194,6 +255,16 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
           </div>
         </div>
       ) : null}
+    </>
+  );
+  if (!remember) return rest;
+  return (
+    <>
+      {remember}
+      <button type="button" className="am-more-b" aria-expanded={more} aria-controls="amMore" onClick={() => setMore(!more)}>
+        <span>More</span><small>Recall only, other memories, finished tasks</small><i className="am-chev" aria-hidden="true" />
+      </button>
+      {more ? <div id="amMore" className="am-more">{rest}</div> : null}
     </>
   );
 }

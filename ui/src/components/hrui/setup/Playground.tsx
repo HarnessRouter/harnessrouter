@@ -47,6 +47,10 @@ import { FileCards, filesOf, type OpenFile } from './TurnFiles';
 import { workingNow } from './stackLive';
 import { sec } from './fmt';
 import { Md } from './TaskThread';
+import Link from 'next/link';
+import { rememberedOf, type Remembered } from '@/lib/memories';
+import { useAgentMemory } from '../memories/AgentMemory';
+import { useMemoryEvents } from '../memories/editor/useMemoryEvents';
 const MAX_FILE = 25 * 1024 * 1024;
 const ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,application/json,.md,.csv,.txt,.json,.pdf';
 
@@ -71,8 +75,10 @@ function readFile(f: File): Promise<Attach> {
 }
 
 /** One test: the composer, then its thread once sent. A new test mounts a fresh one. */
-function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, first, resume, onSeen, onPreview, previewKey, onLive, taskTitle, top, hold, recording, instant, onFollowUp, onReplay, setupFirst }: {
+function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, first, resume, onSeen, onPreview, previewKey, onLive, taskTitle, top, hold, recording, instant, onFollowUp, onReplay, setupFirst, memoryId = '' }: {
   r: SetupRow; model: string; defaultModel: string; headerValues: Record<string, string>;
+  /** the agent's own memory (0.40), where what a turn remembered is kept: its records are linked from the turn */
+  memoryId?: string;
   /** the open task's title, as its bar shows it (a reply's Download all names its zip after it) */
   taskTitle?: string;
   onRan: () => void; onBorn: (sid: string) => void;
@@ -113,6 +119,8 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   const [turnModels, setTurnModels] = useState<string[]>([]);
   // each turn's response ID, as the record has it (read with the record, and again as a turn ends)
   const [turnIds, setTurnIds] = useState<string[]>([]);
+  // what each turn remembered, as its record says once the task's memory has kept it (0.40: `memory` on the turn)
+  const [turnMem, setTurnMem] = useState<(Remembered | null)[]>([]);
   const seenRef = useRef(onSeen);
   seenRef.current = onSeen;
   const fromRecord = useRef(false);
@@ -131,6 +139,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
         return String(x._model || (x.served_model ? x.served_model.split('/').pop() : '') || '');
       }));
       setTurnIds(turns.map((x) => String(x.id || '')));
+      setTurnMem(turns.map(rememberedOf));
     }).catch(() => { if (alive) t = setTimeout(() => void read(n + 1), Math.min(30_000, 2000 * 2 ** n)); });
     void read(0);
     return () => { alive = false; if (t) clearTimeout(t); };
@@ -188,11 +197,23 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     if (!was || conv.busy || !live) return undefined;
     let alive = true, t: ReturnType<typeof setTimeout> | undefined;
     // a read that fails keeps the IDs already read, and is read again shortly (at most three more times)
-    const read = (n: number) => loadSessionTurns(live).then(({ turns }) => { if (alive) setTurnIds(turns.map((x) => String(x.id || ''))); })
+    const read = (n: number) => loadSessionTurns(live).then(({ turns }) => { if (alive) { setTurnIds(turns.map((x) => String(x.id || ''))); setTurnMem(turns.map(rememberedOf)); } })
       .catch(() => { if (alive && n < 3) t = setTimeout(() => void read(n + 1), 1000 * 2 ** n); });
     void read(0);
     return () => { alive = false; if (t) clearTimeout(t); };
   }, [conv.busy, sid, conv.liveSessionId]);
+  // What a finished turn remembered is written on its record once the memory has kept it, after the turn ends. The
+  // memory says when it writes (its event stream): the turns are read again then, so the line comes as it is true.
+  const memRead = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(memRead.current), []);
+  useMemoryEvents(conv.msgs.length && !replayed ? memoryId : '', (e) => {
+    const live = sid || conv.liveSessionId;
+    if (!live || !/^record|^records/.test(e.type)) return;
+    clearTimeout(memRead.current);
+    memRead.current = setTimeout(() => {
+      loadSessionTurns(live).then(({ turns }) => setTurnMem(turns.map(rememberedOf))).catch(() => { /* read again on its next write */ });
+    }, 800);
+  });
   const started = conv.msgs.length > 0 || !!resume || !!top;
   // a recorded run plays as a live one runs: the page's row and head say it is running until it ends
   const playing = recorded && conv.busy && !whole;
@@ -370,6 +391,17 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     if (rec0) bits.push(<span key="rec" className="replay-tag">Recorded</span>);
     if (note) bits.push(<span key="m">{r.baseName} · <span className="mono">{note}</span></span>);
     if (end) bits.push(<span key="e">{end}</span>);
+    // what this turn remembered, linked to where it was kept
+    const kept = m.status !== 'running' ? turnMem[t] : null;
+    if (kept) {
+      const said = `Remembered ${kept.count} ${kept.count === 1 ? 'thing' : 'things'}`;
+      const mid = kept.memoryId || memoryId;
+      const rec = kept.records[0];
+      bits.push(mid ? (
+        <Link key="mem" className="pg-mem" href={`/memories/${encodeURIComponent(rec?.memory_id || mid)}?tab=data${rec ? `&record=${encodeURIComponent(rec.id)}` : ''}`}
+          title="Open what it remembered">{said}</Link>
+      ) : <span key="mem" className="pg-mem">{said}</span>);
+    }
     // its actions, after the words, once it has finished: the reply itself as Markdown (the one most
     // people want, first), its ID, and a request that carries on from it (not on a recorded run,
     // which no server holds)
@@ -470,6 +502,8 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
   // it waits under the save card; once the save has ended its request waits in the box until the
   // person sends it (a demo's sent as recorded plays its recorded run).
   const b = useBuildOf(r.h.id);
+  // the agent's own memory, where its turns' remembered records are (0.40; none before)
+  const own = useAgentMemory(r.h.id);
   const handed = !slot.resume && !!slot.first?.setup;
   const live = handed && b ? b : null;
   const hold = !!live && live.phase !== 'done';
@@ -617,7 +651,7 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
         onBorn={(sid) => { if (handed && !live?.recording) noteFirstSid(r.h.id, sid); onBorn(sid); onRan(); }} pgOpts={pgOpts} first={first}
         resume={slot.resume} onSeen={onSeen} onPreview={onPreview} previewKey={previewKey} onLive={onLive} taskTitle={taskTitle}
         top={top} hold={hold} recording={slot.recorded || (handed ? handedRec : null)} instant={!!slot.recorded}
-        onFollowUp={onFollowUp} onReplay={onReplay}
+        onFollowUp={onFollowUp} onReplay={onReplay} memoryId={own.read?.memory?.id || ''}
         setupFirst={!!slot.recorded || (!!slot.resume && !!b && b.firstSid === slot.resume)} />
       {modelPop}
       {headersPop}

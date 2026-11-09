@@ -1,5 +1,6 @@
 'use client';
-// One record (the design's mmDocHtml): its title, properties and text, its version, and who wrote it. What a person
+// One record (the design's mmDocHtml): its title, properties and text, and its version; who wrote it and what the
+// engine kept beside it (the task, the model) are under Details, for operators. What a person
 // can change follows caps.ts: a record a provider found reads as found, and an action the provider does not serve is
 // not drawn. An open record is a live document: everyone who has it open edits it together and sees what an agent
 // writes as it lands, and it's written back to the memory, as a new version, in the pauses. A record not made yet is
@@ -21,7 +22,7 @@ import { toast } from '../toast';
 import {
   canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, kindOf, labelsOf, readOnlyNote, recordTypeOfSchemaKind, relText, schemaGuides, sentenceFirst,
 } from './caps';
-import { DOTS, HISTORY, Dot, whenOf } from './parts';
+import { DOTS, HISTORY, Dot, shownName, whenOf } from './parts';
 import { LiveTitle } from './editor/LiveTitle';
 import { useLiveRecord, useLiveText } from './editor/liveRecord';
 import { peerColor } from './editor/presence';
@@ -218,7 +219,7 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
     <>
       <div className="mm-doc-bar" ref={barPops}>
         <div className="mm-crumbs">
-          <span className="mm-cr">{memory.name}</span>
+          <span className="mm-cr">{shownName(memory)}</span>
           {crumbs.split('/').filter(Boolean).map((c, i) => <span key={i} className="mm-crw"><span className="mm-crs">/</span><span className="mm-cr">{c}</span></span>)}
         </div>
         {state?.people.length ? (
@@ -329,12 +330,8 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
               <div className="mm-prow"><label>Labels</label><span className="mm-labs">{labels.map((l) => <span key={l} className="mm-lab">{typeLabel(l)}</span>)}</span></div>
             ) : null}
             {predicate ? <div className="mm-prow"><label>Relation</label><span className="mm-pv mm-pred">{relText(predicate)}</span></div> : null}
-            {extra.map(([k, v]) => <div className="mm-prow" key={k}><label>{k}</label><span className="mm-pv">{asText(v)}</span></div>)}
             {record.time?.valid_from ? <div className="mm-prow"><label>True from</label><span className="mm-pv">{record.time.valid_from.slice(0, 10)}</span></div> : null}
             {record.time?.valid_to ? <div className="mm-prow"><label>True until</label><span className="mm-pv">{record.time.valid_to.slice(0, 10)}</span></div> : null}
-            {isNew ? null : (
-              <div className="mm-prow"><label>Written by</label><span className="mm-pv">{[who, when ? ago(when) : ''].filter(Boolean).join(' · ') || '—'}</span></div>
-            )}
           </div>
           {note ? <p className="mm-ronote">{note}</p> : null}
           {sentence ? null : bodyBlock}
@@ -344,6 +341,17 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
                 <a key={i} className="mm-file" href={recordFileUrl(memory.id, record.id, i)} download={p.file?.name || undefined}>{p.file?.name || 'File'}</a>
               ))}
             </div>
+          ) : null}
+          {/* what the engine and the task kept beside it (which task, which model, who wrote it), for operators: out of
+              the way of what the record says */}
+          {!isNew && (extra.length || who || when) ? (
+            <details className="mm-details">
+              <summary>Details</summary>
+              <div className="mm-props mm-props-d">
+                {extra.map(([k, v]) => <div className="mm-prow" key={k}><label title={k}>{k}</label><span className="mm-pv">{asText(v)}</span></div>)}
+                <div className="mm-prow"><label>Written by</label><span className="mm-pv">{[who, when ? ago(when) : ''].filter(Boolean).join(' · ') || '—'}</span></div>
+              </div>
+            </details>
           ) : null}
         </article>
       </div>

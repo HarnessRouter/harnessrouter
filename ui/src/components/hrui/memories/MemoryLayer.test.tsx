@@ -134,10 +134,10 @@ test('Make default where there is none never turns keeping tasks on: the service
   // write given elsewhere, so a memory it writes and no default; the service keeps tasks unless told not to
   const s = backend({ data: [held('m1', 'Brand kits', true)], def: null, observe: true });
   await draw();
-  expect(sw('Keep every finished task').textContent).toBe('Off');
+  expect(sw('Keep finished tasks').textContent).toBe('Off');
   await press(Array.from(rowOf('Brand kits').querySelectorAll('button')).find((b) => b.textContent === 'Make default') as HTMLElement);
   expect(s.sent('PUT', `/v1/harnesses/${H}/memories`)[0].body).toEqual({ default_memory_id: 'm1', observe: false });
-  expect(sw('Keep every finished task').textContent).toBe('Off');
+  expect(sw('Keep finished tasks').textContent).toBe('Off');
 });
 test('Make default where there is one already moves the default and leaves keeping as the person set it', async () => {
   const s = backend({ data: [held('m1', 'Brand kits', true, true), held('m2', 'Support', true)], def: 'm1', observe: true });
@@ -211,7 +211,7 @@ test('what it can’t do is said, and erasing is never the agent’s', async () 
 test('keeping tasks needs a default, and says what the provider really does with them', async () => {
   backend({ data: [held('m1', 'Brand kits', false)] });
   await draw();
-  const keep = () => el.querySelector('button.tog[aria-label="Keep every finished task"]') as HTMLButtonElement;
+  const keep = () => el.querySelector('button.tog[aria-label="Keep finished tasks"]') as HTMLButtonElement;
   expect(keep().disabled).toBe(true);
   expect(el.textContent).toContain('Needs a default memory: one it can write.');
   await act(async () => { root.unmount(); }); root = createRoot(el);
@@ -230,7 +230,12 @@ test('a default whose provider keeps no tasks: nothing to turn on, so no row', a
   const { observe: _o, ...rest } = CAPS.graphiti;
   backend({ data: [held('m1', 'Brand kits', true, true)], def: 'm1', providers: [rest as Provider] });
   await draw();
-  expect(el.querySelector('button.tog[aria-label="Keep every finished task"]')).toBeNull();
+  expect(el.querySelector('button.tog[aria-label="Keep finished tasks"]')).toBeNull();
+});
+test('the layers list names the engine and how it keeps people, where the service says', () => {
+  const base = { object: 'harness.memories' as const, principal: 'x', default_memory_id: null, observe: true, data: [] };
+  expect(memorySummary(base, { memory: { id: 'm', name: 'M', engine: 'mem0', scope: 'per_user', reason: '' }, reason: '' })).toBe('Mem0 · Separately for each person');
+  expect(memorySummary(base, { memory: null, reason: 'No engine.' })).toBe('None');
 });
 test('the layers list says it plainly', () => {
   const base = { object: 'harness.memories' as const, principal: 'x', default_memory_id: null, observe: true };
@@ -238,4 +243,91 @@ test('the layers list says it plainly', () => {
   expect(memorySummary({ ...base, data: [held('a', 'A', true)] as never })).toBe('1 memory');
   expect(memorySummary({ ...base, default_memory_id: 'a', data: [held('a', 'A', true), held('b', 'B', false)] as never })).toBe('2 memories · keeps tasks');
   expect(memorySummary(null)).toBe('');
+});
+
+describe('Remember: one switch, where the service gives the agent its own memory (0.40)', () => {
+  const OWN = { id: 'm1', name: 'Photo cut', engine: 'mem0', scope: 'per_user', reason: 'It serves people, so it keeps each person’s facts and preferences, separately per person.' };
+  function contract(state: { memory: typeof OWN | null; memory_reason?: string }, extra: Record<string, unknown> = {}) {
+    return backend({ data: state.memory ? [held('m1', 'Photo cut', true, true)] : [], def: state.memory ? 'm1' : null, all: [memory({ id: 'm1', name: 'Photo cut', provider: 'mem0' })], providers: [CAPS.mem0, CAPS.graphiti], extra: {
+      [`GET /v1/harnesses/${H}`]: () => ({ id: H, ...state }),
+      [`PUT /v1/harnesses/${H}/memory`]: (c: { body: unknown }) => {
+        if (c.body === 'none') { state.memory = null; state.memory_reason = 'Turned off.'; }
+        else if (c.body === 'auto' || (c.body as { id?: string }).id) state.memory = OWN;
+        else state.memory = { ...OWN, id: 'm9', engine: (c.body as { engine: string }).engine, scope: 'shared', reason: 'It tracks people, things and how they relate over time.' };
+        return { id: H, ...state };
+      },
+      ...extra,
+    } });
+  }
+  const remember = () => el.querySelector('button.tog[aria-label="Remember"]') as HTMLButtonElement;
+  const fact = (dt: string) => Array.from(el.querySelectorAll('.am-facts > div')).find((d) => d.querySelector('dt')?.textContent === dt)?.querySelector('dd')?.textContent;
+
+  test('on: the engine, why, whether each person is kept apart, and the memory, with nothing else to find', async () => {
+    contract({ memory: OWN });
+    await draw();
+    expect(remember().getAttribute('aria-pressed')).toBe('true');
+    expect(fact('Engine')).toContain('Mem0');
+    expect(fact('Why')).toBe(OWN.reason);
+    expect(fact('Scope')).toBe('Separately for each person');
+    expect((el.querySelector('.am-facts a') as HTMLAnchorElement).getAttribute('href')).toBe('/memories/m1');
+    // the rows and the finished-task switch wait under More
+    expect(el.querySelector('button.tog[aria-label="Keep finished tasks"]')).toBeNull();
+    await press(el.querySelector('.am-more-b') as HTMLElement);
+    expect(el.querySelector('button.tog[aria-label="Keep finished tasks"]')).toBeTruthy();
+    expect(el.textContent).toContain('Memories it can use');
+    expect(el.textContent).not.toContain('Reads and writes');
+  });
+  test('off and on again: none, then the same memory back, never a second one', async () => {
+    const s = contract({ memory: OWN });
+    await draw();
+    await press(remember());
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toBe('none');
+    expect(remember().getAttribute('aria-pressed')).toBe('false');
+    expect(el.textContent).toContain('Turned off.');
+    await press(remember());
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[1].body).toEqual({ id: 'm1' });
+    expect(remember().getAttribute('aria-pressed')).toBe('true');
+  });
+  test('off from the start: on asks the service to choose', async () => {
+    const s = contract({ memory: null, memory_reason: 'This agent works on what it’s given each time; memory would add nothing.' });
+    await draw();
+    expect(el.textContent).toContain('memory would add nothing');
+    await press(remember());
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toBe('auto');
+  });
+  test('Change offers the four engines and None, and an engine not running here is shown, not offered', async () => {
+    const s = contract({ memory: OWN });
+    await draw();
+    await press(Array.from(el.querySelectorAll('.am-facts button')).find((b) => b.textContent === 'Change') as HTMLElement);
+    const items = Array.from(el.querySelectorAll('.am-pop .mm-mi'));
+    expect(items.map((b) => b.querySelector('b')?.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight', 'ReMe', 'None']);
+    expect((items[2] as HTMLButtonElement).disabled).toBe(true);
+    expect(items[2].textContent).toContain('Not running here');
+    await press(items[1] as HTMLElement);
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toEqual({ engine: 'graphiti' });
+    expect(fact('Engine')).toContain('Graphiti');
+    expect(fact('Scope')).toBe('Shared');
+  });
+  test('a refusal is said in the service’s words and the switch stays as it is', async () => {
+    contract({ memory: OWN }, { [`PUT /v1/harnesses/${H}/memory`]: { $status: 409, error: { message: 'That engine is not answering.' } } });
+    await draw();
+    await press(remember());
+    expect(toast).toHaveBeenCalledWith('That engine is not answering.');
+    expect(remember().getAttribute('aria-pressed')).toBe('true');
+  });
+  test('a service before 0.40 says nothing of it: no Remember, the rows are the page', async () => {
+    backend({ data: [] });
+    await draw();
+    expect(remember()).toBeNull();
+    expect(el.querySelector('.am-more-b')).toBeNull();
+    expect(sw('Support')).toBeTruthy();
+  });
+  test('while it is read, its shape is drawn, never a blank pane', async () => {
+    let answer: (v: unknown) => void = () => {};
+    (harnessFetch as jest.Mock).mockImplementation(() => new Promise((r) => { answer = r; }));
+    await act(async () => { root.render(<MemoryLayer hid={H} name="Photo cut" />); });
+    expect(el.querySelector('[aria-busy="true"]')).toBeTruthy();
+    expect(el.textContent).toContain('Loading memory');
+    void answer;
+  });
 });

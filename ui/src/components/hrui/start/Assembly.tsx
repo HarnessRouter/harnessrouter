@@ -17,6 +17,7 @@ import { pluginName } from '../setup/setupParts';
 import { slabIcon } from './art';
 import type { Composed, Part } from './compose';
 import { Markup } from '../Markup';
+import { MemoryLine } from '../memories/AgentMemory';
 
 const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>';
 const STAGGER_MS = 70;
@@ -35,6 +36,8 @@ export interface AssemblyState {
   /** what a person added that is on, from the setup's record once it is read (withRecord,
    *  assemblyOfRow): the skills and tools the card names, never a built-in */
   added?: { skills: Part[]; tools: Part[] };
+  /** the setup, once saved: its memory line reads the setup's own record, and Change changes it */
+  hid?: string;
 }
 
 const onParts = (l: { key: string; name: string; on: boolean }[]) => l.filter((x) => x.on).map((x) => ({ id: x.key, name: x.name }));
@@ -51,11 +54,29 @@ export function cardParts(s: AssemblyState): { skills: Part[]; tools: Part[] } {
   return s.added || { skills: addedSkillsOf(s.cfg), tools: [] };
 }
 
-/** The card once the setup is saved: its skills and tools are the ones its record says a person
- *  added. Its plugins land as each attach answers. */
+/** The card once the setup is saved: drawn from what was saved, read again whenever the setup's
+ *  record is: its name, model and instructions as they stand now (a rename in Settings shows here),
+ *  its skills and tools the ones its record says a person added, and, once every attach has answered,
+ *  only the plugins it still includes. Its plugins land as each attach answers. */
 export function withRecord(s: AssemblyState, r: SetupRow | null | undefined): AssemblyState {
   if (!r || s.savedAt == null) return s;
-  return { ...s, added: { skills: onParts(r.added.skills), tools: onParts(r.added.tools) } };
+  const h = r.h;
+  const cfg: Composed = {
+    ...s.cfg,
+    name: h.name || s.cfg.name,
+    instructions: h.systemPrompt || s.cfg.instructions,
+    model: h.defaultModel || s.cfg.model,
+    baseName: r.baseName || s.cfg.baseName,
+  };
+  // the plugins it includes now, where the record names them all (a binding not read names none)
+  const names = s.done && !r.added.plugins.some((p) => p.kind === 'unread') && r.binding !== undefined
+    ? new Set(r.added.plugins.filter((p) => p.on).map((p) => (p.kind === 'plug' ? p.type : p.kind === 'package' ? p.name : '')))
+    : null;
+  if (names) {
+    cfg.plugins = s.cfg.plugins.filter((p) => names.has(p.id) || names.has(p.name));
+    cfg.connectionsNeeded = s.cfg.connectionsNeeded.filter((p) => names.has(p.id) || names.has(p.name));
+  }
+  return { ...s, cfg, hid: h.id, added: { skills: onParts(r.added.skills), tools: onParts(r.added.tools) } };
 }
 
 /** The card a saved setup's record draws, settled: its agent harness, model and instructions, the
@@ -70,7 +91,7 @@ export function assemblyOfRow(r: SetupRow, labels: Record<string, string> = {}):
     name: h.name, instructions: h.systemPrompt || '', exampleTask: '', base: h.base, baseName: r.baseName, model: h.defaultModel || '',
     skills: added.skills, plugins, connectionsNeeded: [],
   };
-  return { cfg, savedAt: h.createdAt || 0, plugins: Object.fromEntries(plugins.map((p) => [p.id, 'on' as Attach])), done: true, added };
+  return { cfg, savedAt: h.createdAt || 0, plugins: Object.fromEntries(plugins.map((p) => [p.id, 'on' as Attach])), done: true, added, hid: h.id };
 }
 
 type Look = 'on' | 'now' | 'wait' | 'lock';
@@ -146,6 +167,8 @@ export function Assembly({ s }: { s: AssemblyState }) {
         <div className="bs-grid">{included}</div>
         {g3.length ? <div className="bs-grid bs-g3">{g3}</div> : null}
       </div>
+      {/* the agent's memory: the setup's own once it is saved (Change is offered then), else what the build proposes */}
+      {s.hid && s.done ? <MemoryLine hid={s.hid} /> : cfg.memory ? <MemoryLine proposed={cfg.memory} /> : null}
     </section></div>
   );
 }

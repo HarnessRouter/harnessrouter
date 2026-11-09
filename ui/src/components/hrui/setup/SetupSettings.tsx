@@ -49,6 +49,7 @@ import {
 import { PluginSwitches, pluginLines, type PluginsIn } from './PluginSwitches';
 import { openNewSetup } from '../start/open';
 import { MemoryLayer, memorySummary } from '../memories/MemoryLayer';
+import { useAgentMemory } from '../memories/AgentMemory';
 import { getHarnessMemories, type HarnessMemories } from '@/lib/memories';
 import { SkillSheet, skillDraft, skillFiles, skillSlug, splitSkillMd, type SkillDraft } from './SkillSheet';
 import {
@@ -373,12 +374,14 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   );
   // the Memory layer's line: read here, and again by the layer itself whenever it changes something
   const [memoryRead, setMemoryRead] = useState<HarnessMemories | null>(null);
+  // the agent's own memory, where the service says (0.40): the line names its engine; the layer and the card change it
+  const ownMemory = useAgentMemory(id);
   useEffect(() => { let live = true; getHarnessMemories(id).then((d) => { if (live) setMemoryRead(d); }).catch(() => {}); return () => { live = false; }; }, [id]);
   const SUM: Record<LayerKey, string> = {
     instructions: plural(words, 'word'),
     harness: [r.baseName, c.model, c.thinking ? thinkingLabel(c.thinking) : ''].filter(Boolean).join(' · '),
     caps: addedLine({ plugin: plugCount, skill: countOn(setupSkills(rec, srv, 'added')), tool: countOn(setupTools(draftRec, srv, 'added')) }),
-    memory: memorySummary(memoryRead),
+    memory: memorySummary(memoryRead, ownMemory.read),
     runtime: [envX?.name || '', c.vars.length ? plural(c.vars.length, 'variable') : '', c.headers.length ? plural(c.headers.length, 'header') : '',
       c.turns ? c.turns + ' steps' : '', c.mins ? c.mins + ' min' : ''].filter(Boolean).join(' · ') || 'Defaults',
   };
@@ -620,6 +623,14 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
     </>,
   };
 
+  // narrow, the layers are a row of chips that scrolls sideways: the open one is brought into view, never left cut off
+  // at the edge (the memories walkthrough, 11-09: Memory open and half off the screen at 390)
+  const chipsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const row = chipsRef.current, on = row?.querySelector<HTMLElement>('button.on');
+    if (!row || !on || row.scrollWidth <= row.clientWidth) return;
+    row.scrollLeft = Math.max(0, on.offsetLeft - row.offsetLeft - (row.clientWidth - on.offsetWidth) / 2);
+  }, [Ly]);
   const stack = (
     <>
       <div className="ly ly-list" role="tablist" aria-orientation="vertical" aria-label={`Layers of ${rec.name}`}
@@ -630,7 +641,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
           </button>
         ))}
       </div>
-      <div className="ly-chips" role="tablist" aria-label="Layers" onKeyDown={(e) => tabKeys(e, LAYER_ORDER, Ly, onLayer)}>
+      <div className="ly-chips" ref={chipsRef} role="tablist" aria-label="Layers" onKeyDown={(e) => tabKeys(e, LAYER_ORDER, Ly, onLayer)}>
         {SET_LAYERS.map(([k, label]) => (
           <button key={k} type="button" className={k === Ly ? 'on' : ''} role="tab" aria-selected={k === Ly} tabIndex={k === Ly ? 0 : -1} onClick={() => onLayer(k)}>
             {label}{dirtyL(k) ? <span className="brk-dot" /> : null}

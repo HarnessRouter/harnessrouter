@@ -12,6 +12,6 @@
 /* where there is no room: the columns become a small segmented control under the page's tabs, the one row of
    underlined tabs on a screen being the page's own */
 #hrui .rc-segbar{flex:none;display:flex;padding:10px 16px;border-bottom:1px solid var(--line)}
-#hrui .rc-tabs.seg{display:flex;width:100%;max-width:420px}
+#hrui .rc-tabs.seg{display:flex;width:100%}
 #hrui .rc-tabs.seg button{flex:1;font-size:13px}
 #hrui .rc.narrow .rc-col{flex:1 1 auto;width:100%}
