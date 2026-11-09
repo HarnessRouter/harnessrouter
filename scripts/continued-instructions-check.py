@@ -274,6 +274,16 @@ def _excerpt(doc, at: str, needle: str, width: int = 260) -> str:
     return " ".join(text[max(0, i - width):i + len(needle) + 40].split())
 
 
+def _order(at: str) -> tuple[int, int]:
+    """Where a marker sits in what the model reads, in reading order: a system field first (it is read
+    before the conversation wherever the body puts it; a Responses body may serialise `instructions`
+    after `input`), then the conversation by its message's index."""
+    if re.match(r"(system|instructions|systemInstruction)\b", at):
+        return (0, 0)
+    m = re.match(r"[A-Za-z_]+\[(\d+)\]", at)
+    return (1, int(m.group(1)) if m else 0)
+
+
 def _superseding(doc, at: str, needle: str) -> bool:
     """Whether the text just before a marker says it replaces an earlier copy of the instructions:
     Codex's "replace all previously provided", Claude Code's "replaces its earlier copy", dsh's
@@ -307,7 +317,7 @@ def judge(row: dict, tag: str, t1: float, t2: float, m: dict) -> None:
     row["path2"] = p
     if not row["A1"]:
         row["verdict"] = "BLIND"
-    elif row["A2"] and row["B2"] and b.rfind(m["B"].encode()) > b.rfind(m["A"].encode()) \
+    elif row["A2"] and row["B2"] and min(map(_order, row["B_at"])) > max(map(_order, row["A_at"])) \
             and all(_superseding(doc, at, m["B"]) for at in row["B_at"]):
         # The base keeps turn 1's copy in its history and adds the edited one AFTER it, saying it
         # replaces the earlier copy: Claude Code and Codex do this on a resumed session. The edit
