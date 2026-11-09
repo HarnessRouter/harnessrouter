@@ -13,3 +13,9 @@ test.each(['.mm-conn', '.mm-doc', '.mm-graphbox'])('%s takes its place from the 
 test('nothing styles the drawers these columns replaced', () => {
   expect(css).not.toMatch(/conn-open|tree-open|mm-scrim|mm-dtog|mm-ctog|no-conn/);
 });
+
+test('a memory’s name and description are one column: the name on its row, the description and its help on the next', () => {
+  const rule = (css.match(/#hrui \.mm-nf\{[^}]*\}/) || [''])[0];
+  expect(rule).toContain('grid-template-columns:minmax(0,1fr);');
+  expect(rule).not.toMatch(/minmax\(0,1fr\) minmax/);
+});

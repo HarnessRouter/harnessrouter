@@ -84,8 +84,9 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
   );
 }
 
-/** A memory's name and description, the same in every window that makes or renames one: side by side, and under
- *  them what the description is for, which stays when the field is filled. */
+/** A memory's name and description, the same in every window that makes or renames one: the name, then the
+ *  description, each on its own row (Richard 11-09), and under the description what it is for, which stays when the
+ *  field is filled. */
 export function NameFields({ nameId, descId, name, desc, onName, onDesc, focus, optional }: {
   nameId: string; descId: string; name: string; desc: string; onName: (v: string) => void; onDesc: (v: string) => void; focus?: boolean;
   /** the description may be left out (New memory says so) */

@@ -202,6 +202,10 @@ describe('New memory: a name, a description if you like, and every engine, the o
     expect(page().textContent).not.toContain('Fixed once created');
     expect(page().querySelector('.mm-sv-facts')).toBeNull();
     expect(page().querySelector('label[for=mmCrDesc]')?.textContent).toContain('optional');
+    // the name, then the description, then what the description is for, tied to it (Richard 11-09: two rows)
+    const nf = page().querySelector('.mm-nf') as HTMLElement;
+    expect(Array.from(nf.children).map((c) => c.querySelector('input,textarea')?.id || c.className)).toEqual(['mmCrName', 'mmCrDesc', 'set-help mm-nf-h']);
+    expect(page().querySelector('#mmCrDesc')?.getAttribute('aria-describedby')).toBe('mmCrDescH');
   });
 
   test('every engine is listed at once, with what it keeps; one not running here is shown and can’t be picked', async () => {
