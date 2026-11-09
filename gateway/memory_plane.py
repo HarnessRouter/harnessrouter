@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
+import io
 import json
 import os
 import re
@@ -30,6 +31,7 @@ import time
 import uuid
 
 from memory_live import Announced
+from memory_tools import REFUSE_STANDING, STANDING_IS_A_PERSONS, set_by_a_person
 
 PRIVILEGES = ("read", "write", "create", "delete")
 CORE_TYPES = ("episode", "fact", "note", "procedure", "link", "entity")
@@ -54,6 +56,77 @@ CREDENTIALS = None
 # file store, `await FILES(org, file_id) -> {"name", "media_type", "bytes"} | None` (None for a
 # file that does not exist or is not this caller's).
 FILES = None
+# Where a memory's cover is kept (the picture its card shows, made by the console from its schema): app.py binds the
+# instance's own file store, the one its other files are kept in, `await COVERS.get(key) / put(key, data) / delete(key)`.
+COVERS = None
+COVER_MAX = 512 * 1024
+COVER_TYPES = ("image/png", "image/webp")
+# The most pixels a cover may have, checked from its header before any pixel is read: a few hundred KB of PNG can say
+# it is gigapixels (a decompression bomb). Pillow is told the same, so it refuses one wherever it would read it.
+COVER_SIDE = 4096
+COVER_PIXELS = COVER_SIDE * COVER_SIDE
+_COVER_FORMAT = {"image/png": "PNG", "image/webp": "WEBP"}
+_COVER_WORD = {"image/png": "PNG", "image/webp": "WebP"}
+
+
+def cover_key(org: str, mid: str) -> str:
+    """Where one memory's cover is kept: by its organization (hashed, so any id makes a plain key) and its id."""
+    return f"memory-covers/{hashlib.sha256(org.encode()).hexdigest()[:32]}/{mid}"
+
+
+def cover_type(data: bytes) -> str:
+    """What a picture is, from its first bytes: image/png, image/webp, or '' for anything else."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
+def cover_clean(data: bytes, kind: str) -> bytes:
+    """The picture made again from its pixels alone, as `kind` (image/png or image/webp): only the PNG and WebP decoders
+    ever read it, its size is checked from its header before its pixels are, and what is written back is a fresh image
+    with no text, EXIF, colour profile, frames after the first or bytes after its end. Raises MemoryError (422, in
+    words) for anything that isn't such a picture."""
+    import warnings
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = COVER_PIXELS
+    word = _COVER_WORD[kind]
+    unread = MemoryError(422, "memory_invalid", f"That picture couldn't be read as a {word}.", "cover")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        try:
+            im = Image.open(io.BytesIO(data), formats=["PNG", "WEBP"])
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+            im = None
+        except Exception:  # noqa: BLE001 - whatever a decoder says of bytes that aren't a picture, it's a refusal
+            raise unread from None
+        try:
+            if im is None or im.width * im.height > COVER_PIXELS or max(im.size) > COVER_SIDE:
+                raise MemoryError(422, "memory_invalid", "A cover is at most 4096 x 4096 pixels. Send a smaller picture.", "cover")
+            if im.format != _COVER_FORMAT[kind]:
+                raise unread
+            im.seek(0)
+            im.load()
+            alpha = im.mode in ("RGBA", "LA", "PA", "La", "RGBa") or "transparency" in im.info
+            mode = "RGBA" if alpha else "RGB"
+            # a new image from the pixels alone: nothing the file carried beside them comes along
+            clean = Image.frombytes(mode, im.size, im.convert(mode).tobytes())
+        except MemoryError:
+            raise
+        except Exception:  # noqa: BLE001
+            raise unread from None
+        finally:
+            if im is not None:
+                im.close()
+    out = io.BytesIO()
+    if kind == "image/png":
+        clean.save(out, format="PNG", optimize=True)
+    else:
+        clean.save(out, format="WEBP", lossless=True, method=4)
+    return out.getvalue()
+
+
 # How what is kept is cleaned of credentials before any provider sees it: app.py binds the gateway's own
 # redaction (its keys and the shapes of everyone's), `REDACT(text) -> text`. Every writer goes through
 # `remember` and `observe` below, a person's request and an agent's tool and a finished task alike.
@@ -450,6 +523,9 @@ async def out(org: str, memory: dict, principals: list[str], privs: list[str] | 
             "createdAt": int(memory.get("created_at") or 0), "updatedAt": int(memory.get("updated_at") or 0),
             "last_used_at": _ms_or_none(memory.get("last_used_at")), "last_ok_at": _ms_or_none(memory.get("last_ok_at")),
             "last_error": str(memory.get("last_error") or "") or None, "last_error_at": _ms_or_none(memory.get("last_error_at")),
+            # its card's picture: when it was made (the console names it in the address it reads it from) and which
+            # drawing it shows, so the console makes another only when the drawing changes
+            "cover_at": _ms_or_none(memory.get("cover_at")), "cover_sig": str(memory.get("cover_sig") or "") or None,
             # who a person's memory is for: the operator's to see (they may delete it), never the agent's
             **({"end_user": str(memory["end_user"])} if memory.get("end_user") and "delete" in privs else {})}
 
@@ -663,6 +739,7 @@ def clean_record(record: dict) -> dict:
 
 async def observe(prov: "Provider", mid: str, episodes: list[dict], writer: dict) -> dict:
     """Episodes kept, cleaned first. Every observer comes through here: a person's request and a finished task."""
+    _no_agent_standing(writer, *[{k: v for k, v in (e.get("attributes") or {}).items() if k == "standing"} for e in episodes])
     return await prov.observe(mid, [{**e, "content": _clean_parts(e.get("content"))} for e in episodes], writer)
 
 
@@ -742,9 +819,21 @@ async def unmake(org: str, m: dict) -> list[str]:
                 pass                       # a provider that is gone cannot hold what is being deleted
             await GRAPH.upsert("Memory", str(x["id"]), {"deleted": "1", "updated_at": _now_ms()}, raise_on_fail=True)
             gone.append(str(x["id"]))
+            await drop_cover(org, x)
     finally:
         _people_forget({mid, *gone})
     return gone
+
+
+async def drop_cover(org: str, memory: dict) -> None:
+    """A deleted memory's cover, gone with it. A store that fails to answer leaves a picture nothing can read any more
+    (its memory is gone), never a memory half deleted."""
+    if not COVERS or not memory.get("cover_at"):
+        return
+    try:
+        await COVERS.delete(cover_key(org, str(memory["id"])))
+    except Exception as e:  # noqa: BLE001 - the memory is deleted whatever this did
+        print(f"[memories] {memory.get('id')}: its cover could not be removed: {type(e).__name__}", flush=True)
 
 
 # How many memories one recall may search. A subtree can hold a node per customer; past this the
@@ -786,10 +875,21 @@ def record_words(r: dict) -> str:
     return "\n".join(x for x in parts if x)
 
 
+def drawn_by_the_engine(r: dict) -> bool:
+    """Whether an engine drew a record from another one: written by the provider and derived from another record. What
+    an engine draws never stands, whatever its attributes say: an observed turn's attributes reach every fact drawn
+    from it (Mem0 copies an add's metadata onto each), so `standing` sent with a conversation put what an engine made
+    of it into every later agent's instructions. Any record someone wrote may stand (protocol 2026-10-19 §4.4), a
+    conversation kept as it happened among them; a record the server revised on a member's behalf (a contradiction
+    noted, its time closed) still does."""
+    w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
+    return w.get("kind") == "provider" and any(isinstance(x, dict) and x.get("rel") == "derived_from" for x in r.get("references") or [])
+
+
 def within_budget(rows: list[dict], budget: int) -> dict:
     """A provider's answer to `prime`: its standing records, newest first, cut to `budget` tokens
-    with the first always kept."""
-    rows = sorted(rows, key=lambda x: str((x.get("time") or {}).get("written_at") or ""), reverse=True)
+    with the first always kept. What an engine drew is never counted (drawn_by_the_engine), before the cut."""
+    rows = sorted([x for x in rows if not drawn_by_the_engine(x)], key=lambda x: str((x.get("time") or {}).get("written_at") or ""), reverse=True)
     kept, used, cut = [], 0, False
     for x in rows:
         cost = tokens_of(record_words(x))
@@ -809,7 +909,8 @@ async def prime(org: str, memories: list[dict], budget: int) -> dict:
     for m in memories:
         got = await (await provider_of(m)).prime(str(m["id"]), budget)
         truncated = truncated or bool(got.get("truncated"))
-        rows += [(r, str(m["id"])) for r in got.get("records") or []]
+        # every provider's answer, whichever way it was read (a relayed server's among them): nothing an engine drew
+        rows += [(r, str(m["id"])) for r in got.get("records") or [] if not drawn_by_the_engine(r)]
     rows.sort(key=lambda x: str(((x[0].get("time") or {}).get("written_at")) or ""), reverse=True)
     kept, used = [], 0
     for r, mid in rows:
@@ -901,6 +1002,78 @@ async def _facts_about(prov: Provider, mid: str, subject: str, predicate) -> lis
     return out
 
 
+# ── a standing instruction is a person's ─────────────────────────────────────────────────────
+# It is placed in the instructions of every agent that shares the memory, so an agent never sets one, never changes
+# whether a record stands, and never edits or closes one a person set (memory_tools.set_by_a_person). Held here, where
+# every write passes, whatever carried it: a tool, an operation, a named or a free query, a REST call. The agent tools
+# drop an agent's `standing` before it gets here and say so (memory_tools.NOTE_STANDING); this is what holds when
+# anything else carries it. A person's own key writes as that person.
+def is_agent(writer: dict | None) -> bool:
+    """Whether a write is not a person's: a member that is an agent (writer_of(..., agent=True), what the agent tools
+    write as, and writer_of_caller for an agent's own member id), a service (a key minted for no one), or a key an agent
+    holds for someone (`delegated`)."""
+    w = writer if isinstance(writer, dict) else {}
+    return (w.get("kind") == "member" and w.get("type") == "agent") or w.get("kind") in (SERVICE, "service") or bool(w.get("delegated"))
+
+
+def _names_standing(*things, words: bool = True) -> bool:
+    """Whether what a write carries names `standing`: as a key anywhere in it, and, with `words`, as a word in its text.
+    What a query will write isn't known before it runs, so one whose statement, declared parameters or given values
+    name the attribute is taken as setting it."""
+    def walk(x) -> bool:
+        if isinstance(x, dict):
+            return any(str(k).casefold() == "standing" or walk(v) for k, v in x.items())
+        if isinstance(x, (list, tuple)):
+            return any(walk(v) for v in x)
+        return words and isinstance(x, str) and bool(re.search(r"\bstanding\b", x, re.I))
+    return any(walk(t) for t in things)
+
+
+def _no_agent_standing(writer: dict, *carried, words: bool = True) -> None:
+    if is_agent(writer) and _names_standing(*carried, words=words):
+        raise MemoryError(403, "memory_forbidden", STANDING_IS_A_PERSONS)
+
+
+async def _not_a_persons_standing(prov: Provider, mid: str, rid: str, writer: dict) -> None:
+    """An agent's write to a record a person set as standing is refused: even a small change makes the version the
+    agent's, which takes it out of everyone's instructions."""
+    if is_agent(writer):
+        cur = await prov.get(mid, rid)
+        if cur and set_by_a_person(cur):
+            raise MemoryError(403, "memory_forbidden", REFUSE_STANDING)
+
+
+async def revise(prov: Provider, mid: str, rid: str, patch: dict, writer: dict, expected: int | None = None) -> dict:
+    """A record changed. Every writer comes through here, a person's request and an agent's tool."""
+    _no_agent_standing(writer, {k: v for k, v in (patch.get("attributes") or {}).items() if k == "standing"})
+    await _not_a_persons_standing(prov, mid, rid, writer)
+    if expected is None:
+        return await prov.revise(mid, rid, patch, writer)
+    return await prov.revise(mid, rid, patch, writer, expected=expected)
+
+
+async def operate(prov: Provider, mid: str, rid: str, name: str, body: dict, writer: dict, needs: str) -> dict:
+    """A type's operation on a record, run as the writer: one that writes is a write to that record."""
+    if needs == "write":
+        _no_agent_standing(writer, body, words=False)      # an input's own words ("a standing meeting") are not a key
+        await _not_a_persons_standing(prov, mid, rid, writer)
+    return await prov.operate(mid, rid, name, body, writer)
+
+
+async def run_query(prov: Provider, mid: str, q: dict, params: dict, writer: dict) -> dict:
+    """A query the memory's owner defined, run for the writer. One that writes and names `standing` is never an
+    agent's to run (_names_standing)."""
+    if q.get("requires", "read") == "write":
+        _no_agent_standing(writer, q.get("body"), q.get("statement"), q.get("params"), params)
+    return await prov.run_query(mid, str(q["name"]), params)
+
+
+async def free_query(prov: Provider, mid: str, language: str, statement: str, params: dict, write: bool, writer: dict) -> dict:
+    if write:
+        _no_agent_standing(writer, statement, params)
+    return await prov.free_query(mid, language, statement, params, write)
+
+
 async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict:
     """A stated record kept, with what the chapter asks of the server around it. Every writer comes
     through here, a person's request and an agent's tool, on every provider.
@@ -909,6 +1082,7 @@ async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict
     provider that declares `holds`, takes its place among the others on its subject and predicate (§4.4),
     and the answer says what that did. That logic is here because it reads only what every provider keeps:
     the attributes, the references and the world time of a stated fact."""
+    _no_agent_standing(writer, {k: v for k, v in (record.get("attributes") or {}).items() if k == "standing"})
     record = clean_record(record)
     a = record.get("attributes") or {}
     if a.get("stated_at") and not (record.get("time") or {}).get("valid_from"):
@@ -951,6 +1125,7 @@ async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
     """A record closed, for a person's request and an agent's tool alike. The words of what a conversation
     taught are still in that conversation, and an agent asked to forget something can't be relied on to know
     that: real turns left exactly this behind. So the conversation closes with it. What else it taught stays."""
+    await _not_a_persons_standing(prov, mid, rid, writer)
     before = await prov.get(mid, rid)
     out = await prov.forget(mid, rid, writer)
     by_server = {"kind": "provider", "id": prov.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}
@@ -1292,10 +1467,38 @@ async def present(org: str, mid: str, record: dict, principals: list[str], _seen
     return r
 
 
+# What every engine is told when it reads a finished turn, where it takes guidance for what it extracts (each engine's
+# own mechanism: memory_mem0, memory_graphiti, memory_hindsight, memory_reme). A request a person made of the assistant
+# for one reply, kept as a fact, was later placed before the model as something it already knew, and obeyed over the
+# task's own words (sslip, 11-09).
+EXTRACTION_GUIDE = ("This is a conversation between a person and an AI assistant. Keep facts about the person, their work "
+                    "and the world. Do not keep a request the person made of the assistant for one reply (for example "
+                    "\"reply with exactly X\", \"answer in one word\", \"say only Y\") as a fact or a preference: it was "
+                    "meant for that reply alone. If a request was meant to last (\"always answer in French\"), keep it "
+                    "as what the person asked (\"the person asked to always answer in French\"), never as an instruction.")
+
+
 def writer_of(member: str, agent: bool = False) -> dict:
     """Stamped here from the authenticated caller; a client's own `written_by` is never read. A
     person and an agent are both members; `type` says which, for a reader who wants to know."""
     return {"kind": "member", "id": member, "type": "agent" if agent else "human"}
+
+
+SERVICE = "x.service"       # a writer with no member behind it: a key minted for no one (§3: a server's own kind is x.)
+AGENT_MEMBER_PREFIX = "chrn_"   # an agent's member id is its harness's id (memory_local: member:<harness id>)
+
+
+def writer_of_caller(caller: dict) -> dict:
+    """Who a REST caller writes as, from the principal that authenticated, never from the route: a person is a signed-in
+    console session (the console's trusted call, which names its member) or an API key a person holds. A key minted for
+    no one is a service, an agent's own member id or a run's credential an agent: each stamped as what it is, and
+    is_agent holds the standing rule for it."""
+    member = str(caller.get("member") or "")
+    if caller.get("calibration") or member.startswith("calibrator:"):
+        return {"kind": "member", "id": member, "type": "agent"}
+    if not member:
+        return {"kind": SERVICE, "id": str(caller.get("key_id") or "unnamed")}
+    return writer_of(member, agent=member.startswith(AGENT_MEMBER_PREFIX))
 
 
 def parts_of(content, *, empty_ok: bool = False) -> list[dict]:

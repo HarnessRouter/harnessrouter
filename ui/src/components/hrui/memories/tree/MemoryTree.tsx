@@ -13,7 +13,7 @@ import { deleteMemory, forgetRecord, labelOf, recall, recordHref, type Memory, t
 import { ConfirmSheet } from '../../Sheet';
 import { plain } from '../../setup/settingsModel';
 import { toast } from '../../toast';
-import { canForget, hasFolders, hasHistory, kindOf, labelsOf, schemaGuides, schemaLabels, servesForget } from '../caps';
+import { canForget, hasFolders, hasHistory, kindOf, labelsOf, schemaGuides, schemaLabels, servesForget, standingOf, NOTED } from '../caps';
 import type { RecordsRead } from '../DataTab';
 import { Dot, DOTS, FILTER, FOLDER, FOLDER_OPEN, MmIco, PLUS, SEARCH, shownName, userOf, X } from '../parts';
 import { typeLabel, type LSchema } from '../schemaModel';
@@ -51,6 +51,12 @@ type SheetState =
 
 const IC = 13;
 const FRESH_MS = 700;
+/** A standing instruction says so on its row; one an agent set, that agents get only as a note, says that. */
+function standTag(r: MemoryRecord): ReactNode {
+  const st = standingOf(r);
+  if (st === 'person') return <small className="mt-mark mt-stand">Standing</small>;
+  return st ? <small className="mt-mark mt-noted">{NOTED[st].tag}</small> : null;
+}
 const short = (r: MemoryRecord) => { const l = labelOf(r) || 'this record'; return l.length > 60 ? `${l.slice(0, 59).trim()}…` : l; };
 const storeKey = (id: string) => `hr.memories.tree.${id}`;
 const readStore = (id: string): Record<string, boolean> => {
@@ -528,6 +534,7 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
         <span className="mt-lbl">{name}</span>
         {r.kind === 'record' && r.record.status === 'forgotten' ? <small className="mt-mark">Forgotten</small> : null}
         {r.kind === 'record' && r.record.status === 'superseded' ? <small className="mt-mark">Replaced</small> : null}
+        {r.kind === 'record' && r.record.status === 'active' ? standTag(r.record) : null}
         <span className="mt-right">
           {r.kind === 'memory' && r.memory.restricted ? <span className="mt-ro" title="Limited access"><Lock size={12} /></span> : null}
           {r.kind === 'memory' && !r.memory.privileges?.includes('write') ? <span className="mt-ro" title="View only"><Eye size={12} /></span> : null}

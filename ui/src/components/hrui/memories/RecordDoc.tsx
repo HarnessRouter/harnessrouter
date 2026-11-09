@@ -11,6 +11,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { LOCAL_MEMBER } from '@/lib/edition';
 import { getSession } from '@/lib/auth';
+import { gwHeaders } from '@/lib/harness';
+import { harnessFetch } from '@/lib/hfetch';
 import {
   addRecord, bodyOf, eraseRecords, forgetRecord, getHistory, labelOf, recordFileUrl, reviseRecord,
   type ContentPart, type Memory, type MemoryRecord, type Provider, type RecordInput,
@@ -20,7 +22,8 @@ import { ago } from '../setups';
 import { plain, plural } from '../setup/settingsModel';
 import { toast } from '../toast';
 import {
-  canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, kindOf, labelsOf, readOnlyNote, recordTypeOfSchemaKind, relText, schemaGuides, sentenceFirst,
+  canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, isKeyWriter, isStanding, kindOf, labelsOf, mayStand, NOTED, readOnlyNote,
+  recordTypeOfSchemaKind, relText, schemaGuides, sentenceFirst, standingOf,
 } from './caps';
 import { DOTS, HISTORY, Dot, shownName, whenOf } from './parts';
 import { LiveTitle } from './editor/LiveTitle';
@@ -34,18 +37,40 @@ import { vendorName } from './vendors';
 const DocEditor = dynamic(() => import('./editor/DocEditor').then((m) => m.DocEditor), { ssr: false, loading: () => null });
 
 /** The record's fields a person does not read as a field of their own. */
-const NOT_A_ROW = new Set(['entity_type', 'folder', 'labels', 'predicate']);
+const NOT_A_ROW = new Set(['entity_type', 'folder', 'labels', 'predicate', 'standing']);
 
-/** Who wrote a record, in a person's words. */
-function writerOf(r: MemoryRecord, setups: Map<string, string> | null): string {
+/** Who wrote a record, in a person's words. An API key no person holds is "An API key", by its name where the keys
+ *  list gives it (`keys`), never by its id. */
+function writerOf(r: MemoryRecord, setups: Map<string, string> | null, keys?: Map<string, string> | null): string {
   const w = r.written_by;
   if (!w) return '';
+  if (isKeyWriter(w)) { const n = keys?.get(w.id); return n ? `An API key (${n})` : 'An API key'; }
   if (w.kind === 'provider') return `Found by ${vendorName(w.id)}`;
   const named = setups?.get(w.id);
   if (named) return named;
   const me = getSession()?.member;
   if (w.id === LOCAL_MEMBER || (me && (w.id === me.email || w.id === me.id))) return 'You';
   return w.id?.startsWith('chrn_') ? 'An agent' : w.id || '';
+}
+
+// The organization's keys by id, to name an API key that wrote a record: read once a visit, and only when one did.
+const keyNames = new Map<string, Promise<Map<string, string>>>();
+function useKeyNames(want: boolean): Map<string, string> | null {
+  const [names, setNames] = useState<Map<string, string> | null>(null);
+  useEffect(() => {
+    const org = getSession()?.orgId || '';
+    if (!want || !org) return undefined;
+    let live = true;
+    if (!keyNames.has(org)) {
+      keyNames.set(org, harnessFetch(`/api/harness/v1/orgs/${encodeURIComponent(org)}/keys`, { headers: gwHeaders() })
+        .then((r) => (r.ok ? r.json() : { keys: [] }))
+        .then((d: { keys?: { id?: string; name?: string }[] }) => new Map((d.keys || []).filter((k) => k.id && k.name).map((k) => [k.id as string, k.name as string])))
+        .catch(() => new Map()));
+    }
+    void keyNames.get(org)!.then((m) => { if (live) setNames(m); });
+    return () => { live = false; };
+  }, [want]);
+  return names;
 }
 
 const asText = (v: unknown) => (v == null ? '' : typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : JSON.stringify(v));
@@ -94,6 +119,9 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const synced = !!state?.synced;
   useEffect(() => { if (!synced) setEdReady(false); }, [synced]);
   const member = getSession()?.member;
+  // the console is a person's: a session's member, never an agent's key, is who may make a record stand
+  const person = !!member && (member as { type?: unknown }).type !== 'agent';
+  const [standBusy, setStandBusy] = useState(false);
   const me = useMemo(() => ({ id: member?.id || member?.email || LOCAL_MEMBER, name: member?.name || member?.email || 'Operator' }), [member?.id, member?.email, member?.name]);
   const titleEl = useRef<HTMLHeadingElement | null>(null);
   const toBody = useRef(false);
@@ -186,6 +214,18 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
       else { toast(`${short(record)} erased`); onGone(record.id); }
     } catch (e) { setRefused(plain(e, 'It was not erased. Try again.')); } finally { setBusy(false); }
   };
+  /** Make it a standing instruction, or stop it being one: written as this person, so one an agent set becomes theirs. */
+  const setStanding = async (on: boolean) => {
+    if (standBusy) return;
+    const was = attrs, next = { ...attrs, standing: on };
+    setAttrs(next);
+    if (isNew) { void write({ attributes: { standing: on } }, { attrs: next }); return; }
+    setStandBusy(true); setErr('');
+    try {
+      onSaved(await reviseRecord(memory.id, record.id, { attributes: { standing: on } }));
+      toast(on ? 'Standing instruction set. Agents get it from their next task.' : 'No longer a standing instruction.');
+    } catch (e) { setAttrs(was); setErr(plain(e, 'That was not changed. Try again.')); } finally { setStandBusy(false); }
+  };
   const move = (path: string) => { setPop(''); void write({ attributes: { folder: path } }); toast(path ? `Moved to ${path}` : `Moved to ${shownName(memory)}`); };
 
   const sentence = sentenceFirst({ type: record.type, title });
@@ -197,12 +237,36 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const note = readOnlyNote(record);
   const counted = !isNew && live && state?.synced ? liveText : body;
   const when = whenOf(record.time?.written_at);
-  const who = writerOf(record, setups);
+  const keys = useKeyNames(isKeyWriter(record.written_by) || (pop === 'hist' && !!versions?.some((v) => isKeyWriter(v.written_by))));
+  const who = writerOf(record, setups, keys);
   const extra = Object.entries(attrs).filter(([k, v]) => !NOT_A_ROW.has(k) && !props.some((p) => p.name === k) && v != null && v !== '');
   const labels = labelsOf({ attributes: attrs });
   const predicate = String(attrs.predicate || '');
   const files = (record.content || []).map((p, i) => [p, i] as const).filter(([p]) => p.type === 'file');
   const crumbs = folderOf({ attributes: attrs });
+  const stands = standingOf({ ...record, attributes: attrs });
+  const standsMay = mayStand(record, provider, memory, person);
+  const standOn = isStanding({ attributes: attrs });
+  const standBlock = stands && stands !== 'person' ? (
+    // set by an agent, with an API key no person holds, or last changed by the service: agents get it as a note until a
+    // person sets it
+    <div className="mm-stand noted">
+      <span className="mm-stand-t">
+        <span className="mm-tag noted">{NOTED[stands].tag}</span>
+        <small>{NOTED[stands].line}</small>
+      </span>
+      {standsMay ? <button type="button" className="btn small" disabled={standBusy} onClick={() => void setStanding(true)}>Make it standing</button> : null}
+    </div>
+  ) : standsMay ? (
+    <div className="mm-stand">
+      <span className="mm-stand-t">
+        <b id="mmStandL">Standing instruction</b>
+        <small id="mmStandH">Every agent that uses this memory gets it at the start of each task.</small>
+      </span>
+      <button type="button" className={`tog${standOn ? ' on' : ''}`} aria-pressed={standOn} aria-labelledby="mmStandL" aria-describedby="mmStandH"
+        disabled={standBusy} onClick={() => void setStanding(!standOn)}><i />{standOn ? 'On' : 'Off'}</button>
+    </div>
+  ) : null;
 
   const bodyBlock = !isNew ? (
     live && state?.synced ? (
@@ -254,7 +318,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
                   return (
                     <div key={v.version} className={`mm-vr${i === 0 ? ' cur' : ''}`}>
                       <b className="mono">{`v${v.version}`}</b>
-                      <span>{writerOf(v, setups)}{at ? <small>{ago(at)}</small> : null}</span>
+                      <span>{writerOf(v, setups, keys)}{at ? <small>{ago(at)}</small> : null}</span>
                       {i === 0 ? <em>Current</em> : null}
                     </div>
                   );
@@ -304,6 +368,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
               onBlur={(e) => { saveTitle(e.relatedTarget); toBody.current = false; }} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); toBody.current = true; (e.currentTarget as HTMLElement).blur(); setEditing(true); } }}>{record.title}</h1>
           ) : <h1 className="mm-title">{record.title}</h1>}
           {err || state?.refused ? <p className="mm-err" role="alert">{err || state?.refused}</p> : null}
+          {stands === 'person' ? <div className="mm-tags"><span className="mm-tag">Standing</span></div> : null}
           <div className={`mm-props${sentence ? ' after-sentence' : ''}`}>
             <div className="mm-prow">
               <label>Type</label>
@@ -348,6 +413,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
             {record.time?.valid_from ? <div className="mm-prow"><label>True from</label><span className="mm-pv">{record.time.valid_from.slice(0, 10)}</span></div> : null}
             {record.time?.valid_to ? <div className="mm-prow"><label>True until</label><span className="mm-pv">{record.time.valid_to.slice(0, 10)}</span></div> : null}
           </div>
+          {standBlock}
           {note ? <p className="mm-ronote">{note}</p> : null}
           {sentence ? null : bodyBlock}
           {files.length ? (

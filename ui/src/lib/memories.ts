@@ -26,8 +26,13 @@ export interface Memory {
   /** A memory kept for one person of an agent that keeps each person's memory apart: who that person is, as the
    *  agent's caller named them (the task's `user`). Said only to whoever manages the memory, never to the agent. */
   end_user?: string;
+  /** Its card's picture: when it was made (epoch ms; null or absent: none yet) and the console's short name for the
+   *  drawing it shows (cover.ts coverSig), so another is made only when the drawing changes. */
+  cover_at?: number | null; cover_sig?: string | null;
 }
-export interface Writer { kind: string; id: string; type?: 'human' | 'agent'; on_behalf_of?: string; consolidation_id?: string }
+/** Who wrote a version: a member (a person, or an agent: `type`), the provider itself, or `x.service`, an API key with no
+ *  person behind it (`id` is the key's own id, never shown). `delegated`: a key an agent holds for someone. */
+export interface Writer { kind: string; id: string; type?: 'human' | 'agent'; on_behalf_of?: string; consolidation_id?: string; delegated?: boolean }
 export interface ContentPart { type: string; text?: string; role?: string; file?: { id: string; name?: string; media_type?: string; bytes?: number }; text_source?: string }
 export interface Reference { rel?: string; memory_id?: string; record_id: string; available: boolean }
 export interface MemoryRecord {
@@ -114,7 +119,11 @@ const R = (id: string, rid: string) => `${M(id)}/records/${encodeURIComponent(ri
 // ── providers ───────────────────────────────────────────────────────────────────────────────
 export const listProviders = () => call<{ data: Provider[] }>('GET', '/v1/memories/providers').then((d) => d.data);
 /** A provider as the workspace connected it: its address, and which of its secrets are set. */
-export interface ProviderPlug { type: string; status: string; config: { base_url?: string }; secrets_set: string[] }
+export interface ProviderPlug {
+  type: string; status: string; config: { base_url?: string }; secrets_set: string[];
+  /** the instance's connection, which this workspace uses having none of its own; `note` says so in words */
+  inherited?: boolean; note?: string;
+}
 export const listProviderPlugs = () => call<{ plugs: ProviderPlug[] }>('GET', '/v1/plugs?kind=memory').then((d) => d.plugs);
 /** Connect a provider. The service tries the address and the key at once and refuses with a
  *  readable message when either fails. An empty address clears the one kept. */
@@ -133,6 +142,30 @@ export const getMemory = (id: string) => call<Memory>('GET', M(id));
 export const createMemory = (b: { name: string; description?: string; provider: string }) => call<Memory>('POST', '/v1/memories', b);
 export const updateMemory = (id: string, b: { name?: string; description?: string }) => call<Memory>('PUT', M(id), b);
 export const deleteMemory = (id: string) => call<{ memories: string[] }>('DELETE', M(id));
+
+// ── a memory's cover ────────────────────────────────────────────────────────────────────────
+/** Where a memory's cover is read: `at` (its cover_at) names the version, so a picture once read comes from the
+ *  browser's own cache ever after, until a new one is made. */
+export const coverPath = (id: string, at: number) => `/api/harness${M(id)}/cover?v=${encodeURIComponent(String(at))}`;
+/** A memory's cover, read with the sign-in (a bare image address would be refused) and from the browser's cache where
+ *  it has it: the service marks a cover immutable. */
+export async function readCover(id: string, at: number): Promise<Blob> {
+  const r = await harnessFetch(coverPath(id, at), { method: 'GET', headers: gwHeaders(), cache: 'default' });
+  if (!r.ok) throw new MemoryApiError(r.status, '', `The service answered ${r.status}.`);
+  return r.blob();
+}
+/** Keep a memory's cover: the picture's bytes, and `sig`, which drawing it shows. */
+export async function putCover(id: string, picture: Blob, sig: string): Promise<{ cover_at: number; cover_sig: string | null }> {
+  const r = await harnessFetch(`/api/harness${M(id)}/cover`, {
+    method: 'PUT', headers: { ...gwHeaders(), 'content-type': picture.type || 'image/png', 'x-cover-sig': sig }, body: picture,
+  });
+  if (!r.ok) {
+    let message = `The service answered ${r.status}.`;
+    try { const j = await r.json(); message = j?.error?.message || message; } catch { /* keep the status */ }
+    throw new MemoryApiError(r.status, '', message);
+  }
+  return r.json();
+}
 
 // ── schema ──────────────────────────────────────────────────────────────────────────────────
 export const getSchema = (id: string) => call<MemorySchema>('GET', `${M(id)}/schema`);

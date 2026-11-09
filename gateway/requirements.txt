@@ -12,6 +12,9 @@ PyJWT==2.15.1
 cryptography==50.0.2
 asyncpg==0.30.0
 aiomysql==0.3.2
+# A memory's cover is decoded and made again before it is kept (memory_plane.cover_clean): the PNG and WebP decoders
+# only. The released image already carries this version (the runner's pdfplumber and weasyprint pull it in).
+pillow==13.0.0
 # The browser plugin drives a cloud browser over CDP from the gateway (browser_plane.py,
 # connect_over_cdp): the driver is needed here, no browser binary is (the image's optional
 # WITH_BROWSER block installs Chromium for harnesses that verify their own output; this is not that).

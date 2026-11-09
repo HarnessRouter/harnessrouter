@@ -52,6 +52,7 @@ LABEL = "type:"     # how Hindsight names a label of the group we keep: never an
 # what each fact mentions and left an unrelated fact bare; "What this fact is about." labelled nothing at all.
 LABEL_ASK = "Every kind of thing this fact mentions. Choose all that apply, or none if nothing fits."
 STATED = "hr_stated"
+TURN = "hr_turn"    # the strategy a finished turn is retained with: the bank's own extraction, told what not to keep
 MAX_KEPT_VERSIONS = 50
 UNIT_PAGE, UNIT_PAGES = 500, 20    # how a bank's facts are read to name what an observation came from: up to 10,000
 ACTIVE = "valid"
@@ -185,8 +186,12 @@ class Hindsight(mp.Provider):
         r = await self._call("PUT", self._bank(mid), body={"name": mid, **({"mission": mission} if mission else {})})
         if r.status_code != 200:
             raise HindsightUnavailable("the bank was not created")
+        # retain_mission is Hindsight's own guidance for what its extraction keeps ("injected into any extraction mode"),
+        # here for what a finished turn is read with (TURN). A strategy's fields it doesn't know are ignored, so a
+        # server without it reads the turn as before.
         r = await self._call("PATCH", self._bank(mid) + "/config",
-                             body={"updates": {"retain_strategies": {STATED: {"retain_extraction_mode": "chunks"}}}})
+                             body={"updates": {"retain_strategies": {STATED: {"retain_extraction_mode": "chunks"},
+                                                                     TURN: {"retain_mission": mp.EXTRACTION_GUIDE}}}})
         if r.status_code != 200:
             raise HindsightUnavailable("the bank was not set up")
         self._ready.add(mid)
@@ -399,7 +404,7 @@ class Hindsight(mp.Provider):
             rid = PREFIX + uuid.uuid4().hex
             ids.append(rid)
             text = "\n".join(f"{p.get('role')}: {p['text']}" if p.get("role") else str(p["text"]) for p in e.get("content") or [] if p.get("text"))
-            items.append({"content": text, "document_id": rid, "tags": ["t:episode"], **_stamp(e), "metadata": {
+            items.append({"content": text, "document_id": rid, "tags": ["t:episode"], "strategy": TURN, **_stamp(e), "metadata": {
                 "hr_type": "episode", "hr_writer": json.dumps({"kind": "provider", "id": self.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}, separators=(",", ":")),
                 "hr_parts": json.dumps(e.get("content") or [], separators=(",", ":")),
                 **({"hr_attributes": json.dumps(e["attributes"], separators=(",", ":"))} if e.get("attributes") else {})}})

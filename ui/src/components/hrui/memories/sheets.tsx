@@ -1,6 +1,6 @@
 'use client';
-// The sheets of the Memories pages: New memory (a name and, if you like, a description: the engine is chosen for you
-// from them, and can be changed), Use in (give a memory to a setup, which then remembers there), Connect (an engine's
+// The sheets of the Memories pages: New memory (a name and, if you like, a description: every engine listed, the one
+// chosen for you from them picked and marked Recommended), Use in (give a memory to a setup, which then remembers there), Connect (an engine's
 // address and a key, tried by the service at once), the list of engines to connect, and Rename. Each is the console's
 // Sheet.
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -14,7 +14,7 @@ import { Skel, SkLine } from '../Skel';
 import { plain } from '../setup/settingsModel';
 import { serviceFacts, shapeOf } from './caps';
 import { KindArt, type Kind } from './CardArt';
-import { GUIDE, VENDORS, vendorName } from './vendors';
+import { GUIDE, inVendorOrder, VENDORS, vendorName } from './vendors';
 
 /** Connecting one engine: its address and, optionally, its key. The service tries both, and its
  *  refusal is shown here in its own words. */
@@ -26,6 +26,9 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
   const [base, setBase] = useState('');
   const [key, setKey] = useState('');
   const [keptKey, setKeptKey] = useState(false);
+  // the instance's connection, used here with none of this workspace's own: its address and key are not this
+  // workspace's to keep, so the form starts empty and connecting makes one of its own
+  const [inherited, setInherited] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   // changing a connection starts from the address it has; a key is only ever said to be kept
@@ -35,11 +38,13 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
     listProviderPlugs().then((l) => {
       if (!live) return;
       const p = l.find((x) => x.type === id);
+      if (p?.inherited) { setInherited(p.note || `This workspace uses this instance’s ${name} (inherited).`); return; }
       setBase(String(p?.config?.base_url || ''));
       setKeptKey(!!p?.secrets_set?.includes('api_key'));
     }).catch(() => {});
     return () => { live = false; };
-  }, [connected, id]);
+  }, [connected, id, name]);
+  const own = connected && !inherited;
   const needsKey = addressOptional && !base.trim() && !keptKey;
   const ready = (addressOptional || !!base.trim()) && (!needsKey || !!key.trim());
   const go = async () => {
@@ -52,8 +57,9 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
   };
   return (
     <Sheet onClose={onClose} labelledBy="mmCn" className="small-sheet mm-sheet" busy={busy}>
-      <SheetTop id="mmCn" title={`${connected ? 'Change' : 'Connect'} ${name}`} sub={VENDORS[id]?.line} onClose={onClose} />
+      <SheetTop id="mmCn" title={own ? `Change ${name}` : inherited ? `Connect ${name} for this workspace` : `Connect ${name}`} sub={VENDORS[id]?.line} onClose={onClose} />
       <form noValidate onSubmit={(e) => { e.preventDefault(); void go(); }}>
+        {inherited ? <p className="set-help mm-inherited" role="note">{inherited} Connect one here to use it in this workspace instead.</p> : null}
         <div className="set-f">
           <label htmlFor="mmCnBase">Server address</label>
           <input id="mmCnBase" className="set-in" type="url" inputMode="url" value={base} autoComplete="off" placeholder="https://memory.example.com" onChange={(e) => setBase(e.target.value)} />
@@ -71,7 +77,7 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
         <div className="sheet-actions">
           <span className="grow" />
           <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn primary" disabled={!ready || busy}>{busy ? 'Connecting…' : connected ? 'Save' : 'Connect'}</button>
+          <button type="submit" className="btn primary" disabled={!ready || busy}>{busy ? 'Connecting…' : own ? 'Save' : 'Connect'}</button>
         </div>
       </form>
     </Sheet>
@@ -164,9 +170,11 @@ function useEngineChoice(name: string, desc: string, on: boolean) {
   return { choice, failed, retry: () => setAgain((x) => x + 1) };
 }
 
-/** New memory: a name and, if you like, a description. The engine is chosen for you from them by the service (the
- *  same reading an agent gets, GET /v1/memories/choose), shown with why, and can be changed under Engine to any engine
- *  that is connected. Connecting another lives on the page, under More. */
+/** New memory: a name and, if you like, a description, and under Engine every engine at once, one row each with what
+ *  kind of memory it keeps. The one the service chooses from the name and description (GET /v1/memories/choose, the
+ *  same reading an agent gets) is picked and marked Recommended, with why, and follows what is typed until the person
+ *  picks one themselves. An engine not connected and answering here is shown, and can't be picked. Connecting another
+ *  lives on the page, under More. */
 export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCreated, onConnect }: {
   providers: Provider[] | null; failed: boolean; retry: () => void; picked?: string;
   onClose: () => void; onCreated: (m: Memory, p: Provider) => void;
@@ -176,25 +184,26 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [chosen, setChosen] = useState(picked || '');
-  const [changing, setChanging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const open = useMemo(() => (providers || []).filter((p) => p.connected), [providers]);
+  const all = useMemo(() => inVendorOrder(providers || []), [providers]);
+  const open = useMemo(() => all.filter((p) => p.connected), [all]);
   const { choice: auto, failed: choiceFailed, retry: chooseAgain } = useEngineChoice(name, desc, open.length > 0);
-  const sel = open.find((p) => p.id === chosen) || open.find((p) => !!auto?.engine && p.id === auto.engine) || null;
-  const why = sel && sel.id === chosen ? VENDORS[sel.id]?.line || '' : auto?.reason || '';
+  const recommended = open.find((p) => !!auto?.engine && p.id === auto.engine) || null;
+  const sel = open.find((p) => p.id === chosen) || recommended;
   const go = async () => {
     if (!sel || !name.trim() || busy) return;
     setBusy(true); setErr('');
     try { onCreated(await createMemory({ name: name.trim(), description: desc.trim(), provider: sel.id }), sel); }
     catch (e) { setErr(plain(e, 'The memory was not created. Try again.')); setBusy(false); }
   };
-  // arrows move the choice along the connected engines, as in any group of radio buttons
+  // arrows move the choice along the engines that can be picked, as in any group of radio buttons
   const onKey = (e: React.KeyboardEvent) => {
     const d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
-    if (!d || !open.length || !sel) return;
+    if (!d || !open.length) return;
     e.preventDefault();
-    const next = open[(open.indexOf(sel) + d + open.length) % open.length];
+    const at = sel ? open.indexOf(sel) : -1;
+    const next = open[(at + d + open.length) % open.length];
     setChosen(next.id);
     (e.currentTarget.querySelector(`[data-sv="${next.id}"]`) as HTMLElement | null)?.focus();
   };
@@ -204,40 +213,43 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
       <form className="mm-new-f" noValidate onSubmit={(e) => { e.preventDefault(); void go(); }}>
         <NameFields nameId="mmCrName" descId="mmCrDesc" name={name} desc={desc} onName={setName} onDesc={setDesc} focus optional />
         <div className="set-f mm-eng">
-          <div className="mm-kept-h">
-            <span className="set-lb" id="mmCrEng">Engine</span>
-            {open.length > 1 || (open.length && !sel && auto) ? <button type="button" className="link-q inl" aria-expanded={changing} aria-controls="mmCrEngs" onClick={() => setChanging(!changing)}>{changing ? 'Done' : 'Change'}</button> : null}
-          </div>
+          <span className="set-lb" id="mmCrEng">Engine</span>
           {failed ? (
             <p className="mm-err" role="alert">The engines could not be read just now. <button type="button" className="link-q inl" onClick={retry}>Try again</button></p>
           ) : !providers ? (
-            <Skel label="Reading the engines"><SkLine w="40%" h={13} /><SkLine w="70%" h={11} style={{ marginTop: 8 }} /></Skel>
-          ) : !open.length ? (
+            <Skel label="Reading the engines">{[0, 1, 2, 3].map((i) => <SkLine key={i} w="100%" h={52} r={12} style={{ marginTop: i ? 6 : 0 }} />)}</Skel>
+          ) : !all.length ? (
             <p className="set-help mm-eng-none">No engine is connected yet. {onConnect ? <button type="button" className="link-q inl" onClick={onConnect}>Connect an engine</button> : null}</p>
           ) : (
             <>
-              {changing ? null : sel ? (
-                <div className="mm-eng-now" aria-labelledby="mmCrEng" aria-live="polite">
-                  <span className="grow"><b>{vendorName(sel.id)}</b>{why ? <small>{why}</small> : null}</span>
-                </div>
-              ) : choiceFailed ? (
-                <p className="mm-err" role="alert">The engine couldn’t be chosen just now. <button type="button" className="link-q inl" onClick={chooseAgain}>Try again</button></p>
-              ) : !auto ? (
-                <Skel label="Choosing the engine"><SkLine w="40%" h={13} /><SkLine w="70%" h={11} style={{ marginTop: 8 }} /></Skel>
-              ) : (
-                // connected, and none answering now: the service says why, and Change still offers them
-                <p className="set-help mm-eng-none" role="status">{auto.reason}</p>
-              )}
-              {changing ? (
-                <div className="mm-prov mm-eng-list" id="mmCrEngs" role="radiogroup" aria-labelledby="mmCrEng" onKeyDown={onKey}>
-                  {open.map((p, i) => (
-                    <button key={p.id} type="button" role="radio" aria-checked={sel?.id === p.id} tabIndex={(sel ? sel.id === p.id : i === 0) ? 0 : -1} data-sv={p.id}
-                      className={`mm-pv-o${sel?.id === p.id ? ' on' : ''}`} onClick={() => setChosen(p.id)}>
-                      <i className="mm-sv-dot" aria-hidden="true" /><Says p={p} />
+              <div className="mm-engs" role="radiogroup" aria-labelledby="mmCrEng" onKeyDown={onKey}>
+                {all.map((p) => {
+                  const can = !!p.connected, on = sel?.id === p.id, rec = recommended?.id === p.id;
+                  const line = VENDORS[p.id]?.line || '';
+                  return (
+                    <button key={p.id} type="button" role="radio" aria-checked={on} disabled={!can} data-sv={p.id}
+                      tabIndex={can && (sel ? on : p === open[0]) ? 0 : -1}
+                      className={`mm-eng-o${on ? ' on' : ''}${can ? '' : ' off'}`} onClick={() => setChosen(p.id)}>
+                      <i className="mm-eng-dot" aria-hidden="true" />
+                      <span className="mm-eng-t">
+                        <span className="mm-eng-n"><b>{vendorName(p.id)}</b>
+                          {rec ? <span className="pill run mm-eng-rec">Recommended</span> : null}
+                          {can ? null : <span className="mm-eng-nr">Not running here</span>}
+                        </span>
+                        {line ? <small>{line}</small> : null}
+                        {rec && auto?.reason ? <small className="mm-eng-why">{auto.reason}</small> : null}
+                      </span>
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
+              </div>
+              {choiceFailed ? (
+                <p className="mm-err" role="alert">The engine couldn’t be chosen just now. <button type="button" className="link-q inl" onClick={chooseAgain}>Try again</button></p>
+              ) : auto && !auto.engine && auto.reason ? (
+                // nothing answering here to recommend: the service says why, and the connected ones can still be picked
+                <p className="set-help mm-eng-none" role="status">{auto.reason}</p>
               ) : null}
+              {!open.length && onConnect ? <p className="set-help mm-eng-none">No engine is connected yet. <button type="button" className="link-q inl" onClick={onConnect}>Connect an engine</button></p> : null}
             </>
           )}
         </div>

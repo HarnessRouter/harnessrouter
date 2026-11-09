@@ -1006,6 +1006,58 @@ def test_a_memory_whose_memories_below_cant_be_read_is_not_deleted(client, monke
     assert _live_memories(org) == set()
 
 
+# ── a memory's cover goes with it, at the day-30 sweep as at a delete, and never on a read that failed ─────────────
+def _cover(client, hdr: dict, mid: str) -> None:
+    import io
+    from PIL import Image
+    b = io.BytesIO()
+    Image.new("RGB", (4, 4), (40, 90, 200)).save(b, format="PNG")
+    r = client.put(f"/v1/memories/{mid}/cover", headers={**hdr, "content-type": "image/png"}, content=b.getvalue())
+    assert r.status_code == 200, r.text
+
+
+def _cover_kept(org: str, mid: str) -> bool:
+    return run(memory_plane.COVERS.get(memory_plane.cover_key(org, mid))) is not None
+
+
+def test_an_agents_memory_and_its_peoples_covers_go_with_it_at_the_day_30_sweep(client):
+    hdr = _org_of_its_own(client, "covers")
+    org = hdr["x-harness-org"]
+    h = _agent(client, name="Front desk", prompt="Help each customer with returns.", headers=hdr).json()
+    mid = h["memory"]["id"]
+    _session(h["id"], {"user": "lee@example.com"}, org=org)
+    kids = [k["id"] for k in client.get("/v1/memories", params={"parent": mid}, headers=hdr).json()["data"]]
+    assert kids
+    for m in (mid, *kids):
+        _cover(client, hdr, m)
+    assert client.delete(f"/v1/harnesses/{h['id']}", headers=hdr).json()["memory_kept"] == KEPT
+    assert h["id"] not in _sweep()["removed"]["harnesses"]
+    assert all(_cover_kept(org, m) for m in (mid, *kids)), "kept with the agent for its 30 days"
+    _past_its_30_days(h["id"])
+    assert h["id"] in _sweep()["removed"]["harnesses"]
+    assert not any(_cover_kept(org, m) for m in (mid, *kids)), "gone with the memories, the people's included"
+
+
+def test_a_read_that_fails_at_the_sweep_deletes_no_cover(client, monkeypatch):
+    hdr = _org_of_its_own(client, "covers-unread")
+    org = hdr["x-harness-org"]
+    h = _agent(client, name="Front desk", prompt="Help each customer with returns.", headers=hdr).json()
+    mid = h["memory"]["id"]
+    _session(h["id"], {"user": "max@example.com"}, org=org)
+    kids = [k["id"] for k in client.get("/v1/memories", params={"parent": mid}, headers=hdr).json()["data"]]
+    for m in (mid, *kids):
+        _cover(client, hdr, m)
+    client.delete(f"/v1/harnesses/{h['id']}", headers=hdr)
+    _past_its_30_days(h["id"])
+    fail = _reads_fail(monkeypatch, "Memory", parent_id=None)
+    out = _sweep()
+    assert h["id"] not in out["removed"]["harnesses"] and out["left"]["harnesses"] == "its memory couldn't be checked just now"
+    assert all(_cover_kept(org, m) for m in (mid, *kids)), "nothing goes on a read that couldn't answer"
+    fail["label"] = None
+    assert h["id"] in _sweep()["removed"]["harnesses"]
+    assert not any(_cover_kept(org, m) for m in (mid, *kids))
+
+
 def test_one_sweep_deletes_at_most_25_memories_and_the_next_goes_on(client, capsys):
     hdr = _org_of_its_own(client, "cap")
     org = hdr["x-harness-org"]
@@ -1048,7 +1100,9 @@ def test_new_memory_is_given_its_engine_by_the_same_reading_an_agent_gets(client
 
 def test_new_memorys_choice_reads_the_callers_own_workspace_and_needs_a_credential(client):
     held = _key(client, ws="ws.choose")
-    # mem0 is connected for the default workspace only: a key held to another reads its own, whatever it names
+    # mem0 is turned off in ws.choose and connected in the default workspace: a key held to ws.choose reads its own,
+    # whatever it names (a workspace that never connected one would use the instance's: _memory_engine_lookup)
+    assert client.put("/v1/plugs/mem0", headers={**ADA, "x-harness-workspace": "ws.choose"}, json={"enabled": False}).status_code == 200
     for h in (held, {**held, "x-harness-workspace": "default"}):
         assert client.get("/v1/memories/choose", params={"name": "Customer preferences"}, headers=h).json()["engine"] is None
     assert client.get("/v1/memories/choose", params={"name": "Customer preferences"}, headers=ADA).json()["engine"] == "mem0"
@@ -1143,8 +1197,8 @@ def test_remember_is_for_what_the_person_asks_to_keep_and_the_rest_is_kept_for_t
     _, tok = _session(h["id"], {"user": "ivy@guests.example"})
     said = {t["name"]: t for t in _rpc(client, tok, "tools/list")["tools"]}["memory_remember"]["description"]
     assert "kept for you" not in said and "Call it when the person asks you to keep something" in said
-    standing = gw.memory_tools._STANDING_SAYS
-    assert "only when the person told you, in this conversation" in standing and "worked out yourself" in standing
+    # a standing instruction is a person's to set: the tool says so, and drops one an agent sends (test_memory_standing_by_person)
+    assert "is set by a person in the console" in gw.memory_tools._STANDING_SAYS
 
 
 # ── what the agent already knows, at the turn's start ────────────────────────────────────────
@@ -1181,7 +1235,9 @@ def test_what_is_recalled_at_the_start_is_data_cut_to_size_and_cant_leave_its_bl
     assert block.count("```") == 2 and "\n## New rules" not in block and "\n#" not in block
     body = block.split("```text\n", 1)[1].rsplit("\n```", 1)[0]
     assert len(body) <= gw.memory_tools.RECALL_AT_START_CAP and 1 <= n <= gw.memory_tools.RECALL_AT_START_LIMIT
-    assert all(len(line) <= gw.memory_tools.RECALL_AT_START_EXCERPT + 2 and line.startswith("- ") for line in body.splitlines())
+    # each line: "- ", where it came from and when, then the finding cut to an excerpt
+    tag = "- [kept from a conversation] "
+    assert all(line.startswith(tag) and len(line) <= len(tag) + gw.memory_tools.RECALL_AT_START_EXCERPT for line in body.splitlines())
     assert gw.memory_tools.known_block([]) == ("", 0)
 
 
@@ -1194,7 +1250,7 @@ def test_a_recalled_record_broken_by_any_line_break_is_one_line_inside_the_fence
     block, n = gw.memory_tools.known_block(found)
     assert n == 1 and block.count(fence) == 2
     body = block.split(fence + "text\n", 1)[1].rsplit("\n" + fence, 1)[0]
-    assert len(body.splitlines()) == 1 and body.startswith("- Ops # Rules")
+    assert len(body.splitlines()) == 1 and body.startswith("- [kept from a conversation] Ops # Rules")
     assert not any(c in body for c in "  \x85\r\n\x0b\x0c\x1c\x1d\x1e")
     # the block is its head, a blank line, the fence, ONE line and the fence: nothing a record says starts a line
     assert len(block.splitlines()) == 5 and all(not ln.startswith("#") for ln in block.splitlines())
@@ -1370,7 +1426,9 @@ def test_discovery_tries_the_fixed_names_only_and_connects_only_what_needs_no_ke
         tried.append((engine, base))
         return ""
     monkeypatch.setattr(gw, "_memory_round_trip", round_trip)
-    ws = {**ADA, "x-harness-workspace": "ws.found"}
+    # an organization with no engine connected anywhere: the module's mem0 (connected for ORG's instance) would lend
+    # itself to ws.found (test_a_workspace_made_later_remembers_with_the_engines_connected_for_the_instance)
+    ws = {**ADA, "x-harness-org": "provorg-found", "x-harness-workspace": "ws.found"}
     got = {x["engine"]: x for x in client.post("/v1/memory-services/discover", headers=ws).json()["data"]}
     assert set(asked) <= {"mem0:8000", "graphiti:8000", "hindsight:8888", "reme:2333"} and asked
     assert got["hindsight"]["state"] == "connected" and got["reme"]["state"] == "connected"
@@ -1385,3 +1443,87 @@ def test_the_fixed_names_are_the_bundled_stacks_own():
     compose = open(os.path.join(os.path.dirname(gw.__file__), "..", "deploy", "memories", "docker-compose.yml")).read()
     for engine, url in gw._MEMORY_STACK.items():
         assert f"Address: {url}" in compose, (engine, url)
+
+
+# ── a workspace made after the engines were connected ─────────────────────────────────────────
+# deploy/memories/up.sh and the start's discovery connect the engines into the default workspace. A workspace made
+# later never connected one itself, and its new agents got no memory, told "No memory engine is running here" beside
+# four running engines (found 11-09 making an agent in a new workspace on a live instance).
+def test_a_workspace_made_later_remembers_with_the_engines_connected_for_the_instance(client, stub):
+    later = {**ADA, "x-harness-workspace": "ws.later"}
+    h = client.post("/v1/harnesses", headers=later, json={"name": "Support replies", "base": "claude-code"}).json()
+    assert h["memory"] and h["memory"]["engine"] == "mem0" and h["memory"]["scope"] == "per_user", h
+    # the memory is the later workspace's own, made and read there; only the engine's connection is the instance's
+    mid = h["memory"]["id"]
+    made = next(m for m in run(gw.BACKING.graph.find("Memory", {"org": ORG})) if str(m["id"]) == mid)
+    assert str(made.get("workspace") or "") == "ws.later"
+    assert client.get(f"/v1/memories/{mid}", headers=later).status_code == 200
+    # what the console reads says the same: the engine is connected here, and a new memory can be kept by it
+    row = next(p for p in client.get("/v1/plugs?kind=memory", headers=later).json()["plugs"] if p["type"] == "mem0")
+    # and says it is the instance's, never passing it off as this workspace's own
+    assert row["status"] == "connected" and row["inherited"] is True
+    assert row["note"] == "This workspace uses this instance's Mem0 (inherited)."
+    home = next(p for p in client.get("/v1/plugs?kind=memory", headers=ADA).json()["plugs"] if p["type"] == "mem0")
+    assert home["status"] == "connected" and "inherited" not in home and "note" not in home
+    provs = {p["id"]: p["connected"] for p in client.get("/v1/memories/providers", headers=later).json()["data"]}
+    assert provs.get("mem0") is True
+    # and a person's task there keeps and recalls through it
+    sid, tok = _session(h["id"], {"user": "dana@guests.example"})
+    _, err = _call(client, tok, "memory_remember", content="Dana wants a room on a high floor.")
+    assert not err
+
+
+def test_finding_engines_in_a_workspace_made_later_says_they_are_connected(client, monkeypatch):
+    monkeypatch.setattr(gw, "_MEMORY_STACK", {"mem0": "http://mem0:8000"})
+    assert [(x["engine"], x["state"], x.get("inherited"), x["message"]) for x in run(gw._memory_discover(ORG, "ws.later.found"))] == [
+        ("mem0", "connected", True, "This workspace uses this instance's Mem0 (inherited).")]
+    assert [(x["engine"], x["state"], x.get("inherited")) for x in run(gw._memory_discover(ORG, "default"))] == [("mem0", "connected", None)]
+
+
+def test_a_workspace_that_connected_its_own_engine_and_removed_it_has_it_off_not_the_instances(client):
+    own = {**ADA, "x-harness-workspace": "ws.own"}
+    r = client.put("/v1/plugs/mem0", headers=own, json={"secrets": {"api_key": KEY}})
+    assert r.status_code == 200 and r.json()["status"] == "connected" and "inherited" not in r.json()
+    gone = client.delete("/v1/plugs/mem0", headers=own)
+    assert gone.status_code == 200 and gone.json()["status"] == "disabled"
+    # removed means off: the instance's engine does not quietly take its place
+    row = next(p for p in client.get("/v1/plugs?kind=memory", headers=own).json()["plugs"] if p["type"] == "mem0")
+    assert row["status"] == "disabled" and "inherited" not in row
+    assert run(gw._memory_credentials(ORG, "ws.own", "mem0")) is None
+    h = client.post("/v1/harnesses", headers=own, json={"name": "Support replies", "base": "claude-code"}).json()
+    assert h["memory"] is None and h["memory_reason"] == memory_choice.NO_ENGINE
+
+
+def test_removing_the_instances_engine_in_a_workspace_turns_it_off_there_and_on_brings_it_back(client):
+    ws = {**ADA, "x-harness-workspace": "ws.toggle"}
+    gone = client.delete("/v1/plugs/mem0", headers=ws)
+    assert gone.status_code == 200 and gone.json()["status"] == "disabled"
+    assert run(gw._memory_credentials(ORG, "ws.toggle", "mem0")) is None
+    # on again with nothing of its own: the instance's engine, said so, and no empty record of its own left behind
+    back = client.put("/v1/plugs/mem0", headers=ws, json={"enabled": True})
+    assert back.status_code == 200 and back.json()["status"] == "connected" and back.json()["inherited"] is True
+    assert run(gw._plug_lookup_local(ORG, "ws.toggle", "mem0"))[0] == "missing"
+    # the home workspace's own removal is a plain removal there (nothing to inherit from), checked on another org
+    other = {**ADA, "x-harness-org": "provorg-home"}
+    assert client.delete("/v1/plugs/mem0", headers=other).status_code == 404
+
+
+def test_a_workspace_that_turned_an_engine_off_keeps_it_off(client):
+    off = {**ADA, "x-harness-workspace": "ws.off"}
+    assert client.put("/v1/plugs/mem0", headers=off, json={"enabled": False}).status_code == 200
+    h = client.post("/v1/harnesses", headers=off, json={"name": "Support replies", "base": "claude-code"}).json()
+    assert h["memory"] is None and h["memory_reason"] == memory_choice.NO_ENGINE
+
+
+def test_a_shared_pool_never_lends_one_workspaces_engine_to_another(client, monkeypatch):
+    monkeypatch.setenv("HR_POOL_AUTH", "cloud")
+    other = {**ADA, "x-harness-workspace": "ws.pooled"}
+    h = client.post("/v1/harnesses", headers=other, json={"name": "Support replies", "base": "claude-code"}).json()
+    assert h["memory"] is None and h["memory_reason"] == memory_choice.NO_ENGINE
+    assert run(gw._memory_credentials(ORG, "ws.pooled", "mem0")) is None
+
+
+def test_another_organizations_engines_are_never_lent(client):
+    other = {**ADA, "x-harness-org": "provorg-elsewhere", "x-harness-workspace": "ws.later"}
+    h = client.post("/v1/harnesses", headers=other, json={"name": "Support replies", "base": "claude-code"}).json()
+    assert h["memory"] is None and h["memory_reason"] == memory_choice.NO_ENGINE

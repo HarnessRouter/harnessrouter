@@ -1,13 +1,11 @@
 // What a provider makes itself (capabilities.schema.builtin): its types and links, merged into a schema drawing and
-// marked built in. The Schema tab draws it locked; a memory's card draws it small. A type already drawn under the same
+// marked built in. The Schema tab draws it locked, and a memory's cover is that drawing. A type already drawn under the same
 // name (a kind a memory holds) is marked rather than drawn twice. What's new is laid out among itself and set to the
 // left of what already has a place.
 import type { Provider } from '@/lib/memories';
 import { builtinOf, relText } from '../caps';
 import { kindInfo } from '../tree';
-import { footprint, initialLayout } from './layout';
-import type { LRel, LSchema, LType } from '../schemaModel';
-import { graphOf, type EType, type VGraph, type VType } from './schemaDraft';
+import type { EType, VGraph, VType } from './schemaDraft';
 
 export type BConn = { from_type: string; to_type: string; builtin?: boolean };
 export type BVType = VType & { builtin?: boolean };
@@ -20,6 +18,19 @@ const andList = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, 
 export function builtinTitles(provider: Provider | null | undefined): string {
   return andList((builtinOf(provider)?.types || []).map((t) => kindInfo(t.name, null).one));
 }
+
+/** The corners of a regular figure of `n` types, each side long enough for a link's name between its two ends: an odd
+ *  number with a point at the top, an even one lying flat, the first on the left. */
+export function figure(n: number): { x: number; y: number }[] {
+  if (n < 2) return [{ x: 0, y: 0 }].slice(0, n);
+  const R = SIDE / 2 / Math.sin(Math.PI / n), start = n % 2 ? -Math.PI / 2 : Math.PI / 2 + Math.PI / n;
+  return Array.from({ length: n }, (_, i) => {
+    const a = start + (2 * Math.PI * i) / n;
+    return { x: Math.round(R * Math.cos(a)) || 0, y: Math.round(R * Math.sin(a)) || 0 };
+  });
+}
+/** A side of that figure: two types and the longest link name a provider has, with room. */
+const SIDE = 260;
 
 export function withBuiltin<G extends VGraph | BGraph | null>(graph: G, provider: Provider | null | undefined): G | BGraph {
   const b = builtinOf(provider);
@@ -48,48 +59,19 @@ export function withBuiltin<G extends VGraph | BGraph | null>(graph: G, provider
   }
   for (const e of ets) if (e.connections.length && e.connections.every((c) => c.builtin)) e.builtin = true;
   if (fresh.length) {
-    const ids = new Set(fresh.map((v) => v.label));
-    const nodes = fresh.map((v) => ({ id: v.label, ...footprint(`${titles[v.label]}\nBuilt in · 00 records`, 38) }));
-    const links = (b.relations || []).filter((r) => ids.has(r.from) && ids.has(r.to) && r.from !== r.to).map((r) => ({ source: r.from, target: r.to }));
-    const { pos } = initialLayout(nodes, links, { spread: 1.7 });
-    const placed = vts.filter((v) => !ids.has(v.label) && v.ui && v.ui.position);
-    const xs = [...pos.values()].map((q) => q.x), ys = [...pos.values()].map((q) => q.y);
+    // What the provider makes is set out as a regular figure, one type on each corner (a triangle for three, the first
+    // on top; two side by side, the first on the left): a link between two corners never passes under a third, and
+    // each link's name has the side between them to itself. Never the force layout, which could put three in a line.
+    const at = figure(fresh.length);
+    const placed = vts.filter((v) => !fresh.includes(v) && v.ui && v.ui.position);
+    const xs = at.map((q) => q.x), ys = at.map((q) => q.y);
     let dx = 0, dy = 0;
     if (placed.length) {
       const px = placed.map((v) => v.ui.position!.x), py = placed.map((v) => v.ui.position!.y);
       dx = Math.min(...px) - 280 - Math.max(...xs);
       dy = (Math.min(...py) + Math.max(...py)) / 2 - (Math.min(...ys) + Math.max(...ys)) / 2;
     }
-    for (const v of fresh) { const q = pos.get(v.label)!; v.ui = { ...v.ui, position: { x: Math.round(q.x + dx), y: Math.round(q.y + dy) } }; }
+    fresh.forEach((v, i) => { v.ui = { ...v.ui, position: { x: Math.round(at[i].x + dx), y: Math.round(at[i].y + dy) } }; });
   }
   return { ...graph, titles, vertex_types: vts, edge_types: ets };
-}
-
-/** A memory's schema as its card draws it (Richard 11-06: the vendor's concepts where nobody set a schema, in the design's
- *  drawing): what the provider makes itself and the types a person set, with the links between them, in the schema's
- *  own shape. A provider that declares nothing gives back what was set. */
-export function concepts(s: LSchema | null | undefined, provider: Provider | null | undefined): LSchema | null {
-  if (!builtinOf(provider)?.types.length) return s ?? null;
-  const g = withBuiltin(graphOf(s || { types: [], relations: [] }), provider) as BGraph;
-  const placed = g.vertex_types;
-  const ids = new Map(placed.map((v) => [v.label, v.id || v.label]));
-  // A card is small: the types go evenly around a circle (three a triangle, six a hexagon), so none sits on another or on
-  // a line between two others, whatever the canvas layout put where. An even number lies flat, wider than tall like the
-  // card, with the first type on the left (two read left to right: Fact, about, Entity); an odd one has a point at the
-  // top. The radius gives a link's name room between its two ends at the card's scale.
-  const n = Math.max(1, placed.length);
-  const R = n <= 3 ? 110 : 60 * n / Math.PI, start = n % 2 ? -Math.PI / 2 : Math.PI / 2 + Math.PI / n;
-  // what the provider makes is drawn by its title (Fact, Episode); a person's own type by its name
-  const types: LType[] = placed.map((v, i) => {
-    const a = start + (2 * Math.PI * i) / n;
-    return {
-      id: ids.get(v.label) as string, name: v.builtin && g.titles?.[v.label] ? g.titles[v.label] : v.label, description: v.description,
-      properties: [], color: v.ui.color || '', icon: v.ui.icon || '', x: Math.round(R * Math.cos(a)), y: Math.round(R * Math.sin(a)), caption: v.ui.caption || 'title',
-    };
-  });
-  const idOf = (label: string) => ids.get(label) || label;
-  const relations: LRel[] = g.edge_types.flatMap((e) => e.connections.map((c, i) => ({
-    id: `${e.label}:${i}`, name: e.label, description: e.description, from: idOf(c.from_type), to: idOf(c.to_type), color: e.ui.color,
-  })));
-  return { types, relations };
 }

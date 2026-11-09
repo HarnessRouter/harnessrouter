@@ -2,9 +2,11 @@
 check in memory_plane, and one call to the memory's provider. Nothing here knows a provider."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
+import re
 import time
 import uuid
 
@@ -28,16 +30,18 @@ _engines_running = None     # app.py's answer to which engines are connected for
 
 
 def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None, on_grant=None, workspace_of=None,
-            used_by=None, engines_running=None) -> None:
+            used_by=None, engines_running=None, covers=None) -> None:
     """Bind the gateway's principal resolver, error envelope, graph backing and file store, and
     mount the routes. `on_grant(org, principal)` runs after a grant is written: the gateway uses
     it to give an agent that was just let into its first memory the tools to use it. `workspace_of` is the
     plug routes' own rule for which workspace a call is about, so the two can't disagree. `used_by(org, caller)`
     answers {memory id: [{harness_id, name}]}: the agents the caller may see that hold a grant on each.
-    `engines_running(org, workspace)` answers the engines connected there that answer now (memory_choice reads it)."""
+    `engines_running(org, workspace)` answers the engines connected there that answer now (memory_choice reads it).
+    `covers` is where memories' covers are kept (memory_plane.COVERS)."""
     global _principal, _uhp_error, _file_bytes, _on_grant, _workspace_of, _used_by, _engines_running
     _principal, _uhp_error, mp.GRAPH, mp.FILES, _file_bytes, _on_grant = principal, uhp_error, graph, file_meta, file_bytes, on_grant
     _workspace_of, _used_by, _engines_running = workspace_of, used_by, engines_running
+    mp.COVERS = covers
     if os.environ.get("HR_MEMORY_FIXTURE") == "1" and "fixture" not in mp.PROVIDERS:
         import memory_fixture
         mp.PROVIDERS["fixture"] = memory_fixture.FixtureProvider()
@@ -63,6 +67,11 @@ async def _who(request: Request) -> tuple[str, str, str, list[str]]:
     # The workspace a memory belongs to is decided exactly as a plug's is, so a memory finds the provider
     # its own workspace connected, and a key held to a workspace can't name another to spend its vendor account.
     return org, str(p.get("member") or ""), _workspace_of(request, p), principals_of(p)
+
+
+def _writer(request: Request) -> dict:
+    """Who this call writes as: the principal that authenticated it (memory_plane.writer_of_caller), set by _who."""
+    return mp.writer_of_caller(getattr(request.state, "hr_caller", {}) or {})
 
 
 async def _json(request: Request) -> dict:
@@ -205,6 +214,85 @@ async def choose(request: Request, name: str = "", description: str = "") -> dic
     return {"engine": c.engine, "scope": c.scope, "reason": c.reason}
 
 
+# ── a memory's cover ─────────────────────────────────────────────────────────────────────────
+# The picture a memory's card shows: its schema as the Schema tab draws it, made once by the console and kept here as
+# the bytes it sent, so a list of memories loads pictures and never works one out. `cover_sig` is the console's short
+# name for the drawing it shows, so it makes another only when the drawing changes.
+_COVER_SIG = re.compile(r"[A-Za-z0-9_\-]{1,64}")
+_COVER_WORD = {"image/png": "PNG", "image/webp": "WebP"}
+_COVER_FILE = {"image/png": "cover.png", "image/webp": "cover.webp"}
+_COVER_CACHE = "private, max-age=31536000, immutable"
+_TOO_BIG = "A cover is at most 512 KB. Send a smaller picture."
+
+
+async def _cover_bytes(request: Request) -> bytes:
+    """The body, read no further than one byte past the most a cover may be, and nothing read at all when its length
+    says it is more. Nothing is decoded until this has answered."""
+    said = request.headers.get("content-length") or ""
+    if said.isdigit() and int(said) > mp.COVER_MAX:
+        raise _uhp_error(422, "memory_invalid", _TOO_BIG, "cover")
+    out = bytearray()
+    async for chunk in request.stream():
+        out += chunk[:mp.COVER_MAX + 1 - len(out)]
+        if len(out) > mp.COVER_MAX:
+            raise _uhp_error(422, "memory_invalid", _TOO_BIG, "cover")
+    return bytes(out)
+
+
+@router.put("/v1/memories/{mid}/cover")
+@guarded
+async def put_cover(mid: str, request: Request) -> dict:
+    """The memory's cover: the body is the picture's bytes, a PNG or a WebP (its type in Content-Type, and its first
+    bytes saying the same) of at most 512 KB, and `X-Cover-Sig` the console's name for the drawing it shows."""
+    org, _, _, pr = await _who(request)
+    m, _ = await mp.need(org, mid, pr, "write")
+    kind = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if kind not in mp.COVER_TYPES:
+        raise _uhp_error(422, "memory_invalid", "A cover is a PNG or WebP picture: send it with that Content-Type.", "content-type")
+    sig = (request.headers.get("x-cover-sig") or "").strip()
+    if sig and not _COVER_SIG.fullmatch(sig):
+        raise _uhp_error(422, "memory_invalid", "X-Cover-Sig is up to 64 letters, digits, - or _.", "x-cover-sig")
+    data = await _cover_bytes(request)
+    if not data:
+        raise _uhp_error(422, "memory_invalid", "Send the picture's bytes as the body.", "cover")
+    if mp.cover_type(data) != kind:
+        raise _uhp_error(422, "memory_invalid", f"That isn't a {_COVER_WORD[kind]} picture: its bytes say otherwise.", "cover")
+    clean = await asyncio.to_thread(mp.cover_clean, data, kind)
+    # the key is the organization and the memory as the store holds it, never anything the request says
+    mid, key = str(m["id"]), mp.cover_key(org, str(m["id"]))
+    if not mp.COVERS or not await mp.COVERS.put(key, clean):
+        raise _uhp_error(503, "memory_unavailable", "The picture couldn't be kept just now. Try again.", "cover")
+    at = int(time.time() * 1000)
+    try:
+        await mp.GRAPH.upsert("Memory", mid, {"cover_at": str(at), "cover_sig": sig, "cover_type": kind}, raise_on_fail=True)
+    except Exception:
+        await mp.COVERS.delete(key)       # a picture no memory names would never be removed
+        raise
+    return {"object": "memory.cover", "memory_id": mid, "cover_at": at, "cover_sig": sig or None, "bytes": len(clean)}
+
+
+@router.get("/v1/memories/{mid}/cover")
+@guarded
+async def get_cover(mid: str, request: Request):
+    """The memory's cover as it was sent. The console names its `cover_at` in the address (`?v=`), so a picture once
+    read is never asked for again until a new one is made."""
+    org, _, _, pr = await _who(request)
+    m, _ = await mp.need(org, mid, pr, "read")          # the same check as recall: a person's own stays theirs
+    kind = str(m.get("cover_type") or "")
+    if not m.get("cover_at") or not mp.COVERS or kind not in mp.COVER_TYPES:
+        raise _uhp_error(404, "memory_not_found", "This memory has no cover yet.", "cover")
+    try:
+        data = await mp.COVERS.get(mp.cover_key(org, str(m["id"])))
+    except Exception:  # noqa: BLE001 - a store that failed to answer is not a cover that isn't there
+        raise _uhp_error(503, "memory_unavailable", "The picture couldn't be read just now. Try again.", "cover")
+    if not data or mp.cover_type(data) != kind:
+        raise _uhp_error(404, "memory_not_found", "This memory has no cover yet.", "cover")
+    # served as the type kept when it was made, under a fixed name, and never as anything that could run
+    return Response(content=data, media_type=kind, headers={
+        "cache-control": _COVER_CACHE, "x-content-type-options": "nosniff",
+        "content-disposition": f'inline; filename="{_COVER_FILE[kind]}"', "content-security-policy": "default-src 'none'"})
+
+
 # ── the tree ──────────────────────────────────────────────────────────────────────────────────
 @router.post("/v1/memories")
 @guarded
@@ -315,7 +403,7 @@ async def observe(mid: str, request: Request) -> dict:
 
     async def write():
         try:
-            made = await mp.observe(prov, mid, eps, mp.writer_of(member))
+            made = await mp.observe(prov, mid, eps, _writer(request))
         except mp.MemoryError as e:
             await mp.mark(org, mid, e.message)
             raise
@@ -382,7 +470,7 @@ async def remember(mid: str, request: Request) -> dict:
 
     async def write():
         try:
-            made = await mp.remember(prov, mid, rec_in, mp.writer_of(member))
+            made = await mp.remember(prov, mid, rec_in, _writer(request))
         except mp.MemoryError as e:
             await mp.mark(org, mid, e.message)
             raise
@@ -424,10 +512,11 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
     # `If-Match` is the version the writer read: named, a write that crossed another is refused rather than losing it
     match = (request.headers.get("if-match") or "").strip().strip('"')
     try:
-        made = await prov.revise(mid, rid, patch, mp.writer_of(member), expected=int(match) if match.isdigit() else None)
+        made = await mp.revise(prov, mid, rid, patch, _writer(request), expected=int(match) if match.isdigit() else None)
     except memory_live.VersionMoved as e:
         raise mp.MemoryError(412, "memory_version_moved", f"Someone else changed this record: it is at version {e.version} now.", "version")
-    await mp.keep_on_both_ends(prov, mid, made, {"kind": "provider", "id": prov.id, "on_behalf_of": f"member:{member}"})
+    w = _writer(request)
+    await mp.keep_on_both_ends(prov, mid, made, {"kind": "provider", "id": prov.id, "on_behalf_of": f"{w['kind']}:{w['id']}"})
     return await mp.present(org, mid, made, pr)
 
 
@@ -436,7 +525,7 @@ async def revise(mid: str, rid: str, request: Request) -> dict:
 async def forget(mid: str, rid: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "write")
-    return await mp.present(org, mid, await mp.forget(await mp.provider_of(m), mid, rid, mp.writer_of(member)), pr)
+    return await mp.present(org, mid, await mp.forget(await mp.provider_of(m), mid, rid, _writer(request)), pr)
 
 
 @router.post("/v1/memories/{mid}/erase")
@@ -579,14 +668,14 @@ async def define_query(mid: str, name: str, request: Request) -> dict:
         raise _uhp_error(422, "memory_invalid", "A named query has a name of letters, digits and underscores, a body, and requires read or write.")
     q = {"name": name, "description": str(b.get("description") or ""), "params": b.get("params") or {"type": "object"},
          "requires": b.get("requires", "read"), "language": str(b.get("language") or ""), "body": str(b["body"]),
-         "defined_by": mp.writer_of(member)}
+         "defined_by": _writer(request)}
     return await (await mp.provider_of(m)).define_query(mid, q)
 
 
 @router.post("/v1/memories/{mid}/queries/{name}")
 @guarded
 async def run_query(mid: str, name: str, request: Request) -> dict:
-    org, _, _, pr = await _who(request)
+    org, member, _, pr = await _who(request)
     m, privs = await mp.need(org, mid, pr, "read")
     prov = await mp.provider_of(m)
     q = next((x for x in await prov.queries(mid) if x["name"] == name), None)
@@ -594,13 +683,13 @@ async def run_query(mid: str, name: str, request: Request) -> dict:
         raise _uhp_error(404, "memory_not_found", "No such query on this memory.", "name")
     if q.get("requires", "read") not in privs:
         raise _uhp_error(403, "memory_forbidden", f"This query needs `{q['requires']}` on the memory.")
-    return await _answer(org, m, pr, await prov.run_query(mid, name, (await _json(request)).get("params") or {}))
+    return await _answer(org, m, pr, await mp.run_query(prov, mid, q, (await _json(request)).get("params") or {}, _writer(request)))
 
 
 @router.post("/v1/memories/{mid}/query")
 @guarded
 async def free_query(mid: str, request: Request) -> dict:
-    org, _, _, pr = await _who(request)
+    org, member, _, pr = await _who(request)
     m, privs = await mp.need(org, mid, pr, "read")
     b = await _json(request)
     prov = await mp.provider_of(m)
@@ -612,7 +701,7 @@ async def free_query(mid: str, request: Request) -> dict:
         raise _uhp_error(403, "memory_forbidden", "A query that writes needs `write` on the memory.")
     if not b.get("statement"):
         raise _uhp_error(422, "memory_invalid", "Give the statement to run.", "statement")
-    res = await prov.free_query(mid, str(b.get("language") or ""), str(b["statement"]), b.get("params") or {}, write)
+    res = await mp.free_query(prov, mid, str(b.get("language") or ""), str(b["statement"]), b.get("params") or {}, write, _writer(request))
     if "results" not in res:           # the provider's own rows, as they are
         return {"object": "memory.query", "rows": res.get("rows") or [], "degraded": res.get("degraded") or []}
     return await _answer(org, m, pr, res)
@@ -629,7 +718,7 @@ async def operate(mid: str, rid: str, name: str, request: Request) -> dict:
     if needs not in privs:
         raise _uhp_error(403, "memory_forbidden", f"This operation needs `{needs}` on the memory.")
     return {"object": "memory.operation", "name": name,
-            "result": await prov.operate(mid, rid, name, await _json(request), mp.writer_of(member))}
+            "result": await mp.operate(prov, mid, rid, name, await _json(request), _writer(request), needs)}
 
 
 # ── snapshots: a name for an instant ──────────────────────────────────────────────────────────
@@ -707,4 +796,4 @@ async def consolidation_changes(mid: str, run: str, request: Request) -> dict:
 async def revert(mid: str, run: str, request: Request) -> dict:
     org, member, _, pr = await _who(request)
     m, _ = await mp.need(org, mid, pr, "delete")
-    return await (await mp.provider_of(m)).revert_consolidation(mid, run, mp.writer_of(member))
+    return await (await mp.provider_of(m)).revert_consolidation(mid, run, _writer(request))

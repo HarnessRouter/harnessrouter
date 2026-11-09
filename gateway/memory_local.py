@@ -24,11 +24,13 @@ class Local:
     start asks for neither (app.py's _memories_turn_start), and a tool list doesn't ask for counts."""
 
     def __init__(self, org: str, hid: str, entries: list[dict], person: dict | None = None, *,
-                 counts: bool = True, around: bool = True):
+                 counts: bool = True, around: bool = True, session: str = ""):
         self.org, self.hid, self._entries, self.person = org, hid, entries, person or None
         self.pr = [f"member:{hid}"] + ([self.person["principal"]] if self.person else [])
         self.wpr = [self.person["principal"]] if self.person else self.pr
-        self.writer = mp.writer_of(hid, agent=True)
+        # what the agent keeps names the task it was kept in (`session`), as what a finished turn sends does: a later
+        # turn of the same task leaves it out of what it recalls at its start (memory_tools.same_session)
+        self.writer = {**mp.writer_of(hid, agent=True), **({"session_id": session} if session else {})}
         self.counts, self.around = counts, around
         # what this agent kept with memory_remember through this seam, each {"id", "memory_id"}: a turn's record links them
         self.kept: list[dict] = []
@@ -171,6 +173,8 @@ class Local:
             return [await mp.present(self.org, mid, h, self.pr) for h in await prov.history(mid, rid)]
         return await self._do(go())
 
+    # Every write below is the agent's (self.writer) and passes memory_plane's write path, which holds that an agent
+    # never sets `standing` and never changes a standing instruction a person set (memory_plane.is_agent).
     async def remember(self, mid, record):
         async def go():
             prov, _ = await self._prov(mid, "write")
@@ -194,7 +198,7 @@ class Local:
                 patch2["content"] = mp._clean_parts(patch2["content"])
             if isinstance(patch2.get("attributes"), dict):
                 patch2["attributes"] = {k: mp.clean_text(v) if isinstance(v, str) else v for k, v in patch2["attributes"].items()}
-            return await mp.present(self.org, mid, await self._wrote(mid, prov.revise(mid, rid, patch2, self.writer)), self.pr)
+            return await mp.present(self.org, mid, await self._wrote(mid, mp.revise(prov, mid, rid, patch2, self.writer)), self.pr)
         return await self._do(go())
 
     async def forget(self, mid, rid):
@@ -213,14 +217,14 @@ class Local:
                 _, privs = await self._prov(mid, "write")
             if q.get("requires", "read") not in privs:
                 raise Refused("memory_forbidden", f"That query needs `{q['requires']}` on the memory.")
-            res = await prov.run_query(mid, name, params)
+            res = await mp.run_query(prov, mid, q, params, self.writer)
             return {"results": [{"record": await mp.present(self.org, mid, x["record"], self.pr)} for x in res.get("results") or []]}
         return await self._do(go())
 
     async def free_query(self, mid, language, statement, params):
         async def go():
             prov, _ = await self._prov(mid, "read")
-            res = await prov.free_query(mid, language, statement, params, False)
+            res = await mp.free_query(prov, mid, language, statement, params, False, self.writer)
             if "results" in res:
                 return {"results": [{"record": await mp.present(self.org, mid, x["record"], self.pr)} for x in res["results"]]}
             return {"rows": res.get("rows") or []}
@@ -234,7 +238,7 @@ class Local:
                 _, privs = await self._prov(mid, "write")
             if needs not in privs or (needs == "write" and not any(e.get("access") == "write" for e in self._entries)):
                 raise Refused("memory_forbidden", f"That operation needs `{needs}` on the memory.")
-            return await prov.operate(mid, rid, name, body, self.writer)
+            return await mp.operate(prov, mid, rid, name, body, self.writer, needs)
         return await self._do(go())
 
     async def prime(self, mid, budget):

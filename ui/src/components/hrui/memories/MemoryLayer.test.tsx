@@ -30,7 +30,8 @@ function backend(o: { data: ReturnType<typeof held>[]; def?: string | null; obse
   const state = { default_memory_id: o.def ?? null, observe: o.observe ?? true };
   const s = service({
     'GET /v1/memories/providers': { data: o.providers || [CAPS.graphiti] },
-    'GET /v1/memories': { data: o.all || ALL() },
+    // the service leaves each count unknown (null) when asked for none, as the page asks
+    'GET /v1/memories': (c: { path: string }) => ({ data: (o.all || ALL()).map((m) => (c.path.includes('counts=false') ? { ...m, records: { count: null } } : m)) }),
     [`GET /v1/harnesses/${H}/memories`]: () => ({ object: 'harness.memories', principal: `member:${H}`, ...state, data: o.data }),
     [`PUT /v1/harnesses/${H}/memories`]: (c: { body: object }) => { Object.assign(state, c.body); return { object: 'harness.memories', principal: `member:${H}`, ...state, data: o.data }; },
     'POST /v1/memories/m1/grants': { id: 'g' }, 'POST /v1/memories/m2/grants': { id: 'g' },
@@ -58,10 +59,12 @@ test('every memory has a row and a switch, on where the agent holds it and off w
   expect(rowOf('Support').classList.contains('off')).toBe(true);
   expect(el.textContent).not.toContain('Give a memory');
 });
-test('its second line is who keeps it and how much, read from the memory', async () => {
-  backend({ data: [] });
+test('it reads the memories without their counts, so it loads at once, and a row says who keeps it', async () => {
+  const s = backend({ data: [] });
   await draw();
-  expect(rowOf('Support').querySelector('small')?.textContent).toBe('1 record · Graphiti');
+  expect(s.sent('GET', '/v1/memories').map((c) => c.path)).toEqual(['/v1/memories?counts=false']);
+  // no count read, so none is said
+  expect(rowOf('Support').querySelector('small')?.textContent).toBe('Graphiti');
 });
 test('it says what it is with its own brick, not a tool’s', async () => {
   backend({ data: [held('m1', 'Brand kits', false)] });
@@ -153,7 +156,7 @@ test('a memory below one that’s on comes with it: on, and not a switch of its 
   await draw();
   expect(sw('Child').getAttribute('aria-pressed')).toBe('true');
   expect(sw('Child').disabled).toBe(true);
-  expect(rowOf('Child').querySelector('small')?.textContent).toBe('Comes with Brand kits · In Brand kits · 1 record · Graphiti');
+  expect(rowOf('Child').querySelector('small')?.textContent).toBe('Comes with Brand kits · In Brand kits · Graphiti');
   expect(sw('Private').getAttribute('aria-pressed')).toBe('false');
   expect(sw('Private').disabled).toBe(false);
 });
@@ -266,19 +269,29 @@ describe('Remember: one switch, where the service gives the agent its own memory
   const remember = () => el.querySelector('button.tog[aria-label="Remember"]') as HTMLButtonElement;
   const fact = (dt: string) => Array.from(el.querySelectorAll('.am-facts > div')).find((d) => d.querySelector('dt')?.textContent === dt)?.querySelector('dd')?.textContent;
 
-  test('on: the engine, why, whether each person is kept apart, and the memory, with nothing else to find', async () => {
+  const engines = () => Array.from(el.querySelectorAll<HTMLButtonElement>('.am-engs [role=radio]'));
+  const engine = (name: string) => engines().find((b) => b.querySelector('b')?.textContent === name) as HTMLButtonElement;
+  test('on: every engine and None in a list, the current one picked with why, then the scope and the memory', async () => {
     contract({ memory: OWN });
     await draw();
     expect(remember().getAttribute('aria-pressed')).toBe('true');
-    expect(fact('Engine')).toContain('Mem0');
-    expect(fact('Why')).toBe(OWN.reason);
+    expect(engines().map((b) => b.querySelector('b')?.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight', 'ReMe', 'None']);
+    expect(engines().filter((b) => b.getAttribute('aria-checked') === 'true').map((b) => b.querySelector('b')?.textContent)).toEqual(['Mem0']);
+    expect(engine('Mem0').querySelector('.mm-eng-why')?.textContent).toBe(OWN.reason);
+    expect(engine('Graphiti').textContent).toContain('A graph of people, things and how they connect');
     expect(fact('Scope')).toBe('Separately for each person');
     expect((el.querySelector('.am-facts a') as HTMLAnchorElement).getAttribute('href')).toBe('/memories/m1');
-    // the rows and the finished-task switch wait under More
-    expect(el.querySelector('button.tog[aria-label="Keep finished tasks"]')).toBeNull();
-    await press(el.querySelector('.am-more-b') as HTMLElement);
+    // nothing is behind a click: no Change, no More
+    expect(Array.from(el.querySelectorAll('button')).some((b) => b.textContent === 'Change')).toBe(false);
+    expect(el.querySelector('.am-more-b, [aria-expanded]')).toBeNull();
+  });
+  test('what was under More is inline, each in its own section: the memories, Recall only, finished tasks', async () => {
+    contract({ memory: OWN });
+    await draw();
+    const heads = Array.from(el.querySelectorAll('.lg-sub-h h3')).map((h) => h.childNodes[0]?.textContent);
+    expect(heads).toEqual(['Memories it can use', 'Finished tasks']);
     expect(el.querySelector('button.tog[aria-label="Keep finished tasks"]')).toBeTruthy();
-    expect(el.textContent).toContain('Memories it can use');
+    expect(Array.from((rowOf('Photo cut').querySelector('select') as HTMLSelectElement).options).map((o) => o.textContent)).toEqual(['Recall only', 'Recall and remember']);
     expect(el.textContent).not.toContain('Reads and writes');
   });
   test('off and on again: none, then the same memory back, never a second one', async () => {
@@ -299,18 +312,45 @@ describe('Remember: one switch, where the service gives the agent its own memory
     await press(remember());
     expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toEqual({ memory: 'auto' });
   });
-  test('Change offers the four engines and None, and an engine not running here is shown, not offered', async () => {
+  test('an engine not running here is shown, and can’t be picked', async () => {
+    contract({ memory: OWN });
+    await draw();
+    expect(engine('Hindsight').disabled).toBe(true);
+    expect(engine('Hindsight').textContent).toContain('Not running here');
+    expect(engine('Graphiti').disabled).toBe(false);
+  });
+  test('picking another engine asks first, in the console’s own dialog, saying a new memory is made and the old one kept', async () => {
+    const confirm = jest.spyOn(window, 'confirm');
     const s = contract({ memory: OWN });
     await draw();
-    await press(Array.from(el.querySelectorAll('.am-facts button')).find((b) => b.textContent === 'Change') as HTMLElement);
-    const items = Array.from(el.querySelectorAll('.am-pop .mm-mi'));
-    expect(items.map((b) => b.querySelector('b')?.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight', 'ReMe', 'None']);
-    expect((items[2] as HTMLButtonElement).disabled).toBe(true);
-    expect(items[2].textContent).toContain('Not running here');
-    await press(items[1] as HTMLElement);
+    await press(engine('Graphiti'));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)).toHaveLength(0);
+    const ask = document.querySelector('.sheet') as HTMLElement;
+    expect(ask.querySelector('#amEngAskh')?.textContent).toBe('Use Graphiti for Photo cut?');
+    // the agent's memory is named after the agent, so the memory it has now is said as such, never by that name
+    expect(ask.querySelector('#amEngAskp')?.textContent).toBe('Photo cut gets a new memory kept by Graphiti and remembers there from its next task. Its current memory stays under Memories, with everything in it.');
+    // Cancel changes nothing
+    await press(Array.from(ask.querySelectorAll('button')).find((b) => b.textContent === 'Cancel') as HTMLElement);
+    expect(document.querySelector('#amEngAskh')).toBeNull();
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)).toHaveLength(0);
+    expect(engine('Mem0').getAttribute('aria-checked')).toBe('true');
+    // and the button that agrees makes the move
+    await press(engine('Graphiti'));
+    await press(Array.from(document.querySelectorAll('.sheet button')).find((b) => b.textContent === 'Use Graphiti') as HTMLElement);
     expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toEqual({ memory: { engine: 'graphiti' } });
-    expect(fact('Engine')).toContain('Graphiti');
+    expect(document.querySelector('#amEngAskh')).toBeNull();
+    expect(engine('Graphiti').getAttribute('aria-checked')).toBe('true');
     expect(fact('Scope')).toBe('Shared');
+    expect(toast).toHaveBeenCalledWith('Engine changed. The memory before is kept.');
+    confirm.mockRestore();
+  });
+  test('None turns Remember off at once, as the switch does', async () => {
+    const s = contract({ memory: OWN });
+    await draw();
+    await press(engine('None'));
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)[0].body).toEqual({ memory: 'none' });
+    expect(remember().getAttribute('aria-pressed')).toBe('false');
   });
   test('a refusal is said in the service’s words and the switch stays as it is', async () => {
     contract({ memory: OWN }, { [`PUT /v1/harnesses/${H}/memory`]: { $status: 409, error: { message: 'That engine is not answering.' } } });

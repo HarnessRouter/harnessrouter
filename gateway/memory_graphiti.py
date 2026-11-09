@@ -37,6 +37,7 @@ import memory_plane as mp
 
 TIMEOUT_S = 180
 NODE, EDGE, EPISODE = "node_", "edge_", "ep_"
+SESSION = " session:"   # how an episode's source names the task it came from (observe), after who sent it
 READ = "hr_read:"    # the name of the episode Graphiti reads a stated record as, followed by the node's uuid
 LINK = "hr_link"     # on an edge made for a record's reference, not for a fact
 # Tests set an httpx transport here so every call is exercised without a server.
@@ -82,6 +83,7 @@ class Graphiti(mp.Provider):
     def __init__(self, base_url: str = "", api_key: str = "", org: str = ""):
         self.base, self.key, self.org = base_url.rstrip("/"), api_key, org
         self._copies_at: dict[str, tuple[float, dict[str, str], set[str]]] = {}
+        self._eps_at: dict[str, tuple[float, list[dict]]] = {}
 
 # What Graphiti itself makes and how it links it: the part of a memory's schema nobody sets. The console draws it locked
 # beside what a person can set; record types and reference rels as this adapter answers them.
@@ -187,8 +189,13 @@ class Graphiti(mp.Provider):
 
     def _episode_out(self, mid: str, x: dict) -> dict:
         closed = x.get("forgotten_at")
+        # the task it came from, as observe named it in its source; a fact or an entity names its episodes, so this is
+        # how a later turn of the same task knows them for its own (memory_tools.same_session)
+        src = str(x.get("source_description") or "")
+        session = src.split(SESSION, 1)[1].strip() if SESSION in src else ""
         return {"id": EPISODE + str(x["uuid"]), "type": "episode", "title": str(x.get("name") or ""),
-                "content": [{"type": "text", "text": str(x.get("content") or "")}], "attributes": {}, "references": [], "version": 1,
+                "content": [{"type": "text", "text": str(x.get("content") or "")}],
+                "attributes": {"session_id": session} if session else {}, "references": [], "version": 1,
                 "status": "forgotten" if closed else "active", "supersedes": None,
                 "time": {"valid_from": x.get("valid_at"), "valid_to": None, "written_at": x.get("created_at"), "invalidated_at": closed},
                 "written_by": {"kind": "provider", "id": self.id}}
@@ -298,13 +305,19 @@ class Graphiti(mp.Provider):
         records = []
         for e in episodes:
             text = "\n".join(f"{p.get('role')}: {p['text']}" if p.get("role") else str(p["text"]) for p in e.get("content") or [] if p.get("text"))
+            session = str((e.get("attributes") or {}).get("session_id") or "")
             r = await self._call("POST", "/episodes", body={
-                "group_id": mid, "content": text, "source_description": f"{writer.get('kind')}:{writer.get('id')}",
+                "group_id": mid, "content": text,
+                "source_description": f"{writer.get('kind')}:{writer.get('id')}" + (SESSION + session if session else ""),
                 **({"reference_time": str((e.get("time") or {})["valid_from"])} if (e.get("time") or {}).get("valid_from") else {}),
+                # Graphiti's own guidance for its extraction, placed in its entity and fact prompts (add_episode's
+                # custom_extraction_instructions; deploy/memories/graphiti passes it on)
+                "custom_extraction_instructions": mp.EXTRACTION_GUIDE,
                 **extraction})
             if r.status_code != 200:
                 raise GraphitiUnavailable("the episode was not taken")
             d = r.json()
+            self._eps_at.pop(mid, None)
             records.append(self._episode_out(mid, d["episode"]))
             records += [self._node_out(mid, n) for n in d.get("nodes") or []]
             records += [self._edge_out(mid, x) for x in d.get("edges") or []]
@@ -360,6 +373,7 @@ class Graphiti(mp.Provider):
         if rid.startswith(EPISODE):
             at = _now()
             r = await self._call("POST", f"/groups/{mid}/episodes/{rid[len(EPISODE):]}/forget", body={"at": at})
+            self._eps_at.pop(mid, None)
             if r.status_code != 200:
                 raise GraphitiUnavailable("the episode was not closed")
             return {**cur, "status": "forgotten", "time": {**cur["time"], "invalidated_at": at}}
@@ -386,6 +400,7 @@ class Graphiti(mp.Provider):
                 r = await self._call("DELETE", f"/groups/{mid}/nodes/{rid[len(NODE):]}")
             else:
                 r = await self._call("DELETE", f"/groups/{mid}/episodes/{rid[len(EPISODE):]}")
+                self._eps_at.pop(mid, None)
             if r.status_code == 200:
                 erased.append(rid)
         return {"erased": erased, "unreachable": unreachable}
@@ -399,9 +414,15 @@ class Graphiti(mp.Provider):
                     return None
                 return out(mid, r.json(), await self._copies(mid, r.json().get("episodes") or []))
         if rid.startswith(EPISODE):
-            r = await self._call("GET", f"/groups/{mid}/episodes", params={"limit": 1000})
-            hit = next((x for x in (r.json() if r.status_code == 200 else []) if str(x.get("uuid")) == rid[len(EPISODE):]), None)
-            return self._episode_out(mid, hit) if hit else None
+            # one listing for the episodes asked about together (a turn's start asks for each fact's episodes at once,
+            # memory_tools.same_session), and read again after a few seconds, since a new one may have come
+            hit = self._eps_at.get(mid)
+            if not hit or time.time() - hit[0] > 5 or not any(str(x.get("uuid")) == rid[len(EPISODE):] for x in hit[1]):
+                r = await self._call("GET", f"/groups/{mid}/episodes", params={"limit": 1000})
+                hit = (time.time(), r.json() if r.status_code == 200 else [])
+                self._eps_at[mid] = hit
+            found = next((x for x in hit[1] if str(x.get("uuid")) == rid[len(EPISODE):]), None)
+            return self._episode_out(mid, found) if found else None
         return None
 
     async def history(self, mid, rid):
