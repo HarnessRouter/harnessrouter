@@ -6869,14 +6869,36 @@ async def _media_chains_public() -> list[dict]:
     return out
 
 
+def _hosted_key_of(integ: dict) -> str:
+    return str(((integ or {}).get("config") or {}).get("api_key") or "").strip()
+
+
+async def _hosted_connection_read(integrations: list[dict]) -> dict | None:
+    """The HarnessRouter API connection whose key reads Cloud's model list, after refreshing that list
+    with it; None when no connection holds a key Cloud takes. Only a connection that holds a key is
+    asked with (a pairing for Deploy to Cloud alone leaves none), and one Cloud refused last time is
+    asked after the others: the first one in the document was always the one asked, so a refused key
+    ahead of a good one kept the list empty however many times the person connected again."""
+    keyed = [i for i in integrations if str(i.get("provider") or "").lower() == "harnessrouter" and _hosted_key_of(i)]
+    for i in sorted(keyed, key=lambda x: _hosted_key_refused(_hosted_key_of(x))):   # stable: document order otherwise
+        await _hosted_models_refresh(_hosted_key_of(i), models_url=str((i.get("config") or {}).get("models_url") or ""))
+        if not _hosted_key_refused(_hosted_key_of(i)):
+            return i
+    return None
+
+
 @app.get("/v1/admin/integrations")
 async def admin_integrations_get(request: Request) -> dict:
     await _require_integrations_admin(request)
     integrations = await _integrations_doc()
-    hosted = next((i for i in integrations if str(i.get("provider") or "").lower() == "harnessrouter"), None)
+    hosted = await _hosted_connection_read(integrations)
     hosted_cfg = (hosted or {}).get("config") or {}
-    await _hosted_models_refresh(str(hosted_cfg.get("api_key") or ""), models_url=str(hosted_cfg.get("models_url") or ""))
     public = [_integration_public(i) for i in integrations]
+    for row, i in zip(public, integrations):
+        # a key Cloud refused is said as that, on its own row: the console asks to reconnect THAT key,
+        # with the reason, instead of offering a new pairing that leaves the refused one in front
+        if str(i.get("provider") or "").lower() == "harnessrouter" and _hosted_key_refused(_hosted_key_of(i)):
+            row["key_state"] = "refused"
     if hosted:
         # What is left to spend on the hosted account, read here with the stored key so the key never
         # reaches the browser; absent (never a stale or made-up figure) when the read fails.
@@ -6899,11 +6921,13 @@ async def _hosted_balance(api_key: str, balance_url: str = "") -> dict | None:
     """GET <balance_url> with the stored key → {"usd", "is_deficit", "as_of"} or None. The hosted side
     holds the figure for up to a minute; 401 (bad key) and 503 (ledger not answering) both mean
     "show nothing", so does any other failure."""
-    if not api_key:
+    if not api_key or _hosted_key_refused(api_key):
         return None
     try:
         async with httpx.AsyncClient(timeout=6.0) as c:
             r = await c.get(balance_url or HR_HOSTED_BALANCE_URL, headers={"authorization": f"Bearer {api_key}"})
+        if r.status_code in (401, 403):
+            _hosted_read_failed(api_key, r.status_code, f"the balance answered HTTP {r.status_code}")
         if r.status_code != 200:
             return None
         j = r.json()
@@ -8342,10 +8366,47 @@ _IMAGE_VENDOR_MODELS: dict[str, dict[str, str]] = {
 
 
 # HarnessRouter serves canonical ids and its list is maintained there, not here: the gateway reads
-# it (at start, on a connect that handed over a key, and hourly on the admin read), keeps the last
-# good read, and the vendor table is that read. An empty read is empty: nothing is listed unprobed.
+# it (on a connect that handed over a key, and hourly on the admin read), keeps the last good read,
+# and the vendor table is that read. An empty read is empty: nothing is listed unprobed.
+#
+# Cloud lists models for a key's organization only: GET /v1/models without a key is a 401, every
+# time. Through 0.39.0 this asked without one whenever no HarnessRouter API connection held a key
+# (an instance that never connected, or one that connected only to Deploy to Cloud, whose key is
+# the deploy destination's and is never a connection), and a failure was not remembered, so every
+# console page with a model picker asked again: one instance made 1010 such calls in four days
+# (hosted, 2026-11-08). Now the list is asked for with a key or not at all, a failed read is not
+# asked again for _HOSTED_MODELS_RETRY_S per key (logged once), and Cloud refusing a key is kept
+# as that key's state so the console can say so (_hosted_key_refused).
 _HOSTED_MODELS: dict = {"ids": [], "at": 0.0}
 _HOSTED_MODELS_TTL = 3600.0
+_HOSTED_MODELS_RETRY_S = float(os.environ.get("HR_HOSTED_MODELS_RETRY_S", "600"))
+_HOSTED_MODELS_FAILS: dict[str, dict] = {}   # key fingerprint -> {"at", "status", "why"}: the last failed read
+
+
+def _hosted_key_fp(api_key: str) -> str:
+    """A key named in memory and in a log line: 16 hex of its SHA-256, never the key."""
+    return hashlib.sha256(str(api_key or "").encode()).hexdigest()[:16]
+
+
+def _hosted_key_refused(api_key: str) -> bool:
+    """Cloud answered 401 or 403 to this key the last time it was asked (the model list or the
+    balance), and has not taken it since."""
+    f = _HOSTED_MODELS_FAILS.get(_hosted_key_fp(api_key)) if api_key else None
+    return bool(f) and f.get("status") in (401, 403)
+
+
+def _hosted_read_failed(api_key: str, status: int, why: str) -> None:
+    """Remember a failed read for this key, and say so once: a line when it starts failing or fails
+    differently, none while it keeps failing the same way."""
+    fp = _hosted_key_fp(api_key)
+    prev = _HOSTED_MODELS_FAILS.get(fp)
+    if not prev or prev.get("why") != why:
+        refused = " (Cloud refused the key)" if status in (401, 403) else ""
+        print(f"[hosted] key {fp[:8]}: {why}{refused}; the model list is asked again in "
+              f"{int(_HOSTED_MODELS_RETRY_S)} s at the earliest", flush=True)
+    if len(_HOSTED_MODELS_FAILS) > 256:
+        _HOSTED_MODELS_FAILS.clear()
+    _HOSTED_MODELS_FAILS[fp] = {"at": time.time(), "status": status, "why": why}
 
 
 def _hosted_models_parse(doc) -> list[str]:
@@ -8368,25 +8429,39 @@ def _hosted_models_parse(doc) -> list[str]:
 
 
 async def _hosted_models_refresh(api_key: str = "", force: bool = False, models_url: str = "") -> list[str]:
-    """Read the hosted model list (the union of every backend's available ids for this key's
-    org) and make it this provider's vendor table. Keeps the last good read on any failure; the
-    key is sent when one is known (the list is computed for the key's org)."""
-    if not force and _HOSTED_MODELS["ids"] and time.time() - _HOSTED_MODELS["at"] < _HOSTED_MODELS_TTL:
+    """Read the hosted model list (the union of every backend's available ids for this key's org)
+    and make it this provider's vendor table. Keeps the last good read on any failure. Never asked
+    without a key (Cloud answers that 401), and a read that failed for a key is not asked again for
+    _HOSTED_MODELS_RETRY_S, unless `force` (a key that was just handed over)."""
+    if not api_key:
         return _HOSTED_MODELS["ids"]
-    headers = {"authorization": f"Bearer {api_key}"} if api_key else {}
+    now = time.time()
+    if not force and _HOSTED_MODELS["ids"] and now - _HOSTED_MODELS["at"] < _HOSTED_MODELS_TTL:
+        return _HOSTED_MODELS["ids"]
+    fp = _hosted_key_fp(api_key)
+    failed = _HOSTED_MODELS_FAILS.get(fp)
+    if not force and failed and now - float(failed.get("at") or 0) < _HOSTED_MODELS_RETRY_S:
+        return _HOSTED_MODELS["ids"]
+    status, ids = 0, []
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
-            r = await c.get(models_url or HR_HOSTED_MODELS_URL, headers=headers)
-        if r.status_code >= 400:
-            print(f"[hosted] model list answered HTTP {r.status_code}", flush=True)
+            r = await c.get(models_url or HR_HOSTED_MODELS_URL, headers={"authorization": f"Bearer {api_key}"})
+        status = r.status_code
+        if status >= 400:
+            _hosted_read_failed(api_key, status, f"the model list answered HTTP {status}")
             return _HOSTED_MODELS["ids"]
         ids = _hosted_models_parse(r.json())
     except Exception as e:  # noqa: BLE001
-        print(f"[hosted] model list unreachable: {type(e).__name__}: {str(e)[:120]}", flush=True)
+        _hosted_read_failed(api_key, status, f"the model list was not read ({type(e).__name__})")
         return _HOSTED_MODELS["ids"]
-    if ids:
-        _HOSTED_MODELS.update({"ids": ids, "at": time.time()})
-        _VENDOR_MODELS["harnessrouter"] = {m: m for m in ids}
+    if not ids:
+        _hosted_read_failed(api_key, status, "the model list came back empty")
+        return _HOSTED_MODELS["ids"]
+    if failed:
+        print(f"[hosted] key {fp[:8]}: the model list read again ({len(ids)} models)", flush=True)
+    _HOSTED_MODELS_FAILS.pop(fp, None)
+    _HOSTED_MODELS.update({"ids": ids, "at": time.time()})
+    _VENDOR_MODELS["harnessrouter"] = {m: m for m in ids}
     return _HOSTED_MODELS["ids"]
 
 
@@ -24710,6 +24785,14 @@ async def _cloud_base_refused(base: str) -> str | None:
     return await _internal_target(u.hostname, u.port or 443)
 
 
+class _CloudKeyRefused(HTTPException):
+    """Cloud answered 401 to a destination's key. Said to the console as 400: a 401 from this server
+    means the person's own session ended, and the console signs them out on it, so a pasted key Cloud
+    refused used to sign its operator out of their own console."""
+    def __init__(self, detail: str = "HarnessRouter Cloud refused this key. Check it, or sign in again to get a new one."):
+        super().__init__(400, detail)
+
+
 async def _cloud_me(base_url: str, api_key: str) -> dict:
     """Resolve a key to where an upload lands, as HarnessRouter Cloud's /v1/me names it. Raises
     HTTPException with the hosted side's words. A key Cloud's sign-in minted for the organization's
@@ -24724,7 +24807,7 @@ async def _cloud_me(base_url: str, api_key: str) -> dict:
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"could not reach {base_url}: {str(e)[:120]}")
     if r.status_code == 401:
-        raise HTTPException(401, "the cloud workspace rejected this key")
+        raise _CloudKeyRefused()
     if r.status_code != 200:
         raise HTTPException(502, f"cloud answered {r.status_code}")
     me = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
@@ -24862,8 +24945,26 @@ async def _cloud_upload_one(org: str, hid: str, target: dict, records: dict) -> 
         per[tkey] = {"fingerprint": fp, "uploaded_at": int(time.time() * 1000),
                      "remote_id": remote_id, "target": _cloud_label(target), "plugins_ok": plugins_ok}
         return {"id": hid, "ok": True, "action": action, "name": body["name"], "remote_id": remote_id}
-    detail = str((j.get("error") or {}).get("message") or j.get("detail") or "") if j else r.text[:160]
-    return {"id": hid, "ok": False, "action": action, "error": f"cloud answered {r.status_code}: {detail}"[:300]}
+    if r.status_code == 401:
+        # the destination's key, refused: said as that, and the destination is marked so the next deploy
+        # asks to sign in again with the reason, instead of failing the same way or pairing in silence
+        return {"id": hid, "ok": False, "action": action, "refused": True,
+                "error": "HarnessRouter Cloud refused the key this instance keeps for that workspace. Sign in again to reconnect it."}
+    return {"id": hid, "ok": False, "action": action, "error": _cloud_refusal(r.status_code, j, r.text)}
+
+
+def _cloud_refusal(status: int, j: dict, text: str) -> str:
+    """Cloud's refusal of a deploy in its own words, naming what it refused. Its errors carry the
+    field they are about (`param`: base, default_model, plugins, or the field a body failed on) and a
+    sentence; a 422 on base or default_model means Cloud does not offer that harness or that model to
+    the workspace, which no retry changes."""
+    err = (j.get("error") or {}) if isinstance(j.get("error"), dict) else {}
+    msg = str(err.get("message") or (j.get("detail") if isinstance(j.get("detail"), str) else "") or "").strip() \
+        if j else str(text or "")[:160]
+    param = str(err.get("param") or "").strip()
+    what = {"base": "the agent harness", "default_model": "the model"}.get(param, param)
+    lead = f"HarnessRouter Cloud did not take {what}" if (status == 422 and what) else f"cloud answered {status}"
+    return f"{lead}: {msg}"[:300] if msg else lead[:300]
 
 
 def _cloud_status(hid: str, records: dict, fp: str | None, target: dict) -> dict:
@@ -24893,7 +24994,7 @@ async def cloud_targets_get(request: Request) -> dict:
         except HTTPException as e:
             # A revoked key is a state the operator must see, not an empty label. Anything else
             # (network, hosted hiccup) stays silent and retries on the next listing.
-            if e.status_code == 401 and not t.get("revoked"):
+            if isinstance(e, _CloudKeyRefused) and not t.get("revoked"):
                 t["revoked"] = True
                 changed = True
             continue
@@ -25038,6 +25139,16 @@ async def _cloud_pick_target(tid: str | None) -> dict:
     raise HTTPException(400, "several workspaces are stored; name one")
 
 
+async def _cloud_mark_refused(target: dict) -> None:
+    """A destination whose key Cloud refused on a deploy reads as refused (`revoked`) in the list, so the
+    console says so and asks for a sign-in; a sign-in to the same workspace replaces it whole."""
+    doc = await _cloud_targets()
+    t = doc["targets"].get(_cloud_tkey(target))
+    if t is not None and not t.get("revoked"):
+        t["revoked"] = True
+        await _cloud_targets_save(doc)
+
+
 async def _cloud_remember_last(target: dict) -> None:
     doc = await _cloud_targets()
     if doc.get("last") != _cloud_tkey(target) and _cloud_tkey(target) in doc["targets"]:
@@ -25053,6 +25164,8 @@ async def cloud_upload_batch(body: CloudUploadBody, request: Request) -> dict:
     results = [await _cloud_upload_one(p.get("org", ""), str(h), target, records) for h in body.ids[:200]]
     await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
     await _cloud_remember_last(target)
+    if any(x.get("refused") for x in results):
+        await _cloud_mark_refused(target)
     return {"results": results, "target": _cloud_target_public(target)}
 
 
@@ -25069,6 +25182,9 @@ async def cloud_upload_one(hid: str, request: Request, body: CloudUploadOneBody 
     res = await _cloud_upload_one(p.get("org", ""), hid, target, records)
     await BACKING.secrets.put(GLOBAL_TENANT, _CLOUD_UPLOAD_RECORDS_KEY, json.dumps(records))
     await _cloud_remember_last(target)
+    if res.get("refused"):
+        await _cloud_mark_refused(target)
+        raise _CloudKeyRefused(res.get("error") or "")
     if not res.get("ok"):
         raise HTTPException(400 if res.get("action") == "skip" else 502, res.get("error") or "upload failed")
     return {**res, "open_url": _cloud_open_url(target, str(res.get("remote_id") or "")),

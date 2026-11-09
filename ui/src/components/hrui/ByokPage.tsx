@@ -9,6 +9,9 @@
 // - A HarnessRouter API key can be pasted, or fetched with Get a key: this instance opens the hand-off
 //   with its own server (POST /v1/admin/connect), the person finishes it on the page that opens, and
 //   the key arrives here by polling the code (GET /v1/admin/connect/{code}); it is saved at once.
+//   A key HarnessRouter Cloud refused says so on its own line, with Reconnect, which runs the same
+//   hand-off and puts the new key in THAT connection: a new connection beside the refused one left
+//   the refused one first, and the person was back where they started (hosted, 2026-11-08).
 // - "Which key serves each model" is the model map in the person's words, for chat models and, apart
 //   from them, image models: for every model one of the keys can serve, the key that does, or Off. A
 //   key added at the maker itself takes the models a gateway key was serving (direct, then your
@@ -158,7 +161,8 @@ function Chain({ chain, busy, onMove, onToggle }: { chain: MediaChain; busy: boo
   );
 }
 
-type Handoff = { code: string; url: string; state: 'waiting' | 'failed'; note: string };
+/** `replacing`: the connection whose key the hand-off replaces (Reconnect), else a new connection */
+type Handoff = { code: string; url: string; state: 'waiting' | 'failed'; note: string; replacing?: string };
 
 export function ByokPage() {
   const [doc, setDoc] = useState<Doc | null>(null);
@@ -198,7 +202,7 @@ export function ByokPage() {
     return res;
   }, [reload]);
 
-  async function submit(meta: CatalogEntry, entry: Integration, editing?: string) {
+  async function submit(meta: CatalogEntry, entry: Integration, editing?: string, said?: string) {
     const doc = docRef.current;
     if (!doc) return { ok: false as const, detail: '' };
     setBusy(true);
@@ -210,7 +214,7 @@ export function ByokPage() {
         track('byok_key_added', { provider: meta.id });
         setForm(null);
         const moved = Object.keys(claims).length;
-        toast(`${look(meta).name} ${editing ? 'connection saved' : 'key saved'}${moved ? `. It now serves ${plural(moved, 'model')} another key was serving.` : ''}`);
+        toast(said || `${look(meta).name} ${editing ? 'connection saved' : 'key saved'}${moved ? `. It now serves ${plural(moved, 'model')} another key was serving.` : ''}`);
         await reload();
       }
       return res;
@@ -256,11 +260,11 @@ export function ByokPage() {
 
   // the HarnessRouter key hand-off: the page it names opens in a new tab, and the code is read until
   // the key is ready, which is then saved as a connection at once
-  async function getKey() {
+  async function getKey(replacing?: string) {
     setHandoff(null);
     try {
       const h = await startHandoff();
-      setHandoff({ ...h, state: 'waiting', note: 'Approve it in the HarnessRouter tab. The key lands here on its own.' });
+      setHandoff({ ...h, state: 'waiting', note: 'Approve it in the HarnessRouter tab. The key lands here on its own.', ...(replacing ? { replacing } : {}) });
       window.open(h.url, '_blank', 'noopener');
     } catch {
       setHandoff({ code: '', url: '', state: 'failed', note: 'HarnessRouter could not be reached just now. Try again.' });
@@ -279,9 +283,12 @@ export function ByokPage() {
       const meta = d?.catalog.find((c) => c.id === HOSTED);
       setHandoff(null);
       if (!d || !meta) return;
+      const config = { api_key: r.api_key, ...(r.endpoint ? { base_url: r.endpoint } : {}), ...(r.models_url ? { models_url: r.models_url } : {}), ...(r.balance_url ? { balance_url: r.balance_url } : {}) };
+      // Reconnect: the new key goes into the connection whose key was refused, under its name and routes
+      const old = handoff.replacing ? d.integrations.find((i) => i.name === handoff.replacing && i.provider === HOSTED) : undefined;
+      if (old) { await submit(meta, { ...old, config: { ...old.config, ...config } }, old.name, `${old.name} is reconnected to HarnessRouter.`); return; }
       const entry: Integration = {
-        name: nameFor(d, HOSTED, (r.name || '').trim() || 'HarnessRouter API'), provider: HOSTED, models: [],
-        config: { api_key: r.api_key, ...(r.endpoint ? { base_url: r.endpoint } : {}), ...(r.models_url ? { models_url: r.models_url } : {}), ...(r.balance_url ? { balance_url: r.balance_url } : {}) },
+        name: nameFor(d, HOSTED, (r.name || '').trim() || 'HarnessRouter API'), provider: HOSTED, models: [], config,
       };
       await submit(meta, entry);
     };
@@ -294,6 +301,21 @@ export function ByokPage() {
   function keyLine(meta: CatalogEntry, i: Integration) {
     const n = servedBy(i);
     const bal = i.balance;
+    if (i.key_state === 'refused') {
+      // said as what happened, with the one action that fixes it: never a silent "serves no model now"
+      return (
+        <div key={i.name} className="pv-key" data-key-state="refused">
+          <span className="pv-k bad">
+            <i className="pv-dot" />Refused · <b>{i.name}</b>
+            <span className="pv-serves"> · HarnessRouter Cloud refused this key. Reconnect to get a new one.</span>
+          </span>
+          <span className="pv-act">
+            <button type="button" className="link-q" disabled={busy} onClick={() => setRemoving(i)}>Remove</button>
+            <button type="button" className="btn small line" disabled={busy || handoff?.state === 'waiting'} onClick={() => void getKey(i.name)}>Reconnect</button>
+          </span>
+        </div>
+      );
+    }
     return (
       <div key={i.name} className="pv-key">
         <span className="pv-k">

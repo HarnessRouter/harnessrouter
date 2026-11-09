@@ -137,6 +137,8 @@
 #hrui .pv-key .pv-k b{color:var(--fg);font-weight:600}
 #hrui .pv-key .pv-k .mono,#hrui .pv-key .pv-serves{color:var(--muted)}
 #hrui .pv-key .pv-act{margin-left:auto}
+#hrui .pv-key .pv-k.bad{color:var(--bad)}
+#hrui .pv-key .pv-k.bad .pv-dot{background:var(--bad)}
 #hrui .pv-how{margin:0 0 12px}
 #hrui .pv-opts{display:grid;gap:12px;margin-top:10px;max-width:560px}
 #hrui .pv-entra{display:grid;gap:14px;max-width:640px}
