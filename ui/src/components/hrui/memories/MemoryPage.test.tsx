@@ -8,7 +8,8 @@ import * as Y from 'yjs';
 import { CAPS, memory, record, service } from './fixtures';
 import type { Memory, MemoryRecord, Provider } from '@/lib/memories';
 
-jest.mock('next/navigation', () => ({ useRouter: () => ({ push: jest.fn(), replace: jest.fn() }) }));
+const mockRouter = { push: jest.fn(), replace: jest.fn() };
+jest.mock('next/navigation', () => ({ useRouter: () => mockRouter }));
 jest.mock('next/link', () => ({ __esModule: true, default: ({ children, href, className }: { children: React.ReactNode; href: string; className?: string }) => <a href={href} className={className}>{children}</a> }));
 jest.mock('react-markdown', () => ({ __esModule: true, default: ({ children }: { children: string }) => <p>{children}</p> }));
 jest.mock('remark-gfm', () => ({ __esModule: true, default: () => undefined }));
@@ -32,7 +33,8 @@ jest.mock('next/dynamic', () => ({
     };
   },
 }));
-jest.mock('./editor/DocEditor', () => ({ DocEditor: ({ readOnly }: { readOnly?: boolean }) => <div className="editor-stub" data-readonly={String(!!readOnly)} /> }));
+// the editor, drawn once it is clicked here (as the real one says when it is ready)
+jest.mock('./editor/DocEditor', () => ({ DocEditor: ({ readOnly, onReady }: { readOnly?: boolean; onReady?: () => void }) => <div className="editor-stub" data-readonly={String(!!readOnly)} onClick={onReady} /> }));
 // the graph, and the panel a record opens on it, which holds the record's links (linksFor)
 jest.mock('./graph/MemoryGraph', () => ({
   MemoryGraph: (p: { activeRecordId: string; refreshKey: number; onOpenRecord: (r: string, m?: string) => void; linksFor?: (id: string) => ReactNode }) => (
@@ -616,6 +618,96 @@ describe('an agent’s memory that keeps each person apart', () => {
     expect(page().querySelector('.mm-up')?.textContent).toBe('Brand kits·Used 2 d ago');
     expect(button('Used by 1 setup')).toBeTruthy();
     expect(button('Not used yet')).toBeUndefined();
+  });
+  test('on a phone, a person’s record shows what the list said of it at once, and its address names their memory', async () => {
+    const wide = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = () => ({ width: 390, height: 800, top: 0, left: 0, right: 390, bottom: 800, x: 0, y: 0, toJSON: () => ({}) });
+    // the person's memory is read slowly (a phone, 11-09: "Opening…" 2.5 s after the tap)
+    let release: () => void = () => {};
+    const slow = new Promise<void>((r) => { release = r; });
+    try {
+      open({ provider: CAPS.mem0, memory: agent(), records: [], extra: { ...routes(), 'GET /v1/memories/hmem_p': () => slow.then(() => person()) } });
+      await draw('data');
+      await click(page().querySelector('#rc-t-tree'));
+      // (the tree keeps a person's branch open from before)
+      if (!row('User prefers email, never phone')) await click(row('You (this console)'));
+      await click(row('User prefers email, never phone'));
+      expect(mockRouter.push).toHaveBeenCalledWith('/memories/hmem_1?tab=data&in=hmem_p&record=f2', { scroll: false });
+      const doc = page().querySelector('#rc-p-doc') as HTMLElement;
+      expect(doc.querySelector('.mm-peek')?.textContent).toBe('User prefers email, never phone');
+      expect(doc.querySelector('.mm-saved')?.textContent).toBe('Opening…');
+      await act(async () => { release(); });
+      await flush();
+      expect(doc.querySelector('.mm-peek')).toBeNull();
+      expect(doc.querySelector('.mm-crumbs.has-up')).toBeTruthy();
+    } finally { Element.prototype.getBoundingClientRect = wide; }
+  });
+});
+
+describe('a record open in the address (the final walkthrough, 11-09: a phone’s Back left the memory)', () => {
+  const narrowRect = () => ({ width: 390, height: 800, top: 0, left: 0, right: 390, bottom: 800, x: 0, y: 0, toJSON: () => ({}) });
+  const wide = Element.prototype.getBoundingClientRect;
+  afterEach(() => { Element.prototype.getBoundingClientRect = wide; });
+  const tab = (id: string) => page().querySelector(`#rc-t-${id}`) as HTMLButtonElement;
+  const row = (t: string) => Array.from(page().querySelectorAll<HTMLElement>('[role=treeitem]')).find((r) => r.querySelector('.mt-lbl')?.textContent === t);
+  /** the address as Next hands it to the page after a push, Back or Forward */
+  const at = async (rec: string | null) => { await act(async () => { root.render(<MemoryPage id="hmem_1" tabParam="data" recordParam={rec} onTab={onTab} />); }); await flush(); };
+  const two = () => open({ provider: CAPS.mem0, records: [record({ id: 'r', title: 'Mine' }), record({ id: 'r2', title: 'Other', content: [{ type: 'text', text: 'What the other says.' }] })] });
+
+  test('on a phone, opening a record from the list is pushed: Back is the list, Forward the record again', async () => {
+    Element.prototype.getBoundingClientRect = narrowRect;
+    two();
+    await draw('data');
+    expect(tab('tree').getAttribute('aria-selected')).toBe('true');
+    await click(row('Other'));
+    expect(mockRouter.push).toHaveBeenCalledWith('/memories/hmem_1?tab=data&record=r2', { scroll: false });
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(tab('doc').getAttribute('aria-selected')).toBe('true');
+    await at('r2');
+    expect(tab('doc').getAttribute('aria-selected')).toBe('true');
+    // Back: the list, still in the memory
+    await at(null);
+    expect(tab('tree').getAttribute('aria-selected')).toBe('true');
+    expect(page().querySelector('.ag-name')?.textContent).toBeTruthy();
+    // Forward: the record
+    await at('r2');
+    expect(tab('doc').getAttribute('aria-selected')).toBe('true');
+    expect(liveDoc().url.split('?')[0]).toBe('/api/memlive/hmem_1/r2');
+  });
+  test('on a phone, the Records tab after a pushed record is Back; the Record tab is pushed too', async () => {
+    Element.prototype.getBoundingClientRect = narrowRect;
+    const back = jest.spyOn(window.history, 'back').mockImplementation(() => {});
+    try {
+      two();
+      await draw('data');
+      await click(row('Other'));
+      await at('r2');
+      await click(tab('tree'));
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(tab('tree').getAttribute('aria-selected')).toBe('true');
+      await at(null);
+      mockRouter.push.mockClear();
+      await click(tab('doc'));
+      expect(mockRouter.push).toHaveBeenCalledWith('/memories/hmem_1?tab=data&record=r2', { scroll: false });
+    } finally { back.mockRestore(); }
+  });
+  test('side by side, picking a record follows in place: nothing to go Back through', async () => {
+    two();
+    await draw('data');
+    await click(row('Other'));
+    expect(mockRouter.replace).toHaveBeenCalledWith('/memories/hmem_1?tab=data&record=r2', { scroll: false });
+    expect(mockRouter.push).not.toHaveBeenCalled();
+  });
+  test('the record’s own words show until the editor is drawn, never "Opening…"', async () => {
+    two();
+    await draw('data', 'r2');
+    const doc = page().querySelector('.mm-doc') as HTMLElement;
+    expect(doc.textContent).not.toContain('Opening…');
+    expect(doc.querySelector('.mm-live .mm-ed-wait')?.textContent).toBe('What the other says.');
+    expect((doc.querySelector('.mm-ed-box') as HTMLElement).hidden).toBe(true);
+    await click(doc.querySelector('.editor-stub'));
+    expect(doc.querySelector('.mm-ed-wait')).toBeNull();
+    expect((doc.querySelector('.mm-ed-box') as HTMLElement).hidden).toBe(false);
   });
 });
 

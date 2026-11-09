@@ -14,6 +14,8 @@ export interface ResizableColumnsProps {
   /** Which pane the tabs show, for a page that moves between them; left out, the tabs keep their own. */
   tab?: string;
   onTab?: (id: string) => void;
+  /** Told when the panes become tabs and when they stop being them (a page whose tabs are places, with Back). */
+  onNarrow?: (narrow: boolean) => void;
 }
 
 /** Below this the panes are tabs, however small their minimums. */
@@ -53,7 +55,7 @@ const readChosen = (key: string): Record<string, number> => {
   } catch { return {}; }
 };
 
-export function ResizableColumns({ storageKey, panes, tab, onTab }: ResizableColumnsProps) {
+export function ResizableColumns({ storageKey, panes, tab, onTab, onNarrow }: ResizableColumnsProps) {
   const el = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
   const [chosen, setChosen] = useState<Record<string, number>>(() => (typeof window === 'undefined' ? {} : readChosen(storageKey)));
@@ -81,6 +83,9 @@ export function ResizableColumns({ storageKey, panes, tab, onTab }: ResizableCol
   }, []);
 
   const narrow = width > 0 && (width < NARROW || !fits(panes, width));
+  const narrowRef = useRef(onNarrow);
+  narrowRef.current = onNarrow;
+  useEffect(() => { narrowRef.current?.(narrow); }, [narrow]);
   const widths = useMemo(() => (width > 0 && !narrow ? resolveWidths(panes, chosen, width) : null), [panes, chosen, width, narrow]);
   const widthOf = (p: ColumnPane) => widths?.[p.id] ?? p.initial;
 

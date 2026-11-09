@@ -123,3 +123,78 @@ test('nothing kept, or nothing said of it: no line', async () => {
   await open({}, { name: 'Support' });
   expect(el.querySelector('.pg-mem')).toBeNull();
 });
+
+// ── a turn reopened from its record (the final walkthrough, 11-09: a reloaded turn lost "Recalled" and its time) ────
+// The record as the gateway keeps it: each memory tool's output (its start), what the platform recalled as the turn
+// began (memory.recalled_at_start), and when the turn began and ended (whole Unix seconds).
+const { msgsFromTurns } = jest.requireActual('@/lib/conversation') as typeof import('@/lib/conversation');
+const recalledText = (lines: string[]) => JSON.stringify({
+  results: lines.map((text, i) => ({ record: { id: `r${i}`, memory_id: 'hmem_a', type: 'fact', title: '', content: [{ type: 'text', text }], version: 1, status: 'active' }, memory: { id: 'hmem_a', name: 'Support' }, score: 0.2, why: ['query'] })),
+  parent: { id: 'hmem_a', name: 'Support' }, children: [], degraded: [], abstain: false,
+}, null, 1);
+// codex's CallToolResult, as runner _codex_tool_item hands it on (json.dumps)
+const codexOut = (text: string) => `{"content": [{"type": "text", "text": ${JSON.stringify(text)}}], "structuredContent": null, "_meta": null}`;
+const RECORD = (o: object = {}) => ({
+  id: 'resp_1', status: 'completed', user: 'Which tea do I drink?', assistant: 'You drink genmaicha.', user_files: [], files: [],
+  created_at: 1794199363, completed_at: 1794199375, ...o,
+});
+async function reopen(record: object) {
+  const { msgs } = msgsFromTurns([record as never]);
+  MSGS.splice(0, MSGS.length, ...(msgs as never[]));
+  await open(record, OWN);
+}
+const restore = () => MSGS.splice(0, MSGS.length, { role: 'user', text: 'Hi, it is Dana. I prefer written steps.' }, { role: 'assistant', blocks: [], files: [], status: 'done' } as never);
+const foot = () => Array.from(el.querySelectorAll('.turn-foot .agent-meta > span:not(.pg-acts), .turn-foot .agent-meta > a'))
+  .map((x) => x.textContent).filter((x) => x !== '·');
+
+test('reopened: a codex search kept on the record still says what it recalled, and the turn its time', async () => {
+  try {
+    await reopen(RECORD({ tools: [{ name: 'memories.memory_recall', arguments: '{"query": "tea"}', output: codexOut(recalledText(['User’s favourite tea is genmaicha', 'User likes sesame rice crackers with it'])) }] }));
+    expect(foot()).toEqual(['Done in 12 s', 'Recalled 2 things']);
+  } finally { restore(); }
+});
+
+test('reopened: a search whose output the record cut short says at least what came', async () => {
+  const whole = codexOut(recalledText(['First fact.', 'Second fact.', 'Third fact, cut in the middle.']));
+  try {
+    await reopen(RECORD({ tools: [{ name: 'memories.memory_recall', arguments: '{}', output: whole.slice(0, whole.indexOf('cut in the')) }] }));
+    expect(foot()).toEqual(['Done in 12 s', 'Recalled at least 2 things']);
+  } finally { restore(); }
+});
+
+test('what the platform recalled as the turn began says Recalled, with no search to show for it', async () => {
+  try {
+    await reopen(RECORD({ tools: [], memory: { remembered: 0, records: [], pending: false, recalled_at_start: 2 } }));
+    const line = el.querySelector('.turn-foot .pg-recalled');
+    expect(line?.textContent).toBe('Recalled 2 things');
+    expect(line?.getAttribute('title')).toBe('2 things recalled as the task began');
+    expect(el.querySelectorAll('.turn-foot .pg-mem')).toHaveLength(1);
+  } finally { restore(); }
+});
+
+test('with both, one line: the larger, never the sum, and the title says each', async () => {
+  try {
+    await reopen(RECORD({ tools: [{ name: 'memories.memory_recall', arguments: '{}', output: codexOut(recalledText(['Tea is genmaicha'])) }],
+      memory: { remembered: 1, records: [{ id: 'k1', memory_id: 'hmem_a' }], recalled_at_start: 3 } }));
+    expect(foot()).toEqual(['Done in 12 s', 'Recalled 3 things', 'Remembered 1 thing']);
+    expect(el.querySelector('.turn-foot .pg-recalled')?.getAttribute('title')).toBe('3 things recalled as the task began; 1 thing found by its own searches');
+  } finally { restore(); }
+});
+
+test('a record that says nothing of memory or time: just Done, no line', async () => {
+  try {
+    await reopen({ id: 'resp_1', status: 'completed', user: 'Hi', assistant: 'Hello', tools: [], files: [] });
+    expect(foot()).toEqual(['Done']);
+  } finally { restore(); }
+});
+
+test('a save that failed: the reason once, never "wasn’t kept" twice, and no guessed cause', async () => {
+  await open({ memory: { remembered: 0, records: [], failed: true, reason: 'Mem0 did not answer: HTTP 500' } }, OWN);
+  expect(el.querySelector('.pg-mem-failed')?.textContent).toBe("Couldn't remember this one: Mem0 did not answer: HTTP 500");
+  await act(async () => { root.unmount(); }); root = createRoot(el);
+  await open({ memory: { remembered: 0, records: [], failed: true, reason: "This conversation wasn't kept: Mem0 did not answer: HTTP 500." } }, OWN);
+  expect(el.querySelector('.pg-mem-failed')?.textContent).toBe("Couldn't remember this one: Mem0 did not answer: HTTP 500");
+  await act(async () => { root.unmount(); }); root = createRoot(el);
+  await open({ memory: { failed: true } }, OWN);
+  expect(el.querySelector('.pg-mem-failed')?.textContent).toBe("Couldn't remember this one");
+});
