@@ -20,8 +20,12 @@ from fastapi import HTTPException
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux") or os.geteuid() != 0,
-                                reason="the write-wall is root's, on Linux")
+_ROOT_ON_LINUX = sys.platform.startswith("linux") and os.geteuid() == 0
+if os.environ.get("HR_REQUIRE_ROOT_TESTS") == "1" and not _ROOT_ON_LINUX:
+    # The CI step that exists to run this file as root sets this, so the file can never quietly go back to
+    # skipping there: anything other than root on Linux fails the step instead.
+    raise RuntimeError("HR_REQUIRE_ROOT_TESTS=1, and these tests are not running as root on Linux")
+pytestmark = pytest.mark.skipif(not _ROOT_ON_LINUX, reason="the write-wall is root's, on Linux")
 UID = 20777
 
 
@@ -33,9 +37,9 @@ def _session(monkeypatch):
     return ws
 
 
-def _victim(text="root's own"):
+def _victim(text="root's own", dir_mode=0o700):
     d = tempfile.mkdtemp(prefix="hrvictim-")
-    os.chmod(d, 0o700)                         # root's, as /data/secrets or another session's directory is
+    os.chmod(d, dir_mode)                      # root's, as /data/secrets or another session's directory is
     f = pathlib.Path(d) / "victim"
     f.write_text(text)
     os.chmod(f, 0o600)
@@ -106,6 +110,21 @@ def test_the_session_identity_is_this_threads_only(monkeypatch):
     victim.write_text("root again")                                         # restored on leaving
 
 
+class _StubProc:
+    """Stands in for a CLI that exits at once with nothing to say: only the runner's own writes happen."""
+
+    def __init__(self, cmd, **kw):
+        self.args, self.pid, self.returncode = cmd, 999999, 0
+        self.stdout = __import__("io").StringIO("")
+        self.stderr = __import__("io").StringIO("")
+        self.stdin = __import__("io").StringIO()
+    poll = wait = lambda self, *a, **k: 0
+    kill = terminate = send_signal = lambda self, *a, **k: None
+    communicate = lambda self, *a, **k: ("", "")
+    __enter__ = lambda self: self
+    __exit__ = lambda self, *exc: False
+
+
 @pytest.mark.parametrize("backend,provider,auth", [
     ("codex", "openai", {"api_key": "k-0123456789abcdef", "base_url": "https://up.example/v1"}),
     ("claude", "anthropic", {"api_key": "k-0123456789abcdef"}),
@@ -125,17 +144,7 @@ def test_a_new_sessions_first_turn_builds_as_the_session(backend, provider, auth
     monkeypatch.setattr(server, "WORKSPACE_ROOT", root)
     monkeypatch.setattr(server, "_ws", lambda identifier="": os.path.join(root, identifier or "s1"))
     spawned = []
-
-    class _P:
-        def __init__(self, cmd, **kw):
-            self.args, self.pid, self.returncode = cmd, 999999, 0
-            self.stdout = self.stderr = __import__("io").StringIO("")
-        poll = wait = lambda self, *a, **k: 0
-        kill = terminate = send_signal = lambda self, *a, **k: None
-        communicate = lambda self, *a, **k: ("", "")
-        __enter__ = lambda self: self
-        __exit__ = lambda self, *exc: False
-    monkeypatch.setattr(server.subprocess, "Popen", lambda cmd, *a, **kw: spawned.append(cmd) or _P(cmd, **kw))
+    monkeypatch.setattr(server.subprocess, "Popen", lambda cmd, *a, **kw: spawned.append(cmd) or _StubProc(cmd, **kw))
     r = TestClient(server.app).post("/turn", params={"identifier": f"hsess{backend}"},
                                     json={"backend": backend, "provider": provider, "model": server.BACKENDS[backend]["default_model"],
                                           "prompt": "hi", "auth": auth,
@@ -210,3 +219,118 @@ def test_a_planted_link_refuses_the_turn_at_once(monkeypatch):
         server.turn(req, "hsessplanted")
     assert e.value.status_code == 409 and root not in e.value.detail
     assert victim.read_text() == "root's own"
+
+
+# ── every per-turn configuration write, through the real /turn path ───────────────────────────
+# Each family below is a file the runner writes into the session's tree on every turn (or on a continued one).
+# Before the turn its real path is a link to a file of root's, mode 0600, in a directory a session can pass
+# through: the name resolves, so the write is genuinely attempted. The turn either runs (200) or is refused in
+# words (a 4xx with a detail), and the file of root's keeps its bytes, its owner and its mode, with nothing
+# written beside it.
+
+def _workspaces(monkeypatch):
+    root = tempfile.mkdtemp(prefix="hrroot-")
+    os.chmod(root, 0o751)                     # as the image makes /data/workspaces: passable, not listable
+    monkeypatch.setattr(server, "_SESSION_UIDS", True)
+    monkeypatch.setattr(server, "WORKSPACE_ROOT", root)
+    monkeypatch.setattr(server, "_ws", lambda identifier="": os.path.join(root, identifier or "s1"))
+    monkeypatch.setattr(server.subprocess, "Popen", lambda cmd, *a, **kw: _StubProc(cmd, **kw))
+    return root
+
+
+def _own(ws: pathlib.Path, rel: str) -> pathlib.Path:
+    """`rel`'s parent folders inside the session, each the session's, as a turn of its own would leave them."""
+    p = ws
+    for part in pathlib.Path(rel).parts[:-1]:
+        p = p / part
+        p.mkdir(exist_ok=True)
+        os.lchown(p, UID, UID)
+    return ws / rel
+
+
+def _settle(client, ident: str, r) -> dict:
+    """The finished turn's record, or {} when the turn was refused before it started."""
+    if r.status_code != 200:
+        return {}
+    tid = r.json()["turn_id"]
+    for _ in range(300):
+        got = client.get(f"/turn/{tid}", params={"identifier": ident}).json()
+        if got.get("done"):
+            return got
+        __import__("time").sleep(0.05)
+    raise AssertionError("the turn did not finish")
+
+
+def _assert_clean(r, before: tuple) -> None:
+    """A turn that ran, or one refused in words: never an unhandled error."""
+    if r.status_code != 200:
+        assert 400 <= r.status_code < 500, (r.status_code, r.text[:300])
+        assert "detail" in r.json() and "Traceback" not in r.text, r.text[:300]
+    d, victim, st = before
+    assert victim.read_text() == "root's own", "the file of root's was written through the link"
+    now = os.stat(victim)
+    assert (now.st_uid, now.st_gid, now.st_mode & 0o7777) == (st.st_uid, st.st_gid, st.st_mode & 0o7777)
+    assert sorted(os.listdir(d)) == ["victim"], f"written beside it: {sorted(os.listdir(d))}"
+
+
+_KEYED = {"api_key": "k-0123456789abcdef", "base_url": "https://up.example/v1"}
+_WRITE_FAMILIES = {
+    # family: (backend, provider, auth, the planted path, extra turn fields)
+    "claude-settings": ("claude", "anthropic", {"api_key": "k-0123456789abcdef"},
+                        ".harness/home/.claude/settings.json", {"tools_disabled": ["Bash"]}),
+    "claude-instructions": ("claude", "anthropic", {"api_key": "k-0123456789abcdef"}, "CLAUDE.md", {}),
+    "gemini-settings": ("gemini", "google", {"api_key": "k-0123456789abcdef"},
+                        ".harness/home/.gemini/settings.json", {"tools_disabled": ["run_shell_command"]}),
+    "qwen-settings": ("qwen", "openai-api", _KEYED, ".harness/home/.qwen/settings.json",
+                      {"tools_disabled": ["run_shell_command"]}),
+    "cline-global-settings": ("cline", "openai-api", _KEYED,
+                              ".harness/home/.cline/data/settings/global-settings.json",
+                              {"tools_disabled": ["run_commands"]}),
+    "cline-mcp-settings": ("cline", "openai-api", _KEYED,
+                           ".harness/home/.cline/data/settings/cline_mcp_settings.json", {}),
+    "cline-providers": ("cline", "openai-api", _KEYED, ".harness/home/.cline/data/settings/providers.json", {}),
+    "codex-config": ("codex", "openai", _KEYED, ".harness/home/.codex/config.toml", {"tools_disabled": ["shell"]}),
+    "codex-instructions": ("codex", "openai", _KEYED, "AGENTS.md", {}),
+    "codex-rollout": ("codex", "openai", _KEYED,
+                      ".harness/home/.codex/sessions/2026/11/09/rollout-2026-11-09T00-00-00-hsessrollout.jsonl",
+                      {"codex_appserver": True}),
+    "hermes-config": ("hermes", "openai-api", _KEYED, ".harness/home/.hermes/config.yaml",
+                      {"tools_disabled": ["terminal"]}),
+    "hermes-state": ("hermes", "openai-api", _KEYED, ".harness/home/.hermes/state.db", {}),
+    "fast-agent-session": ("fast-agent", "openai-api", _KEYED,
+                           ".harness/fast-agent/sessions/hsessresumed/session.json", {}),
+}
+
+
+@pytest.mark.parametrize("continued", [False, True], ids=["first-turn", "continued-turn"])
+@pytest.mark.parametrize("family", sorted(_WRITE_FAMILIES))
+def test_a_per_turn_write_through_a_planted_link_leaves_roots_file_alone(family, continued, monkeypatch):
+    from fastapi.testclient import TestClient
+    backend, provider, auth, rel, extra = _WRITE_FAMILIES[family]
+    root = _workspaces(monkeypatch)
+    ident = f"hsessw{family.replace('-', '')}{int(continued)}"
+    ws = pathlib.Path(root, ident)
+    ws.mkdir()
+    os.chown(ws, UID, UID)
+    os.chmod(ws, 0o700)
+    d, victim = _victim(dir_mode=0o755)        # reachable by name, so the write is attempted, not skipped
+    link = _own(ws, rel)
+    link.symlink_to(victim)
+    os.lchown(link, UID, UID)
+    body = {"backend": backend, "provider": provider, "model": server.BACKENDS[backend]["default_model"],
+            "prompt": "hi", "auth": auth, "agent_doc": "first instructions", **extra}
+    if continued:
+        # A continued task whose instructions were edited since its last turn, so the paths that run only
+        # then (a stored prompt let go, the note that the instructions changed) run too.
+        doc = server._agent_doc_path(str(ws), backend)
+        if not doc.is_symlink():
+            _own(ws, str(doc.relative_to(ws)))
+            doc.write_text("the instructions before the edit\n")
+            os.lchown(doc, UID, UID)
+        body.update(resume_session_id="hsessresumed", agent_doc="edited instructions")
+    before = (d, victim, os.stat(victim))
+    client = TestClient(server.app, raise_server_exceptions=False)
+    r = client.post("/turn", params={"identifier": ident}, json=body)
+    _settle(client, ident, r)
+    _assert_clean(r, before)
+
