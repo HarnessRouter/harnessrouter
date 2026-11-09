@@ -13106,13 +13106,20 @@ async def share_meta(token: str) -> dict:
     return {k: m.get(k) for k in _SHARE_META_FIELDS} | {"session_id": sid}
 
 
+# A memory step as a share link shows it: that memory was used, never what or which.
+_SHARED_MEMORY_STEP = {"name": "memory", "arguments": ""}
+
+
 def _turns_for_a_link(data: dict) -> dict:
-    """A conversation as a share link shows it, to anyone who holds the link. A memory tool's answer, kept on a reopened
-    turn (_MEMORY_TOOL), is what a recall found in the person's memory and the agent's, from tasks the link was never
-    about: the person's and the operator's to read, never a link-holder's. So it is not here, and the turn's memory
-    note says how many things were kept or recalled, never which records in which memory."""
+    """A conversation as a share link shows it, to anyone who holds the link. A memory tool's step (_MEMORY_TOOL) is the
+    person's and the operator's to read, never a link-holder's: its answer is what a recall found in the person's
+    memory and the agent's, from tasks the link was never about; its arguments are the fact a remember kept (often about
+    the person, or about someone else) or what a recall looked up about someone; and its ids are internal. So a memory
+    step is only "memory" here, with no arguments, no answer and no ids, and the turn's memory note says how many things
+    were kept or recalled, never which records in which memory. Every other tool shows as it always has."""
     for t in data.get("turns") or []:
-        t["tools"] = [{k: v for k, v in x.items() if k != "output"} if isinstance(x, dict) else x
+        t["tools"] = [(dict(_SHARED_MEMORY_STEP) if _MEMORY_TOOL.search(str(x.get("name") or ""))
+                       else {k: v for k, v in x.items() if k != "output"}) if isinstance(x, dict) else x
                       for x in t.get("tools") or []]
         note = t.get("memory")
         if isinstance(note, dict):

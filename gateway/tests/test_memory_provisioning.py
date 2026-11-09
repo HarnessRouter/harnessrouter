@@ -615,9 +615,34 @@ def test_a_share_link_shows_no_memory_tools_answer_and_no_record_of_a_memory(cli
     assert shared.status_code == 200, shared.text
     assert "4512" not in shared.text and "hrec_kept1" not in shared.text and "hmem_" not in shared.text
     turn = shared.json()["turns"][0]
-    assert turn["tools"] == [{"name": "mcp__memories__memory_recall", "arguments": '{"query": "locker"}'}]
+    assert turn["tools"] == [{"name": "memory", "arguments": ""}], "that memory was used, never what it looked up"
     assert turn["memory"] == {"remembered": 1, "pending": False, "recalled_at_start": 2}
     assert (turn["user"], turn["assistant"]) == ("Where is my locker?", "Your locker is ready.")
+
+
+def test_a_share_link_shows_a_memory_step_without_what_it_kept_or_looked_up(client):
+    """What a remember kept is its argument: often a fact about the person, or about someone else. What a recall looked
+    up says what the agent asked about someone, and the ids are internal. A link-holder sees only that memory was used,
+    in every byte of the share; the operator still reads the step whole, and other tools show as they always have."""
+    _hid, sid, rid = _observed_turn(client, "Shared desk")
+    kept, asked = "MARKER-KEPT-7f3a91", "MARKER-ASKED-c2e6d4"
+    output = [{"type": "function_call", "call_id": "c1", "name": "mcp__memories__memory_remember",
+               "arguments": json.dumps({"text": kept, "memory_id": "hmem_" + "b" * 32})},
+              {"type": "function_call_output", "call_id": "c1", "output": json.dumps({"remembered": {"id": "hrec_" + "c" * 32}})},
+              {"type": "function_call", "call_id": "c2", "name": "memories.memory_recall", "arguments": json.dumps({"query": asked})},
+              {"type": "function_call", "call_id": "c3", "name": "Bash", "arguments": '{"command": "ls"}'},
+              {"type": "message", "content": [{"type": "output_text", "text": "Noted."}]}]
+    run(gw._resp_put(rid, {"id": rid, "status": "completed", "output": output, "_input": [{"content": "Please note it."}]},
+                     ORG, sid, None, "completed", time.time(), True))
+    own = client.get(f"/v1/sessions/{sid}/turns", headers=ADA)
+    assert kept in own.text and asked in own.text, "the operator reads the steps whole"
+    token = client.post(f"/v1/sessions/{sid}/share", headers=ADA).json()["token"]
+    shared = client.get(f"/share/{token}/turns")
+    assert shared.status_code == 200, shared.text
+    for never in (kept, asked, "hmem_", "hrec_", "memory_remember", "memory_recall"):
+        assert never.encode() not in shared.content, never
+    assert shared.json()["turns"][0]["tools"] == [{"name": "memory", "arguments": ""}, {"name": "memory", "arguments": ""},
+                                                  {"name": "Bash", "arguments": '{"command": "ls"}'}]
 
 
 def test_a_turn_that_wasnt_sent_to_be_kept_gets_no_note(client):
