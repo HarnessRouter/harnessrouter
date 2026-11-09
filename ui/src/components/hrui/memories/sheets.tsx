@@ -178,8 +178,8 @@ function useEngineChoice(name: string, desc: string, on: boolean) {
 export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCreated, onConnect }: {
   providers: Provider[] | null; failed: boolean; retry: () => void; picked?: string;
   onClose: () => void; onCreated: (m: Memory, p: Provider) => void;
-  /** where no engine is connected yet: the way to connect one */
-  onConnect?: () => void;
+  /** connecting an engine: the one named (from its "Not running here" row), or a choice of them */
+  onConnect?: (id?: string) => void;
 }) {
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
@@ -219,13 +219,26 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
           ) : !providers ? (
             <Skel label="Reading the engines">{[0, 1, 2, 3].map((i) => <SkLine key={i} w="100%" h={52} r={12} style={{ marginTop: i ? 6 : 0 }} />)}</Skel>
           ) : !all.length ? (
-            <p className="set-help mm-eng-none">No engine is connected yet. {onConnect ? <button type="button" className="link-q inl" onClick={onConnect}>Connect an engine</button> : null}</p>
+            <p className="set-help mm-eng-none">No engine is connected yet. {onConnect ? <button type="button" className="link-q inl" onClick={() => onConnect()}>Connect an engine</button> : null}</p>
           ) : (
             <>
               <div className="mm-engs" role="radiogroup" aria-labelledby="mmCrEng" onKeyDown={onKey}>
                 {all.map((p) => {
                   const can = !!p.connected, on = sel?.id === p.id, rec = recommended?.id === p.id;
                   const line = VENDORS[p.id]?.line || '';
+                  if (!can) {
+                    // not running here: shown, and connected from its own row
+                    return (
+                      <div key={p.id} role="radio" aria-checked={false} aria-disabled="true" data-sv={p.id} className="mm-eng-o off">
+                        <i className="mm-eng-dot" aria-hidden="true" />
+                        <span className="mm-eng-t">
+                          <span className="mm-eng-n"><b>{vendorName(p.id)}</b><span className="mm-eng-nr">Not running here</span></span>
+                          {line ? <small>{line}</small> : null}
+                        </span>
+                        {onConnect ? <button type="button" className="link-q inl mm-eng-cn" onClick={() => onConnect(p.id)}>Connect</button> : null}
+                      </div>
+                    );
+                  }
                   return (
                     <button key={p.id} type="button" role="radio" aria-checked={on} disabled={!can} data-sv={p.id}
                       tabIndex={can && (sel ? on : p === open[0]) ? 0 : -1}
@@ -249,7 +262,6 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
                 // nothing answering here to recommend: the service says why, and the connected ones can still be picked
                 <p className="set-help mm-eng-none" role="status">{auto.reason}</p>
               ) : null}
-              {!open.length && onConnect ? <p className="set-help mm-eng-none">No engine is connected yet. <button type="button" className="link-q inl" onClick={onConnect}>Connect an engine</button></p> : null}
             </>
           )}
         </div>

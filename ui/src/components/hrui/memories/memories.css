@@ -633,3 +633,5 @@
 #hrui .mm-stand .tog,#hrui .mm-stand .btn{flex:none}
 @media (max-width:560px){#hrui .mm-stand{flex-wrap:wrap}#hrui .mm-stand .btn{margin-left:auto}}
 
+#hrui .mm-eng-o .mm-eng-cn{flex:none;align-self:center;font-size:13px}
+#hrui .mm-found{margin:0 0 14px;font-size:13px;color:var(--muted)}

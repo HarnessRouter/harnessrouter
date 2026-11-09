@@ -2,8 +2,8 @@
 // Memories (docs: the design's memoriesView): one card per memory, each with its picture, the engine that keeps it,
 // which setups use it and when it was last used. Search narrows by name, description, engine or setup, and the list is
 // in the order it was last used (the memories spec, C3). Every figure is the service's; what a service before 0.40
-// doesn't say (who uses it, when) is not drawn. Connecting an engine, and finding the ones running beside this
-// instance, are under More. With no engine connected the page says so in one sentence and leads to connecting one.
+// doesn't say (who uses it, when) is not drawn. With no engine connected here the page looks for the ones running beside
+// this instance by itself, once, says what it found, and leads to connecting one; New memory's list connects any other.
 //
 // A card's picture (Richard 11-09) is its schema graph as the Schema tab draws it, kept by the service and only loaded
 // here, or the memory's brick where there is no graph (cover.ts). The page reads nothing else for it: the covers still
@@ -13,16 +13,15 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { findEngines, getSchema, listMemories, type Memory } from '@/lib/memories';
 import { ago } from '../setups';
-import { plain } from '../setup/settingsModel';
 import { Skel, SkCards, SkHead } from '../Skel';
 import { toast } from '../toast';
 import { hasSchema } from './caps';
 import { Ghost } from './CardArt';
 import { canDraw, coverGraphOf, coverState, drawnCover, isGraph, keepCover, picKindOf, type Drawn } from './cover';
 import { MemoryArt } from './MemoryArt';
-import { DOTS, engineOf, msOf, PLUS, SEARCH, shownName, speaksUse, useDismiss, useProviders, X } from './parts';
+import { engineOf, msOf, PLUS, SEARCH, shownName, speaksUse, useProviders, X } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
-import { ChooseServiceSheet, NewMemorySheet, UseInSheet } from './sheets';
+import { ChooseServiceSheet, ConnectSheet, NewMemorySheet, UseInSheet } from './sheets';
 import { vendorName } from './vendors';
 import './memories.css';
 
@@ -34,7 +33,7 @@ const idle = () => new Promise<void>((r) => {
   if (w.requestIdleCallback) w.requestIdleCallback(() => r(), { timeout: 600 }); else setTimeout(r, 40);
 });
 
-type Open = { k: 'new'; picked?: string } | { k: 'choose'; then?: 'new' } | { k: 'use'; m: Memory } | null;
+type Open = { k: 'new'; picked?: string } | { k: 'choose'; then?: 'new' } | { k: 'connect'; id: string } | { k: 'use'; m: Memory } | null;
 type Sort = 'recent' | 'name';
 const enc = encodeURIComponent;
 // Cards or a list, as on Studio, and remembered the same way (for this person, in this browser)
@@ -76,11 +75,6 @@ export function MemoriesPage() {
   const [vm, setVm] = useState<View>('cards');
   const [q, setQ] = useState('');
   const [sort, setSort] = useState<Sort>('recent');
-  const [more, setMore] = useState(false);
-  const [finding, setFinding] = useState(false);
-  const moreWrap = useRef<HTMLSpanElement | null>(null);
-  const closeMore = useCallback(() => setMore(false), []);
-  useDismiss(more, moreWrap, closeMore);
   useEffect(() => { try { if (localStorage.getItem(VM_KEY) === 'list') setVm('list'); } catch { /* none */ } }, []);
   const pick = (v: View) => { setVm(v); try { localStorage.setItem(VM_KEY, v); } catch { /* none */ } };
 
@@ -150,22 +144,24 @@ export function MemoriesPage() {
     toast(`${m.name} created.`);
     router.push(`/memories/${enc(m.id)}?tab=data`);
   };
-  /** Look for engines running beside this instance, and say which were connected (the providers read before and
-   *  after), then, in the service's words, any that is running and needs its key, or that couldn't be connected. */
-  const find = async () => {
-    setMore(false);
-    if (finding) return;
-    setFinding(true);
-    const before = new Set((providers || []).filter((p) => p.connected).map((p) => p.id));
-    try {
-      const said = await findEngines();
-      const after = (await reloadProviders()) || [];
-      const found = after.filter((p) => p.connected && !before.has(p.id)).map((p) => vendorName(p.id));
-      const more = said.filter((x) => x.state === 'running' || x.state === 'refused').map((x) => x.message).filter(Boolean);
-      toast([found.length ? `${found.join(', ')} connected.` : more.length ? '' : 'No new engine found running here.', ...more].filter(Boolean).join(' '));
-    } catch (e) { toast(plain(e, 'Engines could not be looked for just now. Try again.')); }
-    finally { setFinding(false); }
-  };
+  // With no engine connected here (nor the instance's, inherited), the engines running beside this instance are looked
+  // for once, by themselves (the service connects those that need no key, on an instance with one operator, and
+  // refuses elsewhere, quietly), and what was found is said in one line.
+  const [found, setFound] = useState('');
+  const looked = useRef(false);
+  useEffect(() => {
+    if (!providers || looked.current || providers.some((p) => p.connected)) return;
+    looked.current = true;
+    void (async () => {
+      try {
+        const said = await findEngines();
+        const after = (await reloadProviders()) || [];
+        const now = after.filter((p) => p.connected).map((p) => vendorName(p.id));
+        const more = said.filter((x) => x.state === 'running' || x.state === 'refused').map((x) => x.message).filter(Boolean);
+        setFound([now.length ? `${now.join(', ')} connected.` : '', ...more].filter(Boolean).join(' '));
+      } catch { /* not this instance's to look: the page says what it can do */ }
+    })();
+  }, [providers, reloadProviders]);
 
   const loading = !failed && (!list || (!providers && !providersFailed));
   const noneConnected = !!providers && !providers.some((p) => p.connected);
@@ -180,18 +176,6 @@ export function MemoriesPage() {
     if (sort === 'name' || !dated) return [...out].sort((a, b) => a.name.localeCompare(b.name));
     return [...out].sort((a, b) => (msOf(b.last_used_at) || 0) - (msOf(a.last_used_at) || 0) || a.name.localeCompare(b.name));
   }, [L, needle, sort, dated]);
-
-  const moreMenu = (
-    <span className="mm-popw" ref={moreWrap}>
-      <button type="button" className="icon-btn mm-more" aria-label="More" title="More" aria-haspopup="menu" aria-expanded={more} onClick={() => setMore(!more)}>{DOTS}</button>
-      {more ? (
-        <div className="mm-pop mm-pop-r" role="menu">
-          <button type="button" className="mm-mi" role="menuitem" onClick={() => { setMore(false); setOpen({ k: 'choose' }); }}><b>Connect an engine</b><small>An engine you run, by its address</small></button>
-          <button type="button" className="mm-mi" role="menuitem" disabled={finding} onClick={() => void find()}><b>{finding ? 'Looking for engines…' : 'Find engines'}</b><small>The ones running beside this instance</small></button>
-        </div>
-      ) : null}
-    </span>
-  );
 
   const top = (
     <div className="list-top mm-top">
@@ -208,7 +192,6 @@ export function MemoriesPage() {
             </div>
           ) : null}
           {noneConnected && !L.length ? null : <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>}
-          {moreMenu}
         </div>
       )}
     </div>
@@ -241,10 +224,10 @@ export function MemoriesPage() {
       <div className="mm-empty-list">
         <div className="mm-art big"><Ghost /></div>
         <h2>Connect a memory engine</h2>
-        <p>Your agents remember through an engine. Connect one, or find the ones running beside this instance.</p>
+        <p>Your agents remember through an engine. Connect one to start.</p>
+        {found ? <p className="mm-found" role="status">{found}</p> : null}
         <div className="mm-none-acts">
           <button type="button" className="btn primary" onClick={() => setOpen({ k: 'choose' })}>Connect an engine</button>
-          <button type="button" className="btn" disabled={finding} onClick={() => void find()}>{finding ? 'Looking…' : 'Find engines'}</button>
         </div>
       </div>
     );
@@ -253,6 +236,7 @@ export function MemoriesPage() {
       <div className="mm-empty-list">
         <div className="mm-art big"><Ghost /></div>
         <h2>No memories yet</h2>
+        {found ? <p className="mm-found" role="status">{found}</p> : null}
         <p>A memory is where your agents keep what should outlast one task: who your customers are, the rules they follow, what happened last time. A new setup gets one of its own.</p>
         <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>
       </div>
@@ -325,7 +309,11 @@ export function MemoriesPage() {
       </div>
       {open?.k === 'new' ? (
         <NewMemorySheet providers={providers} failed={providersFailed} retry={() => void reloadProviders()} picked={open.picked}
-          onClose={() => setOpen(null)} onCreated={created} onConnect={() => setOpen({ k: 'choose', then: 'new' })} />
+          onClose={() => setOpen(null)} onCreated={created} onConnect={(id) => setOpen(id ? { k: 'connect', id } : { k: 'choose', then: 'new' })} />
+      ) : null}
+      {open?.k === 'connect' ? (
+        <ConnectSheet id={open.id} onClose={() => setOpen({ k: 'new' })}
+          onConnected={async (id) => { await reloadProviders(); setOpen({ k: 'new', picked: id }); toast(`${vendorName(id)} connected.`); }} />
       ) : null}
       {open?.k === 'choose' && providers ? (
         <ChooseServiceSheet providers={providers} onClose={() => setOpen(null)}
