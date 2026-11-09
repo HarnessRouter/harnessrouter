@@ -30,6 +30,7 @@ import time
 import uuid
 
 from memory_live import Announced
+from memory_tools import REFUSE_STANDING, STANDING_IS_A_PERSONS, set_by_a_person
 
 PRIVILEGES = ("read", "write", "create", "delete")
 CORE_TYPES = ("episode", "fact", "note", "procedure", "link", "entity")
@@ -663,6 +664,7 @@ def clean_record(record: dict) -> dict:
 
 async def observe(prov: "Provider", mid: str, episodes: list[dict], writer: dict) -> dict:
     """Episodes kept, cleaned first. Every observer comes through here: a person's request and a finished task."""
+    _no_agent_standing(writer, *[{k: v for k, v in (e.get("attributes") or {}).items() if k == "standing"} for e in episodes])
     return await prov.observe(mid, [{**e, "content": _clean_parts(e.get("content"))} for e in episodes], writer)
 
 
@@ -913,6 +915,77 @@ async def _facts_about(prov: Provider, mid: str, subject: str, predicate) -> lis
     return out
 
 
+# ── a standing instruction is a person's ─────────────────────────────────────────────────────
+# It is placed in the instructions of every agent that shares the memory, so an agent never sets one, never changes
+# whether a record stands, and never edits or closes one a person set (memory_tools.set_by_a_person). Held here, where
+# every write passes, whatever carried it: a tool, an operation, a named or a free query, a REST call. The agent tools
+# drop an agent's `standing` before it gets here and say so (memory_tools.NOTE_STANDING); this is what holds when
+# anything else carries it. A person's own key writes as that person.
+def is_agent(writer: dict | None) -> bool:
+    """Whether a write is an agent's: a member that is an agent (writer_of(..., agent=True), what the agent tools write
+    as), a service, or a key an agent holds for someone (`delegated`)."""
+    w = writer if isinstance(writer, dict) else {}
+    return (w.get("kind") == "member" and w.get("type") == "agent") or w.get("kind") == "service" or bool(w.get("delegated"))
+
+
+def _names_standing(*things, words: bool = True) -> bool:
+    """Whether what a write carries names `standing`: as a key anywhere in it, and, with `words`, as a word in its text.
+    What a query will write isn't known before it runs, so one whose statement, declared parameters or given values
+    name the attribute is taken as setting it."""
+    def walk(x) -> bool:
+        if isinstance(x, dict):
+            return any(str(k).casefold() == "standing" or walk(v) for k, v in x.items())
+        if isinstance(x, (list, tuple)):
+            return any(walk(v) for v in x)
+        return words and isinstance(x, str) and bool(re.search(r"\bstanding\b", x, re.I))
+    return any(walk(t) for t in things)
+
+
+def _no_agent_standing(writer: dict, *carried, words: bool = True) -> None:
+    if is_agent(writer) and _names_standing(*carried, words=words):
+        raise MemoryError(403, "memory_forbidden", STANDING_IS_A_PERSONS)
+
+
+async def _not_a_persons_standing(prov: Provider, mid: str, rid: str, writer: dict) -> None:
+    """An agent's write to a record a person set as standing is refused: even a small change makes the version the
+    agent's, which takes it out of everyone's instructions."""
+    if is_agent(writer):
+        cur = await prov.get(mid, rid)
+        if cur and set_by_a_person(cur):
+            raise MemoryError(403, "memory_forbidden", REFUSE_STANDING)
+
+
+async def revise(prov: Provider, mid: str, rid: str, patch: dict, writer: dict, expected: int | None = None) -> dict:
+    """A record changed. Every writer comes through here, a person's request and an agent's tool."""
+    _no_agent_standing(writer, {k: v for k, v in (patch.get("attributes") or {}).items() if k == "standing"})
+    await _not_a_persons_standing(prov, mid, rid, writer)
+    if expected is None:
+        return await prov.revise(mid, rid, patch, writer)
+    return await prov.revise(mid, rid, patch, writer, expected=expected)
+
+
+async def operate(prov: Provider, mid: str, rid: str, name: str, body: dict, writer: dict, needs: str) -> dict:
+    """A type's operation on a record, run as the writer: one that writes is a write to that record."""
+    if needs == "write":
+        _no_agent_standing(writer, body, words=False)      # an input's own words ("a standing meeting") are not a key
+        await _not_a_persons_standing(prov, mid, rid, writer)
+    return await prov.operate(mid, rid, name, body, writer)
+
+
+async def run_query(prov: Provider, mid: str, q: dict, params: dict, writer: dict) -> dict:
+    """A query the memory's owner defined, run for the writer. One that writes and names `standing` is never an
+    agent's to run (_names_standing)."""
+    if q.get("requires", "read") == "write":
+        _no_agent_standing(writer, q.get("body"), q.get("statement"), q.get("params"), params)
+    return await prov.run_query(mid, str(q["name"]), params)
+
+
+async def free_query(prov: Provider, mid: str, language: str, statement: str, params: dict, write: bool, writer: dict) -> dict:
+    if write:
+        _no_agent_standing(writer, statement, params)
+    return await prov.free_query(mid, language, statement, params, write)
+
+
 async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict:
     """A stated record kept, with what the chapter asks of the server around it. Every writer comes
     through here, a person's request and an agent's tool, on every provider.
@@ -921,6 +994,7 @@ async def remember(prov: Provider, mid: str, record: dict, writer: dict) -> dict
     provider that declares `holds`, takes its place among the others on its subject and predicate (§4.4),
     and the answer says what that did. That logic is here because it reads only what every provider keeps:
     the attributes, the references and the world time of a stated fact."""
+    _no_agent_standing(writer, {k: v for k, v in (record.get("attributes") or {}).items() if k == "standing"})
     record = clean_record(record)
     a = record.get("attributes") or {}
     if a.get("stated_at") and not (record.get("time") or {}).get("valid_from"):
@@ -963,6 +1037,7 @@ async def forget(prov: Provider, mid: str, rid: str, writer: dict) -> dict:
     """A record closed, for a person's request and an agent's tool alike. The words of what a conversation
     taught are still in that conversation, and an agent asked to forget something can't be relied on to know
     that: real turns left exactly this behind. So the conversation closes with it. What else it taught stays."""
+    await _not_a_persons_standing(prov, mid, rid, writer)
     before = await prov.get(mid, rid)
     out = await prov.forget(mid, rid, writer)
     by_server = {"kind": "provider", "id": prov.id, "on_behalf_of": f"{writer.get('kind')}:{writer.get('id')}"}

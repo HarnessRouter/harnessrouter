@@ -193,7 +193,8 @@ _FILE_SAYS = (" To keep a file you made (an image you generated, a document you 
 # (Seam.offers()["standing"]): everywhere else the word would only raise the question.
 _STANDING_SAYS = (". `standing` is not set here: a standing instruction, given to everyone who shares a memory, is set "
                   "by a person in the console")
-NOTE_STANDING = "Kept as a note. A standing instruction is set by a person in the console."
+STANDING_IS_A_PERSONS = "A standing instruction is set by a person in the console."
+NOTE_STANDING = "Kept as a note. " + STANDING_IS_A_PERSONS
 REFUSE_STANDING = "This is a standing instruction a person set; only a person can change it in the console."
 
 # When to call memory_remember, said on the tool itself. An agent kept things nobody asked it to keep, with

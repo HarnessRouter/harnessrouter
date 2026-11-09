@@ -78,7 +78,7 @@ def test_mem0_is_never_sent_standing_for_what_it_draws(monkeypatch):
     sent = _wire(monkeypatch, memory_mem0, lambda *a: {"results": []})
     prov = memory_mem0.Mem0Server("k", "http://vendor.test")
     run(mp.observe(prov, "hmem_m", [{"content": [{"type": "text", "role": "user", "text": ORDER}],
-                                      "attributes": {"standing": True, "session_id": "sess_a"}}], AGENT))
+                                      "attributes": {"standing": True, "session_id": "sess_a"}}], PERSON))
     meta = next(b for m, p, b in sent if m == "POST" and p == "/memories")["metadata"]
     assert "standing" not in meta and json.loads(meta["hr_attrs"]) == {"session_id": "sess_a"}
 

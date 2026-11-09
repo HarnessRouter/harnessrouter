@@ -12,14 +12,10 @@ from __future__ import annotations
 import asyncio
 
 import memory_plane as mp
-from memory_tools import REFUSE_STANDING, Refused, set_by_a_person
+from memory_tools import Refused
 
 
 PERSON_NAME = "This person's memory"
-
-
-def _no_standing(attrs):
-    return {k: v for k, v in attrs.items() if k != "standing"} if isinstance(attrs, dict) else attrs
 
 
 class Local:
@@ -177,20 +173,12 @@ class Local:
             return [await mp.present(self.org, mid, h, self.pr) for h in await prov.history(mid, rid)]
         return await self._do(go())
 
-    async def _not_a_persons_standing(self, prov, mid, rid):
-        """An agent never changes or closes a standing instruction a person set (memory_tools.REFUSE_STANDING): it would
-        rewrite what every agent sharing the memory is told, or, since the version an agent writes is the agent's, take
-        it out of their instructions."""
-        cur = await prov.get(mid, rid)
-        if cur and set_by_a_person(cur):
-            raise Refused("memory_forbidden", REFUSE_STANDING)
-
+    # Every write below is the agent's (self.writer) and passes memory_plane's write path, which holds that an agent
+    # never sets `standing` and never changes a standing instruction a person set (memory_plane.is_agent).
     async def remember(self, mid, record):
         async def go():
             prov, _ = await self._prov(mid, "write")
-            # the tools drop an agent's `standing` and say so (memory_tools.call); this seam never writes one either
-            record_ = {**record, "attributes": _no_standing(record.get("attributes"))} if "attributes" in record else record
-            made = await self._wrote(mid, mp.remember(prov, mid, mp._record_in(record_), self.writer))
+            made = await self._wrote(mid, mp.remember(prov, mid, mp._record_in(record), self.writer))
             if made.get("id"):
                 self.kept.append({"id": str(made["id"]), "memory_id": str(mid)})
             return {**await mp.present(self.org, mid, made, self.pr), **{k: made[k] for k in ("closed", "conflicts") if k in made}}
@@ -209,16 +197,13 @@ class Local:
             if "content" in patch2:
                 patch2["content"] = mp._clean_parts(patch2["content"])
             if isinstance(patch2.get("attributes"), dict):
-                patch2["attributes"] = {k: mp.clean_text(v) if isinstance(v, str) else v
-                                        for k, v in _no_standing(patch2["attributes"]).items()}
-            await self._not_a_persons_standing(prov, mid, rid)
-            return await mp.present(self.org, mid, await self._wrote(mid, prov.revise(mid, rid, patch2, self.writer)), self.pr)
+                patch2["attributes"] = {k: mp.clean_text(v) if isinstance(v, str) else v for k, v in patch2["attributes"].items()}
+            return await mp.present(self.org, mid, await self._wrote(mid, mp.revise(prov, mid, rid, patch2, self.writer)), self.pr)
         return await self._do(go())
 
     async def forget(self, mid, rid):
         async def go():
             prov, _ = await self._prov(mid, "write")
-            await self._not_a_persons_standing(prov, mid, rid)
             return await mp.forget(prov, mid, rid, self.writer)
         return await self._do(go())
 
@@ -232,14 +217,14 @@ class Local:
                 _, privs = await self._prov(mid, "write")
             if q.get("requires", "read") not in privs:
                 raise Refused("memory_forbidden", f"That query needs `{q['requires']}` on the memory.")
-            res = await prov.run_query(mid, name, params)
+            res = await mp.run_query(prov, mid, q, params, self.writer)
             return {"results": [{"record": await mp.present(self.org, mid, x["record"], self.pr)} for x in res.get("results") or []]}
         return await self._do(go())
 
     async def free_query(self, mid, language, statement, params):
         async def go():
             prov, _ = await self._prov(mid, "read")
-            res = await prov.free_query(mid, language, statement, params, False)
+            res = await mp.free_query(prov, mid, language, statement, params, False, self.writer)
             if "results" in res:
                 return {"results": [{"record": await mp.present(self.org, mid, x["record"], self.pr)} for x in res["results"]]}
             return {"rows": res.get("rows") or []}
@@ -253,9 +238,7 @@ class Local:
                 _, privs = await self._prov(mid, "write")
             if needs not in privs or (needs == "write" and not any(e.get("access") == "write" for e in self._entries)):
                 raise Refused("memory_forbidden", f"That operation needs `{needs}` on the memory.")
-            if needs == "write":
-                await self._not_a_persons_standing(prov, mid, rid)
-            return await prov.operate(mid, rid, name, body, self.writer)
+            return await mp.operate(prov, mid, rid, name, body, self.writer, needs)
         return await self._do(go())
 
     async def prime(self, mid, budget):
