@@ -72,11 +72,23 @@ test('a turn that remembered says how much, linked to the first record it kept i
   expect(a.getAttribute('href')).toBe('/memories/hmem_a?tab=data&record=r1');
 });
 
-test('a record kept in a person’s own memory is opened there', async () => {
+test('a record kept in a person’s own memory opens on the agent’s memory, open in it there', async () => {
   await open({ memory: { remembered: 1, records: [{ id: 'r9', memory_id: 'hmem_dana' }] } }, OWN);
   const a = el.querySelector('.turn-foot .pg-mem') as HTMLAnchorElement;
   expect(a.textContent).toBe('Remembered 1 thing');
-  expect(a.getAttribute('href')).toBe('/memories/hmem_dana?tab=data&record=r9');
+  expect(a.getAttribute('href')).toBe('/memories/hmem_a?tab=data&in=hmem_dana&record=r9');
+});
+
+test('a turn that searched its memory says how many things it recalled, beside what it remembered', async () => {
+  const found = JSON.stringify({ results: [{ record: { id: 'f1', title: '', content: [{ type: 'text', text: 'User’s name is Dana' }] } }], abstain: false }, null, 1);
+  const wrapped = `<untrusted_tool_result source="mcp__memories__memory_recall">\nThe following content was retrieved from an external source.\n\n${JSON.stringify({ result: found })}\n</untrusted_tool_result>`;
+  MSGS[1] = { role: 'assistant', blocks: [{ kind: 'tools', reasoning: '', steps: [{ name: 'mcp__memories__memory_recall', args: '{"query":"Dana"}', result: wrapped }] }], files: [], status: 'done' } as never;
+  try {
+    await open({ memory: { remembered: 1, records: [{ id: 'r9', memory_id: 'hmem_a' }] } }, OWN);
+    expect(Array.from(el.querySelectorAll('.turn-foot .pg-mem')).map((x) => x.textContent)).toEqual(['Recalled 1 thing', 'Remembered 1 thing']);
+  } finally {
+    MSGS[1] = { role: 'assistant', blocks: [], files: [], status: 'done' } as never;
+  }
 });
 
 test('kept after the turn ended, in a person’s memory below the agent’s: the line comes when the agent’s memory says so', async () => {
@@ -98,7 +110,7 @@ test('kept after the turn ended, in a person’s memory below the agent’s: the
     await act(async () => { es!.on['records.changed']({ data: JSON.stringify({ id: 4, type: 'records.changed', memory_id: 'hmem_a', record_ids: [], below: true }) }); });
     await act(async () => { await new Promise((r) => setTimeout(r, 900)); });
     await flush();
-    expect(el.querySelector('.turn-foot .pg-mem')?.getAttribute('href')).toBe('/memories/hmem_dana?tab=data&record=r9');
+    expect(el.querySelector('.turn-foot .pg-mem')?.getAttribute('href')).toBe('/memories/hmem_a?tab=data&in=hmem_dana&record=r9');
   } finally {
     delete (globalThis as { EventSource?: unknown }).EventSource;
   }

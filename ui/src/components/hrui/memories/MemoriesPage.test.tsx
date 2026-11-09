@@ -6,7 +6,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Provider } from '@/lib/memories';
-import { allProviders, CAPS, memory, service } from './fixtures';
+import { allProviders, CAPS, memory, record, service } from './fixtures';
 
 const push = jest.fn();
 jest.mock('next/navigation', () => ({ useRouter: () => ({ push, replace: jest.fn() }) }));
@@ -22,6 +22,8 @@ jest.mock('../setup/settingsModel', () => ({
 import { harnessFetch } from '@/lib/hfetch';
 import { MemoriesPage } from './MemoriesPage';
 import { toast } from '../toast';
+import { listCustom } from '@/lib/harness';
+import { memoryNowLine, replaceAsk } from './sheets';
 import { CardArt } from './CardArt';
 import { concepts } from './graph/builtin';
 
@@ -352,6 +354,47 @@ describe('the cards', () => {
     expect(toast).toHaveBeenCalledWith('Photo cut remembers in Idle now.');
   });
 
+  test('what Use in asks before it replaces: the memory by its name, or its own where it is named after the setup', () => {
+    const own = (name: string) => ({ k: 'own' as const, id: 'hmem_x', name });
+    expect(replaceAsk({ name: 'Busy', has: own('Busy') }, 'Idle')).toEqual({ title: 'Replace its own memory in Busy?',
+      body: 'Busy remembers in its own memory now. From its next task it remembers in Idle instead. Its own memory is kept, with everything in it.' });
+    expect(replaceAsk({ name: 'Busy', has: own('Support notes') }, 'Idle').title).toBe('Replace Support notes in Busy?');
+    expect(replaceAsk({ name: 'Old', has: { k: 'count', n: 2 } }, 'Idle').body).toBe('Old uses 2 memories now. From its next task it remembers in Idle instead. They are kept, with everything in them.');
+    expect(memoryNowLine(own('Busy'), 'c', 'Busy')).toBe('Remembers in its own memory');
+  });
+
+  test('Use in lists the setups in use first, each with the memory it has now; replacing one asks first (C6)', async () => {
+    (listCustom as jest.Mock).mockResolvedValueOnce([
+      { id: 'chrn_old', name: 'Old idle', createdAt: 1, memory: null, memory_reason: 'Turned off.' },
+      { id: 'chrn_busy', name: 'Busy', createdAt: 2, memory: { id: 'hmem_x', name: 'Support notes', engine: 'mem0', scope: 'per_user', reason: '' } },
+      { id: 'chrn_new', name: 'Newest', createdAt: 3 },
+      { id: 'chrn_here', name: 'Already here', createdAt: 0, memory: { id: 'c', name: 'Idle', engine: 'mem0', scope: 'shared', reason: '' } },
+    ]);
+    const s = backend({
+      'GET /v1/memories/providers': { data: [CAPS.mem0] },
+      'GET /v1/memories': { data: [memory({ id: 'c', name: 'Idle', provider: 'mem0', engine: 'mem0', used_by: [] })] },
+      'GET /v1/traces': { sessions: [{ session_id: 's1', harness_id: 'chrn_busy', status: 'completed', finished_at: 1762600000 }] },
+      'PUT /v1/harnesses/chrn_busy/memory': { id: 'chrn_busy', memory: { id: 'c', name: 'Idle', engine: 'mem0', scope: 'shared', reason: '' } },
+    });
+    await open();
+    await press('Use in…');
+    const rows = Array.from(page().querySelectorAll('.mm-use-row')).map((r) => [r.querySelector('b')?.textContent, r.querySelector('.mm-use-n small')?.textContent || '', r.querySelector('button')?.textContent || r.querySelector('.mm-use-here')?.textContent]);
+    expect(rows).toEqual([
+      ['Busy', 'Remembers in Support notes', 'Use here'],
+      ['Newest', '', 'Use here'],
+      ['Old idle', 'No memory', 'Use here'],
+      ['Already here', '', 'Remembers here'],
+    ]);
+    // one that has a memory of its own asks before it is replaced, in the console's own dialog
+    await press_(page().querySelectorAll<HTMLElement>('.mm-use-row button')[0]);
+    expect(page().querySelector('#mmUseRh')?.textContent).toBe('Replace Support notes in Busy?');
+    expect(page().querySelector('#mmUseRp')?.textContent).toBe('Busy remembers in Support notes now. From its next task it remembers in Idle instead. Support notes is kept, with everything in it.');
+    expect(s.sent('PUT', '/v1/harnesses/chrn_busy/memory')).toHaveLength(0);
+    await press('Replace');
+    expect(s.sent('PUT', '/v1/harnesses/chrn_busy/memory')[0].body).toEqual({ memory: { id: 'c' } });
+    expect(toast).toHaveBeenCalledWith('Busy remembers in Idle now.');
+  });
+
   test('connecting and finding engines are under More', async () => {
     backend({ 'GET /v1/memories/providers': { data: [CAPS.mem0] }, 'GET /v1/memories': { data: [memory({ provider: 'mem0' })] } });
     await open();
@@ -401,8 +444,28 @@ describe('a card draws what is kept', () => {
     });
     await open();
     const card = (n: string) => Array.from(page().querySelectorAll('.mm-card')).find((c) => c.textContent?.includes(n)) as Element;
-    expect(names(card('Kept by the service'))).toEqual(['Fact']);
+    // one type related to nothing is no picture of anything: what it keeps is drawn instead (the polish round, C10)
+    expect(names(card('Kept by the service'))).toEqual([]);
+    expect(card('Kept by the service').querySelector('.mm-ca-ghost')).not.toBeNull();
     expect(names(card('Kept by a server'))).toEqual(['Entity', 'Fact']);
+  });
+  test('a Mem0 memory draws the first facts it keeps; one that keeps each person apart, its people', async () => {
+    const factsOnly = { ...CAPS.mem0, schema: { mode: 'none', builtin: { types: [{ name: 'fact', description: 'f' }], relations: [] } } } as Provider;
+    backend({
+      'GET /v1/memories/providers': { data: [factsOnly] },
+      'GET /v1/memories': (c: { path: string }) => (c.path.includes('parent=hmem_2')
+        ? { data: [{ ...memory(), id: 'hmem_p1', name: '5d41402a', end_user: 'local@localhost', parent_id: 'hmem_2' }, { ...memory(), id: 'hmem_p2', name: '7c1e9a40', end_user: 'Dana', parent_id: 'hmem_2' }] }
+        : { data: [{ ...memory(), id: 'hmem_1', name: 'Brand facts', provider: 'mem0', builtin: null },
+          { ...memory(), id: 'hmem_2', name: 'Personalized support', provider: 'mem0', builtin: null, children: { count: 2 } }] }),
+      'GET /v1/memories/hmem_1/records': { data: [record({ id: 'r1', title: '', content: [{ type: 'text', text: 'Acme wants navy and gold' }] })], next: null },
+      'GET /v1/memories/hmem_2/records': { data: [], next: null },
+    });
+    await open();
+    const card = (n: string) => Array.from(page().querySelectorAll('.mm-card')).find((c) => c.textContent?.includes(n)) as Element;
+    const rows = (el: Element) => Array.from(el.querySelectorAll('.mm-ca-row span')).map((x) => x.textContent);
+    expect(names(card('Brand facts'))).toEqual([]);
+    expect(rows(card('Brand facts'))).toEqual(['Acme wants navy and gold']);
+    expect(rows(card('Personalized support'))).toEqual(['You (this console)', 'Dana']);
   });
   test('labels a person set are drawn as labels; with none yet, what the vendor makes', () => {
     const labelled = { ...CAPS.hindsight, schema: { mode: 'labels', builtin: MADE } } as Provider;

@@ -36,6 +36,8 @@ export interface BuildArgs {
   showAll: (key: string) => boolean;
   activeId?: string;
   cap?: number;
+  /** a search's order for what it found, the best first (rankOf); left out, by name */
+  order?: (a: MemoryRecord, b: MemoryRecord) => number;
 }
 
 export const memoryKey = (id: string) => `m:${id}`;
@@ -44,7 +46,7 @@ export const folderKey = (mid: string, path: string) => `f:${mid}:${path}`;
 export const recordKey = (mid: string, rid: string) => `r:${mid}:${rid}`;
 
 export function buildRows(a: BuildArgs): Row[] {
-  const { view, match, needle, filtering, isOpen, showAll, activeId, cap = CAP } = a;
+  const { view, match, needle, filtering, isOpen, showAll, activeId, cap = CAP, order } = a;
 
   const leaves = (mid: string, kinds: LSchema | null, recs: MemoryRecord[], depth: number, parent: string, scope: string): Row[] => {
     let list = recs, hidden = 0;
@@ -104,9 +106,9 @@ export function buildRows(a: BuildArgs): Row[] {
     const shown = v.records.filter(match);
     const before = out.length;
     if (v.folders) {
-      out.push(...folderRows(mid, v.kinds, folderTree(shown, filtering ? [] : v.made), depth, parent, v.hasMore));
+      out.push(...folderRows(mid, v.kinds, folderTree(shown, filtering ? [] : v.made, order), depth, parent, v.hasMore));
     } else {
-      for (const g of groupsOf(shown, v.kinds)) {
+      for (const g of groupsOf(shown, v.kinds, order)) {
         const key = groupKey(mid, g.kind.key);
         const open = filtering || isOpen(key, true);
         out.push({ kind: 'group', key, depth, parent, memoryId: mid, group: g.kind, count: g.records.length, plus: v.hasMore, open });
@@ -151,6 +153,46 @@ export function treeKey(rows: Row[], focus: string, key: string): KeyMove | null
       return me ? { activate: me.key } : null;
     default: return null;
   }
+}
+
+/** One thing a search by meaning found, as the engine answered it (POST /v1/memories/{id}/recall). */
+export interface Found { record: MemoryRecord; score: number | null; why?: string[] }
+/** Where an engine's best answer stands out from the rest of what it gave (a sentence on the subject among sentences
+ *  that aren't), it is a find: measured on one engine (11-09), the records on a subject scored 0.71 to 0.75 and every
+ *  other record of the memory 0.08 to 0.17. An engine like that ranks every record it holds for any words at all,
+ *  "zebra quantum volcano" included, so its whole list is no answer by itself. */
+const STANDS_OUT = 2;
+/** A best score this high is on the subject whatever the rest scored (every record on it). */
+const ON_SUBJECT = 0.35;
+/** A find scores at least this share of the best. */
+const NEAR_BEST = 0.5;
+/** An engine that ranks without scoring gives each find its place for a score (1, 1 - 1/n, ...): no measure of how
+ *  near, so its list is taken as it is. */
+function placesOnly(scores: number[]): boolean {
+  if (scores.length < 2 || Math.abs(scores[0] - 1) > 1e-3) return false;
+  const step = scores[0] - scores[1];
+  // each the one before it less the same step: 1, 1 less a step, 1 less two steps, ...
+  return step > 0 && scores.every((s, i) => 1e-3 > Math.abs(s + i * step - 1));
+}
+/** What a search by meaning found that matches, in the engine's order: what it found by the words themselves, and
+ *  what scores near its best where its best stands out (from the rest, or on its own). An engine that gives no scores,
+ *  or only places, is taken at its word. */
+export function meaningHits(found: Found[]): MemoryRecord[] {
+  const list = found.filter((x) => x.record?.id);
+  const scores = list.map((x) => x.score);
+  if (!list.length || scores.some((s) => typeof s !== 'number' || !Number.isFinite(s)) || placesOnly(scores as number[])) return list.map((x) => x.record);
+  const nums = scores as number[];
+  const best = Math.max(...nums);
+  const sorted = [...nums].sort((a, b) => a - b);
+  const mid = sorted.length % 2 ? sorted[(sorted.length - 1) / 2] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
+  const standsOut = list.length < 3 || best >= ON_SUBJECT || best >= STANDS_OUT * mid;
+  return list.filter((x, i) => (x.why || []).includes('text') || (standsOut && nums[i] >= best * NEAR_BEST)).map((x) => x.record);
+}
+/** A search's order: what the engine found, in its order, then what holds the words and it didn't find, by name. */
+export function rankOf(found: MemoryRecord[]): (a: MemoryRecord, b: MemoryRecord) => number {
+  const at = new Map(found.map((r, i) => [r.id, i]));
+  const of = (r: MemoryRecord) => at.get(r.id) ?? found.length;
+  return (a, b) => of(a) - of(b) || labelOf(a).localeCompare(labelOf(b));
 }
 
 /** Does this record hold the words being looked for? The same test on its line and its text. */

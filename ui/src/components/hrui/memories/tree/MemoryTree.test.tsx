@@ -113,8 +113,47 @@ test('a search reads what is below and keeps the way to a match open', async () 
   expect(row('Sub').getAttribute('aria-expanded')).toBe('true');
   expect(el.querySelector('.mt-status')?.textContent).toContain('1 record');
   await type(el.querySelector('input[aria-label="Find in Root"]') as HTMLInputElement, 'not there at all');
-  expect(el.textContent).toContain('Nothing matches.');
+  // nothing is said to match until the engine has answered too
+  expect(el.textContent).not.toContain('Nothing here matches');
+  await act(async () => { await new Promise((r) => setTimeout(r, 350)); });
+  await flush();
+  expect(el.textContent).toContain('Nothing here matches “not there at all”.');
   expect(rows()).toHaveLength(0);
+});
+
+// What the walkthrough saw (11-09): an engine that ranks every record it holds for any words. Its scores as measured:
+// a record on the subject well above the rest, and for words on no subject at all, every record alike and low.
+const DANA = [
+  record({ id: 'n', title: '', type: 'fact', content: [{ type: 'text', text: 'User’s name is Dana' }] }),
+  record({ id: 'e', title: '', type: 'fact', content: [{ type: 'text', text: 'User prefers to be contacted by email only and never by phone' }] }),
+  record({ id: 'b', title: '', type: 'fact', content: [{ type: 'text', text: 'User prefers all future chat replies in short bullet points' }] }),
+  record({ id: 's', title: '', type: 'fact', content: [{ type: 'text', text: 'User experienced the invoices page not loading in Safari' }] }),
+];
+const ranked = (pairs: [string, number][]) => ({ results: pairs.map(([id, score]) => ({ record: DANA.find((r) => r.id === id), score, why: ['query'] })), degraded: [], abstain: false });
+const search = async (words: string) => {
+  await type(el.querySelector('input[aria-label="Find in Root"]') as HTMLInputElement, words);
+  await act(async () => { await new Promise((r) => setTimeout(r, 350)); });
+  await flush();
+};
+test('a search by meaning lists what the engine found, best first, and hides the rest', async () => {
+  const t = open({ records: DANA, routes: { 'POST /v1/memories/hmem_1/recall': ranked([['e', 0.41], ['b', 0.16], ['n', 0.12], ['s', 0.09]]) } });
+  await mount(t.props);
+  await search('how should we reach');
+  expect(said()).toEqual(['1:Facts', '2:User prefers to be contacted by email only and never by phone']);
+  expect(el.querySelector('.mt-status')?.textContent).toBe('1 record');
+});
+test('words on no subject at all: nothing matches, and the tree says so', async () => {
+  const t = open({ records: DANA, routes: { 'POST /v1/memories/hmem_1/recall': ranked([['s', 0.14], ['n', 0.12], ['b', 0.1], ['e', 0.08]]) } });
+  await mount(t.props);
+  await search('zebra quantum volcano');
+  expect(rows()).toHaveLength(0);
+  expect(el.textContent).toContain('Nothing here matches “zebra quantum volcano”.');
+});
+test('several finds come in the engine’s order, not by name; a literal match it didn’t rank comes after them', async () => {
+  const t = open({ records: DANA, routes: { 'POST /v1/memories/hmem_1/recall': ranked([['s', 0.62], ['e', 0.55], ['n', 0.11], ['b', 0.1]]) } });
+  await mount(t.props);
+  await search('Dana');
+  expect(said()).toEqual(['1:Facts', '2:User experienced the invoices page not loading in Safari', '2:User prefers to be contacted by email only and never by phone', '2:User’s name is Dana']);
 });
 test('a search reads on through pages it has not seen', async () => {
   const more = jest.fn();

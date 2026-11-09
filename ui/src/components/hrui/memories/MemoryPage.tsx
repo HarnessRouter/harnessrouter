@@ -5,6 +5,8 @@
 // edit where a schema guides the engine, labels where it applies them, and where it decides for itself, what it makes.
 // The last thing that failed here is said at the top, in the service's words, until something works again. Whatever
 // changes in the memory while this is open, by anyone, comes in on its event stream.
+// A person's own memory (below an agent's, kept for one person) says where it sits: under its name, the agent's memory,
+// which Back returns to; and who uses it is who uses the agent's memory, with when this person's was last used.
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -51,7 +53,12 @@ function useRecords(mid: string): RecordsRead {
   return { records, failed, retry: read, more: next ? more : null, put, drop };
 }
 
-export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; tabParam: string | null; recordParam: string | null; onTab: (t: 'schema' | 'data') => void }) {
+export function MemoryPage({ id, tabParam, recordParam, inParam = null, onTab }: {
+  id: string; tabParam: string | null; recordParam: string | null;
+  /** the memory below this one `recordParam` is in (a person's own), where it isn't this one's */
+  inParam?: string | null;
+  onTab: (t: 'schema' | 'data') => void;
+}) {
   const router = useRouter();
   const [memory, setMemory] = useState<Memory | null>(null);
   const [missing, setMissing] = useState(false);
@@ -77,9 +84,9 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
   const linked = useMemo(() => (read.records || []).some((r) => (r.references || []).some((x) => x.available !== false)), [read.records]);
   const [graphAsked, setGraphAsked] = useState(false);
   const [typeFilter, setTypeFilter] = useState('');
-  // going to Schema and back opens the record that was open
-  const openRecord = useRef(recordParam || '');
-  const keepOpen = useCallback((rid: string) => { openRecord.current = rid; }, []);
+  // going to Schema and back opens the record that was open, in the memory it was open in
+  const openRecord = useRef({ rid: recordParam || '', in: (recordParam && inParam) || '' });
+  const keepOpen = useCallback((rid: string, inMid: string) => { openRecord.current = { rid, in: inMid }; }, []);
 
   // what changes while the page is open: the tree and the graph read it again, and what changed shows for a moment
   const [liveTick, setLiveTick] = useState(0);
@@ -106,10 +113,28 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
     if (e.type !== 'record.revised') readMemory();
   });
 
-  // "Used by": grants to setups; none of it is drawn when the grants could not be read
+  // the memory this one is below (a person's own below an agent's): where Back goes, and who uses it
+  const parentId = memory?.parent_id || '';
+  const [parent, setParent] = useState<Memory | null>(null);
+  useEffect(() => {
+    if (!parentId) { setParent(null); return undefined; }
+    let live = true;
+    getMemory(parentId).then((x) => { if (live) setParent(x); }).catch(() => { if (live) setParent(null); });
+    return () => { live = false; };
+  }, [parentId]);
+
+  // "Used by": grants to setups; none of it is drawn when the grants could not be read. A person's memory is used by
+  // whoever uses the agent's memory above it (the agent's grant reaches it): its own `used_by` where the service says,
+  // else the one above's.
   const [grants, setGrants] = useState<Grant[] | null>(null);
   useEffect(() => { listGrants(id).then(setGrants).catch(() => setGrants(null)); }, [id]);
-  const users = useMemo(() => (grants && names ? setupsOf(grants, names) : null), [grants, names]);
+  const users = useMemo((): { id: string; name: string; grant: Grant | null }[] | null => {
+    if (parentId) {
+      const by = memory?.used_by?.length ? memory.used_by : parent?.used_by;
+      return by ? by.map((u) => ({ id: u.harness_id, name: u.name, grant: null })) : null;
+    }
+    return grants && names ? setupsOf(grants, names) : null;
+  }, [grants, names, parentId, memory?.used_by, parent?.used_by]);
   const [pop, setPop] = useState<'' | 'users' | 'more'>('');
   const [defaults, setDefaults] = useState<Record<string, boolean>>({});
   const usersWrap = useRef<HTMLDivElement | null>(null);
@@ -166,14 +191,25 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
   // the last failure, said until something works again after it
   const failedAt = msOf(m.last_error_at), okAt = msOf(m.last_ok_at);
   const failing = !!m.last_error && (!okAt || !failedAt || failedAt > okAt);
+  // a person's memory: under the agent's memory it is in, which Back returns to, and when it was last used
+  const upHref = m.parent_id ? `/memories/${enc(m.parent_id)}?tab=data` : '/memories';
+  const upName = m.parent_id ? (parent ? shownName(parent) : '') : '';
+  const lastUsed = m.parent_id ? msOf(m.last_used_at) : null;
 
   return (
     <div className="tk-page mm-page">
       <header className="ag-bar ag-rt">
         <div className="ag-lft">
-          <Link className="ag-back" href="/memories" aria-label="Back to Memories" title="Memories">{BACK_IC}</Link>
+          <Link className="ag-back" href={upHref} aria-label={m.parent_id ? `Back to ${upName || 'the memory it is in'}` : 'Back to Memories'} title={m.parent_id ? upName || undefined : 'Memories'}>{BACK_IC}</Link>
           <div className="ag-ident">
             <div className="ag-l1"><h1 className="ag-name" title={m.name}>{shownName(m)}</h1><span className="pill neutral">{vendorName(engineOf(m))}</span></div>
+            {m.parent_id && (upName || lastUsed) ? (
+              <div className="ag-l2 mm-up">
+                {upName ? <Link className="mm-up-l" href={upHref} title={`In ${upName}`}>{upName}</Link> : null}
+                {upName && lastUsed ? <span className="sep" aria-hidden="true">·</span> : null}
+                {lastUsed ? <span className="mm-up-t">{`Used ${ago(lastUsed)}`}</span> : null}
+              </div>
+            ) : null}
           </div>
         </div>
         <div className="ag-right mm-rights">
@@ -185,7 +221,7 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
                 <div className="mm-pop mm-pop-r" role="menu">
                   {users.length ? users.map((u) => (
                     <button key={u.id} type="button" className="mm-mi" role="menuitem" onClick={() => router.push(`/studio/${enc(u.id)}?tab=settings&layer=memory`)}>
-                      <b>{u.name}</b><small>{u.grant.privileges.includes('write') ? 'Recalls and remembers' : 'Recalls only'}{defaults[u.id] ? ' · remembers here' : ''}</small>
+                      <b>{u.name}</b><small>{u.grant ? `${u.grant.privileges.includes('write') ? 'Recalls and remembers' : 'Recalls only'}${defaults[u.id] ? ' · remembers here' : ''}` : 'Recalls and remembers this person'}</small>
                     </button>
                   )) : <p className="mm-pop-p">Give it to a setup in that setup’s Settings, under Memory.</p>}
                 </div>
@@ -224,9 +260,10 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
       {tab === 'schema' && provider ? (
         <SchemaEditor memory={m} provider={provider} doc={doc} ro={ro} countOf={countOf} onOpenData={(t: string) => { setTypeFilter(t); onTab('data'); }} />
       ) : (
-        <DataTab memory={m} provider={provider} schema={doc.schema} read={read} setups={names} typeFilter={typeFilter} initialRecord={openRecord.current} onOpenRecord={keepOpen}
+        <DataTab memory={m} provider={provider} schema={doc.schema} read={read} setups={names} typeFilter={typeFilter} initialRecord={openRecord.current.rid} initialIn={openRecord.current.in} onOpenRecord={keepOpen}
           showGraph={graphOn} onUseIn={canUseIn ? () => setSheet('use') : undefined}
-          onSchema={() => onTab('schema')} onOtherMemory={(mid, rid) => router.push(`/memories/${enc(mid)}?tab=data&record=${enc(rid)}`)} onChanged={readMemory} liveTick={liveTick} pulse={pulse} />
+          onSchema={() => onTab('schema')} onOtherMemory={(mid, rid) => router.push(`/memories/${enc(mid)}?tab=data&record=${enc(rid)}`)} onChanged={readMemory}
+          onBelowChanged={(ids) => { setLiveTick((x) => x + 1); lit(ids); }} liveTick={liveTick} pulse={pulse} />
       )}
       {sheet === 'use' ? (
         <UseInSheet m={m} onClose={() => setSheet('')}

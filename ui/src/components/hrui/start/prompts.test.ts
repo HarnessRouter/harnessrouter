@@ -5,13 +5,14 @@
 // makes a new key and the person pastes it). Each takes the "Set up a starter app" design's form
 // (Richard, 10-19): a goal, numbered steps with the key one of them in the design's words, then the
 // context.
-import { API_BASE, CODERS, GUIDE, KEY_STEP, handPrompt, promptText, setupPrompt, starterPrompt, type SetupRef } from './prompts';
+import { API_BASE, CODERS, GUIDE, HOW_IT_REMEMBERS, KEY_STEP, handPrompt, promptText, setupPrompt, starterPrompt, type SetupRef } from './prompts';
 
 const A: SetupRef = { id: 'chrn_0123456789', name: 'Support replies', harness: 'hermes', model: 'gpt-5.4', instr: 'Answer customer questions from the help center.' };
 const OWN_APP: [string, string][] = [
   ['Start in your codebase', handPrompt()],
   ['Migrate an existing agent', setupPrompt()],
   ['Connect your app', promptText(A)],
+  ['Connect your app, for a setup that remembers each person', promptText({ ...A, perUser: true })],
 ];
 // a kit's own setup: the one launching the kit made in the workspace
 const K: SetupRef = { id: 'chrn_kit0123456789', name: 'Super Mario', harness: 'System One', model: 'jev-1.13', instr: '' };
@@ -83,6 +84,16 @@ describe.each(ALL)('%s takes the design’s form', (_name, text) => {
 it('every block that adds the integration ends its steps by checking it with a real request', () => {
   for (const [, t] of OWN_APP) expect(t).toMatch(/\d\. Verify: send one real request/);
   for (const [, t] of KIT_TEXTS) expect(t).toContain('Verify: run one task in the app on my host and confirm a result comes back.');
+});
+
+it('a setup that remembers each person says every task names its user, from the app’s own sign in, or memory is off', () => {
+  const t = promptText({ ...A, perUser: true });
+  expect(t).toContain(HOW_IT_REMEMBERS);
+  expect(t).toContain('4. Call this setup from my backend as How it connects says below, with my user’s id on every request as How it remembers says.');
+  expect(HOW_IT_REMEMBERS).toContain('my backend sets user to my signed-in user’s own id from my app’s own authentication');
+  expect(HOW_IT_REMEMBERS).toContain('A task sent without user runs with its memory off');
+  // one that keeps no one apart says nothing of it
+  expect(promptText(A)).not.toContain('How it remembers');
 });
 
 it('a setup with no instructions says nothing about what it does', () => {

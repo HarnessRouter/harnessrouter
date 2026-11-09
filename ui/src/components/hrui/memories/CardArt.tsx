@@ -6,6 +6,8 @@
 //   · labels: the vocabulary as a row of chips, since labels name facts and do not relate;
 //   · no schema: the first records it keeps, a row each, and how many more there are;
 //   · nothing kept yet: the empty shape of a schema, dashed, like an unbuilt brick.
+// A schema of one type and no relations (Mem0's "Fact") is no picture of anything: the card draws what it keeps
+// instead, as for no schema.
 import { typeLabel, type LSchema } from './schemaModel';
 import { MmIco } from './parts';
 
@@ -26,7 +28,7 @@ export function CardArt({ s, labels, records, recent, pending }: {
   if (pending) return null;
   const T = s?.types || [];
   if (T.length && labels) return <Vocabulary s={s as LSchema} />;
-  if (T.length) return <SchemaArt s={s as LSchema} />;
+  if (T.length && !saysNothing(s)) return <SchemaArt s={s as LSchema} />;
   if (records && records > 0) return <Rows n={records} titles={recent} />;
   return <Ghost />;
 }
@@ -109,6 +111,9 @@ function SchemaArt({ s }: { s: LSchema }) {
   );
 }
 
+/** A schema whose picture adds nothing: one type at most, and nothing relating it to anything. */
+export const saysNothing = (s: LSchema | null | undefined) => !s || (s.types.length <= 1 && !s.relations.length);
+
 interface Box { x: number; y: number; w: number; h: number }
 const meets = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 /** Where along its line a relation's name is tried, the middle first. */
@@ -160,7 +165,7 @@ export function MiniArt({ s, labels, records }: { s: LSchema | null | undefined;
   if (T.length && labels) {
     const shown = T.slice(0, 3);
     inner = shown.map((t, i) => <circle key={t.id} cx={w / 2 + (i - (shown.length - 1) / 2) * 9} cy={h / 2} r={3.4} fill={t.color} />);
-  } else if (T.length) {
+  } else if (T.length && !saysNothing(s)) {
     const xs = T.map((t) => t.x), ys = T.map((t) => t.y), pad = 7;
     const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
     const f = Math.min((w - 2 * pad) / Math.max(1, x1 - x0), (h - 2 * pad) / Math.max(1, y1 - y0));

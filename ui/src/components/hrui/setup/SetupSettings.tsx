@@ -49,7 +49,8 @@ import {
 import { PluginSwitches, pluginLines, type PluginsIn } from './PluginSwitches';
 import { openNewSetup } from '../start/open';
 import { MemoryLayer, memorySummary } from '../memories/MemoryLayer';
-import { useAgentMemory } from '../memories/AgentMemory';
+import { announceAgentMemory, useAgentMemory } from '../memories/AgentMemory';
+import { followRename } from './setupMemory';
 import { getHarnessMemories, type HarnessMemories } from '@/lib/memories';
 import { SkillSheet, skillDraft, skillFiles, skillSlug, splitSkillMd, type SkillDraft } from './SkillSheet';
 import {
@@ -320,6 +321,12 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
       setPatch({});
       setJustSaved(true); toast('Saved.');
       onSaved();
+      // a memory made for this setup, still named after it, takes its new name (setupMemory.ts followRename)
+      if (has('name') && h.name !== next.name) {
+        followRename(h, h.name, next.name)
+          .then((renamed) => { if (renamed) { toast('Saved. Its memory is renamed too.'); void announceAgentMemory(id).catch(() => {}); } })
+          .catch(() => toast('Saved. Its memory kept its old name: rename it on its page.'));
+      }
     } catch (e) { toast(plain(e, 'The changes were not saved. Try again.')); }
     finally { setBusy(''); }
   }
@@ -743,7 +750,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
       ) : null}
       {pop?.k === 'del' ? (
         <DeleteSetupSheet h={rec} onClose={() => setPop(null)}
-          onDeleted={() => { keepDraft(id, {}, false); onDirtyRef.current?.(false); toast(`${rec.name} deleted`); router.push('/studio'); }} />
+          onDeleted={(said) => { keepDraft(id, {}, false); onDirtyRef.current?.(false); toast(said || `${rec.name} deleted`); router.push('/studio'); }} />
       ) : null}
       {pop?.k === 'dup' ? (
         <DuplicateSheet h={rec} bases={bases} plugs={included} onClose={() => setPop(null)}

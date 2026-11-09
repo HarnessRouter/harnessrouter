@@ -1,12 +1,14 @@
 'use client';
 // A memory's data, in columns you can drag: everything it holds on the left, the open record in the middle as a
 // document people edit together, and, where its records link to each other (or when asked), the graph of what
-// connects to what on the right. Under 900 px they become tabs. Opened, it shows the most recent record that says
-// something (never an episode or a bare role name), or nothing.
+// connects to what on the right. Under 900 px they become tabs, and the page opens on the list (or on a record it was
+// sent to), never on an empty record. Opened, it shows the most recent record that says something (never an episode
+// or a bare role name), or nothing. A record of a memory below this one (a person's own, below an agent's) opens here
+// too, in that memory, its place said above it (this memory › the person), so nobody loses their place.
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  bodyOf, getRecord, graphAround, labelOf, reviseRecord,
+  bodyOf, getMemory, getRecord, graphAround, labelOf, reviseRecord, shownName, userOf,
   type GraphEdge, type Memory, type MemoryGraph, type MemoryRecord, type Provider,
 } from '@/lib/memories';
 import { plain } from '../setup/settingsModel';
@@ -20,6 +22,7 @@ import { ResizableColumns } from './ResizableColumns';
 import { typeLabel, type LSchema } from './schemaModel';
 import { allFolders, folderTree } from './tree';
 import { MemoryTree } from './tree/MemoryTree';
+import { listChildren } from './tree/api';
 import { recordOfKind } from './tree/treeModel';
 
 // Client only: the live document's library is the server's too, and a second copy of it in the same process warns and misbehaves.
@@ -47,10 +50,16 @@ export function latestWorthOpening(records: MemoryRecord[]): MemoryRecord | null
   return worth.sort((a, b) => at(b) - at(a))[0] || null;
 }
 
-export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, onOpenRecord, onSchema, onOtherMemory, onChanged, liveTick, pulse, showGraph = true, onUseIn }: {
+export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, initialIn = '', onOpenRecord, onSchema, onOtherMemory, onChanged, onBelowChanged, liveTick, pulse, showGraph = true, onUseIn }: {
   memory: Memory; provider: Provider | null; schema: LSchema | null; read: RecordsRead; setups: Map<string, string> | null;
-  typeFilter: string; initialRecord: string; onOpenRecord: (id: string) => void; onSchema: () => void;
-  onOtherMemory: (memoryId: string, recordId: string) => void; onChanged: () => void; liveTick: number; pulse: string[];
+  typeFilter: string; initialRecord: string;
+  /** the memory below this one that `initialRecord` is in (a person's own), where it isn't this one's */
+  initialIn?: string;
+  onOpenRecord: (id: string, inMemory: string) => void; onSchema: () => void;
+  onOtherMemory: (memoryId: string, recordId: string) => void; onChanged: () => void;
+  /** a record of a memory below this one was changed here: the list reads what is below again */
+  onBelowChanged?: (recordIds: string[]) => void;
+  liveTick: number; pulse: string[];
   /** the graph's column: where records link, or when a person asked for it */
   showGraph?: boolean;
   /** give this memory to a setup, where nothing uses it yet */
@@ -60,11 +69,48 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   // a record's kind comes from a schema of types; labels are a vocabulary on facts, not kinds of record
   const kinds = schemaGuides(provider) ? schema : null;
   const [sel, setSel] = useState(initialRecord);
+  // the memory below this one the open record is in ('' for this one's own)
+  const [selIn, setSelIn] = useState(initialRecord && initialIn !== memory.id ? initialIn : '');
+  const [inMemory, setInMemory] = useState<Memory | null>(null);
   const [draft, setDraft] = useState<MemoryRecord | null>(null);
   const [outside, setOutside] = useState<MemoryRecord | null>(null);    // open, but not in the list: forgotten, or past a page
-  const [tab, setTab] = useState('doc');
+  // where the columns are tabs: the list, unless the page was sent to a record
+  const [tab, setTab] = useState(initialRecord ? 'doc' : 'tree');
   const [subSheet, setSubSheet] = useState(false);
-  useEffect(() => { onOpenRecord(sel); }, [sel, onOpenRecord]);
+  useEffect(() => { onOpenRecord(sel, selIn); }, [sel, selIn, onOpenRecord]);
+
+  // the memory below this one a record is open in: read for what it lets a person do, and checked to be below this one
+  // (anything else opens on its own page)
+  const otherRef = useRef(onOtherMemory);
+  otherRef.current = onOtherMemory;
+  const selRef = useRef(sel);
+  selRef.current = sel;
+  useEffect(() => {
+    if (!selIn) { setInMemory(null); return undefined; }
+    let live = true;
+    setInMemory(null);
+    getMemory(selIn).then((m) => {
+      if (!live) return;
+      if (m.parent_id === memory.id || (m.ancestors || []).includes(memory.id)) setInMemory(m);
+      else otherRef.current(selIn, selRef.current);
+    }).catch(() => { if (live) setInMemory(null); });
+    return () => { live = false; };
+  }, [selIn, memory.id]);
+
+  // what the memories below this one hold, where this one holds nothing itself (an agent that keeps each person apart):
+  // the page says "Nothing kept yet" only when nothing is kept anywhere in it
+  const [below, setBelow] = useState<{ n: number | null; people: boolean } | null>(null);
+  const kids = memory.children?.count || 0;
+  useEffect(() => {
+    if (!kids) { setBelow({ n: 0, people: false }); return undefined; }
+    let live = true;
+    listChildren(memory.id).then((l) => {
+      if (!live) return;
+      const counts = l.map((k) => k.records?.count);
+      setBelow({ n: counts.some((c) => typeof c !== 'number') ? null : (counts as number[]).reduce((a, b) => a + b, 0), people: l.some((k) => !!userOf(k)) });
+    }).catch(() => { if (live) setBelow({ n: null, people: false }); });
+    return () => { live = false; };
+  }, [memory.id, kids, liveTick]);
 
   const all = useMemo(() => read.records || [], [read.records]);
   // the most recent record that says something opens by itself, or none: never an episode, a role's bare name or an
@@ -77,23 +123,29 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
     if (first) setSel(first.id);
   }, [read.records, sel, draft]);
 
-  const listed = all.find((r) => r.id === sel) || null;
+  const listed = selIn ? null : all.find((r) => r.id === sel) || null;
   useEffect(() => {
     if (!sel || listed || !read.records) { setOutside(null); return undefined; }
     let live = true;
-    getRecord(memory.id, sel).then((r) => { if (live) setOutside(r); }).catch(() => { if (live) setOutside(null); });
+    getRecord(selIn || memory.id, sel).then((r) => { if (live) setOutside(r); }).catch(() => { if (live) setOutside(null); });
     return () => { live = false; };
-  }, [sel, listed, read.records, memory.id]);
+  }, [sel, selIn, listed, read.records, memory.id]);
   const record = draft || listed || outside;
+  // the memory the open record is in: this one, or the one below it it was opened in (once read)
+  const docMemory = selIn ? inMemory : memory;
 
   // A record picked on the graph opens in the graph's own panel, so where the columns are tabs the graph stays (Richard
   // 11-06: in a narrow view the panel takes the bottom of the graph); picked anywhere else, the Record tab shows it.
   const show = useCallback((rid: string, mid?: string) => {
     if (mid && mid !== memory.id) { onOtherMemory(mid, rid); return false; }
-    setDraft(null); setSel(rid);
+    setDraft(null); setSelIn(''); setSel(rid);
     return true;
   }, [memory.id, onOtherMemory]);
-  const open = useCallback((rid: string, mid?: string) => { if (show(rid, mid)) setTab('doc'); }, [show]);
+  // from the list: a record of a memory below this one (a person's own) opens here, in that memory
+  const open = useCallback((rid: string, mid?: string) => {
+    if (mid && mid !== memory.id) { setDraft(null); setSelIn(mid); setSel(rid); setTab('doc'); return; }
+    if (show(rid, mid)) setTab('doc');
+  }, [show, memory.id]);
 
   // ── what the open record links to ─────────────────────────────────────────────────────────
   const links = keepsLinks(provider);
@@ -106,18 +158,18 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
     setGraphFailed(false);
     if (!rid || !links) { setGraph(null); return () => {}; }
     let live = true;
-    graphAround(memory.id, rid, 1)
+    graphAround(selIn || memory.id, rid, 1)
       .then((g) => { if (live) setGraph(g); })
       .catch(() => { if (live) { setGraph(null); setGraphFailed(true); } });
     return () => { live = false; };
-  }, [rid, links, memory.id]);
+  }, [rid, links, memory.id, selIn]);
   useEffect(() => readGraph(), [readGraph, version, liveTick]);
 
   const edges = useMemo(() => (graph?.edges || []).filter((e) => e.from.record_id === rid || e.to.record_id === rid), [graph, rid]);
   const linkCount = links ? edges.length : (record?.references?.length || 0);
 
   const options = useMemo<LinkOption[] | null>(() => {
-    if (!record || !record.id || !links || !canEdit(record, provider, memory)) return null;
+    if (!record || !record.id || !links || !docMemory || !canEdit(record, provider, docMemory)) return null;
     if (hasSchema(provider) && !hasRelations(provider)) return null;
     const free: LinkOption[] = [{ key: 'free', rel: '', out: true, other: null, label: '' }];
     if (!hasSchema(provider)) return free;
@@ -132,7 +184,7 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
     // A schema steers what the provider pulls out; it does not limit what is stated. An agent links any two records
     // with a word of its own, so a person can too where the schema relates this type to nothing.
     return designed.length ? designed : free;
-  }, [record, links, provider, memory, schema]);
+  }, [record, links, provider, docMemory, schema]);
   const candidates = (o: LinkOption) => all.filter((x) => x.id !== rid && (o.other === null || kindOf(x) === o.other) && (o.out || canEdit(x, provider, memory)));
   const refsOf = (r: MemoryRecord) => (r.references || []).filter((x) => x.available !== false).map((x) => ({ rel: x.rel || 'related', record_id: x.record_id, ...(x.memory_id ? { memory_id: x.memory_id } : {}) }));
   const holderOf = (e: GraphEdge) => graph?.nodes.find((n) => n.record.id === e.from.record_id)?.record;
@@ -142,14 +194,14 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
     const holder = o.out ? record : all.find((x) => x.id === to);
     if (!holder) return;
     try {
-      savedLink(await reviseRecord(memory.id, holder.id, { references: [...refsOf(holder), { rel, record_id: o.out ? to : rid }] }));
+      savedLink(await reviseRecord(selIn || memory.id, holder.id, { references: [...refsOf(holder), { rel, record_id: o.out ? to : rid }] }));
     } catch (e) { toast(plain(e, 'That link was not made. Try again.')); }
   };
   const unlink = (e: GraphEdge) => {
     const h = holderOf(e);
     if (!h) return;
     const kept = refsOf(h).filter((x) => !(x.record_id === e.to.record_id && x.rel === (e.rel || 'related')));
-    reviseRecord(memory.id, h.id, { references: kept }).then(savedLink).catch((x) => toast(plain(x, 'That link was not removed. Try again.')));
+    reviseRecord(selIn || memory.id, h.id, { references: kept }).then(savedLink).catch((x) => toast(plain(x, 'That link was not removed. Try again.')));
   };
   const hideLinks = connectionsHidden(provider, linkCount, !!options?.length);
 
@@ -162,26 +214,39 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
       time: { valid_from: null, valid_to: null, written_at: null, invalidated_at: null },
       written_by: { kind: 'member', id: '' }, references: [], trust: 'untrusted',
     });
-    setSel(''); setTab('doc');
+    setSel(''); setSelIn(''); setTab('doc');
   }, [memory.id, provider, schema]);
   const everyFolder = useMemo(() => (hasFolders(provider) ? allFolders(folderTree(all, [])) : []), [provider, all]);
 
   const tree = <MemoryTree memory={memory} provider={provider} schema={kinds} read={read} activeId={record?.id || ''} pulse={pulse} filterKind={typeFilter} onOpen={open} onNew={startNew} onChanged={onChanged} />;
+  // something is kept here, in this memory or below it (null while what is below is still being read)
+  const held = all.length ? true : below === null ? (kids ? null : false) : below.n === null ? true : below.n > 0;
   const doc = (
     <main className="mm-doc">
-      {record ? (
-        <RecordDoc key={record.id || 'draft'} memory={memory} provider={provider} record={record} schema={kinds} setups={setups} links={linkCount} folders={everyFolder}
-          onSaved={(r) => { read.put(r); if (draft) { setDraft(null); setSel(r.id); onChanged(); } }}
-          onGone={(id) => { read.drop(id); setSel(''); onChanged(); }} />
+      {record && docMemory ? (
+        <RecordDoc key={`${selIn}:${record.id || 'draft'}`} memory={docMemory} above={selIn ? shownName(memory) : undefined} provider={provider} record={record} schema={kinds} setups={setups} links={linkCount} folders={selIn ? [] : everyFolder}
+          onSaved={(r) => {
+            if (selIn) { onBelowChanged?.([r.id]); return; }
+            read.put(r); if (draft) { setDraft(null); setSel(r.id); onChanged(); }
+          }}
+          onGone={(id) => {
+            if (selIn) { setSel(''); setSelIn(''); onBelowChanged?.([id]); return; }
+            read.drop(id); setSel(''); onChanged();
+          }} />
+      ) : record ? (
+        <><div className="mm-doc-bar"><span className="grow" /></div><p className="mm-muted mm-cpad" role="status">Opening…</p></>
       ) : (
         <>
           <div className="mm-doc-bar"><span className="grow" /></div>
-          {read.records ? (
+          {read.records && held !== null ? (
             <div className="mm-doc-empty">
-              <h2>{all.length ? 'Pick a record' : 'Nothing kept yet'}</h2>
-              <p>{all.length ? 'Choose one from the list or the graph to read it.' : `Add the first record, or give ${memory.name} to a setup and let it write.`}</p>
-              {!all.length && write ? <button type="button" className="btn primary small" onClick={() => startNew(kinds?.types[0]?.name || 'note')}>{PLUS}New record</button> : null}
-              {!all.length && schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>Set what it should look for first</button></p> : null}
+              <h2>{held ? 'Pick a record' : 'Nothing kept yet'}</h2>
+              <p>{held
+                ? (!all.length && below?.people ? 'What it keeps about each person is under their name. Choose a record to read it.'
+                  : showGraph ? 'Choose one from the list or the graph to read it.' : 'Choose one from the list to read it.')
+                : `Add the first record, or give ${memory.name} to a setup and let it write.`}</p>
+              {!held && write ? <button type="button" className="btn primary small" onClick={() => startNew(kinds?.types[0]?.name || 'note')}>{PLUS}New record</button> : null}
+              {!held && schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>Set what it should look for first</button></p> : null}
             </div>
           ) : null}
         </>

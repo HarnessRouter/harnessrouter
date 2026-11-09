@@ -111,14 +111,30 @@ export function framesBetween(seen: Map<string, Seen>, cards: TraceCard[], since
   return out.sort((a, b) => a.at - b.at);
 }
 
-async function readCards(h: Record<string, string>, signal: AbortSignal): Promise<TraceCard[]> {
-  const q = new URLSearchParams({ org: h['x-harness-org'], limit: String(WINDOW) });
+async function readCards(h: Record<string, string>, signal?: AbortSignal, limit = WINDOW): Promise<TraceCard[]> {
+  const q = new URLSearchParams({ org: h['x-harness-org'], limit: String(limit) });
   appendWorkspaceQuery(q);
   const r = await harnessFetch(`/api/harness/v1/traces?${q.toString()}`, { headers: h, cache: 'no-store', signal });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const d = await r.json().catch(() => null) as { sessions?: unknown } | null;
   if (!d || !Array.isArray(d.sessions)) throw new Error(`HTTP ${r.status}, not a task list`);
   return d.sessions as TraceCard[];
+}
+
+/** How many of the workspace's newest tasks a list of setups is ordered by. */
+export const RECENT_TASKS = 100;
+/** When each setup last ran a task, among the workspace's newest tasks (seconds; a task still running is now): one read,
+ *  for a list of setups that puts the ones in use first. A setup none of those tasks ran is not in it. */
+export async function lastTaskBySetup(limit = RECENT_TASKS): Promise<Map<string, number>> {
+  const cards = await readCards(headers(), undefined, limit);
+  const now = Date.now() / 1000;
+  const out = new Map<string, number>();
+  for (const c of cards) {
+    const hid = c.harness_id || '';
+    const at = RUNNING.has(String(c.status || '')) ? now : Number(c.finished_at) || 0;
+    if (hid && at > (out.get(hid) || 0)) out.set(hid, at);
+  }
+  return out;
 }
 
 function connect(h: Record<string, string>): Conn {
