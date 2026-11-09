@@ -26,6 +26,7 @@ import tempfile
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import (Auth, BACKENDS, CHECKPOINT_EXCLUDE, _HERMES_RELAY, _MINIMAX_TOOLS,  # noqa: E402
                     _mcp_headers,
                     _agent_doc_path, _build_minimax, _failure_reason, _minimax_eof,
@@ -54,7 +55,7 @@ def _norm(lines):
 def _argv(d=None, **kw):
     d = d or tempfile.mkdtemp()
     env: dict = {}
-    cmd = _build_minimax("openai-api", Auth(api_key="sk-real-provider-key", base_url="https://up.example/v1"),
+    cmd = handed.build(_build_minimax, "openai-api", Auth(api_key="sk-real-provider-key", base_url="https://up.example/v1"),
                          "minimax/minimax-m3", "do it", d, env, **kw)
     return cmd, d, env
 
@@ -282,8 +283,8 @@ def test_a_name_the_cli_does_not_know_disables_nothing_and_changes_nothing():
 
 
 def _handed(d) -> list[str]:
-    """The prompt files the builder wrote for the CLI to read (on stdin, or by the path in its argv)."""
-    return [p.read_text() for p in pathlib.Path(d, "tmp").glob(".prompt-*")]
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
 
 
 def _store(d, sid=SID, keep_open=False):

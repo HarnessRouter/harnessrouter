@@ -66,6 +66,7 @@ import signal
 import sys
 import contextlib
 import ctypes
+import select
 import socket
 import sqlite3
 import subprocess
@@ -73,6 +74,7 @@ import tempfile
 import hmac
 import pwd
 import stat
+import struct
 import threading
 import time
 import urllib.error
@@ -4409,42 +4411,140 @@ _TURN_THINKING: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr
 
 # ── the prompt, handed over by file or stdin, not on the command line ─────────────────────────
 # A process's command line is what `ps` lists (/proc/<pid>/cmdline), and a turn's prompt is the task's own
-# words, kept in the session's own files. So the CLI is not given the prompt as an argument: the builder writes it to a file
-# of the session's own (_prompt_handover), and the CLI reads it on stdin, or from that file's path in its
-# argv, or, for a Python CLI with neither, through prompt_launcher.py. The file is 0600 and made as the
-# session in its tmp/ (never checkpointed, never shown as produced), and it goes when the turn ends. One per
-# turn, held here for the turn's own thread (_run_turn_bg, _run_hermes_bg).
+# words, kept in the session's own files. So the CLI is not given the prompt as an argument: the builder writes
+# it to a file of the session's own (_prompt_handover), and the CLI reads it on stdin, or from that file's path
+# in its argv, or, for a Python CLI with neither, through prompt_launcher.py. The file is made 0600 by the
+# session's uid, in a 0700 folder of the session's own in its tmp/ (never checkpointed, never shown as
+# produced), and it is gone as soon as the CLI has it: a file read on stdin is removed before the CLI starts
+# (the CLI reads the open descriptor), one read by its path once the CLI has read it, and either, whatever
+# happens, when the turn ends. One per turn, held here for the turn's own thread (_run_turn_bg,
+# _run_hermes_bg).
 _TURN_PROMPT: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_prompt", default=None)
 PROMPT_LAUNCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_launcher.py")
 PROMPT_ARG = "{hr:prompt}"   # prompt_launcher.py's placeholder for the file's text
+PROMPT_DIR = ".hr-prompt"    # in the session's tmp/
+_IN_ACCESS, _IN_CLOSE_NOWRITE, _IN_DELETE_SELF, _IN_IGNORED = 0x1, 0x10, 0x400, 0x8000
+_IN_NONBLOCK, _IN_CLOEXEC = 0o4000, 0o2000000
+
+
+def _prompt_folder(cwd: str, uid: int | None) -> int:
+    """A descriptor of the folder a turn's prompt file is made in: tmp/.hr-prompt in the session's tree, a
+    folder of the session's own, 0700. Called as the session (_fs_as); each step is opened without following a
+    link, so the descriptor is of that folder and no other."""
+    tmp = os.path.join(cwd, "tmp")
+    where = os.path.join(tmp, PROMPT_DIR)
+    try:
+        os.makedirs(tmp, exist_ok=True)
+        tfd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            try:
+                os.mkdir(PROMPT_DIR, 0o700, dir_fd=tfd)
+            except FileExistsError:
+                pass
+            dfd = os.open(PROMPT_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=tfd)
+        finally:
+            os.close(tfd)
+    except OSError as e:
+        raise type(e)(e.errno, e.strerror, where) from e      # named by its place in the session's tree
+    try:
+        if uid is not None and os.fstat(dfd).st_uid != uid:
+            raise PermissionError(errno.EPERM, "not the session's own folder", where)
+        os.fchmod(dfd, 0o700)
+    except BaseException:
+        os.close(dfd)
+        raise
+    return dfd
 
 
 def _prompt_handover(cwd: str, text: str, stdin: bool = False) -> str:
     """Write this turn's prompt to a new 0600 file of the session's own and return its path.
 
-    `stdin`: the CLI reads its prompt on stdin, from the descriptor kept open here for the turn's thread
-    (_prompt_stdin); otherwise the CLI is handed the path. Made O_EXCL|O_NOFOLLOW as the session, so a name
-    planted in its tree leads nowhere."""
-    folder = os.path.join(cwd, "tmp")
-    with _fs_as(_session_uid(cwd)):
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, f".prompt-{uuid.uuid4().hex}")
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    `stdin`: the CLI reads its prompt on stdin, from the descriptor kept for the turn's thread (_prompt_stdin),
+    and the file is removed at once: nothing of it stays on disk while the CLI runs. Otherwise the CLI is handed
+    the path, and the file goes as soon as the CLI has read it (_prompt_watch). Made O_EXCL|O_NOFOLLOW by the
+    session's uid, so a name planted in its tree leads nowhere."""
+    uid = _session_uid(cwd)
+    name = f"prompt-{uuid.uuid4().hex}"
+    path = os.path.join(cwd, "tmp", PROMPT_DIR, name)
+    with _fs_as(uid):
+        dfd = _prompt_folder(cwd, uid)
+        try:
+            fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                         dir_fd=dfd)
+        except BaseException:
+            os.close(dfd)
+            raise
+    held = _TURN_PROMPT.get()
     try:
         data = memoryview((text or "").encode())
         while data:
             data = data[os.write(fd, data):]
         os.lseek(fd, 0, os.SEEK_SET)
+        if stdin or held is None:
+            if stdin:
+                with _fs_as(uid):
+                    os.unlink(name, dir_fd=dfd)
+            if held is None:          # a builder called on its own: nothing to hand it to
+                os.close(fd)
+                os.close(dfd)
+                return path
     except BaseException:
         os.close(fd)
+        with _fs_as(uid), contextlib.suppress(OSError):
+            os.unlink(name, dir_fd=dfd)
+        os.close(dfd)
         raise
-    held = _TURN_PROMPT.get()
-    if held is None:
-        os.close(fd)          # no turn to hand it to (a builder called on its own): the path still reads
-        return path
     _prompt_discard(held)     # one per turn
-    held.update(cwd=cwd, path=path, fd=fd, stdin=stdin)
+    held.update(cwd=cwd, uid=uid, path=path, name=name, dfd=dfd, stdin=stdin, fd=fd)
+    if not stdin:
+        _prompt_watch(held)
+        held["fd"] = None
+        os.close(fd)
     return path
+
+
+def _prompt_watch(held: dict) -> None:
+    """For a CLI handed its prompt file by path: remove the file as soon as the CLI has read it, at the first
+    close that follows a read (inotify, on the file the descriptor names, so no path is looked up again).
+    Linux only; elsewhere, or when the CLI never reads it, the file goes when the turn ends (_prompt_discard)."""
+    if _LIBC is None or held.get("fd") is None:
+        return
+    ifd = _LIBC.inotify_init1(_IN_NONBLOCK | _IN_CLOEXEC)
+    if ifd < 0:
+        return
+    mask = _IN_ACCESS | _IN_CLOSE_NOWRITE | _IN_DELETE_SELF
+    if _LIBC.inotify_add_watch(ifd, f"/proc/self/fd/{held['fd']}".encode(), mask) < 0:
+        os.close(ifd)
+        return
+    stop = threading.Event()
+    name, dfd, uid = held["name"], held["dfd"], held["uid"]
+
+    def run() -> None:
+        seen_read = False
+        try:
+            while not stop.is_set():
+                if not select.select([ifd], [], [], 0.25)[0]:
+                    continue
+                try:
+                    buf = os.read(ifd, 4096)
+                except BlockingIOError:
+                    continue
+                off, done = 0, False
+                while off + 16 <= len(buf):
+                    _wd, ev, _cookie, size = struct.unpack_from("iIII", buf, off)
+                    off += 16 + size
+                    seen_read = seen_read or bool(ev & _IN_ACCESS)
+                    done = done or bool((seen_read and ev & _IN_CLOSE_NOWRITE) or ev & (_IN_DELETE_SELF | _IN_IGNORED))
+                if done:
+                    with _fs_as(uid), contextlib.suppress(OSError):
+                        os.unlink(name, dir_fd=dfd)
+                    return
+        finally:
+            os.close(ifd)
+
+    t = threading.Thread(target=run, name="prompt-watch", daemon=True)
+    t.start()
+    held["watch"] = (stop, t)
 
 
 def _prompt_stdin(held: dict | None):
@@ -4459,19 +4559,22 @@ def _prompt_discard(held: dict | None) -> None:
     """Close and remove the turn's prompt file: when the turn is over, or when it never started."""
     if not held:
         return
+    watch = held.pop("watch", None)
+    if watch:
+        watch[0].set()
+        watch[1].join(timeout=5)
     fd = held.pop("fd", None)
     if fd is not None:
-        try:
+        with contextlib.suppress(OSError):
             os.close(fd)
-        except OSError:
-            pass
-    path = held.pop("path", None)
-    if path:
-        try:
-            with _fs_as(_session_uid(held.get("cwd") or "")):
-                os.unlink(path)
-        except OSError:
-            pass
+    dfd, name = held.pop("dfd", None), held.pop("name", None)
+    if dfd is not None:
+        if name:
+            with _fs_as(held.get("uid")), contextlib.suppress(OSError):
+                os.unlink(name, dir_fd=dfd)
+        if not (watch and watch[1].is_alive()):       # never under a watcher still using it
+            os.close(dfd)
+    held.pop("path", None)
 
 
 # The caller's W3C trace context (#473), for the turn being built: {"traceparent": ..., "tracestate":
@@ -16734,8 +16837,8 @@ def _hermes_msg_events(row: sqlite3.Row, state: dict) -> list[dict]:
 def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str, prompt: str,
                    resume_session_id: str | None, timeout_seconds: int | None,
                    mcp_toolsets: list[str] | None = None, prompt_io: dict | None = None) -> None:
-    """A hermes turn. Its prompt file (_prompt_handover, made here as the session when the turn did not
-    already) is removed when the turn is over, however it ends."""
+    """A hermes turn. Its prompt file (_prompt_handover, made when the turn was built, or here when it was
+    not) is removed once read, and in any case when the turn is over, however it ends."""
     try:
         if not (prompt_io or {}).get("path"):
             held = _TURN_PROMPT.set(prompt_io if prompt_io is not None else {})
@@ -18154,6 +18257,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                              max_turns=req.max_turns, mcp_servers=req.mcp_servers,
                                              vision_auth=req.vision_auth, own_memory_off=platform_memory,
                                              tools_disabled=req.tools_disabled)
+            _prompt_handover(cwd, req.prompt)    # read by prompt_launcher.py (_run_hermes_proc), here as the session
             if req.resume_session_id and doc_changed:
                 # Hermes then builds the prompt from AGENTS.md as it reads it, the trust of any new
                 # session reading its instruction file; no text of the runner's is said to replace it.

@@ -11,19 +11,20 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import (Auth, BACKENDS, _agent_doc_path, _build_cline, _cline_eof,  # noqa: E402
                     _cline_to_claude)
 
 
 def _handed(d) -> list[str]:
-    """The prompt files the builder wrote for the CLI to read, by their text."""
-    return [p.read_text() for p in pathlib.Path(d, "tmp").glob(".prompt-*")]
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
 
 
 def _argv(prompt="do the thing", **kw):
     d = tempfile.mkdtemp()
     env: dict = {}
-    cmd = _build_cline("openai-api", Auth(api_key="", base_url="https://relay.example/v1"),
+    cmd = handed.build(_build_cline, "openai-api", Auth(api_key="", base_url="https://relay.example/v1"),
                        "gpt-5.4", prompt, d, env, **kw)
     return cmd, d, env
 

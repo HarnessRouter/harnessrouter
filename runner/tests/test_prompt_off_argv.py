@@ -1,9 +1,9 @@
 """The prompt is handed over by file or stdin, not on the command line.
 
 A process's command line is what `ps` lists (/proc/<pid>/cmdline). Each builder below writes
-the turn's prompt to a file of the session's own (0600, in its tmp/) and the CLI reads it on stdin, or from the
-file's path in its argv, or through prompt_launcher.py. These tests read what each builder returns: the prompt's
-words appear nowhere in the argv, and the file holds them. test_root_writes_stay_in_the_session.py starts the
+the turn's prompt to a file of the session's own (0600, in a 0700 folder in its tmp/) and the CLI reads it on
+stdin, or from the file's path in its argv, or through prompt_launcher.py. These tests read what each builder
+returns: the prompt's words appear nowhere in the argv, and the CLI is handed them. test_root_writes_stay_in_the_session.py starts the
 turns for real, as the session, and reads their command lines as another uid.
 """
 import json
@@ -18,6 +18,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server  # noqa: E402
+import handed  # noqa: E402
 
 MARK = "the task's own words 7f3a91c2"
 KEY = server.Auth(api_key="k-0123456789abcdef", base_url="https://up.example/v1")
@@ -49,7 +50,7 @@ def _build(backend: str, prompt: str = MARK, instructions: str | None = None, re
 
 
 def _file_named_in(cmd: list[str], d: str) -> pathlib.Path:
-    prefix = os.path.join(d, "tmp", ".prompt-")
+    prefix = os.path.join(d, "tmp", server.PROMPT_DIR, "prompt-")
     files = [pathlib.Path(a.split("=", 1)[1] if a.startswith("--") else a) for a in cmd
              if a.startswith(prefix) or (a.startswith("--") and "=" + prefix in a)]
     assert len(files) == 1, cmd
@@ -60,17 +61,24 @@ STDIN = ["claude", "codex", "pi", "omp", "qwen", "gemini", "cline", "opencode", 
 BY_PATH = ["grok", "goose", "vibe", "docker-agent", "opensquilla"]
 
 
+def _folder_is_private(d: str) -> None:
+    folder = pathlib.Path(d, "tmp", server.PROMPT_DIR)
+    assert folder.is_dir() and not folder.is_symlink() and stat.S_IMODE(folder.stat().st_mode) == 0o700
+
+
 @pytest.mark.parametrize("backend", STDIN)
-def test_the_prompt_goes_on_stdin(backend):
+def test_the_prompt_goes_on_stdin_and_nothing_of_it_stays_on_disk(backend):
     cmd, held, d = _build(backend)
     assert not any(MARK in a for a in cmd), cmd
     assert held.get("stdin") is True and held.get("fd") is not None
     p = pathlib.Path(held["path"])
-    assert p.parent == pathlib.Path(d, "tmp") and p.read_text() == MARK
-    assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    assert p.parent == pathlib.Path(d, "tmp", server.PROMPT_DIR)
+    assert not p.exists(), "removed before the CLI starts: the CLI reads the open descriptor"
+    assert stat.S_IMODE(os.fstat(held["fd"]).st_mode) == 0o600
+    _folder_is_private(d)
     assert os.read(held["fd"], 1 << 16).decode() == MARK          # what the CLI reads, from the start
     server._prompt_discard(held)
-    assert not p.exists()
+    assert held.get("fd") is None and held.get("dfd") is None
 
 
 @pytest.mark.parametrize("backend", BY_PATH)
@@ -79,7 +87,8 @@ def test_the_prompt_goes_by_file(backend):
     assert not any(MARK in a for a in cmd), cmd
     p = _file_named_in(cmd, d)
     assert p.read_text() == MARK and stat.S_IMODE(p.stat().st_mode) == 0o600
-    assert held.get("stdin") is False and str(p) == held["path"]
+    _folder_is_private(d)
+    assert held.get("stdin") is False and str(p) == held["path"] and held.get("fd") is None
     server._prompt_discard(held)
     assert not p.exists()
 
@@ -108,8 +117,8 @@ def test_the_changed_instructions_travel_with_the_prompt(backend, monkeypatch):
         assert any("EDITED RULES 55e1" in a for a in cmd)
         return
     assert not any("EDITED RULES 55e1" in a or MARK in a for a in cmd), cmd
-    text = pathlib.Path(held["path"]).read_text()
-    assert "EDITED RULES 55e1" in text and text.endswith(MARK), "the note leads the prompt, in the file"
+    text = handed.text(held)
+    assert "EDITED RULES 55e1" in text and text.endswith(MARK), "the note leads the prompt, off the command line"
     server._prompt_discard(held)
 
 
@@ -120,7 +129,7 @@ def test_only_kimi_and_jcode_still_take_the_prompt_on_the_command_line():
     assert still == {"kimi", "jcode"}
 
 
-def test_the_prompt_file_is_made_fresh_and_never_through_a_planted_name(tmp_path):
+def test_the_prompt_file_is_made_fresh_each_time(tmp_path):
     (tmp_path / "tmp").mkdir()
     tok = server._TURN_PROMPT.set(None)        # builders called on their own: each file stays
     try:
@@ -150,7 +159,7 @@ def test_a_turn_reads_its_prompt_on_stdin_and_the_file_goes_with_the_turn(tmp_pa
     server._run_turn_bg("t-stdin", ["claude", "-p"], dict(os.environ), str(tmp_path), server._claude_passthrough, "m",
                         prompt_io=held)
     assert seen["stdin"] == MARK
-    assert not pathlib.Path(path).exists() and held.get("fd") is None
+    assert not pathlib.Path(path).exists() and held.get("fd") is None and held.get("dfd") is None
 
 
 def test_a_turn_without_a_prompt_file_still_reads_nothing(tmp_path, monkeypatch):
@@ -202,6 +211,7 @@ def test_the_launcher_runs_the_entry_point_with_the_prompt_in_its_own_argv(tmp_p
                          env={**os.environ, "PYTHONPATH": str(pkg)}, capture_output=True, text=True, timeout=60)
     assert out.returncode == 3, out.stderr
     assert json.loads(out.stdout) == ["fakecli", "-z", MARK + "\nsecond line", "--model", "m"]
+    assert not prompt.exists(), "the launcher removes the file once it has read it"
 
 
 def test_the_launcher_imports_nothing_from_the_folder_it_lives_in(tmp_path):
@@ -214,3 +224,59 @@ def test_the_launcher_imports_nothing_from_the_folder_it_lives_in(tmp_path):
     out = subprocess.run([sys.executable, server.PROMPT_LAUNCHER, str(prompt), "fakecli:main", "fakecli"],
                          env={**os.environ, "PYTHONPATH": str(pkg)}, capture_output=True, text=True, timeout=60)
     assert out.returncode != 0 and "No module named 'server'" in out.stderr
+
+
+def test_the_folder_is_made_0700_and_one_left_wider_is_narrowed(tmp_path):
+    (tmp_path / "tmp" / server.PROMPT_DIR).mkdir(parents=True, mode=0o755)
+    os.chmod(tmp_path / "tmp" / server.PROMPT_DIR, 0o755)
+    server._prompt_handover(str(tmp_path), "x")
+    _folder_is_private(str(tmp_path))
+
+
+def test_a_link_at_the_folders_name_is_refused_in_the_sessions_own_terms(tmp_path):
+    """Named by its place in the session's tree, so the turn is refused in words (_session_tree_refused)."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    ws = tmp_path / "ws"
+    (ws / "tmp").mkdir(parents=True)
+    (ws / "tmp" / server.PROMPT_DIR).symlink_to(elsewhere)
+    with pytest.raises(OSError) as e:
+        server._prompt_handover(str(ws), MARK)
+    assert server._session_tree_refused(e.value, str(ws)), e.value
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_a_file_whose_turn_never_started_is_removed(tmp_path):
+    held: dict = {}
+    tok = server._TURN_PROMPT.set(held)
+    try:
+        path = server._prompt_handover(str(tmp_path), MARK)
+    finally:
+        server._TURN_PROMPT.reset(tok)
+    assert pathlib.Path(path).exists()
+    server._prompt_discard(held)
+    assert not pathlib.Path(path).exists()
+
+
+@pytest.mark.skipif(server._LIBC is None, reason="inotify is Linux's")
+def test_a_file_read_by_its_path_goes_once_the_cli_has_read_it(tmp_path):
+    import time
+    held: dict = {}
+    tok = server._TURN_PROMPT.set(held)
+    try:
+        path = server._prompt_handover(str(tmp_path), MARK)
+    finally:
+        server._TURN_PROMPT.reset(tok)
+    os.stat(path)                                    # a look without a read leaves it
+    with open(path, "rb"):
+        pass                                         # an open and close without a read leaves it
+    time.sleep(0.6)
+    assert pathlib.Path(path).exists()
+    with open(path) as fh:
+        assert fh.read() == MARK                     # read and closed: gone
+    for _ in range(40):
+        if not pathlib.Path(path).exists():
+            break
+        time.sleep(0.05)
+    assert not pathlib.Path(path).exists()
+    server._prompt_discard(held)

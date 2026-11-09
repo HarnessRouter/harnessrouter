@@ -11,6 +11,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import _build_pi, _pi_models_json, _pi_to_claude, Auth  # noqa: E402
 
 
@@ -157,7 +158,7 @@ def test_no_deltas_still_emits_full_text():
 def _cmdline(tmp_path, provider="anthropic", base_url=None, model="claude-sonnet-4-6", **kw):
     env = {"HOME": str(tmp_path / "home")}
     auth = Auth(api_key="k-test", base_url=base_url)
-    return _build_pi(provider, auth, model, "do it", str(tmp_path), env,
+    return handed.build(_build_pi, provider, auth, model, "do it", str(tmp_path), env,
                      **kw), env
 
 
@@ -174,7 +175,7 @@ def test_a_direct_anthropic_key_goes_through_the_relay_not_the_environment(tmp_p
     assert server._HERMES_RELAY["routes"][hr["apiKey"]][:2] == ("https://api.anthropic.com/v1", "k-test")
     assert "--approve" in cmd and "--no-extensions" in cmd
     assert "do it" not in cmd       # read on stdin, from a file of the session's own
-    assert [p.read_text() for p in (tmp_path / "tmp").glob(".prompt-*")] == ["do it"]
+    assert handed.by_folder(tmp_path) == ["do it"]
 
 
 def test_build_tokenrouter_claude_family_uses_anthropic_messages(tmp_path):

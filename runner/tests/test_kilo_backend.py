@@ -21,6 +21,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 import server  # noqa: E402
 from server import (Auth, _agent_doc_path, _build_kilo, _kilo_denies, _kilo_eof,  # noqa: E402
                     _kilo_has_session, _kilo_npm, _kilo_to_claude, _resume_lost)
@@ -118,15 +119,15 @@ def test_tool_calls_render_as_tool_use_and_result():
 # ── the builder ───────────────────────────────────────────────────────────────────────────────
 
 def _handed(d) -> list[str]:
-    """The prompt files the builder wrote for the CLI to read (on stdin, or by the path in its argv)."""
-    return [p.read_text() for p in pathlib.Path(d, "tmp").glob(".prompt-*")]
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
 
 
 def _build(auth=None, provider="openai-api", **kw):
     d = tempfile.mkdtemp()
     env = {"HOME": f"{d}/.harness/home"}
     auth = auth or Auth(api_key="sk-real", base_url="https://gateway.example/v1")
-    cmd = _build_kilo(provider, auth, "gpt-5.4", "do it", d, env, **kw)
+    cmd = handed.build(_build_kilo, provider, auth, "gpt-5.4", "do it", d, env, **kw)
     cfg = json.loads(pathlib.Path(d, ".harness", "kilo.json").read_text())
     return cmd, cfg, env, d
 
@@ -141,7 +142,7 @@ def test_argv_is_a_headless_json_run_with_the_measured_flags():
 
 def test_a_prompt_that_looks_like_a_flag_is_not_read_as_one():
     d = tempfile.mkdtemp()
-    cmd = _build_kilo("openai-api", Auth(api_key="k", base_url="https://g.example/v1"), "gpt-5.4",
+    cmd = handed.build(_build_kilo, "openai-api", Auth(api_key="k", base_url="https://g.example/v1"), "gpt-5.4",
                       "--version", d, {"HOME": d})
     assert "--version" not in cmd and _handed(d) == ["--version"]   # on stdin it is only ever the prompt
 

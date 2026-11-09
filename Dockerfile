@@ -202,12 +202,14 @@ COPY --from=ui /ui/THIRD-PARTY-console.txt /app/THIRD-PARTY-console.txt
 # the runner from here, and a product user that can write them is root at the next start (reported
 # privately, GHSA-mm72-wr37-26pv). The gateway's and the console's own code are root's too: neither
 # writes there at run time but for Next's cache, and code that cannot change itself cannot keep a
-# compromise across a restart. Compiled here because `agent` cannot write __pycache__.
+# compromise across a restart. Compiled here because `agent` cannot write __pycache__. The prompt
+# launcher (runner/prompt_launcher.py) runs as each session's uid, so it is read-only to everyone.
 RUN useradd -m -u 10001 agent \
     && rm -rf /home/agent/.npm /root/.npm \
     && mkdir -p /data /app/ui/.next/cache \
     && chown -R root:root /app \
     && chmod -R go-w,a+rX /app \
+    && chmod 0444 /app/runner/prompt_launcher.py \
     && python -m compileall -q /app/gateway /app/runner \
     && chown -R agent:agent /data /home/agent /app/ui/.next/cache \
     && chmod -R a+rX /opt/harnessrouter/skills /opt/harnessrouter/kits

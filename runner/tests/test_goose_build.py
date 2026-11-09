@@ -30,6 +30,7 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import (Auth, ALL_GOOSE_TOOLS, BACKENDS, _agent_doc_path, _build_goose,  # noqa: E402
                     _goose_extensions, _goose_has_session, _goose_root, _goose_split_base,
                     _goose_mcp_startup_failure, _goose_to_claude, _goose_usage,
@@ -40,7 +41,7 @@ from server import (Auth, ALL_GOOSE_TOOLS, BACKENDS, _agent_doc_path, _build_goo
 def _argv(**kw):
     d = tempfile.mkdtemp()
     env: dict = {}
-    cmd = _build_goose("openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
+    cmd = handed.build(_build_goose, "openai-api", Auth(api_key="sk-t", base_url="https://up.example/v1"),
                        "gpt-5.4", "do it", d, env, **kw)
     return cmd, d, env
 
@@ -55,8 +56,8 @@ def _norm(events):
 
 
 def _handed(d) -> list[str]:
-    """The prompt files the builder wrote for the CLI to read (on stdin, or by the path in its argv)."""
-    return [p.read_text() for p in pathlib.Path(d, "tmp").glob(".prompt-*")]
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
 
 
 def _msg(*content, role="assistant", inference=None):
@@ -76,7 +77,7 @@ def test_argv_is_headless_stream_json():
     assert ["--model", "gpt-5.4"] == cmd[4:6]
     # -i names a file of the session's own holding the prompt, never -t with the prompt itself
     assert cmd[8] == "-i" and "-t" not in cmd and "do it" not in cmd
-    assert pathlib.Path(cmd[9]).read_text() == "do it" and _handed(d) == ["do it"]
+    assert cmd[9].startswith(f"{d}/tmp/") and _handed(d) == ["do it"]
 
 
 def test_auto_mode_and_no_session_naming():
