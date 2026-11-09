@@ -193,7 +193,8 @@ _FILE_SAYS = (" To keep a file you made (an image you generated, a document you 
 # (Seam.offers()["standing"]): everywhere else the word would only raise the question.
 _STANDING_SAYS = (". `standing` is not set here: a standing instruction, given to everyone who shares a memory, is set "
                   "by a person in the console")
-NOTE_STANDING = "Kept as a note. A standing instruction is set by a person in the console."
+STANDING_IS_A_PERSONS = "A standing instruction is set by a person in the console."
+NOTE_STANDING = "Kept as a note. " + STANDING_IS_A_PERSONS
 REFUSE_STANDING = "This is a standing instruction a person set; only a person can change it in the console."
 
 # When to call memory_remember, said on the tool itself. An agent kept things nobody asked it to keep, with
@@ -646,11 +647,18 @@ _ASKED = re.compile(r"^(?:please\s+)?(?:(?:reply|respond|answer)\s+(?:with|in|on
                     r"say\s+(?:only|exactly|just)\b|(?:always|never|do not|don't)\s+\w|make sure\b|remember to\b)", re.I)
 
 
-def as_past(words: str) -> str:
-    """A line that reads as an instruction to the assistant, framed as a request made once (_ASKED); any other as it is."""
+def as_past(words: str, persons: bool = True) -> str:
+    """A line that reads as an instruction to the assistant, framed as a request made once (_ASKED); any other as it is.
+    `persons`: the words were drawn from a person's own (an engine's reading of what they said, or what a person wrote),
+    so "the person asked once:"; what an agent wrote down is "a request, noted once:", which claims nobody asked."""
     if not _ASKED.match(words):
         return words
-    return "the person asked once: " + words[:1].lower() + words[1:]
+    return ("the person asked once: " if persons else "a request, noted once: ") + words[:1].lower() + words[1:]
+
+
+def _by_an_agent(r: dict) -> bool:
+    w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
+    return w.get("kind") == "member" and w.get("type") == "agent"
 
 
 def known_block(results: list[dict], now: datetime | None = None) -> tuple[str, int]:
@@ -671,7 +679,7 @@ def known_block(results: list[dict], now: datetime | None = None) -> tuple[str, 
         if not same or any(f" {same} " in f" {s} " for s in seen):
             continue
         seen.append(same)
-        (raw if is_raw else drawn).append((words if is_raw else as_past(words), rec))
+        (raw if is_raw else drawn).append((words if is_raw else as_past(words, not _by_an_agent(rec)), rec))
     lines, used = [], 0
     for words, rec in (drawn or raw)[:RECALL_AT_START_LIMIT]:
         words = words.replace("```", "'''")
@@ -772,15 +780,14 @@ def _standing_line(r: dict) -> str:
 def _noted_line(r: dict) -> str:
     """A standing record no person set (set_by_a_person) as a line of data: placed with what was recalled, under its head,
     never with the standing instructions. Who noted it and on which day, then its words, flattened to one line that
-    can't close the fence and framed as what was asked once where they read as a request (as_past)."""
+    can't close the fence and framed as a request noted once where they read as one (as_past): no person set it."""
     words, raw = known_line(r)
-    words = (words if raw else as_past(words)).replace("```", "'''")
+    words = (words if raw else as_past(words, persons=False)).replace("```", "'''")
     if not words:
         return ""
     words = words if len(words) <= STANDING_CAP else words[: STANDING_CAP - 1].rstrip() + "…"
-    w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
     t = _parsed_time((r.get("time") or {}).get("written_at") if isinstance(r.get("time"), dict) else None)
-    who = "noted by an agent" if w.get("kind") == "member" and w.get("type") == "agent" else "noted"
+    who = "noted by an agent" if _by_an_agent(r) else "noted"
     return f"- [{who}{f' on {t.day} {t:%B %Y}' if t else ''}] {words}"
 
 
