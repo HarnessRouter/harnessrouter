@@ -159,3 +159,37 @@ def test_a_model_whose_window_is_smaller_than_the_cap_answers_through_the_route(
         assert got[0] == want                                      # and nothing else changed on the way
     finally:
         up.shutdown()
+
+
+# ── disabled tools: permissions.deny in the settings file ─────────────────────────────────────
+# A harness with every tool switched off ran on Qwen Code with every tool still in the request: the
+# builder took no disabled list at all. Qwen Code 0.26.3 never registers a tool a whole-tool deny
+# rule names (not as a deferred tool either), and --yolo only decides how a registered tool's call
+# is approved, so the rule is a real block.
+
+def _settings(d):
+    return json.loads(pathlib.Path(d, ".harness", "home", ".qwen", "settings.json").read_text())
+
+
+def test_disabled_tools_are_whole_tool_deny_rules():
+    _, d, _ = _argv(tools_disabled=["run_shell_command", "write_file (writes a file)", "agent", "agent", " "])
+    assert _settings(d)["permissions"] == {"deny": ["agent", "run_shell_command", "write_file"]}
+
+
+def test_nothing_off_writes_no_rule():
+    _, d, _ = _argv()
+    assert "permissions" not in _settings(d)
+    _, d, _ = _argv(tools_disabled=[])
+    assert "permissions" not in _settings(d)
+
+
+def test_the_deny_rules_ride_the_settings_file_not_the_command_line():
+    cmd, _, _ = _argv(tools_disabled=["run_shell_command"])
+    assert "run_shell_command" not in " ".join(cmd)
+    assert "--yolo" in cmd
+
+
+def test_disabled_tools_sit_beside_the_mcp_servers():
+    _, d, _ = _argv(tools_disabled=["edit"], mcp_servers=[{"name": "graph", "url": "https://mcp.example/mcp"}])
+    cfg = _settings(d)
+    assert cfg["permissions"]["deny"] == ["edit"] and "graph" in cfg["mcpServers"]

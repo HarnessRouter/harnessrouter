@@ -8528,11 +8528,26 @@ QWEN_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 _QWEN_DROP_FIELDS = ("max_tokens",)
 
 
-def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
-    """~/.qwen/settings.json under the redirected HOME. Only mcpServers is written (gemini-cli
-    schema: command/args/env for stdio, url/httpUrl for remote); auth stays in the ENVIRONMENT
-    (OPENAI_API_KEY / OPENAI_BASE_URL + --auth-type openai), so unlike pi and opencode no
-    credential ever lands on disk for this backend."""
+def _tool_names_off(tools_disabled: list[str] | None) -> list[str]:
+    """A harness's disabled tools as the CLI names them: a stored entry may be a display string,
+    "Name (description)", and only the part before " (" is the tool's name. Sorted, once each."""
+    return sorted({str(t).split(" (")[0].strip() for t in (tools_disabled or []) if t and str(t).strip()})
+
+
+def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None,
+                   tools_disabled: list[str] | None = None) -> None:
+    """~/.qwen/settings.json under the redirected HOME: mcpServers (gemini-cli schema:
+    command/args/env for stdio, url/httpUrl for remote) and the disabled tools. Auth stays in the
+    ENVIRONMENT (OPENAI_API_KEY / OPENAI_BASE_URL + --auth-type openai), so unlike pi and opencode
+    no credential ever lands on disk for this backend.
+
+    A disabled tool is a whole-tool rule in `permissions.deny`. Qwen Code 0.26.3 resolves every
+    tool's registration through its permission manager before the model sees it, and a tool a deny
+    rule names is "disabled": never registered, not even as a deferred tool that tool_search could
+    surface, and refused if a call names it anyway (getToolRegistrationStatus, registerLazyTool;
+    the loader merges permissions.deny with the legacy tools.exclude). --yolo does not reach this:
+    it chooses how a REGISTERED tool's call is approved, and approval is a different question from
+    whether the tool exists (scripts/tools-off-check.py measures it at the model request)."""
     qdir = home / ".qwen"
     qdir.mkdir(parents=True, exist_ok=True)
     servers: dict = {}
@@ -8561,11 +8576,15 @@ def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
     cfg: dict = {}
     if servers:
         cfg["mcpServers"] = servers
+    off = _tool_names_off(tools_disabled)
+    if off:
+        cfg["permissions"] = {"deny": off}
     (qdir / "settings.json").write_text(json.dumps(cfg, indent=2))
 
 
 def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
-                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None) -> list[str]:
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "openai-api"
     if pr not in QWEN_PROVIDERS:
         raise HTTPException(400, f"unknown qwen provider '{pr}' (one of {sorted(QWEN_PROVIDERS)})")
@@ -8586,7 +8605,7 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
     env["OPENAI_API_KEY"] = auth.api_key or ""
     env["OPENAI_BASE_URL"] = auth.base_url
-    _qwen_settings(home, mcp_servers)
+    _qwen_settings(home, mcp_servers, tools_disabled)
     cmd = ["qwen", "-p", prompt, "-o", "stream-json", "-m", model,
            # Resume REQUIRES an explicit auth type in non-interactive mode (verified on 0.22.1:
            # without it every -r run dies "No auth type is selected"); fresh runs take it too for
@@ -17304,10 +17323,11 @@ def capabilities(identifier: str = "") -> dict:
 #   opensquilla — `--permissions` picks a posture (restricted / bypass / full); there is no
 #                 per-tool deny list anywhere on its agent CLI.
 #   gemini      — no confirmed per-tool switch in headless mode.
-#   qwen, cline — no per-tool switch was found headless.
+#   cline       — no per-tool switch was found headless.
+# Qwen Code has one, `permissions.deny` in its settings file (_qwen_settings).
 # The gateway's catalog says the same thing per base (tool_enforcement "instruction" for exactly
 # these), and gateway/tests/test_tool_enforcement_parity.py holds the two together.
-_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "gemini", "opensquilla", "qwen", "cline"})
+_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "gemini", "opensquilla", "cline"})
 
 
 def _disabled_tools_note(backend: str, tools_disabled: list[str] | None) -> str:
@@ -17589,7 +17609,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         elif backend == "qwen":
             model = model or QWEN_DEFAULT_MODEL
             cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
-                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                              tools_disabled=req.tools_disabled)
         elif backend == "kimi":
             model = model or KIMI_DEFAULT_MODEL
             # _write_skills has already run, so the directory is on disk and can simply be named:
