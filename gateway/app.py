@@ -20255,6 +20255,9 @@ _BASE_CATALOG: dict[str, dict] = {
         "tools": [("terminal", "Terminal"), ("read_file", "File Read"), ("write_file", "File Write"),
                   ("patch", "Patch"), ("search_files", "Search"), ("web_search", "Web Search"),
                   ("web_extract", "Web Extract")],
+        # "instruction": hermes switches toolsets, not tools. Terminal is withheld (its toolset holds
+        # only it and the process tool that serves it), and the four file tools are withheld when all
+        # four are off, but one file tool alone can only be asked (_hermes_toolsets_off).
         "tool_enforcement": "instruction",
     },
     "pi": {
@@ -20291,9 +20294,12 @@ _BASE_CATALOG: dict[str, dict] = {
                           "real git workspace, running shell commands and editing files to "
                           "complete the task end to end."),
         # The sdk profile's model-facing tools, read off the request header of a 0.1.2rc1 turn
-        # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). No per-tool
-        # switch exists on the wire, so disabling is an instruction to the model, the same
-        # standing as codex/hermes.
+        # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). The switch is
+        # the profile's rows: a tool whose row registers nothing else is withheld (bash,
+        # str_replace_editor, web_fetch, todo_write, skill, subagent, subagent_fork, workflow;
+        # dsh_driver._rows_off), glob and grep only together, and read, write and edit never, since
+        # their row also holds read_image. So the base stays "instruction": the request covers what
+        # the rows cannot.
         # web_search is not offered: dsh's stock provider calls DeepSeek's own API with the relay's placeholder
         # key (401 every time, and off the turn's connection), so the driver turns that row off.
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),
@@ -20630,13 +20636,17 @@ _BASE_CATALOG: dict[str, dict] = {
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
         # From the live init event's tool list under --yolo (0.22.1) — shell/write/edit exist
-        # ONLY in yolo mode, which the runner always passes. No per-tool kill switch on the CLI,
-        # so disabling is an instruction to the model — same tier as codex/hermes/dsh.
+        # ONLY in yolo mode, which the runner always passes. On 0.26.3 web_fetch, todo_write and
+        # agent are deferred (offered through tool_search rather than in the first request).
         "tools": [("run_shell_command", "Shell"), ("read_file", "File Read"),
                   ("write_file", "File Write"), ("edit", "Edit"),
                   ("grep_search", "Search"), ("glob", "Glob"), ("web_fetch", "Web Fetch"),
                   ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
-        "tool_enforcement": "instruction",
+        # "hard": a disabled tool is a whole-tool rule in the settings file's permissions.deny, and
+        # Qwen Code never registers a tool such a rule names, deferred or not (_qwen_settings).
+        # Until this the switch did nothing here at all: measured on 0.40.0 with all ten off, seven
+        # were still in the request and nothing asked the model not to use them.
+        "tool_enforcement": "hard",
     },
     "gemini": {
         "label": "Gemini CLI", "backend": "gemini", "status": "ready",
@@ -20659,9 +20669,13 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("web_fetch", "Web Fetch"), ("google_web_search", "Web Search"),
                   ("write_todos", "Todo"), ("save_memory", "Memory"),
                   ("activate_skill", "Skill"), ("update_topic", "Topic")],
-        # No confirmed hard per-tool kill switch in headless mode (only --allowed-mcp-server-names
-        # gates MCP servers) — instruction tier until proven otherwise, same as qwen/cline/codex.
-        "tool_enforcement": "instruction",
+        # "hard": a disabled tool goes in the settings file's tools.exclude, and Gemini CLI leaves an
+        # excluded tool (or its legacy alias) out of the function declarations it sends, for
+        # subagents too (_gemini_settings). Until this it was a request: measured on 0.40.0 with all
+        # twelve off, nine were still in the request. search_file_content, write_todos and
+        # save_memory were not offered even with nothing off on 0.58.0 (the first is now
+        # grep_search, which the exclusion's alias expansion covers).
+        "tool_enforcement": "hard",
     },
     "cline": {
         "label": "Cline", "backend": "cline", "status": "ready",
@@ -20669,13 +20683,18 @@ _BASE_CATALOG: dict[str, dict] = {
                           "workspace with shell and file access, reading and editing files and "
                           "running commands to complete the task end to end."),
         # From the tools array a live 3.0.60 run sent its provider (captured at a stub upstream).
-        # The CLI exposes no per-tool kill switch headless, so disabling is an instruction to the
-        # model — the codex/hermes/dsh/qwen tier, not claude's hard deny.
+        # "editor" is sent as apply_patch for a model whose route edits by patch; switching Editor
+        # off withholds both names.
         "tools": [("run_commands", "Shell"), ("read_files", "File Read"),
                   ("editor", "Editor"), ("search_codebase", "Search"),
                   ("fetch_web_content", "Web Fetch"), ("ask_question", "Question"),
                   ("spawn_agent", "Subagent")],
-        "tool_enforcement": "instruction",
+        # "hard": the runner writes the disabled list into cline's global-settings.json
+        # `disabledTools`, which 3.0.60 applies to every tool list it builds, a subagent's included,
+        # except a teammate's, so with any tool off the team tools go too (_cline_disabled_tools).
+        # Until this the switch did nothing here at all: measured on 0.40.0 with all seven off, six
+        # were still in the request and nothing asked the model not to use them.
+        "tool_enforcement": "hard",
     },
     "mimo": {
         "label": "MiMo Code", "backend": "mimo", "status": "ready",

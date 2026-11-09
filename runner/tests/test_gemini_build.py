@@ -321,3 +321,31 @@ def test_every_helper_alias_of_the_cli_runs_on_the_turns_model(tmp_path):
                  "summarizer-shell", "loop-detection-double-check", "classifier"):
         assert must in custom
     assert len(custom) == 18
+
+
+# ── disabled tools: tools.exclude in the settings file ────────────────────────────────────────
+# Measured on 0.40.0 with every catalog tool off: nine of twelve still in the request (the other
+# three are not offered on 0.58.0 at all). Gemini CLI leaves a tool named in tools.exclude, or its
+# legacy alias, out of the function declarations, subagents' included; --approval-mode=yolo only
+# decides how an active tool's call is approved.
+
+def _settings(d):
+    return json.loads(pathlib.Path(d, ".harness", "home", ".gemini", "settings.json").read_text())
+
+
+def test_disabled_tools_are_excluded_in_settings():
+    _, d, _ = _argv(tools_disabled=["run_shell_command", "search_file_content (search)", "replace", "replace"])
+    assert _settings(d)["tools"] == {"exclude": ["replace", "run_shell_command", "search_file_content"]}
+
+
+def test_nothing_off_excludes_nothing():
+    _, d, _ = _argv()
+    assert "tools" not in _settings(d)
+
+
+def test_exclusion_rides_the_settings_file_and_yolo_stays():
+    cmd, d, _ = _argv(tools_disabled=["run_shell_command"])
+    assert "run_shell_command" not in " ".join(cmd)
+    assert "yolo" in cmd
+    cfg = _settings(d)
+    assert cfg["security"]["auth"]["selectedType"] == "gemini-api-key" and "modelConfigs" in cfg

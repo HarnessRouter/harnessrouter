@@ -18,8 +18,11 @@ from server import (BACKENDS, _TOOLS_OFF_BY_REQUEST, _agent_doc_path,  # noqa: E
 OFF = ["run_shell_command", "write_file (writes a file)", "editor"]
 
 
-def test_qwen_and_cline_are_asked():
-    assert {"qwen", "cline"} <= _TOOLS_OFF_BY_REQUEST
+@pytest.mark.parametrize("backend", ["qwen", "gemini", "cline"])
+def test_qwen_gemini_and_cline_withhold_rather_than_ask(backend):
+    """Each has a real switch in a settings file (test_qwen_build.py, test_gemini_build.py,
+    test_cline_backend.py)."""
+    assert backend not in _TOOLS_OFF_BY_REQUEST and _disabled_tools_note(backend, OFF) == ""
 
 
 @pytest.mark.parametrize("backend", sorted(_TOOLS_OFF_BY_REQUEST))
@@ -39,7 +42,7 @@ def test_a_base_with_a_real_switch_gets_no_request(backend):
 
 @pytest.mark.parametrize("off", [None, [], [""], ["  "]])
 def test_nothing_switched_off_says_nothing(off):
-    assert _disabled_tools_note("qwen", off) == ""
+    assert _disabled_tools_note("codex", off) == ""
 
 
 def test_every_request_only_base_is_a_backend():

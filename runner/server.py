@@ -3249,6 +3249,12 @@ def _codex_web_search_off(tools_disabled: list[str] | None) -> bool:
                for x in (tools_disabled or []) if x and x.strip())
 
 
+def _codex_shell_off(tools_disabled: list[str] | None) -> bool:
+    """Whether the turn's disabled list names codex's shell, by the catalog's name or the one 0.154
+    sends the model (exec_command, with write_stdin, under unified exec)."""
+    return bool({t.lower() for t in _tool_names_off(tools_disabled)} & {"shell", "exec_command"})
+
+
 def _codex_flag(value: str | bool | None) -> bool | None:
     """Parse a connection's optional on/off flag, preserving an unset value."""
     if value is None or (isinstance(value, str) and not value.strip()):
@@ -3386,6 +3392,11 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         # nothing). It goes before the first table header: appended at the end it would belong
         # to the last table and switch nothing (measured on rc.1: the tool stayed in the request).
         cfg = _codex_insert_top_level(cfg, 'web_search = "disabled"')
+    if _codex_shell_off(tools_disabled):
+        # The shell is a feature in codex 0.154's own table (`codex features list`: shell_tool), and
+        # off it takes the shell family out of the tools codex builds (exec_command and write_stdin
+        # under unified exec). A table of its own, so it never lands inside another one.
+        cfg += "[features]\nshell_tool = false\n"
     if resume:
         # A resumed session keeps the provider id it started under; Codex looks that id up in the
         # config and refuses to load without it ("Model provider `azure` not found", a July
@@ -3567,7 +3578,8 @@ DSH_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dsh_drive
 
 def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                resume_session_id: str | None = None,
-               mcp_servers: list[dict] | None = None, vision: bool = True) -> list[str]:
+               mcp_servers: list[dict] | None = None, vision: bool = True,
+               tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "deepseek"
     if pr not in DSH_PROVIDERS:
         raise HTTPException(400, f"unknown dsh provider '{pr}' (one of {sorted(DSH_PROVIDERS)})")
@@ -3600,7 +3612,9 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     job = {"prompt": prompt, "model": model, "cwd": cwd,
            "session_id": resume_session_id or "",
            # a server is a url or, for a plugin's stdio server, the launcher the runner wrote
-           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url") or (s or {}).get("command")]}
+           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url") or (s or {}).get("command")],
+           # the profile rows that register only a disabled tool are switched off (dsh_driver._rows_off)
+           "tools_off": _tool_names_off(tools_disabled)}
     if not _DSH_DEEPSEEK_MODEL.search(model or ""):
         # Family decides the route, not the integration's name: deepseek models keep the
         # verified dsh-llm-deepseek launch path whichever endpoint serves them; every other
@@ -8396,11 +8410,36 @@ _HERMES_DEFAULT_BASE = {"anthropic": "https://api.anthropic.com/v1", "openai-api
 # once saving into its private store, which nobody sees in the console (sslip, 11-09).
 _HERMES_OWN_MEMORY_TOOLSETS = ("memory", "session_search")
 
+# A harness's disabled tools, as hermes toolsets (hermes-agent 0.19.0 toolsets.py). hermes switches
+# toolsets, never single tools, so a toolset is switched off only when it withholds nothing the
+# harness left on: `file` is read_file, write_file, patch and search_files, all four or none;
+# `search` is web_search alone and `web` is web_search with web_extract. `terminal` is terminal with
+# `process`, which only manages the background runs terminal starts (its own description) and has no
+# switch of its own, so it goes with terminal. Subagents inherit the parent's toolsets and its
+# disabled ones (delegate_tool._build_child_agent), so a withheld tool stays withheld below it.
+#
+# What hermes does with agent.disabled_toolsets differs by path, and the table holds on both: chat -q
+# (resume, MCP) subtracts the toolsets' tools from everything enabled, and the one-shot -z removes the
+# names from the enabled toolsets (tools_config._get_platform_tools). On -z, web_search still comes in
+# through the `browser` toolset where a search backend is configured, which is why it is asked as
+# well (_TOOLS_OFF_BY_REQUEST keeps hermes).
+_HERMES_TOOLSETS_OFF = (("file", ("read_file", "write_file", "patch", "search_files")),
+                        ("terminal", ("terminal",)),
+                        ("web", ("web_search", "web_extract")),
+                        ("search", ("web_search",)))
+
+
+def _hermes_toolsets_off(tools_disabled: list[str] | None) -> list[str]:
+    """The toolsets whose every tool the harness switched off (_HERMES_TOOLSETS_OFF)."""
+    off = set(_tool_names_off(tools_disabled))
+    return [ts for ts, tools in _HERMES_TOOLSETS_OFF if set(tools) <= off]
+
 
 def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
                         model: str = "", max_turns: int | None = None,
                         mcp_servers: list[dict] | None = None,
-                        vision_auth: dict | None = None, own_memory_off: bool = False) -> list[str]:
+                        vision_auth: dict | None = None, own_memory_off: bool = False,
+                        tools_disabled: list[str] | None = None) -> list[str]:
     """Point HERMES_HOME inside the checkpointed workspace home (CODEX_HOME precedent) so the
     conversation state (state.db) survives sandbox recycling, and inject provider creds as env.
     Writes config.yaml fresh each turn (harness config is the source of truth, like the agent doc).
@@ -8439,12 +8478,16 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     if max_turns:
         # hermes 0.19.0 has no --max-turns CLI flag; agent.max_turns in config.yaml is the knob.
         cfg["agent"]["max_turns"] = int(max_turns)
+    toolsets_off = _hermes_toolsets_off(tools_disabled)
     if own_memory_off:
         # The toolsets come out of what the model is offered (agent.disabled_toolsets, read by the chat path a turn
         # with MCP servers takes), and the store behind them is off too (memory.*_enabled: no MEMORY.md or USER.md
         # in its prompt, and no background review writing to them).
-        cfg["agent"]["disabled_toolsets"] = list(_HERMES_OWN_MEMORY_TOOLSETS)
+        toolsets_off = list(_HERMES_OWN_MEMORY_TOOLSETS) + toolsets_off
         cfg["memory"] = {"memory_enabled": False, "user_profile_enabled": False}
+    if toolsets_off:
+        # with the disabled tools' own toolsets, where a toolset is wholly off (_hermes_toolsets_off)
+        cfg["agent"]["disabled_toolsets"] = toolsets_off
     if vision_auth and vision_auth.get("model"):
         # hermes asks its image questions separately from the conversation (vision_analyze, the
         # browser tools) and, left alone, asks the model the harness writes with. That made a
@@ -8588,11 +8631,26 @@ QWEN_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 _QWEN_DROP_FIELDS = ("max_tokens",)
 
 
-def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
-    """~/.qwen/settings.json under the redirected HOME. Only mcpServers is written (gemini-cli
-    schema: command/args/env for stdio, url/httpUrl for remote); auth stays in the ENVIRONMENT
-    (OPENAI_API_KEY / OPENAI_BASE_URL + --auth-type openai), so unlike pi and opencode no
-    credential ever lands on disk for this backend."""
+def _tool_names_off(tools_disabled: list[str] | None) -> list[str]:
+    """A harness's disabled tools as the CLI names them: a stored entry may be a display string,
+    "Name (description)", and only the part before " (" is the tool's name. Sorted, once each."""
+    return sorted({str(t).split(" (")[0].strip() for t in (tools_disabled or []) if t and str(t).strip()})
+
+
+def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None,
+                   tools_disabled: list[str] | None = None) -> None:
+    """~/.qwen/settings.json under the redirected HOME: mcpServers (gemini-cli schema:
+    command/args/env for stdio, url/httpUrl for remote) and the disabled tools. Auth stays in the
+    ENVIRONMENT (OPENAI_API_KEY / OPENAI_BASE_URL + --auth-type openai), so unlike pi and opencode
+    no credential ever lands on disk for this backend.
+
+    A disabled tool is a whole-tool rule in `permissions.deny`. Qwen Code 0.26.3 resolves every
+    tool's registration through its permission manager before the model sees it, and a tool a deny
+    rule names is "disabled": never registered, not even as a deferred tool that tool_search could
+    surface, and refused if a call names it anyway (getToolRegistrationStatus, registerLazyTool;
+    the loader merges permissions.deny with the legacy tools.exclude). --yolo does not reach this:
+    it chooses how a REGISTERED tool's call is approved, and approval is a different question from
+    whether the tool exists (scripts/tools-off-check.py measures it at the model request)."""
     qdir = home / ".qwen"
     qdir.mkdir(parents=True, exist_ok=True)
     servers: dict = {}
@@ -8621,11 +8679,15 @@ def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None) -> None:
     cfg: dict = {}
     if servers:
         cfg["mcpServers"] = servers
+    off = _tool_names_off(tools_disabled)
+    if off:
+        cfg["permissions"] = {"deny": off}
     (qdir / "settings.json").write_text(json.dumps(cfg, indent=2))
 
 
 def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
-                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None) -> list[str]:
+                resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
+                tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "openai-api"
     if pr not in QWEN_PROVIDERS:
         raise HTTPException(400, f"unknown qwen provider '{pr}' (one of {sorted(QWEN_PROVIDERS)})")
@@ -8646,7 +8708,7 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
     env["OPENAI_API_KEY"] = auth.api_key or ""
     env["OPENAI_BASE_URL"] = auth.base_url
-    _qwen_settings(home, mcp_servers)
+    _qwen_settings(home, mcp_servers, tools_disabled)
     cmd = ["qwen", "-p", prompt, "-o", "stream-json", "-m", model,
            # Resume REQUIRES an explicit auth type in non-interactive mode (verified on 0.22.1:
            # without it every -r run dies "No auth type is selected"); fresh runs take it too for
@@ -9635,8 +9697,17 @@ GEMINI_MODELS = ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemi
                  "gemini-3-flash-preview")
 
 
-def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: str = "") -> None:
+def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: str = "",
+                     tools_disabled: list[str] | None = None) -> None:
     """~/.gemini/settings.json under the redirected HOME.
+
+    A disabled tool goes in `tools.exclude`. Gemini CLI 0.58.0 builds the model's function
+    declarations from its registry's ACTIVE tools, and a tool whose name (or legacy alias:
+    search_file_content is grep_search) is in the exclude set is not active (ToolRegistry
+    getActiveTools / isActiveTool, fed by Config.getExcludeTools, which the loader fills from
+    settings.tools.exclude). A subagent's registry is built on the same Config and filtered the
+    same way. --approval-mode=yolo decides how an active tool's call is approved, which is a
+    separate question, so the exclusion holds under it.
 
     mcpServers uses gemini-cli's own schema (command/args/env for stdio, url/httpUrl/headers for
     remote) — the same shape _qwen_settings already writes, because qwen inherited it unchanged
@@ -9709,12 +9780,15 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
                                   "modelChains": {k: own for k in ("preview", "default", "lite", "auto-preview", "auto-default")}}}
     if servers:
         cfg["mcpServers"] = servers
+    off = _tool_names_off(tools_disabled)
+    if off:
+        cfg["tools"] = {"exclude": off}
     (gdir / "settings.json").write_text(json.dumps(cfg, indent=2))
 
 
 def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                   resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-                  native_model: str | None = None) -> list[str]:
+                  native_model: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "google"
     if pr not in GEMINI_PROVIDERS:
         raise HTTPException(400, f"unknown gemini provider '{pr}' (one of {sorted(GEMINI_PROVIDERS)})")
@@ -9739,7 +9813,7 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
         relay_base, relay_tok = _gemini_relay_route("https://generativelanguage.googleapis.com", auth.api_key, model, "")
         env["GOOGLE_GEMINI_BASE_URL"] = relay_base
         env["GEMINI_API_KEY"] = relay_tok
-    _gemini_settings(home, mcp_servers, model)
+    _gemini_settings(home, mcp_servers, model, tools_disabled)
     cmd = ["gemini", "-p", prompt, "-o", "stream-json", "-m", model,
            # Load-bearing, same risk class as qwen's --yolo: gemini-cli gates tool use behind a
            # per-workspace "folder trust" prompt and an approval mode, neither of which can be
@@ -9767,8 +9841,39 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
 CLINE_PROVIDERS = {"anthropic", "openai", "azure", "openai-api", "tokenrouter"}
 
 
+# Cline's own tool catalogue (3.0.60, the binary's tool ids and the names each puts in a request): the
+# "editor" id is sent as `apply_patch` for a model whose route edits by patch (gpt-5.4, measured: the
+# request carried apply_patch and no editor), and the "teams" id is these eighteen names.
+_CLINE_EDITOR_NAMES = ("editor", "apply_patch")
+_CLINE_TEAM_TOOLS = ("team_spawn_teammate", "team_shutdown_teammate", "team_status", "team_task",
+                     "team_run_task", "team_cancel_run", "team_list_runs", "team_await_runs",
+                     "team_send_message", "team_broadcast", "team_read_mailbox", "team_mission_log",
+                     "team_cleanup", "team_create_outcome", "team_attach_outcome_fragment",
+                     "team_review_outcome_fragment", "team_finalize_outcome", "team_list_outcomes")
+
+
+def _cline_disabled_tools(tools_disabled: list[str] | None) -> list[str]:
+    """The names for cline's `disabledTools`: the harness's, the editor's other name, and, with any
+    tool off, the team tools.
+
+    3.0.60 filters every tool list it builds by this setting's names (the lead's, and a spawn_agent
+    subagent's) EXCEPT a teammate's: team_spawn_teammate starts one with the full built-in tool set
+    whatever is switched off, so a switched-off tool would come straight back through a teammate.
+    The team tools go with any switched-off tool for that reason (and with Subagent, since a
+    teammate is another agent). Without team_spawn_teammate no teammate can start; the rest of the
+    family is useless without one."""
+    off = _tool_names_off(tools_disabled)
+    if not off:
+        return []
+    names = set(off)
+    if names & set(_CLINE_EDITOR_NAMES):
+        names |= set(_CLINE_EDITOR_NAMES)
+    names |= set(_CLINE_TEAM_TOOLS)
+    return sorted(names)
+
+
 def _cline_settings(home: pathlib.Path, base_url: str, api_key: str, model: str,
-                    mcp_servers: list[dict] | None) -> None:
+                    mcp_servers: list[dict] | None, tools_disabled: list[str] | None = None) -> None:
     """~/.cline/data/settings/{providers.json, cline_mcp_settings.json} under the redirected HOME.
 
     Written directly rather than through `cline auth` — the file is trivial, and a subprocess per
@@ -9818,11 +9923,31 @@ def _cline_settings(home: pathlib.Path, base_url: str, api_key: str, model: str,
             entry["transport"]["headers"] = hdrs
         servers[name] = entry
     (sdir / "cline_mcp_settings.json").write_text(json.dumps({"mcpServers": servers}, indent=2))
+    # Disabled tools: `disabledTools` in global-settings.json, beside providers.json, which 3.0.60's
+    # session builder applies to the tool list before the model sees it (E$/zj over
+    # resolveDisabledToolNames). --auto-approve decides how an offered tool's call is approved, a
+    # separate question, so the filter holds under it. Written every turn, since HOME is checkpointed
+    # and a list from an earlier turn must not outlive the harness's; anything else cline keeps in
+    # the file stays.
+    gs = sdir / "global-settings.json"
+    try:
+        cur = json.loads(gs.read_text()) if gs.exists() else {}
+    except (OSError, ValueError):
+        cur = {}
+    cur = cur if isinstance(cur, dict) else {}
+    off = _cline_disabled_tools(tools_disabled)
+    if off:
+        cur["disabledTools"] = off
+    else:
+        cur.pop("disabledTools", None)
+    if cur or gs.exists():
+        gs.write_text(json.dumps(cur, indent=2))
 
 
 def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                  resume_session_id: str | None = None,
-                 mcp_servers: list[dict] | None = None) -> list[str]:
+                 mcp_servers: list[dict] | None = None,
+                 tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "openai-api"
     if pr not in CLINE_PROVIDERS:
         raise HTTPException(400, f"unknown cline provider '{pr}' (one of {sorted(CLINE_PROVIDERS)})")
@@ -9837,7 +9962,7 @@ def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     home = pathlib.Path(cwd) / ".harness" / "home"
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)          # sessions/settings/db live INSIDE the checkpointed workspace
-    _cline_settings(home, auth.base_url, auth.api_key or "", model, mcp_servers)
+    _cline_settings(home, auth.base_url, auth.api_key or "", model, mcp_servers, tools_disabled)
     # A prompt with no whitespace is parsed as a SUBCOMMAND ("Unknown command or unquoted
     # prompt: hi") and `--` does not rescue it. A trailing newline does, verified on 3.0.60,
     # and is invisible to the model.
@@ -17461,17 +17586,23 @@ def capabilities(identifier: str = "") -> dict:
 # requires the request rather than silence wherever a block is not possible: an operator who switched
 # a tool off and got neither believes it is off. Qwen Code and Cline were in neither group, and an
 # operator who switched every tool off on them watched the agent use them all.
-#   codex       — the one built-in with a switch is web_search (_codex_web_search_off).
-#   hermes      — switches toolsets, not tools, which is a different granularity from the per-tool
-#                 names a harness configures.
-#   dsh         — no per-tool switch on the wire.
+#   codex       — web_search and the shell have switches (_codex_web_search_off, _codex_shell_off);
+#                 the catalog's other names are not tools codex 0.154 offers, so they are asked.
+#   hermes      — switches toolsets, not tools. A toolset whose every tool is off is switched off,
+#                 so those tools are withheld (_hermes_toolsets_off: terminal, the four file tools
+#                 together, the web tools); read_file alone, say, is asked.
+#   dsh         — switches its profile's rows. A row that registers only a disabled tool (bash,
+#                 str_replace_editor, todo_write, skill, subagent, subagent_fork, workflow; web_fetch
+#                 has its row's own switch) is off, so that tool is withheld (dsh_driver._rows_off);
+#                 read, write and edit share a row with read_image, and glob and grep share one, so
+#                 those are asked unless their whole row is off.
 #   opensquilla — `--permissions` picks a posture (restricted / bypass / full); there is no
 #                 per-tool deny list anywhere on its agent CLI.
-#   gemini      — no confirmed per-tool switch in headless mode.
-#   qwen, cline — no per-tool switch was found headless.
+# Qwen Code, Gemini CLI and Cline have one each in a settings file (_qwen_settings, _gemini_settings,
+# _cline_settings).
 # The gateway's catalog says the same thing per base (tool_enforcement "instruction" for exactly
 # these), and gateway/tests/test_tool_enforcement_parity.py holds the two together.
-_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "gemini", "opensquilla", "qwen", "cline"})
+_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "opensquilla"})
 
 
 def _disabled_tools_note(backend: str, tools_disabled: list[str] | None) -> str:
@@ -17738,14 +17869,15 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             hermes_provider = _hermes_resolve_provider(req.provider, auth)
             hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
                                              max_turns=req.max_turns, mcp_servers=req.mcp_servers,
-                                             vision_auth=req.vision_auth, own_memory_off=platform_memory)
+                                             vision_auth=req.vision_auth, own_memory_off=platform_memory,
+                                             tools_disabled=req.tools_disabled)
             if req.resume_session_id and doc_changed:
                 _hermes_forget_system_prompt(os.path.join(env["HERMES_HOME"], "state.db"), req.resume_session_id)
         elif backend == "dsh":
             model = model or DSH_DEFAULT_MODEL
             cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                             vision=bool(req.vision))
+                             vision=bool(req.vision), tools_disabled=req.tools_disabled)
         elif backend == "pi":
             model = model or PI_DEFAULT_MODEL
             cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
@@ -17759,7 +17891,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         elif backend == "qwen":
             model = model or QWEN_DEFAULT_MODEL
             cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
-                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                              tools_disabled=req.tools_disabled)
         elif backend == "kimi":
             model = model or KIMI_DEFAULT_MODEL
             # _write_skills has already run, so the directory is on disk and can simply be named:
@@ -17850,11 +17983,12 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             model = model or GEMINI_DEFAULT_MODEL
             cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
                                 resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                                native_model=req.native_model)
+                                native_model=req.native_model, tools_disabled=req.tools_disabled)
         elif backend == "cline":
             model = model or CLINE_DEFAULT_MODEL
             cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
-                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers)
+                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
+                               tools_disabled=req.tools_disabled)
         elif backend == "goose":
             model = model or GOOSE_DEFAULT_MODEL
             cmd = _build_goose(req.provider, auth, model, req.prompt, cwd, env,
