@@ -1,13 +1,12 @@
 // What a provider makes itself (capabilities.schema.builtin): its types and links, merged into a schema drawing and
-// marked built in. The Schema tab draws it locked; a memory's card draws it small. A type already drawn under the same
+// marked built in. The Schema tab draws it locked, and a memory's cover is that drawing. A type already drawn under the same
 // name (a kind a memory holds) is marked rather than drawn twice. What's new is laid out among itself and set to the
 // left of what already has a place.
 import type { Provider } from '@/lib/memories';
 import { builtinOf, relText } from '../caps';
 import { kindInfo } from '../tree';
 import { footprint, initialLayout } from './layout';
-import type { LRel, LSchema, LType } from '../schemaModel';
-import { graphOf, type EType, type VGraph, type VType } from './schemaDraft';
+import type { EType, VGraph, VType } from './schemaDraft';
 
 export type BConn = { from_type: string; to_type: string; builtin?: boolean };
 export type BVType = VType & { builtin?: boolean };
@@ -63,33 +62,4 @@ export function withBuiltin<G extends VGraph | BGraph | null>(graph: G, provider
     for (const v of fresh) { const q = pos.get(v.label)!; v.ui = { ...v.ui, position: { x: Math.round(q.x + dx), y: Math.round(q.y + dy) } }; }
   }
   return { ...graph, titles, vertex_types: vts, edge_types: ets };
-}
-
-/** A memory's schema as its card draws it (Richard 11-06: the vendor's concepts where nobody set a schema, in the design's
- *  drawing): what the provider makes itself and the types a person set, with the links between them, in the schema's
- *  own shape. A provider that declares nothing gives back what was set. */
-export function concepts(s: LSchema | null | undefined, provider: Provider | null | undefined): LSchema | null {
-  if (!builtinOf(provider)?.types.length) return s ?? null;
-  const g = withBuiltin(graphOf(s || { types: [], relations: [] }), provider) as BGraph;
-  const placed = g.vertex_types;
-  const ids = new Map(placed.map((v) => [v.label, v.id || v.label]));
-  // A card is small: the types go evenly around a circle (three a triangle, six a hexagon), so none sits on another or on
-  // a line between two others, whatever the canvas layout put where. An even number lies flat, wider than tall like the
-  // card, with the first type on the left (two read left to right: Fact, about, Entity); an odd one has a point at the
-  // top. The radius gives a link's name room between its two ends at the card's scale.
-  const n = Math.max(1, placed.length);
-  const R = n <= 3 ? 110 : 60 * n / Math.PI, start = n % 2 ? -Math.PI / 2 : Math.PI / 2 + Math.PI / n;
-  // what the provider makes is drawn by its title (Fact, Episode); a person's own type by its name
-  const types: LType[] = placed.map((v, i) => {
-    const a = start + (2 * Math.PI * i) / n;
-    return {
-      id: ids.get(v.label) as string, name: v.builtin && g.titles?.[v.label] ? g.titles[v.label] : v.label, description: v.description,
-      properties: [], color: v.ui.color || '', icon: v.ui.icon || '', x: Math.round(R * Math.cos(a)), y: Math.round(R * Math.sin(a)), caption: v.ui.caption || 'title',
-    };
-  });
-  const idOf = (label: string) => ids.get(label) || label;
-  const relations: LRel[] = g.edge_types.flatMap((e) => e.connections.map((c, i) => ({
-    id: `${e.label}:${i}`, name: e.label, description: e.description, from: idOf(c.from_type), to: idOf(c.to_type), color: e.ui.color,
-  })));
-  return { types, relations };
 }

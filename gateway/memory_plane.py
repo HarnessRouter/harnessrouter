@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
+import io
 import json
 import os
 import re
@@ -54,6 +55,77 @@ CREDENTIALS = None
 # file store, `await FILES(org, file_id) -> {"name", "media_type", "bytes"} | None` (None for a
 # file that does not exist or is not this caller's).
 FILES = None
+# Where a memory's cover is kept (the picture its card shows, made by the console from its schema): app.py binds the
+# instance's own file store, the one its other files are kept in, `await COVERS.get(key) / put(key, data) / delete(key)`.
+COVERS = None
+COVER_MAX = 512 * 1024
+COVER_TYPES = ("image/png", "image/webp")
+# The most pixels a cover may have, checked from its header before any pixel is read: a few hundred KB of PNG can say
+# it is gigapixels (a decompression bomb). Pillow is told the same, so it refuses one wherever it would read it.
+COVER_SIDE = 4096
+COVER_PIXELS = COVER_SIDE * COVER_SIDE
+_COVER_FORMAT = {"image/png": "PNG", "image/webp": "WEBP"}
+_COVER_WORD = {"image/png": "PNG", "image/webp": "WebP"}
+
+
+def cover_key(org: str, mid: str) -> str:
+    """Where one memory's cover is kept: by its organization (hashed, so any id makes a plain key) and its id."""
+    return f"memory-covers/{hashlib.sha256(org.encode()).hexdigest()[:32]}/{mid}"
+
+
+def cover_type(data: bytes) -> str:
+    """What a picture is, from its first bytes: image/png, image/webp, or '' for anything else."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
+def cover_clean(data: bytes, kind: str) -> bytes:
+    """The picture made again from its pixels alone, as `kind` (image/png or image/webp): only the PNG and WebP decoders
+    ever read it, its size is checked from its header before its pixels are, and what is written back is a fresh image
+    with no text, EXIF, colour profile, frames after the first or bytes after its end. Raises MemoryError (422, in
+    words) for anything that isn't such a picture."""
+    import warnings
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = COVER_PIXELS
+    word = _COVER_WORD[kind]
+    unread = MemoryError(422, "memory_invalid", f"That picture couldn't be read as a {word}.", "cover")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        try:
+            im = Image.open(io.BytesIO(data), formats=["PNG", "WEBP"])
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+            im = None
+        except Exception:  # noqa: BLE001 - whatever a decoder says of bytes that aren't a picture, it's a refusal
+            raise unread from None
+        try:
+            if im is None or im.width * im.height > COVER_PIXELS or max(im.size) > COVER_SIDE:
+                raise MemoryError(422, "memory_invalid", "A cover is at most 4096 x 4096 pixels. Send a smaller picture.", "cover")
+            if im.format != _COVER_FORMAT[kind]:
+                raise unread
+            im.seek(0)
+            im.load()
+            alpha = im.mode in ("RGBA", "LA", "PA", "La", "RGBa") or "transparency" in im.info
+            mode = "RGBA" if alpha else "RGB"
+            # a new image from the pixels alone: nothing the file carried beside them comes along
+            clean = Image.frombytes(mode, im.size, im.convert(mode).tobytes())
+        except MemoryError:
+            raise
+        except Exception:  # noqa: BLE001
+            raise unread from None
+        finally:
+            if im is not None:
+                im.close()
+    out = io.BytesIO()
+    if kind == "image/png":
+        clean.save(out, format="PNG", optimize=True)
+    else:
+        clean.save(out, format="WEBP", lossless=True, method=4)
+    return out.getvalue()
+
+
 # How what is kept is cleaned of credentials before any provider sees it: app.py binds the gateway's own
 # redaction (its keys and the shapes of everyone's), `REDACT(text) -> text`. Every writer goes through
 # `remember` and `observe` below, a person's request and an agent's tool and a finished task alike.
@@ -450,6 +522,9 @@ async def out(org: str, memory: dict, principals: list[str], privs: list[str] | 
             "createdAt": int(memory.get("created_at") or 0), "updatedAt": int(memory.get("updated_at") or 0),
             "last_used_at": _ms_or_none(memory.get("last_used_at")), "last_ok_at": _ms_or_none(memory.get("last_ok_at")),
             "last_error": str(memory.get("last_error") or "") or None, "last_error_at": _ms_or_none(memory.get("last_error_at")),
+            # its card's picture: when it was made (the console names it in the address it reads it from) and which
+            # drawing it shows, so the console makes another only when the drawing changes
+            "cover_at": _ms_or_none(memory.get("cover_at")), "cover_sig": str(memory.get("cover_sig") or "") or None,
             # who a person's memory is for: the operator's to see (they may delete it), never the agent's
             **({"end_user": str(memory["end_user"])} if memory.get("end_user") and "delete" in privs else {})}
 
@@ -742,9 +817,21 @@ async def unmake(org: str, m: dict) -> list[str]:
                 pass                       # a provider that is gone cannot hold what is being deleted
             await GRAPH.upsert("Memory", str(x["id"]), {"deleted": "1", "updated_at": _now_ms()}, raise_on_fail=True)
             gone.append(str(x["id"]))
+            await drop_cover(org, x)
     finally:
         _people_forget({mid, *gone})
     return gone
+
+
+async def drop_cover(org: str, memory: dict) -> None:
+    """A deleted memory's cover, gone with it. A store that fails to answer leaves a picture nothing can read any more
+    (its memory is gone), never a memory half deleted."""
+    if not COVERS or not memory.get("cover_at"):
+        return
+    try:
+        await COVERS.delete(cover_key(org, str(memory["id"])))
+    except Exception as e:  # noqa: BLE001 - the memory is deleted whatever this did
+        print(f"[memories] {memory.get('id')}: its cover could not be removed: {type(e).__name__}", flush=True)
 
 
 # How many memories one recall may search. A subtree can hold a node per customer; past this the

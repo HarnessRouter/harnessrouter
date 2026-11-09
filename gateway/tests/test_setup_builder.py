@@ -135,7 +135,7 @@ def env(monkeypatch):
         return {"pdf": {"name": "PDF", "about": "Read and write PDF files."}}
 
     async def lookup(org, ws, t):
-        rec["lookups"].append((org, ws))
+        rec["lookups"].append((org, ws, t))
         status = PLUGS.get((org, ws), {}).get(t, "missing")
         return status, ({"config": {}} if status == "connected" else None)
 
@@ -268,7 +268,10 @@ def test_the_builder_runs_on_the_instances_own_model_reading_this_workspace_only
     flat = json.dumps(call0["json"])
     for theirs in ("other-secret", "other.example", "henv_b", "crm-token-not-real", "mcp.plugs"):
         assert theirs not in flat
-    assert set(env["lookups"]) == {(ORG_A, WS_A)}
+    # only this workspace's plugins are read; the one read outside it is the instance's memory engines, which a
+    # workspace that never connected its own uses on an instance with one operator (_memory_engine_lookup)
+    assert {(o, w) for o, w, t in env["lookups"] if t not in gw._MEMORY_STACK} == {(ORG_A, WS_A)}
+    assert {(o, w) for o, w, t in env["lookups"] if t in gw._MEMORY_STACK} <= {(ORG_A, WS_A), (ORG_A, "default")}
     props = call0["json"]["tools"][1]["function"]["parameters"]["properties"]
     assert props["base"]["enum"] == ["hermes", "dsh"]                            # never one Auto may not pick
     assert props["connections_needed"]["items"]["enum"] == ["browser", "insforge", "vercel"]

@@ -25,21 +25,24 @@ export const record = (o: Partial<MemoryRecord> = {}): MemoryRecord => ({
   written_by: { kind: 'member', id: 'local@localhost', type: 'human' }, references: [], trust: 'untrusted', ...o,
 });
 
-export interface Call { method: string; path: string; body: unknown }
+export interface Call { method: string; path: string; body: unknown; headers: Record<string, string> }
 export type Answer = unknown | ((c: Call) => unknown);
 /** `routes`: "GET /v1/memories" to an answer; an answer of `{ $status, ... }` is that status with that
- *  body. A route not listed answers 404, so a call a page should not make is seen in `calls`. */
+ *  body, and a Blob is a picture. A route not listed answers 404, so a call a page should not make is
+ *  seen in `calls`. A body that is a Blob (a picture sent) is kept as it is. */
 export function service(routes: Record<string, Answer>) {
   const calls: Call[] = [];
   const fetcher = jest.fn(async (url: string, init: RequestInit = {}) => {
     const path = String(url).replace(/^\/api\/harness/, '');
     const method = String(init.method || 'GET');
-    const call: Call = { method, path, body: init.body ? JSON.parse(String(init.body)) : undefined };
+    const body = init.body instanceof Blob ? init.body : init.body ? JSON.parse(String(init.body)) : undefined;
+    const call: Call = { method, path, body, headers: { ...(init.headers as Record<string, string> | undefined) } };
     calls.push(call);
     const key = `${method} ${path.split('?')[0]}`;
     if (!(key in routes)) return { ok: false, status: 404, json: async () => ({ error: { code: 'not_found', message: 'Not here.' } }) };
     const a = routes[key];
     const out = (typeof a === 'function' ? (a as (c: Call) => unknown)(call) : a) as { $status?: number } | null;
+    if (out instanceof Blob) return { ok: true, status: 200, blob: async () => out, json: async () => { throw new Error('a picture'); } };
     const status = out?.$status || 200;
     return { ok: status < 400, status, json: async () => out };
   });

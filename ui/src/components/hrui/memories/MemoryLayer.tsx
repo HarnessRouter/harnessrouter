@@ -1,15 +1,17 @@
 'use client';
 // A setup's Settings, Memory. One switch, Remember (the memories spec, C2): on, the agent has its own memory, reads and
-// writes it, writes there by default and keeps what matters from each finished task; under it, the engine that keeps it,
-// whether each person's memory is kept apart, and the memory itself. The service chooses and provisions that memory
-// (PUT /v1/harnesses/{hid}/memory), so nobody picks a vendor, names a memory or finds a second switch.
+// writes it, writes there by default and keeps what matters from each finished task; under it, the engine that keeps it
+// as a list of every engine and None (Richard 11-09: nothing behind a click), whether each person's memory is kept
+// apart, and the memory itself. The service chooses and provisions that memory (PUT /v1/harnesses/{hid}/memory), so
+// nobody names a memory or finds a second switch; picking another engine makes a new memory and moves the agent to it,
+// which the console's own dialog asks about first.
 //
-// More holds the rest, as before: every memory this person can see, one row each, with a switch that gives it to this
-// setup or takes it away, the way the Tools list works; where it's on, whether the agent may only recall from it and
+// Below, each in its own small section: every memory this person can see, one row each, with a switch that gives it to
+// this setup or takes it away, the way the Tools list works; where it's on, whether the agent may only recall from it and
 // whether it's where the agent writes by default sit quietly beside the switch; and whether finished tasks are kept.
 // Access is a grant on the memory to the setup's own principal, and these changes apply at once: nothing here waits for
 // Save. A service before 0.40 says nothing of an agent's own memory: there is no Remember switch then, and the rows are
-// the page.
+// the page. The memories are listed without their record counts, so the page is one quick read.
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -20,9 +22,10 @@ import Link from 'next/link';
 import { partIcon } from '../bricks';
 import { announceHarnessMemories } from '../setup/harnessMemories';
 import { plain, plural } from '../setup/settingsModel';
+import { ConfirmSheet } from '../Sheet';
 import { Skel, SkLine } from '../Skel';
 import { toast } from '../toast';
-import { EngineMenu, lineOf, useAgentMemory } from './AgentMemory';
+import { EngineList, useAgentMemory } from './AgentMemory';
 import { keepLine, keepsTasks } from './caps';
 import { memoriesWord, PLUS, useProviders } from './parts';
 import { scopeWord, vendorName } from './vendors';
@@ -52,7 +55,8 @@ function LayerSkel() {
         <div className="cap-list"><div className="cap-row mm-sl am-sk">
           <SkLine w={30} h={30} r={8} /><span className="grow"><SkLine w="28%" h={13} /><SkLine w="72%" h={11} style={{ marginTop: 8 }} /></span><SkLine w={56} h={26} r={13} />
         </div></div>
-        <div className="am-facts">{[46, 38, 52].map((w, i) => <div key={i}><SkLine w={70} h={11} /><SkLine w={`${w}%`} h={11} /></div>)}</div>
+        <div className="am-eng"><SkLine w={56} h={12} /><div className="mm-engs am-engs" style={{ marginTop: 10 }}>{[0, 1, 2, 3, 4].map((i) => <SkLine key={i} w="100%" h={46} r={12} />)}</div></div>
+        <div className="am-facts">{[38, 52].map((w, i) => <div key={i}><SkLine w={70} h={11} /><SkLine w={`${w}%`} h={11} /></div>)}</div>
       </div>
     </Skel>
   );
@@ -76,7 +80,8 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
   const router = useRouter();
   const { providers } = useProviders();
   const own = useAgentMemory(hid);
-  const [more, setMore] = useState(false);
+  // an engine picked in the list, asked about before the agent is moved to a new memory there
+  const [asking, setAsking] = useState('');
   // the memory Remember last gave in this visit: turned on again, the agent goes back to it rather than to a new one
   const last = useRef('');
   if (own.read?.memory) last.current = own.read.memory.id;
@@ -89,7 +94,8 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
   const read = useCallback(async () => {
     setFailed(false);
     try {
-      const [h, l] = await Promise.all([getHarnessMemories(hid), listMemories()]);
+      // no counts: a row that has none says nothing of it, and counting asked every memory's engine (6.5 s for 170)
+      const [h, l] = await Promise.all([getHarnessMemories(hid), listMemories({ counts: false })]);
       setD(h); setAll(l); onRead?.(h);
       announceHarnessMemories(hid, h);
       return h;
@@ -180,17 +186,27 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
         </div>
       </div>
       {mine ? (
-        <dl className="am-facts">
-          <div><dt>Engine</dt><dd><span>{lineOf(own.read).engine}</span>
-            <EngineMenu current={mine.engine} busy={own.busy || busy} onPick={(c) => void setOwn(c, c === 'none' ? OFF : 'Engine changed. The memory before is kept.')} /></dd></div>
-          {mine.reason ? <div><dt>Why</dt><dd>{mine.reason}</dd></div> : null}
-          <div><dt>Scope</dt><dd>{scopeWord(mine.scope)}</dd></div>
-          <div><dt>Memory</dt><dd><Link className="link-q inl am-open" href={`/memories/${encodeURIComponent(mine.id)}`}>{mine.name || 'Open'}</Link></dd></div>
-        </dl>
+        <>
+          <div className="am-eng">
+            <h3 className="am-h" id="amEngH">Engine</h3>
+            <EngineList current={mine.engine} why={mine.reason} busy={own.busy || busy}
+              onPick={(c) => { if (c === 'none') void setOwn('none', OFF); else if (typeof c === 'object' && 'engine' in c) setAsking(c.engine); }} />
+          </div>
+          <dl className="am-facts">
+            <div><dt>Scope</dt><dd>{scopeWord(mine.scope)}</dd></div>
+            <div><dt>Memory</dt><dd><Link className="link-q inl am-open" href={`/memories/${encodeURIComponent(mine.id)}`}>{mine.name || 'Open'}</Link></dd></div>
+          </dl>
+        </>
+      ) : null}
+      {mine && asking ? (
+        <ConfirmSheet id="amEngAsk" tone="primary" title={`Use ${vendorName(asking)} for ${name}?`} confirmLabel={`Use ${vendorName(asking)}`} busy={own.busy}
+          body={`${name} gets a new memory kept by ${vendorName(asking)} and remembers there from its next task. ${mine.name || 'The memory it has now'} is kept, with everything in it, under Memories.`}
+          onClose={() => { if (!own.busy) setAsking(''); }}
+          onConfirm={() => { const e = asking; void setOwn({ engine: e }, 'Engine changed. The memory before is kept.').then(() => setAsking('')); }} />
       ) : null}
     </div>
   ) : null;
-  // the rows and the finished-task switch: the whole layer before 0.40, and More under Remember after it
+  // the rows and the finished-task switch: the whole layer before 0.40, and their own sections under Remember after it
   const rest = (
     <>
       <div className="lg-sub mm-layer">
@@ -261,10 +277,7 @@ export function MemoryLayer({ hid, name, onRead }: { hid: string; name: string; 
   return (
     <>
       {remember}
-      <button type="button" className="am-more-b" aria-expanded={more} aria-controls="amMore" onClick={() => setMore(!more)}>
-        <span>More</span><small>Recall only, other memories, finished tasks</small><i className="am-chev" aria-hidden="true" />
-      </button>
-      {more ? <div id="amMore" className="am-more">{rest}</div> : null}
+      {rest}
     </>
   );
 }

@@ -1,8 +1,9 @@
 /** @jest-environment jsdom */
 // The Memories list, and New memory. Nothing connected leads to connecting (or finding the engines running here), in
-// one sentence. A new memory takes a name and, if you like, a description; its engine is chosen from them, said with
-// why, and can be changed to another connected engine. Each card names its engine, who uses it and when, where the
-// service says. A refused connection says the engine's own words. Every figure on a card is the service's.
+// one sentence. A new memory takes a name and, if you like, a description; every engine is listed, the one chosen from
+// them picked and marked Recommended with why, and any connected one can be picked. Each card names its engine, who
+// uses it and when, where the service says, and shows its kept cover or its brick, reading nothing else for it. A
+// refused connection says the engine's own words. Every figure on a card is the service's.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Provider } from '@/lib/memories';
@@ -19,13 +20,14 @@ jest.mock('../setup/settingsModel', () => ({
   plural: (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`,
 }));
 
+const drawCover = jest.fn();
+jest.mock('./graph/coverShot', () => ({ drawCover: (...a: unknown[]) => drawCover(...a) }));
+
 import { harnessFetch } from '@/lib/hfetch';
 import { MemoriesPage } from './MemoriesPage';
 import { toast } from '../toast';
 import { listCustom } from '@/lib/harness';
 import { memoryNowLine, replaceAsk } from './sheets';
-import { CardArt } from './CardArt';
-import { concepts } from './graph/builtin';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root; let el: HTMLElement;
@@ -52,6 +54,7 @@ async function type(sel: string, v: string) {
 }
 beforeEach(() => {
   push.mockReset();
+  localStorage.removeItem('hr.memories.view');
   window.history.replaceState(null, '', '/memories');
   el = document.createElement('div'); el.id = 'hrui';
   document.body.appendChild(el);
@@ -104,7 +107,7 @@ describe('nothing connected', () => {
     refuse = false;
     await press('Connect');
     expect(page().querySelector('#mmCrT')?.textContent).toBe('New memory');
-    expect(page().querySelector('.mm-eng-now b')?.textContent).toBe('Graphiti');
+    expect(page().querySelector('.mm-engs [role=radio][aria-checked=true] b')?.textContent).toBe('Graphiti');
   });
 
   test('an engine that may go without an address needs a key then, and no key is sent when none is typed', async () => {
@@ -159,7 +162,7 @@ describe('nothing connected', () => {
   });
 });
 
-describe('New memory: a name, a description if you like, and the engine chosen for you', () => {
+describe('New memory: a name, a description if you like, and every engine, the one chosen for you picked', () => {
   const connected = { ...NONE, mem0: true, graphiti: true, hindsight: true };
   // the service's answers (GET /v1/memories/choose), by the name asked about: the console reads them, it never scores
   const PEOPLE = 'It serves people, so it keeps each person’s facts and preferences, separately per person.';
@@ -185,7 +188,11 @@ describe('New memory: a name, a description if you like, and the engine chosen f
   };
   // typing rests before the service is asked again
   const rest = async () => { await act(async () => { await new Promise((r) => setTimeout(r, 350)); }); await flush(); };
-  const chosen = () => page().querySelector('.mm-eng-now b')?.textContent;
+  const rows = () => Array.from(page().querySelectorAll<HTMLButtonElement>('.mm-engs [role=radio]'));
+  const row = (name: string) => rows().find((r) => r.querySelector('b')?.textContent === name) as HTMLButtonElement;
+  const chosen = () => page().querySelector('.mm-engs [role=radio][aria-checked=true] b')?.textContent;
+  const recommended = () => page().querySelector('.mm-engs .mm-eng-rec')?.closest('[role=radio]')?.querySelector('b')?.textContent;
+  const pick = async (name: string) => { await act(async () => { row(name).click(); }); await flush(); };
 
   test('nothing to compare and nothing to lock: no Kept by, no Fixed once created', async () => {
     await start();
@@ -195,37 +202,65 @@ describe('New memory: a name, a description if you like, and the engine chosen f
     expect(page().querySelector('label[for=mmCrDesc]')?.textContent).toContain('optional');
   });
 
-  test('the service chooses the engine from what the memory is for, as typing rests, and says why', async () => {
+  test('every engine is listed at once, with what it keeps; one not running here is shown and can’t be picked', async () => {
+    await start();
+    expect(rows().map((r) => r.querySelector('b')?.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight', 'ReMe']);
+    expect(page().querySelector('[role=radiogroup]')?.getAttribute('aria-labelledby')).toBe('mmCrEng');
+    expect(row('Graphiti').textContent).toContain('A graph of people, things and how they connect, tracked over time.');
+    expect(row('ReMe').disabled).toBe(true);
+    expect(row('ReMe').textContent).toContain('Not running here');
+    expect(row('Mem0').textContent).not.toContain('Not running here');
+    // nothing is folded away, and nothing asks for a click to see the others
+    expect(button('Change')).toBeUndefined();
+    expect(page().querySelector('.mm-eng [aria-expanded]')).toBeNull();
+  });
+
+  test('the one the service chooses is picked and marked Recommended, with why, and follows what is typed', async () => {
     const s = await start();
     expect(chosen()).toBe('Mem0');
+    expect(recommended()).toBe('Mem0');
     await type('#mmCrName', 'Customer preferences');
     await type('#mmCrDesc', 'What each customer likes.');
     await rest();
     expect(chosen()).toBe('Mem0');
-    expect(page().querySelector('.mm-eng-now small')?.textContent).toBe(PEOPLE);
+    expect(row('Mem0').querySelector('.mm-eng-why')?.textContent).toBe(PEOPLE);
+    expect(page().querySelectorAll('.mm-eng-rec')).toHaveLength(1);
     const sent = s.sent('GET', '/v1/memories/choose');
     const last = sent[sent.length - 1];
     expect([asked(last).get('name'), asked(last).get('description')]).toEqual(['Customer preferences', 'What each customer likes.']);
     await type('#mmCrName', 'Account research');
     await type('#mmCrDesc', '');
     await rest();
-    expect(chosen()).toBe('Graphiti');
+    expect([chosen(), recommended()]).toEqual(['Graphiti', 'Graphiti']);
     await type('#mmCrName', 'Incident lessons');
     await rest();
-    expect(chosen()).toBe('Hindsight');
+    expect([chosen(), recommended()]).toEqual(['Hindsight', 'Hindsight']);
     // one question per pause in the typing, never one per key
     expect(s.sent('GET', '/v1/memories/choose').length).toBeLessThanOrEqual(5);
   });
 
-  test('no engine answering here: the service says so in its words, and Change still offers the connected ones', async () => {
+  test('once the person picks one, the recommendation still says what it is but no longer moves the choice', async () => {
+    const s = await start();
+    await type('#mmCrName', 'Account research');
+    await rest();
+    expect(chosen()).toBe('Graphiti');
+    await pick('Hindsight');
+    expect(chosen()).toBe('Hindsight');
+    await type('#mmCrName', 'Customer preferences');
+    await rest();
+    expect([chosen(), recommended()]).toEqual(['Hindsight', 'Mem0']);
+    await press('Create');
+    expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe('hindsight');
+  });
+
+  test('no engine answering here: the service says so in its words, and a connected one can still be picked', async () => {
     const s = await start({ ...NONE, mem0: true, graphiti: true }, () => ({ engine: null, scope: 'per_user', reason: 'No memory engine is running here; one command starts them: deploy/memories/up.sh' }));
     expect(chosen()).toBeUndefined();
+    expect(recommended()).toBeUndefined();
     expect(page().querySelector('.mm-eng-none')?.textContent).toBe('No memory engine is running here; one command starts them: deploy/memories/up.sh');
     await type('#mmCrName', 'Accounts');
     expect(button('Create')?.disabled).toBe(true);
-    await press('Change');
-    await act(async () => { (page().querySelector('[data-sv=graphiti]') as HTMLButtonElement).click(); });
-    await press('Done');
+    await pick('Graphiti');
     expect(chosen()).toBe('Graphiti');
     await press('Create');
     expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe('graphiti');
@@ -235,23 +270,28 @@ describe('New memory: a name, a description if you like, and the engine chosen f
     let up = false;
     await start(connected, () => (up ? CHOICES.Accounts : { $status: 503, error: { message: 'Not now.' } }));
     expect(page().querySelector('.mm-eng .mm-err')?.textContent).toContain('The engine couldn’t be chosen just now.');
+    expect(rows()).toHaveLength(4);
     up = true;
     await press('Try again');
     await rest();
     expect(chosen()).toBe('Mem0');
   });
 
-  test('Change offers the connected engines only, as a group of radio buttons, and the choice is what gets created', async () => {
+  test('arrows move the choice along the engines that can be picked, and the choice is what gets created', async () => {
     const s = await start();
     await type('#mmCrName', 'Accounts');
-    await press('Change');
-    expect(Array.from(page().querySelectorAll('[role=radiogroup] [role=radio] b')).map((b) => b.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight']);
-    await act(async () => { (page().querySelector('[role=radiogroup]') as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); });
-    const now = page().querySelector('[role=radiogroup] [aria-checked=true] b')?.textContent;
-    await press('Done');
-    expect(chosen()).toBe(now);
+    await rest();
+    const group = page().querySelector('[role=radiogroup]') as HTMLElement;
+    const key = async (k: string) => { await act(async () => { group.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })); }); };
+    await key('ArrowDown');
+    expect(chosen()).toBe('Graphiti');
+    await key('ArrowDown'); await key('ArrowDown');
+    // ReMe isn't running here, so the choice goes round to Mem0
+    expect(chosen()).toBe('Mem0');
+    await key('ArrowUp');
+    expect(chosen()).toBe('Hindsight');
     await press('Create');
-    expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe(now?.toLowerCase());
+    expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe('hindsight');
   });
 
   test('Create makes it with its name and description and opens its data, whatever the engine reads', async () => {
@@ -269,6 +309,7 @@ describe('New memory: a name, a description if you like, and the engine chosen f
     await press('New memory');
     await type('#mmCrName', 'Accounts');
     expect(button('Create')?.disabled).toBe(true);
+    expect(rows().every((r) => r.disabled)).toBe(true);
     await press('Connect an engine');
     expect(page().querySelector('#mmCh')?.textContent).toBe('Connect a memory engine');
   });
@@ -406,74 +447,123 @@ describe('the cards', () => {
   });
 });
 
-describe('a card draws what is kept', () => {
+describe('a card shows its picture', () => {
   const MADE = {
     types: [{ name: 'episode', description: 'e' }, { name: 'entity', description: 'n' }, { name: 'fact', description: 'f' }],
     relations: [{ name: 'about', from: 'fact', to: 'entity', description: 'a' }, { name: 'derived_from', from: 'fact', to: 'episode', description: 'o' }],
   };
-  const makes = { ...CAPS.graphiti, schema: { ...CAPS.graphiti.schema, builtin: MADE } } as Provider;
-  const names = (el: Element) => Array.from(el.querySelectorAll('text.mm-ca-type')).map((x) => x.textContent).sort();
-  test('where nobody set a schema it draws what the vendor makes, named and linked, not the records (Richard 11-06)', () => {
-    const host = document.createElement('div');
-    const r = createRoot(host);
-    act(() => r.render(<CardArt s={concepts(null, makes)} labels={false} records={41} recent={['Caroline gave a talk']} />));
-    expect(names(host)).toEqual(['Entity', 'Episode', 'Fact']);
-    expect(host.querySelectorAll('line')).toHaveLength(2);
-    expect(host.textContent).not.toContain('Caroline gave a talk');
-    act(() => r.unmount());
+  const graphiti = { ...CAPS.graphiti, schema: { ...CAPS.graphiti.schema, builtin: MADE } } as Provider;
+  const factsOnly = { ...CAPS.mem0, schema: { mode: 'none', builtin: { types: [{ name: 'fact', description: 'f' }], relations: [] } } } as Provider;
+  const PIC = new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: 'image/png' });
+  const made: Blob[] = [];
+  beforeEach(() => {
+    made.length = 0;
+    let n = 0;
+    Object.assign(URL, { createObjectURL: jest.fn((b: Blob) => { made.push(b); return `blob:cover/${++n}`; }), revokeObjectURL: jest.fn() });
   });
-  test('the picture has what the vendor makes and what a person set', async () => {
-    backend({
-      'GET /v1/memories/providers': { data: [makes] },
-      'GET /v1/memories': { data: [memory()] },
-      'GET /v1/memories/hmem_1/schema': { types: [{ name: 'Company' }, { name: 'Person' }], relations: [] },
-      'GET /v1/memories/hmem_1/grants': { data: [] },
+  const card = (n: string) => Array.from(page().querySelectorAll('.mm-card')).find((c) => c.textContent?.includes(n)) as Element;
+  const reads = (s: { calls: { method: string; path: string }[] }) => s.calls.filter((c) => c.method === 'GET' && /\/(schema|records|grants)\b/.test(c.path));
+
+  test('a card with a cover shows only the picture, read once by its version, and reads nothing else for it', async () => {
+    const s = backend({
+      'GET /v1/memories/providers': { data: [graphiti] },
+      'GET /v1/memories': { data: [memory({ id: 'hmem_1', name: 'Accounts', cover_at: 1762700000000, cover_sig: 'c1abc' })] },
+      'GET /v1/memories/hmem_1/cover': PIC,
     });
     await open();
-    const card = page().querySelector('.mm-card') as Element;
-    expect(names(card)).toEqual(['Company', 'Entity', 'Episode', 'Fact', 'Person']);
+    const art = card('Accounts').querySelector('.mm-art') as Element;
+    const img = art.querySelector('img.mm-cover') as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe('blob:cover/1');
+    expect([img.alt, img.getAttribute('loading'), img.getAttribute('decoding')]).toEqual(['', 'lazy', 'async']);
+    expect(art.querySelector('svg')).toBeNull();
+    expect(s.sent('GET', '/v1/memories/hmem_1/cover').map((c) => c.path)).toEqual(['/v1/memories/hmem_1/cover?v=1762700000000']);
+    expect(reads(s)).toEqual([]);
+    expect(made).toEqual([PIC]);
   });
-  test("each memory draws what its provider makes where the memory is kept, not where the list is read", async () => {
-    // Mem0's own service makes facts; a Mem0 server, facts and the names in them: two Mem0 memories draw differently
-    const factsOnly = { ...CAPS.mem0, schema: { mode: 'none', builtin: { types: [{ name: 'fact', description: 'f' }], relations: [] } } } as Provider;
-    const server = { types: [{ name: 'fact', description: 'f' }, { name: 'entity', description: 'n' }], relations: [{ name: 'about', from: 'fact', to: 'entity', description: 'a' }] };
-    backend({
+
+  test('a memory with no graph shows its brick from the agent stack, and reads nothing for it', async () => {
+    const s = backend({
       'GET /v1/memories/providers': { data: [factsOnly] },
-      'GET /v1/memories': { data: [{ ...memory(), id: 'hmem_1', name: 'Kept by the service', provider: 'mem0', builtin: factsOnly.schema!.builtin },
-        { ...memory(), id: 'hmem_2', name: 'Kept by a server', provider: 'mem0', builtin: server }] },
+      'GET /v1/memories': { data: [memory({ id: 'hmem_2', name: 'Brand facts', provider: 'mem0', builtin: factsOnly.schema!.builtin })] },
     });
     await open();
-    const card = (n: string) => Array.from(page().querySelectorAll('.mm-card')).find((c) => c.textContent?.includes(n)) as Element;
-    // one type related to nothing is no picture of anything: what it keeps is drawn instead (the polish round, C10)
-    expect(names(card('Kept by the service'))).toEqual([]);
-    expect(card('Kept by the service').querySelector('.mm-ca-ghost')).not.toBeNull();
-    expect(names(card('Kept by a server'))).toEqual(['Entity', 'Fact']);
+    const art = card('Brand facts').querySelector('.mm-art') as Element;
+    expect(art.querySelector('.mm-brick svg.iso .bk.f-memory.built')).not.toBeNull();
+    expect(art.querySelector('.mm-brick svg .iso-shadow')).not.toBeNull();
+    expect(art.querySelector('img')).toBeNull();
+    expect(art.textContent).toBe('');
+    expect(s.calls.filter((c) => c.path.startsWith('/v1/memories/hmem_2'))).toEqual([]);
+    // the list's row shows the same, small
+    await press('List');
+    expect(page().querySelector('.mm-row .mm-mini-box .mm-brick.mini .f-memory')).not.toBeNull();
   });
-  test('a Mem0 memory draws the first facts it keeps; one that keeps each person apart, its people', async () => {
-    const factsOnly = { ...CAPS.mem0, schema: { mode: 'none', builtin: { types: [{ name: 'fact', description: 'f' }], relations: [] } } } as Provider;
-    backend({
-      'GET /v1/memories/providers': { data: [factsOnly] },
-      'GET /v1/memories': (c: { path: string }) => (c.path.includes('parent=hmem_2')
-        ? { data: [{ ...memory(), id: 'hmem_p1', name: '5d41402a', end_user: 'local@localhost', parent_id: 'hmem_2' }, { ...memory(), id: 'hmem_p2', name: '7c1e9a40', end_user: 'Dana', parent_id: 'hmem_2' }] }
-        : { data: [{ ...memory(), id: 'hmem_1', name: 'Brand facts', provider: 'mem0', builtin: null },
-          { ...memory(), id: 'hmem_2', name: 'Personalized support', provider: 'mem0', builtin: null, children: { count: 2 } }] }),
-      'GET /v1/memories/hmem_1/records': { data: [record({ id: 'r1', title: '', content: [{ type: 'text', text: 'Acme wants navy and gold' }] })], next: null },
-      'GET /v1/memories/hmem_2/records': { data: [], next: null },
+
+  test('a graph with no cover yet waits in a quiet shape of the same size, never the old drawing, and reads nothing at once', async () => {
+    const s = backend({
+      'GET /v1/memories/providers': { data: [graphiti] },
+      'GET /v1/memories': { data: [memory({ id: 'hmem_3', name: 'Research' })] },
     });
     await open();
-    const card = (n: string) => Array.from(page().querySelectorAll('.mm-card')).find((c) => c.textContent?.includes(n)) as Element;
-    const rows = (el: Element) => Array.from(el.querySelectorAll('.mm-ca-row span')).map((x) => x.textContent);
-    expect(names(card('Brand facts'))).toEqual([]);
-    expect(rows(card('Brand facts'))).toEqual(['Acme wants navy and gold']);
-    expect(rows(card('Personalized support'))).toEqual(['You (this console)', 'Dana']);
+    const art = card('Research').querySelector('.mm-art') as Element;
+    expect(art.querySelector('.mm-cv-wait')).not.toBeNull();
+    expect(art.querySelector('svg, img')).toBeNull();
+    expect(reads(s)).toEqual([]);
   });
-  test('labels a person set are drawn as labels; with none yet, what the vendor makes', () => {
-    const labelled = { ...CAPS.hindsight, schema: { mode: 'labels', builtin: MADE } } as Provider;
-    const host = document.createElement('div');
-    const r = createRoot(host);
-    act(() => r.render(<CardArt s={concepts({ types: [], relations: [] }, labelled)} labels={false} records={3} />));
-    expect(names(host)).toEqual(['Entity', 'Episode', 'Fact']);
-    act(() => r.unmount());
+});
+
+describe('a cover still missing is made once the page has settled', () => {
+  jest.setTimeout(10000);
+  const MADE = {
+    types: [{ name: 'episode', description: 'e' }, { name: 'fact', description: 'f' }],
+    relations: [{ name: 'derived_from', from: 'fact', to: 'episode', description: 'o' }],
+  };
+  const graphiti = { ...CAPS.graphiti, schema: { ...CAPS.graphiti.schema, builtin: MADE } } as Provider;
+  const DRAWN = new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' });
+  beforeEach(() => {
+    let n = 0;
+    Object.assign(URL, { createObjectURL: jest.fn(() => `blob:drawn/${++n}`), revokeObjectURL: jest.fn() });
+    Object.assign(window, { CanvasRenderingContext2D: function CanvasRenderingContext2D() { /* a canvas to draw on */ } });
+    drawCover.mockReset();
+    drawCover.mockResolvedValue(DRAWN);
+  });
+  afterEach(() => { delete (window as { CanvasRenderingContext2D?: unknown }).CanvasRenderingContext2D; });
+  const settle = async () => { await act(async () => { await new Promise((r) => setTimeout(r, 1100)); }); await flush(); };
+
+  test('drawn as the Schema tab draws it, one at a time, kept where the person may write, and shown', async () => {
+    const s = backend({
+      'GET /v1/memories/providers': { data: [graphiti] },
+      'GET /v1/memories': { data: [
+        memory({ id: 'hmem_w', name: 'Writable' }),
+        memory({ id: 'hmem_r', name: 'Read only', privileges: ['read'] }),
+        memory({ id: 'hmem_k', name: 'Kept', cover_at: 5, cover_sig: 'c1x' }),
+      ] },
+      'GET /v1/memories/hmem_w/schema': { types: [{ name: 'Company', color: '#ec4899', icon: 'building', x: 10, y: 20 }], relations: [] },
+      'GET /v1/memories/hmem_r/schema': { types: [], relations: [] },
+      'GET /v1/memories/hmem_k/cover': new Blob(['x'], { type: 'image/png' }),
+      'PUT /v1/memories/hmem_w/cover': { object: 'memory.cover', cover_at: 9, cover_sig: 'c1' },
+    });
+    let busy = 0, most = 0;
+    drawCover.mockImplementation(async () => { busy += 1; most = Math.max(most, busy); await new Promise((r) => setTimeout(r, 30)); busy -= 1; return DRAWN; });
+    await open();
+    expect(drawCover).not.toHaveBeenCalled();
+    await settle();
+    await act(async () => { await new Promise((r) => setTimeout(r, 200)); }); await flush();
+    expect(drawCover).toHaveBeenCalledTimes(2);
+    expect(most).toBe(1);
+    // the drawing is the schema with what the engine makes itself, as the tab draws it
+    const g = drawCover.mock.calls[0][0] as { vertex_types: { label: string }[]; edge_types: { label: string }[] };
+    expect(g.vertex_types.map((v) => v.label).sort()).toEqual(['Company', 'episode', 'fact']);
+    const put = s.sent('PUT', '/v1/memories/hmem_w/cover');
+    expect(put).toHaveLength(1);
+    expect(put[0].body).toBe(DRAWN);
+    expect(put[0].headers['content-type']).toBe('image/png');
+    expect(put[0].headers['x-cover-sig']).toMatch(/^c1[0-9a-z]+$/);
+    // read only: drawn for this visit, never kept
+    expect(s.sent('PUT', '/v1/memories/hmem_r/cover')).toHaveLength(0);
+    expect(s.sent('GET', '/v1/memories/hmem_k/schema')).toHaveLength(0);
+    const src = (n: string) => (Array.from(page().querySelectorAll('.mm-card')).find((c) => c.textContent?.includes(n))?.querySelector('img') as HTMLImageElement | null)?.getAttribute('src');
+    expect(src('Writable')).toMatch(/^blob:drawn\//);
+    expect(src('Read only')).toMatch(/^blob:drawn\//);
   });
 });
 

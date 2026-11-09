@@ -17,10 +17,12 @@ import { StarterArt } from '../CardArt';
 import { vendorName } from '../vendors';
 import CytoscapeCanvas, { colorFor } from './CytoscapeCanvas.jsx';
 import { exploreOf, readGraph, GRAPH_LIMIT } from './adapter';
-import { I, IconByName, iconUrl, needsCatalog, useIconCatalog } from './graphIcons.jsx';
+import { I, IconByName, needsCatalog, useIconCatalog } from './graphIcons.jsx';
 import { arrive, footprint, initialLayout } from './layout';
 import { applyDrafts, cloneSchema, graphOf, heldGraph, newRelation } from './schemaDraft';
 import { builtinTitles, withBuiltin } from './builtin';
+import { buildSchemaElements } from './schemaElements';
+import { coverGraphOf, useCoverKeeper } from '../cover';
 import './graph.css';
 
 const SWATCHES = [
@@ -30,55 +32,8 @@ const SWATCHES = [
 const COMPACT_PANE_WIDTH = 460;
 const typeWord = (t) => (MM_PTYPES.find(([v]) => v === t) || [t, t])[1];
 
-// ── Schema → Cytoscape elements (one node per vertex type, one edge per rule).
-// `posDrafts` overlays dragged-but-unsaved positions; `typeDrafts` overlays unsaved color/icon + connection add/remove
-// edits so the canvas previews the pending schema change before Save.
-export function buildSchemaElements(graph, posDrafts, typeDrafts, captionOf) {
-  if (!graph) return [];
-  const drafts = typeDrafts || {};
-  const elements = [];
-  const vts = graph.vertex_types || [];
-  vts.forEach((vt, i) => {
-    const label = vt.label;
-    const d = drafts[`vertex:${label}`] || {};
-    const color = d.color || (vt.ui && vt.ui.color) || colorFor(label).ring;
-    const iconKey = d.icon != null ? d.icon : (vt.ui && vt.ui.icon);
-    const url = iconKey ? iconUrl(iconKey, '#FFFFFF') : null;
-    const pos = (posDrafts && posDrafts[label]) || (vt.ui && vt.ui.position) || { x: 120 * i, y: 0 };
-    const data = { id: label, kind: 'vertex', caption: captionOf ? captionOf(label, d) : typeLabel(d.name || label), color };
-    if (url) data.iconUrl = url;
-    if (vt.builtin) data.builtin = true;
-    // what the provider makes itself stays where it is drawn: nobody moves, renames or removes it
-    elements.push({ data, position: { x: pos.x, y: pos.y }, grabbable: !vt.builtin, ...(vt.builtin ? { classes: 'builtin' } : {}) });
-  });
-  (graph.edge_types || []).forEach((et) => {
-    const label = et.label;
-    const d = drafts[`edge:${label}`] || {};
-    const color = d.color || (et.ui && et.ui.color) || '#94A3B8';
-    const removed = new Set((d.removeConns || []).map((c) => `${c.from_type}->${c.to_type}`));
-    const merged = [
-      ...(et.connections || []).filter((c) => !removed.has(`${c.from_type}->${c.to_type}`)),
-      ...(d.addConns || []),
-    ];
-    const seen = new Set();
-    merged.forEach((c) => {
-      if (!c.from_type || !c.to_type) return;
-      const key = `${c.from_type}->${c.to_type}`;
-      if (seen.has(key)) return; seen.add(key);
-      const preview = !(et.connections || []).some((x) => `${x.from_type}->${x.to_type}` === key);
-      const classes = [preview ? 'preview' : '', c.builtin ? 'builtin' : ''].filter(Boolean).join(' ');
-      elements.push({
-        data: {
-          id: `e-${label}-${c.from_type}-${c.to_type}`,
-          kind: 'edge', edgeLabel: label,
-          source: c.from_type, target: c.to_type, caption: relText(d.name || label), lineColor: color,
-        },
-        ...(classes ? { classes } : {}),
-      });
-    });
-  });
-  return elements;
-}
+// The schema's nodes and links as the canvas draws them (schemaElements.js), the same for a memory's cover.
+export { buildSchemaElements };
 
 // ── Schema editing controls ─────────────────────────────────────────────────
 function ColorPicker({ value, onPick, disabled }) {
@@ -937,6 +892,8 @@ function WrittenSchema({ memory, provider, doc, ro, countOf, onOpenData }) {
   }, [ro, guides, provider]);
   // what the provider makes itself, drawn locked, beside what a person sets
   const graph = useMemo(() => (doc.schema ? withBuiltin(graphOf(doc.schema), provider) : null), [doc.schema, provider]);
+  // the memory's cover is this drawing: made once the schema is read, and again once a change to it is saved
+  useCoverKeeper(memory, graph, !!doc.schema && doc.state !== 'saving' && doc.state !== 'error');
   const count = useCallback((key, label) => (key.startsWith('vertex:') ? countOf(label) : null), [countOf]);
   const made = builtinTitles(provider);
   return (
@@ -967,6 +924,9 @@ function HeldSchema({ memory, provider, onOpenData }) {
   }, [memory.id, provider]);
   useEffect(() => { read(); }, [read]);
   const held = state.held;
+  // what this memory holds changes with every task; its cover is what the provider makes itself, which doesn't
+  const ownGraph = useMemo(() => coverGraphOf(null, provider), [provider]);
+  useCoverKeeper(memory, ownGraph, !state.loading);
   const count = useCallback((key) => (held && held.count[key] != null ? held.count[key] : null), [held]);
   const vendor = vendorName(provider.id);
   const made = builtinTitles(provider);

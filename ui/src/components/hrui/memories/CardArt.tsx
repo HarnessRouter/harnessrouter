@@ -1,148 +1,12 @@
 'use client';
-// The picture at the top of a memory's card, in the same box as a setup's tower on Studio. It draws
-// what the memory is, from what was read of it and nothing else:
-//   · a schema of types: each type with its colour and icon where it sits, its name under it, and the
-//     relations between types as lines named in mono, the way the Schema tab draws them;
-//   · labels: the vocabulary as a row of chips, since labels name facts and do not relate;
-//   · no schema: the first records it keeps, a row each, and how many more there are;
-//   · nothing kept yet: the empty shape of a schema, dashed, like an unbuilt brick.
-// A schema of one type and no relations (Mem0's "Fact") is no picture of anything: the card draws what it keeps
-// instead, as for no schema.
-import { typeLabel, type LSchema } from './schemaModel';
+// The small drawings of the Memories pages that aren't a memory's own picture (that is its cover or its brick, MemoryArt.tsx):
+//   · Ghost: nothing kept yet, the empty shape of a schema, dashed, like an unbuilt brick;
+//   · KindArt: what a new memory will be with an engine, before it exists;
+//   · StarterArt: a starting schema, small, on the button that starts from it.
+import type { LSchema } from './schemaModel';
 import { MmIco } from './parts';
 
 const W = 260, H = 200;
-/** Rows drawn for a memory with no schema; more say "+N more". */
-const ROWS = 5;
-/** Records named on the card, when their titles were read. */
-const TITLES = 3;
-/** Chips drawn for a vocabulary; more say "+N". */
-const CHIPS = 8;
-// widths of the rows, so a list of records does not read as one block
-const ROW_W = [88, 72, 80, 64, 76];
-
-export function CardArt({ s, labels, records, recent, pending }: {
-  s: LSchema | null | undefined; labels: boolean; records: number | null; recent?: string[] | null; pending?: boolean;
-}) {
-  // a schema still being read draws nothing yet, so the card does not change its picture once it comes
-  if (pending) return null;
-  const T = s?.types || [];
-  if (T.length && labels) return <Vocabulary s={s as LSchema} />;
-  if (T.length && !saysNothing(s)) return <SchemaArt s={s as LSchema} />;
-  if (records && records > 0) return <Rows n={records} titles={recent} />;
-  return <Ghost />;
-}
-
-/** Types where they sit, joined by their relations. Nothing is drawn on anything else: a type's name sits on the side
- *  away from the middle (above a type in the top half, below one in the bottom half), so a line between two types never
- *  crosses a name; and a relation's name goes where it fits along its line, clear of every type, name and other
- *  relation's name, or isn't drawn. */
-function SchemaArt({ s }: { s: LSchema }) {
-  const T = s.types, many = T.length > 6;
-  const r = many ? 11 : 15, nameH = 15;
-  const padX = 46, padY = r + nameH + 6;
-  const xs = T.map((t) => t.x), ys = T.map((t) => t.y);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const f = Math.min((W - 2 * padX) / Math.max(1, x1 - x0), (H - 2 * padY) / Math.max(1, y1 - y0), 1);
-  const ox = (W - (x1 - x0) * f) / 2, oy = (H - (y1 - y0) * f) / 2;
-  const at = new Map(T.map((t) => [t.id, [ox + (t.x - x0) * f, oy + (t.y - y0) * f] as const]));
-  const mid = H / 2;
-  const above = (y: number) => y < mid - 1;
-  // what's taken: each type's disc and its name
-  const taken: Box[] = T.flatMap((t) => {
-    const [x, y] = at.get(t.id) as readonly [number, number];
-    const nw = typeLabel(t.name).length * 6.4 + 4;
-    const ny = above(y) ? y - r - nameH - 2 : y + r + 2;
-    return [{ x: x - r - 2, y: y - r - 2, w: 2 * r + 4, h: 2 * r + 4 }, { x: x - nw / 2, y: ny, w: nw, h: nameH }];
-  });
-  const named = new Map<string, Box>();
-  if (!many) {
-    for (const rel of s.relations) {
-      const a = at.get(rel.from), b = at.get(rel.to);
-      if (!a || !b || rel.from === rel.to) continue;
-      const lw = rel.name.length * 6.6 + 10;
-      for (const t of SLIDE) {
-        const box = { x: a[0] + (b[0] - a[0]) * t - lw / 2, y: a[1] + (b[1] - a[1]) * t - 9, w: lw, h: 18 };
-        if (box.x < 2 || box.y < 2 || box.x + box.w > W - 2 || box.y + box.h > H - 2 || taken.some((o) => meets(box, o))) continue;
-        named.set(rel.id, box);
-        taken.push(box);
-        break;
-      }
-    }
-  }
-  return (
-    <svg className="mm-art-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Schema: ${T.map((t) => typeLabel(t.name)).join(', ')}`}>
-      <defs>
-        <marker id="mm-ca-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0 0.8 7 4 0 7.2" fill="none" stroke="var(--faint)" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-        </marker>
-      </defs>
-      {s.relations.map((rel) => {
-        const a = at.get(rel.from), b = at.get(rel.to);
-        if (!a || !b || rel.from === rel.to) return null;
-        const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
-        const ux = dx / len, uy = dy / len, gap = r + 3;
-        return (
-          <line key={rel.id} x1={a[0] + ux * gap} y1={a[1] + uy * gap} x2={b[0] - ux * gap} y2={b[1] - uy * gap}
-            stroke="var(--g-line, var(--line))" strokeWidth="1.4" markerEnd="url(#mm-ca-arrow)" />
-        );
-      })}
-      {s.relations.map((rel) => {
-        const box = named.get(rel.id);
-        return box ? (
-          <g key={rel.id} className="mm-ca-rel">
-            <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={9} />
-            <text x={box.x + box.w / 2} y={box.y + 13} textAnchor="middle">{rel.name.toLowerCase()}</text>
-          </g>
-        ) : null;
-      })}
-      {T.map((t) => {
-        const [x, y] = at.get(t.id) as readonly [number, number];
-        const ic = many ? 11 : 15;
-        return (
-          <g key={t.id}>
-            <circle cx={x} cy={y} r={r} fill={t.color} stroke="var(--surface)" strokeWidth="3" />
-            <g transform={`translate(${x - ic / 2} ${y - ic / 2})`}><MmIco k={t.icon} size={ic} color="#fff" /></g>
-            <text className="mm-ca-type" x={x} y={above(y) ? y - r - 6 : y + r + 15} textAnchor="middle">{typeLabel(t.name)}</text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-/** A schema whose picture adds nothing: one type at most, and nothing relating it to anything. */
-export const saysNothing = (s: LSchema | null | undefined) => !s || (s.types.length <= 1 && !s.relations.length);
-
-interface Box { x: number; y: number; w: number; h: number }
-const meets = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-/** Where along its line a relation's name is tried, the middle first. */
-const SLIDE = [0.5, 0.4, 0.6, 0.32, 0.68, 0.25, 0.75];
-
-/** Labels: names applied to facts, so a row of chips and no lines between them. */
-function Vocabulary({ s }: { s: LSchema }) {
-  const shown = s.types.slice(0, CHIPS), more = s.types.length - shown.length;
-  return (
-    <span className="mm-ca-chips" role="img" aria-label={`Labels: ${s.types.map((t) => typeLabel(t.name)).join(', ')}`}>
-      {shown.map((t) => <span key={t.id} className="mm-ca-chip"><i style={{ background: t.color }} />{typeLabel(t.name)}</span>)}
-      {more > 0 ? <span className="mm-ca-chip more">{`+${more}`}</span> : null}
-    </span>
-  );
-}
-
-/** The first records, a row each; without their titles, one quiet row a record. */
-function Rows({ n, titles }: { n: number; titles?: string[] | null }) {
-  const T = (titles || []).slice(0, TITLES);
-  const shown = T.length || Math.min(n, ROWS), more = n - shown;
-  return (
-    <span className={`mm-ca-rows${T.length ? ' named' : ''}`} aria-hidden={!T.length}>
-      {T.length
-        ? T.map((t, i) => <span key={i} className="mm-ca-row"><i /><span>{t}</span></span>)
-        : Array.from({ length: shown }, (_, i) => <span key={i} className="mm-ca-row"><i /><b style={{ width: `${ROW_W[i % ROW_W.length]}%` }} /></span>)}
-      {more > 0 ? <small>{`+${more} more`}</small> : null}
-    </span>
-  );
-}
 
 /** Nothing kept yet: three types, dashed, not yet built. */
 export function Ghost() {
@@ -155,39 +19,6 @@ export function Ghost() {
       {P.map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r={15} />)}
     </svg>
   );
-}
-
-/** The same picture, small, for a row of the list: the types and their relations as dots and lines,
- *  a vocabulary as a few chips' dots, records as lines, and nothing kept as an empty dashed ring. */
-export function MiniArt({ s, labels, records }: { s: LSchema | null | undefined; labels: boolean; records: number | null }) {
-  const T = s?.types || [], w = 36, h = 36;
-  let inner: React.ReactNode;
-  if (T.length && labels) {
-    const shown = T.slice(0, 3);
-    inner = shown.map((t, i) => <circle key={t.id} cx={w / 2 + (i - (shown.length - 1) / 2) * 9} cy={h / 2} r={3.4} fill={t.color} />);
-  } else if (T.length && !saysNothing(s)) {
-    const xs = T.map((t) => t.x), ys = T.map((t) => t.y), pad = 7;
-    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-    const f = Math.min((w - 2 * pad) / Math.max(1, x1 - x0), (h - 2 * pad) / Math.max(1, y1 - y0));
-    const ox = (w - (x1 - x0) * f) / 2, oy = (h - (y1 - y0) * f) / 2;
-    const at = new Map(T.map((t) => [t.id, [ox + (t.x - x0) * f, oy + (t.y - y0) * f] as const]));
-    inner = (
-      <>
-        {s!.relations.map((r) => {
-          const a = at.get(r.from), b = at.get(r.to);
-          return a && b ? <line key={r.id} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke="var(--line-strong, var(--faint))" strokeWidth="1" /> : null;
-        })}
-        {T.map((t) => { const p = at.get(t.id)!; return <circle key={t.id} cx={p[0]} cy={p[1]} r={3.6} fill={t.color} />; })}
-      </>
-    );
-  } else if (records && records > 0) {
-    inner = [0, 1, 2].slice(0, Math.min(3, records)).map((i) => (
-      <g key={i}><circle cx={10} cy={11 + i * 7} r={1.6} fill="var(--faint)" /><rect x={14} y={10 + i * 7} width={[14, 11, 13][i]} height={2} rx={1} fill="var(--line-strong, var(--faint))" /></g>
-    ));
-  } else {
-    inner = <circle cx={w / 2} cy={h / 2} r={8} fill="none" stroke="var(--line-strong, var(--faint))" strokeWidth="1.2" strokeDasharray="3 3" />;
-  }
-  return <svg className="mm-mini" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">{inner}</svg>;
 }
 
 /** What a new memory will be, before it exists: drawn dashed in the "next" blue, like a brick not yet

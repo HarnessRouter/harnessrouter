@@ -132,13 +132,19 @@ def world():
         memory_mem0.transport = None
 
 
-def test_the_provider_is_connected_like_a_plug_and_listed_apart_from_tool_plugs(world):
+def test_the_provider_is_connected_like_a_plug_and_listed_apart_from_tool_plugs(world, monkeypatch):
     c, _, _, _ = world
     assert "mem0" not in [p["type"] for p in c.get("/v1/plugs", headers=ADA).json()["plugs"]]
     row = c.get("/v1/plugs?kind=memory", headers=ADA).json()["plugs"][0]
     assert row["type"] == "mem0" and row["status"] == "connected" and row["secrets_set"] == ["api_key"]
     other = {**ADA, "x-harness-workspace": "elsewhere"}
+    # on an instance with one operator, a workspace that never connected mem0 uses the instance's (the default
+    # workspace's, where deploy/memories/up.sh connects it); its memory is still its own
     r = c.post("/v1/memories", headers=other, json={"provider": "mem0", "name": "x"})
+    assert r.status_code == 200, r.text
+    # on a shared pool a workspace reaches only what it connected itself
+    monkeypatch.setenv("HR_POOL_AUTH", "cloud")
+    r = c.post("/v1/memories", headers=other, json={"provider": "mem0", "name": "y"})
     assert r.status_code == 503 and "not connected for this workspace" in r.json()["error"]["message"]
 
 

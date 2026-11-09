@@ -2,9 +2,11 @@
 check in memory_plane, and one call to the memory's provider. Nothing here knows a provider."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
+import re
 import time
 import uuid
 
@@ -28,16 +30,18 @@ _engines_running = None     # app.py's answer to which engines are connected for
 
 
 def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None, on_grant=None, workspace_of=None,
-            used_by=None, engines_running=None) -> None:
+            used_by=None, engines_running=None, covers=None) -> None:
     """Bind the gateway's principal resolver, error envelope, graph backing and file store, and
     mount the routes. `on_grant(org, principal)` runs after a grant is written: the gateway uses
     it to give an agent that was just let into its first memory the tools to use it. `workspace_of` is the
     plug routes' own rule for which workspace a call is about, so the two can't disagree. `used_by(org, caller)`
     answers {memory id: [{harness_id, name}]}: the agents the caller may see that hold a grant on each.
-    `engines_running(org, workspace)` answers the engines connected there that answer now (memory_choice reads it)."""
+    `engines_running(org, workspace)` answers the engines connected there that answer now (memory_choice reads it).
+    `covers` is where memories' covers are kept (memory_plane.COVERS)."""
     global _principal, _uhp_error, _file_bytes, _on_grant, _workspace_of, _used_by, _engines_running
     _principal, _uhp_error, mp.GRAPH, mp.FILES, _file_bytes, _on_grant = principal, uhp_error, graph, file_meta, file_bytes, on_grant
     _workspace_of, _used_by, _engines_running = workspace_of, used_by, engines_running
+    mp.COVERS = covers
     if os.environ.get("HR_MEMORY_FIXTURE") == "1" and "fixture" not in mp.PROVIDERS:
         import memory_fixture
         mp.PROVIDERS["fixture"] = memory_fixture.FixtureProvider()
@@ -203,6 +207,85 @@ async def choose(request: Request, name: str = "", description: str = "") -> dic
     running = list(await _engines_running(org, ws or "default")) if _engines_running else []
     c = memory_choice.for_memory(running=running, name=name[:mp._NAME_MAX * 2], description=description[:mp._DESC_MAX])
     return {"engine": c.engine, "scope": c.scope, "reason": c.reason}
+
+
+# ── a memory's cover ─────────────────────────────────────────────────────────────────────────
+# The picture a memory's card shows: its schema as the Schema tab draws it, made once by the console and kept here as
+# the bytes it sent, so a list of memories loads pictures and never works one out. `cover_sig` is the console's short
+# name for the drawing it shows, so it makes another only when the drawing changes.
+_COVER_SIG = re.compile(r"[A-Za-z0-9_\-]{1,64}")
+_COVER_WORD = {"image/png": "PNG", "image/webp": "WebP"}
+_COVER_FILE = {"image/png": "cover.png", "image/webp": "cover.webp"}
+_COVER_CACHE = "private, max-age=31536000, immutable"
+_TOO_BIG = "A cover is at most 512 KB. Send a smaller picture."
+
+
+async def _cover_bytes(request: Request) -> bytes:
+    """The body, read no further than one byte past the most a cover may be, and nothing read at all when its length
+    says it is more. Nothing is decoded until this has answered."""
+    said = request.headers.get("content-length") or ""
+    if said.isdigit() and int(said) > mp.COVER_MAX:
+        raise _uhp_error(422, "memory_invalid", _TOO_BIG, "cover")
+    out = bytearray()
+    async for chunk in request.stream():
+        out += chunk[:mp.COVER_MAX + 1 - len(out)]
+        if len(out) > mp.COVER_MAX:
+            raise _uhp_error(422, "memory_invalid", _TOO_BIG, "cover")
+    return bytes(out)
+
+
+@router.put("/v1/memories/{mid}/cover")
+@guarded
+async def put_cover(mid: str, request: Request) -> dict:
+    """The memory's cover: the body is the picture's bytes, a PNG or a WebP (its type in Content-Type, and its first
+    bytes saying the same) of at most 512 KB, and `X-Cover-Sig` the console's name for the drawing it shows."""
+    org, _, _, pr = await _who(request)
+    m, _ = await mp.need(org, mid, pr, "write")
+    kind = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if kind not in mp.COVER_TYPES:
+        raise _uhp_error(422, "memory_invalid", "A cover is a PNG or WebP picture: send it with that Content-Type.", "content-type")
+    sig = (request.headers.get("x-cover-sig") or "").strip()
+    if sig and not _COVER_SIG.fullmatch(sig):
+        raise _uhp_error(422, "memory_invalid", "X-Cover-Sig is up to 64 letters, digits, - or _.", "x-cover-sig")
+    data = await _cover_bytes(request)
+    if not data:
+        raise _uhp_error(422, "memory_invalid", "Send the picture's bytes as the body.", "cover")
+    if mp.cover_type(data) != kind:
+        raise _uhp_error(422, "memory_invalid", f"That isn't a {_COVER_WORD[kind]} picture: its bytes say otherwise.", "cover")
+    clean = await asyncio.to_thread(mp.cover_clean, data, kind)
+    # the key is the organization and the memory as the store holds it, never anything the request says
+    mid, key = str(m["id"]), mp.cover_key(org, str(m["id"]))
+    if not mp.COVERS or not await mp.COVERS.put(key, clean):
+        raise _uhp_error(503, "memory_unavailable", "The picture couldn't be kept just now. Try again.", "cover")
+    at = int(time.time() * 1000)
+    try:
+        await mp.GRAPH.upsert("Memory", mid, {"cover_at": str(at), "cover_sig": sig, "cover_type": kind}, raise_on_fail=True)
+    except Exception:
+        await mp.COVERS.delete(key)       # a picture no memory names would never be removed
+        raise
+    return {"object": "memory.cover", "memory_id": mid, "cover_at": at, "cover_sig": sig or None, "bytes": len(clean)}
+
+
+@router.get("/v1/memories/{mid}/cover")
+@guarded
+async def get_cover(mid: str, request: Request):
+    """The memory's cover as it was sent. The console names its `cover_at` in the address (`?v=`), so a picture once
+    read is never asked for again until a new one is made."""
+    org, _, _, pr = await _who(request)
+    m, _ = await mp.need(org, mid, pr, "read")          # the same check as recall: a person's own stays theirs
+    kind = str(m.get("cover_type") or "")
+    if not m.get("cover_at") or not mp.COVERS or kind not in mp.COVER_TYPES:
+        raise _uhp_error(404, "memory_not_found", "This memory has no cover yet.", "cover")
+    try:
+        data = await mp.COVERS.get(mp.cover_key(org, str(m["id"])))
+    except Exception:  # noqa: BLE001 - a store that failed to answer is not a cover that isn't there
+        raise _uhp_error(503, "memory_unavailable", "The picture couldn't be read just now. Try again.", "cover")
+    if not data or mp.cover_type(data) != kind:
+        raise _uhp_error(404, "memory_not_found", "This memory has no cover yet.", "cover")
+    # served as the type kept when it was made, under a fixed name, and never as anything that could run
+    return Response(content=data, media_type=kind, headers={
+        "cache-control": _COVER_CACHE, "x-content-type-options": "nosniff",
+        "content-disposition": f'inline; filename="{_COVER_FILE[kind]}"', "content-security-policy": "default-src 'none'"})
 
 
 # ── the tree ──────────────────────────────────────────────────────────────────────────────────

@@ -167,6 +167,16 @@ export function isoSvg(o: Tower, u: number, text: boolean | 'card', zones = fals
   return '<svg class="iso" viewBox="0 0 ' + wr.w.toFixed(0) + ' ' + wr.h.toFixed(0) + '" width="100%" role="img" aria-label="Agent model">' + wr.svg + '</svg>';
 }
 
+/** One part's brick alone, as the tower draws it standing on a setup (2 x 2, one high, its stud on top), on the same
+ *  soft ground shadow the tower stands on: a memory with no schema to picture is shown as its brick. `fam` is the
+ *  part ('memory', 'skill', ...); the drawing is geometry only, with no text. */
+export function brickSvg(fam: string, state: BrickState = 'built', u = 16): string {
+  const K = Iso(u, 0.9);
+  const g = K.box(0, 0, 0, 2, 2, 1) + K.stud(1, 1, 1, 2);
+  const wr = K.wrap(K.tile(0.22, 0.34, 2.22, 2.34, 'iso-shadow') + '<g class="bk f-' + (FAM[fam] || fam) + ' ' + state + '">' + g + '</g>', 3);
+  return '<svg class="iso" viewBox="0 0 ' + wr.w.toFixed(0) + ' ' + wr.h.toFixed(0) + '" aria-hidden="true">' + wr.svg + '</svg>';
+}
+
 /** What a setup is made of and what has happened to it, as read from its record and its tasks. */
 export interface SetupFacts {
   harness: string;            // the base harness's name
