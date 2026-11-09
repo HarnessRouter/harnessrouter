@@ -666,13 +666,25 @@ async def observe(prov: "Provider", mid: str, episodes: list[dict], writer: dict
     return await prov.observe(mid, [{**e, "content": _clean_parts(e.get("content"))} for e in episodes], writer)
 
 
-async def _subtree(org: str, mid: str) -> list[dict]:
-    """The memory's descendants, parents before children: one level per pass."""
+_UNREAD_BELOW = "The memories below this one couldn't be read just now, so nothing was deleted. Try again in a moment."
+
+
+async def _subtree(org: str, mid: str, *, strict: bool = False) -> list[dict]:
+    """The memory's descendants, parents before children: one level per pass. `strict`: a level that could not be
+    read raises, where the plain read answers it as "nothing below" (GRAPH.find swallows a failed read into []).
+    Whatever decides a delete reads strictly: "nothing below" means no person's memory to keep, and no grant below."""
     found, frontier = [], [mid]
     while frontier:
         nxt = []
         for pid in frontier:
-            for k in await GRAPH.find("Memory", {"org": org, "parent_id": pid}):
+            if strict:
+                try:
+                    kids = await GRAPH.find_strict("Memory", {"org": org, "parent_id": pid})
+                except Exception as e:  # noqa: BLE001 - the store could not answer
+                    raise MemoryError(503, "memory_unavailable", _UNREAD_BELOW) from e
+            else:
+                kids = await GRAPH.find("Memory", {"org": org, "parent_id": pid})
+            for k in kids:
                 if str(k.get("deleted") or "0") != "1":
                     found.append(k)
                     nxt.append(str(k["id"]))
@@ -716,11 +728,14 @@ async def delete(org: str, mid: str, principals: list[str]) -> list[str]:
 
 async def unmake(org: str, m: dict) -> list[str]:
     """The memory and everything below it gone, at its engine and here: `delete` once access is checked, and the
-    server's own undoing of a memory it made a moment ago (app.py's provisioning, when a later step failed)."""
+    server's own undoing of a memory it made a moment ago (app.py's provisioning, when a later step failed). What is
+    below is read strictly and before anything is dropped: a read that fails drops nothing, where it once dropped the
+    memory and left the people's memories below it with nothing above them."""
     mid = str(m["id"])
     gone = []
+    below = await _subtree(org, mid, strict=True)
     try:
-        for x in [m] + await _subtree(org, mid):
+        for x in [m] + below:
             try:
                 await (await provider_of(x)).drop(str(x["id"]))
             except MemoryError:

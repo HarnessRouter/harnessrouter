@@ -11210,6 +11210,7 @@ async def _owned_org(request: Request, org: str) -> dict:
 # Richard's rule (2026-10-08), the hosted service's too, and published in the self-hosting guide:
 #   for good, at once:          tasks (sessions, with everything they left), API keys, credentials
 #   30 days, restorable, gone:  harnesses, responses deleted on their own, environments, uploads
+#                               (a harness with the memory made for it and its people's: _memories_gone_with)
 # Each delete does its own "at once" part. This sweep removes what has come due: what a delete
 # could not finish, the marker a deleted session keeps for a day, and every 30-day kind past its
 # 30 days. It runs when the server starts and every day after, so the first start of a version
@@ -11282,13 +11283,15 @@ async def _retention_due(kind: str, now: int) -> tuple[list[dict], int]:
         # of its last edit and the last task it ran, which the delete came after (Richard,
         # 2026-10-08, "Last activity"). Its last edit alone can be months before a delete made
         # yesterday by someone who had kept using it.
+        # Both reads strict: which agents are past their 30 days decides whose memory goes with them
+        # (_memories_gone_with), and a failed read of the tasks would make an old agent due early.
         last_task: dict[str, int] = {}
-        for sv in await BACKING.graph.find("HarnessSession"):
+        for sv in await BACKING.graph.find_strict("HarnessSession"):
             h = str(sv.get("harness_id") or "")
             if h:
                 t = max(_stamp_ms(sv.get("updated_at")), _stamp_ms(sv.get("created_at")))
                 last_task[h] = max(last_task.get(h, 0), t)
-        for r in await BACKING.graph.find("Harness", {"deleted": "1"}):
+        for r in await BACKING.graph.find_strict("Harness", {"deleted": "1"}):
             if not _stamp_ms(r.get("deleted_at")):
                 r = {**r, "_last_activity": str(max(_stamp_ms(r.get("updated_at")), _stamp_ms(r.get("created_at")),
                                                     last_task.get(str(r.get("id") or ""), 0)) or "")}
@@ -11331,7 +11334,8 @@ async def _harness_blob_refs() -> "collections.Counter[str]":
     """How many harness records name each bundle. A client may write a bundle's id onto another
     harness, so a removed harness's bundle goes only when no record left names it."""
     refs: "collections.Counter[str]" = collections.Counter()
-    for h in await BACKING.graph.find("Harness"):
+    # strict: a failed read taken as "no record names it" would delete bundles other harnesses still use
+    for h in await BACKING.graph.find_strict("Harness"):
         refs.update(_harness_blobs(h))
     return refs
 
@@ -11358,6 +11362,12 @@ async def _retention_remove(kind: str, item: dict, ctx: dict) -> str | None:
         await BACKING.graph.delete(iid, "HarnessResponse")
     elif kind == "harnesses":
         org = str(row.get("org") or "")
+        # Its memory goes first, as whoever deleted it: kept with it until now (_harness_delete). One that
+        # couldn't be checked, or past the sweep's cap, leaves the agent for the next sweep, where it is again.
+        why = await _memories_gone_with(org, iid, [str(x) for x in _json_list(row.get("deleted_by"))],
+                                        ctx.setdefault("memories", {"n": 0}))
+        if why:
+            return why
         # credentials were removed at the delete; again here for a harness deleted before that
         await _hosted_scrub_removed(org, iid, _mcp_list(row), [])
         for c in await BACKING.graph.find(_CONNECTION_LABEL, {"harness": iid}):
@@ -11393,7 +11403,14 @@ async def _retention_sweep(dry_run: bool, kinds: list[str] | None = None, limit:
     done = True
     ctx: dict = {}
     for kind in kinds or _RETENTION_KINDS:
-        due, no_time = await _retention_due(kind, now)
+        try:
+            due, no_time = await _retention_due(kind, now)
+        except Exception as e:  # noqa: BLE001 — a strict read that couldn't answer: this kind waits, the rest go on
+            print(f"[retention] what of {kind} is due couldn't be read: {type(e).__name__}", flush=True)
+            out["left"][kind] = "what is due couldn't be read just now"
+            listed[kind] = []
+            done = False
+            continue
         batch = due[:limit] if limit else due
         if len(batch) < len(due):
             done = False
@@ -11473,7 +11490,19 @@ async def retention_restore(body: RetentionRestoreBody) -> dict:
                 for r in await BACKING.graph.find("Environment", {"slug": str(v.get("slug") or "")})):
             raise uhp_error(409, "environment_exists",
                             f"Another environment is mounted at /env/{v.get('slug')} now; rename it first.", "id")
-        await _vg_upsert(label, iid, {"deleted": "0", "deleted_at": "", "updated_at": str(_now_ms())})
+        # A harness comes back with its memory and its people's memories: they were kept with it (_harness_delete).
+        # Who deleted it goes too, so a later delete is that person's.
+        await _vg_upsert(label, iid, {"deleted": "0", "deleted_at": "", "updated_at": str(_now_ms()),
+                                      **({"deleted_by": ""} if label == "Harness" else {})})
+        if label == "Harness":
+            # and the tools it reaches them through, whose binding the delete removed with its credentials
+            # (_hosted_scrub_removed): a memory kept for it and out of its reach would not be its memory back
+            org = str(v.get("org") or "")
+            try:
+                if await memory_plane.granted(org, _agent(iid)):
+                    await _memories_on_grant(org, _agent(iid))
+            except Exception as e:  # noqa: BLE001 - the agent is back; its tools are given again at its next grant
+                print(f"[memories] {iid}: restored without its memory tools: {type(e).__name__}", flush=True)
     elif kind == "uploads":
         meta = await _upload_meta(iid)
         if not meta or not meta.get("deleted_at") or await _blob_get(f"uploads/{iid}", kb=RESP_BLOB_KB) is None:
@@ -13077,12 +13106,26 @@ async def share_meta(token: str) -> dict:
     return {k: m.get(k) for k in _SHARE_META_FIELDS} | {"session_id": sid}
 
 
+def _turns_for_a_link(data: dict) -> dict:
+    """A conversation as a share link shows it, to anyone who holds the link. A memory tool's answer, kept on a reopened
+    turn (_MEMORY_TOOL), is what a recall found in the person's memory and the agent's, from tasks the link was never
+    about: the person's and the operator's to read, never a link-holder's. So it is not here, and the turn's memory
+    note says how many things were kept or recalled, never which records in which memory."""
+    for t in data.get("turns") or []:
+        t["tools"] = [{k: v for k, v in x.items() if k != "output"} if isinstance(x, dict) else x
+                      for x in t.get("tools") or []]
+        note = t.get("memory")
+        if isinstance(note, dict):
+            t["memory"] = {k: v for k, v in note.items() if k != "records"} or None
+    return data
+
+
 @app.get("/share/{token}/turns")
 async def share_turns(token: str) -> dict:
     sid = await _share_sid(token)
     if not sid:
         raise HTTPException(404, "share not found")
-    return await _session_turns_data(sid, strict=True)
+    return _turns_for_a_link(await _session_turns_data(sid, strict=True))
 
 
 @app.get("/share/{token}/files")
@@ -21109,8 +21152,9 @@ def _json_obj(s) -> dict:
 
 def _harness_memory_view(v: dict) -> dict:
     """`memory` ({id, name, engine, scope, reason, observe, provisioned}) or `memory: null` and `memory_reason`, as the
-    harness keeps them (_memory_provision). `provisioned`: the memory was made for this agent, and is deleted with it
-    when no other agent uses it (_harness_delete). Nothing for a harness made before; its memories are at /memories."""
+    harness keeps them (_memory_provision). `provisioned`: the memory was made for this agent, kept with it for the 30
+    days a deleted agent is kept, and deleted with it then when no other agent uses it (_memories_gone_with). Nothing
+    for a harness made before; its memories are at /memories."""
     info, reason = _json_obj(v.get("memory_info")), str(v.get("memory_reason") or "")
     if info.get("id"):
         return {"memory": {"id": info["id"], "name": str(info.get("name") or ""), "engine": str(info.get("engine") or ""),
@@ -21774,7 +21818,8 @@ async def _memory_provision(org: str, p: dict, hid: str, ask: tuple[str, str], h
             if not member:
                 raise _memory_no_person()          # before anything is made (_MEMORY_NO_PERSON)
             # named after the agent, made by the person who made it: they manage it like any memory of theirs. It
-            # says which agent it was made for, so it goes with that agent when nothing else uses it (_harness_delete).
+            # says which agent it was made for, so it goes with that agent, when the retention sweep removes the agent
+            # for good and nothing else uses it (_memories_gone_with).
             m = await memory_plane.create(org, member, ws, who, name=str(v.get("name") or "Agent")[:120],
                                           description=f"What {str(v.get('name') or 'this agent')[:80]} remembers from its work.",
                                           provider=choice.engine, extra={"provisioned_for": hid})
@@ -23513,62 +23558,46 @@ async def _harness_delete(org: str, hid: str, v: dict, caller: dict | None = Non
     responses that used it are not touched (Harnesses §5.3). What cannot wait goes now: a deleted
     agent must not still be holding a database password, and must not still be spending at a
     provider. A second delete keeps the first one's time, so it cannot extend the 30 days.
-    The memory made for it goes with it when nothing else uses it (_harness_memory_goes): what
-    happened is in the answer, `memory_deleted` or `memory_kept`."""
+
+    The memory made for it is kept with it for those 30 days, with every person's memory below it, so a restore
+    brings the agent back as it was: nothing of it is deleted here. The retention sweep deletes it when it removes
+    the agent for good (_memories_gone_with), as whoever deleted the agent (`deleted_by`, their principals), and only
+    when no agent still kept holds it. What the answer says of it is in `memory_kept` (_harness_memory_kept)."""
     v = await _mcp_migrate(org, hid, v)
+    props: dict = {}
     if str(v.get("deleted")) not in ("1", "true", "True") or not v.get("deleted_at"):
-        await _vg_upsert("Harness", hid, {"deleted": "1", "deleted_at": str(_now_ms())})
+        props.update({"deleted": "1", "deleted_at": str(_now_ms())})
+    if not v.get("deleted_by"):
+        props["deleted_by"] = json.dumps(memory_routes.principals_of(caller or {}), separators=(",", ":"))
+    if props:
+        await _vg_upsert("Harness", hid, props)
     await _hosted_scrub_removed(org, hid, _mcp_list(v), [])
     await _media_harness_purge(hid)
-    return await _harness_memory_goes(org, hid, v, caller or {})
+    return await _harness_memory_kept(org, hid, v, caller or {})
 
 
-_MEMORY_KEPT_IN_USE = "used by another agent"
+_MEMORY_KEPT_30_DAYS = "kept with the agent for 30 days"
 _MEMORY_KEPT_NOT_YOURS = "only whoever manages it can delete it"
 
 
-async def _harness_memory_goes(org: str, hid: str, v: dict, caller: dict) -> dict:
-    """A deleted agent's memory, when it was made for that agent (`provisioned_for`): deleted with the people's
-    memories below it, through the memory delete every caller goes through, unless another agent still uses it (holds
-    a grant on it or below it). {"memory_deleted": id}, {"memory_kept": why}, or {} for a memory someone chose for
-    the agent, which is theirs and stays. Never fails the agent's delete: it is already deleted.
-
-    Then every memory left for nobody goes too (_memories_left_for_nobody): one made for an agent that no longer
-    exists, that no remaining agent holds a grant on. Agent A's memory, used by B, was kept when A was deleted, and
-    then outlived B as well, since it was never B's own (r3, 11-09). When the memory B used is one of those, B's
-    answer says so: `memory_deleted`, as for a memory of its own."""
-    mid = str(_json_obj(v.get("memory_info")).get("id") or "")
-    live: set[str] = set()
-    try:
-        live = {str(r["id"]) for r in await _vg_list_by_org("Harness", org)
-                if r.get("id") and str(r["id"]) != hid and str(r.get("deleted")) not in ("1", "true", "True")}
-        out = await _harness_own_memory_goes(org, hid, mid, live, caller)
-    except Exception as e:  # noqa: BLE001 - the agent is deleted whatever happens to its memory
-        print(f"[memories] {hid}: its memory was not deleted with it: {type(e).__name__}", flush=True)
-        return {"memory_kept": "it couldn't be deleted just now"}
-    try:
-        swept = await _memories_left_for_nobody(org, live, caller)
-    except Exception as e:  # noqa: BLE001 - a memory left for nobody is swept again at the next agent's delete
-        print(f"[memories] {hid}: the memories left for nobody were not swept: {type(e).__name__}", flush=True)
-        swept = []
-    if swept:
-        print(f"[memories] {hid}: {len(swept)} memories made for agents that no longer exist went with it", flush=True)
-    return {"memory_deleted": mid} if mid and mid in swept and not out.get("memory_deleted") else out
-
-
-async def _harness_own_memory_goes(org: str, hid: str, mid: str, live: set[str], caller: dict) -> dict:
-    m = await memory_plane._load(org, mid) if mid else None
-    if not m or str(m.get("provisioned_for") or "") != hid:
+async def _harness_memory_kept(org: str, hid: str, v: dict, caller: dict) -> dict:
+    """What a delete says of the memory made for the agent (`provisioned_for`): {"memory_kept": why}, or {} for a
+    memory someone chose for it, which is theirs and stays. Only words: nothing is deleted here, and a read that
+    fails changes no more than the words."""
+    info = _json_obj(v.get("memory_info"))
+    mid = str(info.get("id") or "")
+    if not mid:
         return {}
-    tree = {mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid))}
-    if tree & _memories_agents_hold(await BACKING.graph.find("MemoryGrant", {"org": org}), live):
-        return {"memory_kept": _MEMORY_KEPT_IN_USE}
     try:
-        gone = await memory_plane.delete(org, mid, memory_routes.principals_of(caller))
-    except memory_plane.MemoryError:
-        return {"memory_kept": _MEMORY_KEPT_NOT_YOURS}
-    print(f"[memories] {hid}: its memory {mid} went with it ({len(gone)} with the people's memories below)", flush=True)
-    return {"memory_deleted": mid}
+        m = await memory_plane._load(org, mid)
+        if not m or str(m.get("provisioned_for") or "") != hid:
+            return {}
+        if "delete" not in await memory_plane.effective(org, m, memory_routes.principals_of(caller)):
+            return {"memory_kept": _MEMORY_KEPT_NOT_YOURS}
+    except Exception as e:  # noqa: BLE001 - the agent is deleted, and its memory is kept, whatever this read did
+        print(f"[memories] {hid}: its memory could not be read at its delete: {type(e).__name__}", flush=True)
+        return {"memory_kept": _MEMORY_KEPT_30_DAYS} if info.get("provisioned") is True else {}
+    return {"memory_kept": _MEMORY_KEPT_30_DAYS}
 
 
 def _memories_agents_hold(grants: list[dict], live: set[str]) -> set[str]:
@@ -23578,30 +23607,60 @@ def _memories_agents_hold(grants: list[dict], live: set[str]) -> set[str]:
             and str(g.get("deleted") or "0") != "1" and json.loads(g.get("privileges") or "[]")}
 
 
-async def _memories_left_for_nobody(org: str, live: set[str], caller: dict) -> list[str]:
-    """Every memory made for an agent that no longer exists (`provisioned_for` names no live agent of `live`) that no
-    live agent holds a grant on, on it or below it: deleted through the memory delete every caller goes through,
-    people's memories with it. One the caller may not delete stays, as a memory of the deleted agent's own does.
-    The ids deleted, each memory's own (not those below it)."""
-    made = [m for m in await BACKING.graph.find("Memory", {"org": org})
-            if m.get("id") and str(m.get("deleted") or "0") != "1" and str(m.get("provisioned_for") or "")
-            and str(m["provisioned_for"]) not in live]
-    if not made:
-        return []
-    held = _memories_agents_hold(await BACKING.graph.find("MemoryGrant", {"org": org}), live)
-    gone: list[str] = []
-    for m in made:
-        mid = str(m["id"])
+# The most memories one retention sweep deletes (each with the people's memories below it). Past it the sweep stops
+# deleting memories and says so in its log, and the agent whose turn it was is left for the next sweep, which goes on.
+_MEMORY_SWEEP_CAP = 25
+_MEMORY_UNCHECKED = "its memory couldn't be checked just now"
+_MEMORY_CAPPED = "more memories were due than one sweep deletes"
+
+
+async def _memories_gone_with(org: str, hid: str, principals: list[str], budget: dict) -> str | None:
+    """At the retention sweep, before agent `hid` is removed for good: every memory made for an agent that is no
+    longer kept (`provisioned_for` names no Harness record left but `hid`), this agent's own first, that no agent
+    still kept holds a grant on, on it or below it, deleted with its people's memories through the memory delete
+    every caller goes through, as whoever deleted `hid` (`principals`). A deleted agent still inside its 30 days is
+    kept, restorable, and holds its memory as it did. One the deleter may not delete stays, as it would have at
+    their own delete. None when the agent may go; else why it is left for the next sweep, having deleted nothing
+    on a read that couldn't answer, or what it could under the cap (`budget["n"]`, shared by the whole sweep).
+
+    Every read the decision rests on is strict: the agents, the grants, the memories and each one's subtree. The
+    plain reads answer a failed read with [] (backing.GraphStore.find), and here [] reads as "no agent holds it":
+    one failed read during one agent's removal would have deleted every provisioned memory in the organization."""
+    try:
+        agents = await BACKING.graph.find_strict("Harness", {"org": org})
+        grants = await BACKING.graph.find_strict("MemoryGrant", {"org": org})
+        made = await BACKING.graph.find_strict("Memory", {"org": org})
+        kept = {str(a["id"]) for a in agents if a.get("id")} - {hid}
+        due = [m for m in made if m.get("id") and str(m.get("deleted") or "0") != "1"
+               and str(m.get("provisioned_for") or "") and str(m["provisioned_for"]) not in kept]
+        due.sort(key=lambda m: str(m["provisioned_for"]) != hid)
+        held = _memories_agents_hold(grants, kept)
+        go = []
+        for m in due:
+            mid = str(m["id"])
+            if not ({mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid, strict=True))} & held):
+                go.append(mid)
+    except Exception as e:  # noqa: BLE001 - nothing is deleted on a read that couldn't answer
+        print(f"[memories] {hid}: no memory was deleted with it, a read couldn't answer: {type(e).__name__}", flush=True)
+        return _MEMORY_UNCHECKED
+    gone = 0
+    for i, mid in enumerate(go):
+        if budget.get("n", 0) >= _MEMORY_SWEEP_CAP:
+            print(f"[memories] the sweep stopped at {_MEMORY_SWEEP_CAP} memories: {len(go) - i} more of {org}'s "
+                  f"wait for the next sweep, and {hid} with them", flush=True)
+            return _MEMORY_CAPPED
         if await memory_plane._load(org, mid) is None:
             continue                                  # went with one deleted before it in this sweep
-        if ({mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid))}) & held:
-            continue
         try:
-            await memory_plane.delete(org, mid, memory_routes.principals_of(caller))
+            below = await memory_plane.delete(org, mid, principals)
         except memory_plane.MemoryError:
-            continue
-        gone.append(mid)
-    return gone
+            continue                                  # theirs to delete, not this deleter's; or a read below it failed
+        budget["n"] = budget.get("n", 0) + 1
+        gone += 1
+        print(f"[memories] {hid}: {mid} went with it ({len(below)} with the people's memories below)", flush=True)
+    if gone:
+        print(f"[memories] {hid}: {gone} memories made for agents no longer kept went with it", flush=True)
+    return None
 
 
 # ── workspaces: the DIRECTORY, server-side (fix for the localStorage split-brain) ──────
