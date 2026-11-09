@@ -57,8 +57,8 @@ def _file_named_in(cmd: list[str], d: str) -> pathlib.Path:
     return files[0]
 
 
-STDIN = ["claude", "codex", "pi", "omp", "qwen", "gemini", "cline", "opencode", "mimo", "kilo", "minimax",
-         "docker-agent"]
+STDIN = ["claude", "codex", "pi", "omp", "qwen", "gemini", "opencode", "mimo", "kilo", "minimax", "docker-agent"]
+PIPE = ["cline"]
 BY_PATH = ["grok", "goose", "vibe", "opensquilla"]
 
 
@@ -80,6 +80,47 @@ def test_the_prompt_goes_on_stdin_and_nothing_of_it_stays_on_disk(backend):
     assert os.read(held["fd"], 1 << 16).decode() == MARK          # what the CLI reads, from the start
     server._prompt_discard(held)
     assert held.get("fd") is None and held.get("dfd") is None
+
+
+@pytest.mark.parametrize("backend", PIPE)
+def test_the_prompt_goes_through_a_pipe_and_no_file_is_made(backend):
+    cmd, held, d = _build(backend)
+    assert not any(MARK in a for a in cmd), cmd
+    assert held.get("stdin") is True and held.get("path") == ""
+    assert stat.S_ISFIFO(os.fstat(held["fd"]).st_mode)
+    assert handed.text(held) == MARK                                 # all of it, then the end
+    assert not pathlib.Path(d, "tmp", server.PROMPT_DIR).exists() or not list(pathlib.Path(d, "tmp", server.PROMPT_DIR).iterdir())
+    server._prompt_discard(held)
+    assert held.get("fd") is None
+
+
+def test_a_prompt_longer_than_a_pipe_holds_goes_whole():
+    held: dict = {}
+    tok = server._TURN_PROMPT.set(held)
+    big = "x" * (1 << 20) + MARK
+    try:
+        server._prompt_handover(tempfile.mkdtemp(), big, stdin="pipe")
+    finally:
+        server._TURN_PROMPT.reset(tok)
+    assert handed.text(held) == big
+    server._prompt_discard(held)
+
+
+def test_a_pipe_nobody_reads_lets_its_writer_go(tmp_path):
+    import threading
+    import time
+    held: dict = {}
+    tok = server._TURN_PROMPT.set(held)
+    try:
+        server._prompt_handover(str(tmp_path), "y" * (1 << 20), stdin="pipe")
+    finally:
+        server._TURN_PROMPT.reset(tok)
+    server._prompt_discard(held)                                      # the turn never started
+    for _ in range(40):
+        if not [t for t in threading.enumerate() if t.name == "prompt-pipe"]:
+            break
+        time.sleep(0.05)
+    assert not [t for t in threading.enumerate() if t.name == "prompt-pipe"]
 
 
 @pytest.mark.parametrize("backend", BY_PATH)

@@ -588,8 +588,9 @@ def test_a_turns_command_line_holds_none_of_its_prompt(base, continued, monkeypa
     cmdline = seen.stdout.replace(b"\0", b" ").decode(errors="replace")
     assert seen.returncode == 0 and cmdline.strip(), seen.stderr     # the read itself worked, as another uid
     assert PROMPT_MARK not in cmdline and "edited instructions" not in cmdline, cmdline
-    assert made and all(_opened_as(UID2, f) in ("EACCES", "ENOENT") for f in made), \
-        [(f, _opened_as(UID2, f)) for f in made]
+    files = [f for f in made if f]                                  # cline's goes through a pipe: no file
+    assert made and all(_opened_as(UID2, f) in ("EACCES", "ENOENT") for f in files), \
+        [(f, _opened_as(UID2, f)) for f in files]
     got = json.loads(report.read_text())
     handed = got["stdin"] + "".join(got["files"].values())
     assert PROMPT_MARK in handed, got                                  # ...and the CLI still has its prompt

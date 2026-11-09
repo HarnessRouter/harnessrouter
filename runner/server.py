@@ -4406,13 +4406,18 @@ def _prompt_folder(cwd: str, uid: int | None) -> int:
     return dfd
 
 
-def _prompt_handover(cwd: str, text: str, stdin: bool = False) -> str:
+def _prompt_handover(cwd: str, text: str, stdin: bool | str = False) -> str:
     """Write this turn's prompt to a new 0600 file of the session's own and return its path.
 
     `stdin`: the CLI reads its prompt on stdin, from the descriptor kept for the turn's thread (_prompt_stdin),
     and the file is removed at once: nothing of it stays on disk while the CLI runs. Otherwise the CLI is handed
     the path, and the file goes as soon as the CLI has read it (_prompt_watch). Made O_EXCL|O_NOFOLLOW by the
-    session's uid, so a name planted in its tree leads nowhere."""
+    session's uid, so a name planted in its tree leads nowhere.
+
+    `stdin="pipe"`: for a CLI that reads only a pipe on stdin, the prompt goes into one (_prompt_pipe) and no
+    file is made at all; the path is then ""."""
+    if stdin == "pipe":
+        return _prompt_pipe(cwd, text)
     uid = _session_uid(cwd)
     name = f"prompt-{uuid.uuid4().hex}"
     path = os.path.join(cwd, "tmp", PROMPT_DIR, name)
@@ -4451,6 +4456,32 @@ def _prompt_handover(cwd: str, text: str, stdin: bool = False) -> str:
         held["fd"] = None
         os.close(fd)
     return path
+
+
+def _prompt_pipe(cwd: str, text: str) -> str:
+    """The prompt on stdin through a pipe: a thread of its own writes it and closes its end, so a prompt
+    longer than the pipe holds goes as the CLI reads. The thread ends with the reader: once the CLI and the
+    turn have closed theirs, a write left over fails and it stops."""
+    held = _TURN_PROMPT.get()
+    if held is None:              # a builder called on its own: nothing to hand it to
+        return ""
+    _prompt_discard(held)         # one per turn
+    r, w = os.pipe()              # both close on exec; Popen gives the CLI `r` as its stdin
+    data = (text or "").encode()
+
+    def feed() -> None:
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(w, view):]
+        except OSError:
+            pass                  # the reader went first
+        finally:
+            os.close(w)
+
+    threading.Thread(target=feed, name="prompt-pipe", daemon=True).start()
+    held.update(cwd=cwd, uid=_session_uid(cwd), path="", stdin=True, fd=r)
+    return ""
 
 
 def _prompt_watch(held: dict) -> None:
@@ -10212,14 +10243,14 @@ def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)          # sessions/settings/db live INSIDE the checkpointed workspace
     _cline_settings(home, auth.base_url, auth.api_key or "", model, mcp_servers, tools_disabled)
-    # The prompt is handed over on stdin, not on the command line (_prompt_handover). 3.0.60 reads piped
-    # stdin only after --json has insisted on a prompt argument ("JSON output mode requires a prompt
-    # argument or piped stdin", checked before stdin is read; measured on a stand-in turn), and joins the
-    # two as `${argument}\n\n${stdin}`. So the argument is one space: it carries none of the task, and
-    # what the model reads is the prompt after a blank line. On the command line a prompt with no
-    # whitespace was parsed as a SUBCOMMAND ("Unknown command or unquoted prompt: hi"); on stdin it is
-    # only the prompt.
-    _prompt_handover(cwd, prompt, stdin=True)
+    # The prompt is handed over on stdin, through a pipe, not on the command line (_prompt_handover).
+    # 3.0.60 reads stdin only after --json has insisted on a prompt argument ("JSON output mode requires
+    # a prompt argument or piped stdin", checked before stdin is read), and joins the two as
+    # `${argument}\n\n${stdin}`. So the argument is one space: it carries none of the task, and what the
+    # model reads is the prompt after a blank line. Its stdin read comes back empty from a file (measured
+    # on stand-in turns: "prompt cannot be empty"), so it gets a pipe. On the command line a prompt with
+    # no whitespace was parsed as a SUBCOMMAND ("Unknown command or unquoted prompt: hi").
+    _prompt_handover(cwd, prompt, stdin="pipe")
     # NO resume flag, deliberately. 3.0.60's `--json --id <session>` refuses every way of passing
     # a prompt (argument, =form, piped stdin — all verified individually, and the identical argv
     # without --id runs), so headless resume is unusable in this release. A follow-up turn starts
