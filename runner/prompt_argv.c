@@ -13,9 +13,11 @@
  * memory the kernel laid out at exec and is not touched here) holds only the placeholder. The file is the
  * session's own, 0600 (server.py, _prompt_handover), and goes as soon as it is read.
  *
- * The program's own environment loses all three variables here, so nothing it starts loads this library or
- * looks for the prompt. Anything that stops the hand-over in the program stops the program, loudly: a turn never
- * runs with the placeholder as its prompt. Everywhere else this does nothing at all.
+ * The file must be the program's own (its owner is the program's effective uid) and private (no access for group
+ * or others), checked on the open file itself. The program's own environment loses all three variables here, so
+ * nothing it starts loads this library or looks for the prompt. Anything that stops the hand-over in the program
+ * stops the program, loudly: a turn never runs with the placeholder as its prompt. Everywhere else this does
+ * nothing at all.
  *
  * libc only. This file ships with the runner; the library is root-owned and read-only, never in a session's tree.
  */
@@ -73,6 +75,10 @@ static void hand_over(int argc, char **argv, char **envp) {
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
         say_and_exit("it is not a file");
+    /* the session's own file and no one else's to read (_prompt_handover makes it 0600, as the session): a file
+     * someone else made, or one others could read, is never taken as the prompt */
+    if (st.st_uid != geteuid() || (st.st_mode & 077) != 0)
+        say_and_exit("it is not this program's own private file");
     char *text = malloc((size_t)st.st_size + 1);
     if (text == NULL)
         say_and_exit("out of memory");

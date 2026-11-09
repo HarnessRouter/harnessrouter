@@ -700,3 +700,36 @@ def test_a_turns_command_line_holds_none_of_its_prompt(base, continued, monkeypa
     assert PROMPT_MARK in handed, got                                  # ...and the CLI still has its prompt
     _settle(client, ident, r)
     assert not list((ws / "tmp").glob(".prompt-*")), "the prompt file outlived the turn"
+
+
+# ── the prompt file the preload and the library take: the CLI's own, and private ─────────────────────────────────────
+@pytest.mark.parametrize("reader", ["preload", "library"])
+def test_a_prompt_file_another_uid_owns_is_never_taken(reader, tmp_path):
+    """Root can open any file, so only the owner check stands between a CLI running as root and a file planted for
+    it by another uid: the CLI stops before it runs (exit 2), and the file is left where it is."""
+    os.chmod(tmp_path, 0o755)
+    prompt = tmp_path / "p.txt"
+    prompt.write_text(PROMPT_MARK)
+    os.chmod(prompt, 0o600)
+    os.chown(prompt, UID, UID)
+    if reader == "preload":
+        node = shutil.which("node")
+        if not node:
+            pytest.fail("the preload runs in node, and there is no node here")
+        entry = tmp_path / "fakecli.js"
+        entry.write_text("process.stdout.write('ran');\n")
+        cmd = [node, str(entry), "-p", server.PROMPT_ARG]
+        env = {**os.environ, "NODE_OPTIONS": f"--require {server.PROMPT_PRELOAD_CJS}", "HR_PROMPT_FILE": str(prompt)}
+    else:
+        cc = shutil.which("cc") or shutil.which("gcc")
+        if not cc:
+            pytest.fail("the library is built with a C compiler, and there is none here")
+        so = tmp_path / "prompt_argv.so"
+        subprocess.run([cc, "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(so),
+                        str(pathlib.Path(server.__file__).with_name("prompt_argv.c"))], check=True, capture_output=True)
+        py = os.path.realpath(sys.executable)
+        cmd = [py, "-c", "print('ran')", "--", server.PROMPT_ARG]
+        env = {**os.environ, "LD_PRELOAD": str(so), "HR_PROMPT_FILE": str(prompt), "HR_PROMPT_EXE": py}
+    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
+    assert os.geteuid() == 0 and out.returncode == 2 and "ran" not in out.stdout, (out.stdout, out.stderr)
+    assert "own private file" in out.stderr and prompt.exists()

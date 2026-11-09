@@ -253,8 +253,7 @@ def test_the_preload_sets_the_argument_in_process_and_leaves_nothing_for_what_th
                      "let cmdline = null;\n"
                      "try { cmdline = require('node:fs').readFileSync('/proc/self/cmdline', 'utf8'); } catch {}\n"
                      "process.stdout.write(JSON.stringify({argv: process.argv.slice(2), child: JSON.parse(child), cmdline}));\n")
-    prompt = tmp_path / "p.txt"
-    prompt.write_text(MARK + "\nsecond line")
+    prompt = _private(tmp_path / "p.txt", MARK + "\nsecond line")
     env = {**os.environ, "NODE_OPTIONS": f"--require {server.PROMPT_PRELOAD_CJS}", "HR_PROMPT_FILE": str(prompt)}
     out = subprocess.run(["node", str(entry), "-p", server.PROMPT_ARG, "--output-format", "stream-json"],
                          env=env, capture_output=True, text=True, timeout=60)
@@ -274,11 +273,18 @@ def test_the_preload_stops_the_cli_rather_than_run_it_without_its_prompt(tmp_pat
     entry.write_text("process.stdout.write('ran');\n")
     prompt = tmp_path / "p.txt"
     if case == "no placeholder":
-        prompt.write_text(MARK)
+        _private(prompt, MARK)
     env = {**os.environ, "NODE_OPTIONS": f"--require {server.PROMPT_PRELOAD_CJS}", "HR_PROMPT_FILE": str(prompt)}
     args = ["-p", server.PROMPT_ARG] if case == "no file" else ["-p", "something else"]
     out = subprocess.run(["node", str(entry), *args], env=env, capture_output=True, text=True, timeout=60)
     assert out.returncode == 2 and out.stdout == "", (out.stdout, out.stderr)
+
+
+def _private(path: pathlib.Path, text: str) -> pathlib.Path:
+    """A prompt file as _prompt_handover makes it: this process's own, 0600."""
+    path.write_text(text)
+    os.chmod(path, 0o600)
+    return path
 
 
 def _library(tmp_path) -> str:
@@ -299,8 +305,7 @@ _SHOW = ("import json, os, sys\n"
 
 def test_the_library_sets_the_argument_in_the_named_binary_alone(tmp_path):
     so = _library(tmp_path)
-    prompt = tmp_path / "p.txt"
-    prompt.write_text(MARK + "\nsecond line")
+    prompt = _private(tmp_path / "p.txt", MARK + "\nsecond line")
     py = os.path.realpath(sys.executable)
     env = {**os.environ, "LD_PRELOAD": so, "HR_PROMPT_FILE": str(prompt), "HR_PROMPT_EXE": py}
     out = subprocess.run([py, "-c", _SHOW, "run", "--", server.PROMPT_ARG], env=env, capture_output=True, text=True, timeout=60)
@@ -311,7 +316,7 @@ def test_the_library_sets_the_argument_in_the_named_binary_alone(tmp_path):
     assert got["env"] == [None, None, None], "nothing the binary starts loads the library or finds the file"
     assert not prompt.exists()
     # any other program (a launcher in between) passes the placeholder on as it is, and keeps the file
-    prompt.write_text(MARK)
+    _private(prompt, MARK)
     out = subprocess.run([py, "-c", _SHOW, "--", server.PROMPT_ARG], env={**env, "HR_PROMPT_EXE": "/usr/bin/elsewhere"},
                          capture_output=True, text=True, timeout=60)
     assert json.loads(out.stdout)["argv"] == ["--", server.PROMPT_ARG] and prompt.exists()
@@ -322,12 +327,36 @@ def test_the_library_stops_the_binary_rather_than_run_it_without_its_prompt(tmp_
     so = _library(tmp_path)
     prompt = tmp_path / "p.txt"
     if case == "no placeholder":
-        prompt.write_text(MARK)
+        _private(prompt, MARK)
     py = os.path.realpath(sys.executable)
     env = {**os.environ, "LD_PRELOAD": so, "HR_PROMPT_FILE": str(prompt), "HR_PROMPT_EXE": py}
     args = ["--", server.PROMPT_ARG] if case == "no file" else ["--", "something else"]
     out = subprocess.run([py, "-c", "print('ran')", *args], env=env, capture_output=True, text=True, timeout=60)
     assert out.returncode == 2 and out.stdout == "" and "the prompt could not be handed over" in out.stderr
+
+
+@node
+def test_the_preload_refuses_a_prompt_file_others_could_read(tmp_path):
+    """The session's own and private (0600, as _prompt_handover makes it): a 0644 file stops the CLI before it runs."""
+    entry = tmp_path / "fakecli.js"
+    entry.write_text("process.stdout.write('ran');\n")
+    prompt = _private(tmp_path / "p.txt", MARK)
+    os.chmod(prompt, 0o644)
+    env = {**os.environ, "NODE_OPTIONS": f"--require {server.PROMPT_PRELOAD_CJS}", "HR_PROMPT_FILE": str(prompt)}
+    out = subprocess.run(["node", str(entry), "-p", server.PROMPT_ARG], env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 2 and out.stdout == "" and "own private file" in out.stderr, (out.stdout, out.stderr)
+    assert prompt.exists(), "a file that is not the CLI's own private one is left where it is"
+
+
+def test_the_library_refuses_a_prompt_file_others_could_read(tmp_path):
+    so = _library(tmp_path)
+    prompt = _private(tmp_path / "p.txt", MARK)
+    os.chmod(prompt, 0o644)
+    py = os.path.realpath(sys.executable)
+    env = {**os.environ, "LD_PRELOAD": so, "HR_PROMPT_FILE": str(prompt), "HR_PROMPT_EXE": py}
+    out = subprocess.run([py, "-c", "print('ran')", "--", server.PROMPT_ARG], env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 2 and out.stdout == "" and "own private file" in out.stderr, (out.stdout, out.stderr)
+    assert prompt.exists()
 
 
 def test_the_prompt_file_is_made_fresh_each_time(tmp_path):

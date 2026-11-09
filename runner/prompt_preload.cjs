@@ -8,7 +8,9 @@
 // Node loads this before the program's own code. The argument equal to PROMPT_ARG is replaced, in this process,
 // by the file's text, so the program parses the prompt as it would have from its command line, while the
 // command line the process was started with (what `ps` lists, /proc/<pid>/cmdline) holds only the placeholder.
-// The file is the session's own, 0600 (server.py, _prompt_handover), and goes as soon as it is read.
+// The file is the session's own, 0600 (server.py, _prompt_handover), and goes as soon as it is read. It must be
+// this process's own (its owner is the effective uid) and private (no access for group or others), checked on the
+// open file itself: anything else stops the program.
 //
 // What the program starts inherits neither variable: both are taken out of its environment here, so no shell
 // or server it runs loads this file or looks for the prompt. Anything that stops the hand-over stops the
@@ -29,7 +31,19 @@ if (file !== undefined) {
   const at = process.argv.indexOf(PROMPT_ARG);
   let text;
   try {
-    text = fs.readFileSync(file, 'utf8');
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      // the session's own file and no one else's to read (_prompt_handover makes it 0600, as the session): a file
+      // someone else made, or one others could read, is never taken as the prompt. Checked on the open file.
+      const st = fs.fstatSync(fd);
+      if (!st.isFile() || st.uid !== process.geteuid() || (st.mode & 0o077) !== 0) {
+        process.stderr.write('the prompt could not be handed over: it is not this program\'s own private file\n');
+        process.exit(2);
+      }
+      text = fs.readFileSync(fd, 'utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch (e) {
     process.stderr.write(`the prompt could not be read: ${e && e.code ? e.code : 'error'}\n`);
     process.exit(2);
