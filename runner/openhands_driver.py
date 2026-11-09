@@ -231,9 +231,9 @@ def _agent_spec(job: dict) -> dict:
                   "tools": tools,
                   # THE AGENT DOC IS CONTEXT, NOT A FILE THE MODEL MAY OR MAY NOT OPEN. The SDK
                   # loads the workspace's AGENTS.md (and .agents/skills/) as repo skills only when
-                  # asked (AgentContext.load_project_skills, False by default), and it reads them
-                  # afresh on each server's first run, so every turn sees the harness's current
-                  # instructions, workspace contract and skills block. Without this the doc reached
+                  # asked (AgentContext.load_project_skills, False by default), when the
+                  # conversation is created; a resumed conversation keeps that copy, and an edit
+                  # reaches it with the message (server._PINNED_INSTRUCTIONS). Without this the doc reached
                   # the model only when it chose to `cat AGENTS.md` (it did in the smoke turns; a
                   # model that does not never learns where deliverables go or which skills exist).
                   "agent_context": {"load_project_skills": True}}
@@ -366,6 +366,14 @@ def _conversation(base: str, key: str, job: dict, cwd: str) -> tuple[str, bool]:
         body["max_iterations"] = max(1, int(budget))
     _req(f"{base}/api/conversations", key, method="POST", body=body, timeout=120)
     return cid, False
+
+
+def _turn_prompt(job: dict, resumed: bool) -> str:
+    """The message this turn sends. A resumed conversation keeps the AGENTS.md it loaded when it was
+    created; when the instructions changed since, the runner sends the current file to go ahead of
+    the message (server._PINNED_INSTRUCTIONS). A new conversation loads the current file itself, so
+    it gets the message alone."""
+    return (str(job.get("instructions_changed") or "") if resumed else "") + str(job["prompt"])
 
 
 # What a turn's end looks like on the wire. The server reports execution status as an EVENT
@@ -638,7 +646,7 @@ def main() -> int:
         # ceiling here ended a legitimate long turn as "timed out" while the operator's setting
         # said otherwise. The value is the runner's global ceiling, so this loop only ends what
         # the runner would have ended anyway.
-        _run_turn(base, ws_base, key, cid, job["prompt"], state,
+        _run_turn(base, ws_base, key, cid, _turn_prompt(job, resumed), state,
                   float(os.environ.get("HR_OPENHANDS_TURN_SECONDS", "21600")), proc=proc)
     except Exception as exc:  # noqa: BLE001 — the reason belongs in the record, not in a traceback
         tail = _log_tail(logf)

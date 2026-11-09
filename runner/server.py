@@ -2319,8 +2319,57 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         else "CLAUDE.md")
 
 
+def _read_agent_doc(cwd: str, backend: str) -> str:
+    """The instruction file as this turn wrote it, read as the session; "" when there is none."""
+    try:
+        with _fs_as(_session_uid(cwd)):
+            return _agent_doc_path(cwd, backend).read_text()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+# The most of an instruction file a changed-instructions note carries itself. The note rides in the
+# CLI's argv with the message, and one argument is capped at 128 KiB on Linux; a larger file is named
+# for the agent to read instead.
+_NOTE_INLINE_MAX = 64 * 1024
+
+# Bases whose resumed conversation keeps the instruction file it read when the conversation began,
+# and has no signal of its own to read it again: a continued turn after an edit is handed the current
+# file ahead of its message (_instructions_changed_note). Measured on the 0.40.0 image against a
+# recording stand-in (scripts/continued-instructions-check.py): each one's continued request carried
+# the first turn's instructions and not the edited ones. Where they sit: Kimi Code in its session's
+# `profile.bind` record, Grok Build in the conversation's first message, MiMo Code in its session's
+# prefix snapshot, dcode in the agent's checkpointed memory state, OpenHands in the conversation's
+# persisted agent context and system prompt event. Hermes and fast-agent are not here: each keeps
+# the prompt in a store it reads as "build it again" when the value is absent, and is told that way
+# (_hermes_forget_system_prompt, _fast_agent_forget_prompt). Nor is Qoder, whose instructions are
+# its remote Agent's system prompt, which a session keeps from the Agent version it was made with:
+# its driver hands a continued session the edit (qoder_driver.instructions_changed_note).
+_PINNED_INSTRUCTIONS = frozenset({"kimi", "grok", "mimo", "dcode", "openhands"})
+
+
+def _instructions_changed_note(doc_name: str, text: str, path: str = "") -> str:
+    """What a resumed conversation is handed, ahead of its message, when the instructions changed
+    since it began and the base keeps the copy it read then: the current file, said to replace that
+    copy. The shape Claude Code, Codex and dsh give an edited file in a resumed session on their own
+    (the new copy after the old one, and the old one named stale), and what Kimi Code tells its model
+    when the file changes while it runs, with the contents here rather than a request to read them."""
+    body = text.strip()
+    if len(body.encode()) > _NOTE_INLINE_MAX:
+        return ("<system-reminder>\n"
+                f"The {doc_name} instructions changed after this conversation started. The copy in your "
+                f"system prompt is stale and is replaced by the current file: read {path or doc_name} "
+                "now and follow it.\n"
+                "</system-reminder>\n\n")
+    return ("<system-reminder>\n"
+            f"The {doc_name} instructions changed after this conversation started. The contents below "
+            "replace the copy in your system prompt, which is stale: follow these.\n\n"
+            f"{body}\n"
+            "</system-reminder>\n\n")
+
+
 def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict],
-                     environment: dict | None = None) -> None:
+                     environment: dict | None = None) -> bool:
     """Compose the agent's instruction file from (1) the harness's user-authored doc and (2) a managed
     block: the workspace contract, always, plus an 'Available skills' section when skills are
     installed. The user doc is the base; the managed block is appended inside HTML-comment markers.
@@ -2340,9 +2389,14 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     checkpoint (CHECKPOINT_EXCLUDE); hidden from the gateway's file listing. Without it the rule
     read as "writes are restricted to the workspace" while nothing enforces that, and hermes, told
     by its own stop-time check to write under /tmp, spent tool calls and its reply on the conflict
-    (2026-10-19, see _hermes_prepare_env). One rule, and the reality agrees with it."""
+    (2026-10-19, see _hermes_prepare_env). One rule, and the reality agrees with it.
+
+    Answers whether the file now says something it did not say before this turn: the instructions
+    changed since the last turn (a person edited them, or a section that follows the turn did). A
+    base that keeps the copy it read when its conversation started has to be told, or a continued
+    task goes on with the old instructions (see _hermes_forget_system_prompt, _instructions_changed_note)."""
     if backend in ("systemone", "qoder"):
-        return                  # reads no workspace; its instructions travel in the job (_build_systemone, _build_qoder)
+        return False            # reads no workspace; its instructions travel in the job (_build_systemone, _build_qoder)
     p = _agent_doc_path(cwd, backend)
     base = (agent_doc or "").strip()
     lines = [_AGENTS_BEGIN, "## Workspace", "",
@@ -2374,14 +2428,20 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
         lines.append("")
     block = "\n".join(lines).rstrip("\n") + "\n" + _AGENTS_END + "\n"
     body = ((base + "\n\n") if base else "") + block
+    body = body if body.endswith("\n") else body + "\n"
     try:
         # As the session: a link it planted at the doc's name leads nowhere it could not write itself.
         with _fs_as(_session_uid(cwd)):
             # minimax's file lives in the CLI's home, which does not exist before its first turn.
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(body if body.endswith("\n") else body + "\n")
+            try:
+                before = p.read_text()
+            except (OSError, UnicodeDecodeError):
+                before = None
+            p.write_text(body)
+        return before != body
     except Exception:  # noqa: BLE001
-        pass
+        return False
 
 
 # ── auth / provider model ────────────────────────────────────────────────────────
@@ -8729,7 +8789,7 @@ def _kimi_mcp_config(home: pathlib.Path, mcp_servers: list[dict] | None) -> path
 def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                 skills_dir: str | None = None, tools_disabled: list[str] | None = None,
-                max_turns: int | None = None) -> list[str]:
+                max_turns: int | None = None, instructions: str | None = None) -> list[str]:
     """Kimi Code CLI (MoonshotAI/kimi-code, 2.0.0), the successor its vendor moved Kimi CLI to.
 
     The model is defined from the ENVIRONMENT alone: with KIMI_MODEL_NAME set the CLI synthesises a
@@ -8737,7 +8797,13 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     no credential exists at rest. Measured: after a full session the data home held no trace of the
     key. Every turn rides the loopback relay, the qwen rationale unchanged: the real key never
     enters the CLI's environment, request shapes strict endpoints refuse are repaired in flight,
-    and the provider's own "model" passes through for the served-model check."""
+    and the provider's own "model" passes through for the served-model check.
+
+    `instructions` is the agent doc when it changed since the last turn. A resumed conversation keeps
+    the system prompt it was bound with, AGENTS.md included (the session's `profile.bind` record,
+    replayed on resume; the CLI notices a changed file only while it is running), so an edited doc
+    never reached a continued task. It goes ahead of the message instead (_instructions_changed_note):
+    measured on 2.0.0, the resumed request then carried the edited doc after the old one."""
     pr = provider or "openai-api"
     if pr not in KIMI_PROVIDERS:
         raise HTTPException(400, f"unknown kimi provider '{pr}' (one of {sorted(KIMI_PROVIDERS)})")
@@ -8771,8 +8837,11 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     _kimi_mcp_config(home, mcp_servers)
     # -p runs one prompt without the TUI, with automatic permission (it refuses --yolo/--auto
     # beside it); stream-json is one message per line. The process's cwd is the workspace.
+    resuming = bool(resume_session_id) and _kimi_has_session(home, resume_session_id)
+    if resuming and instructions and instructions.strip():
+        prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "kimi"))) + prompt
     cmd = ["kimi", "-p", prompt, "--output-format", "stream-json"]
-    if resume_session_id and _kimi_has_session(home, resume_session_id):
+    if resuming:
         cmd += ["-r", resume_session_id]
     else:
         # The agent is bound when a session is created and restored on resume, and the CLI refuses
@@ -9195,7 +9264,8 @@ def _grok_config(home: pathlib.Path, model: str, base_url: str,
 def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                 tools_disabled: list[str] | None = None, max_turns: int | None = None,
-                partial: bool = False) -> list[str]:
+                partial: bool = False,
+                instructions: str | None = None) -> list[str]:
     """Grok Build (1.0.41), headless: `grok -p … --output-format streaming-messages-json`, which is
     Claude Code's stream-json (system/init with session_id, assistant/user messages, a terminal
     result), so the normaliser is the claude passthrough plus two repairs (see _grok_to_claude).
@@ -9251,6 +9321,11 @@ def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     env["NO_COLOR"] = "1"
     sid = (resume_session_id or "").strip().lower()
     resumed = bool(sid) and _grok_has_session(home, sid)
+    if resumed and instructions and instructions.strip():
+        # The conversation carries the AGENTS.md it read on its first turn (its first message, as
+        # always-applied workspace rules) and a resumed one reads none again: an edit is handed over
+        # with the message (_PINNED_INSTRUCTIONS).
+        prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "grok"))) + prompt
     # `--single=<prompt>` so a prompt that begins with a dash is the prompt, not a flag (measured).
     cmd = ["grok", f"--single={prompt}", "-m", _GROK_MODEL_KEY,
            "--output-format", "streaming-messages-json", "--always-approve"]
@@ -10224,7 +10299,8 @@ def _mimo_npm(auth: Auth, model: str, pr: str) -> str:
 
 def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-                skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
+                skills_dir: str | None = None, tools_disabled: list[str] | None = None,
+                instructions: str | None = None) -> list[str]:
     pr = provider or "openai-api"
     if pr not in MIMO_PROVIDERS:
         raise HTTPException(400, f"unknown mimo provider '{pr}' (one of {sorted(MIMO_PROVIDERS)})")
@@ -10263,6 +10339,11 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
            "--thinking"]
     if resume_session_id and _opencode_has_session(env, resume_session_id, share="mimocode"):
         cmd += ["-s", resume_session_id]
+        if instructions and instructions.strip():
+            # Unlike opencode, mimo pins a session's system prompt, AGENTS.md included, in its
+            # prefix snapshot for the provider's cache, so a resumed session reads none again: an
+            # edit is handed over with the message (_PINNED_INSTRUCTIONS).
+            prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "mimo"))) + prompt
     elif resume_session_id:
         # opencode's guard, unchanged: naming a session this database does not hold exits 1 before
         # the first event, and since every later turn passes the same dead id the conversation
@@ -11644,7 +11725,8 @@ def _openhands_mcp_config(mcp_servers: list[dict] | None) -> dict:
 def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                      resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                      tools_disabled: list[str] | None = None,
-                     max_turns: int | None = None) -> list[str]:
+                     max_turns: int | None = None,
+                     instructions: str | None = None) -> list[str]:
     """OpenHands V1, driven through `openhands-agent-server` (OpenHands/agent-sdk, MIT).
 
     NOT the CLI. PyPI `openhands` is OpenHands/openhands-cli, whose README opens with "This project
@@ -11718,6 +11800,13 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
            # the server's own default is 500 iterations per run; an operator's budget that the
            # backend drops is the quiet lie kimi shipped at 1000 steps
            "max_turns": max_turns}
+    if instructions and instructions.strip():
+        # The conversation keeps the AGENTS.md it loaded when it was created, in its persisted agent
+        # context and its system prompt event, and a resumed one loads none again: an edit is handed
+        # over with the message. Only the driver knows whether the conversation is resumed (it asks
+        # the agent-server), so it adds this then and only then (_PINNED_INSTRUCTIONS).
+        job["instructions_changed"] = _instructions_changed_note(
+            "AGENTS.md", instructions, str(_agent_doc_path(cwd, "openhands")))
     return _driver_cmd(OPENHANDS_PYTHON, OPENHANDS_DRIVER, job, env)
 
 
@@ -14503,7 +14592,8 @@ def _dcode_config(cwd: str) -> None:
 def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                  resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                  tools_disabled: list[str] | None = None,
-                 max_turns: int | None = None) -> list[str]:
+                 max_turns: int | None = None,
+                 instructions: str | None = None) -> list[str]:
     pr = provider or "openai-api"
     if pr not in DCODE_PROVIDERS:
         raise HTTPException(400, f"unknown dcode provider '{pr}' (one of {sorted(DCODE_PROVIDERS)})")
@@ -14561,6 +14651,12 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
         # Nothing declared: its auto-discovery would otherwise pick up a config in the workspace,
         # which is the task's own file rather than the harness's declaration.
         cmd.append("--no-mcp")
+    known = bool(resume_session_id) and _dcode_session_present(cwd, cmd, resume_session_id)
+    if known and instructions and instructions.strip():
+        # The agent's memory middleware reads AGENTS.md into the thread's checkpointed state once, and
+        # a resumed thread keeps that copy: an edit is handed over with the message
+        # (_PINNED_INSTRUCTIONS).
+        prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "dcode"))) + prompt
     # The driver speaks ACP to that process and claude's stream-json to the runner.
     job = {"argv": cmd, "cwd": str(pathlib.Path(cwd).resolve()),
            # The task rides the protocol, not the command line: ACP takes it in session/prompt.
@@ -14571,7 +14667,7 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
            # the store DOES have (resume_known) must load, or the turn fails with the agent's own
            # reason: it is never answered as a new conversation without a word.
            "resume": resume_session_id or "",
-           "resume_known": bool(resume_session_id) and _dcode_session_present(cwd, cmd, resume_session_id),
+           "resume_known": known,
            # A cap of its own, under the runner's, so a turn that never answers is reported as the
            # limit rather than as an unexplained failure.
            "timeout": MAX_TURN_SECONDS}
@@ -14650,6 +14746,39 @@ def _fast_agent_set_model(cwd: str, session_id: str, model: str) -> bool:
             want = f"generic.{model}"
             if spec.get("model_spec") != want:
                 spec["model_spec"] = want
+                changed = True
+        if not changed:
+            return False
+        tmp = path.with_suffix(".json.hr-tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        os.replace(tmp, path)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _fast_agent_forget_prompt(cwd: str, session_id: str) -> bool:
+    """Let a resumed session take its instruction from this turn's -i file, not from the store.
+
+    fast-agent saves each agent's resolved instruction with the session (`resolved_prompt`) and a
+    load puts it back over the one the agent was started with (session/hydrator.py
+    _restore_agent_prompt), so a resumed session read AGENTS.md once: measured on the 0.40.0 image,
+    a continued turn's system message was the first turn's instructions and not the edited ones. An
+    absent `resolved_prompt` is fast-agent's own "nothing to restore", and the agent then keeps the
+    instruction -i read this turn. Only that field changes, as in _fast_agent_set_model: the history
+    is a file of its own and is not touched. True when a stored prompt was let go."""
+    path = _fast_agent_session_file(cwd, session_id)
+    try:
+        with path.open(encoding="utf-8") as fh:
+            doc = json.load(fh)
+        agents = ((doc.get("continuation") or {}).get("agents") or {})
+        if not isinstance(agents, dict):
+            return False
+        changed = False
+        for spec in agents.values():
+            if isinstance(spec, dict) and spec.get("resolved_prompt") is not None:
+                spec["resolved_prompt"] = None
                 changed = True
         if not changed:
             return False
@@ -14907,7 +15036,8 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
                       resume_session_id: str | None = None,
                       mcp_servers: list[dict] | None = None,
                       tools_disabled: list[str] | None = None,
-                      max_turns: int | None = None, vision: bool = True) -> list[str]:
+                      max_turns: int | None = None, vision: bool = True,
+                      instructions_changed: bool = False) -> list[str]:
     pr = provider or "openai-api"
     if pr not in FAST_AGENT_PROVIDERS:
         raise HTTPException(400, f"unknown fast-agent provider '{pr}' "
@@ -14967,6 +15097,10 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
         # The store is pointed at this turn's model first: the loaded session keeps its own, and
         # neither --model nor ACP changes it (measured).
         _fast_agent_set_model(cwd, resume_session_id, model)
+        if instructions_changed:
+            # ...and the prompt it stored is let go when the instructions changed, so the agent keeps
+            # the one -i reads now (_fast_agent_forget_prompt).
+            _fast_agent_forget_prompt(cwd, resume_session_id)
         if not vision:
             # ...and an image an earlier model attached is not sent to one that refuses images.
             _fast_agent_drop_media(cwd, resume_session_id, model)
@@ -16145,6 +16279,36 @@ def _hermes_db_ro(db_path: str) -> sqlite3.Connection | None:
         return db
     except Exception:  # noqa: BLE001 — db not created yet / mid-write
         return None
+
+
+def _hermes_forget_system_prompt(db_path: str, session_id: str) -> bool:
+    """Make a resumed Hermes session build its system prompt again, from the files as they are now.
+
+    Hermes keeps the system prompt it built on a session's first turn in its state.db and replays it
+    verbatim on every continuation, for the provider's prefix cache (agent/conversation_loop.py,
+    _restore_or_build_system_prompt), so it reads AGENTS.md once per conversation: an edit to the
+    harness's instructions never reached a continued task. Measured on 0.19.0 against a recording
+    stand-in: the continued turn's request carried the first turn's instructions and not the edited
+    ones. A NULL stored prompt is Hermes's own signal to rebuild, the one it sets itself when a
+    session's model changes (hermes_state.update_session_model); the conversation is in the messages
+    table and is not touched. Called on the runner's thread as the session (_fs_as), so a journal the
+    write creates is the session's. True when a stored prompt was cleared."""
+    if not os.path.isfile(db_path):
+        return False
+    try:
+        db = sqlite3.connect(db_path, timeout=5)
+        try:
+            cur = db.execute("UPDATE sessions SET system_prompt = NULL WHERE id = ? AND system_prompt IS NOT NULL",
+                             (session_id,))
+            db.commit()
+            return cur.rowcount > 0
+        finally:
+            db.close()
+    except sqlite3.Error as e:
+        # The turn still runs, on the instructions the session started with; said, not hidden.
+        print(f"[hermes] the stored system prompt could not be cleared, so this turn keeps the "
+              f"instructions its session started with: {type(e).__name__}: {str(e)[:160]}", flush=True)
+        return False
 
 
 def _hermes_session_row(db_path: str, sid: str) -> dict | None:
@@ -17459,7 +17623,11 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         # The layer is mounted read-only in THIS sandbox; a remote runtime sees only what its driver
         # uploads. Said here, before anything starts, rather than run without it.
         raise HTTPException(400, f"the {backend} backend runs in a remote runtime and cannot mount an environment")
-    _write_agent_doc(cwd, backend, agent_doc, installed_skills, environment=turn_environment)
+    doc_changed = _write_agent_doc(cwd, backend, agent_doc, installed_skills, environment=turn_environment)
+    # The current file, for a base that keeps its first copy, when there is a conversation to continue
+    # and the instructions changed since its last turn; each builder adds it only when it resumes.
+    changed_doc = (_read_agent_doc(cwd, backend) or None) if (
+        doc_changed and req.resume_session_id and backend in _PINNED_INSTRUCTIONS) else None
     # The harness's own variables under the runner's, so nothing a caller names shadows the
     # runner's credentials or paths; the platform's HR_ names come after and win (below).
     env = {**_caller_env(req.env), **_child_env()}
@@ -17551,6 +17719,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
                                              max_turns=req.max_turns, mcp_servers=req.mcp_servers,
                                              vision_auth=req.vision_auth, own_memory_off=platform_memory)
+            if req.resume_session_id and doc_changed:
+                _hermes_forget_system_prompt(os.path.join(env["HERMES_HOME"], "state.db"), req.resume_session_id)
         elif backend == "dsh":
             model = model or DSH_DEFAULT_MODEL
             cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
@@ -17579,7 +17749,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             cmd = _build_kimi(req.provider, auth, model, req.prompt, cwd, env,
                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                               skills_dir=kimi_skills, tools_disabled=req.tools_disabled,
-                              max_turns=req.max_turns)
+                              max_turns=req.max_turns, instructions=changed_doc)
         elif backend == "minimax":
             model = model or MINIMAX_DEFAULT_MODEL
             # Skills are already on disk in the home _write_skills chose, which the CLI discovers itself;
@@ -17594,7 +17764,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             cmd = _build_grok(req.provider, auth, model, req.prompt, cwd, env,
                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
                               tools_disabled=req.tools_disabled, max_turns=req.max_turns,
-                              partial=bool(req.partial_messages))
+                              partial=bool(req.partial_messages), instructions=changed_doc)
         elif backend == "aider":
             model = model or AIDER_DEFAULT_MODEL
             # aider has no skill loader and no instruction-file convention: the driver puts the agent
@@ -17630,7 +17800,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             cmd = _build_openhands(req.provider, auth, model, req.prompt, cwd, env,
                                    resume_session_id=req.resume_session_id,
                                    mcp_servers=req.mcp_servers,
-                                   tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+                                   tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                                   instructions=changed_doc)
         elif backend == "agentzero":
             model = model or AGENTZERO_DEFAULT_MODEL
             cmd = _build_agentzero(req.provider, auth, model, req.prompt, cwd, env,
@@ -17690,7 +17861,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             skills_dir = os.path.join(cwd, ".harness", "skills") if installed_skills else None
             cmd = _build_mimo(req.provider, auth, model, req.prompt, cwd, env,
                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                              skills_dir=skills_dir, tools_disabled=req.tools_disabled)
+                              skills_dir=skills_dir, tools_disabled=req.tools_disabled,
+                              instructions=changed_doc)
         elif backend == "roder":
             model = model or roder_backend.DEFAULT_MODEL
             cmd = roder_backend.build(req.provider, auth, model, req.prompt, cwd, env,
@@ -17716,12 +17888,13 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                     resume_session_id=req.resume_session_id,
                                     mcp_servers=req.mcp_servers,
                                     tools_disabled=req.tools_disabled, max_turns=req.max_turns,
-                                    vision=bool(req.vision))
+                                    vision=bool(req.vision), instructions_changed=doc_changed)
         elif backend == "dcode":
             model = model or DCODE_DEFAULT_MODEL
             cmd = _build_dcode(req.provider, auth, model, req.prompt, cwd, env,
                                resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                               tools_disabled=req.tools_disabled, max_turns=req.max_turns)
+                               tools_disabled=req.tools_disabled, max_turns=req.max_turns,
+                               instructions=changed_doc)
         elif backend == "docker-agent":
             model = model or DOCKER_AGENT_DEFAULT_MODEL
             cmd = _build_docker_agent(req.provider, auth, model, req.prompt, cwd, env,
