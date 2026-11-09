@@ -71,6 +71,19 @@ export interface TraceCard {
 export interface ChatTarget { name: string; backend: string | null; model?: string; baseId?: string;
   /** The runtime this harness runs on and the model its settings default to (the footer names both). */
   runtime?: string; defaultModel?: string }
+/** A branch the server would not make (setup/branch.ts), in a person's words; '' for anything else, which keeps the
+ *  server's own sentence. Its reasons speak of checkpoints and responses, and every one of them comes to the same:
+ *  this reply can't be branched (an older reply, one whose files weren't kept, one that was deleted). Sending again
+ *  won't change that, so it says where to go instead. A 404 is the task it goes on from, out of reach now. */
+export const BRANCH_REFUSED = "This reply can't be branched. Branch from another reply, or carry on in the original task.";
+export const BRANCH_SOURCE_GONE = "The task this goes on from can't be opened any more, so it can't be branched.";
+export function branchRefusal(branchFrom: string | undefined, status: unknown, code: string): string {
+  if (!branchFrom) return '';
+  if (code === 'branch_unavailable') return BRANCH_REFUSED;
+  if (status === 404) return BRANCH_SOURCE_GONE;
+  return '';
+}
+
 /** `imported`: part of an earlier turn brought with the task's first request (a recorded run carried
  *  into a task of your own, start/fork.ts; a branch's history), never run in this task. */
 export interface UserMsg { role: 'user'; text: string; attachments?: { name: string; dataUri?: string }[]; imported?: true }
@@ -896,7 +909,7 @@ export function useConversationTurn({ harnessId, sessionId, target, onRan, onSes
           ...taskFacts(),
         });
         if (pendId) dropPending(pendId);
-        const detail = e instanceof Error ? e.message : String(e);
+        const detail = branchRefusal(opts.branchFrom, st, code) || (e instanceof Error ? e.message : String(e));
         if (!(sessionId ?? sidRef.current)) onRefused?.(text, sent.map((f) => ({ name: f.name, dataUri: f.dataUri })));
         updateLast((a) => { a.blocks = withText(a.blocks, answered ? `\n\nError: ${detail}` : '\n\nNot sent. Check your connection and try again.'); a.status = 'failed'; });
       }

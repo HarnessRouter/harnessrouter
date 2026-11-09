@@ -138,6 +138,43 @@ describe('a branch (issue #477)', () => {
   });
 });
 
+describe('a branch the server would not make', () => {
+  const refuse = (status: number, code: string, message: string) => mockChat.stream.mockImplementation(async () => {
+    throw Object.assign(new Error(message), { status, code });
+  });
+  const lastText = () => {
+    const a = [...api.msgs].reverse().find((m) => m.role === 'assistant') as AsstMsg;
+    return a.blocks.map((b) => (b.kind === 'text' ? b.text : '')).join('');
+  };
+  test('a reply that can’t be branched is said in plain words, with where to go instead, never the server’s jargon', async () => {
+    refuse(409, 'branch_unavailable', 'This response has no restorable checkpoint.');
+    await render(<Conv sid={null} />);
+    let took: boolean | undefined;
+    await act(async () => { took = await api.send('Try another way', [], { branchFrom: 'r2' }); });
+    expect(took).toBe(false);
+    expect(lastText()).toContain(C.BRANCH_REFUSED);
+    expect(lastText()).not.toMatch(/checkpoint|response/i);
+    expect((api.msgs[api.msgs.length - 1] as AsstMsg).status).toBe('failed');
+  });
+  test('the task it goes on from out of reach (404) says so', async () => {
+    refuse(404, 'session_not_found', 'No session with that id.');
+    await render(<Conv sid={null} />);
+    await act(async () => { await api.send('Try another way', [], { branchFrom: 'r2' }); });
+    expect(lastText()).toContain(C.BRANCH_SOURCE_GONE);
+    expect(lastText()).not.toContain('session');
+  });
+  test('any other refusal of a branch keeps the server’s sentence, and an ordinary message is never read as a branch', async () => {
+    refuse(429, 'one_at_a_time', 'One task at a time on this setup. Try again when it ends.');
+    await render(<Conv sid={null} />);
+    await act(async () => { await api.send('Try another way', [], { branchFrom: 'r2' }); });
+    expect(lastText()).toContain('One task at a time on this setup.');
+    refuse(409, 'branch_unavailable', 'A server sentence.');
+    await act(async () => { await api.send('Hello'); });
+    expect(lastText()).toContain('A server sentence.');
+    expect(C.branchRefusal(undefined, 404, 'branch_unavailable')).toBe('');
+  });
+});
+
 describe('a turn’s state as the record says it', () => {
   test.each(['queued', 'starting', 'running', 'in_progress'])('%s is live: running', (s) => {
     expect(C.turnStatus(s)).toBe('running');

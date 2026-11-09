@@ -257,7 +257,8 @@ describe('a branched task, opened again', () => {
     mockConv.msgs = BRANCHED;
     mockChat.origin.mockImplementation(async (sid: string) => (sid === 's2' ? { title: 'a', branchedFrom: 's1' } : { title: '', branchedFrom: null, missing: true }));
     await open({ key: 's2', resume: 's2' });
-    expect(marks()[0].textContent).toBe('Continued from a deleted task');
+    // deleted, or out of this person's reach: the service answers both alike, so it says only what is sure
+    expect(marks()[0].textContent).toBe('Continued from an earlier task');
     expect(marks()[0].querySelector('a')).toBeNull();
   });
 
