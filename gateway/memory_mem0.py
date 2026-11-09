@@ -103,6 +103,12 @@ def _split(text: str, titled: bool) -> tuple[str, str]:
     return head.strip(), rest.strip()
 
 
+def _drawn_attrs(episode: dict) -> dict:
+    """The attributes of what Mem0 draws from an observed episode. Mem0 keeps no episode: an add's metadata goes onto
+    each fact it draws, and nothing an engine draws stands (mp.drawn_by_the_engine), so `standing` is left out."""
+    return {k: v for k, v in (episode.get("attributes") or {}).items() if k != "standing"}
+
+
 class Mem0(mp.Provider):
     id = "mem0"
 
@@ -262,7 +268,7 @@ class Mem0(mp.Provider):
             # each text part is one message, under the role it carries (mem0 takes user, assistant, system)
             msgs = [{"role": p.get("role") if p.get("role") in ("user", "assistant", "system") else "user", "content": p["text"]}
                     for p in e.get("content") or [] if p.get("text")]
-            meta = self._meta({"type": "fact", "attributes": e.get("attributes") or {}}, {"kind": "provider", "id": "mem0"})
+            meta = self._meta({"type": "fact", "attributes": _drawn_attrs(e)}, {"kind": "provider", "id": "mem0"})
             meta[_RESERVED + "observed_by"] = f"{writer.get('kind')}:{writer.get('id')}"
             # custom_instructions: the Platform's own guidance for what its extraction keeps, per add (mem0's client sends
             # it in the same /v3/memories/add/ body, AddMemoryOptions at the pinned commit)
@@ -410,7 +416,7 @@ class Mem0(mp.Provider):
         """A record stated with `standing` has it in its metadata, which mem0 filters on itself. A fact mem0 drew from
         an observed turn carries that turn's metadata, `standing` too when it was sent with the turn, and names no
         record it came from: it is told by its writer, mem0 on an observer's behalf (`hr_observed_by`), which nothing
-        else here is written as. It never stands (mp.set_as_a_record)."""
+        else here is written as. It never stands (mp.drawn_by_the_engine); observe no longer sends it (_drawn_attrs)."""
         got = await self.list(mid, {"filters": {"field": "attributes.standing", "op": "eq", "value": True}, "limit": 50})
         return mp.within_budget([x for x in got["records"] if x["status"] == "active" and not self._observed(x)], budget)
 
@@ -652,7 +658,7 @@ class Mem0Server(Mem0):
         for e in episodes:
             msgs = [{"role": p.get("role") if p.get("role") in ("user", "assistant", "system") else "user", "content": p["text"]}
                     for p in e.get("content") or [] if p.get("text")]
-            meta = self._meta({"type": "fact", "attributes": e.get("attributes") or {}}, {"kind": "provider", "id": "mem0"})
+            meta = self._meta({"type": "fact", "attributes": _drawn_attrs(e)}, {"kind": "provider", "id": "mem0"})
             meta[_RESERVED + "observed_by"] = f"{writer.get('kind')}:{writer.get('id')}"
             # prompt: the server's per-add guidance for its extraction (MemoryCreate.prompt, which Memory.add places as the
             # extraction's custom instructions at the pinned commit, 753496cf)

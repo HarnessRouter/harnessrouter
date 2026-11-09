@@ -12,7 +12,7 @@ import re
 import time
 import uuid
 
-from memory_plane import MemoryError, Provider, record_words, said, set_as_a_record, tokens_of
+from memory_plane import MemoryError, Provider, drawn_by_the_engine, record_words, said, tokens_of
 
 _OPEN = None
 
@@ -219,7 +219,7 @@ class FixtureProvider(Provider):
 
     async def prime(self, mid, budget):
         heads = [r for r in self._current(mid) if r.get("status") == "active" and (r.get("attributes") or {}).get("standing") is True
-                 and set_as_a_record(r)]
+                 and not drawn_by_the_engine(r)]
         heads.sort(key=lambda r: str((r.get("time") or {}).get("written_at") or ""), reverse=True)
         kept, used, cut = [], 0, False
         for r in heads:

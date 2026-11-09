@@ -1,10 +1,10 @@
 """What stands: the records placed in every agent's instructions without being asked for (memory_plane.prime,
 memory_tools.doc_section). Standing records are instructions, so two rules hold that recall's lines don't need:
 
-  1. only a record someone set as one stands: a person, an agent at a person's word, the operator. A conversation
-     kept as it happened never does, nor anything an engine drew from one, whatever attributes it carries. Before
-     this, `standing` sent with an observed conversation reached every fact Mem0 drew from it (Mem0 copies the add's
-     metadata onto each), and the fixture and ReMe primed the conversation itself;
+  1. nothing an engine drew from another record stands, whatever attributes it carries. Before this, `standing` sent
+     with an observed conversation reached every fact Mem0 drew from it (Mem0 copies the add's metadata onto each).
+     Any record someone wrote may still stand, a conversation kept as it happened among them (protocol 2026-10-19
+     §4.4, "Any record may carry it");
   2. each line says who set it and on which day, as each recalled line says where it came from.
 
 The engines' records are made by their own adapters from the shapes their servers answer, as in
@@ -58,22 +58,23 @@ def ada():
         yield lambda m, path, **kw: getattr(c, m)(path, headers=h, **kw)
 
 
-def test_standing_sent_with_a_conversation_is_never_given_to_an_agent(ada):
+def test_a_conversation_kept_with_standing_keeps_it_as_the_protocol_says(ada):
+    """Any record may carry `standing` (protocol 2026-10-19 §4.4), an observed conversation too: kept as sent, and read
+    back by prime. Narrowing that is for the next protocol version."""
     mid = ada("post", "/v1/memories", json={"provider": "fixture", "name": "Desk", "description": "How the desk works."}).json()["id"]
     rule = ada("post", f"/v1/memories/{mid}/records", json={"type": "procedure", "title": "Quote prices in euros",
                                                             "attributes": {"standing": True}}).json()
     seen = ada("post", f"/v1/memories/{mid}/observe", json={"episodes": [
         {"content": [{"type": "text", "role": "user", "text": ORDER}], "attributes": {"standing": True, "session_id": "sess_a"}}]})
     assert seen.status_code == 200, seen.text
-    primed = ada("get", f"/v1/memories/{mid}/prime").json()["records"]
-    assert [r["id"] for r in primed] == [rule["id"]], [mt.record_words(r) for r in primed]
-    # the conversation is kept as it was said, without the one attribute that would make it an instruction
     ep = ada("get", f"/v1/memories/{mid}/records?type=episode").json()["data"]
-    assert len(ep) == 1 and ep[0]["attributes"] == {"session_id": "sess_a"}
+    assert len(ep) == 1 and ep[0]["attributes"] == {"standing": True, "session_id": "sess_a"}
+    primed = ada("get", f"/v1/memories/{mid}/prime").json()["records"]
+    assert sorted(r["id"] for r in primed) == sorted([rule["id"], ep[0]["id"]])
 
 
-def test_mem0_never_receives_standing_with_a_conversation(monkeypatch):
-    """Mem0 copies an add's metadata onto every fact it draws: the one observe path leaves `standing` out of it."""
+def test_mem0_is_never_sent_standing_for_what_it_draws(monkeypatch):
+    """Mem0 keeps no episode: an add's metadata goes onto every fact it draws, so `standing` is left out of it."""
     sent = _wire(monkeypatch, memory_mem0, lambda *a: {"results": []})
     prov = memory_mem0.Mem0Server("k", "http://vendor.test")
     run(mp.observe(prov, "hmem_m", [{"content": [{"type": "text", "role": "user", "text": ORDER}],
@@ -110,12 +111,12 @@ def test_an_entity_graphiti_drew_from_a_conversation_never_stands(monkeypatch):
     assert [x["title"] for x in got["records"]] == ["Quote prices in euros"]
 
 
-def test_a_conversation_reme_kept_never_stands(monkeypatch):
-    ep = "digest/hmem_r/episodes/hrec_" + "b" * 32 + ".md"
+def test_a_note_reme_drew_from_a_conversation_never_stands(monkeypatch):
+    note = "digest/hmem_r/notes/hrec_" + "b" * 32 + ".md"
     st = "digest/hmem_r/records/hrec_" + "c" * 32 + ".md"
-    files = {ep: ({"hr_id": "hrec_" + "b" * 32, "hr_type": "episode", "hr_status": "active", "hr_written_at": "2026-11-06T09:00:00Z",
-                   "hr_attributes": {"standing": True}, "hr_writer": {"kind": "provider", "id": "reme", "on_behalf_of": "member:hrn_1"}},
-                  "user: " + ORDER),
+    files = {note: ({"hr_id": "hrec_" + "b" * 32, "hr_type": "note", "hr_status": "active", "hr_written_at": "2026-11-06T09:00:00Z",
+                     "hr_attributes": {"standing": True}, "hr_writer": {"kind": "provider", "id": "reme", "on_behalf_of": "member:hrn_1"},
+                     "hr_refs": [{"rel": "derived_from", "memory_id": "hmem_r", "record_id": "hrec_" + "d" * 32}]}, ORDER),
              st: ({"hr_id": "hrec_" + "c" * 32, "hr_type": "procedure", "hr_status": "active", "hr_written_at": "2026-11-05T09:00:00Z",
                    "hr_title": "Quote prices in euros", "hr_attributes": {"standing": True}, "hr_writer": PERSON}, "")}
 
@@ -155,16 +156,17 @@ def _r(rid, by, *, kind="procedure", refs=(), at="2026-11-06T09:00:00Z"):
             "time": {"written_at": at}}
 
 
-def test_whatever_a_provider_answers_only_what_was_set_as_a_record_stands(monkeypatch):
+def test_whatever_a_provider_answers_nothing_an_engine_drew_stands(monkeypatch):
     rows = [_r("by_a_person", PERSON), _r("by_an_agent", AGENT),
             _r("revised_by_the_server", {"kind": "provider", "id": "answers", "on_behalf_of": "member:ada@example.com"}, refs=["contradicts"]),
             _r("a_conversation", AGENT, kind="episode"),
             _r("drawn_by_the_engine", {"kind": "provider", "id": "answers"}, kind="fact", refs=["derived_from"])]
     monkeypatch.setitem(mp.PROVIDERS, "answers", _Answers(rows))
     got = run(mp.prime(ORG, [{"id": "hmem_x", "provider": "answers"}], 4000))
-    assert [r["id"] for r in got["records"]] == ["by_a_person", "by_an_agent", "revised_by_the_server"]
-    # an adapter's own cut counts only what stands: a newer conversation never takes the place of what does
-    newer = [_r("a_conversation", AGENT, kind="episode", at="2026-11-09T09:00:00Z"), _r("by_a_person", PERSON)]
+    assert [r["id"] for r in got["records"]] == ["by_a_person", "by_an_agent", "revised_by_the_server", "a_conversation"]
+    # an adapter's own cut counts only what stands: a newer drawn fact never takes the place of what does
+    newer = [_r("drawn_by_the_engine", {"kind": "provider", "id": "answers"}, kind="fact", refs=["derived_from"], at="2026-11-09T09:00:00Z"),
+             _r("by_a_person", PERSON)]
     assert [r["id"] for r in mp.within_budget(newer, 1)["records"]] == ["by_a_person"]
 
 

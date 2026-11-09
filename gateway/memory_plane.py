@@ -662,15 +662,8 @@ def clean_record(record: dict) -> dict:
 
 
 async def observe(prov: "Provider", mid: str, episodes: list[dict], writer: dict) -> dict:
-    """Episodes kept, cleaned first. Every observer comes through here: a person's request and a finished task.
-    A conversation never stands (set_as_a_record), so `standing` sent with one is not kept: an engine copies an
-    episode's attributes onto what it draws from it, and nothing drawn from a conversation may stand either."""
-    def plain(e: dict) -> dict:
-        attrs = e.get("attributes")
-        if isinstance(attrs, dict) and "standing" in attrs:
-            e = {**e, "attributes": {k: v for k, v in attrs.items() if k != "standing"}}
-        return {**e, "content": _clean_parts(e.get("content"))}
-    return await prov.observe(mid, [plain(e) for e in episodes], writer)
+    """Episodes kept, cleaned first. Every observer comes through here: a person's request and a finished task."""
+    return await prov.observe(mid, [{**e, "content": _clean_parts(e.get("content"))} for e in episodes], writer)
 
 
 _UNREAD_BELOW = "The memories below this one couldn't be read just now, so nothing was deleted. Try again in a moment."
@@ -793,24 +786,21 @@ def record_words(r: dict) -> str:
     return "\n".join(x for x in parts if x)
 
 
-def set_as_a_record(r: dict) -> bool:
-    """Whether a record can stand: one someone wrote as a record (a person, an agent at a person's word, the operator),
-    never a conversation kept as it happened (an episode) nor what an engine drew from one, whatever its attributes
-    say. An observed turn's attributes reach every fact an engine draws from it (Mem0 copies the add's metadata onto
-    each), and a turn can say anything: without this, `standing` sent with a conversation put what an engine made of
-    it into every later agent's instructions. Drawn: written by the provider and derived from another record. A record
-    the server revised on a member's behalf (a contradiction noted, its time closed) still stands."""
-    if str(r.get("type") or "") == "episode":
-        return False
+def drawn_by_the_engine(r: dict) -> bool:
+    """Whether an engine drew a record from another one: written by the provider and derived from another record. What
+    an engine draws never stands, whatever its attributes say: an observed turn's attributes reach every fact drawn
+    from it (Mem0 copies an add's metadata onto each), so `standing` sent with a conversation put what an engine made
+    of it into every later agent's instructions. Any record someone wrote may stand (protocol 2026-10-19 §4.4), a
+    conversation kept as it happened among them; a record the server revised on a member's behalf (a contradiction
+    noted, its time closed) still does."""
     w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
-    drawn = any(isinstance(x, dict) and x.get("rel") == "derived_from" for x in r.get("references") or [])
-    return not (w.get("kind") == "provider" and drawn)
+    return w.get("kind") == "provider" and any(isinstance(x, dict) and x.get("rel") == "derived_from" for x in r.get("references") or [])
 
 
 def within_budget(rows: list[dict], budget: int) -> dict:
     """A provider's answer to `prime`: its standing records, newest first, cut to `budget` tokens
-    with the first always kept. Only what was set as a record (set_as_a_record) is counted, before the cut."""
-    rows = sorted([x for x in rows if set_as_a_record(x)], key=lambda x: str((x.get("time") or {}).get("written_at") or ""), reverse=True)
+    with the first always kept. What an engine drew is never counted (drawn_by_the_engine), before the cut."""
+    rows = sorted([x for x in rows if not drawn_by_the_engine(x)], key=lambda x: str((x.get("time") or {}).get("written_at") or ""), reverse=True)
     kept, used, cut = [], 0, False
     for x in rows:
         cost = tokens_of(record_words(x))
@@ -830,8 +820,8 @@ async def prime(org: str, memories: list[dict], budget: int) -> dict:
     for m in memories:
         got = await (await provider_of(m)).prime(str(m["id"]), budget)
         truncated = truncated or bool(got.get("truncated"))
-        # every provider's answer, whichever way it was read (a relayed server's among them), holds to set_as_a_record
-        rows += [(r, str(m["id"])) for r in got.get("records") or [] if set_as_a_record(r)]
+        # every provider's answer, whichever way it was read (a relayed server's among them): nothing an engine drew
+        rows += [(r, str(m["id"])) for r in got.get("records") or [] if not drawn_by_the_engine(r)]
     rows.sort(key=lambda x: str(((x[0].get("time") or {}).get("written_at")) or ""), reverse=True)
     kept, used = [], 0
     for r, mid in rows:
