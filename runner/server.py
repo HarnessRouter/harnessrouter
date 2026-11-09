@@ -14180,9 +14180,10 @@ def _vibe_profile(home: pathlib.Path, model: str) -> None:
 
 
 def _vibe_export(cwd: str) -> dict:
-    """This turn's export.json, or {} when the run died before writing one."""
+    """This turn's export.json, or {} when the run died before writing one. Read as the session: the file
+    is in its tree, and a link it planted at that name leads nowhere it could not read itself."""
     try:
-        with open(_vibe_out(cwd) / "export.json", encoding="utf-8") as fh:
+        with _fs_as(_session_uid(cwd)), open(_vibe_out(cwd) / "export.json", encoding="utf-8") as fh:
             obj = json.load(fh)
         return obj if isinstance(obj, dict) else {}
     except (OSError, ValueError):

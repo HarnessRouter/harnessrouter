@@ -414,3 +414,15 @@ def test_opensquilla_reads_its_transcript_as_the_session(monkeypatch):
     _plant(ws, ".harness/opensquilla/transcript.jsonl", other)
     evs = server._opensquilla_eof({"cwd": str(ws), "prompt": "hi"}, 0)
     assert OTHERS not in json.dumps(evs)
+
+
+def test_vibe_reads_its_export_as_the_session(monkeypatch):
+    """A vibe turn's outcome, its error and its usage come from the export it wrote."""
+    exp = {"outcome": "error", "error": {"message": OTHERS, "code": "x"},
+           "usage": {"prompt_tokens": 4321, "completion_tokens": 1234}}
+    other = _second_sessions(".harness/vibe/out/export.json", json.dumps(exp).encode())
+    ws = _a_session(monkeypatch)
+    _plant(ws, ".harness/vibe/out/export.json", other)
+    evs = server._vibe_eof({"cwd": str(ws)}, 1)
+    seen = json.dumps(evs)
+    assert OTHERS not in seen and "4321" not in seen
