@@ -12653,7 +12653,7 @@ def _build_opensquilla(provider: str, auth: Auth, model: str, prompt: str, cwd: 
         # NOT a per-tool switch: `--permissions` chooses a posture (restricted / bypass / full) and
         # there is no deny list on the CLI, so the disabled set travels as a standing instruction in
         # the agent doc instead — the same honest downgrade codex, hermes, dsh and gemini get, and
-        # the reason this base's tool_enforcement is "soft" in the gateway's catalog.
+        # the reason this base's tool_enforcement is "instruction" in the gateway's catalog.
         pass
     return cmd
 
@@ -17282,6 +17282,46 @@ def capabilities(identifier: str = "") -> dict:
     }
 
 
+# Disabled tools, by what each CLI can actually enforce. Where the CLI has a real switch, its builder
+# uses it and the tool is not in what the model is offered: claude's `permissions.deny` in
+# settings.json (_build_claude; NOT `--disallowedTools`, which belongs to the permission-prompt system
+# that --dangerously-skip-permissions turns off), pi's and omp's tool lists, opencode's and kilo's
+# `permission` denies, goose's available_tools, and the rest named in the gateway's _BASE_CATALOG with
+# `tool_enforcement: "hard"`. A permission-prompt switch that the turn's own skip-approval mode turns
+# off is not a block, and none of these is one.
+#
+# The bases in this set have no switch that withholds every tool the catalog offers, so the disabled
+# set reaches the model as a standing instruction in the agent doc instead (_disabled_tools_note).
+# That is a request, not a guarantee: verified reaching the agent, and verified as a request (hermes
+# complied, codex used the tool anyway), which is why the console says so next to the switch. UHP §4.3
+# requires the request rather than silence wherever a block is not possible: an operator who switched
+# a tool off and got neither believes it is off. Qwen Code and Cline were in neither group, and an
+# operator who switched every tool off on them watched the agent use them all.
+#   codex       — the one built-in with a switch is web_search (_codex_web_search_off).
+#   hermes      — switches toolsets, not tools, which is a different granularity from the per-tool
+#                 names a harness configures.
+#   dsh         — no per-tool switch on the wire.
+#   opensquilla — `--permissions` picks a posture (restricted / bypass / full); there is no
+#                 per-tool deny list anywhere on its agent CLI.
+#   gemini      — no confirmed per-tool switch in headless mode.
+#   qwen, cline — no per-tool switch was found headless.
+# The gateway's catalog says the same thing per base (tool_enforcement "instruction" for exactly
+# these), and gateway/tests/test_tool_enforcement_parity.py holds the two together.
+_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "gemini", "opensquilla", "qwen", "cline"})
+
+
+def _disabled_tools_note(backend: str, tools_disabled: list[str] | None) -> str:
+    """The agent doc's "Disabled tools" section for a base that can only be asked not to use a tool,
+    or "" where there is nothing to ask (a base with a real switch, or no tool switched off). The
+    names are the harness's own, as stored."""
+    if backend not in _TOOLS_OFF_BY_REQUEST:
+        return ""
+    names = ", ".join(t for t in (tools_disabled or []) if t and str(t).strip())
+    if not names:
+        return ""
+    return f"## Disabled tools\n\nDo NOT use these tools — they are disabled for this harness: {names}."
+
+
 class TurnReq(BaseModel):
     backend: str = "claude"          # claude | codex | hermes | pi | dsh
     provider: str | None = None      # see BACKENDS[...].providers
@@ -17426,31 +17466,11 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         # Seed the agent's instruction file (AGENTS.md/CLAUDE.md) from the harness doc + installed skills.
         # The model's system prompt stays the CLI default; persistent instructions live in this file.
         #
-        # Disabled tools, by what each CLI can actually enforce:
-        #   claude — a `permissions.deny` list in settings.json, a hard block (see _build_claude). The
-        #     agent reports having no such tool. NOT `--disallowedTools`: that belongs to the permission
-        #     prompt system, which --dangerously-skip-permissions turns off.
-        #   codex, hermes — no per-tool switch exists. Codex has none at all; hermes only disables whole
-        #     TOOLSETS, which is a different granularity from the per-tool names a harness configures.
-        #     Both read the agent doc, so both get the same instruction. It is a request to the model,
-        #     not a guarantee — verified reaching the agent on both, and verified as a request: hermes
-        #     complied, codex used the tool anyway. That is why the console calls it a request rather
-        #     than a block. Written here once rather than as two divergent branches — hermes previously
-        #     had neither, and silently ignored every disabled tool.
-        #   gemini — same tier, no confirmed per-tool switch in headless mode (see _BASE_CATALOG's
-        #     "gemini" entry). UHP §4.3 requires this be conveyed as a standing instruction rather than
-        #     silently dropped wherever it can't be a hard block, so it goes in this set rather than
-        #     being left out of it — the same class of gap this comment already names for hermes.
     agent_doc = req.agent_doc or ""
-    # opensquilla is in this set for the same reason gemini is: `--permissions` picks a posture
-    # (restricted / bypass / full) and there is no per-tool deny list anywhere on its agent CLI, so
-    # UHP §4.3 requires the disabled set be conveyed as a standing instruction rather than silently
-    # dropped. nanobot, mimo and jcode are NOT here — each has a real switch.
-    if backend in ("codex", "hermes", "dsh", "gemini", "opensquilla") and req.tools_disabled:
-        _off = ", ".join(t for t in req.tools_disabled if t)
-        if _off:
-            agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + \
-                f"## Disabled tools\n\nDo NOT use these tools — they are disabled for this harness: {_off}."
+    # A disabled tool the CLI cannot withhold is asked off in the agent doc (_TOOLS_OFF_BY_REQUEST).
+    _off = _disabled_tools_note(backend, req.tools_disabled)
+    if _off:
+        agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + _off
     note = _codex_custom_editing_note(backend, req.auth)
     if note:
         agent_doc = ((agent_doc + "\n\n") if agent_doc.strip() else "") + note
