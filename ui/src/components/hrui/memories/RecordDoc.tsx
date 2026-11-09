@@ -15,15 +15,15 @@ import { getSession } from '@/lib/auth';
 import { gwHeaders } from '@/lib/harness';
 import { harnessFetch } from '@/lib/hfetch';
 import {
-  addRecord, bodyOf, eraseRecords, forgetRecord, getHistory, labelOf, recordFileUrl, reviseRecord,
+  addRecord, bodyOf, forgetRecord, getHistory, labelOf, recordFileUrl, reviseRecord,
   type ContentPart, type Memory, type MemoryRecord, type Provider, type RecordInput,
 } from '@/lib/memories';
-import { ConfirmSheet, Sheet, SheetTop } from '../Sheet';
+import { ConfirmSheet } from '../Sheet';
 import { ago } from '../setups';
 import { plain, plural } from '../setup/settingsModel';
 import { toast } from '../toast';
 import {
-  canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, isKeyWriter, isStanding, kindOf, labelsOf, mayStand, NOTED, readOnlyNote,
+  canEdit, canForget, hasFolders, hasHistory, hasProperties, isKeyWriter, isStanding, kindOf, labelsOf, mayStand, NOTED, readOnlyNote,
   recordTypeOfSchemaKind, relText, schemaGuides, sentenceFirst, standingOf,
 } from './caps';
 import { DOTS, HISTORY, Dot, shownName, whenOf } from './parts';
@@ -113,7 +113,6 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const isNew = !record.id;
   const open = isNew || canEdit(record, provider, memory);
   const forgettable = !isNew && canForget(record, provider, memory);
-  const erasable = !isNew && canErase(record, provider, memory);
   const history = !isNew && hasHistory(provider);
   const movable = open && !isNew && hasFolders(provider);
   const typedKinds = schemaGuides(provider) ? schema?.types || [] : [];
@@ -131,10 +130,9 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const [pop, setPop] = useState<'' | 'hist' | 'more' | 'type'>('');
   const [versions, setVersions] = useState<MemoryRecord[] | null>(null);
   const [histFailed, setHistFailed] = useState(false);
-  const [confirm, setConfirm] = useState<'' | 'forget' | 'erase'>('');
+  const [confirm, setConfirm] = useState<'' | 'forget'>('');
   const [busy, setBusy] = useState(false);
   const [refused, setRefused] = useState('');
-  const [leftover, setLeftover] = useState(false);
   const [edReady, setEdReady] = useState(false);
   const { live, state } = useLiveRecord(memory.id, isNew ? '' : record.id, peerColor);
   // the editor is drawn again after the link comes back: the words show until it is
@@ -226,15 +224,6 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
     setBusy(true); setRefused('');
     try { await forgetRecord(memory.id, record.id); toast(`${short(record)} forgotten`); setConfirm(''); onGone(record.id); }
     catch (e) { setRefused(plain(e, 'It was not forgotten. Try again.')); } finally { setBusy(false); }
-  };
-  const erase = async () => {
-    setBusy(true); setRefused('');
-    try {
-      const res = await eraseRecords(memory.id, [record.id]);
-      setConfirm('');
-      if (res.unreachable?.includes(record.id)) setLeftover(true);
-      else { toast(`${short(record)} erased`); onGone(record.id); }
-    } catch (e) { setRefused(plain(e, 'It was not erased. Try again.')); } finally { setBusy(false); }
   };
   /** Make it a standing instruction, or stop it being one: written as this person, so one an agent set becomes theirs. */
   const setStanding = async (on: boolean) => {
@@ -354,7 +343,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
             ) : null}
           </span>
         ) : null}
-        {forgettable || erasable || movable ? (
+        {forgettable || movable ? (
           <span className="mm-popw">
             <button type="button" className="icon-btn sm" aria-label="More" title="More" aria-expanded={pop === 'more'} onClick={() => setPop(pop === 'more' ? '' : 'more')}>{DOTS}</button>
             {pop === 'more' ? (
@@ -367,17 +356,12 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
                         {folders.map((f) => <option key={f} value={f}>{f.split('/').join(' / ')}</option>)}
                       </select>
                     </label>
-                    {forgettable || erasable ? <div className="mm-pop-sep" /> : null}
+                    {forgettable ? <div className="mm-pop-sep" /> : null}
                   </>
                 ) : null}
                 {forgettable ? (
                   <button type="button" className="mm-mi" role="menuitem" onClick={() => { setPop(''); setRefused(''); setConfirm('forget'); }}>
                     <b>Forget</b><small>{history ? 'Agents stop seeing it. Its history stays.' : 'Agents stop seeing it.'}</small>
-                  </button>
-                ) : null}
-                {erasable ? (
-                  <button type="button" className="mm-mi bad" role="menuitem" onClick={() => { setPop(''); setRefused(''); setConfirm('erase'); }}>
-                    <b>Erase</b><small>Destroys it and every version. Cannot be undone.</small>
                   </button>
                 ) : null}
               </div>
@@ -472,17 +456,6 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
       {confirm === 'forget' ? (
         <ConfirmSheet id="mmFg" title={`Forget ${short(record) || 'this record'}?`} confirmLabel="Forget" busy={busy} refused={refused || undefined}
           body={history ? 'Setups stop seeing it, and its history is kept.' : 'Setups stop seeing it.'} onClose={() => setConfirm('')} onConfirm={() => void forget()} />
-      ) : null}
-      {confirm === 'erase' ? (
-        <ConfirmSheet id="mmEr" title={`Erase ${short(record) || 'this record'}?`} confirmLabel="Erase" busy={busy} refused={refused || undefined}
-          body="Its text, properties and every version are destroyed, along with its links. This cannot be undone." onClose={() => setConfirm('')} onConfirm={() => void erase()} />
-      ) : null}
-      {leftover ? (
-        <Sheet onClose={() => { setLeftover(false); onGone(record.id); }} labelledBy="mmLo" className="small-sheet" alert>
-          <SheetTop id="mmLo" title="Not all of it could be erased" onClose={() => { setLeftover(false); onGone(record.id); }} />
-          <p className="del-p">{`The record is gone from ${memory.name}, but ${vendorName(provider?.id || '')} may still hold its words in what it came from. Remove them there if they must be gone.`}</p>
-          <div className="del-act"><button type="button" className="btn" onClick={() => { setLeftover(false); onGone(record.id); }}>Close</button></div>
-        </Sheet>
       ) : null}
     </>
   );

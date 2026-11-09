@@ -8,17 +8,18 @@
 // answers that way: what it finds is listed with what matches the words, so "how does Dana like help"
 // finds "prefers written steps". A memory kept for one person is listed by that person's name.
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, Eye, FilePlus2, FolderPlus, History, Link2, Lock, Pencil, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
-import { deleteMemory, forgetRecord, labelOf, recall, recordHref, type Memory, type MemoryRecord, type Provider } from '@/lib/memories';
+import { ChevronDown, ChevronRight, Eye, FilePlus2, FolderPlus, History, Link2, Lock, Pencil, Trash2 } from 'lucide-react';
+import { deleteMemory, eraseRecords, forgetRecord, labelOf, recall, recordHref, reviseRecord, type Memory, type MemoryRecord, type Provider } from '@/lib/memories';
 import { ConfirmSheet } from '../../Sheet';
 import { plain } from '../../setup/settingsModel';
 import { toast } from '../../toast';
-import { canForget, hasFolders, hasHistory, kindOf, labelsOf, schemaGuides, schemaLabels, servesForget, standingOf, NOTED } from '../caps';
+import { canEdit, canErase, canForget, hasFolders, hasHistory, kindOf, labelsOf, schemaGuides, schemaLabels, servesForget, standingOf, NOTED } from '../caps';
 import type { RecordsRead } from '../DataTab';
 import { Dot, DOTS, FILTER, FOLDER, FOLDER_OPEN, MmIco, PLUS, SEARCH, shownName, userOf, X } from '../parts';
 import { typeLabel, type LSchema } from '../schemaModel';
 import { RenameSheet } from '../sheets';
 import { folderName, folderOf, groupsOf, kindInfo, type Kind } from '../tree';
+import { vendorName } from '../vendors';
 import {
   buildRows, folderKey, groupKey, hitRecord, isExpandable, isOpenRow, kindsToWrite, labelFilter, meaningHits, memoryKey, rankOf, recordOfKind, treeKey,
   type BranchView, type Row,
@@ -44,6 +45,7 @@ export interface MemoryTreeProps {
 interface MenuItem { key: string; label?: string; icon?: ReactNode; bad?: boolean; on?: boolean; head?: boolean; sep?: boolean; run?: () => void }
 type SheetState =
   | { t: 'forget'; r: MemoryRecord; mid: string }
+  | { t: 'erase'; rs: MemoryRecord[]; mid: string; folder?: string; next: string }
   | { t: 'delete'; m: Memory; parent: string }
   | { t: 'rename'; m: Memory; parent: string }
   | { t: 'newsub'; parent: Memory }
@@ -98,6 +100,8 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
   const [busy, setBusy] = useState(false);
   const [refused, setRefused] = useState('');
   const [focusKey, setFocusKey] = useState('');
+  // the record row whose title is being edited in place (F2, or Rename)
+  const [renaming, setRenaming] = useState('');
   const [fresh, setFresh] = useState<Record<string, boolean>>({});
   const listRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -319,13 +323,35 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
     const failed = () => toast('The link could not be copied.');
     if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(done, failed); else failed();
   };
+  /** The records a folder holds, itself and the folders in it, where every one of them has been read. */
+  const folderRecords = (r: Extract<Row, { kind: 'folder' }>): MemoryRecord[] | null => {
+    if (r.plus) return null;
+    return (view(r.memoryId)?.records || []).filter((x) => x.status === 'active' && (folderOf(x) === r.path || folderOf(x).startsWith(`${r.path}/`)));
+  };
+  /** A folder is erased with everything in it, by someone who may erase each record in it. */
+  const folderErasable = (r: Extract<Row, { kind: 'folder' }>): boolean => {
+    const rs = folderRecords(r), m = memoryOf(r.memoryId), p = providerOfMemory(r.memoryId);
+    return !!rs && rs.length > 0 && rs.every((x) => canErase(x, p, m));
+  };
+  /** The row focus goes to once `r` is gone: the next one, or the one before it at the end. */
+  const nextAfter = (r: Row): string => {
+    const at = focusable.findIndex((x) => x.key === r.key);
+    return (focusable[at + 1] || focusable[at - 1])?.key || '';
+  };
+  const askErase = (r: Row) => {
+    setRefused('');
+    if (r.kind === 'record') setSheet({ t: 'erase', rs: [r.record], mid: r.memoryId, next: nextAfter(r) });
+    else if (r.kind === 'folder') { const rs = folderRecords(r); if (rs?.length) setSheet({ t: 'erase', rs, mid: r.memoryId, folder: r.path, next: nextAfter(r) }); }
+  };
+
   const itemsOfRow = (r: Row): MenuItem[] => {
     if (r.kind === 'record') {
-      const m = memoryOf(r.memoryId);
+      const m = memoryOf(r.memoryId), p = providerOfMemory(r.memoryId);
       return [
-        { key: 'open', label: 'Open', icon: <SquareArrowOutUpRight size={IC} />, run: () => { setMenu(null); openRecordRow(r); } },
+        ...(canEdit(r.record, p, m) ? [{ key: 'rename', label: 'Rename', icon: <Pencil size={IC} />, run: () => { setMenu(null); setRenaming(r.key); } }] : []),
         { key: 'copy', label: 'Copy link', icon: <Link2 size={IC} />, run: () => copyLink(r.record, r.memoryId) },
-        ...(canForget(r.record, providerOfMemory(r.memoryId), m) ? [{ key: 'forget', label: 'Forget', icon: <Trash2 size={IC} />, bad: true, run: () => { setMenu(null); setRefused(''); setSheet({ t: 'forget', r: r.record, mid: r.memoryId }); } }] : []),
+        ...(canForget(r.record, p, m) ? [{ key: 'forget', label: 'Forget', icon: <Trash2 size={IC} />, bad: true, run: () => { setMenu(null); setRefused(''); setSheet({ t: 'forget', r: r.record, mid: r.memoryId }); } }] : []),
+        ...(canErase(r.record, p, m) ? [{ key: 'erase', label: 'Erase', icon: <Trash2 size={IC} />, bad: true, run: () => { setMenu(null); askErase(r); } }] : []),
       ];
     }
     if (r.kind === 'group') {
@@ -334,9 +360,11 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
     }
     if (r.kind === 'folder') {
       const kinds = kindItems(r.memoryId, r.path);
-      return kinds.length ? [...kinds, { key: 'sep', sep: true }, {
+      const items: MenuItem[] = kinds.length ? [...kinds, { key: 'sep', sep: true }, {
         key: 'folder', label: 'New folder', icon: <FolderPlus size={IC} />, run: () => { setMenu(null); setNewFolder({ mid: r.memoryId, base: r.path }); },
       }] : [];
+      if (folderErasable(r)) items.push({ key: 'erase', label: 'Erase folder', icon: <Trash2 size={IC} />, bad: true, run: () => { setMenu(null); askErase(r); } });
+      return items;
     }
     if (r.kind === 'memory') {
       const m = r.memory, can = (x: 'write' | 'create' | 'delete') => !!m.privileges?.includes(x);
@@ -444,6 +472,15 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
       if (el && itemsOfRow(me).length) openRowMenu(me, el.getBoundingClientRect());
       return;
     }
+    // as in a file explorer: F2 renames, Delete (or Backspace, Cmd+Backspace on a Mac) erases, after asking
+    if (me && e.key === 'F2' && me.kind === 'record' && canEdit(me.record, providerOfMemory(me.memoryId), memoryOf(me.memoryId))) {
+      e.preventDefault(); setRenaming(me.key); return;
+    }
+    if (me && (e.key === 'Delete' || e.key === 'Backspace')) {
+      const may = me.kind === 'record' ? canErase(me.record, providerOfMemory(me.memoryId), memoryOf(me.memoryId)) : me.kind === 'folder' ? folderErasable(me) : false;
+      if (may) { e.preventDefault(); askErase(me); }
+      return;
+    }
     const mv = treeKey(rows, focused, e.key);
     if (!mv) return;
     e.preventDefault();
@@ -479,6 +516,33 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
       closeSheet();
       onChanged();
     } catch (e) { setRefused(plain(e, 'It was not forgotten. Try again.')); setBusy(false); }
+  };
+  const erase = async (rs: MemoryRecord[], mid: string, next: string) => {
+    setBusy(true); setRefused('');
+    try {
+      const res = await eraseRecords(mid, rs.map((x) => x.id));
+      const gone = new Set(res.erased || []);
+      if (mid === memory.id) gone.forEach((id) => read.drop(id));
+      else patch(mid, (c) => ({ records: c.records?.filter((x) => !gone.has(x.id)) || null }));
+      closeSheet();
+      if ((res.unreachable || []).length) {
+        toast(`Erased from ${memoryOf(mid)?.name || 'this memory'}, but ${vendorName(providerOfMemory(mid)?.id || '')} may still hold the words in what it came from. Remove them there if they must be gone.`);
+      } else toast(rs.length === 1 ? `${short(rs[0])} erased` : `${rs.length} records erased`);
+      if (next) { wantFocus.current = true; setFocusKey(next); }
+      onChanged();
+    } catch (e) { setRefused(plain(e, 'It was not erased. Try again.')); setBusy(false); }
+  };
+  /** A record's title, edited in place in its row: saved as a new version on Enter or when the row is left. */
+  const rename = async (r: MemoryRecord, mid: string, v: string) => {
+    setRenaming('');
+    const title = v.replace(/\s+/g, ' ').trim();
+    if (!title || title === r.title) return;
+    try {
+      const out = await reviseRecord(mid, r.id, { title });
+      if (mid === memory.id) read.put(out);
+      else patch(mid, (c) => ({ records: c.records?.map((x) => (x.id === r.id ? out : x)) || null }));
+      onChanged();
+    } catch (e) { toast(plain(e, 'It was not renamed. Try again.')); }
   };
   const removeMemory = async (m: Memory, parent: string) => {
     setBusy(true); setRefused('');
@@ -531,7 +595,16 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
         onClick={() => act(r)} onFocus={(e) => { if (e.target === e.currentTarget) setFocusKey(r.key); }}
         onContextMenu={items.length ? (e) => { e.preventDefault(); if (r.kind === 'memory') void ensure(r.memory); openMenu(r.key, { left: e.clientX, right: e.clientX + 220, top: e.clientY, bottom: e.clientY }, items.length); } : undefined}>
         {icon}
-        <span className="mt-lbl">{name}</span>
+        {r.kind === 'record' && renaming === r.key ? (
+          <input className="mt-rename" aria-label={`Rename ${name}`} defaultValue={r.record.title || name} autoFocus spellCheck={false}
+            onClick={(e) => e.stopPropagation()} onFocus={(e) => e.currentTarget.select()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') { e.preventDefault(); void rename(r.record, r.memoryId, e.currentTarget.value); }
+              if (e.key === 'Escape') { e.preventDefault(); setRenaming(''); }
+            }}
+            onBlur={(e) => { if (renaming === r.key) void rename(r.record, r.memoryId, e.currentTarget.value); }} />
+        ) : <span className="mt-lbl">{name}</span>}
         {r.kind === 'record' && r.record.status === 'forgotten' ? <small className="mt-mark">Forgotten</small> : null}
         {r.kind === 'record' && r.record.status === 'superseded' ? <small className="mt-mark">Replaced</small> : null}
         {r.kind === 'record' && r.record.status === 'active' ? standTag(r.record) : null}
@@ -609,6 +682,12 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
         <ConfirmSheet id="mtFg" title={`Forget ${short(sheet.r)}?`} confirmLabel="Forget" busy={busy} refused={refused || undefined}
           body={hasHistory(providerOfMemory(sheet.mid)) ? 'Setups stop seeing it, and its history is kept.' : 'Setups stop seeing it.'}
           onClose={closeSheet} onConfirm={() => void forget(sheet.r, sheet.mid)} />
+      ) : null}
+      {sheet?.t === 'erase' ? (
+        <ConfirmSheet id="mtEr" busy={busy} refused={refused || undefined} confirmLabel="Erase"
+          title={sheet.folder ? `Erase the folder ${sheet.folder.split('/').pop()}?` : `Erase "${short(sheet.rs[0])}"?`}
+          body={sheet.folder ? `It holds ${sheet.rs.length === 1 ? '1 record' : `${sheet.rs.length} records`}, and every one is erased with it. They can't be brought back.` : 'It can’t be brought back.'}
+          onClose={closeSheet} onConfirm={() => void erase(sheet.rs, sheet.mid, sheet.next)} />
       ) : null}
       {sheet?.t === 'delete' ? (
         <ConfirmSheet id="mtDl" title={`Delete ${sheet.m.name}?`} confirmLabel="Delete memory" busy={busy} refused={refused || undefined}

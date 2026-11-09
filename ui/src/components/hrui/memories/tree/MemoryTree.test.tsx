@@ -187,20 +187,80 @@ test('the keys: down and up move focus, left closes a group, right opens it, ent
 test('a record offers what the provider and this person allow, and nothing else', async () => {
   const live = open({ records: [record({ id: 'a', title: 'Mine' })] });
   await mount(live.props);
-  expect(await menuOf('Mine')).toEqual(['Open', 'Copy link', 'Forget']);
+  // as in a file explorer: what can be done to it, here; selecting the row is what opens it
+  expect(await menuOf('Mine')).toEqual(['Rename', 'Copy link', 'Forget', 'Erase']);
   await act(async () => root.unmount()); root = createRoot(el);
   const readOnly = open({ records: [record({ id: 'a', title: 'Mine' })], memory: memory({ id: 'hmem_1', name: 'Root', provider: 'mem0', privileges: ['read'] }) });
   await mount(readOnly.props);
-  expect(await menuOf('Mine')).toEqual(['Open', 'Copy link']);
+  expect(await menuOf('Mine')).toEqual(['Copy link']);
   expect(el.querySelector('button[aria-label="New"]')).toBeNull();
   await act(async () => root.unmount()); root = createRoot(el);
   const noForget = open({ provider: { ...CAPS.mem0, forget: false }, records: [record({ id: 'a', title: 'Mine' })] });
   await mount(noForget.props);
-  expect(await menuOf('Mine')).toEqual(['Open', 'Copy link']);
+  expect(await menuOf('Mine')).toEqual(['Rename', 'Copy link', 'Erase']);
   await act(async () => root.unmount()); root = createRoot(el);
   const episode = open({ records: [record({ id: 'a', title: 'What happened', type: 'episode' })] });
   await mount(episode.props);
-  expect(await menuOf('What happened')).toEqual(['Open', 'Copy link']);
+  // what happened is read only: never renamed, never forgotten; erased by someone who may
+  expect(await menuOf('What happened')).toEqual(['Copy link', 'Erase']);
+});
+
+describe('as in a file explorer: rename and erase on the row, with the keys', () => {
+  const recs = () => [record({ id: 'a', title: 'Alpha' }), record({ id: 'b', title: 'Bravo' }), record({ id: 'c', title: 'Charlie' })];
+  const toasts: string[] = [];
+  // a key on a row, as a person gives it: the row has the focus first
+  const keyOn = async (k: string, t: string) => { await act(async () => { row(t).focus(); }); await flush(); await key(k, row(t)); };
+  const hear = (e: Event) => toasts.push(String((e as CustomEvent).detail));
+  beforeEach(() => { toasts.length = 0; window.addEventListener('hrui:toast', hear); });
+  afterEach(() => window.removeEventListener('hrui:toast', hear));
+
+  test('F2 renames the focused record in place; Enter saves it as its new title, Escape leaves it', async () => {
+    const t = open({ records: recs(), routes: { 'PATCH /v1/memories/hmem_1/records/b': record({ id: 'b', title: 'Bravo two', version: 2 }) } });
+    await mount(t.props);
+    await keyOn('F2', 'Bravo');
+    const input = el.querySelector('input.mt-rename') as HTMLInputElement;
+    expect(input.value).toBe('Bravo');
+    await key('Escape', input);
+    expect(el.querySelector('input.mt-rename')).toBeNull();
+    await keyOn('F2', 'Bravo');
+    await type(el.querySelector('input.mt-rename') as HTMLInputElement, 'Bravo two');
+    await key('Enter', el.querySelector('input.mt-rename') as HTMLInputElement);
+    expect(t.s.sent('PATCH', '/v1/memories/hmem_1/records/b')[0].body).toEqual({ title: 'Bravo two' });
+    expect(t.read.put).toHaveBeenCalledWith(expect.objectContaining({ id: 'b', title: 'Bravo two' }));
+  });
+  test('Delete asks in the console’s own dialog, saying what goes; erasing moves focus to the next row', async () => {
+    const t = open({ records: recs(), routes: { 'POST /v1/memories/hmem_1/erase': { erased: ['b'], unreachable: [] } } });
+    await mount(t.props);
+    await keyOn('Delete', 'Bravo');
+    expect(document.querySelector('#mtErh')?.textContent).toBe('Erase "Bravo"?');
+    expect(document.querySelector('#mtErp')?.textContent).toBe('It can’t be brought back.');
+    expect(t.s.sent('POST', '/v1/memories/hmem_1/erase')).toHaveLength(0);
+    await click(sheetButton('Erase'));
+    expect(t.s.sent('POST', '/v1/memories/hmem_1/erase')[0].body).toEqual({ record_ids: ['b'] });
+    expect(t.read.drop).toHaveBeenCalledWith('b');
+    expect(document.activeElement?.getAttribute('data-key')).toBe(row('Charlie').getAttribute('data-key'));
+    expect(toasts).toContain('Bravo erased');
+  });
+  test('Cancel erases nothing; someone who may not erase gets neither the key nor the item', async () => {
+    const t = open({ records: recs() });
+    await mount(t.props);
+    await keyOn('Delete', 'Bravo');
+    await click(sheetButton('Cancel'));
+    expect(t.s.sent('POST', '/v1/memories/hmem_1/erase')).toHaveLength(0);
+    await act(async () => root.unmount()); root = createRoot(el);
+    const ro = open({ records: recs(), memory: memory({ id: 'hmem_1', name: 'Root', provider: 'mem0', privileges: ['read', 'write'] }) });
+    await mount(ro.props);
+    await keyOn('Delete', 'Bravo');
+    expect(document.querySelector('#mtErh')).toBeNull();
+    expect(await menuOf('Bravo')).not.toContain('Erase');
+  });
+  test('what the engine couldn’t remove from where it came from is said', async () => {
+    const t = open({ records: recs(), routes: { 'POST /v1/memories/hmem_1/erase': { erased: ['a'], unreachable: ['a'] } } });
+    await mount(t.props);
+    await keyOn('Delete', 'Alpha');
+    await click(sheetButton('Erase'));
+    expect(toasts.join(' ')).toContain('may still hold the words in what it came from');
+  });
 });
 test('escape closes a row menu and the keys carry on from that row', async () => {
   const t = open({ records: [record({ id: 'a', title: 'Mine' })] });

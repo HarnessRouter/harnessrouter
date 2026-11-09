@@ -298,12 +298,12 @@ describe('a derived record', () => {
 
 describe('an action a provider does not serve is not shown', () => {
   const mine = record({ id: 'r', title: 'Mine' });
-  test('with everything served: versions, forget, erase', async () => {
+  test('with everything served: versions and forget in the reader; erasing is the record list’s, as in a file explorer', async () => {
     open({ provider: CAPS.mem0, records: [mine] });
     await draw();
     expect(byLabel('Versions')).toBeTruthy();
     await click(page().querySelector('.mm-doc-bar button[aria-label="More"]'));
-    expect(Array.from(page().querySelectorAll('.mm-doc-bar .mm-mi b')).map((b) => b.textContent)).toEqual(['Forget', 'Erase']);
+    expect(Array.from(page().querySelectorAll('.mm-doc-bar .mm-mi b')).map((b) => b.textContent)).toEqual(['Forget']);
   });
   test('no history: no versions; no forget and no erase: no menu', async () => {
     open({ provider: { ...CAPS.mem0, history: { content: 'none' }, forget: false, erase: false }, records: [mine] });
@@ -322,14 +322,12 @@ describe('an action a provider does not serve is not shown', () => {
     open({ provider: CAPS.graphiti, records: [ep] });
     await draw('data', 'ep');
     expect(page().textContent).toContain('Kept from a finished task. Read only.');
-    await click(page().querySelector('.mm-doc-bar button[aria-label="More"]'));
-    expect(Array.from(page().querySelectorAll('.mm-doc-bar .mm-mi b')).map((b) => b.textContent)).toEqual(['Erase']);
+    expect(page().querySelector('.mm-doc-bar button[aria-label="More"]')).toBeNull();
     await act(async () => { root.unmount(); }); root = createRoot(el);
     const ent = record({ id: 'en', type: 'entity', title: 'Acme', written_by: { kind: 'provider', id: 'graphiti' } });
     open({ provider: CAPS.graphiti, records: [ent] });
     await draw('data');
-    await click(page().querySelector('.mm-doc-bar button[aria-label="More"]'));
-    expect(Array.from(page().querySelectorAll('.mm-doc-bar .mm-mi b')).map((b) => b.textContent)).toEqual(['Erase']);
+    expect(page().querySelector('.mm-doc-bar button[aria-label="More"]')).toBeNull();
   });
   test('reading only: nothing that writes is offered, and the live document agrees', async () => {
     open({ provider: CAPS.graphiti, memory: memory({ provider: 'graphiti', privileges: ['read'] }), records: [mine] });
@@ -338,15 +336,6 @@ describe('an action a provider does not serve is not shown', () => {
     expect(editorReadOnly()).toBe('true');
     expect(page().querySelector('.mm-doc-bar button[aria-label="More"]')).toBeNull();
     expect(await moreItems()).toEqual(['Schema', 'Show graph', 'Copy memory ID']);
-  });
-  test('what could not be erased is said', async () => {
-    const s = open({ provider: CAPS.mem0, records: [mine], extra: { 'POST /v1/memories/hmem_1/erase': { erased: ['r'], unreachable: ['r'] } } });
-    await draw();
-    await click(page().querySelector('.mm-doc-bar button[aria-label="More"]'));
-    await click(Array.from(page().querySelectorAll('.mm-doc-bar .mm-mi')).find((b) => b.textContent?.startsWith('Erase')));
-    await click(button('Erase'));
-    expect(s.sent('POST', '/v1/memories/hmem_1/erase')[0].body).toEqual({ record_ids: ['r'] });
-    expect(page().textContent).toContain('Not all of it could be erased');
   });
 });
 
