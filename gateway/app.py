@@ -18734,6 +18734,10 @@ async def _plug_save(org: str, workspace: str, plug_type: str, body: PlugBody) -
 # deleted. The record goes into a memory of its own that no person or agent has (its id is made here and used
 # once), its title carries the probe's mark (memory_plane.PROBE_PREFIX) so no recall or listing ever answers with
 # it, and it and its memory are deleted in a `finally`, whichever step failed.
+# Every engine also reads what it is given in the background (a copy it extracts from), and that can land after the
+# probe's memory was dropped: it is dropped once more a while later.
+_PROBE_SWEEP_S = float(os.environ.get("HR_MEMORY_PROBE_SWEEP_S", "120"))
+_PROBE_SWEEPS: set = set()
 _MODEL_TROUBLE = re.compile(r"(?i)api[ _-]?key|\b40[13]\b|unauthori[sz]ed|authenticat|openai|\bmodel\b|embedding|\bllm\b|quota|insufficient")
 
 
@@ -18780,6 +18784,14 @@ async def _memory_round_trip(engine: str, key: str, base: str, org: str) -> str:
             await prov.drop(mid)
         except Exception:  # noqa: BLE001
             print(f"[memories] the connection check's probe memory on {engine} could not be dropped", flush=True)
+        if _PROBE_SWEEP_S > 0:
+            async def again():
+                await asyncio.sleep(_PROBE_SWEEP_S)
+                with contextlib.suppress(Exception):
+                    await prov.drop(mid)
+            t = asyncio.create_task(again())
+            _PROBE_SWEEPS.add(t)
+            t.add_done_callback(_PROBE_SWEEPS.discard)
 
 
 # ── engines found beside this instance ───────────────────────────────────────────────────────

@@ -471,6 +471,17 @@ def test_a_connection_writes_reads_back_and_deletes_a_probe(stub):
     assert stub.mem == before and probe_user.startswith("hmem_00000000"), "the probe and its memory are gone"
 
 
+def test_what_an_engine_reads_in_the_background_is_dropped_again_later(stub, monkeypatch):
+    monkeypatch.setattr(gw, "_PROBE_SWEEP_S", 0.01)
+
+    async def go():
+        n = len(stub.calls)
+        assert await gw._memory_round_trip("mem0", KEY, "", ORG) == ""
+        await asyncio.sleep(0.05)
+        return [(m, p, dict(b)) for (m, p, b) in stub.calls[n:] if m == "DELETE" and p == "/v1/memories/"]
+    assert len(run(go())) == 2
+
+
 def test_a_probe_that_cant_be_read_back_is_still_deleted_and_the_reason_is_plain(stub, monkeypatch):
     real = stub.__call__
     seen = []

@@ -24,4 +24,6 @@ os.environ.update({
     "HR_MEDIA_SWEEP_S": "3600",
     # no memory engines are looked for at start: a test that wants them asks (_memory_discover), against its own stubs
     "HR_MEMORY_DISCOVER": "0",
+    # a connection check's probe memory is dropped once, not again minutes later in a test's closed loop
+    "HR_MEMORY_PROBE_SWEEP_S": "0",
 })
