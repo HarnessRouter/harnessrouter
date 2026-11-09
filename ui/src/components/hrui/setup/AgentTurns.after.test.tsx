@@ -5,11 +5,13 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Msg } from '@/lib/conversation';
 
+// Not `virtual`: the module is installed, and jest keeps its module ids across the files of one process. A file that
+// ran earlier and loaded AgentTurns for real leaves an id this mock would miss, and the real view is drawn instead.
 jest.mock('reifyui/agent-chat', () => ({
   AgentTurnView: ({ turn }: { turn: { user?: { text?: string } | null } }) => <div className="t">{turn.user?.text}</div>,
   turnFromMessage: (_m: unknown, _c: unknown, user: unknown) => ({ status: 'done', items: [], user }),
   motionFor: () => '',
-}), { virtual: true });
+}));
 jest.mock('@/components/HarnessLogo', () => ({ harnessLogoSrc: () => '' }));
 jest.mock('@/lib/limit-copy', () => ({ limitStopWhy: () => '', SETUP_LIMITS: {} }));
 jest.mock('./agent-chat.scoped.css', () => ({}), { virtual: true });
