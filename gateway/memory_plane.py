@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
+import io
 import json
 import os
 import re
@@ -59,6 +60,12 @@ FILES = None
 COVERS = None
 COVER_MAX = 512 * 1024
 COVER_TYPES = ("image/png", "image/webp")
+# The most pixels a cover may have, checked from its header before any pixel is read: a few hundred KB of PNG can say
+# it is gigapixels (a decompression bomb). Pillow is told the same, so it refuses one wherever it would read it.
+COVER_SIDE = 4096
+COVER_PIXELS = COVER_SIDE * COVER_SIDE
+_COVER_FORMAT = {"image/png": "PNG", "image/webp": "WEBP"}
+_COVER_WORD = {"image/png": "PNG", "image/webp": "WebP"}
 
 
 def cover_key(org: str, mid: str) -> str:
@@ -73,6 +80,50 @@ def cover_type(data: bytes) -> str:
     if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
     return ""
+
+
+def cover_clean(data: bytes, kind: str) -> bytes:
+    """The picture made again from its pixels alone, as `kind` (image/png or image/webp): only the PNG and WebP decoders
+    ever read it, its size is checked from its header before its pixels are, and what is written back is a fresh image
+    with no text, EXIF, colour profile, frames after the first or bytes after its end. Raises MemoryError (422, in
+    words) for anything that isn't such a picture."""
+    import warnings
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = COVER_PIXELS
+    word = _COVER_WORD[kind]
+    unread = MemoryError(422, "memory_invalid", f"That picture couldn't be read as a {word}.", "cover")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        try:
+            im = Image.open(io.BytesIO(data), formats=["PNG", "WEBP"])
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+            im = None
+        except Exception:  # noqa: BLE001 - whatever a decoder says of bytes that aren't a picture, it's a refusal
+            raise unread from None
+        try:
+            if im is None or im.width * im.height > COVER_PIXELS or max(im.size) > COVER_SIDE:
+                raise MemoryError(422, "memory_invalid", "A cover is at most 4096 x 4096 pixels. Send a smaller picture.", "cover")
+            if im.format != _COVER_FORMAT[kind]:
+                raise unread
+            im.seek(0)
+            im.load()
+            alpha = im.mode in ("RGBA", "LA", "PA", "La", "RGBa") or "transparency" in im.info
+            mode = "RGBA" if alpha else "RGB"
+            # a new image from the pixels alone: nothing the file carried beside them comes along
+            clean = Image.frombytes(mode, im.size, im.convert(mode).tobytes())
+        except MemoryError:
+            raise
+        except Exception:  # noqa: BLE001
+            raise unread from None
+        finally:
+            if im is not None:
+                im.close()
+    out = io.BytesIO()
+    if kind == "image/png":
+        clean.save(out, format="PNG", optimize=True)
+    else:
+        clean.save(out, format="WEBP", lossless=True, method=4)
+    return out.getvalue()
 
 
 # How what is kept is cleaned of credentials before any provider sees it: app.py binds the gateway's own

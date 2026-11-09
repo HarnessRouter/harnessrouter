@@ -1006,6 +1006,58 @@ def test_a_memory_whose_memories_below_cant_be_read_is_not_deleted(client, monke
     assert _live_memories(org) == set()
 
 
+# ── a memory's cover goes with it, at the day-30 sweep as at a delete, and never on a read that failed ─────────────
+def _cover(client, hdr: dict, mid: str) -> None:
+    import io
+    from PIL import Image
+    b = io.BytesIO()
+    Image.new("RGB", (4, 4), (40, 90, 200)).save(b, format="PNG")
+    r = client.put(f"/v1/memories/{mid}/cover", headers={**hdr, "content-type": "image/png"}, content=b.getvalue())
+    assert r.status_code == 200, r.text
+
+
+def _cover_kept(org: str, mid: str) -> bool:
+    return run(memory_plane.COVERS.get(memory_plane.cover_key(org, mid))) is not None
+
+
+def test_an_agents_memory_and_its_peoples_covers_go_with_it_at_the_day_30_sweep(client):
+    hdr = _org_of_its_own(client, "covers")
+    org = hdr["x-harness-org"]
+    h = _agent(client, name="Front desk", prompt="Help each customer with returns.", headers=hdr).json()
+    mid = h["memory"]["id"]
+    _session(h["id"], {"user": "lee@example.com"}, org=org)
+    kids = [k["id"] for k in client.get("/v1/memories", params={"parent": mid}, headers=hdr).json()["data"]]
+    assert kids
+    for m in (mid, *kids):
+        _cover(client, hdr, m)
+    assert client.delete(f"/v1/harnesses/{h['id']}", headers=hdr).json()["memory_kept"] == KEPT
+    assert h["id"] not in _sweep()["removed"]["harnesses"]
+    assert all(_cover_kept(org, m) for m in (mid, *kids)), "kept with the agent for its 30 days"
+    _past_its_30_days(h["id"])
+    assert h["id"] in _sweep()["removed"]["harnesses"]
+    assert not any(_cover_kept(org, m) for m in (mid, *kids)), "gone with the memories, the people's included"
+
+
+def test_a_read_that_fails_at_the_sweep_deletes_no_cover(client, monkeypatch):
+    hdr = _org_of_its_own(client, "covers-unread")
+    org = hdr["x-harness-org"]
+    h = _agent(client, name="Front desk", prompt="Help each customer with returns.", headers=hdr).json()
+    mid = h["memory"]["id"]
+    _session(h["id"], {"user": "max@example.com"}, org=org)
+    kids = [k["id"] for k in client.get("/v1/memories", params={"parent": mid}, headers=hdr).json()["data"]]
+    for m in (mid, *kids):
+        _cover(client, hdr, m)
+    client.delete(f"/v1/harnesses/{h['id']}", headers=hdr)
+    _past_its_30_days(h["id"])
+    fail = _reads_fail(monkeypatch, "Memory", parent_id=None)
+    out = _sweep()
+    assert h["id"] not in out["removed"]["harnesses"] and out["left"]["harnesses"] == "its memory couldn't be checked just now"
+    assert all(_cover_kept(org, m) for m in (mid, *kids)), "nothing goes on a read that couldn't answer"
+    fail["label"] = None
+    assert h["id"] in _sweep()["removed"]["harnesses"]
+    assert not any(_cover_kept(org, m) for m in (mid, *kids))
+
+
 def test_one_sweep_deletes_at_most_25_memories_and_the_next_goes_on(client, capsys):
     hdr = _org_of_its_own(client, "cap")
     org = hdr["x-harness-org"]

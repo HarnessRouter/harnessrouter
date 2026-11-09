@@ -2,6 +2,7 @@
 check in memory_plane, and one call to the memory's provider. Nothing here knows a provider."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -214,16 +215,22 @@ async def choose(request: Request, name: str = "", description: str = "") -> dic
 # name for the drawing it shows, so it makes another only when the drawing changes.
 _COVER_SIG = re.compile(r"[A-Za-z0-9_\-]{1,64}")
 _COVER_WORD = {"image/png": "PNG", "image/webp": "WebP"}
+_COVER_FILE = {"image/png": "cover.png", "image/webp": "cover.webp"}
 _COVER_CACHE = "private, max-age=31536000, immutable"
+_TOO_BIG = "A cover is at most 512 KB. Send a smaller picture."
 
 
 async def _cover_bytes(request: Request) -> bytes:
-    """The body, read no further than the most a cover may be."""
+    """The body, read no further than one byte past the most a cover may be, and nothing read at all when its length
+    says it is more. Nothing is decoded until this has answered."""
+    said = request.headers.get("content-length") or ""
+    if said.isdigit() and int(said) > mp.COVER_MAX:
+        raise _uhp_error(422, "memory_invalid", _TOO_BIG, "cover")
     out = bytearray()
     async for chunk in request.stream():
-        out += chunk
+        out += chunk[:mp.COVER_MAX + 1 - len(out)]
         if len(out) > mp.COVER_MAX:
-            raise _uhp_error(422, "memory_invalid", "A cover is at most 512 KB. Send a smaller picture.", "cover")
+            raise _uhp_error(422, "memory_invalid", _TOO_BIG, "cover")
     return bytes(out)
 
 
@@ -233,7 +240,7 @@ async def put_cover(mid: str, request: Request) -> dict:
     """The memory's cover: the body is the picture's bytes, a PNG or a WebP (its type in Content-Type, and its first
     bytes saying the same) of at most 512 KB, and `X-Cover-Sig` the console's name for the drawing it shows."""
     org, _, _, pr = await _who(request)
-    await mp.need(org, mid, pr, "write")
+    m, _ = await mp.need(org, mid, pr, "write")
     kind = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
     if kind not in mp.COVER_TYPES:
         raise _uhp_error(422, "memory_invalid", "A cover is a PNG or WebP picture: send it with that Content-Type.", "content-type")
@@ -245,11 +252,18 @@ async def put_cover(mid: str, request: Request) -> dict:
         raise _uhp_error(422, "memory_invalid", "Send the picture's bytes as the body.", "cover")
     if mp.cover_type(data) != kind:
         raise _uhp_error(422, "memory_invalid", f"That isn't a {_COVER_WORD[kind]} picture: its bytes say otherwise.", "cover")
-    if not mp.COVERS or not await mp.COVERS.put(mp.cover_key(org, mid), data):
+    clean = await asyncio.to_thread(mp.cover_clean, data, kind)
+    # the key is the organization and the memory as the store holds it, never anything the request says
+    mid, key = str(m["id"]), mp.cover_key(org, str(m["id"]))
+    if not mp.COVERS or not await mp.COVERS.put(key, clean):
         raise _uhp_error(503, "memory_unavailable", "The picture couldn't be kept just now. Try again.", "cover")
     at = int(time.time() * 1000)
-    await mp.GRAPH.upsert("Memory", mid, {"cover_at": str(at), "cover_sig": sig}, raise_on_fail=True)
-    return {"object": "memory.cover", "memory_id": mid, "cover_at": at, "cover_sig": sig or None, "bytes": len(data)}
+    try:
+        await mp.GRAPH.upsert("Memory", mid, {"cover_at": str(at), "cover_sig": sig, "cover_type": kind}, raise_on_fail=True)
+    except Exception:
+        await mp.COVERS.delete(key)       # a picture no memory names would never be removed
+        raise
+    return {"object": "memory.cover", "memory_id": mid, "cover_at": at, "cover_sig": sig or None, "bytes": len(clean)}
 
 
 @router.get("/v1/memories/{mid}/cover")
@@ -258,17 +272,20 @@ async def get_cover(mid: str, request: Request):
     """The memory's cover as it was sent. The console names its `cover_at` in the address (`?v=`), so a picture once
     read is never asked for again until a new one is made."""
     org, _, _, pr = await _who(request)
-    m, _ = await mp.need(org, mid, pr, "read")
-    if not m.get("cover_at") or not mp.COVERS:
+    m, _ = await mp.need(org, mid, pr, "read")          # the same check as recall: a person's own stays theirs
+    kind = str(m.get("cover_type") or "")
+    if not m.get("cover_at") or not mp.COVERS or kind not in mp.COVER_TYPES:
         raise _uhp_error(404, "memory_not_found", "This memory has no cover yet.", "cover")
     try:
-        data = await mp.COVERS.get(mp.cover_key(org, mid))
+        data = await mp.COVERS.get(mp.cover_key(org, str(m["id"])))
     except Exception:  # noqa: BLE001 - a store that failed to answer is not a cover that isn't there
         raise _uhp_error(503, "memory_unavailable", "The picture couldn't be read just now. Try again.", "cover")
-    kind = mp.cover_type(data or b"")
-    if not kind:
+    if not data or mp.cover_type(data) != kind:
         raise _uhp_error(404, "memory_not_found", "This memory has no cover yet.", "cover")
-    return Response(content=data, media_type=kind, headers={"cache-control": _COVER_CACHE, "x-content-type-options": "nosniff"})
+    # served as the type kept when it was made, under a fixed name, and never as anything that could run
+    return Response(content=data, media_type=kind, headers={
+        "cache-control": _COVER_CACHE, "x-content-type-options": "nosniff",
+        "content-disposition": f'inline; filename="{_COVER_FILE[kind]}"', "content-security-policy": "default-src 'none'"})
 
 
 # ── the tree ──────────────────────────────────────────────────────────────────────────────────
