@@ -85,7 +85,7 @@ test('a standing record says so, and nothing raw about it is listed under Detail
   await draw(note({ attributes: { standing: true } }));
   expect(el.querySelector('.mm-tags .mm-tag')?.textContent).toBe('Standing');
   expect(sw()?.getAttribute('aria-pressed')).toBe('true');
-  expect(Array.from(el.querySelectorAll('.mm-props-d label')).map((l) => l.textContent)).not.toContain('standing');
+  expect(Array.from(el.querySelectorAll('.mm-props label')).map((l) => l.textContent)).not.toContain('standing');
 });
 
 test('without write, there is no switch: a reader sees the tag, and nothing to change', async () => {
@@ -173,7 +173,7 @@ test('a new record gets the same switch, and is made standing when it is made', 
 
 describe('a write made with an API key no person holds', () => {
   const KEY = { kind: 'x.service', id: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' };
-  const writtenBy = () => Array.from(el.querySelectorAll('.mm-props-d .mm-prow')).find((r) => r.querySelector('label')?.textContent === 'Written by')?.querySelector('.mm-pv')?.textContent;
+  const writtenBy = () => Array.from(el.querySelectorAll('.mm-props .mm-prow')).find((r) => r.querySelector('label')?.textContent === 'Written by')?.querySelector('.mm-pv')?.textContent;
   function keys(list: unknown) {
     const s = service({ 'GET /v1/orgs/org1/keys': list, 'PATCH /v1/memories/hmem_1/records/r1': (c: { body: { attributes?: Record<string, unknown> } }) => note({ version: 2, attributes: { ...c.body.attributes } }) });
     (harnessFetch as jest.Mock).mockImplementation(s.fetcher);

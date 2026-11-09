@@ -240,10 +240,11 @@ describe('narrow: the columns are tabs', () => {
 
 describe('a derived record', () => {
   const found = (o: Partial<MemoryRecord> = {}) => record({ id: 'd', type: 'fact', title: 'Acme uses Slack', written_by: { kind: 'provider', id: 'graphiti' }, ...o });
-  test('reads as found, under Details, and cannot be edited', async () => {
+  test('reads as found, in its one section, and cannot be edited', async () => {
     open({ provider: CAPS.graphiti, records: [found()] });
     await draw('data');
-    expect(page().querySelector('.mm-details')?.textContent).toContain('Found by Graphiti');
+    expect(page().querySelector('.mm-doc-col > .mm-props')?.textContent).toContain('Found by Graphiti');
+    expect(page().querySelector('details')).toBeNull();
     expect(editable()).toBeNull();
     expect(editorReadOnly()).toBe('true');
   });
@@ -470,16 +471,32 @@ describe('what changes while the page is open', () => {
 });
 
 describe('a record reads as what it says', () => {
-  test('the engine’s fields (the task, the model, the kind) are under Details, not on the record', async () => {
-    const f = record({ id: 'f', type: 'fact', title: '', content: [{ type: 'text', text: 'Dana prefers written steps.' }], attributes: { session_id: 'hsess_1', model: 'm-5', kind: 'turn' } });
-    open({ provider: CAPS.mem0, records: [f] });
-    await draw();
+  test('one section, never folded: Type, Written by, the task it was kept from, linked, and the model, in words', async () => {
+    const f = record({ id: 'f', type: 'episode', title: '', content: [{ type: 'text', text: 'Dana prefers written steps.' }],
+      attributes: { session_id: 'hsess_0123456789abcdef', model: 'm-5', kind: 'turn', ticket: 'T-42' }, written_by: { kind: 'provider', id: 'reme' } });
+    open({ provider: CAPS.mem0, records: [f], extra: { 'GET /v1/sessions/hsess_0123456789abcdef': { session_id: 'hsess_0123456789abcdef', harness_id: 'chrn_a' } } });
+    await draw('data', 'f');
+    expect(page().querySelector('details, summary')).toBeNull();
     const props = page().querySelector('.mm-doc-col > .mm-props') as HTMLElement;
-    expect(props.textContent).not.toMatch(/session_id|hsess_1|kind/);
-    const details = page().querySelector('.mm-details') as HTMLDetailsElement;
-    expect(details.querySelector('summary')?.textContent).toBe('Details');
-    expect(details.textContent).toContain('session_id');
-    expect(details.textContent).toContain('hsess_1');
+    const rows = Array.from(props.querySelectorAll(':scope > .mm-prow')).map((r) => [r.querySelector('label')?.textContent, r.querySelector('.mm-pv')?.textContent]);
+    expect(rows.map((r) => r[0])).toEqual(['Type', 'Written by', 'Task', 'Model', 'ticket']);
+    // the read-only note sits under the type, in the same section
+    expect(props.querySelector('.mm-prow .mm-pnote')?.textContent).toBe('Kept from a finished task. Read only.');
+    expect(page().querySelector('.mm-doc-col > .mm-ronote')).toBeNull();
+    // the task, short, and a link to it on its setup's page; the internal kind isn't shown; a person's own field is as written
+    const task = props.querySelector('a.mm-pv') as HTMLAnchorElement;
+    expect(task.getAttribute('href')).toBe('/studio/chrn_a?test=hsess_0123456789abcdef');
+    expect(task.textContent).toBe('hsess_012345…');
+    expect(props.textContent).not.toMatch(/session_id|turn/);
+    expect(rows.find((r) => r[0] === 'ticket')?.[1]).toBe('T-42');
+  });
+  test('a task that can’t be opened is its short id, not a link', async () => {
+    const f = record({ id: 'f', type: 'fact', title: 'A fact', attributes: { session_id: 'hsess_gone_0123456789' } });
+    open({ provider: CAPS.mem0, records: [f] });
+    await draw('data', 'f');
+    const props = page().querySelector('.mm-doc-col > .mm-props') as HTMLElement;
+    expect(props.querySelector('a.mm-pv')).toBeNull();
+    expect(Array.from(props.querySelectorAll('.mm-prow')).find((r) => r.querySelector('label')?.textContent === 'Task')?.querySelector('.mm-pv')?.textContent).toBe('hsess_gone_0…');
   });
   test('it opens on the most recent record that says something, never on a role’s bare name or an episode', async () => {
     const at = (d: string) => ({ valid_from: null, valid_to: null, written_at: d, invalidated_at: null });

@@ -1,6 +1,6 @@
 'use client';
-// One record (the design's mmDocHtml): its title, properties and text, and its version; who wrote it and what the
-// engine kept beside it (the task, the model) are under Details, for operators. What a person
+// One record (the design's mmDocHtml): its title, then one section of what it is (its type, its properties, who wrote it,
+// the task and model it was kept from, anything added to it), never folded (Richard 11-09), then its text. What a person
 // can change follows caps.ts: a record a provider found reads as found, and an action the provider does not serve is
 // not drawn. An open record is a live document: everyone who has it open edits it together and sees what an agent
 // writes as it lands, and it's written back to the memory, as a new version, in the pauses. A record not made yet is
@@ -10,6 +10,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { LOCAL_MEMBER } from '@/lib/edition';
+import Link from 'next/link';
 import { getSession } from '@/lib/auth';
 import { gwHeaders } from '@/lib/harness';
 import { harnessFetch } from '@/lib/hfetch';
@@ -72,6 +73,27 @@ function useKeyNames(want: boolean): Map<string, string> | null {
   }, [want]);
   return names;
 }
+
+/** Where the task a record was kept from opens: its setup's page, open on that task, where the task is there and this
+ *  person may open it (the task's own record names its setup); '' until then, or where it isn't. */
+function useTaskHref(sid: string): string {
+  const [href, setHref] = useState('');
+  useEffect(() => {
+    if (!sid) { setHref(''); return undefined; }
+    let live = true;
+    harnessFetch(`/api/harness/v1/sessions/${encodeURIComponent(sid)}`, { headers: gwHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { harness_id?: unknown } | null) => {
+        const hid = typeof d?.harness_id === 'string' ? d.harness_id : '';
+        if (live) setHref(hid ? `/studio/${encodeURIComponent(hid)}?test=${encodeURIComponent(sid)}` : '');
+      })
+      .catch(() => { if (live) setHref(''); });
+    return () => { live = false; };
+  }, [sid]);
+  return href;
+}
+/** A task's id, short: enough to tell two apart, never the whole of it. */
+const shortId = (id: string) => (id.length > 14 ? `${id.slice(0, 12)}…` : id);
 
 const asText = (v: unknown) => (v == null ? '' : typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : JSON.stringify(v));
 /** A text field's words as the record's parts: files keep their place behind the text. */
@@ -239,7 +261,12 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const when = whenOf(record.time?.written_at);
   const keys = useKeyNames(isKeyWriter(record.written_by) || (pop === 'hist' && !!versions?.some((v) => isKeyWriter(v.written_by))));
   const who = writerOf(record, setups, keys);
-  const extra = Object.entries(attrs).filter(([k, v]) => !NOT_A_ROW.has(k) && !props.some((p) => p.name === k) && v != null && v !== '');
+  // what the record carries beside its properties: the service's own fields as a person reads them (the task it was kept
+  // from, the model), and anything a person or an agent added under its own name, as written
+  const extra = Object.entries(attrs).filter(([k, v]) => !NOT_A_ROW.has(k) && !props.some((p) => p.name === k) && v != null && v !== ''
+    && !(k === 'kind' && v === 'turn'));
+  const taskSid = typeof attrs.session_id === 'string' ? attrs.session_id : '';
+  const taskHref = useTaskHref(taskSid);
   const labels = labelsOf({ attributes: attrs });
   const predicate = String(attrs.predicate || '');
   const files = (record.content || []).map((p, i) => [p, i] as const).filter(([p]) => p.type === 'file');
@@ -368,7 +395,6 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
               onBlur={(e) => { saveTitle(e.relatedTarget); toBody.current = false; }} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); toBody.current = true; (e.currentTarget as HTMLElement).blur(); setEditing(true); } }}>{record.title}</h1>
           ) : <h1 className="mm-title">{record.title}</h1>}
           {err || state?.refused ? <p className="mm-err" role="alert">{err || state?.refused}</p> : null}
-          {stands === 'person' ? <div className="mm-tags"><span className="mm-tag">Standing</span></div> : null}
           <div className={`mm-props${sentence ? ' after-sentence' : ''}`}>
             <div className="mm-prow">
               <label>Type</label>
@@ -386,6 +412,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
                   ) : null}
                 </span>
               ) : <span className="mm-pv mm-typev"><span className="mm-dot sm" style={{ background: kind.color }} />{kind.one}</span>}
+              {note ? <small className="mm-pnote">{note}</small> : null}
             </div>
             {props.map((p) => {
               const v = attrs[p.name];
@@ -412,9 +439,23 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
             {predicate ? <div className="mm-prow"><label>Relation</label><span className="mm-pv mm-pred">{relText(predicate)}</span></div> : null}
             {record.time?.valid_from ? <div className="mm-prow"><label>True from</label><span className="mm-pv">{record.time.valid_from.slice(0, 10)}</span></div> : null}
             {record.time?.valid_to ? <div className="mm-prow"><label>True until</label><span className="mm-pv">{record.time.valid_to.slice(0, 10)}</span></div> : null}
+            {!isNew && (who || when) ? <div className="mm-prow"><label>Written by</label><span className="mm-pv">{[who, when ? ago(when) : ''].filter(Boolean).join(' · ')}</span></div> : null}
+            {extra.map(([k, v]) => (
+              k === 'session_id' ? (
+                <div className="mm-prow" key={k}><label>Task</label>
+                  {taskHref ? <Link className="mm-pv mono link-q" href={taskHref} title={String(v)}>{shortId(String(v))}</Link> : <span className="mm-pv mono" title={String(v)}>{shortId(String(v))}</span>}
+                </div>
+              ) : k === 'model' ? (
+                <div className="mm-prow" key={k}><label>Model</label><span className="mm-pv mono">{asText(v)}</span></div>
+              ) : k === 'kind' ? (
+                <div className="mm-prow" key={k}><label>Kind</label><span className="mm-pv">{asText(v)}</span></div>
+              ) : (
+                <div className="mm-prow" key={k}><label title={k}>{k}</label><span className="mm-pv">{asText(v)}</span></div>
+              )
+            ))}
+            {stands === 'person' ? <div className="mm-tags"><span className="mm-tag">Standing</span></div> : null}
+            {standBlock}
           </div>
-          {standBlock}
-          {note ? <p className="mm-ronote">{note}</p> : null}
           {sentence ? null : bodyBlock}
           {files.length ? (
             <div className="mm-files">
@@ -422,17 +463,6 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
                 <a key={i} className="mm-file" href={recordFileUrl(memory.id, record.id, i)} download={p.file?.name || undefined}>{p.file?.name || 'File'}</a>
               ))}
             </div>
-          ) : null}
-          {/* what the engine and the task kept beside it (which task, which model, who wrote it), for operators: out of
-              the way of what the record says */}
-          {!isNew && (extra.length || who || when) ? (
-            <details className="mm-details">
-              <summary>Details</summary>
-              <div className="mm-props mm-props-d">
-                {extra.map(([k, v]) => <div className="mm-prow" key={k}><label title={k}>{k}</label><span className="mm-pv">{asText(v)}</span></div>)}
-                <div className="mm-prow"><label>Written by</label><span className="mm-pv">{[who, when ? ago(when) : ''].filter(Boolean).join(' · ') || '—'}</span></div>
-              </div>
-            </details>
           ) : null}
         </article>
       </div>

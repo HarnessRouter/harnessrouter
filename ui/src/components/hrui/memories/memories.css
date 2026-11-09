@@ -636,3 +636,10 @@
 
 #hrui .mm-eng-o .mm-eng-cn{flex:none;align-self:center;font-size:13px}
 #hrui .mm-found{margin:0 0 14px;font-size:13px;color:var(--muted)}
+
+/* a record's one section: what it is, label beside value, and on a phone label over value */
+#hrui .mm-pnote{display:block;grid-column:2;margin:-4px 0 4px;font-size:12.5px;color:var(--faint)}
+#hrui .mm-props .mm-pv.mono{font-family:var(--mono);font-size:13px}
+#hrui .mm-props a.mm-pv{color:var(--accent);text-decoration:none}
+#hrui .mm-props .mm-tags{margin:10px 0 0}
+@media (max-width:560px){#hrui .mm-prow{grid-template-columns:minmax(0,1fr);gap:2px;min-height:0;padding:5px 0}#hrui .mm-pnote{grid-column:1;margin:0}}
