@@ -40,10 +40,35 @@ each Python package's beside it in site-packages.
     highlight.js         BSD-3-Clause
     Mermaid              MIT
     Apache ECharts       Apache-2.0
+    Tiptap, ProseMirror  MIT
+    Yjs, y-prosemirror, y-protocols, lib0
+                         MIT
+    Cytoscape.js, cytoscape-edgehandles
+                         MIT
+    d3-force             ISC
+    Lucide               ISC
+    marked, Turndown, node-diff3, zeed-dom
+                         MIT
+    domino               BSD-2-Clause
 
   Operating system
     The image is built on Debian. Its system packages, some under copyleft licenses such as the
     GPL and LGPL, are unchanged and carry their own terms in /usr/share/doc.
+
+MEMORY VENDORS — NOT REDISTRIBUTED
+----------------------------------
+deploy/memories runs these as separate services, from their own published images or source, when
+you choose to. None of their code is in this repository or in the image. HarnessRouter reaches
+them over the network.
+
+  Mem0                       Apache-2.0
+  Graphiti (graphiti-core)   Apache-2.0
+  Hindsight                  MIT
+  ReMe                       Apache-2.0
+  pgvector, PostgreSQL       PostgreSQL License
+  LadybugDB (ladybug)        MIT, "Copyright (c) 2022-2025 Kùzu Inc., Copyright (c) 2025-2026 Ladybug
+                             Memory Inc." Graphiti's store in that compose file. Its full text
+                             extension (MIT) is fetched when that image is built.
 
 AGENT RUNTIMES — NOT REDISTRIBUTED
 ----------------------------------

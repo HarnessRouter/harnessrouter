@@ -21,6 +21,7 @@ import { Skel, SkLine } from '../Skel';
 import { ABOUT, BLURB, FIELD, HIDDEN_FIELDS, M365_MODES, MARK, REQUIRED, SHOWN } from './plugCopy';
 import '../mcp/mcp.css';
 import './plugins.css';
+import { Markup } from '../Markup';
 
 // ── the workspace's plugins ───────────────────────────────────────────────────────────────────────
 export interface PluginsData {
@@ -116,7 +117,7 @@ export function accountOf(r: Row): { text: string; mono: boolean } {
 /** A service's own mark; a plugin without one is a plugin brick. */
 export function Logo({ mark, on = true, size }: { mark?: { src: string; app?: boolean }; name?: string; on?: boolean; size: 'row' | 'tile' | 'cap' }) {
   const wrap = size === 'row' ? `lib-ic${on ? '' : ' off'}` : size === 'cap' ? `cap-ic pl-capic${on ? '' : ' off'}` : 'pl-ic';
-  if (!mark) return <span className={wrap} aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon(on ? 'built' : 'empty', 'plugin') }} />;
+  if (!mark) return <Markup className={wrap} html={partIcon(on ? 'built' : 'empty', 'plugin')} />;
   return (
     <span className={wrap} aria-hidden="true">
       <span className={`brand-ic${mark.app ? ' pl-cover' : ' pl-b'}`}>

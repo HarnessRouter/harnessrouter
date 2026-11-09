@@ -91,7 +91,7 @@ const STUDIO_ALLOWED: Entry[] = [
   ['components/hrui/NewSetup.tsx', "router.prefetch('/studio/new')", 'fetches the page Save opens ahead of time, goes nowhere'],
   ['components/hrui/start/BuildPage.tsx', 'className="ag-back" href="/studio"', 'Back, pressed'],
   ['components/hrui/start/BuildPage.tsx', "onBack={() => router.push('/studio')}", 'Back, pressed (a phone’s task head)'],
-  ['components/hrui/setup/SetupSettings.tsx', "toast(`${rec.name} deleted`); router.push('/studio')", 'the setup was deleted: it has no page any more'],
+  ['components/hrui/setup/SetupSettings.tsx', "toast(said || `${rec.name} deleted`); router.push('/studio')", 'the setup was deleted: it has no page any more'],
   ['components/hrui/setup/parts.tsx', 'className="ag-back" href="/studio"', 'a setup page’s Back, pressed'],
   ['app/(app)/studio/page.tsx', 'const setupHref = ', 'a setup’s card on Harness Studio, pressed'],
   ['app/(app)/studio/page.tsx', "router.replace('/studio', { scroll: false })", 'Studio takes ?new=1 out of its own address as it opens New setup'],

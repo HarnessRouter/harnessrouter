@@ -264,7 +264,7 @@ export function ByokPage() {
     setHandoff(null);
     try {
       const h = await startHandoff();
-      setHandoff({ ...h, state: 'waiting', note: 'Finish in the HarnessRouter tab. The key lands here on its own.', ...(replacing ? { replacing } : {}) });
+      setHandoff({ ...h, state: 'waiting', note: 'Approve it in the HarnessRouter tab. The key lands here on its own.', ...(replacing ? { replacing } : {}) });
       window.open(h.url, '_blank', 'noopener');
     } catch {
       setHandoff({ code: '', url: '', state: 'failed', note: 'HarnessRouter could not be reached just now. Try again.' });

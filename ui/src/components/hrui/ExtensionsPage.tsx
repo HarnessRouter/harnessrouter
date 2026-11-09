@@ -15,6 +15,7 @@ import { SkillsTab, skillCount } from './ext/SkillsTab';
 import { ToolsTab, toolCount } from './ext/ToolsTab';
 import { EnvsTab, useEnvironments } from './ext/EnvsTab';
 import { tabKeys } from './tabKeys';
+import { Markup } from './Markup';
 
 type Tab = 'plugins' | 'skills' | 'tools' | 'envs';
 const TABS: [Tab, string, string][] = [['plugins', 'Plugins', 'plugin'], ['skills', 'Skills', 'skill'], ['tools', 'Tools', 'mcp'], ['envs', 'Environments', 'tool']];
@@ -74,7 +75,7 @@ export function ExtensionsPage() {
         <div className="tabs inline" role="tablist" aria-label="Add-ons" onKeyDown={(e) => tabKeys(e, TAB_KEYS, tab, pick)}>
           {TABS.map(([k, label, fam]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => pick(k)}>
-              <span className="tab-brick" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('built', fam) }} />{label}{' '}
+              <Markup className="tab-brick" html={partIcon('built', fam)} />{label}{' '}
               <span className="count">{counts[k] ?? ''}</span>
             </button>
           ))}

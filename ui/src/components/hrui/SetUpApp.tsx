@@ -20,6 +20,7 @@ import { useWsKeys } from './start/keys';
 import { KEY_BASE, KeyStep, keySlug, type MadeKey } from './start/KeyStep';
 import { promptText, starterFolder, starterPrompt, type SetupRef } from './start/prompts';
 import { PromptStep, type StepState } from './start/Steps';
+import { agentMemoryOf } from '@/lib/memories';
 
 const X = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>;
 const CHECK = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6} aria-hidden="true"><path d="M5 12l5 5L20 7" /></svg>;
@@ -33,7 +34,9 @@ export function SetUpApp({ r, onClose, kit, kitTitle }: {
 }) {
   const folder = starterFolder(kit);
   const starter = !!folder;
-  const a: SetupRef = { id: r.h.id, name: r.h.name, harness: r.baseName, model: r.h.defaultModel || '', instr: (r.h.systemPrompt || '').trim() };
+  // a setup that remembers each person apart needs every task to name its user (its record says, from 0.40)
+  const perUser = agentMemoryOf(r.h)?.memory?.scope === 'per_user';
+  const a: SetupRef = { id: r.h.id, name: r.h.name, harness: r.baseName, model: r.h.defaultModel || '', instr: (r.h.systemPrompt || '').trim(), perUser };
   const k = useWsKeys();
   const src = useRef<HTMLPreElement | null>(null);
   const keyEntry = useRef<HTMLElement | null>(null);
@@ -58,7 +61,8 @@ export function SetUpApp({ r, onClose, kit, kitTitle }: {
           <h3 id="sh">{starter ? `Make ${kitTitle || r.h.name} yours` : 'Connect your app'}</h3>
           <p className="sub">{starter
             ? `Your coding agent takes the kit’s app from GitHub and changes it. This instance keeps running ${runs} behind it.`
-            : `Your coding agent adds ${r.h.name} to your app. This instance runs ${runs} behind it, and every task your app sends shows in its task list.`}</p>
+            : `Your coding agent adds ${r.h.name} to your app. This instance runs ${runs} behind it, and every task your app sends shows in its task list.`}
+            {!starter && perUser ? ' It remembers each of your users separately, so your app names the user on every task.' : null}</p>
         </div>
         <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>{X}</button>
       </div>

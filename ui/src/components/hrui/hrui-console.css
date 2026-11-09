@@ -442,8 +442,9 @@
 #hrui .set-split .lg-dz>.ly-n{flex:1 1 auto;min-width:0}
 #hrui .set-split .lg-dz>.ly-n b{color:var(--bad)}
 #hrui .set-split .lg-dz>.ly-n:hover{background:var(--bad-soft)}
-/* Duplicate: Delete setup's row, at its right end, blue */
-#hrui .set-split .lg-dz>.ly-n.lg-dup{flex:none;width:auto;text-align:right}
+/* Delete harness, then Duplicate harness under it: two rows of a layer's anatomy, red then blue */
+#hrui .set-split .lg-dz{flex-direction:column;align-items:stretch;gap:2px}
+#hrui .set-split .lg-dz>.ly-n.lg-dup{flex:none;width:100%;text-align:left}
 #hrui .set-split .lg-dz>.ly-n.lg-dup b{color:var(--accent)}
 #hrui .set-split .lg-dz>.ly-n.lg-dup:hover{background:var(--accent-soft)}
 #hrui .set-split .lg-col>.lg-dz{display:none}
@@ -1073,3 +1074,19 @@
    loaded bar draws them, so the tabs do not move when it lands */
 #hrui .ag-bar.ag-rt>.ag-sk-tabs{margin-left:auto;display:flex;align-items:center;gap:28px;padding:0 14px}
 @media (max-width:860px){#hrui .ag-bar.ag-rt>.ag-sk-tabs{order:9;flex:0 0 100%;height:44px;margin:4px 0 0;padding:0 14px}}
+
+/* The Memory part: the same brick as every part, in its own colour */
+#hrui .iso .f-memory{--b-top:#fff0b3;--b-left:#ffdd70;--b-right:#f7c843;--b-line:#c9960f;--lb-ink:#5f4500;--r-top:#ffcf33;--r-left:#f5b60b;--r-right:#dc9d00;--r-line:#a87800}
+@media (prefers-color-scheme:dark){#hrui:not([data-theme="light"]) .iso .f-memory{--b-top:#6a5414;--b-left:#544210;--b-right:#43350d;--b-line:#d0a22a}}
+#hrui[data-theme="dark"] .iso .f-memory{--b-top:#6a5414;--b-left:#544210;--b-right:#43350d;--b-line:#d0a22a}
+#hrui .set-split>.agent-side[data-focus="memory"]:has(.bk[data-tw="memory"]) .iso-wrap .bk:not([data-tw="memory"]){opacity:.28}
+/* Five parts in one row (hrui.css: each column as wide as its own label): a word never breaks */
+#hrui .agent-side .part-n,#hrui .agent-side .part small{white-space:nowrap}
+/* A memory's row in a setup's Settings: read or write, quiet beside the switch, as Edit and Delete are */
+#hrui .mm-acc-q{appearance:none;-webkit-appearance:none;border:0;background:transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 2px center;padding:2px 15px 2px 2px;font:inherit;font-size:13px;color:var(--muted);cursor:pointer;border-radius:6px;max-width:150px;flex:none}
+#hrui .mm-acc-q:hover{color:var(--fg)}
+@supports (field-sizing:content){#hrui .mm-acc-q{field-sizing:content}}
+/* on a phone it does what an MCP row does: the switch stays beside the name, the rest drops below */
+@media (max-width:520px){#hrui .cap-mcp .mm-acc-q{order:3;margin-left:36px}#hrui .cap-mcp .mm-row-a{order:4}#hrui .cap-mcp .mm-row-a.first{margin-left:36px}}
+#hrui .mm-acc-q:disabled{opacity:.5;cursor:default}
+#hrui .mm-acc-q:focus-visible{outline:2px solid var(--accent);outline-offset:1px}

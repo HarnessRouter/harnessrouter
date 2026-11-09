@@ -313,6 +313,37 @@ def test_a_job_is_saved_into_the_workspace_with_its_own_copies_of_the_skill_and_
     assert env["plugs_attach"] == [] and env["media"] == []
 
 
+def test_the_record_says_the_memory_the_save_will_give_while_it_saves(env, monkeypatch):
+    """The card draws "Memory: <Engine>, <why>" from the record before the setup exists (the memories spec, C1). It is
+    chosen, not made: the save provisions it. With no engine running in this workspace, it says so and how to start one."""
+    seen = []
+    real = gw._setup_build_save
+
+    async def save(p, cfg, hid, ctx):
+        rec = sb.RECORDS.get(sb.record_key(ORG_A, ADA["member"], "b1test0001"))
+        seen.append((rec["step"], rec["config"].get("memory"), cfg.get("memory")))
+        return await real(p, cfg, hid, ctx)
+    monkeypatch.setattr(gw, "_setup_build_save", save)
+    start(env)
+    out = settled(env)
+    assert out["status"] == "saved", out
+    [(step, on_record, given)] = seen
+    assert step == sb.SAVING and on_record == given
+    assert on_record == {"engine": None, "scope": "per_user", "reason": gw.memory_choice.NO_ENGINE}
+    assert out["config"]["memory"] == on_record
+    [h] = built(env)
+    assert h["memory_reason"] == gw.memory_choice.NO_ENGINE, "what the save gave is what the card said"
+
+
+def test_a_build_whose_memory_cant_be_said_still_saves(env, monkeypatch):
+    async def down(p, cfg):
+        raise RuntimeError("engines unreachable")
+    monkeypatch.setattr(gw, "_setup_build_memory", down)
+    start(env)
+    out = settled(env)
+    assert out["status"] == "saved" and "memory" not in out["config"]
+
+
 def test_a_plugin_the_workspace_has_not_connected_is_asked_for_and_bound(env):
     env["chat"].answer = (200, call(sb.TOOL, configure(plugins=["media", "github"], connections_needed=["vercel"])))
     start(env)

@@ -165,6 +165,8 @@ export function rowOf(h: CustomHarness, baseName: string, cards: TraceCard[], ca
       plugin: countOn(added.plugins),
       mcp: countOn(added.tools),
       env: h.environment ? 1 : 0,
+      // from its grants, as the service counts them on the read of the list, so no row asks on its own
+      memory: h.memories?.count || 0,
     },
     running,
   });

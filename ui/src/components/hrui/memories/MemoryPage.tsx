@@ -1,0 +1,290 @@
+'use client';
+// One memory (the design's memoryView): back, its name and the engine that keeps it, "Used by N setups" (or Use in,
+// where nothing uses it yet), and More. The page is its data (the memories spec, C5): what it holds, the open record,
+// and the graph of what connects to what where its records link (or when asked for). Schema is under More: types to
+// edit where a schema guides the engine, labels where it applies them, and where it decides for itself, what it makes.
+// The last thing that failed here is said at the top, in the service's words, until something works again. Whatever
+// changes in the memory while this is open, by anyone, comes in on its event stream.
+// A person's own memory (below an agent's, kept for one person) says where it sits: under its name, the agent's memory,
+// which Back returns to; and who uses it is who uses the agent's memory, with when this person's was last used.
+import dynamic from 'next/dynamic';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  deleteMemory, getHarnessMemories, getMemory, getRecord, listGrants, listRecords, MemoryApiError, recordHref,
+  type Grant, type Memory, type MemoryRecord,
+} from '@/lib/memories';
+import { ConfirmSheet } from '../Sheet';
+import { Skel, SkHead, SkRows } from '../Skel';
+import { plain, plural } from '../setup/settingsModel';
+import { toast } from '../toast';
+import { keepsLinks, kindOf, schemaLabels } from './caps';
+import { DataTab, type RecordsRead } from './DataTab';
+import { ago } from '../setups';
+import { BACK_IC, DOTS, engineOf, msOf, setupsOf, shownName, speaksUse, useDismiss, useProviders, useSetupNames } from './parts';
+import { ConnectSheet, RenameSheet, UseInSheet } from './sheets';
+import { useMemoryEvents, type MemoryEvent } from './editor/useMemoryEvents';
+import { useSchemaDoc } from './useSchemaDoc';
+import { vendorName } from './vendors';
+import './memories.css';
+
+const SchemaEditor = dynamic(() => import('./graph/SchemaEditor').then((m) => m.SchemaEditor), { ssr: false, loading: () => <p className="mm-muted mm-cpad">Drawing the schema…</p> });
+
+const enc = encodeURIComponent;
+const PAGE = 200;
+const PULSE_MS = 2500;
+
+function useRecords(mid: string): RecordsRead {
+  const [records, setRecords] = useState<MemoryRecord[] | null>(null);
+  const [next, setNext] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const read = useCallback(() => {
+    setFailed(false);
+    listRecords(mid, { limit: PAGE }).then((d) => { setRecords(d.data); setNext(d.next || null); }).catch(() => setFailed(true));
+  }, [mid]);
+  useEffect(() => { read(); }, [read]);
+  const more = useCallback(() => {
+    if (!next) return;
+    listRecords(mid, { limit: PAGE, cursor: next }).then((d) => { setRecords((r) => [...(r || []), ...d.data]); setNext(d.next || null); }).catch(() => toast('More records could not be read just now.'));
+  }, [mid, next]);
+  const put = useCallback((r: MemoryRecord) => setRecords((l) => (l?.some((x) => x.id === r.id) ? l.map((x) => (x.id === r.id ? r : x)) : [r, ...(l || [])])), []);
+  const drop = useCallback((id: string) => setRecords((l) => l?.filter((x) => x.id !== id) || null), []);
+  return { records, failed, retry: read, more: next ? more : null, put, drop };
+}
+
+export function MemoryPage({ id, tabParam, recordParam, inParam = null, onTab }: {
+  id: string; tabParam: string | null; recordParam: string | null;
+  /** the memory below this one `recordParam` is in (a person's own), where it isn't this one's */
+  inParam?: string | null;
+  onTab: (t: 'schema' | 'data') => void;
+}) {
+  const router = useRouter();
+  const [memory, setMemory] = useState<Memory | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const { providers, reload: reloadProviders } = useProviders();
+  const names = useSetupNames();
+  const readMemory = useCallback(() => {
+    setFailed(false);
+    getMemory(id).then(setMemory).catch((e) => {
+      if (e instanceof MemoryApiError && e.status === 404) setMissing(true); else setFailed(true);
+    });
+  }, [id]);
+  useEffect(() => { readMemory(); }, [readMemory]);
+
+  const provider = useMemo(() => (memory ? (providers || []).find((p) => p.id === memory.provider) || null : null), [providers, memory]);
+  const doc = useSchemaDoc(id, provider);
+  const read = useRecords(id);
+  const ro = !memory?.privileges?.includes('write');
+
+  // data first, always: Schema is opened from More (or by its address)
+  const tab: 'schema' | 'data' = tabParam === 'schema' || tabParam === 'labels' ? 'schema' : 'data';
+  // the graph takes a column only where records link to each other, or when a person asks for it
+  const linked = useMemo(() => (read.records || []).some((r) => (r.references || []).some((x) => x.available !== false)), [read.records]);
+  const [graphAsked, setGraphAsked] = useState(false);
+  const [typeFilter, setTypeFilter] = useState('');
+  // going to Schema and back opens the record that was open, in the memory it was open in
+  const openRecord = useRef({ rid: recordParam || '', in: (recordParam && inParam) || '' });
+  const keepOpen = useCallback((rid: string, inMid: string) => { openRecord.current = { rid, in: inMid }; }, []);
+  // the open record in the address (DataTab says how): a phone's Back from a record comes back to the list
+  const place = useCallback((rid: string, inMid: string, how: 'push' | 'replace') => {
+    const to = rid ? recordHref(id, inMid || id, rid) : `/memories/${enc(id)}?tab=data`;
+    if (how === 'push') router.push(to, { scroll: false }); else router.replace(to, { scroll: false });
+  }, [id, router]);
+
+  // what changes while the page is open: the tree and the graph read it again, and what changed shows for a moment
+  const [liveTick, setLiveTick] = useState(0);
+  const [pulse, setPulse] = useState<string[]>([]);
+  const lit = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    setPulse((p) => [...new Set([...p, ...ids])]);
+    setTimeout(() => setPulse((p) => p.filter((x) => !ids.includes(x))), PULSE_MS);
+  }, []);
+  useMemoryEvents(id, (e: MemoryEvent) => {
+    if (e.type === 'schema.changed') { doc.retry(); return; }
+    setLiveTick((n) => n + 1);
+    if (e.type === 'record.created' || e.type === 'record.revised') {
+      const rid = e.record_id || '';
+      if (rid) getRecord(id, rid).then((r) => { read.put(r); lit([rid]); }).catch(() => undefined);
+    } else if (e.type === 'record.forgotten') {
+      if (e.record_id) read.drop(e.record_id);
+    } else if (e.type === 'records.erased') {
+      (e.record_ids || []).forEach((x) => read.drop(x));
+    } else {
+      read.retry();
+      lit(e.record_ids || []);
+    }
+    if (e.type !== 'record.revised') readMemory();
+  });
+
+  // the memory this one is below (a person's own below an agent's): where Back goes, and who uses it
+  const parentId = memory?.parent_id || '';
+  const [parent, setParent] = useState<Memory | null>(null);
+  useEffect(() => {
+    if (!parentId) { setParent(null); return undefined; }
+    let live = true;
+    getMemory(parentId).then((x) => { if (live) setParent(x); }).catch(() => { if (live) setParent(null); });
+    return () => { live = false; };
+  }, [parentId]);
+
+  // "Used by": grants to setups; none of it is drawn when the grants could not be read. A person's memory is used by
+  // whoever uses the agent's memory above it (the agent's grant reaches it): its own `used_by` where the service says,
+  // else the one above's.
+  const [grants, setGrants] = useState<Grant[] | null>(null);
+  useEffect(() => { listGrants(id).then(setGrants).catch(() => setGrants(null)); }, [id]);
+  const users = useMemo((): { id: string; name: string; grant: Grant | null }[] | null => {
+    if (parentId) {
+      const by = memory?.used_by?.length ? memory.used_by : parent?.used_by;
+      return by ? by.map((u) => ({ id: u.harness_id, name: u.name, grant: null })) : null;
+    }
+    return grants && names ? setupsOf(grants, names) : null;
+  }, [grants, names, parentId, memory?.used_by, parent?.used_by]);
+  const [pop, setPop] = useState<'' | 'users' | 'more'>('');
+  const [defaults, setDefaults] = useState<Record<string, boolean>>({});
+  const usersWrap = useRef<HTMLDivElement | null>(null);
+  const moreWrap = useRef<HTMLSpanElement | null>(null);
+  const closePop = useCallback(() => setPop(''), []);
+  useDismiss(pop === 'users', usersWrap, closePop);
+  useDismiss(pop === 'more', moreWrap, closePop);
+  const openUsers = () => {
+    setPop(pop === 'users' ? '' : 'users');
+    (users || []).forEach((u) => {
+      getHarnessMemories(u.id).then((d) => setDefaults((m) => ({ ...m, [u.id]: d.default_memory_id === id }))).catch(() => {});
+    });
+  };
+
+  const [sheet, setSheet] = useState<'' | 'rename' | 'delete' | 'connect' | 'use'>('');
+  const [busy, setBusy] = useState(false);
+  const [refused, setRefused] = useState('');
+  const remove = async () => {
+    setBusy(true); setRefused('');
+    try { await deleteMemory(id); toast(`${memory?.name} deleted`); router.push('/memories'); }
+    catch (e) { setRefused(plain(e, 'The memory was not deleted. Try again.')); setBusy(false); }
+  };
+
+  const countOf = useCallback((typeName: string) => {
+    if (!read.records || read.more) return null;
+    return read.records.filter((r) => kindOf(r) === typeName).length;
+  }, [read.records, read.more]);
+
+  if (missing) {
+    return <div className="scroll"><div className="list-wrap lw-n"><div className="empty-list" role="alert">This memory is not here. <Link className="link-q inl" href="/memories">Back to Memories</Link></div></div></div>;
+  }
+  if (failed) {
+    return <div className="scroll"><div className="list-wrap lw-n"><div className="empty-list ws-fail" role="alert">This memory could not be read just now. <button type="button" className="link-q inl" onClick={readMemory}>Try again</button></div></div></div>;
+  }
+  if (!memory || !providers) {
+    return <div className="scroll"><div className="list-wrap lw-n"><Skel label="Loading memory"><SkHead /><SkRows n={4} /></Skel></div></div>;
+  }
+
+  const m = memory;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(m.id); toast('Memory ID copied'); }
+    catch { toast('Text selected. Press Cmd or Ctrl + C.'); }
+  };
+  // every provider has a schema: what it makes itself, drawn locked, and where it reads one, what a person sets
+  const schemaWord = schemaLabels(provider) ? 'Labels' : 'Schema';
+  const canRename = !!m.privileges?.includes('write'), canDelete = !!m.privileges?.includes('delete');
+  const disconnected = provider ? provider.connected === false : true;
+  // Use in: where the service gives a setup its memory (0.40), nothing uses this one yet, and this person may give it
+  // (a memory below another, a person's own among them, is reached through the one above it: never given on its own here)
+  const canUseIn = speaksUse(m) && !m.parent_id && !!users && !users.length && !!m.privileges?.includes('write');
+  // a memory with nothing in it offers Use in in the middle of the page, so the bar doesn't say it twice
+  const nothingHere = !!read.records && !read.records.length && !m.children?.count;
+  const graphOn = linked || graphAsked;
+  // the last failure, said until something works again after it
+  const failedAt = msOf(m.last_error_at), okAt = msOf(m.last_ok_at);
+  const failing = !!m.last_error && (!okAt || !failedAt || failedAt > okAt);
+  // a person's memory: under the agent's memory it is in, which Back returns to, and when it was last used
+  const upHref = m.parent_id ? `/memories/${enc(m.parent_id)}?tab=data` : '/memories';
+  const upName = m.parent_id ? (parent ? shownName(parent) : '') : '';
+  const lastUsed = m.parent_id ? msOf(m.last_used_at) : null;
+
+  return (
+    <div className="tk-page mm-page">
+      <header className="ag-bar ag-rt">
+        <div className="ag-lft">
+          <Link className="ag-back" href={upHref} aria-label={m.parent_id ? `Back to ${upName || 'the memory it is in'}` : 'Back to Memories'} title={m.parent_id ? upName || undefined : 'Memories'}>{BACK_IC}</Link>
+          <div className="ag-ident">
+            <div className="ag-l1"><h1 className="ag-name" title={m.name}>{shownName(m)}</h1><span className="pill neutral">{vendorName(engineOf(m))}</span></div>
+            {m.parent_id && (upName || lastUsed) ? (
+              <div className="ag-l2 mm-up">
+                {upName ? <Link className="mm-up-l" href={upHref} title={`In ${upName}`}>{upName}</Link> : null}
+                {upName && lastUsed ? <span className="sep" aria-hidden="true">·</span> : null}
+                {lastUsed ? <span className="mm-up-t">{`Used ${ago(lastUsed)}`}</span> : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="ag-right mm-rights">
+          {tab === 'schema' ? <button type="button" className="btn small line" onClick={() => onTab('data')}>Back to data</button> : null}
+          {canUseIn && tab === 'data' ? (nothingHere ? null : <button type="button" className="btn small line mm-usein-h" onClick={() => setSheet('use')}>Use in…</button>) : users && tab === 'data' ? (
+            <div className="mm-right" ref={usersWrap}>
+              <button type="button" className="btn small line" aria-expanded={pop === 'users'} onClick={openUsers}>{users.length ? `Used by ${plural(users.length, 'setup')}` : 'Not used yet'}</button>
+              {pop === 'users' ? (
+                <div className="mm-pop mm-pop-r" role="menu">
+                  {users.length ? users.map((u) => (
+                    <button key={u.id} type="button" className="mm-mi" role="menuitem" onClick={() => router.push(`/studio/${enc(u.id)}?tab=settings&layer=memory`)}>
+                      <b>{u.name}</b><small>{u.grant ? `${u.grant.privileges.includes('write') ? 'Recalls and remembers' : 'Recalls only'}${defaults[u.id] ? ' · remembers here' : ''}` : 'Recalls and remembers this person'}</small>
+                    </button>
+                  )) : <p className="mm-pop-p">Give it to a setup in that setup’s Settings, under Memory.</p>}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {(
+            <span className="mm-popw" ref={moreWrap}>
+              <button type="button" className="icon-btn sm" aria-label="More" title="More" aria-expanded={pop === 'more'} onClick={() => setPop(pop === 'more' ? '' : 'more')}>{DOTS}</button>
+              {pop === 'more' ? (
+                <div className="mm-pop mm-pop-r" role="menu">
+                  {provider && tab === 'data' ? <button type="button" className="mm-mi" role="menuitem" onClick={() => { setPop(''); onTab('schema'); }}><b>{schemaWord}</b><small>{schemaLabels(provider) ? 'The labels it gives what it keeps' : 'What it looks for, and how things relate'}</small></button> : null}
+                  {provider && tab === 'data' && keepsLinks(provider) && !linked ? (
+                    <button type="button" className="mm-mi" role="menuitem" onClick={() => { setPop(''); setGraphAsked(!graphAsked); }}><b>{graphAsked ? 'Hide graph' : 'Show graph'}</b></button>
+                  ) : null}
+                  <button type="button" className="mm-mi" role="menuitem" onClick={() => { setPop(''); void copy(); }}><b>Copy memory ID</b></button>
+                  {canRename ? <button type="button" className="mm-mi" role="menuitem" onClick={() => { setPop(''); setSheet('rename'); }}><b>Rename and describe</b></button> : null}
+                  {canDelete ? <button type="button" className="mm-mi bad" role="menuitem" onClick={() => { setPop(''); setRefused(''); setSheet('delete'); }}><b>Delete memory</b></button> : null}
+                </div>
+              ) : null}
+            </span>
+          )}
+        </div>
+      </header>
+      {failing ? (
+        <div className="conn-stale mm-failing" role="alert">
+          <span className="grow">{m.last_error}{failedAt ? <small>{` ${ago(failedAt)}`}</small> : null}</span>
+        </div>
+      ) : null}
+      {disconnected ? (
+        <div className="conn-stale" role="alert">
+          <span className="grow">{`${vendorName(m.provider)} is not connected, so what ${m.name} keeps can’t be read.`}</span>
+          <button type="button" className="btn small" onClick={() => setSheet('connect')}>Connect</button>
+        </div>
+      ) : null}
+      {tab === 'schema' && provider ? (
+        <SchemaEditor memory={m} provider={provider} doc={doc} ro={ro} countOf={countOf} onOpenData={(t: string) => { setTypeFilter(t); onTab('data'); }} />
+      ) : (
+        <DataTab memory={m} provider={provider} schema={doc.schema} read={read} setups={names} typeFilter={typeFilter} initialRecord={openRecord.current.rid} initialIn={openRecord.current.in} onOpenRecord={keepOpen}
+          urlRecord={recordParam} urlIn={inParam} onPlace={place}
+          showGraph={graphOn} onUseIn={canUseIn ? () => setSheet('use') : undefined}
+          onSchema={() => onTab('schema')} onOtherMemory={(mid, rid) => router.push(`/memories/${enc(mid)}?tab=data&record=${enc(rid)}`)} onChanged={readMemory}
+          onBelowChanged={(ids) => { setLiveTick((x) => x + 1); lit(ids); }} liveTick={liveTick} pulse={pulse} />
+      )}
+      {sheet === 'use' ? (
+        <UseInSheet m={m} onClose={() => setSheet('')}
+          onDone={(setup) => { setSheet(''); toast(`${setup} remembers in ${m.name} now.`); listGrants(id).then(setGrants).catch(() => setGrants(null)); readMemory(); }} />
+      ) : null}
+      {sheet === 'rename' ? <RenameSheet m={m} onClose={() => setSheet('')} onDone={(x) => { setMemory({ ...m, ...x }); setSheet(''); toast('Saved'); }} /> : null}
+      {sheet === 'delete' ? (
+        <ConfirmSheet id="mmDl" title={`Delete ${m.name}?`} confirmLabel="Delete memory" busy={busy} refused={refused || undefined}
+          body={`${m.name}, its records and anything below it are destroyed, and setups lose it at once. This cannot be undone.`}
+          onClose={() => setSheet('')} onConfirm={() => void remove()} />
+      ) : null}
+      {sheet === 'connect' ? (
+        <ConnectSheet id={m.provider} onClose={() => setSheet('')}
+          onConnected={async () => { await reloadProviders(); setSheet(''); readMemory(); read.retry(); toast(`${vendorName(m.provider)} connected.`); }} />
+      ) : null}
+    </div>
+  );
+}

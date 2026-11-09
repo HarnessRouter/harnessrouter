@@ -47,7 +47,17 @@ import { FileCards, filesOf, type OpenFile } from './TurnFiles';
 import { workingNow } from './stackLive';
 import { sec } from './fmt';
 import { Md } from './TaskThread';
+import Link from 'next/link';
+import { failedLine, recalledAtStartOf, recordHref, rememberedOf, type Remembered } from '@/lib/memories';
+import { recalledIn, recalledLine, recalledTitle } from './memorySteps';
+import { useAgentMemory } from '../memories/AgentMemory';
+import { useMemoryEvents } from '../memories/editor/useMemoryEvents';
 const MAX_FILE = 25 * 1024 * 1024;
+
+/** What memory did in each turn, as the turns' records say: what it kept (or that keeping it failed), and how many
+ *  things the platform recalled for it as it began. */
+interface TurnMemory { kept: Remembered | null; atStart: number }
+const memoryOfTurns = (turns: unknown[]): TurnMemory[] => turns.map((t) => ({ kept: rememberedOf(t), atStart: recalledAtStartOf(t) }));
 const ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,application/json,.md,.csv,.txt,.json,.pdf';
 
 const CHEV = <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>;
@@ -71,8 +81,10 @@ function readFile(f: File): Promise<Attach> {
 }
 
 /** One test: the composer, then its thread once sent. A new test mounts a fresh one. */
-function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, first, resume, onSeen, onPreview, previewKey, onLive, taskTitle, top, hold, recording, instant, onFollowUp, onReplay, setupFirst }: {
+function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, first, resume, onSeen, onPreview, previewKey, onLive, taskTitle, top, hold, recording, instant, onFollowUp, onReplay, setupFirst, memoryId = '' }: {
   r: SetupRow; model: string; defaultModel: string; headerValues: Record<string, string>;
+  /** the agent's own memory (0.40), where what a turn remembered is kept: its records are linked from the turn */
+  memoryId?: string;
   /** the open task's title, as its bar shows it (a reply's Download all names its zip after it) */
   taskTitle?: string;
   onRan: () => void; onBorn: (sid: string) => void;
@@ -113,6 +125,8 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   const [turnModels, setTurnModels] = useState<string[]>([]);
   // each turn's response ID, as the record has it (read with the record, and again as a turn ends)
   const [turnIds, setTurnIds] = useState<string[]>([]);
+  // what each turn remembered, as its record says once the task's memory has kept it (0.40: `memory` on the turn)
+  const [turnMem, setTurnMem] = useState<TurnMemory[]>([]);
   const seenRef = useRef(onSeen);
   seenRef.current = onSeen;
   const fromRecord = useRef(false);
@@ -131,6 +145,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
         return String(x._model || (x.served_model ? x.served_model.split('/').pop() : '') || '');
       }));
       setTurnIds(turns.map((x) => String(x.id || '')));
+      setTurnMem(memoryOfTurns(turns));
     }).catch(() => { if (alive) t = setTimeout(() => void read(n + 1), Math.min(30_000, 2000 * 2 ** n)); });
     void read(0);
     return () => { alive = false; if (t) clearTimeout(t); };
@@ -188,11 +203,23 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     if (!was || conv.busy || !live) return undefined;
     let alive = true, t: ReturnType<typeof setTimeout> | undefined;
     // a read that fails keeps the IDs already read, and is read again shortly (at most three more times)
-    const read = (n: number) => loadSessionTurns(live).then(({ turns }) => { if (alive) setTurnIds(turns.map((x) => String(x.id || ''))); })
+    const read = (n: number) => loadSessionTurns(live).then(({ turns }) => { if (alive) { setTurnIds(turns.map((x) => String(x.id || ''))); setTurnMem(memoryOfTurns(turns)); } })
       .catch(() => { if (alive && n < 3) t = setTimeout(() => void read(n + 1), 1000 * 2 ** n); });
     void read(0);
     return () => { alive = false; if (t) clearTimeout(t); };
   }, [conv.busy, sid, conv.liveSessionId]);
+  // What a finished turn remembered is written on its record once the memory has kept it, after the turn ends. The
+  // memory says when it writes (its event stream): the turns are read again then, so the line comes as it is true.
+  const memRead = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(memRead.current), []);
+  useMemoryEvents(conv.msgs.length && !replayed ? memoryId : '', (e) => {
+    const live = sid || conv.liveSessionId;
+    if (!live || !/^record|^records/.test(e.type)) return;
+    clearTimeout(memRead.current);
+    memRead.current = setTimeout(() => {
+      loadSessionTurns(live).then(({ turns }) => setTurnMem(memoryOfTurns(turns))).catch(() => { /* read again on its next write */ });
+    }, 800);
+  });
   const started = conv.msgs.length > 0 || !!resume || !!top;
   // a recorded run plays as a live one runs: the page's row and head say it is running until it ends
   const playing = recorded && conv.busy && !whole;
@@ -364,12 +391,34 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     // a recorded run says the time it took when it ran, however fast it is played
     const rec0 = replayed && t === 0 && !!recording;
     const took = rec0 && recording ? recording.durMs : ms;
-    const end = m.status === 'done' ? (took != null && took >= 0 ? `Done in ${sec(took)}` : 'Done') : '';
+    // a turn read back from its record with no figure of its own: from when the record says it began to when it ended,
+    // in the whole seconds the record keeps (conversation.ts turnSpan)
+    const end = m.status === 'done' ? (took != null && took >= 0 ? `Done in ${sec(took)}` : m.span ? `Done in ${m.span} s` : 'Done') : '';
     const rid = turnIds[t] || '';
     const bits: React.ReactNode[] = [];
     if (rec0) bits.push(<span key="rec" className="replay-tag">Recorded</span>);
     if (note) bits.push(<span key="m">{r.baseName} · <span className="mono">{note}</span></span>);
     if (end) bits.push(<span key="e">{end}</span>);
+    // what this turn recalled: what its memory searches found, read from the searches themselves (memorySteps.ts), and
+    // what the platform recalled for it as it began, which its record counts (there is no step for that)
+    const done = m.status !== 'running';
+    const found = done ? recalledIn(m) : null, atStart = done ? turnMem[t]?.atStart || 0 : 0;
+    const recalled = recalledLine(found, atStart);
+    if (recalled) bits.push(<span key="rcl" className="pg-mem pg-recalled" title={recalledTitle(found, atStart)}>{recalled}</span>);
+    // what this turn remembered, linked to where it was kept: a record in a person's memory opens on the agent's
+    // memory's page, the person's record open in it, so Back is the agent's memory
+    const kept = done ? turnMem[t]?.kept || null : null;
+    if (kept?.failed) {
+      const said = failedLine(kept.reason || '');
+      bits.push(<span key="mem" className="pg-mem pg-mem-failed" title={said}>{said}</span>);
+    } else if (kept) {
+      const said = `Remembered ${kept.count} ${kept.count === 1 ? 'thing' : 'things'}`;
+      const mid = kept.memoryId || memoryId;
+      const rec = kept.records[0];
+      bits.push(mid ? (
+        <Link key="mem" className="pg-mem" href={recordHref(memoryId, rec?.memory_id || mid, rec?.id)} title="Open what it remembered">{said}</Link>
+      ) : <span key="mem" className="pg-mem">{said}</span>);
+    }
     // its actions, after the words, once it has finished: the reply itself as Markdown (the one most
     // people want, first), its ID, and a request that carries on from it (not on a recorded run,
     // which no server holds)
@@ -470,6 +519,8 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
   // it waits under the save card; once the save has ended its request waits in the box until the
   // person sends it (a demo's sent as recorded plays its recorded run).
   const b = useBuildOf(r.h.id);
+  // the agent's own memory, where its turns' remembered records are (0.40; none before)
+  const own = useAgentMemory(r.h.id);
   const handed = !slot.resume && !!slot.first?.setup;
   const live = handed && b ? b : null;
   const hold = !!live && live.phase !== 'done';
@@ -617,7 +668,7 @@ export function Playground({ r, onRan, slot, onBorn, onPreview, previewKey = nul
         onBorn={(sid) => { if (handed && !live?.recording) noteFirstSid(r.h.id, sid); onBorn(sid); onRan(); }} pgOpts={pgOpts} first={first}
         resume={slot.resume} onSeen={onSeen} onPreview={onPreview} previewKey={previewKey} onLive={onLive} taskTitle={taskTitle}
         top={top} hold={hold} recording={slot.recorded || (handed ? handedRec : null)} instant={!!slot.recorded}
-        onFollowUp={onFollowUp} onReplay={onReplay}
+        onFollowUp={onFollowUp} onReplay={onReplay} memoryId={own.read?.memory?.id || ''}
         setupFirst={!!slot.recorded || (!!slot.resume && !!b && b.firstSid === slot.resume)} />
       {modelPop}
       {headersPop}

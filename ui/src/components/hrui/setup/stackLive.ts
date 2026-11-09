@@ -11,6 +11,9 @@ import { LAYERS, PARTS, SUBS, type BrickState, type Tower } from '../tower';
 // server's tools its own way (mcp__plugs__x, plugs.x, mcp_plugs_x, plugs_x), so the server is a
 // segment of the name.
 const PLUGS = /(^|[_.:/-])plugs([_.:/-]|$)/i;
+// An agent's memory tools are the Memory brick whichever server name they arrive under: they're a tool to the agent,
+// and memory to anyone reading the stack.
+const MEMORY = /(^|[_.:/-])memory_(list|recall|graph|get|remember|revise|forget|run_query|operate|query)$/i;
 const FILE_KINDS = new Set(['read', 'write', 'edit', 'search', 'glob', 'list']);
 const SANDBOX_KINDS = new Set(['shell', 'shell_output', 'web_search', 'web_fetch', 'browser', 'tool']);
 
@@ -19,6 +22,7 @@ const SANDBOX_KINDS = new Set(['shell', 'shell_output', 'web_search', 'web_fetch
  *  harness's other tools (a command, a web read) the Sandbox; those last two run in the Environment. */
 export function toolLayers(name: string, args: unknown): string[] {
   if (PLUGS.test(name)) return ['plugin'];
+  if (MEMORY.test(name)) return ['memory'];
   const k = describeTool(name, args).kind;
   if (k === 'mcp') return ['mcp'];
   if (k === 'skill') return ['skill'];

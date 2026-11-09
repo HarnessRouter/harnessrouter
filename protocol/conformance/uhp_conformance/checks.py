@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import time
 import uuid
@@ -2429,6 +2430,8 @@ def _memories_supported(ctx) -> dict:
                    "Memories chapter is optional at every class")
     if "memory_provider" not in ctx.state:
         rows = (ctx.client.get("/v1/memories/providers").json or {}).get("data") or []
+        wanted = os.environ.get("UHP_MEMORY_PROVIDER", "")      # hold one provider to the rules, when a server has several
+        rows = [p for p in rows if not wanted or p.get("id") == wanted]
         ctx.state["memory_provider"] = None
         for p in rows:      # the first provider this caller can actually create a memory with
             r = ctx.client.post("/v1/memories", body={"name": f"uhp-conformance-{uuid.uuid4().hex[:6]}",

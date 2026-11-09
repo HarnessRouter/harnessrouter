@@ -1,0 +1,60 @@
+/* The left column of a memory: compact rows, the icon as the indent, a chevron on the right, and a row's
+   actions coming out when it is hovered. */
+#hrui .mt{display:flex;flex-direction:column;flex:1;width:100%;min-width:0;min-height:0;background:var(--bg)}
+#hrui .mt-top{display:flex;align-items:center;gap:6px;height:56px;box-sizing:border-box;flex:none;padding:0 10px;border-bottom:1px solid var(--line);min-width:0}
+#hrui .mt-top .mm-find{height:32px;box-sizing:border-box;padding:0 9px}
+#hrui .mt-top .icon-btn{flex:none}
+#hrui .mt-btn-on{color:var(--accent);border-color:var(--accent)}
+#hrui .mt-clear{flex:none;width:16px;height:16px;display:grid;place-items:center;color:var(--faint);border-radius:4px}
+#hrui .mt-clear svg{width:11px;height:11px}
+#hrui .mt-clear:hover{color:var(--fg)}
+#hrui .mt-chips{display:flex;flex-wrap:wrap;gap:4px;padding:0 10px 6px}
+#hrui .mt-status{font-size:12px;color:var(--faint);padding:0 12px 4px}
+#hrui .mt-status:empty{display:none}
+#hrui .mt-pad{padding:6px 12px;margin:0}
+#hrui .mt-newfolder{display:flex;align-items:center;gap:7px;padding:2px 10px 6px;color:var(--faint)}
+#hrui .mt-newfolder svg{flex:none}
+#hrui .mt-newfolder input{flex:1;min-width:0}
+#hrui .mt-list{flex:1;min-height:0;overflow:auto;padding:2px 6px 24px}
+#hrui .mt-row{position:relative;display:flex;align-items:center;gap:7px;min-height:30px;padding:3px 4px 3px calc(8px + var(--d,0) * 13px);border-radius:7px;font-size:14px;color:var(--fg);cursor:pointer;user-select:none;outline:none}
+#hrui .mt-row:hover{background:var(--surface)}
+#hrui .mt-row:focus-visible{box-shadow:inset 0 0 0 2px var(--accent)}
+#hrui .mt-row.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+#hrui .mt-row.sel{background:var(--surface)}
+#hrui .mt-row.gone .mt-lbl{color:var(--faint);text-decoration:line-through}
+#hrui .mt-memory .mt-lbl{font-weight:600}
+#hrui .mt-group .mt-lbl{font-weight:500;color:var(--muted)}
+#hrui .mt-folder .mt-lbl{color:var(--muted)}
+#hrui .mt-more .mt-lbl{font-size:12px;color:var(--accent)}
+#hrui .mt-ic{flex:none;display:grid;place-items:center;width:15px;height:15px;color:var(--faint)}
+#hrui .mt-lbl{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .mt-mark{flex:none;font-size:11px;color:var(--faint);padding:0 6px;border:1px solid var(--line);border-radius:999px}
+#hrui .mt-right{flex:none;margin-left:auto;display:inline-flex;align-items:center;gap:1px;padding-left:4px}
+#hrui .mt-count{font-size:11px;color:var(--faint);font-family:var(--mono);padding:0 4px}
+#hrui .mt-ro{display:inline-flex;align-items:center;color:var(--faint);padding:0 2px}
+#hrui .mt-chev,#hrui .mt-rowact{flex:none;width:20px;height:20px;border-radius:5px;display:inline-grid;place-items:center;color:var(--faint);padding:0}
+#hrui .mt-chev:hover,#hrui .mt-rowact:hover,#hrui .mt-rowact.on{background:var(--surface-2,var(--line));color:var(--fg)}
+#hrui .mt-rowact{display:none}
+#hrui .mt-rowact svg{width:14px;height:14px}
+#hrui .mt-row:hover .mt-rowact,#hrui .mt-row:focus-within .mt-rowact,#hrui .mt-rowact.on{display:inline-grid}
+@media (hover:none){#hrui .mt-rowact{display:inline-grid}}
+#hrui .mt-note{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:5px 8px 5px calc(8px + var(--d,0) * 13px);font-size:12px;color:var(--faint);line-height:1.45}
+#hrui .mt-note.bad{color:var(--muted)}
+#hrui .mt-skel{width:15px;height:15px;border-radius:4px;background:var(--line);animation:mt-breathe 1.5s ease-in-out infinite}
+@keyframes mt-breathe{0%,100%{opacity:.4}50%{opacity:.75}}
+/* a record that just changed, and one that just came */
+#hrui .mt-pulse{animation:mt-pulse 1.8s ease-out}
+@keyframes mt-pulse{0%,35%{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}100%{background:transparent;box-shadow:inset 2px 0 0 transparent}}
+#hrui .mt-fresh{animation:mt-slide .35s ease-out}
+@keyframes mt-slide{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){#hrui .mt-pulse,#hrui .mt-fresh,#hrui .mt-skel{animation:none}#hrui .mt-pulse{background:var(--accent-soft)}}
+/* the menu: fixed, so a row at the column's edge is never cut off by the column */
+#hrui .mt-menu{position:fixed;z-index:60;width:220px;max-width:calc(100vw - 16px);max-height:60vh;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:10px;box-shadow:0 14px 34px -12px rgba(17,24,39,.4),0 3px 10px -4px rgba(17,24,39,.2);padding:4px}
+#hrui .mt-mh{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);padding:6px 9px 3px}
+#hrui .mt-sep{height:1px;background:var(--line);margin:4px}
+#hrui .mt-mi{display:flex;align-items:center;gap:9px;width:100%;min-height:30px;padding:6px 9px;border-radius:6px;font-size:13px;color:var(--fg);text-align:left;outline:none}
+#hrui .mt-mi:hover,#hrui .mt-mi:focus-visible,#hrui .mt-mi.on{background:var(--surface)}
+#hrui .mt-mi svg{flex:none}
+#hrui .mt-mi>svg{color:var(--muted)}
+#hrui .mt-mi span:last-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hrui .mt-mi.bad,#hrui .mt-mi.bad>svg{color:var(--bad)}

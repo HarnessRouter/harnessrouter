@@ -1,0 +1,15 @@
+// The columns are ResizableColumns' to place. A column moved off to one side by a rule of its own, from when these were
+// drawers, stays there with nothing overflowing, so a page can look fine to a check and show an empty column to a person.
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+const css = readFileSync(join(__dirname, 'memories.css'), 'utf8');
+
+test.each(['.mm-conn', '.mm-doc', '.mm-graphbox'])('%s takes its place from the column it is in', (sel) => {
+  const rules = css.match(new RegExp(`\\${sel}\\{[^}]*\\}`, 'g')) || [];
+  for (const r of rules) expect(r).not.toMatch(/position:\s*(absolute|fixed)|transform:|visibility:\s*hidden/);
+});
+
+test('nothing styles the drawers these columns replaced', () => {
+  expect(css).not.toMatch(/conn-open|tree-open|mm-scrim|mm-dtog|mm-ctog|no-conn/);
+});

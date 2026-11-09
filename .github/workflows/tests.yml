@@ -39,6 +39,14 @@ jobs:
       - run: python3 scripts/check-install-pins.py
       - run: python3 scripts/test-install-env.py
 
+  # deploy/memories/up.sh, the parts that need no Docker: .env at mode 600, which container is
+  # HarnessRouter, and that the image never carries a .env from the engines' folder.
+  memories-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/test-memories-deploy.py
+
   gateway:
     runs-on: ubuntu-latest
     steps:
@@ -62,6 +70,8 @@ jobs:
       # the benchmark suite's rules are pinned by its tests; they read the gateway's vendor tables
       # from source (scripts/support-matrix/samemodel.py) and need nothing the gateway job lacks
       - run: python -m pytest scripts/benchmark -q
+      # the memories matrix runner against a memory server and an agent written in its own test
+      - run: python -m pytest scripts/support-matrix/memories -q
 
   runner:
     runs-on: ubuntu-latest

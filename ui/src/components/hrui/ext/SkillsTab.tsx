@@ -15,6 +15,7 @@ import { Skel, SkRows } from '../Skel';
 import { SkillEditor } from '../skills/SkillEditor';
 import { AddToSheet, type AddResult, type AddTarget } from './AddToSheet';
 import { skillDraft, skillFiles, skillSlug, splitSkillMd, type SkillDraft, type SkillFile } from '../skills/skillMd';
+import { Markup } from '../Markup';
 
 type Skill = CustomHarness['skills'][number];
 const isOwn = (s: Skill) => Boolean((s.files && s.files.length) || (s as { content?: string }).content || s.blob);
@@ -135,12 +136,12 @@ export function SkillsTab({ setups, reload, failed = false, retry }: {
         {failed ? <ReadFailed what="skills" retry={retry || (() => void reload())} /> : null}
         {loading && !failed ? <Skel label="Loading your skills"><SkRows n={4} /></Skel> : null}
         {empty ? (
-          <div className="empty-list es"><span className="es-art" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('empty', 'skill') }} /><span>No skills yet.</span></div>
+          <div className="empty-list es"><Markup className="es-art" html={partIcon('empty', 'skill')} /><span>No skills yet.</span></div>
         ) : null}
         {!loading ? rows.map((r) => (
           <div key={`${r.h.id}:${r.s.id || r.s.name}`} className="row lib-g">
             <span className="t lib-t">
-              <span className="lib-ic" aria-hidden="true" dangerouslySetInnerHTML={{ __html: partIcon('built', 'skill') }} />
+              <Markup className="lib-ic" html={partIcon('built', 'skill')} />
               <span>
                 <b>{r.s.name}</b>
                 {r.desc ? <small className="sub2">{r.desc}</small> : null}

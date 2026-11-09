@@ -19,6 +19,7 @@
 // differs from the one the page last drew, else when it changes, or after a while as it is.
 import { gwHeaders, type CustomHarness } from '@/lib/harness';
 import { harnessFetch } from '@/lib/hfetch';
+import { agentMemoryOf, type AgentMemoryRead } from '@/lib/memories';
 
 export const AUTO = 'auto';
 /** The media server, offered by the composer as a plugin under this id (its own attach route). */
@@ -37,6 +38,8 @@ export interface Composed {
   connectionsNeeded: Part[];
   /** a demo's own skills, saved with the setup (start/replay.ts templateOf); the composer gives none */
   ownSkills?: CustomHarness['skills'];
+  /** the memory the build proposes for the agent and why, where the server says (0.40); absent otherwise */
+  memory?: AgentMemoryRead;
 }
 
 /** What the person chose: the agent harness and model (their ids, or AUTO, sent as is), and the
@@ -84,6 +87,7 @@ export function readComposed(answer: unknown, chosen: Chosen): Composed | null {
     name, instructions, exampleTask: field(c, 'exampleTask', 'example_task'),
     base, baseName, model,
     skills: parts(c.skills), plugins: parts(c.plugins), connectionsNeeded: parts(c.connectionsNeeded ?? c.connections_needed),
+    ...(agentMemoryOf(c) ? { memory: agentMemoryOf(c) } : {}),
   };
 }
 

@@ -93,11 +93,12 @@ RETRY_MIN_S = 8.0          # less than this left: no further call
 INVENTORY_S = 8.0          # reading the workspace
 CONN_S = 10.0              # reading the builder's connections
 SAVE_S = 60.0              # saving it
+PROPOSE_S = 10.0           # what memory the agent will get, said before it is saved (`propose`)
 KEEP_S = 24 * 3600         # a build's record
 # A record still "building" this long after it began is a build that stopped without ending (it
 # cannot happen in one process unless its task died): it reads as saved when its setup exists, else
 # failed. The longest a build can take, and a margin.
-STALE_S = INVENTORY_S + CONN_S + TIMEOUT_S + SAVE_S + 30
+STALE_S = INVENTORY_S + CONN_S + TIMEOUT_S + PROPOSE_S + SAVE_S + 30
 # How long a read of a build that has not changed waits for its next change (follow).
 WAIT_S = float(os.environ.get("HR_SETUP_BUILD_WAIT_S", "25"))
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
@@ -111,6 +112,7 @@ APP = "app:"               # an app's id as the builder sees it (a plugin may sh
 BUILDING, SAVED, FAILED = "building", "saved", "failed"
 READING, WRITING, SAVING = "reading", "writing", "saving"
 
+MEMORY_HINT_MAX = 300      # characters of what the goal says to remember
 R_UNAVAILABLE = "The setup couldn’t be built just now. Nothing was saved. Try again."
 R_TIMEOUT = "Building the setup took too long. Nothing was saved. Try again."
 R_BUDGET = "Many setups were built here in the last hour. Nothing was saved. Try again later."
@@ -173,6 +175,11 @@ SYSTEM = (
     "Attach a connected app or plugin whenever the job reads from it or writes to it. None is a fine answer.\n"
     "- connections_needed{apps_needed}: services the job cannot do without that are not connected yet. "
     "Usually none, and never one that is connected.\n"
+    "- memory_hint: who the harness should remember and what about them, in a few words taken from the team's "
+    "goal (\"each customer's plan and past issues\", \"the lessons of each deployment\"), or empty when the job "
+    "needs no memory. The platform gives the harness its memory and the rules for using it: never write memory "
+    "policy or mechanisms into the instructions, no plugin, file or tool for memory, and never require an "
+    "identifier before recalling.\n"
     "- base and model, when asked: {default} on its default model fits most jobs; choose another only when "
     "the job clearly fits it better.{language}"
 )
@@ -264,6 +271,7 @@ def configure_schema(inv: dict, base_req: str, model_req: str, seen: dict) -> di
         props["connections_needed"] = _arr(sorted(inv["connect"]), "Plugins not connected that the job cannot work without.", MAX_NEEDS)
     if seen:
         props["apps_needed"] = _arr([APP + a for a in sorted(seen)], "Apps found with find_apps, not connected, that the job cannot work without.", MAX_NEEDS)
+    props["memory_hint"] = {"type": "string", "description": "Who the harness should remember and what about them, from the team's goal; empty for none."}
     return {"type": "object", "properties": props, "required": required, "additionalProperties": False}
 
 
@@ -364,6 +372,8 @@ def settle(args: dict, inv: dict, base_req: str, model_req: str, seen: dict, job
         "mcpServers": [{"id": k, "name": inv["mcp"][k]["name"]} for k in servers],
         "environment": {"id": env, "name": inv["environments"][env]["name"]} if env else None,
         "connectionsNeeded": needs,
+        # what the goal says to remember, for the engine the server chooses when it saves (memory_choice)
+        "memoryHint": sx._line(args.get("memory_hint"), MEMORY_HINT_MAX),
     }
 
 
@@ -687,7 +697,8 @@ async def start(org: str, member: str, key: str, job: str, base: str, model: str
     """Start a build, or answer the one this key already names. `bases` answers the organization's
     agent harnesses and models now ({"bases", "default_base"}); `run_parts` the callables a build runs
     on: inventory(), skill_text(id), find(query), conn() (the builder's connections, best first: see
-    builder_models), client, save(cfg, setup_id), exists(setup_id).
+    builder_models), client, save(cfg, setup_id), exists(setup_id), and optionally propose(cfg): the memory the
+    agent will get, {engine, scope, reason}, said on the record before it is saved (nothing is made by it).
     Raises BadKey, JobEmpty, JobTooLong, NotOffered, Unrecorded and NoBuilder before anything is
     started."""
     key = str(key or "").strip()
@@ -750,7 +761,7 @@ def _refused_unanswered(came: str, stats: dict) -> bool:
 
 
 async def _run(org: str, member: str, key: str, job: str, base_req: str, model_req: str, rec: dict, t0: float, *,
-               inventory, skill_text, find, wires, client, save, exists) -> None:
+               inventory, skill_text, find, wires, client, save, exists, propose=None) -> None:
     rk = record_key(org, member, key)
     hid = setup_id(org, member, key)
     lang = sx.detect_language(job)
@@ -789,6 +800,14 @@ async def _run(org: str, member: str, key: str, job: str, base_req: str, model_r
         if cfg is None:
             await fail(R_TIMEOUT if came == "timeout" else R_UNAVAILABLE, came)
             return
+        if propose is not None:
+            # the memory the save will give the agent, on the card while it saves: chosen, not made (the save makes it)
+            try:
+                said = await asyncio.wait_for(propose(cfg), PROPOSE_S)
+                if isinstance(said, dict) and "engine" in said:
+                    cfg = {**cfg, "memory": {k: said.get(k) for k in ("engine", "scope", "reason")}}
+            except Exception as e:  # noqa: BLE001 - the card says nothing of memory, and the save still gives it
+                print(f"[setup-build] build={_h(key, n=8)} memory not proposed: {type(e).__name__}", flush=True)
         rec = {**rec, "step": SAVING, "config": cfg}
         await _put(rk, rec)
         try:

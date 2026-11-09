@@ -2,18 +2,19 @@
 // The sheets Settings opens (docs/uxuidesign/console-79: delAgentHtml, popHtml's env picker), plus
 // the ones the design has no drawing for but the setup needs: a copy on another agent harness (the
 // design hands this to its New setup sheet) and an installed plugin package.
+import { isServiceEntry } from './setupParts';
 import Link from 'next/link';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { strToU8, zipSync } from 'fflate';
 import {
-  createCustom, deleteCustom, getPluginFiles, getSkillFiles, offeredOob, oobById, oobDefaultModel, oobModels, modelAvailability, setHarnessPlugs, useModelCatalogRead, PLUGS_ENTRY_ID,
-  type BaseInfo, type CustomHarness, type HarnessPlugin, type HarnessPlugs,
+  createCustom, deleteCustom, getPluginFiles, getSkillFiles, offeredOob, oobById, oobDefaultModel, oobModels, modelAvailability, setHarnessPlugs, useModelCatalogRead, type BaseInfo, type CustomHarness, type HarnessPlugin, type HarnessPlugs,
 } from '@/lib/harness';
 import type { Environment } from '@/lib/environments';
 import { Sheet, SheetTop } from '../Sheet';
 import { toast } from '../toast';
 import { ReadFailed } from '../ext/shared';
 import { plain, plural } from './settingsModel';
+import { deletedToast, memoryOnDelete, memoryOnDeleteLine, type MemoryOnDelete } from './setupMemory';
 
 export const CHECK = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6} aria-hidden="true"><path d="M5 12l5 5L20 7" /></svg>;
 
@@ -24,9 +25,20 @@ export const CHECK = <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
 // sentence is what the gateway does: the setup stops at once and tasks sent to its Harness ID are
 // refused; its tasks stay readable; it is kept 30 days (the instance's operator can restore it until
 // then) and removed after, so it does not say "can't be undone".
-export function DeleteSetupSheet({ h, onClose, onDeleted }: { h: CustomHarness; onClose: () => void; onDeleted: () => void }) {
+//
+// A setup whose memory the service made for it (0.40, `memory.provisioned`) says that the memory, and each person's
+// memory, are kept with it for the 30 days and then deleted, with what they hold, unless another setup uses it; once
+// deleted, the toast says what the service did with it (deletedToast).
+export function DeleteSetupSheet({ h, onClose, onDeleted }: { h: CustomHarness; onClose: () => void; onDeleted: (said: string) => void }) {
   const [v, setV] = useState('');
   const [busy, setBusy] = useState(false);
+  const [mem, setMem] = useState<MemoryOnDelete | null>(null);
+  useEffect(() => {
+    let live = true;
+    memoryOnDelete(h.id).then((x) => { if (live) setMem(x); }).catch(() => { /* the dialog says nothing of it */ });
+    return () => { live = false; };
+  }, [h.id]);
+  const memLine = memoryOnDeleteLine(mem);
   const inRef = useRef<HTMLInputElement | null>(null);
   const [mac] = useState(() => typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent || ''));
   const name = (h.name || '').trim();
@@ -35,13 +47,13 @@ export function DeleteSetupSheet({ h, onClose, onDeleted }: { h: CustomHarness; 
   async function go() {
     if (!ok || busy) return;
     setBusy(true);
-    try { await deleteCustom(h.id); onDeleted(); }
+    try { onDeleted(deletedToast(name, await deleteCustom(h.id))); }
     catch (e) { setBusy(false); toast(plain(e, 'The setup could not be deleted. Try again.')); }
   }
   return (
     <Sheet onClose={onClose} labelledBy="dlh" describedBy="dlp" className="small-sheet del-sheet" alert busy={busy} initialFocus={inRef}>
-      <SheetTop id="dlh" title="Delete setup" onClose={onClose} />
-      <p className="del-p" id="dlp"><b>{name || 'This setup'}</b> stops working at once, and tasks sent to its Harness ID are refused. Its past tasks stay readable. It is removed for good after 30 days.</p>
+      <SheetTop id="dlh" title="Delete harness" onClose={onClose} />
+      <p className="del-p" id="dlp"><b>{name || 'This setup'}</b> stops working at once, and tasks sent to its Harness ID are refused. Its past tasks stay readable. It is removed for good after 30 days.{memLine ? ` ${memLine}` : ''}</p>
       <label className="del-l nm" htmlFor="delConfirm">Type <b>{want}</b> to confirm.</label>
       <input id="delConfirm" ref={inRef} className="set-in" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
         value={v} onChange={(e) => setV(e.target.value)}
@@ -158,7 +170,7 @@ export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
   const notes = [
     !takesSkills && ownSkills.length ? `${o?.name || base} takes no skills, so the copy has none.` : '',
     !takesEnv && h.environment ? `${o?.name || base} can’t open an environment, so the copy has none.` : '',
-    (h.mcpServers || []).some((m) => m.id !== PLUGS_ENTRY_ID) || Object.keys(h.env || {}).length
+    (h.mcpServers || []).some((m) => !isServiceEntry(m)) || Object.keys(h.env || {}).length
       ? 'Its MCP servers and environment variables are not copied: add them in the copy’s Settings.' : '',
   ].filter(Boolean);
 
@@ -191,7 +203,7 @@ export function DuplicateSheet({ h, bases, plugs, onClose, onDone }: {
 
   return (
     <Sheet onClose={onClose} labelledBy="duh" className="small-sheet" busy={busy}>
-      <SheetTop id="duh" title="Duplicate setup" sub="Same skills, plugins and instructions, new Harness ID." onClose={onClose} />
+      <SheetTop id="duh" title="Duplicate harness" sub="Same skills, plugins and instructions, new Harness ID." onClose={onClose} />
       <div className="set-f"><label htmlFor="duName">Name</label>
         <input id="duName" className="set-in" value={name} onChange={(e) => setName(e.target.value)} /></div>
       <div className="set-f"><label htmlFor="duBase">Agent harness</label>

@@ -1,0 +1,29 @@
+# ReMe's own defaults, with search by meaning turned on. Without this it searches words alone,
+# so an agent asking about "exercise habits" doesn't find a note that says "the gym".
+extends: default
+
+components:
+  # its default answer length is more than this model allows, and a note fails without this
+  as_llm:
+    default:
+      parameters:
+        max_tokens: 16000
+
+  as_embedding:
+    default:
+      backend: openai
+      model: ${EMBEDDING_MODEL_NAME:-text-embedding-3-small}
+      dimensions: 1536
+      credential:
+        api_key: ${EMBEDDING_API_KEY:-}
+        base_url: ${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
+      parameters: {}
+
+  embedding_store:
+    default:
+      backend: local
+      as_embedding: default
+
+  file_store:
+    default:
+      embedding_store: default

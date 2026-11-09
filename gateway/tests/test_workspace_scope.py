@@ -250,6 +250,7 @@ ASKS = {"_owned_session", "_owned_environment", "_harness_in_reach", "_harness_f
 # A route that takes an id and is not held to a workspace, with the reason it is not.
 EXEMPT = {
     "recycle_session_sandbox": "behind the internal key: the platform's own call, no caller to narrow",
+    "memory_service_revoke": "behind the internal key: a memory service belongs to the instance, not a workspace",
     "workspace_by_path": "the public artifact address: one unguessable link, its own check, no caller at all",
     "workspaces_update": "the id IS a workspace: refuses a workspace's key that names another one",
 }
