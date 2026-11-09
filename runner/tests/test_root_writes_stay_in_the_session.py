@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import stat
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -518,7 +519,55 @@ _PROMPT_BASES = {  # base: (provider, auth)
     "kilo": ("openai-api", _KEYED), "minimax": ("openai-api", _KEYED), "goose": ("openai-api", _KEYED),
     "grok": ("openai-api", _KEYED), "vibe": ("openai-api", _KEYED), "docker-agent": ("openai-api", _KEYED),
     "opensquilla": ("openai-api", _KEYED), "hermes": ("openai-api", _KEYED),
+    # the prompt is set in the CLI's own process: kimi's stand-in is a Node script (the preload acts in node), and
+    # jcode's a native binary the loader library acts in (both below)
+    "kimi": ("openai-api", _KEYED), "jcode": ("openai-api", _KEYED),
 }
+# kimi: a Node program, as Kimi Code is, so NODE_OPTIONS loads prompt_preload.cjs into it. It records the argv it
+# holds in-process (where the preload put the prompt), starts a helper and waits.
+_NODE_STAND_IN = r"""#!{node}
+const fs = require('node:fs');
+const {{ spawn }} = require('node:child_process');
+const helper = spawn('/bin/sleep', ['8'], {{ stdio: 'ignore' }});
+const out = `${{process.cwd()}}/.stand-in-${{process.pid}}.json`;
+fs.writeFileSync(out + '.part', JSON.stringify({{ argv: process.argv, stdin: '', files: {{}}, in_process: process.argv.slice(2),
+                                                 helper: helper.pid }}));
+fs.renameSync(out + '.part', out);
+setTimeout(() => process.exit(0), 6000);
+"""
+# jcode: a native binary, as jcode's release is (the `.bin` beside its launcher), so the loader runs
+# prompt_argv.so in it. The same record.
+_NATIVE_STAND_IN = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+static void quoted(FILE *f, const char *s) {
+    fputc('"', f);
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') fprintf(f, "\\%c", c);
+        else if (c < 0x20) fprintf(f, "\\u%04x", c);
+        else fputc(c, f);
+    }
+    fputc('"', f);
+}
+int main(int argc, char **argv) {
+    pid_t helper = fork();
+    if (helper == 0) { execl("/bin/sleep", "sleep", "8", (char *)NULL); _exit(127); }
+    char out[256], part[300];
+    snprintf(out, sizeof out, ".stand-in-%d.json", (int)getpid());
+    snprintf(part, sizeof part, "%s.part", out);
+    FILE *f = fopen(part, "w");
+    if (!f) return 1;
+    fprintf(f, "{\"stdin\": \"\", \"files\": {}, \"helper\": %d, \"in_process\": [", (int)helper);
+    for (int i = 1; i < argc; i++) { quoted(f, argv[i]); if (i + 1 < argc) fputc(',', f); }
+    fputs("]}", f);
+    fclose(f);
+    rename(part, out);
+    sleep(6);
+    return 0;
+}
+"""
 
 
 def _opened_as(uid: int, path: str) -> str:
@@ -561,10 +610,27 @@ def _stand_ins(monkeypatch) -> pathlib.Path:
     """A folder of stand-ins, one per CLI name, first on PATH; and the absolute ones pointed at it."""
     d = pathlib.Path(tempfile.mkdtemp(prefix="hrstandin-"))
     os.chmod(d, 0o755)
+    node, cc = shutil.which("node"), shutil.which("cc") or shutil.which("gcc")
     text = _STAND_IN.format(python=sys.executable)
     for name in _ON_PATH + ["vibe", "docker-agent", "python-opensquilla", "python-hermes"]:
         (d / name).write_text(text)
         os.chmod(d / name, 0o755)
+    if node:
+        (d / "kimi").write_text(_NODE_STAND_IN.format(node=node))
+        os.chmod(d / "kimi", 0o755)
+    if cc:
+        # jcode's pair: a launcher, and the binary beside it that the runner starts directly (_jcode_exe); and the
+        # library that hands the binary its prompt, built from the runner's own source as the image builds it
+        src = d / "jcode-stand-in.c"
+        src.write_text(_NATIVE_STAND_IN)
+        subprocess.run([cc, "-O2", "-o", str(d / "jcode.bin"), str(src)], check=True, capture_output=True)
+        (d / "jcode").write_text('#!/bin/sh\nexec "$0.bin" "$@"\n')
+        so = d / "prompt_argv.so"
+        subprocess.run([cc, "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(so),
+                        str(pathlib.Path(server.__file__).with_name("prompt_argv.c"))], check=True, capture_output=True)
+        for f in (d / "jcode", d / "jcode.bin", so):
+            os.chmod(f, 0o755)
+        monkeypatch.setattr(server, "PROMPT_ARGV_SO", str(so), raising=False)
     monkeypatch.setenv("PATH", f"{d}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.setattr(server, "VIBE_BIN", str(d / "vibe"))
     monkeypatch.setattr(server, "DOCKER_AGENT_BIN", str(d / "docker-agent"))
@@ -584,6 +650,10 @@ def test_a_turns_command_line_holds_none_of_its_prompt(base, continued, monkeypa
     monkeypatch.setattr(server, "WORKSPACE_ROOT", root)
     monkeypatch.setattr(server, "_ws", lambda identifier="": os.path.join(root, identifier or "s1"))
     _stand_ins(monkeypatch)
+    if base == "kimi" and not shutil.which("node"):
+        pytest.fail("kimi's stand-in is a Node program, and there is no node here")
+    if base == "jcode" and not (shutil.which("cc") or shutil.which("gcc")):
+        pytest.fail("jcode's stand-in and its library are built with a C compiler, and there is none here")
     provider, auth = _PROMPT_BASES[base]
     ident = f"hsessprompt{base.replace('-', '')}{int(continued)}"
     ws = pathlib.Path(root, ident)
@@ -625,7 +695,8 @@ def test_a_turns_command_line_holds_none_of_its_prompt(base, continued, monkeypa
     assert made and all(_opened_as(UID2, f) in ("EACCES", "ENOENT") for f in files), \
         [(f, _opened_as(UID2, f)) for f in files]
     got = json.loads(report.read_text())
-    handed = got["stdin"] + "".join(got["files"].values())
+    # kimi and jcode hold it in-process, where the preload and the library set it: nowhere a command line shows
+    handed = got["stdin"] + "".join(got["files"].values()) + "".join(got.get("in_process") or [])
     assert PROMPT_MARK in handed, got                                  # ...and the CLI still has its prompt
     _settle(client, ident, r)
     assert not list((ws / "tmp").glob(".prompt-*")), "the prompt file outlived the turn"

@@ -177,14 +177,15 @@ def test_mimo_resume_is_not_claimed_for_a_session_this_workspace_does_not_hold()
 
 def test_jcode_argv_pins_the_version_under_the_measurement():
     d, env = _ws(), {"HOME": str(pathlib.Path(_ws()) / "h")}
-    cmd = _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "do it", d, env)
-    assert cmd[0] == "jcode"
+    cmd = handed.build(_build_jcode, "openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "do it", d, env)
+    assert cmd[0] == "jcode" or cmd[0].endswith(".bin")     # the release's binary itself, where the launcher pairs it
     # MANDATORY: auto-update defaults to true, so without this the binary replaces itself midway
     # through a measurement — the Muse Code failure, written into the argv.
     assert "--no-update" in cmd
     assert cmd[cmd.index("--provider") + 1] == "openai-compatible"
     assert cmd[cmd.index("--model") + 1] == "gpt-5.4"
-    assert cmd[-3:] == ["run", "--ndjson", "do it"]
+    # the message is handed over in jcode's own process (prompt_argv.so); the command line holds the placeholder
+    assert cmd[-4:] == ["run", "--ndjson", "--", server.PROMPT_ARG] and handed.by_folder(d)[-1] == "do it"
     # The relay token rides the ENVIRONMENT, which is what _relay_served_model keys off: a backend
     # whose credential rides argv or a file leaves matrix rule 2 unevaluable (the openhands defect).
     assert env["JCODE_OPENAI_COMPAT_API_BASE"].startswith("http")

@@ -23,6 +23,7 @@ import handed  # noqa: E402
 
 MARK = "the task's own words 7f3a91c2"
 KEY = server.Auth(api_key="k-0123456789abcdef", base_url="https://up.example/v1")
+node = pytest.mark.skipif(not shutil.which("node"), reason="no node here")
 
 
 def _build(backend: str, prompt: str = MARK, instructions: str | None = None, resume: str | None = None):
@@ -166,24 +167,167 @@ def test_the_flags_each_cli_reads_the_file_with():
 @pytest.mark.parametrize("backend", ["kimi", "grok", "mimo"])
 def test_the_changed_instructions_travel_with_the_prompt(backend, monkeypatch):
     """Where an edit to the instructions is handed over with the message (_PINNED_INSTRUCTIONS), it goes the
-    prompt's way. kimi still takes both on its command line: its CLI has no other way in (see below)."""
+    prompt's way."""
     probe = {"mimo": "_opencode_has_session"}.get(backend, f"_{backend}_has_session")
     monkeypatch.setattr(server, probe, lambda *a, **k: True)
     cmd, held, d = _build(backend, instructions="EDITED RULES 55e1", resume="hsess-continued")
-    if backend == "kimi":
-        assert any("EDITED RULES 55e1" in a for a in cmd)
-        return
     assert not any("EDITED RULES 55e1" in a or MARK in a for a in cmd), cmd
     text = handed.text(held)
     assert "EDITED RULES 55e1" in text and text.rstrip('"').endswith(MARK), "the note leads the prompt, off the command line"
     server._prompt_discard(held)
 
 
-def test_only_kimi_and_jcode_still_take_the_prompt_on_the_command_line():
-    """kimi (a Node single executable whose -p takes only an argument, and nothing reads stdin) and jcode (`run`
-    takes only <MESSAGE>) have no other way in short of their ACP servers; the rest hand it over off argv."""
-    still = {b for b in ("kimi", "jcode") if any(MARK in a for a in _build(b)[0])}
-    assert still == {"kimi", "jcode"}
+# ── kimi and jcode: one executable, the prompt only as an argument ─────────────────────────────────────
+# Kimi Code is a Node single executable whose -p takes only an argument and which reads nothing on stdin; jcode's
+# `run` takes only <MESSAGE>. Neither has an entry point a launcher could run in-process, so the argument is set
+# inside the CLI's own process before its code reads it: by a Node preload for kimi (prompt_preload.cjs), by a
+# library the dynamic loader runs first for jcode (prompt_argv.so). The command line holds only the placeholder.
+def _env_of(backend: str, prompt: str = MARK):
+    d = tempfile.mkdtemp()
+    env: dict = {"HOME": os.path.join(d, ".harness", "home"), "PATH": os.environ.get("PATH", "")}
+    held: dict = {}
+    tok = server._TURN_PROMPT.set(held)
+    try:
+        fn = getattr(server, f"_build_{backend}")
+        cmd = fn("openai-api", KEY, server.BACKENDS[backend]["default_model"], prompt, d, env)
+    finally:
+        server._TURN_PROMPT.reset(tok)
+    return [str(a) for a in cmd], env, held, d
+
+
+def test_no_cli_takes_the_prompt_on_its_command_line_any_more():
+    for backend in ("kimi", "jcode"):
+        cmd, env, held, d = _env_of(backend)
+        assert not any(MARK in a for a in cmd) and server.PROMPT_ARG in cmd, (backend, cmd)
+        assert env["HR_PROMPT_FILE"] == held["path"] and handed.text(held) == MARK, backend
+        assert pathlib.Path(held["path"]).parent == pathlib.Path(d, "tmp", server.PROMPT_DIR)
+        _folder_is_private(d)
+        server._prompt_discard(held)
+        assert not os.path.exists(env["HR_PROMPT_FILE"]), "the file goes with the turn"
+
+
+def test_kimi_is_handed_its_prompt_by_the_node_preload():
+    cmd, env, held, _ = _env_of("kimi")
+    assert cmd[:3] == ["kimi", "-p", server.PROMPT_ARG]
+    assert env["NODE_OPTIONS"] == f"--require {server.PROMPT_PRELOAD_CJS}"
+    server._prompt_discard(held)
+
+
+def test_jcode_is_handed_its_prompt_by_the_loader_library_in_jcode_itself(tmp_path, monkeypatch):
+    """The Linux release is a launcher and `<launcher>.bin` (docker/entrypoint.sh, install_jcode): the binary is
+    started directly, with its folder on LD_LIBRARY_PATH as the launcher would put it, so no shell in between holds
+    the arguments; the library acts only in the binary HR_PROMPT_EXE names."""
+    rel = tmp_path / "jcode"
+    rel.mkdir()
+    launcher, binary = rel / "jcode-linux-x86_64", rel / "jcode-linux-x86_64.bin"
+    launcher.write_text("#!/bin/sh\nexec \"$0.bin\" \"$@\"\n")
+    binary.write_text("")
+    os.chmod(launcher, 0o755)
+    os.chmod(binary, 0o755)
+    on_path = tmp_path / "bin"
+    on_path.mkdir()
+    (on_path / "jcode").symlink_to(launcher)
+    monkeypatch.setenv("PATH", f"{on_path}{os.pathsep}{os.environ.get('PATH', '')}")
+    cmd, env, held, _ = _env_of("jcode", prompt="-a message that starts with a dash")
+    assert cmd[0] == os.path.realpath(binary) and cmd[-4:] == ["run", "--ndjson", "--", server.PROMPT_ARG]
+    assert env["LD_LIBRARY_PATH"].split(os.pathsep)[0] == os.path.dirname(os.path.realpath(binary))
+    assert env["LD_PRELOAD"] == server.PROMPT_ARGV_SO and env["HR_PROMPT_EXE"] == os.path.realpath(binary)
+    assert handed.text(held) == "-a message that starts with a dash"     # after `--`: still the message
+    server._prompt_discard(held)
+
+
+def test_jcode_is_refused_in_words_where_the_runner_has_no_library_to_hand_it_over(monkeypatch):
+    """Never started with the placeholder as its message, and never with the prompt on its command line."""
+    monkeypatch.setattr(server, "PROMPT_ARGV_SO", "/nonexistent/prompt_argv.so")
+    with pytest.raises(server.HTTPException) as e:
+        _env_of("jcode")
+    assert "prompt_argv.so" in str(e.value.detail) and "process list" in str(e.value.detail)
+
+
+@node
+def test_the_preload_sets_the_argument_in_process_and_leaves_nothing_for_what_the_cli_starts(tmp_path):
+    entry = tmp_path / "fakecli.js"
+    entry.write_text("const { execFileSync } = require('node:child_process');\n"
+                     "const child = execFileSync(process.execPath, ['-e', "
+                     "'process.stdout.write(JSON.stringify([process.env.NODE_OPTIONS || null, process.env.HR_PROMPT_FILE || null]))']);\n"
+                     "let cmdline = null;\n"
+                     "try { cmdline = require('node:fs').readFileSync('/proc/self/cmdline', 'utf8'); } catch {}\n"
+                     "process.stdout.write(JSON.stringify({argv: process.argv.slice(2), child: JSON.parse(child), cmdline}));\n")
+    prompt = tmp_path / "p.txt"
+    prompt.write_text(MARK + "\nsecond line")
+    env = {**os.environ, "NODE_OPTIONS": f"--require {server.PROMPT_PRELOAD_CJS}", "HR_PROMPT_FILE": str(prompt)}
+    out = subprocess.run(["node", str(entry), "-p", server.PROMPT_ARG, "--output-format", "stream-json"],
+                         env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    assert got["argv"] == ["-p", MARK + "\nsecond line", "--output-format", "stream-json"]
+    assert got["child"] == [None, None], "what the CLI starts loads no preload and finds no prompt file"
+    assert not prompt.exists(), "the preload removes the file once it has read it"
+    if got["cmdline"] is not None:
+        assert MARK not in got["cmdline"] and server.PROMPT_ARG in got["cmdline"]
+
+
+@node
+@pytest.mark.parametrize("case", ["no file", "no placeholder"])
+def test_the_preload_stops_the_cli_rather_than_run_it_without_its_prompt(tmp_path, case):
+    entry = tmp_path / "fakecli.js"
+    entry.write_text("process.stdout.write('ran');\n")
+    prompt = tmp_path / "p.txt"
+    if case == "no placeholder":
+        prompt.write_text(MARK)
+    env = {**os.environ, "NODE_OPTIONS": f"--require {server.PROMPT_PRELOAD_CJS}", "HR_PROMPT_FILE": str(prompt)}
+    args = ["-p", server.PROMPT_ARG] if case == "no file" else ["-p", "something else"]
+    out = subprocess.run(["node", str(entry), *args], env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 2 and out.stdout == "", (out.stdout, out.stderr)
+
+
+def _library(tmp_path) -> str:
+    cc = shutil.which("cc") or shutil.which("gcc")
+    if not sys.platform.startswith("linux") or not cc:
+        pytest.skip("the library is a Linux one, built where a C compiler is (the image builds it)")
+    so = tmp_path / "prompt_argv.so"
+    built = subprocess.run([cc, "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(so),
+                            str(pathlib.Path(server.__file__).with_name("prompt_argv.c"))], capture_output=True, text=True)
+    assert built.returncode == 0, built.stderr
+    return str(so)
+
+
+_SHOW = ("import json, os, sys\n"
+         "print(json.dumps({'argv': sys.argv[1:], 'cmdline': open('/proc/self/cmdline', 'rb').read().decode(errors='replace'),"
+         " 'env': [os.environ.get(k) for k in ('LD_PRELOAD', 'HR_PROMPT_FILE', 'HR_PROMPT_EXE')]}))\n")
+
+
+def test_the_library_sets_the_argument_in_the_named_binary_alone(tmp_path):
+    so = _library(tmp_path)
+    prompt = tmp_path / "p.txt"
+    prompt.write_text(MARK + "\nsecond line")
+    py = os.path.realpath(sys.executable)
+    env = {**os.environ, "LD_PRELOAD": so, "HR_PROMPT_FILE": str(prompt), "HR_PROMPT_EXE": py}
+    out = subprocess.run([py, "-c", _SHOW, "run", "--", server.PROMPT_ARG], env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    assert got["argv"] == ["run", "--", MARK + "\nsecond line"]
+    assert MARK not in got["cmdline"] and server.PROMPT_ARG in got["cmdline"]
+    assert got["env"] == [None, None, None], "nothing the binary starts loads the library or finds the file"
+    assert not prompt.exists()
+    # any other program (a launcher in between) passes the placeholder on as it is, and keeps the file
+    prompt.write_text(MARK)
+    out = subprocess.run([py, "-c", _SHOW, "--", server.PROMPT_ARG], env={**env, "HR_PROMPT_EXE": "/usr/bin/elsewhere"},
+                         capture_output=True, text=True, timeout=60)
+    assert json.loads(out.stdout)["argv"] == ["--", server.PROMPT_ARG] and prompt.exists()
+
+
+@pytest.mark.parametrize("case", ["no file", "no placeholder"])
+def test_the_library_stops_the_binary_rather_than_run_it_without_its_prompt(tmp_path, case):
+    so = _library(tmp_path)
+    prompt = tmp_path / "p.txt"
+    if case == "no placeholder":
+        prompt.write_text(MARK)
+    py = os.path.realpath(sys.executable)
+    env = {**os.environ, "LD_PRELOAD": so, "HR_PROMPT_FILE": str(prompt), "HR_PROMPT_EXE": py}
+    args = ["--", server.PROMPT_ARG] if case == "no file" else ["--", "something else"]
+    out = subprocess.run([py, "-c", "print('ran')", *args], env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 2 and out.stdout == "" and "the prompt could not be handed over" in out.stderr
 
 
 def test_the_prompt_file_is_made_fresh_each_time(tmp_path):
@@ -409,7 +553,6 @@ def test_what_each_cli_is_handed_is_the_message_it_stored_from_its_arguments():
     server._prompt_discard(held)
 
 
-node = pytest.mark.skipif(not shutil.which("node"), reason="no node here")
 
 
 @node
