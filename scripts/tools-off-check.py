@@ -175,7 +175,8 @@ def model_body(path: str, body: dict) -> tuple[str, bytes]:
     if path.endswith("/responses"):
         item = {"id": "msg_stand", "type": "message", "role": "assistant", "status": "completed",
                 "content": [{"type": "output_text", "text": "OK", "annotations": []}]}
-        done = {"id": "resp_stand", "object": "response", "status": "completed", "model": model, "output": [item],
+        # created_at: a client on the AI SDK refuses a response event without it (Type validation failed)
+        done = {"id": "resp_stand", "object": "response", "created_at": 1, "status": "completed", "model": model, "output": [item],
                 "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
         if not stream:
             return "application/json", json.dumps(done).encode()
