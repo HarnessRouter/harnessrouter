@@ -359,7 +359,7 @@ describe('where something can\'t change, the same panel shows all of it, not edi
     stored = { types: [{ name: 'Company', description: 'A customer.' }] };
     await open(CAPS.hindsight);
     expect(el.textContent).not.toContain('Facts pulled out of each task');
-    expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Inspect selected type', '+ Label', 'expand']);
+    expect(Array.from(tools().children).map((c) => c.getAttribute('aria-label') || c.textContent)).toEqual(['Inspect selected type', '+ Type', 'expand']);
     expect(canvasProps.edgeDrawEnabled).toBe(false);
     await act(async () => { canvasProps.onTapNode('Company'); });
     await flush();
@@ -374,8 +374,9 @@ describe('where something can\'t change, the same panel shows all of it, not edi
     await click(button('Save'));
     await later(20);
     expect(puts[0]).toEqual({ types: [{ name: 'Company', description: 'Someone who pays.' }] });
-    await click(button('+ Label'));
-    expect(q('.sp-graph-addtype').textContent).toContain('New label');
+    // its entries are types, as on every engine (Richard 11-09: "make them consistent called schema")
+    await click(button('+ Type'));
+    expect(q('.sp-graph-addtype').textContent).toContain('New type');
     expect(button('Edge')).toBeUndefined();
   });
   describe('a provider that decides for itself', () => {

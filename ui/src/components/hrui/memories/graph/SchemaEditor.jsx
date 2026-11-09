@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConfirmSheet } from '../../Sheet';
 import { toast } from '../../toast';
 import { plural } from '../../setup/settingsModel';
-import { builtinOf, hasProperties, hasRelations, NO_RELATIONS_LINE, RELATIONS_LINE, relText, schemaGuides, schemaLabels, schemaWord, TYPES_LINE } from '../caps';
+import { builtinOf, hasProperties, hasRelations, NO_RELATIONS_LINE, RELATIONS_LINE, relText, schemaGuides, schemaLabels, TYPES_LINE } from '../caps';
 import { MM_COLORS, MM_PTYPES, MM_STARTS, propNameOf, schemaProblem, startSchema, typeLabel, typeNameOf, uid } from '../schemaModel';
 import { kindInfo } from '../tree';
 import { StarterArt } from '../CardArt';
@@ -531,7 +531,8 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
   const [rowBusy] = useState({});
   const schemaRef = useRef(null);
   const bodyRef = useRef(null);
-  const word = schemaWord(provider);
+  // one word for a schema's entries on every engine (Richard 11-09: "make them consistent called schema")
+  const word = 'type';
 
   const draftHasContent = (d) => !!d && (d.name != null || d.color != null || d.icon != null || d.description != null || d.labelProps != null || (d.props && d.props.length) || (d.addConns && d.addConns.length) || (d.removeConns && d.removeConns.length));
   const typeDirty = Object.values(typeDrafts).some(draftHasContent);
@@ -741,7 +742,7 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
             <div className="dg-canvas-tools" style={{ zIndex: edit ? 4 : undefined }}>
               <button className={'pane-btn' + (edit ? ' active' : '')} onClick={() => setEdit(!edit)} title={caps.any ? 'Inspect / edit selected type' : 'Inspect selected type'} aria-label="Inspect selected type" aria-pressed={edit}>{(caps.any ? I.pencil : I.info)}</button>
               {caps.any ? null : <span className="pill neutral" title="This can be read here, not changed">Read only</span>}
-              {caps.add ? <button type="button" className="btn sm" onClick={() => setAddType((v) => !v)} title={`Add a ${word}`}>+ {word === 'label' ? 'Label' : 'Type'}</button> : null}
+              {caps.add ? <button type="button" className="btn sm" onClick={() => setAddType((v) => !v)} title="Add a type">+ Type</button> : null}
               <button className={'pane-btn' + (expanded ? ' active' : '')} onClick={() => setExpanded((v) => !v)} title={expanded ? 'restore' : 'expand'} aria-label={expanded ? 'restore' : 'expand'} aria-pressed={expanded}>{expanded ? I.cornersIn : I.cornersOut}</button>
               {caps.any && schemaDirty && (
                 <>
@@ -888,7 +889,7 @@ function WrittenSchema({ memory, provider, doc, ro, countOf, onOpenData }) {
   const count = useCallback((key, label) => (key.startsWith('vertex:') ? countOf(label) : null), [countOf]);
   return (
     <SchemaPane memory={memory} provider={provider} graph={graph} saved={doc.schema} doc={doc} caps={caps}
-      loading={!doc.schema && !doc.failed} failed={!doc.schema && doc.failed ? (schemaLabels(provider) ? 'The labels could not be read just now.' : 'The schema could not be read just now.') : ''}
+      loading={!doc.schema && !doc.failed} failed={!doc.schema && doc.failed ? 'The schema could not be read just now.' : ''}
       retry={doc.retry} countOf={count} onOpenData={onOpenData} />
   );
 }

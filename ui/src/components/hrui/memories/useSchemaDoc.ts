@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSchema, putSchema, type Provider } from '@/lib/memories';
 import { plain } from '../setup/settingsModel';
-import { hasSchema, schemaWord } from './caps';
+import { hasSchema } from './caps';
 import { schemaIn, schemaOut, schemaProblem, type LSchema } from './schemaModel';
 
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
@@ -43,7 +43,7 @@ export function useSchemaDoc(mid: string, provider: Provider | null): SchemaDoc 
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
     const s = cur.current;
     if (!s || !dirty.current || writing.current) return;
-    const problem = schemaProblem(s, schemaWord(prov.current));
+    const problem = schemaProblem(s);
     if (problem) { setError(problem); setState('error'); return; }
     dirty.current = false;
     writing.current = true;

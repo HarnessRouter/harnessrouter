@@ -37,10 +37,11 @@ jest.mock('next/dynamic', () => ({
 jest.mock('./editor/DocEditor', () => ({ DocEditor: ({ readOnly, onReady }: { readOnly?: boolean; onReady?: () => void }) => <div className="editor-stub" data-readonly={String(!!readOnly)} onClick={onReady} /> }));
 // the graph, and the panel a record opens on it, which holds the record's links (linksFor)
 jest.mock('./graph/MemoryGraph', () => ({
-  MemoryGraph: (p: { activeRecordId: string; refreshKey: number; onOpenRecord: (r: string, m?: string) => void; linksFor?: (id: string) => ReactNode }) => (
+  MemoryGraph: (p: { activeRecordId: string; refreshKey: number; onOpenRecord: (r: string, m?: string) => void; linksFor?: (id: string) => ReactNode; onFold?: () => void }) => (
     <div className="graph-panel-stub">
       <button type="button" className="graph-stub" data-active={p.activeRecordId} data-tick={p.refreshKey} onClick={() => p.onOpenRecord('far', 'hmem_2')}>graph</button>
       <button type="button" className="graph-here" onClick={() => p.onOpenRecord('r2')}>here</button>
+      {p.onFold ? <button type="button" className="fold-stub" aria-label="Hide graph" onClick={p.onFold}>fold</button> : null}
       {p.linksFor ? p.linksFor(p.activeRecordId) : null}
     </div>
   ),
@@ -92,8 +93,10 @@ const byLabel = (t: string) => page().querySelector(`button[aria-label="${t}"]`)
 /** The page's tabs, by name, in order. */
 const tabNames = () => Array.from(page().querySelectorAll('.ag-bar .ag-tabs [role=tab]')).map((b) => (b.textContent || '').trim());
 const tabOf = (t: string) => Array.from(page().querySelectorAll<HTMLButtonElement>('.ag-bar .ag-tabs [role=tab]')).find((b) => (b.textContent || '').trim() === t);
-/** The record list's own Graph switch, where records don't link. */
+/** A Graph switch on the record list's bar: there is none (Richard 11-09: the panel folds from its own edge). */
 const graphSwitch = () => page().querySelector<HTMLButtonElement>('.mt-top button[aria-label="Graph"]');
+const hideGraph = () => page().querySelector<HTMLButtonElement>('button[aria-label="Hide graph"]');
+const showGraph = () => page().querySelector<HTMLButtonElement>('button[aria-label="Show graph"]');
 /** A record that links to another: what makes the graph take its column. */
 const linking = (o: Partial<MemoryRecord> = {}) => record({ references: [{ rel: 'about', record_id: 'zz', available: true }], ...o });
 async function click(b: Element | null | undefined) {
@@ -132,6 +135,7 @@ beforeEach(() => {
   if (!globalThis.crypto) Object.assign(globalThis, { crypto: {} });
   if (!globalThis.crypto.getRandomValues) Object.assign(globalThis.crypto, { getRandomValues: (a: Uint8Array) => a.fill(7) });
   FakeSource.all = [];
+  localStorage.removeItem('hr.memory.graph');
   root = createRoot(el);
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); jest.clearAllMocks(); });
@@ -180,10 +184,12 @@ describe('tabs: Data, Schema and Settings, as a setup has Tasks and Settings (Ri
     expect(page().querySelector('.schema-stub')?.getAttribute('data-mode')).toBe('guides');
     expect(s.sent('GET', '/v1/memories/hmem_1/schema').length).toBeGreaterThan(0);
   });
-  test('one that applies labels calls its tab Labels, and shows what the provider makes beside them', async () => {
+  test('one that applies labels calls its tab Schema too (Richard 11-09: "make them consistent called schema")', async () => {
     open({ provider: CAPS.hindsight, records: [record()], schema: { types: [{ name: 'Company' }] } });
     await draw();
-    expect(tabNames()).toEqual(['Data', 'Labels', 'Settings']);
+    expect(tabNames()).toEqual(['Data', 'Schema', 'Settings']);
+    await click(tabOf('Schema'));
+    expect(onTab).toHaveBeenLastCalledWith('schema');
     await act(async () => { root.unmount(); }); root = createRoot(el);
     open({ provider: CAPS.hindsight, records: [record()], schema: { types: [{ name: 'Company' }] } });
     await draw('labels');
@@ -211,32 +217,34 @@ describe('the columns: everything it holds, the open record, and the graph where
     expect(page().querySelector('.mm-doc .editor-stub')).toBeTruthy();
     expect(page().querySelector('.graph-stub')?.getAttribute('data-active')).toBe('r');
   });
-  test('where nothing links, the record takes the graph’s room, and the list’s Graph switch brings it back when asked', async () => {
+  test('the graph is open by default, even where nothing links yet, and the record list has no Graph switch (Richard 11-09)', async () => {
+    open({ provider: CAPS.graphiti, records: [record({ id: 'r', title: 'Mine' })] });
+    await draw();
+    expect(page().querySelector('.graph-stub')?.getAttribute('data-active')).toBe('r');
+    expect(page().querySelector('.mm-doc .editor-stub')).toBeTruthy();
+    expect(graphSwitch()).toBeNull();
+  });
+  test('it folds to the right into a rail from its own edge, opens again from the rail, and is kept that way in this browser', async () => {
+    open({ provider: CAPS.mem0, records: [record({ id: 'r', title: 'Mine' })] });
+    await draw();
+    expect(hideGraph()).toBeTruthy();
+    await click(hideGraph());
+    expect(page().querySelector('.graph-stub')).toBeNull();
+    const rail = page().querySelector('.mm-rail') as HTMLElement;
+    expect(rail.textContent).toBe('Graph');
+    expect(rail.closest('.rc-col')?.getAttribute('style')).toContain('0 0 52px');
+    expect(showGraph()?.getAttribute('aria-expanded')).toBe('false');
+    expect(page().querySelector('.mm-doc .editor-stub')).toBeTruthy();
+    expect(localStorage.getItem('hr.memory.graph')).toBe('folded');
+    // another visit: still folded
+    await act(async () => { root.unmount(); }); root = createRoot(el);
     open({ provider: CAPS.mem0, records: [record({ id: 'r', title: 'Mine' })] });
     await draw();
     expect(page().querySelector('.graph-stub')).toBeNull();
-    expect(page().querySelector('.mm-doc .editor-stub')).toBeTruthy();
-    expect(graphSwitch()?.getAttribute('aria-pressed')).toBe('false');
-    await click(graphSwitch());
+    await click(showGraph());
     expect(page().querySelector('.graph-stub')?.getAttribute('data-active')).toBe('r');
-    expect(graphSwitch()?.getAttribute('aria-pressed')).toBe('true');
-    await click(graphSwitch());
-    expect(page().querySelector('.graph-stub')).toBeNull();
-  });
-  test('where records link, the graph is always there, and there is no switch', async () => {
-    open({ provider: CAPS.mem0, records: [linking({ id: 'r', title: 'Mine' })] });
-    await draw();
-    expect(page().querySelector('.graph-stub')).toBeTruthy();
-    expect(graphSwitch()).toBeNull();
-  });
-  test('an engine that finds people and things still shows no graph until something links (Richard 11-09)', async () => {
-    open({ provider: CAPS.graphiti, records: [record({ id: 'r', title: 'Mine' })] });
-    await draw();
-    expect(page().querySelector('.graph-stub')).toBeNull();
-    await act(async () => { root.unmount(); }); root = createRoot(el);
-    open({ provider: CAPS.graphiti, records: [linking({ id: 'r', title: 'Mine' })] });
-    await draw();
-    expect(page().querySelector('.graph-stub')).toBeTruthy();
+    expect(page().querySelector('.mm-rail')).toBeNull();
+    expect(localStorage.getItem('hr.memory.graph')).toBeNull();
   });
   test('a record in another memory, reached from the graph, opens on that memory', async () => {
     open({ provider: CAPS.mem0, records: [linking({ id: 'r', title: 'Mine' })] });
@@ -360,7 +368,7 @@ describe('an action a provider does not serve is not shown', () => {
     expect(editorReadOnly()).toBe('true');
     expect(page().querySelector('.mm-doc-bar button[aria-label="More"]')).toBeNull();
     expect(tabNames()).toEqual(['Data', 'Schema', 'Settings']);
-    expect(graphSwitch()).toBeTruthy();
+    expect(page().querySelector('.graph-stub')).toBeTruthy();
   });
 });
 
@@ -387,8 +395,7 @@ describe('links', () => {
       extra: { 'PATCH /v1/memories/hmem_1/records/a': a, 'PATCH /v1/memories/hmem_1/records/b': b },
     });
     await draw();
-    // nothing links yet, so the graph (where links are made) is asked for
-    await click(graphSwitch());
+    // the graph, where links are made, is open from the start
     await click(button('Link a record'));
     await click(button('Link'));
     const patched = [...s.sent('PATCH', '/v1/memories/hmem_1/records/a'), ...s.sent('PATCH', '/v1/memories/hmem_1/records/b')][0].body;
@@ -403,7 +410,6 @@ describe('links', () => {
     });
     await draw('data');
     expect(page().textContent).not.toContain('no relations in the schema');
-    await click(graphSwitch());
     await click(button('Link a record'));
     expect(page().querySelector('input[aria-label="How they relate"]')).toBeTruthy();
     await click(button('Link'));

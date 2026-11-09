@@ -54,7 +54,22 @@ export function latestWorthOpening(records: MemoryRecord[]): MemoryRecord | null
   return worth.sort((a, b) => at(b) - at(a))[0] || null;
 }
 
-export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, initialIn = '', onOpenRecord, onSchema, onOtherMemory, onChanged, onBelowChanged, liveTick, pulse, showGraph = true, graphToggle, urlRecord = null, urlIn = null, onPlace }: {
+/** The folded graph's rail: the width of a setup's folded Agent stack. */
+const RAIL = 52;
+const FOLD_KEY = 'hr.memory.graph';
+const CHEV_L = <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>;
+/** Whether this person folded the graph: kept in this browser, as the Memories page's view is; open until they fold it. */
+function useGraphFold(): [boolean, (on: boolean) => void] {
+  const [folded, setFolded] = useState(false);
+  useEffect(() => { try { setFolded(window.localStorage.getItem(FOLD_KEY) === 'folded'); } catch { /* none */ } }, []);
+  const fold = useCallback((on: boolean) => {
+    setFolded(on);
+    try { if (on) window.localStorage.setItem(FOLD_KEY, 'folded'); else window.localStorage.removeItem(FOLD_KEY); } catch { /* private window */ }
+  }, []);
+  return [folded, fold];
+}
+
+export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, initialIn = '', onOpenRecord, onSchema, onOtherMemory, onChanged, onBelowChanged, liveTick, pulse, showGraph = true, urlRecord = null, urlIn = null, onPlace }: {
   memory: Memory; provider: Provider | null; schema: LSchema | null; read: RecordsRead; setups: Map<string, string> | null;
   typeFilter: string; initialRecord: string;
   /** the memory below this one that `initialRecord` is in (a person's own), where it isn't this one's */
@@ -64,10 +79,8 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   /** a record of a memory below this one was changed here: the list reads what is below again */
   onBelowChanged?: (recordIds: string[]) => void;
   liveTick: number; pulse: string[];
-  /** the graph's column: where records link, or when a person asked for it */
+  /** the graph's column, open unless this person folded it (Richard 11-09): where the engine keeps links, or records link */
   showGraph?: boolean;
-  /** the graph's switch, for the record list's bar: where records link it is always on, and there's none */
-  graphToggle?: { on: boolean; toggle: () => void };
   /** the record the address names now (?record=, and ?in= for one below this memory): Back and Forward move it */
   urlRecord?: string | null; urlIn?: string | null;
   /** put the open record in the address: `push` where opening it is going somewhere (the columns are tabs, and the
@@ -104,6 +117,9 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   // comes back to the list, not out of the memory. Side by side, the list stays and a record is only picked: the
   // address follows it in place. Back and Forward (and a link) move the open record with the address.
   const narrow = useRef(false);
+  const [tabbed, setTabbed] = useState(false);   // the columns are tabs (a phone): the graph is a tab, never folded
+  const [folded, fold] = useGraphFold();
+  const graphOpen = showGraph && (!folded || tabbed);
   const pushed = useRef(false);                  // the address's record is one this page pushed (Back is the list)
   const at = useRef(`${urlIn || ''}:${urlRecord || ''}`);
   const placed = useRef<string | null>(null);    // the address this page last asked for
@@ -295,7 +311,7 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   }, [memory.id, provider, schema]);
   const everyFolder = useMemo(() => (hasFolders(provider) ? allFolders(folderTree(all, [])) : []), [provider, all]);
 
-  const tree = <MemoryTree memory={memory} provider={provider} schema={kinds} read={read} activeId={record?.id || ''} pulse={pulse} filterKind={typeFilter} onOpen={open} onNew={startNew} onChanged={onChanged} graphToggle={graphToggle} />;
+  const tree = <MemoryTree memory={memory} provider={provider} schema={kinds} read={read} activeId={record?.id || ''} pulse={pulse} filterKind={typeFilter} onOpen={open} onNew={startNew} onChanged={onChanged} />;
   // something is kept here, in this memory or below it (null while what is below is still being read)
   const held = all.length ? true : below === null ? (kids ? null : false) : below.n === null ? true : below.n > 0;
   const doc = (
@@ -323,7 +339,7 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
               <h2>{held ? 'Pick a record' : 'Nothing kept yet'}</h2>
               <p>{held
                 ? (!all.length && below?.people ? 'What it keeps about each person is under their name. Choose a record to read it.'
-                  : showGraph ? 'Choose one from the list or the graph to read it.' : 'Choose one from the list to read it.')
+                  : graphOpen ? 'Choose one from the list or the graph to read it.' : 'Choose one from the list to read it.')
                 : `Add the first record, or give ${memory.name} to a setup and let it write.`}</p>
               {!held && write ? <button type="button" className="btn primary small" onClick={() => startNew(kinds?.types[0]?.name || 'note')}>{PLUS}New record</button> : null}
               {!held && schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>Set what it should look for first</button></p> : null}
@@ -342,8 +358,15 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
           linksFor={(id: string) => (hideLinks || !record?.id || id !== record.id ? null : (
             <Connections record={record} graph={graph} failed={graphFailed} retry={readGraph} schema={kinds} options={options} candidates={candidates} provider={provider}
               onOpen={show} onLink={link} onUnlink={unlink} canUnlink={canUnlink} />
-          ))} />
+          ))} onFold={tabbed ? undefined : () => fold(true)} />
       </div>
+    </aside>
+  );
+  // folded: a slim rail at the right, as a setup's Agent stack folds, with the toggle that opens it and its name
+  const rail = (
+    <aside className="mm-conn mm-rail" aria-label="Graph">
+      <button type="button" className="icon-btn mm-rail-tog" aria-expanded={false} aria-label="Show graph" title="Show graph" onClick={() => fold(false)}>{CHEV_L}</button>
+      <span className="mm-rail-l" aria-hidden="true">Graph</span>
     </aside>
   );
   // A memory that holds nothing at all (no records, no sub memories) is said once, in the middle: what it will hold,
@@ -374,8 +397,8 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
       <ResizableColumns storageKey={showGraph ? 'hr.memory.columns' : 'hr.memory.columns.nograph'} tab={tab} panes={[
         { id: 'tree', label: 'Records', min: 220, initial: 280, node: tree },
         { id: 'doc', label: 'Record', min: 380, initial: 640, grow: true, node: doc },
-        ...(showGraph ? [{ id: 'graph', label: 'Graph', min: 280, initial: 440, node: right }] : []),
-      ]} onTab={pickTab} onNarrow={(n) => { narrow.current = n; }} />
+        ...(showGraph ? [folded && !tabbed ? { id: 'graph', label: 'Graph', min: RAIL, initial: RAIL, fixed: RAIL, node: rail } : { id: 'graph', label: 'Graph', min: 280, initial: 440, node: right }] : []),
+      ]} onTab={pickTab} onNarrow={(n) => { narrow.current = n; setTabbed(n); }} />
     </div>
   );
 }

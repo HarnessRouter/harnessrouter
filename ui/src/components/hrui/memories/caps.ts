@@ -14,10 +14,8 @@ export const schemaGuides = (p?: Provider | null) => p?.schema?.mode === 'guides
 export const schemaLabels = (p?: Provider | null) => p?.schema?.mode === 'labels';
 export const hasProperties = (p?: Provider | null) => schemaGuides(p) && !!p?.schema?.properties;
 export const hasRelations = (p?: Provider | null) => schemaGuides(p) && !!p?.schema?.relations;
-/** What the schema is called here: its tab, and the word for one of its entries. */
 /** What a provider makes itself, if it says. */
 export const builtinOf = (p?: Provider | null) => p?.schema?.builtin || null;
-export const schemaWord = (p?: Provider | null) => (schemaLabels(p) ? 'label' : 'type');
 // What was measured on a provider that reads types and relations, said where someone edits them.
 export const TYPES_LINE = 'Types work best for things with a name, like people, companies and products.';
 export const RELATIONS_LINE = 'Relations you name replace the words we’d otherwise pick, so name every kind you care about. Anything else stays linked as related, with its sentence kept.';
@@ -149,7 +147,7 @@ export const relText = (rel?: string | null) => { const r = String(rel || ''); r
  *  rows a person compares before a choice that is fixed once made. */
 export function serviceFacts(p: Provider): { label: string; value: string }[] {
   const schema = schemaGuides(p) ? (hasRelations(p) ? 'Types and relations' : 'Types')
-    : schemaLabels(p) ? 'Labels' : hasFolders(p) ? 'Folders' : 'None';
+    : schemaLabels(p) ? 'Types' : hasFolders(p) ? 'Folders' : 'None';
   const entities = p.graph?.entities === 'derived' ? 'Found for you' : p.graph?.entities === 'stated' ? 'Only what you write' : 'None';
   const finds = ({ write_time: 'As it writes', background: 'In the background', agent: 'Its own agent' } as Record<string, string>)[String(p.derivation)] || 'Keeps what you write';
   return [{ label: 'Schema', value: schema }, { label: 'Entities', value: entities }, { label: 'Pulls out facts', value: finds }];
