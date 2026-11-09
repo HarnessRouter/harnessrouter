@@ -22,16 +22,19 @@ _uhp_error = None
 
 _file_bytes = None          # app.py's reader of an uploaded file's bytes, bound by install()
 _on_grant = None            # app.py's hook after a grant is written, bound by install()
+_used_by = None             # app.py's answer to which agents use each memory, bound by install()
 
 
-def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None, on_grant=None, workspace_of=None) -> None:
+def install(app, principal, uhp_error, graph, file_meta=None, file_bytes=None, on_grant=None, workspace_of=None,
+            used_by=None) -> None:
     """Bind the gateway's principal resolver, error envelope, graph backing and file store, and
     mount the routes. `on_grant(org, principal)` runs after a grant is written: the gateway uses
     it to give an agent that was just let into its first memory the tools to use it. `workspace_of` is the
-    plug routes' own rule for which workspace a call is about, so the two can't disagree."""
-    global _principal, _uhp_error, _file_bytes, _on_grant, _workspace_of
+    plug routes' own rule for which workspace a call is about, so the two can't disagree. `used_by(org, caller)`
+    answers {memory id: [{harness_id, name}]}: the agents the caller may see that hold a grant on each."""
+    global _principal, _uhp_error, _file_bytes, _on_grant, _workspace_of, _used_by
     _principal, _uhp_error, mp.GRAPH, mp.FILES, _file_bytes, _on_grant = principal, uhp_error, graph, file_meta, file_bytes, on_grant
-    _workspace_of = workspace_of
+    _workspace_of, _used_by = workspace_of, used_by
     if os.environ.get("HR_MEMORY_FIXTURE") == "1" and "fixture" not in mp.PROVIDERS:
         import memory_fixture
         mp.PROVIDERS["fixture"] = memory_fixture.FixtureProvider()
@@ -53,6 +56,7 @@ async def _who(request: Request) -> tuple[str, str, str, list[str]]:
     org = p.get("org", "")
     if not org:
         raise _uhp_error(401, "invalid_credential", "Missing or invalid API key.")
+    request.state.hr_caller = p
     # The workspace a memory belongs to is decided exactly as a plug's is, so a memory finds the provider
     # its own workspace connected, and a key held to a workspace can't name another to spend its vendor account.
     return org, str(p.get("member") or ""), _workspace_of(request, p), principals_of(p)
@@ -199,21 +203,34 @@ async def create_memory(request: Request) -> dict:
 
 @router.get("/v1/memories")
 @guarded
-async def list_memories(request: Request, parent: str = "", ancestor: str = "", granted: bool = False, counts: bool = True) -> dict:
+async def list_memories(request: Request, parent: str = "", ancestor: str = "", granted: bool = False, counts: bool = True,
+                        q: str = "", sort: str = "") -> dict:
     """`counts=false`: each memory's record count is left unknown (null), and no provider is asked. A list that shows
-    no counts (the console's Memories page) loads in one read instead of a call to a provider for every memory."""
+    no counts (the console's Memories page) loads in one read instead of a call to a provider for every memory.
+    `q` keeps the memories whose name or description has it; `sort=recent` puts the one used last first, and
+    the never used after, by name. Each memory says its `engine`, `last_used_at` and `used_by`: the agents
+    that hold a grant on it, as far as the caller may see them."""
     org, _, _, pr = await _who(request)
+    if sort not in ("", "name", "recent"):
+        raise _uhp_error(422, "memory_invalid", "`sort` is name or recent.", "sort")
     if granted:
-        return {"object": "list", "data": await mp.given(org, pr)}
-    if ancestor:
+        data = await mp.given(org, pr)
+    elif ancestor:
         m, _ = await mp.need(org, ancestor, pr, "read")
         data = []
         for k in await mp._subtree(org, m["id"]):
             kp = await mp.effective(org, k, pr)
             if kp:
                 data.append(await mp.out(org, k, pr, kp))
-        return {"object": "list", "data": data}
-    return {"object": "list", "data": await (mp.children(org, parent, pr, counts) if parent else mp.roots(org, pr, counts))}
+    else:
+        data = await (mp.children(org, parent, pr, counts) if parent else mp.roots(org, pr, counts))
+    words = " ".join(q.split()).casefold()
+    if words:
+        data = [x for x in data if words in f"{x.get('name') or ''}\n{x.get('description') or ''}".casefold()]
+    if sort == "recent":
+        data = sorted(data, key=lambda x: (-(x.get("last_used_at") or 0), str(x.get("name") or "").casefold(), x["id"]))
+    users = await _used_by(org, getattr(request.state, "hr_caller", {}) or {}) if _used_by else {}
+    return {"object": "list", "data": [{**x, "used_by": users.get(str(x["id"]), [])} for x in data]}
 
 
 @router.get("/v1/memories/{mid}")
@@ -221,7 +238,8 @@ async def list_memories(request: Request, parent: str = "", ancestor: str = "", 
 async def get_memory(mid: str, request: Request) -> dict:
     org, _, _, pr = await _who(request)
     m, privs = await mp.need(org, mid, pr, "read")
-    return await mp.out(org, m, pr, privs)
+    users = await _used_by(org, getattr(request.state, "hr_caller", {}) or {}) if _used_by else {}
+    return {**await mp.out(org, m, pr, privs), "used_by": users.get(mid, [])}
 
 
 @router.put("/v1/memories/{mid}")
@@ -280,7 +298,12 @@ async def observe(mid: str, request: Request) -> dict:
             "attributes": dict(e.get("attributes") or {})} for e in eps]
 
     async def write():
-        made = await prov.observe(mid, eps, mp.writer_of(member))
+        try:
+            made = await mp.observe(prov, mid, eps, mp.writer_of(member))
+        except mp.MemoryError as e:
+            await mp.mark(org, mid, e.message)
+            raise
+        await mp.mark(org, mid)
         body = {"object": "list", "data": await _records_out(org, mid, made.get("records") or [], pr)}
         if made.get("job"):
             # the provider derives after it answers: what it wrote is read from the job once it settles
@@ -342,7 +365,12 @@ async def remember(mid: str, request: Request) -> dict:
     await mp.settle_files(org, rec_in["content"], prov)
 
     async def write():
-        made = await mp.remember(prov, mid, rec_in, mp.writer_of(member))
+        try:
+            made = await mp.remember(prov, mid, rec_in, mp.writer_of(member))
+        except mp.MemoryError as e:
+            await mp.mark(org, mid, e.message)
+            raise
+        await mp.mark(org, mid)
         return 200, {**await mp.present(org, mid, made, pr), **{k: made[k] for k in ("closed", "conflicts") if k in made}}
     return _answer_of(*await _once(request, org, member, mid, "remember", write))
 
@@ -473,7 +501,7 @@ async def list_records(mid: str, request: Request, type: str = "", as_of: str = 
     m, _ = await mp.need(org, mid, pr, "read")
     res = await (await mp.provider_of(m)).list(mid, {"types": [type] if type else None, "as_of": as_of or None,
                                              "include": include, "limit": max(1, min(limit, 200)), "cursor": cursor})
-    return {"object": "list", "data": await _records_out(org, mid, res.get("records") or [], pr),
+    return {"object": "list", "data": await _records_out(org, mid, [r for r in res.get("records") or [] if not mp.is_probe(r)], pr),
             "next": res.get("next"), **await mp.neighbours(org, m, pr)}
 
 
