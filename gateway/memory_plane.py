@@ -542,15 +542,23 @@ async def end_user_node(org: str, parent: dict, user: str) -> tuple[dict, str]:
 # engine reached (an observe, a remember, a connect), with `last_error_at`; `last_ok_at` is the last time one
 # worked. A reader compares the two. `last_used_at` is the last time an agent read or wrote it. Written at
 # most once a minute per memory and kind on this replica: a busy memory is not a write per call.
+# `write_error_at` is when a write through the engine last failed (`write`: not a connection someone was refused
+# while the working one stayed): app.py reads it, against `last_ok_at`, to tell an engine that answers but can't keep
+# anything (_memory_engines_failing).
 _MARKED: dict[tuple[str, str], float] = {}
 MARK_EVERY_S = 60.0
 
 
-async def mark(org: str, mid: str, error: str = "", *, used: bool = False) -> None:
+async def mark(org: str, mid: str, error: str = "", *, used: bool = False, write: bool = True) -> None:
     now = time.time()
     if error:
+        at = _now_ms()
         props = {"last_error": " ".join(str(REDACT(error) if REDACT else error).split())[:300] or "It failed.",
-                 "last_error_at": _now_ms()}
+                 "last_error_at": at, **({"write_error_at": at} if write else {})}
+        # the next success anywhere is written at once, not up to a minute later: whether an engine is failing is read
+        # off the newest failure and the newest success of its memories
+        for k in [k for k in _MARKED if k[1] == "ok"]:
+            _MARKED.pop(k, None)
     else:
         key = (mid, "used" if used else "ok")
         if now - _MARKED.get(key, 0.0) < MARK_EVERY_S:

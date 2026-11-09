@@ -230,17 +230,18 @@ class Choice:
     fits: str               # the nature that fits best: none, an engine, or '' when nothing was said
 
 
-def choose(*, running=None, **agent) -> Choice:
-    """The engine for this agent among the ones `running` here (connected and answering; None means all of
+def choose(*, running=None, failing=None, **agent) -> Choice:
+    """The engine for this agent among the ones `running` here (connected, answering and writing; None means all of
     them), its scope, and why. When the one that fits best isn't running, the next best that is keeps it, and
-    the reason says so. With none running there is no memory, and the reason says how to start them."""
+    the reason says so. With none running there is no memory, and the reason says how to start them. `failing`
+    ({engine: why}) names the engines that answer but whose writes are failing, so the reason says that instead."""
     fits, sc = scores(**agent)
     if fits == NONE:
         return Choice(None, SHARED, REASON[NONE], NONE)
-    return _among(fits, sc, running)
+    return _among(fits, sc, running, failing)
 
 
-def for_memory(*, running=None, name: str = "", description: str = "") -> Choice:
+def for_memory(*, running=None, failing=None, name: str = "", description: str = "") -> Choice:
     """The engine for a memory a person makes by hand (New memory), read from its name and description the way an
     agent is read (choose), with one difference: a memory always has an engine. Words that say "works on what it is
     given" mean nothing for a memory, so the nature that fits next keeps it, or, when nothing else was said, the one
@@ -248,21 +249,27 @@ def for_memory(*, running=None, name: str = "", description: str = "") -> Choice
     fits, sc = scores(name=name, description=description)
     if fits == NONE:
         fits = _best({**sc, NONE: 0.0})
-    return _among(fits, sc, running)
+    return _among(fits, sc, running, failing)
 
 
-def _among(fits: str, sc: dict[str, float], running) -> Choice:
+def _among(fits: str, sc: dict[str, float], running, failing=None) -> Choice:
     """The engine for the nature that fits (an engine's, or '' when nothing was said) among the ones running."""
     best = fits or MEM0
     why = REASON[best] if fits else UNSAID
     scope = scope_of(fits)
-    up = list(ENGINES) if running is None else [e for e in ENGINES if e in set(running)]
+    failing = {e: str(w or "") for e, w in (failing or {}).items() if e in ENGINES}
+    up = list(ENGINES) if running is None else [e for e in ENGINES if e in set(running) and e not in failing]
     if best in up:
         return Choice(best, scope, why, fits)
     if not up:
+        if failing:
+            e = best if best in failing else next(iter(failing))
+            return Choice(None, scope, f"No memory engine here can keep anything right now. {LABEL[e]}: "
+                                       f"{failing[e].rstrip('.') or 'its last writes failed'}.", fits)
         return Choice(None, scope, NO_ENGINE, fits)
     alt = sorted(up, key=lambda e: (-sc.get(e, 0.0), ORDER.index(e)))[0]
-    return Choice(alt, scope, f"{why} {LABEL[best]} fits best; it isn't running here, so {LABEL[alt]} keeps it for now.", fits)
+    down = "it can't keep anything here right now" if best in failing else "it isn't running here"
+    return Choice(alt, scope, f"{why} {LABEL[best]} fits best; {down}, so {LABEL[alt]} keeps it for now.", fits)
 
 
 def for_engine(engine: str, **agent) -> Choice:

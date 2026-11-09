@@ -18698,7 +18698,8 @@ async def _plug_save(org: str, workspace: str, plug_type: str, body: PlugBody) -
         if refusal:
             refusal = memory_plane.clean_text(refusal)
             for m in await BACKING.graph.find("Memory", {"org": org, "workspace": workspace, "provider": plug_type}):
-                await memory_plane.mark(org, str(m["id"]), refusal)        # the memories on it say why, where they are read
+                # the memories on it say why, where they are read; it isn't a write that failed: what worked still does
+                await memory_plane.mark(org, str(m["id"]), refusal, write=False)
             raise uhp_error(422, "memory_invalid", refusal, "secrets.api_key" if given else "config.base_url")
     for field, value in (body.secrets or {}).items():
         if field not in form["secrets"]:
@@ -18812,9 +18813,15 @@ async def _memory_discover(org: str, workspace: str) -> list[dict]:
     if not _pool_is_local():
         raise uhp_error(403, "forbidden", "Engines are found only on an instance with one operator.")
     out = []
+    failing = await _memory_engines_failing(org, workspace)
     for engine, url in _MEMORY_STACK.items():
         label = memory_choice.LABEL[engine]
         status, _rec = await _plug_lookup_local(org, workspace, engine)
+        if status == "connected" and engine in failing:
+            # connected and answering is not working: its writes have been failing, so agents are not given it
+            out.append({"engine": engine, "state": "failing", "reason": failing[engine],
+                        "message": _memory_engine_failing_words(engine, failing[engine])})
+            continue
         if status == "connected":
             out.append({"engine": engine, "state": "connected", "message": f"{label} is connected."})
             continue
@@ -21452,8 +21459,17 @@ def _memory_ws_of(p: dict) -> str:
 
 
 async def _memory_engines_running(org: str, ws: str) -> list[str]:
-    """The engines connected for this workspace that answer now, each asked at most once a minute and for a few
-    seconds: one that is down never holds up making an agent."""
+    """The engines connected for this workspace that answer now AND can write: each one's health asked at most once a
+    minute and for a few seconds (one that is down never holds up making an agent), and none whose writes have been
+    failing (_memory_engines_failing). A health route alone answered while every write failed with HTTP 500 (a dead
+    model key), and auto-choice picked Graphiti and Hindsight there."""
+    return (await _memory_engines_state(org, ws))[0]
+
+
+async def _memory_engines_state(org: str, ws: str) -> tuple[list[str], dict[str, str]]:
+    """(the engines answering and writing here, {engine: why} for those that answer but whose writes are failing)."""
+    failing = await _memory_engines_failing(org, ws)
+
     async def one(e: str) -> str:
         if e not in memory_plane.PROVIDERS or e not in _MEMORY_CHECKS:
             return ""
@@ -21470,7 +21486,36 @@ async def _memory_engines_running(org: str, ws: str) -> list[str]:
             why = type(err).__name__
         _ENGINE_UP[(org, ws, e)] = (time.time(), not why)
         return "" if why else e
-    return [e for e in await asyncio.gather(*(one(e) for e in memory_choice.ENGINES)) if e]
+    up = [e for e in await asyncio.gather(*(one(e) for e in memory_choice.ENGINES)) if e]
+    return [e for e in up if e not in failing], {e: why for e, why in failing.items() if e in up}
+
+
+_ENGINE_FAILING_S = 600.0     # how far back a write that failed makes an engine "not answering"
+
+
+async def _memory_engines_failing(org: str, ws: str) -> dict[str, str]:
+    """{engine: the last failure, in words} for each engine whose newest write failure on any memory it keeps for this
+    workspace is from the last ten minutes and newer than its newest success. Read off the memories (memory_plane.mark
+    keeps write_error_at and last_ok_at on each), so every replica reads the same. A key someone pasted and was refused
+    is not a write that failed: the connection that worked is kept, and still works."""
+    now_ms, ws = time.time() * 1000, ws or "default"
+    err: dict[str, tuple[int, str]] = {}
+    ok: dict[str, int] = {}
+    for m in await BACKING.graph.find("Memory", {"org": org}):
+        if str(m.get("deleted") or "0") == "1" or (str(m.get("workspace") or "") or "default") != ws:
+            continue
+        e = str(m.get("provider") or "")
+        at = memory_plane._ms_or_none(m.get("write_error_at")) or 0
+        if at > err.get(e, (0, ""))[0]:
+            err[e] = (at, str(m.get("last_error") or ""))
+        ok[e] = max(ok.get(e, 0), memory_plane._ms_or_none(m.get("last_ok_at")) or 0)
+    return {e: why or "Its last writes failed." for e, (at, why) in err.items()
+            if now_ms - at < _ENGINE_FAILING_S * 1000 and at > ok.get(e, 0)}
+
+
+def _memory_engine_failing_words(engine: str, why: str) -> str:
+    label = memory_choice.LABEL.get(engine, engine)
+    return f"{label} is running, but it couldn't keep anything in the last few minutes: {str(why or '').rstrip('.')}."
 
 
 async def _memory_agent_words(org: str, hid: str, v: dict, hint: str = "") -> dict:
@@ -21511,9 +21556,13 @@ async def _memory_ask_check(org: str, ws: str, ask: tuple[str, str], p: dict) ->
     kind, value = ask
     if kind == "engine" and not str(p.get("member") or ""):
         raise _memory_no_person()
-    if kind == "engine" and value not in await _memory_engines_running(org, ws):
-        raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here. Start it with "
-                        f"{memory_choice.START_COMMAND} and connect it, or leave memory on auto.", "memory.engine")
+    if kind == "engine":
+        running, failing = await _memory_engines_state(org, ws)
+        if value in failing:
+            raise uhp_error(422, "memory_unavailable", _memory_engine_failing_words(value, failing[value]), "memory.engine")
+        if value not in running:
+            raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here. Start it with "
+                            f"{memory_choice.START_COMMAND} and connect it, or leave memory on auto.", "memory.engine")
     if kind == "id":
         who = memory_routes.principals_of(p)
         m = await memory_plane._load(org, value)
@@ -21561,13 +21610,15 @@ async def _memory_provision(org: str, p: dict, hid: str, ask: tuple[str, str], h
         choice = memory_choice.for_engine(str(m.get("provider") or ""), **words)
         reason = f"It uses {m.get('name') or 'the memory'}, which was chosen for it."
     else:
-        running = await _memory_engines_running(org, ws)
+        running, failing = await _memory_engines_state(org, ws)
         if kind == "engine":
+            if value in failing:
+                raise uhp_error(422, "memory_unavailable", _memory_engine_failing_words(value, failing[value]), "memory.engine")
             if value not in running:
                 raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here.", "memory.engine")
             choice = memory_choice.for_engine(value, **words)
         else:
-            choice = memory_choice.choose(running=running, **words)
+            choice = memory_choice.choose(running=running, failing=failing, **words)
         reason = choice.reason
         if choice.engine is None:
             return await none(reason)
@@ -23898,7 +23949,8 @@ async def _setup_build_memory(p: dict, cfg: dict) -> dict:
              "hint": str(cfg.get("memoryHint") or "")[:1000],
              "tools": [str(x.get("name") or "") for x in cfg.get("mcpServers") or [] if isinstance(x, dict)],
              "skills": [str(x.get("name") or "") for x in cfg.get("skills") or [] if isinstance(x, dict)]}
-    c = memory_choice.choose(running=await _memory_engines_running(str(p["org"]), _memory_ws_of(p)), **words)
+    running, failing = await _memory_engines_state(str(p["org"]), _memory_ws_of(p))
+    c = memory_choice.choose(running=running, failing=failing, **words)
     return {"engine": c.engine, "scope": c.scope, "reason": c.reason}
 
 

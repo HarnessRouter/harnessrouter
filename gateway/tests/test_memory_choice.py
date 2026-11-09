@@ -177,6 +177,17 @@ def test_tools_count_by_their_name_whatever_the_shape():
     assert fits == mc.GRAPHITI
 
 
+# ── an engine that answers but can't write ───────────────────────────────────────────────────────
+def test_an_engine_whose_writes_fail_is_passed_over_and_the_reason_says_why():
+    got = mc.choose(name="Market research", description="Researches competitors over time.", running=["mem0", "graphiti"],
+                    failing={"graphiti": "Graphiti did not answer: HTTP 500"})
+    assert got.engine == mc.MEM0 and got.scope == mc.SHARED
+    assert got.reason == mc.REASON[mc.GRAPHITI] + " Graphiti fits best; it can't keep anything here right now, so Mem0 keeps it for now."
+    got = mc.choose(name="Support replies", running=["mem0"], failing={"mem0": "mem0 did not answer: HTTP 500."})
+    assert got.engine is None and got.reason == "No memory engine here can keep anything right now. Mem0: mem0 did not answer: HTTP 500."
+    assert mc.for_memory(name="Customer preferences", running=["mem0", "reme"], failing={"mem0": "x"}).engine == mc.REME
+
+
 # ── a memory made by hand (New memory, GET /v1/memories/choose) ─────────────────────────────────
 MEMORIES = [
     ("Customer preferences", "", mc.MEM0),

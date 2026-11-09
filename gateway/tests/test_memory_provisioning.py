@@ -802,6 +802,40 @@ def test_a_probe_record_is_never_an_answer(client):
     assert [x["title"] for x in listed] == ["Real fact about probes"]
 
 
+# ── answering means writing ──────────────────────────────────────────────────────────────────
+def test_an_engine_whose_writes_fail_is_not_given_to_new_agents_and_discovery_says_why(client, stub, monkeypatch):
+    org = "provorg-failing"
+    hdr = {**ADA, "x-harness-org": org}
+    assert client.put("/v1/plugs/mem0", headers=hdr, json={"secrets": {"api_key": KEY}}).json()["status"] == "connected"
+    first = client.post("/v1/harnesses", headers=hdr, json={"name": "Support replies", "base": "claude-code"}).json()
+    mid = first["memory"]["id"]
+    assert first["memory"]["engine"] == "mem0"
+    memory_plane._MARKED.clear()
+    # its health route still answers (the stub is up); its writes fail, as with a dead model key
+    run(memory_plane.mark(org, mid, "mem0 did not answer: HTTP 500 from its model"))
+    assert run(gw._memory_engines_running(org, "default")) == []
+    h = client.post("/v1/harnesses", headers=hdr, json={"name": "Support desk", "base": "claude-code"}).json()
+    assert h["memory"] is None
+    assert h["memory_reason"] == "No memory engine here can keep anything right now. Mem0: mem0 did not answer: HTTP 500 from its model."
+    r = client.post("/v1/harnesses", headers=hdr, json={"name": "Wiki", "base": "claude-code", "memory": {"engine": "mem0"}})
+    assert r.status_code == 422 and r.json()["error"]["message"] == (
+        "Mem0 is running, but it couldn't keep anything in the last few minutes: mem0 did not answer: HTTP 500 from its model.")
+    monkeypatch.setattr(gw, "_MEMORY_STACK", {"mem0": "http://mem0:8000"})
+    found = run(gw._memory_discover(org, "default"))
+    assert [(x["engine"], x["state"], x["reason"]) for x in found] == [("mem0", "failing", "mem0 did not answer: HTTP 500 from its model")]
+    # a write that works again puts it back at once
+    run(memory_plane.mark(org, mid))
+    assert run(gw._memory_engines_running(org, "default")) == ["mem0"]
+    assert [x["state"] for x in run(gw._memory_discover(org, "default"))] == ["connected"]
+    # a wrong key someone pasted is refused and said on the memory, but the connection that works is kept and still works
+    assert client.put("/v1/plugs/mem0", headers=hdr, json={"secrets": {"api_key": "m0-wrong-key"}}).status_code == 422
+    assert "refused" in client.get(f"/v1/memories/{mid}", headers=hdr).json()["last_error"]
+    assert run(gw._memory_engines_running(org, "default")) == ["mem0"]
+    # and a write failure from longer ago than ten minutes no longer counts
+    run(gw.BACKING.graph.upsert("Memory", mid, {"write_error_at": str(int(time.time() * 1000) - 11 * 60_000), "last_ok_at": "1"}))
+    assert run(gw._memory_engines_running(org, "default")) == ["mem0"]
+
+
 # ── engines found beside this instance ───────────────────────────────────────────────────────
 def test_discovery_takes_no_address(client):
     for body in ({"url": "http://169.254.169.254"}, {"host": "evil"}, {"port": 22}, ["x"]):
