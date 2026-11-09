@@ -558,7 +558,9 @@
 #hrui .mm-roww{position:relative;display:flex;align-items:center;min-width:0}
 #hrui .mm-roww>.mm-row{flex:1;min-width:0}
 #hrui .mm-roww>.mm-usein{flex:none;margin:0 10px 0 6px}
-#hrui .mm-rn .mm-ub{margin-top:4px}
+#hrui .mm-rn .mm-ub{margin-top:4px;font-family:var(--sans);font-weight:400;white-space:normal}
+#hrui .mm-rows .mm-roww{border-bottom:1px solid var(--line)}
+#hrui .mm-rows .mm-roww>.mm-row{border-bottom:0}
 
 /* New memory: a name, a description if you like, and the engine chosen for you, changeable */
 #hrui .mm-new-mem{width:min(560px,100%)}
@@ -615,5 +617,6 @@
   #hrui .mm-sort{margin-left:0}
   #hrui .am-facts>div{grid-template-columns:76px minmax(0,1fr)}
   #hrui .mm-roww{flex-wrap:wrap}
+  #hrui .mm-roww>.mm-row{flex-basis:100%}
   #hrui .mm-roww>.mm-usein{margin:0 0 10px 64px}
 }
