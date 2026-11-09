@@ -288,9 +288,9 @@ def test_the_key_is_the_organization_and_the_memory_alone(people):
                                         "x-harness-workspace": "elsewhere"})
     assert r.status_code == 200
     assert _kept(mid) is not None
-    root = os.path.join(os.environ["HR_DATA_DIR"])
+    root = os.path.join(str(app.BACKING.blob._root), app.BLOB_KB)       # the instance's own file store, self-hosted
     found = [os.path.relpath(os.path.join(d, f), root) for d, _, fs in os.walk(root) for f in fs if mid in f]
-    assert found and all(p.endswith(key) for p in found), found
+    assert found == [key], found
 
 
 def test_the_list_says_when_each_cover_was_made_and_which_drawing_it_shows(people):
