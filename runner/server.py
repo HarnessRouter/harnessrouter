@@ -16598,6 +16598,10 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     rec = _turns[turn_id]
     state: dict = {"final": ""}
     db_path = os.path.join(env["HERMES_HOME"], "state.db")
+    # The database is in the session's tree, and this thread is root's: every read of it below is made as the
+    # session (_fs_as), so a link the session planted at its name, or at its -wal beside it, leads nowhere it
+    # could not read itself. What it reads becomes this turn's events and its usage.
+    suid = _session_uid(cwd)
     t0 = time.time()
 
     def append(ev: dict) -> None:
@@ -16610,7 +16614,8 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     resume = None
     pre = None
     if resume_session_id:
-        pre = _hermes_session_row(db_path, resume_session_id)
+        with _fs_as(suid):
+            pre = _hermes_session_row(db_path, resume_session_id)
         if pre:
             resume = resume_session_id
         else:
@@ -16668,18 +16673,23 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     produced = False        # has the model emitted ANY message yet (see _HERMES_STARTUP_TIMEOUT_S)
     last_msg = t0           # when the last message of this turn was read from the CLI's database
     if resume:
-        db = _hermes_db_ro(db_path)
-        if db is not None:
-            try:  # only rows appended by THIS turn become events
-                cursor = db.execute("SELECT COALESCE(MAX(id),0) FROM messages WHERE session_id=?",
-                                    (resume,)).fetchone()[0]
-            except Exception:  # noqa: BLE001
-                pass
-            finally:
-                db.close()
+        with _fs_as(suid):
+            db = _hermes_db_ro(db_path)
+            if db is not None:
+                try:  # only rows appended by THIS turn become events
+                    cursor = db.execute("SELECT COALESCE(MAX(id),0) FROM messages WHERE session_id=?",
+                                        (resume,)).fetchone()[0]
+                except Exception:  # noqa: BLE001
+                    pass
+                finally:
+                    db.close()
         append({"type": "system", "subtype": "init", "session_id": resume, "model": model})
 
     def _sweep() -> None:
+        with _fs_as(suid):
+            _sweep_db()
+
+    def _sweep_db() -> None:
         nonlocal sid, cursor, produced, last_msg
         db = _hermes_db_ro(db_path)
         if db is None:
@@ -16738,7 +16748,8 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     usage = {"input_tokens": 0, "output_tokens": 0}
     run_failed = False
     if sid:
-        post = _hermes_session_row(db_path, sid) or {}
+        with _fs_as(suid):
+            post = _hermes_session_row(db_path, sid) or {}
         usage = {"input_tokens": max(0, int(post.get("input_tokens") or 0) - int((pre or {}).get("input_tokens") or 0)),
                  "output_tokens": max(0, int(post.get("output_tokens") or 0) - int((pre or {}).get("output_tokens") or 0))}
     if not use_chat:

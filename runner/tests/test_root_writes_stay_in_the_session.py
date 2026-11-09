@@ -334,3 +334,73 @@ def test_a_per_turn_write_through_a_planted_link_leaves_roots_file_alone(family,
     _settle(client, ident, r)
     _assert_clean(r, before)
 
+
+
+# ── what the runner reads back from a session's tree, it reads as the session ─────────────────
+# After a turn the runner reads files the CLI wrote into the session's tree (a database, a transcript, an
+# export, a log) and turns them into the turn's events, its result and its usage. Each read below is made as
+# the session, so a link the session planted at that name leads nowhere it could not read itself: here, to the
+# same kind of file in a second session's tree (another uid, its folder 0700, the file 0600), none of whose
+# words may reach this turn.
+UID2 = 20778
+OTHERS = "words from the other session"
+
+
+def _second_sessions(rel: str, content: bytes | None = None) -> pathlib.Path:
+    """A file at `rel` in a second session's tree, that session's own."""
+    top = pathlib.Path(tempfile.mkdtemp(prefix="hrother-"))
+    os.chown(top, UID2, UID2)
+    os.chmod(top, 0o700)
+    f = top / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(content or b"")
+    for p in [f, *f.parents]:
+        if p == top.parent:
+            break
+        os.chown(p, UID2, UID2)
+    os.chmod(f, 0o600)
+    return f
+
+
+def _plant(ws: pathlib.Path, rel: str, target: pathlib.Path) -> None:
+    link = _own(ws, rel)
+    link.symlink_to(target)
+    os.lchown(link, UID, UID)
+
+
+def _a_session(monkeypatch) -> pathlib.Path:
+    ws = pathlib.Path(_session(monkeypatch))
+    return ws
+
+
+def test_hermes_reads_its_database_as_the_session(monkeypatch):
+    """The turn's events and usage come from hermes's state.db, read after the CLI ran."""
+    import sqlite3
+    import time
+    from fastapi.testclient import TestClient
+    other = _second_sessions(".harness/home/.hermes/state.db")
+    db = sqlite3.connect(other)
+    db.execute("CREATE TABLE sessions (id TEXT, started_at REAL, input_tokens INT, output_tokens INT)")
+    db.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, "
+               "tool_calls TEXT, tool_call_id TEXT)")
+    db.execute("INSERT INTO sessions VALUES ('20261109_other', ?, 4321, 1234)", (time.time() + 60,))
+    db.execute("INSERT INTO messages (session_id, role, content) VALUES ('20261109_other', 'assistant', ?)", (OTHERS,))
+    db.commit()
+    db.close()
+    os.chown(other, UID2, UID2)
+    os.chmod(other, 0o600)
+    root = _workspaces(monkeypatch)
+    ws = pathlib.Path(root, "hsesshermesread")
+    ws.mkdir()
+    os.chown(ws, UID, UID)
+    os.chmod(ws, 0o700)
+    _plant(ws, ".harness/home/.hermes/state.db", other)
+    client = TestClient(server.app, raise_server_exceptions=False)
+    r = client.post("/turn", params={"identifier": "hsesshermesread"},
+                    json={"backend": "hermes", "provider": "openai-api", "model": server.BACKENDS["hermes"]["default_model"],
+                          "prompt": "hi", "auth": _KEYED})
+    got = _settle(client, "hsesshermesread", r)
+    assert r.status_code == 200, r.text[:300]
+    seen = json.dumps(got)
+    assert OTHERS not in seen and "20261109_other" not in seen
+    assert '"input_tokens": 4321' not in seen
