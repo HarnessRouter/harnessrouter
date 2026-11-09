@@ -148,3 +148,67 @@ def test_a_deleted_task_opens_nowhere_even_for_its_owner(api):
     assert _status(api, at["content"], OWNER) == 404
     assert _status(api, at["by-path"], OWNER) == 404
     assert _status(api, at["public"], NOBODY) == 404
+
+
+# ── a path that is not plain names opens nothing (CAT's review of #594) ─────────────────────────
+# The console now refuses these before it asks (its relays build a URL, and fetch() resolves '..').
+# The gateway's own two by-path routes must not lean on that: the session id is only ever a key looked
+# up in the graph (a missing one is a 404 before any storage is read), and the path must pass
+# _ws_visible, which refuses an empty, '.', '..', dot-led or backslashed segment, before any read; a
+# read then matches a whole member name, never a joined filesystem path. Pinned here, both through
+# HTTP (encoded the ways a client could send them) and on the decoded values a route receives.
+BAD_PATHS = ["..", "../x", "a/../../x", "./x", "a//b", "a\\b", "..\\x", "", "/", ".git/config", "x/.."]
+BAD_SIDS = ["..", ".", "a\\b", "x..", ""]
+
+
+@pytest.fixture()
+def reads(monkeypatch):
+    seen = []
+
+    async def file_bytes(container_id, file_id):
+        seen.append((container_id, file_id))
+        return BYTES, "text/plain", FILE
+    monkeypatch.setattr(gw, "_container_file_bytes", file_bytes)
+    gw._SHARE_TOKEN_CACHE.clear()
+    return seen
+
+
+class _Req:
+    def __init__(self, headers):
+        self.headers, self.method = headers, "GET"
+        self.url = type("U", (), {"path": "/a/x"})()
+
+
+def _code(coro) -> int:
+    try:
+        asyncio.run(coro)
+    except Exception as e:  # noqa: BLE001
+        return getattr(e, "status_code", 500)
+    return 200
+
+
+def test_a_path_that_is_not_plain_names_opens_nothing_at_either_by_path_route(reads):
+    sid = _task(shared="1", share_token="shr" + os.urandom(16).hex())
+    for p in BAD_PATHS:
+        assert _code(gw.artifact_by_path(sid, p, _Req(OWNER))) == 404, p
+        assert _code(gw.workspace_by_path("chrn_links", sid, p)) == 404, p
+    assert reads == [], "a refused path must not reach a storage read"
+    # the plain path beside them still opens, both ways
+    assert _code(gw.artifact_by_path(sid, FILE, _Req(OWNER))) == 200
+    assert _code(gw.workspace_by_path("chrn_links", sid, FILE)) == 200
+
+
+def test_a_session_id_that_is_not_a_plain_name_is_not_found_before_any_read(reads):
+    for s in BAD_SIDS:
+        assert _code(gw.artifact_by_path(s, FILE, _Req(OWNER))) == 404, s
+        assert _code(gw.workspace_by_path("chrn_links", s, FILE)) == 404, s
+    assert reads == []
+
+
+def test_encoded_steps_up_over_http_open_nothing(api, reads):
+    sid = _task(shared="1", share_token="shr" + os.urandom(16).hex())
+    for tail in ["%2e%2e/%2e%2e/v1/sessions", "..%2f..%2fv1%2fsessions", "a%5cb", "%2e%2e%5cx", ".%2e/x", "x%2f..%2f..%2fy"]:
+        for url in (f"/a/{sid}/{tail}", f"/w/chrn_links/{sid}/workspace/{tail}"):
+            r = api.get(url, headers=OWNER)   # the client sends the path as written: nothing resolves '..'
+            assert r.status_code == 404, (url, r.status_code)
+    assert reads == []

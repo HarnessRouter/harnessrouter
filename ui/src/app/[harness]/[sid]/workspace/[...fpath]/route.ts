@@ -13,10 +13,15 @@
 //
 // This handler checks the cookie itself: the self-hosted gate lets a path ending in .png or .css
 // through without one (STATIC_ASSET in middleware.ts), and this route must not lean on it.
+//
+// It also refuses, before asking the gateway anything, an address whose harness, session or file
+// segments are not plain names (lib/public-artifact-response plainSegments): fetch() resolves '..'
+// in the URL it is given, so `/a/{sid}/../../v1/...` would have read another gateway route, with the
+// box's key on the signed-in branch. The refusal is the gateway's own 404 for a missing file.
 import type { NextRequest } from 'next/server';
 import { LOCAL_MEMBER, LOCAL_ORG, SELF_HOSTED } from '@/lib/edition';
 import { AUTH_DISABLED, SESSION_COOKIE, sessionValid } from '@/lib/selfhost-auth';
-import { publicShareResponseHeaders } from '@/lib/public-artifact-response';
+import { notFoundResponse, plainSegments, publicShareResponseHeaders } from '@/lib/public-artifact-response';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +36,9 @@ async function signedIn(req: NextRequest): Promise<boolean> {
 export async function GET(req: NextRequest,
   ctx: { params: Promise<{ harness: string; sid: string; fpath: string[] }> }) {
   const { harness, sid, fpath } = await ctx.params;
-  const path = (fpath || []).map(encodeURIComponent).join('/');
+  const file = fpath || [];
+  if (!file.length || !plainSegments([harness, sid, ...file])) return notFoundResponse('file not found', true);
+  const path = file.map(encodeURIComponent).join('/');
   const member = await signedIn(req);
   const target = member
     ? `${GATEWAY}/a/${encodeURIComponent(sid)}/${path}`

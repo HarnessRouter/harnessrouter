@@ -32,12 +32,14 @@ beforeEach(() => {
   }) as unknown as typeof fetch;
 });
 
-function call(GET: (req: never, ctx: never) => Promise<Response>, cookie = '', headers: Record<string, string> = {}) {
+type Params = { harness: string; sid: string; fpath: string[] };
+const FILE: Params = { harness: 'chrn_1', sid: 'hsess_1', fpath: ['out', 'hello world.pptx'] };
+function call(GET: (req: never, ctx: never) => Promise<Response>, cookie = '', headers: Record<string, string> = {}, params: Params = FILE) {
   const req = {
     headers: new Headers({ ...headers, cookie }),
     cookies: { get: (n: string) => { const m = cookie.match(new RegExp(`(?:^|; )${n}=([^;]*)`)); return m ? { value: decodeURIComponent(m[1]) } : undefined; } },
   };
-  return GET(req as never, { params: Promise.resolve({ harness: 'chrn_1', sid: 'hsess_1', fpath: ['out', 'hello world.pptx'] }) } as never);
+  return GET(req as never, { params: Promise.resolve(params) } as never);
 }
 
 const PUBLIC = 'http://gateway.test/w/chrn_1/hsess_1/workspace/out/hello%20world.pptx';
@@ -106,4 +108,50 @@ test('a gateway that cannot be reached is a 502 in the same sandbox', async () =
   const res = await call(route().GET, 'hr_selfhost=signed-in');
   expect(res.status).toBe(502);
   expect(res.headers.get('content-security-policy')).toContain('sandbox allow-scripts');
+});
+
+// CAT's review of #594: fetch() resolves '.' and '..' in the URL it is given, and encodeURIComponent
+// leaves both as they are, so a segment of '..' moved the relay to another gateway route (with the
+// box's key on the signed-in branch). Every segment is checked as Next hands it over, decoded once,
+// and a refused address is the gateway's own 404 for a missing file, before anything is fetched.
+describe('an address that is not plain names is refused before the gateway is asked', () => {
+  /** a raw address segment run as Next hands it to the route: split on '/', each part decoded once */
+  const asNext = (raw: string) => raw.split('/').map(decodeURIComponent);
+  const BAD = ['%2e%2e/%2e%2e/v1/internal/x', '..%2f..%2fv1%2finternal', 'a%2fb', 'a%5cb', 'dir//file.txt', '../../v1/x', '.%2e/x', './x'];
+  const BAD_SID = ['%2e%2e', '..%2f..%2fv1', 'a%2fb', 'a%5cb', '', '..'];
+  const refused = async (res: Response) => {
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: { type: 'invalid_request_error', code: 'not_found', message: 'file not found', param: null, detail: null }, detail: 'file not found' });
+    expect(res.headers.get('content-security-policy')).toContain('sandbox allow-scripts');
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+  };
+
+  for (const cookie of ['hr_selfhost=signed-in', '']) {
+    const who = cookie ? 'signed in' : 'not signed in';
+    test.each(BAD)(`${who}: the file path %p is a 404 and nothing is fetched`, async (raw) => {
+      await refused(await call(route().GET, cookie, {}, { harness: 'chrn_1', sid: 'hsess_1', fpath: asNext(raw) }));
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+    test.each(BAD_SID)(`${who}: the session %p is a 404 and nothing is fetched`, async (raw) => {
+      await refused(await call(route().GET, cookie, {}, { harness: 'chrn_1', sid: decodeURIComponent(raw), fpath: ['file.txt'] }));
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+    test(`${who}: a harness of '..' is a 404 and nothing is fetched`, async () => {
+      await refused(await call(route().GET, cookie, {}, { harness: '..', sid: 'hsess_1', fpath: ['file.txt'] }));
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+  }
+
+  test('a nested path still opens, signed in and not', async () => {
+    await call(route().GET, 'hr_selfhost=signed-in', {}, { harness: 'chrn_1', sid: 'hsess_1', fpath: asNext('dir/sub/file.txt') });
+    await call(route().GET, '', {}, { harness: 'chrn_1', sid: 'hsess_1', fpath: asNext('dir/sub/file.txt') });
+    expect(sent.map((x) => x.url)).toEqual(['http://gateway.test/a/hsess_1/dir/sub/file.txt',
+      'http://gateway.test/w/chrn_1/hsess_1/workspace/dir/sub/file.txt']);
+  });
+
+  test('a name decoded once is sent as a name: %252e%252e stays a file called %2e%2e, never a step up', async () => {
+    await call(route().GET, 'hr_selfhost=signed-in', {}, { harness: 'chrn_1', sid: 'hsess_1', fpath: asNext('%252e%252e/x') });
+    expect(sent[0].url).toBe('http://gateway.test/a/hsess_1/%252e%252e/x');
+    expect(new URL(sent[0].url).pathname).toBe('/a/hsess_1/%252e%252e/x');
+  });
 });
