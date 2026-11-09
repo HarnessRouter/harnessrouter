@@ -12602,7 +12602,10 @@ def _opensquilla_transcript(state: dict) -> list[dict]:
         return []
     state_dir, transcript, _ = _opensquilla_paths(cwd)
     try:
-        lines = transcript.read_text(errors="replace").splitlines()
+        # As the session: the transcript is in its tree, and a link it planted at that name leads nowhere
+        # it could not read itself. This runs on the turn's thread, which is root's.
+        with _fs_as(_session_uid(cwd)):
+            lines = transcript.read_text(errors="replace").splitlines()
     except OSError:
         return []
     msgs: list[dict] = []

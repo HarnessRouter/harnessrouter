@@ -404,3 +404,13 @@ def test_hermes_reads_its_database_as_the_session(monkeypatch):
     seen = json.dumps(got)
     assert OTHERS not in seen and "20261109_other" not in seen
     assert '"input_tokens": 4321' not in seen
+
+
+def test_opensquilla_reads_its_transcript_as_the_session(monkeypatch):
+    """Everything an opensquilla turn shows comes from its transcript, read at the end of the turn."""
+    line = {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": OTHERS}]}}
+    other = _second_sessions(".harness/opensquilla/transcript.jsonl", (json.dumps(line) + "\n").encode())
+    ws = _a_session(monkeypatch)
+    _plant(ws, ".harness/opensquilla/transcript.jsonl", other)
+    evs = server._opensquilla_eof({"cwd": str(ws), "prompt": "hi"}, 0)
+    assert OTHERS not in json.dumps(evs)
