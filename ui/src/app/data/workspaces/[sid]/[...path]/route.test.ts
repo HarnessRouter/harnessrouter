@@ -6,6 +6,7 @@
 const mockEdition = { selfHosted: true };
 jest.mock('@/lib/edition', () => ({ get SELF_HOSTED() { return mockEdition.selfHosted; }, LOCAL_ORG: 'local', LOCAL_MEMBER: 'local@localhost' }));
 process.env.HARNESS_INTERNAL_KEY = 'internal-key';
+export {};   // a module, so its helpers don't meet other test files' in the global scope
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { GET } = require('./route') as typeof import('./route');

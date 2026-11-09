@@ -42,8 +42,8 @@ const refused = async (res: Response) => {
 
 // refused in both editions, before anything is fetched
 const ODD = [
-  'v1/..%2finternal%2fx',            // CAT: one segment, decoded '../internal/x'
-  '%2e%2e/internal/x',               // CAT
+  'v1/..%2finternal%2fx',            // the security review: one segment, decoded '../internal/x'
+  '%2e%2e/internal/x',               // the security review
   'v1/%2e%2e/internal/x', 'v1/.%2e/internal/x', 'v1/../internal/x', 'v1/./internal',
   'v1/%252e%252e/internal/x',        // decoded once to '%2e%2e', which fetch() still reads as '..'
   'v1/sessions/s/files/a%2F..%2F..%2F..%2Finternal%2Fx',
