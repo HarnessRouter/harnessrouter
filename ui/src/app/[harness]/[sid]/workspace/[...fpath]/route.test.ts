@@ -110,7 +110,7 @@ test('a gateway that cannot be reached is a 502 in the same sandbox', async () =
   expect(res.headers.get('content-security-policy')).toContain('sandbox allow-scripts');
 });
 
-// CAT's review of #594: fetch() resolves '.' and '..' in the URL it is given, and encodeURIComponent
+// The security review of #594: fetch() resolves '.' and '..' in the URL it is given, and encodeURIComponent
 // leaves both as they are, so a segment of '..' moved the relay to another gateway route (with the
 // box's key on the signed-in branch). Every segment is checked as Next hands it over, decoded once,
 // and a refused address is the gateway's own 404 for a missing file, before anything is fetched.

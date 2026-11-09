@@ -150,7 +150,7 @@ def test_a_deleted_task_opens_nowhere_even_for_its_owner(api):
     assert _status(api, at["public"], NOBODY) == 404
 
 
-# ── a path that is not plain names opens nothing (CAT's review of #594) ─────────────────────────
+# ── a path that is not plain names opens nothing (the security review of #594) ─────────────────────────
 # The console now refuses these before it asks (its relays build a URL, and fetch() resolves '..').
 # The gateway's own two by-path routes must not lean on that: the session id is only ever a key looked
 # up in the graph (a missing one is a 404 before any storage is read), and the path must pass
