@@ -21451,9 +21451,24 @@ async def _memory_used_by(org: str, caller: dict) -> dict[str, list[dict]]:
     return out
 
 
+class _MemoryCovers:
+    """Memories' covers, kept in the instance's own file store beside its other files (blob storage hosted, the data
+    volume self-hosted). A read that fails raises, so a store that didn't answer is never a cover that isn't there."""
+
+    async def get(self, key: str) -> bytes | None:
+        return await _blob_get_or_raise(key, kb=BLOB_KB)
+
+    async def put(self, key: str, data: bytes) -> bool:
+        return await _blob_put(key, data, kb=BLOB_KB)
+
+    async def delete(self, key: str) -> bool:
+        return await _blob_delete(key, kb=BLOB_KB)
+
+
 memory_routes.install(app, _principal, uhp_error, BACKING.graph, _memory_file_meta, _memory_file_bytes,
                       on_grant=lambda org, principal: _memories_on_grant(org, principal), workspace_of=_plug_workspace,
-                      used_by=_memory_used_by, engines_running=lambda org, ws: _memory_engines_running(org, ws))
+                      used_by=_memory_used_by, engines_running=lambda org, ws: _memory_engines_running(org, ws),
+                      covers=_MemoryCovers())
 memory_plane.PROVIDERS.update({"mem0": memory_mem0.Mem0(), "graphiti": memory_graphiti.Graphiti(),
                                "hindsight": memory_hindsight.Hindsight(), "reme": memory_reme.ReMe()})
 _MEMORY_CHECKS = {"mem0": memory_mem0.check, "graphiti": memory_graphiti.check,
