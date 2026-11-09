@@ -21,5 +21,3 @@ export function inVendorOrder<T extends { id: string }>(list: T[]): T[] {
 
 // Which engine a new memory gets is the service's to say (GET /v1/memories/choose, lib/memories chooseEngine): one
 // reading of what a memory is for, the one an agent gets, and never a copy of it here.
-/** What a person reads for how an agent's memory is kept apart. */
-export const scopeWord = (scope: string | null | undefined) => (scope === 'per_user' ? 'Separately for each person' : 'Shared');

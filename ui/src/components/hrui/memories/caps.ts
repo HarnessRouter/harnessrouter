@@ -115,13 +115,6 @@ export const keepsLinks = (p?: Provider | null) => !!p?.graph && p.graph.entitie
 /** The connections panel goes where it would be empty and can't be added to. */
 export const connectionsHidden = (p: Provider | null | undefined, links: number, canAdd: boolean) => !keepsLinks(p) && links === 0 && !canAdd;
 
-// ── finished tasks ──────────────────────────────────────────────────────────────────────────
-export const keepsTasks = (p?: Provider | null) => !!p?.observe;
-/** What keeping a finished task does here. */
-export const keepLine = (p: Provider | null | undefined, memory: string) => (p?.observe?.keeps_episodes === false
-  ? `${vendorName(p.id)} pulls what matters out of each task and keeps it in ${memory}, so later tasks can recall it.`
-  : `Each task is kept in ${memory} as an episode, so later tasks can recall it.`);
-
 // ── a record's kind ─────────────────────────────────────────────────────────────────────────
 /** The kind a record is drawn as: its schema type where it names one, else its record type. */
 export const kindOf = (r: Pick<MemoryRecord, 'type' | 'attributes'>) => String(r.attributes?.entity_type || '') || r.type;

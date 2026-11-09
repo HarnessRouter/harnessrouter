@@ -49,7 +49,7 @@ import {
 import { PluginSwitches, pluginLines, type PluginsIn } from './PluginSwitches';
 import { openNewSetup } from '../start/open';
 import { MemoryLayer, memorySummary } from '../memories/MemoryLayer';
-import { announceAgentMemory, useAgentMemory } from '../memories/AgentMemory';
+import { announceAgentMemory } from '../memories/AgentMemory';
 import { followRename } from './setupMemory';
 import { getHarnessMemories, type HarnessMemories } from '@/lib/memories';
 import { SkillSheet, skillDraft, skillFiles, skillSlug, splitSkillMd, type SkillDraft } from './SkillSheet';
@@ -381,14 +381,12 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
   );
   // the Memory layer's line: read here, and again by the layer itself whenever it changes something
   const [memoryRead, setMemoryRead] = useState<HarnessMemories | null>(null);
-  // the agent's own memory, where the service says (0.40): the line names its engine; the layer and the card change it
-  const ownMemory = useAgentMemory(id);
   useEffect(() => { let live = true; getHarnessMemories(id).then((d) => { if (live) setMemoryRead(d); }).catch(() => {}); return () => { live = false; }; }, [id]);
   const SUM: Record<LayerKey, string> = {
     instructions: plural(words, 'word'),
     harness: [r.baseName, c.model, c.thinking ? thinkingLabel(c.thinking) : ''].filter(Boolean).join(' · '),
     caps: addedLine({ plugin: plugCount, skill: countOn(setupSkills(rec, srv, 'added')), tool: countOn(setupTools(draftRec, srv, 'added')) }),
-    memory: memorySummary(memoryRead, ownMemory.read),
+    memory: memorySummary(memoryRead),
     runtime: [envX?.name || '', c.vars.length ? plural(c.vars.length, 'variable') : '', c.headers.length ? plural(c.headers.length, 'header') : '',
       c.turns ? c.turns + ' steps' : '', c.mins ? c.mins + ' min' : ''].filter(Boolean).join(' · ') || 'Defaults',
   };
@@ -461,7 +459,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
     </>,
     instructions: field('setMd', mdName(rec.base),
       <textarea id="setMd" className="set-in md" rows={14} value={c.agentsMd} onChange={(e) => set('agentsMd', e.target.value)} />),
-    memory: <MemoryLayer hid={id} name={rec.name} onRead={setMemoryRead} />,
+    memory: <MemoryLayer hid={id} onRead={setMemoryRead} />,
     // Capabilities: one tab per kind, in Extensions order. A company's lists get long: each tab shows
     // only its own list, with its one action on the right, and a search field once the list passes six.
     caps: <>
