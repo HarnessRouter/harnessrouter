@@ -1382,7 +1382,13 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
     # A connection that carries request headers is brokered here too, for the same reason: a header
     # value is often a gateway's credential (cf-aig-authorization, Helicone-Auth), and the broker is
     # the one place every base's requests pass, so the agent never holds it (see _conn_headers).
-    if SANDBOX_TRUST == "owner" and not _entra_conn(conn) and not _conn_headers(conn):
+    #
+    # And a custom connection whose address is the full request URL ("Use Full URL"): every agent CLI
+    # appends its own resource (/chat/completions, /responses, /v1/messages) to the base it is given,
+    # so the address can be used as it is only where every base's model calls pass, the broker
+    # (_conn_request_url). Handed over, the key went to the stored URL with a resource appended.
+    if (SANDBOX_TRUST == "owner" and not _entra_conn(conn) and not _conn_headers(conn)
+            and not _conn_full_url(conn)):
         for field in _SECRET_AUTH_FIELDS:
             if conn.get(field) is not None:
                 out[field] = conn[field]
@@ -1408,6 +1414,9 @@ def _auth_from_conn(conn: dict, sid: str = "", effort: str = "") -> dict | None:
         return None
     out["api_key"] = _mint_turn_cred(sid, str(conn.get("name") or ""), effort)
     out["base_url"] = f"{_sandbox_broker_origin()}/v1/llm"
+    # `full_url` describes the connection's own address, which the broker uses; the base handed over
+    # is the broker's, to which the CLI appends its resource as it does to any base.
+    out.pop("full_url", None)
     return out
 
 
@@ -4353,6 +4362,32 @@ _BROKER_IMAGE_PATHS = {"images/generations", "images/edits", "images/variations"
 HR_BROKER_IMAGES = os.environ.get("HR_BROKER_IMAGES", "0").strip().lower() in ("1", "on", "true")
 
 
+# The resource each custom format's clients call, as the broker sees it after its v1/ collapse: the paths
+# the console's form says are appended to an address that is not a full URL.
+_FULL_URL_RESOURCE = {"openai": "chat/completions", "responses": "responses", "anthropic": "messages"}
+
+
+def _conn_full_url(conn: dict | None) -> bool:
+    """Whether a connection's address is the full request URL: "Use Full URL" on a custom connection
+    (stored "1"). Read under the vendor's own name, which a turn's connection carries as `_vendor`
+    beside the runner's name for it, and the broker's as `provider`."""
+    c = conn or {}
+    vendor = str(c.get("_vendor") or c.get("provider") or "").strip().lower()
+    return vendor == "custom" and str(c.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _conn_request_url(conn: dict, base: str, suffix: str) -> str | None:
+    """Where a call for `suffix` goes on this connection, before any query: the connection's base with
+    the suffix joined, as always; or, when the connection's address is the full request URL, that
+    address exactly, for the one resource its API format names. Any other path has no address on such
+    a connection (the stored URL is no model list, token count or compaction, and no other format's
+    endpoint): None, and the caller sends nothing."""
+    if not _conn_full_url(conn):
+        return f"{base}/{suffix}" if suffix else base
+    fmt = str(conn.get("api_format") or "openai").strip().lower()
+    return base if suffix.strip("/").lower() == _FULL_URL_RESOURCE.get(fmt) else None
+
+
 def _broker_path_allowed(suffix: str) -> bool:
     """True if this upstream path is part of the inference surface."""
     s = (suffix or "").strip("/").lower()
@@ -5231,8 +5266,11 @@ async def _memory_relay(tok: str, path: str, request: Request):
     else:
         headers["authorization"] = f"Bearer {key}"
     body = _strip_unsupported(memory_relay.with_model(raw, pid), provider=provider, byok=True, path=suffix, keep_thinking=False)
+    url = _conn_request_url(conn, base, suffix)
+    if url is None:
+        raise HTTPException(502, f"that key's address is a full request URL, with no address for {suffix}")
     rc = _relay_client()
-    up = await rc.send(rc.build_request("POST", f"{base}/{suffix}", headers=headers, content=body), stream=True)
+    up = await rc.send(rc.build_request("POST", url, headers=headers, content=body), stream=True)
     print(f"[memory-relay] {sid} {svc.get('vendor')} {suffix} {model} -> {integ.get('name')} {up.status_code}", flush=True)
 
     async def pump():
@@ -5291,9 +5329,15 @@ async def llm_broker(path: str, request: Request):
               f"mode={HR_BROKER_PATHS}", flush=True)
         if HR_BROKER_PATHS == "enforce":
             raise HTTPException(403, "this path is not available through the model broker")
-    url = f"{base}/{suffix}" if suffix else base
+    url = _conn_request_url(conn, base, suffix)
+    if url is None:
+        print(f"[broker] {suffix!r} has no address on a connection whose address is a full request URL "
+              f"(sid={sid}); nothing sent", flush=True)
+        raise HTTPException(404, "This connection's address is the full request URL for its API format, "
+                                 "so this path has no address on it.")
     if request.url.query:
-        url = f"{url}?{request.url.query}"
+        # a stored full URL may carry its own query (an api-version); the client's joins it
+        url = f"{url}{'&' if _conn_full_url(conn) and '?' in url else '?'}{request.url.query}"
 
     headers = _relay_out_headers(request.headers)
     key = str(conn.get("api_key") or "")
@@ -24038,12 +24082,14 @@ def _setup_build_wire(vendor: str, cfg: dict, model_id: str, canonical: str) -> 
     base = _provider_base_url(vendor, str(cfg.get("base_url") or "") or _PROVIDER_BASE.get(vendor, ""))
     if not base:
         return None
-    full = vendor == "custom" and str(cfg.get("full_url") or "").strip().lower() in ("1", "true", "on", "yes")
+    url = _conn_request_url({**cfg, "provider": vendor}, base, "chat/completions")
+    if not url:
+        return None
     header = {"api-key": key} if vendor in ("azure", "azure-foundry") else {"authorization": f"Bearer {key}"}
     # The builder calls the provider from here rather than through the broker, so it adds the
     # connection's headers itself, after the key's, which none of them may name.
     _with_conn_headers(header, cfg)
-    return {"url": base if full else f"{base}/chat/completions", "headers": header,
+    return {"url": url, "headers": header,
             "model": model_id or canonical, "canonical": canonical, "route": vendor}
 
 

@@ -294,6 +294,14 @@ The mapping is a property of the connection, not of a harness: a harness picks a
 the connection decides how that id is written for its endpoint. Two harnesses that need different
 vocabularies on one endpoint are two connections to it.
 
+**Use Full URL.** When the endpoint URL is the complete request URL (a gateway route such as
+`https://llm.internal/teams/a/invoke`), set **Use Full URL** to **Use as it is** (`"full_url": "1"`
+in the integrations document). Every model call for the connection's API format then goes to that
+URL exactly, with nothing appended, whichever harness makes it. Any other call a harness makes on
+the side (a model list, a token count, a conversation compaction) has no address on such a
+connection and is answered `404` without being sent. Like a connection with request headers, it goes
+through the gateway even under `HR_SANDBOX_TRUST=owner`, so its key is never handed to the agent.
+
 **Disabled built-in tools.** Some endpoints refuse an agent's built-in tools per model (a proxy
 that answers `400 The following tool is not allowed for model 'gpt-5.5': web_search` to Codex).
 Name those tools on the connection, comma-separated, and every turn through it runs without them;

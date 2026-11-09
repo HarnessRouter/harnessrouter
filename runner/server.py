@@ -2457,7 +2457,10 @@ class Auth(BaseModel):
     wire_api: str | None = None            # responses | chat (default responses)
     # Custom provider
     api_format: str | None = None          # "openai" | "responses" | "anthropic" (custom integration)
-    full_url: str | None = None            # "1" when the URL is a complete request URL
+    # "1" when the connection's own address is the complete request URL. Never applied here: the gateway
+    # brokers such a connection (_auth_from_conn) and its broker sends each call to that address, so the
+    # base a turn is given is the broker's, to which every CLI appends its resource as usual.
+    full_url: str | None = None
     namespace_tools: bool | str | None = None  # "1"/true to opt into namespace tools
     web_search: bool | str | None = None       # "1"/true to opt into built-in web search
 
