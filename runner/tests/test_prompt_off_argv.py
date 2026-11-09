@@ -383,13 +383,19 @@ def test_what_each_cli_is_handed_is_the_message_it_stored_from_its_arguments():
     arguments wrapped in quotes and stdin's as it is, so stdin gets the quoted form; Qwen Code stores plain
     stdin with a blank line after it, and its stream-json input changes its system prompt, so it is given
     -p in-process through prompt_launcher.mjs."""
-    for backend in ("opencode", "mimo"):
+    for backend in ("opencode", "mimo", "kilo"):
         cmd, held, _ = _build(backend, prompt='say "hi" twice')
         assert handed.text(held) == '"say \\"hi\\" twice"', backend
         server._prompt_discard(held)
         cmd, held, _ = _build(backend, prompt="one-word")
         assert handed.text(held) == "one-word", backend           # no space: as it is, as from arguments
         server._prompt_discard(held)
+    cmd, held, _ = _build("kilo", prompt="-a dash first")
+    assert handed.text(held) == "-a dash first"                    # after `--`, which kilo does not quote
+    server._prompt_discard(held)
+    cmd, held, _ = _build("opencode", prompt="-a dash first")
+    assert handed.text(held) == '"-a dash first"'                  # opencode quotes after `--` too
+    server._prompt_discard(held)
     env: dict = {}
     held: dict = {}
     tok = server._TURN_PROMPT.set(held)

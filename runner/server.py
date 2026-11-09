@@ -10699,8 +10699,8 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
 
 def _opencode_typed(prompt: str) -> str:
     """The user's message as `run` builds it from its message arguments (one argument, here): an argument
-    with a space in it is wrapped in double quotes, its own double quotes escaped (opencode's and mimo's
-    run.ts, `includes(" ")`). Measured on recorded requests: on stdin the text is taken as it is, so the
+    with a space in it is wrapped in double quotes, its own double quotes escaped (opencode's, mimo's and
+    kilo's run, `includes(" ")`). Measured on recorded requests: on stdin the text is taken as it is, so the
     model would read every message after this change without the quotes it read on every one before,
     and a conversation restored from its checkpoint would mix the two."""
     return f'"{prompt.replace(chr(34), chr(92) + chr(34))}"' if " " in prompt else prompt
@@ -10809,6 +10809,9 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
               flush=True)
     # The prompt is handed over on stdin, not on the command line (_prompt_handover): `run` folds piped
     # stdin into its message, as it is; in the quoted form its arguments make, as opencode's (_opencode_typed).
+    # Its run always joins `message + "\n" + stdin`, so with no message argument the stored text opens with
+    # the newline it used to end with; measured on recorded requests, that one newline is the only
+    # difference left, and no other way in keeps the message off the command line.
     _prompt_handover(cwd, _opencode_typed(prompt), stdin=True)
     return cmd
 
@@ -11116,9 +11119,10 @@ def _build_kilo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # _resume_lost reads the missing --session and the reply says the history is gone.
         print(f"[resume] kilo: session {resume_session_id} not in this workspace — starting fresh",
               flush=True)
-    # The prompt is handed over on stdin, not on the command line (_prompt_handover): `run` folds piped
-    # stdin into its message.
-    _prompt_handover(cwd, prompt, stdin=True)
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): `run` takes piped
+    # stdin as its message, as it is. Its message from arguments is quoted, as opencode's is, except after
+    # `--`, which is where a prompt starting with "-" went (buildRunMessage); stdin gets that same form.
+    _prompt_handover(cwd, prompt if prompt.startswith("-") else _opencode_typed(prompt), stdin=True)
     return cmd
 
 

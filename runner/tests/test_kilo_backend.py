@@ -137,14 +137,15 @@ def test_argv_is_a_headless_json_run_with_the_measured_flags():
     assert cmd[:6] == ["kilo", "run", "--format", "json", "--model", "hr/gpt-5.4"]
     for flag in ("--auto", "--pure", "--thinking"):
         assert flag in cmd
-    assert "do it" not in cmd and _handed(d) == ["do it"]     # read on stdin, from the session's own file
+    assert "do it" not in cmd and _handed(d) == ['"do it"']   # on stdin, in the quoted form run gives its arguments
 
 
 def test_a_prompt_that_looks_like_a_flag_is_not_read_as_one():
     d = tempfile.mkdtemp()
     cmd = handed.build(_build_kilo, "openai-api", Auth(api_key="k", base_url="https://g.example/v1"), "gpt-5.4",
                       "--version", d, {"HOME": d})
-    assert "--version" not in cmd and _handed(d) == ["--version"]   # on stdin it is only ever the prompt
+    # on stdin it is only ever the prompt, unquoted: from arguments it went after `--`, which kilo does not quote
+    assert "--version" not in cmd and _handed(d) == ["--version"]
 
 
 def test_the_real_key_never_reaches_the_sandbox():
