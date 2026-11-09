@@ -26,8 +26,9 @@ export const CHECK = <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
 // refused; its tasks stay readable; it is kept 30 days (the instance's operator can restore it until
 // then) and removed after, so it does not say "can't be undone".
 //
-// A setup whose memory the service made for it (0.40, `memory.provisioned`) says that the memory goes too, with what it
-// holds, unless another setup uses it; once deleted, the toast says what the service did with it (deletedToast).
+// A setup whose memory the service made for it (0.40, `memory.provisioned`) says that the memory, and each person's
+// memory, are kept with it for the 30 days and then deleted, with what they hold, unless another setup uses it; once
+// deleted, the toast says what the service did with it (deletedToast).
 export function DeleteSetupSheet({ h, onClose, onDeleted }: { h: CustomHarness; onClose: () => void; onDeleted: (said: string) => void }) {
   const [v, setV] = useState('');
   const [busy, setBusy] = useState(false);

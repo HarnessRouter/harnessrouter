@@ -1,4 +1,5 @@
-// What happens to a setup's own memory when the setup changes: deleted with it, or renamed with it. From 0.40 the
+// What happens to a setup's own memory when the setup changes: kept with it for 30 days when it is deleted and then
+// deleted with it, or renamed with it. From 0.40 the
 // service makes a memory for a new setup's agent (named after the setup) and says so on the setup's record
 // (`memory.provisioned: true`). Every line here is read from the service at the moment it is said; a service that
 // doesn't say (before 0.40, or a memory a person gave the setup) gets nothing said and nothing done.
@@ -47,18 +48,23 @@ const names = (l: string[]) => (l.length <= 2 ? l.join(' and ') : `${l.slice(0, 
 /** What one thing in a memory is called: Mem0 keeps facts; anything else, records. */
 const thing = (engine: string, n: number) => `${n.toLocaleString('en-US')} ${engine === 'mem0' ? (n === 1 ? 'fact' : 'facts') : n === 1 ? 'record' : 'records'}`;
 
-/** The delete dialog's line about the setup's memory. */
+/** The delete dialog's line about the setup's memory. The service keeps it with the setup for the 30 days the setup
+ *  can be restored, and deletes it, with each person's memory below it, when it removes the setup for good. */
 export function memoryOnDeleteLine(x: MemoryOnDelete | null): string {
   if (!x) return '';
   if (x.others.length) return `Its memory, ${x.name}, stays: ${names(x.others)} ${x.others.length === 1 ? 'uses' : 'use'} it too.`;
-  return `This also deletes its memory${x.count !== null ? ` (${thing(x.engine, x.count)})` : ''}, unless another agent uses it.`;
+  return `Its memory, and each person's memory, are kept for 30 days with it, then deleted${x.count !== null ? ` (${thing(x.engine, x.count)} in all)` : ''}.`;
 }
+
+/** What the service says, word for word, of a memory it keeps with a deleted setup (gateway _MEMORY_KEPT_30_DAYS). */
+export const KEPT_WITH_IT = 'kept with the agent for 30 days';
 
 /** The toast once the setup is deleted, from what the service says it did with the memory. */
 export function deletedToast(setup: string, out: SetupDeleted | null | undefined): string {
   const name = setup.trim() || 'The setup';
   if (out?.memory_deleted) return `${name} deleted, and its memory with it.`;
   const kept = out?.memory_kept;
+  if (kept === KEPT_WITH_IT) return `${name} deleted. Its memory is kept with it for 30 days, then deleted.`;
   if (kept) {
     const by = kept && typeof kept === 'object' && Array.isArray((kept as { used_by?: unknown }).used_by)
       ? ((kept as { used_by: unknown[] }).used_by).map((u) => (u && typeof u === 'object' ? String((u as { name?: unknown }).name || '') : '')).filter(Boolean)

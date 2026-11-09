@@ -595,8 +595,9 @@ export async function deleteSession(sid: string): Promise<void> {
   await gw<{ deleted: boolean }>('DELETE', `/v1/sessions/${encodeURIComponent(sid)}`);
 }
 
-/** What deleting a setup did. From 0.40 it says what became of the memory made for its agent: `memory_deleted` (gone
- *  with it) or `memory_kept` (kept, because another agent uses it). A service before says neither. */
+/** What deleting a setup did. From 0.40 it says what became of the memory made for its agent: `memory_kept`, why
+ *  ("kept with the agent for 30 days", deleted with it when it is removed for good; or that only whoever manages it
+ *  can delete it). `memory_deleted` (gone with it) is what an earlier candidate said. A service before says neither. */
 export interface SetupDeleted { deleted?: boolean; memory_deleted?: unknown; memory_kept?: unknown }
 /** Delete a setup: it stops at once and is removed for good after 30 days; its tasks stay. */
 export async function deleteCustom(id: string): Promise<SetupDeleted> {

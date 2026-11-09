@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 // A setup's own memory goes with the setup (the memories polish round, C5 and C11): deleting the setup says that its
-// memory goes too, with what it holds, unless another setup uses it, and says after what the service did; renaming
+// memory, and each person's, are kept with it for 30 days and then deleted, with what they hold, unless another setup
+// uses it, and says after what the service did; renaming
 // the setup renames a memory still named after it. Only where the service made the memory for the setup
 // (`memory.provisioned`): otherwise nothing is said and nothing is done.
 jest.mock('@/lib/hfetch', () => ({ harnessFetch: jest.fn() }));
@@ -24,7 +25,7 @@ test('the memory a setup’s record names, and whether the service made it for t
   expect(ownMemoryOf({ id: H })).toBeNull();
 });
 
-test('delete: its memory goes too, with every fact it and the people below it hold', async () => {
+test('delete: its memory, and each person’s, are kept 30 days with it, then deleted, with every fact they hold', async () => {
   use({
     [`GET /v1/harnesses/${H}`]: harness(OWN),
     'GET /v1/memories/hmem_a': mem(),
@@ -32,7 +33,7 @@ test('delete: its memory goes too, with every fact it and the people below it ho
   });
   const x = await memoryOnDelete(H);
   expect(x).toEqual({ name: 'Support', engine: 'mem0', count: 5, others: [] });
-  expect(memoryOnDeleteLine(x)).toBe('This also deletes its memory (5 facts), unless another agent uses it.');
+  expect(memoryOnDeleteLine(x)).toBe('Its memory, and each person\'s memory, are kept for 30 days with it, then deleted (5 facts in all).');
 });
 
 test('delete: a memory another setup uses stays, and the dialog says who', async () => {
@@ -42,16 +43,17 @@ test('delete: a memory another setup uses stays, and the dialog says who', async
 
 test('delete: a count that can’t be said is left out, and a memory the setup was given is not mentioned', async () => {
   use({ [`GET /v1/harnesses/${H}`]: harness(OWN), 'GET /v1/memories/hmem_a': mem(), 'GET /v1/memories': { data: [{ ...mem(), id: 'hmem_p1', records: { count: null } }] } });
-  expect(memoryOnDeleteLine(await memoryOnDelete(H))).toBe('This also deletes its memory, unless another agent uses it.');
+  expect(memoryOnDeleteLine(await memoryOnDelete(H))).toBe('Its memory, and each person\'s memory, are kept for 30 days with it, then deleted.');
   use({ [`GET /v1/harnesses/${H}`]: harness({ ...OWN, provisioned: false }) });
   expect(await memoryOnDelete(H)).toBeNull();
   // a service before 0.40 says nothing of a memory
   use({ [`GET /v1/harnesses/${H}`]: { id: H, name: 'Support' } });
   expect(memoryOnDeleteLine(await memoryOnDelete(H))).toBe('');
-  expect(memoryOnDeleteLine({ name: 'Notes', engine: 'graphiti', count: 1, others: [] })).toBe('This also deletes its memory (1 record), unless another agent uses it.');
+  expect(memoryOnDeleteLine({ name: 'Notes', engine: 'graphiti', count: 1, others: [] })).toBe('Its memory, and each person\'s memory, are kept for 30 days with it, then deleted (1 record in all).');
 });
 
 test('deleted: the toast says what the service did with the memory, and nothing of it where it said nothing', () => {
+  expect(deletedToast('Support', { deleted: true, memory_kept: 'kept with the agent for 30 days' })).toBe('Support deleted. Its memory is kept with it for 30 days, then deleted.');
   expect(deletedToast('Support', { deleted: true, memory_deleted: true })).toBe('Support deleted, and its memory with it.');
   expect(deletedToast('Support', { deleted: true, memory_kept: true })).toBe('Support deleted. Its memory stays: another agent uses it.');
   expect(deletedToast('Support', { deleted: true, memory_kept: { id: 'hmem_a', used_by: [{ harness_id: 'chrn_b', name: 'Billing' }] } })).toBe('Support deleted. Its memory stays: Billing uses it.');
