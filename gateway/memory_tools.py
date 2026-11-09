@@ -559,17 +559,23 @@ def known_line(r: dict) -> tuple[str, bool]:
     return words, kind == "episode" or bool(_SAID_BY.match(words))
 
 
-def _when(ts, now: datetime) -> str:
-    """How long ago, in words a reader weighs at a glance ("3 days ago"), from a record's `time.written_at`; "" when it
-    has none that reads as a time."""
+def _parsed_time(ts) -> datetime | None:
+    """A record's time as an instant in UTC: one written without a zone is read as UTC; None when it isn't one."""
     if not ts:
-        return ""
+        return None
     try:
         t = datetime.fromisoformat(str(ts).strip().replace("Z", "+00:00"))
     except ValueError:
+        return None
+    return (t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t).astimezone(timezone.utc)
+
+
+def _when(ts, now: datetime) -> str:
+    """How long ago, in words a reader weighs at a glance ("3 days ago"), from a record's `time.written_at`; "" when it
+    has none that reads as a time."""
+    t = _parsed_time(ts)
+    if t is None:
         return ""
-    if t.tzinfo is None:
-        t = t.replace(tzinfo=timezone.utc)
     s = (now - t).total_seconds()
     if s < 90:
         return "just now"
@@ -722,8 +728,26 @@ async def doc_section(seam: Seam, *, kept_after: bool = True, person: bool = Fal
 
 
 def _standing_line(r: dict) -> str:
-    """One standing record as a line: its title, or how its words begin."""
+    """One standing record as a line: who set it and when (set_by), then its title, or how its words begin."""
     words = str(r.get("title") or "").strip() or " ".join(
         str(p.get("text") or "") for p in r.get("content") or [] if isinstance(p, dict)).strip()
     words = " ".join(words.split())
-    return words if len(words) <= STANDING_CAP else words[: STANDING_CAP - 1].rstrip() + "…"
+    if not words:
+        return ""
+    words = words if len(words) <= STANDING_CAP else words[: STANDING_CAP - 1].rstrip() + "…"
+    said = set_by(r)
+    return f"[{said}] {words}" if said else words
+
+
+def set_by(r: dict) -> str:
+    """Who set a standing record and on which day ("set by a person on 6 November 2026"), as recall says where a
+    finding came from (provenance). The day, never "3 days ago": these lines sit in the instructions a continued
+    task compares turn to turn, and an age would change them every day. Who: the member that wrote the record as it
+    stands; a record the server last revised (to note a contradiction, or the end of its time) names only the day."""
+    w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
+    who = ("an agent" if w.get("type") == "agent" else "a person") if w.get("kind") == "member" else ""
+    t = _parsed_time((r.get("time") or {}).get("written_at") if isinstance(r.get("time"), dict) else None)
+    day = f"{t.day} {t:%B %Y}" if t else ""
+    if who:
+        return f"set by {who}" + (f" on {day}" if day else "")
+    return f"set on {day}" if day else ""

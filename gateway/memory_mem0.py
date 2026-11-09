@@ -407,9 +407,17 @@ class Mem0(mp.Provider):
         return ({"AND": clauses} if len(clauses) > 1 else clauses[0]), later
 
     async def prime(self, mid, budget):
-        """A record stated with `standing` has it in its metadata, which mem0 filters on itself."""
+        """A record stated with `standing` has it in its metadata, which mem0 filters on itself. A fact mem0 drew from
+        an observed turn carries that turn's metadata, `standing` too when it was sent with the turn, and names no
+        record it came from: it is told by its writer, mem0 on an observer's behalf (`hr_observed_by`), which nothing
+        else here is written as. It never stands (mp.set_as_a_record)."""
         got = await self.list(mid, {"filters": {"field": "attributes.standing", "op": "eq", "value": True}, "limit": 50})
-        return mp.within_budget([x for x in got["records"] if x["status"] == "active"], budget)
+        return mp.within_budget([x for x in got["records"] if x["status"] == "active" and not self._observed(x)], budget)
+
+    @staticmethod
+    def _observed(x: dict) -> bool:
+        w = x.get("written_by") or {}
+        return w.get("kind") == "provider" and bool(w.get("on_behalf_of"))
 
     async def list(self, mid, req):
         degraded: list[str] = []
