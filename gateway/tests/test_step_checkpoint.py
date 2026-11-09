@@ -42,7 +42,8 @@ def relay(monkeypatch):
         if state["delay"]:
             await asyncio.sleep(state["delay"])
         calls[-1]["done"] = asyncio.get_running_loop().time()
-        return state["ok"], state["bytes"], "sha", "abc123"
+        # a committed checkpoint names its full commit; a mid-turn one commits nothing
+        return state["ok"], state["bytes"], "sha", "abc123", ("abc123" + "0" * 34) if commit else ""
 
     async def _upsert(_sid, props):
         upserts.append(props)

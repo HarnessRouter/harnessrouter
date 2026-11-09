@@ -662,7 +662,8 @@ def _req_hash(body: "CreateResponseBody") -> str:
              "previous_response_id": body.previous_response_id, "backend": body.backend,
              "tools": body.tools, "max_output_tokens": body.max_output_tokens,
              "max_step": body.max_step, "metadata": meta,
-             **({"reasoning": body.reasoning} if body.reasoning else {})}
+             **({"reasoning": body.reasoning} if body.reasoning else {}),
+             **({"branch": True} if body.branch is True else {})}
     return hashlib.sha256(json.dumps(canon, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -943,9 +944,9 @@ def _runner_turn_recorded(sid: str) -> None:
 
 
 @contextlib.asynccontextmanager
-async def _turn_slot(org: str, sid: str):
+async def _turn_slot(org: str, sid: str, *, heartbeat: bool = True):
     """Both concurrency gates, held for the turn, with the session's heartbeat kept fresh while the
-    turn WAITS for them.
+    turn WAITS for them. The one place the gates are taken.
 
     A turn is marked `starting` when it is accepted, and on one container the gates admit as many
     turns as the box has cores, so a busy box queues the rest. A queued turn is alive, but it has no
@@ -960,10 +961,15 @@ async def _turn_slot(org: str, sid: str):
     sweep has neither a runner turn to ask nor a heartbeat from the poll loop, and "no runner turn on
     record" read a live turn restoring a large workspace as gone (CAT, 2026-10-21; restores past the
     120 s stale window were measured on the hosted service). It stops when the poll loop takes over
-    (_runner_turn_recorded) or the slot is released."""
+    (_runner_turn_recorded) or the slot is released.
+
+    `heartbeat=False` is a branch's preparation (_branch_prepare): the same capacity, taken before
+    its new session exists. Nothing sweeps a session that is not there yet, and a beat would write
+    the vertex of one that is not published, and never may be."""
     beat_s = max(1, _RECONCILE_STALE_S // 4)
     on_record = asyncio.Event()
-    _RUNNER_TURN_ON[sid] = on_record
+    if heartbeat:
+        _RUNNER_TURN_ON[sid] = on_record
 
     async def beat():
         while True:
@@ -977,13 +983,14 @@ async def _turn_slot(org: str, sid: str):
             except Exception:  # noqa: BLE001 — a missed beat is retried on the next one
                 pass
 
-    t = asyncio.create_task(beat())
+    t = asyncio.create_task(beat()) if heartbeat else None
     try:
         async with _global_sem(), _tenant_sem(org):
             yield
     finally:
         on_record.set()
-        t.cancel()
+        if t is not None:
+            t.cancel()
         if _RUNNER_TURN_ON.get(sid) is on_record:
             _RUNNER_TURN_ON.pop(sid, None)
 
@@ -2211,10 +2218,10 @@ def _ckpt_params(sid: str, commit: bool) -> dict:
     return {"identifier": sid} if commit else {"identifier": sid, "commit": "0"}
 
 
-async def _checkpoint_relay(sid: str, commit: bool = True) -> tuple[bool, int, str, str]:
+async def _checkpoint_relay(sid: str, commit: bool = True) -> tuple[bool, int, str, str, str]:
     """Stream the workspace tar from the runner /checkpoint straight into the VG blob PUT without
     ever holding the whole tarball in gateway memory (HR-INF-015). Folds sha256 + byte count over
-    the stream as it flows. Returns (ok, nbytes, ws_sha, git_head). A 1 GiB workspace no longer
+    the stream as it flows. Returns (ok, nbytes, ws_sha, git_head, git_commit). A 1 GiB workspace no longer
     materializes a full copy in the gateway (it did on every turn end, for every session).
 
     Safety (verified): the runner sends a fixed Content-Length, so a short read makes aiter_bytes
@@ -2230,25 +2237,26 @@ async def _checkpoint_relay(sid: str, commit: bool = True) -> tuple[bool, int, s
             r0 = await rc0.get(f"{POOL_ENDPOINT}/checkpoint", params=_ckpt_params(sid, commit),
                                headers=_pool_headers())
             if r0.status_code >= 400 or not r0.content:
-                return False, 0, "", ""
+                return False, 0, "", "", ""
             ok0 = await BACKING.blob.put(BLOB_KB, _ws_blob(sid), r0.content)
             return (ok0, len(r0.content), hashlib.sha256(r0.content).hexdigest() if ok0 else "",
-                    r0.headers.get("X-Git-Head", ""))
+                    r0.headers.get("X-Git-Head", ""), r0.headers.get("X-Git-Commit", ""))
         except Exception:  # noqa: BLE001 — same contract as the streaming path: failure = no advance
-            return False, 0, "", ""
+            return False, 0, "", "", ""
     h = hashlib.sha256()
     nbytes = 0
-    git_head = ""
+    git_head = git_commit = ""
     rc = _relay_client()
 
     async def _pipe():
-        nonlocal nbytes, git_head
+        nonlocal nbytes, git_head, git_commit
         req = rc.build_request("GET", f"{POOL_ENDPOINT}/checkpoint", params=_ckpt_params(sid, commit),
                                headers=_pool_headers())
         resp = await rc.send(req, stream=True)
         try:
             resp.raise_for_status()
             git_head = resp.headers.get("X-Git-Head", "")
+            git_commit = resp.headers.get("X-Git-Commit", "")
             async for chunk in resp.aiter_bytes():
                 nbytes += len(chunk)
                 h.update(chunk)
@@ -2259,10 +2267,10 @@ async def _checkpoint_relay(sid: str, commit: bool = True) -> tuple[bool, int, s
     put = await rc.put(_blob_url(_ws_blob(sid)),
                        headers=_blob_headers("application/octet-stream"), content=_pipe())
     ok = put.status_code < 400 and nbytes > 0
-    return ok, nbytes, (h.hexdigest() if nbytes else ""), git_head
+    return ok, nbytes, (h.hexdigest() if nbytes else ""), git_head, git_commit
 
 
-async def _hydrate_relay(sid: str, params: dict | None) -> httpx.Response:
+async def _hydrate_relay(sid: str, params: dict | None, *, source_sid: str | None = None) -> httpx.Response:
     """Stream the workspace tar from VG blob storage straight into the runner /hydrate POST body
     (HR-INF-015 reverse path) — no full-tarball buffer in the gateway. Uses the dedicated relay pool.
 
@@ -2272,14 +2280,14 @@ async def _hydrate_relay(sid: str, params: dict | None) -> httpx.Response:
     if not _blob_streaming():
         # Local backing: read the checkpoint (absent → empty body → runner starts fresh, the same
         # meaning a 404 carries on the streaming path) and post it buffered.
-        tar = await BACKING.blob.get(BLOB_KB, _ws_blob(sid))
+        tar = await BACKING.blob.get(BLOB_KB, _ws_blob(source_sid or sid))
         return await _relay_client().request(
             "POST", f"{POOL_ENDPOINT}/hydrate", params={"identifier": sid, **(params or {})},
             headers=_pool_headers(), content=tar or b"")
     rc = _relay_client()
 
     async def _pipe():
-        resp = await _blob_open_stream(_ws_blob(sid), client=rc)
+        resp = await _blob_open_stream(_ws_blob(source_sid or sid), client=rc)
         try:
             if resp.status_code == 404:
                 return                       # genuine no-checkpoint → empty body → fresh workspace
@@ -2901,13 +2909,46 @@ def _hydrate_reason(rec: dict) -> str:
     return err or "unknown"
 
 
-async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False) -> None:
+def _branch_point_key(rid: str) -> str:
+    """Where a response's branch point is kept (Sessions §1.1), in the response store under a prefix
+    of its own: not beside the response records in responses/, whose namespace is theirs."""
+    return f"branch-points/{rid}.json"
+
+
+async def _branch_point_put(sid: str, rec: dict, response_id: str, git_commit: str, ws_sha: str) -> None:
+    """The commit an end-of-turn checkpoint closed on, kept as the response's branch point.
+
+    Only the point: the runner checks it against the HEAD of the checkpoint it is given, so no
+    copy of the session's latest commit is kept in step with the tarball (one was, written after
+    it, and a put that failed, or a branch that read it while a new turn checkpointed, made every
+    point 409 until the next turn). Nor is the response's place in its session: that is read when
+    a branch is made (_branch_prepare_inner reads and sorts the session's responses anyway), so a
+    turn's end reads nothing back from the store for it. Optional: a failure is recorded on the
+    turn's record, never raised, since the durable checkpoint has already succeeded. A runner that
+    sends no full commit (one from before branching) leaves no point, and a branch from this
+    response is then branch_unavailable."""
+    if not re.fullmatch(r"[0-9a-f]{40}", git_commit or ""):
+        return
+    point = {"commit": git_commit, "ws_sha": ws_sha, "session_id": sid,
+             "response_id": response_id, "backend": rec.get("backend") or ""}
+    try:
+        if not await _blob_put(_branch_point_key(response_id), json.dumps(point).encode(), kb=RESP_BLOB_KB):
+            rec["branch_checkpoint_unavailable"] = True
+    except Exception:  # noqa: BLE001
+        rec["branch_checkpoint_unavailable"] = True
+
+
+async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_id: str = "") -> None:
     """Pull the committed /workspace from the sandbox and persist it to durable blob storage.
 
     `mid_turn`: taken after a tool step while the turn runs (_step_checkpoint_maybe, #505). It does
     not commit, and the session records when it was taken (ws_mid_turn_at, read by
     _reapply_app_writes). The end-of-turn checkpoint first settles any mid-turn one, so it is
-    always the last write, and clears the stamp."""
+    always the last write, and clears the stamp.
+
+    `response_id`: the turn this end-of-turn checkpoint closes. Its commit is saved as that
+    response's branch point (Sessions §1.1). A mid-turn checkpoint never saves one: it commits
+    nothing, and the turn has not ended."""
     if not mid_turn:
         await _step_checkpoint_settle(sid)
     _ws_tar_evict(sid)             # workspace changed — next file open refetches
@@ -2936,7 +2977,7 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False) -> None:
                 pass
         # Stream runner tar -> VG blob without buffering the whole workspace (HR-INF-015).
         taken_at = time.time()     # before the tar: what an app wrote before this is in it
-        ok, nbytes, ws_sha, git_head = await _checkpoint_relay(sid, commit=not mid_turn)
+        ok, nbytes, ws_sha, git_head, git_commit = await _checkpoint_relay(sid, commit=not mid_turn)
         if nbytes > 0:
             rec["checkpoint_bytes"] = nbytes
             rec["checkpointed"] = ok
@@ -2948,6 +2989,8 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False) -> None:
                 await _vertex_upsert(sid, {"checkpoint_bytes": str(nbytes), "git_head": git_head,
                                            "ws_sha": ws_sha,
                                            "ws_mid_turn_at": str(taken_at) if mid_turn else ""})
+                if response_id and not mid_turn:
+                    await _branch_point_put(sid, rec, response_id, git_commit, ws_sha)
             else:
                 rec["checkpoint_error"] = "durable workspace upload failed; ws_sha not advanced"
     except Exception as e:  # noqa: BLE001
@@ -3310,7 +3353,10 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     model = str(v.get("model") or "")
     harness_id = tr["harness_id"]
     member = tr["member"]
-    translator = _RespTranslator(resp_id, model, None, True, time.time(), sid=sid,
+    translator = _RespTranslator(resp_id, model,
+                                 (_orig_rec or {}).get("previous_response_id"),
+                                 (_orig_rec or {}).get("store", True),
+                                 (_orig_rec or {}).get("created_at") or time.time(), sid=sid,
                                  # The original owner computed this from the request body, which
                                  # this replica never saw. Without it, the settle below overwrites
                                  # the stored record and the marker vanishes exactly when a turn is
@@ -3318,6 +3364,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
                                  # the running snapshot and then not on the terminal record, which
                                  # reads as the field having been honoured after all (tasks.md 1.1).
                                  ignored=((_orig_rec or {}).get("metadata") or {}).get("ignored_fields"))
+    translator.branched_from = str(((_orig_rec or {}).get("metadata") or {}).get("branched_from") or "")
     # Resume at the PER-TURN harvest cursor (the sandbox indexes /turn/{rt}?since=N in THIS turn's
     # own event space — NOT the session-wide trace count). The primary loop persists it after each
     # ack'd flush; poll since=cursor so no already-flushed event is re-written or re-emitted. If it
@@ -3423,7 +3470,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     await _browser_close(sid, "turn_end")
     # Saved before the answer completes, as on the primary path: whether a file too large to
     # attach is in the task's files is known only once the save has landed (_too_large_saved).
-    await _checkpoint(sid, rec)
+    await _checkpoint(sid, rec, response_id=resp_id)
     try:
         _too_large_saved(produced, rec)
         # Translate for the wire, the same way the persist just below does: `rec["status"]` holds
@@ -3443,7 +3490,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     try:
         full_output = await _replay_output_from_trace(base, resp_id, model, since_ms=turn_since_ms)
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
-                  "_member": member}
+                  "_member": member, "_input": (_orig_rec or {}).get("_input") or [],
+                  "_backend": (_orig_rec or {}).get("_backend") or rec.get("backend") or ""}
         if _status == "incomplete" and translator.input_request:
             # the question the turn ended on, for the answer to be checked against (§3.2)
             stored["_pending_input"] = translator.pending_input()
@@ -3457,7 +3505,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
             if _status == "incomplete" and translator.input_request:
                 # ...and so is the question: its message and its item are the gateway's as well (§3.2)
                 stored["output"] += translator.output[-2:]
-        await _resp_put(resp_id, stored, org, sid, None, _status, translator.created_at, True)
+        await _resp_put(resp_id, stored, org, sid, (_orig_rec or {}).get("previous_response_id"),
+                        _status, (_orig_rec or {}).get("created_at") or translator.created_at, True)
     except Exception:  # noqa: BLE001
         pass
     if fence:
@@ -5253,6 +5302,10 @@ UHP_CAPABILITIES = {
     # `input_response` item on the next request, chained on the response. Served to the bases in
     # _INPUT_REQUEST_BASES (GET /v1/bases says which).
     "input_requests": True,
+    # Sessions §1.1: `branch: true` beside previous_response_id starts a new session from that
+    # response's committed files and transcript (_branch_source, _branch_prepare). Optional at every
+    # class (VERSIONING: within a version only optional things are added), so it is a capability.
+    "session_branching": True,
 }
 UHP_CONFORMANCE_CLASS = "full"
 # The bases the runner serves `ask_user` to and ends a turn at its call (runner/ask_user_mcp.py).
@@ -5704,6 +5757,8 @@ async def session_detail(sid: str, request: Request) -> dict:
     org, v = await _owned_session(request, sid)
     out = {"session_id": sid,
            **{k: val for k, val in v.items() if k not in ("id", "pk", "label")}}
+    if "branched_from" in out:
+        out["branched_from"] = _branch_origin(out["branched_from"])
     base = _prefix_from_vertex(sid, v)
     if base:
         mb = await _blob_get(_manifest_key(base), kb=TRACE_KB)
@@ -6141,6 +6196,7 @@ async def _session_purge(sid: str, v: dict | None, index: dict | None = None) ->
         for rid in await _session_records("HarnessResponse", "session_id", sid, index):
             _resp_cache_forget(rid)
             await _blob_delete(f"responses/{rid}.json", kb=RESP_BLOB_KB)
+            await _blob_delete(_branch_point_key(rid), kb=RESP_BLOB_KB)
             await BACKING.graph.delete(rid, "HarnessResponse")
     # 3) everything stored under its id: the checkpoint and the media scene (sessions/<sid>/ in
     # the session store), the change list (sessions/<sid>/ in the response store), the files its
@@ -7166,6 +7222,7 @@ class _RespTranslator:
     def __init__(self, resp_id: str, model: str, prev: str | None, store: bool, created_at: float,
                  sid: str = "", ignored: list[str] | None = None):
         self.resp_id, self.model, self.prev, self.store, self.created_at = resp_id, model, prev, store, created_at
+        self.branched_from = ""
         self.sid = sid   # surfaced in response.metadata so the client can highlight/track the session
         # Request fields we accepted and did not act on (tasks.md 1.1). `tools` and `include` are
         # reserved and ignored (1.4), and ignoring has to be observable: a silently dropped field
@@ -7224,6 +7281,8 @@ class _RespTranslator:
 
     def _response_obj(self, status: str) -> dict:
         meta: dict = {}
+        if self.branched_from:
+            meta["branched_from"] = self.branched_from
         if self.sid:
             meta["session_id"] = self.sid
         if self.environment:
@@ -7722,7 +7781,9 @@ def _input_history(inp, org: str = "") -> tuple[list[dict], object]:
 
 
 async def _imported_turns_put(turns: list[dict], *, sid: str, org: str, member: str, backend: str,
-                              before: float, store: bool) -> list[str]:
+                              before: float, store: bool,
+                              copied_inputs: list[list[dict]] | None = None,
+                              copied_outputs: list[list[dict]] | None = None) -> list[str]:
     """A new task's earlier turns (_input_history, each with its `input` items) as its first response
     records, oldest first, each a millisecond apart and before `before` (the turn's own created_at),
     so the thread sorts them ahead of it. Completed, no model, no usage: nothing ran, so nothing is
@@ -7737,12 +7798,13 @@ async def _imported_turns_put(turns: list[dict], *, sid: str, org: str, member: 
         stored = {"id": rid, "object": "response", "created_at": int(at), "status": "completed", "error": None,
                   "served_model": None, "reasoning": None, "incomplete_details": None,
                   "previous_response_id": None, "model": "", "store": store,
-                  "output": ([{"id": "msg_" + rid.removeprefix("resp_"), "type": "message", "status": "completed",
+                  "output": copied_outputs[i] if copied_outputs is not None else ([{"id": "msg_" + rid.removeprefix("resp_"), "type": "message", "status": "completed",
                                "role": "assistant", "content": [{"type": "output_text", "text": said, "annotations": []}]}]
                              if said else []),
                   "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
                   "metadata": {"session_id": sid, "imported": True},
-                  "_session_id": sid, "_org": org, "_member": member, "_input": t.get("input") or [],
+                  "_session_id": sid, "_org": org, "_member": member,
+                  "_input": copied_inputs[i] if copied_inputs is not None else t.get("input") or [],
                   "_backend": backend, "_imported": True}
         async with sem:
             if not await _blob_put(f"responses/{rid}.json", json.dumps(stored, default=str).encode(), kb=RESP_BLOB_KB):
@@ -9749,11 +9811,275 @@ async def _collect_produced(sid: str, exclude: set[str] | None = None) -> list[d
     return out
 
 
+def _branch_origin(value) -> dict:
+    try:
+        origin = json.loads(value) if isinstance(value, str) else value
+        if (isinstance(origin, dict) and isinstance(origin.get("response_id"), str)
+                and isinstance(origin.get("session_id"), str)):
+            out = {"response_id": origin["response_id"], "session_id": origin["session_id"]}
+            # Where on the original line the branch starts (Sessions §3), from 1. Absent rather
+            # than guessed when the stored origin has none.
+            if type(origin.get("turn")) is int and origin["turn"] >= 1:
+                out["turn"] = origin["turn"]
+            return out
+    except (TypeError, ValueError):
+        pass
+    return {}
+
+
+async def _branch_source(rid: str, org: str, harness_id: str, caller: dict) -> dict:
+    """Authorize before disclosing whether a response can be restored."""
+    try:
+        rec = await _resp_get(rid, strict=True)
+        sid = str((rec or {}).get("_session_id") or "")
+        vertex = await _vertex_get(sid) if sid else None
+    except Exception as error:
+        raise uhp_error(503, "server_error", "The source session could not be read. Try again.") from error
+    if (not rec or rec.get("_deleted") or rec.get("_org") != org or not vertex or vertex.get("tenant") != org
+            or vertex.get("status") == "deleted" or not _scope_keeps(caller, vertex.get("workspace"))
+            or str(vertex.get("harness_id") or "") != harness_id):
+        raise uhp_error(404, "session_not_found", "No session with that id.")
+    if _UHP_STATUS.get(str(rec.get("status"))) not in {"completed", "failed", "cancelled", "incomplete"}:
+        raise uhp_error(409, "branch_unavailable", "Only a completed response checkpoint can be branched.")
+    try:
+        point_bytes = await _blob_get_or_raise(_branch_point_key(rid), kb=RESP_BLOB_KB)
+    except Exception as error:
+        raise uhp_error(503, "server_error", "The checkpoint could not be read. Try again.") from error
+    try:
+        point = json.loads(point_bytes or b"null")
+        if (not isinstance(point, dict) or point["response_id"] != rid or point["session_id"] != sid
+                or not isinstance(point["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", point["commit"])):
+            raise ValueError("missing checkpoint position")
+    except (ValueError, TypeError, KeyError):
+        raise uhp_error(409, "branch_unavailable", "This response has no restorable checkpoint.")
+    return {"point": point, "source_sid": sid,
+            "backend": str(point.get("backend") or vertex.get("backend") or ""),
+            "workspace": str(vertex.get("workspace") or "")}
+
+
+# A branch copies the files its imported turns captured (_branch_artifacts), so their citations do
+# not depend on the source session. Each capture is at most RESP_MAX_FILE_BYTES and a turn has up to
+# RESP_MAX_FILES of them, so a long session's copies had no bound but the session's length: bounded
+# now, in count and in bytes, inside the preparation's deadline. Past either bound a capture is not
+# copied: its citation names the file's path in the branch's restored files instead (as one of an
+# excluded file does), which reads what the branch point committed at that path, or not found.
+BRANCH_COPY_MAX_FILES = int(os.environ.get("HR_BRANCH_COPY_MAX_FILES", "100"))
+BRANCH_COPY_MAX_BYTES = int(os.environ.get("HR_BRANCH_COPY_MAX_BYTES", str(256 * 1024 * 1024)))
+# One deadline over a branch's whole preparation (_branch_prepare): the restore and its retries,
+# the new checkpoint, the copies and the imported turns. The request that asked waits on it in
+# every response mode, before anything is acknowledged.
+BRANCH_PREPARE_TIMEOUT_S = float(os.environ.get("HR_BRANCH_PREPARE_TIMEOUT_S", "300"))
+
+
+async def _branch_artifacts(history: list[dict], source: str, target: str,
+                            org: str, caller: dict) -> list[dict]:
+    """Give imported citations target-owned paths or immutable copies, never source aliases.
+    At most BRANCH_COPY_MAX_FILES copies and BRANCH_COPY_MAX_BYTES in all; past them, the path."""
+    result = json.loads(json.dumps(history))  # Never mutate cached original response records.
+    copied: dict[tuple[str, str], str | None] = {}
+    budget = {"files": BRANCH_COPY_MAX_FILES, "bytes": BRANCH_COPY_MAX_BYTES}
+
+    async def visit(value):
+        if isinstance(value, list):
+            for item in value:
+                await visit(item)
+            return
+        if not isinstance(value, dict):
+            return
+        container, file_id = value.get("container_id"), value.get("file_id")
+        if (isinstance(container, str) and isinstance(file_id, str)
+                and re.fullmatch(r"[A-Za-z0-9_-]+", container)
+                and re.fullmatch(r"[A-Za-z0-9_-]+", file_id)):
+            key = (container, file_id)
+            if key not in copied:
+                owner = await _vertex_get(container)
+                calibration = caller.get("calibration") or {}
+                allowed = (owner and owner.get("tenant") == org and owner.get("status") != "deleted"
+                           and _scope_keeps(caller, owner.get("workspace"))
+                           and (not calibration or owner.get("harness_id") == calibration.get("inner")))
+                copied[key] = None
+                if allowed and file_id.startswith("wf_"):
+                    # Path ids resolve against the restored committed tree, not the source's tip.
+                    path = _wf_path(file_id)
+                    if path and _ws_visible(path):
+                        copied[key] = file_id
+                elif allowed:
+                    raw_meta = await _blob_get_or_raise(f"containers/{container}/{file_id}.meta", kb=RESP_BLOB_KB)
+                    meta = json.loads(raw_meta) if raw_meta else {
+                        "filename": value.get("filename") or file_id,
+                        "media_type": "application/octet-stream"}
+                    filename = str(meta.get("filename") or file_id)
+                    if not _ws_visible(filename):
+                        # Preserve the citation but never carry excluded bytes through an old capture.
+                        copied[key] = _wf_id(filename)
+                    elif budget["files"] <= 0:
+                        copied[key] = _wf_id(filename)       # past the count: the path, unread
+                    else:
+                        data = await _blob_get_or_raise(f"containers/{container}/{file_id}", kb=RESP_BLOB_KB)
+                        if data is not None and len(data) > budget["bytes"]:
+                            copied[key] = _wf_id(filename)   # past the bytes: the path
+                        elif data is not None:
+                            budget["files"] -= 1
+                            budget["bytes"] -= len(data)
+                            new_id = _rid("cfile")
+                            # Imported captures must never be reapplied as later app edits.
+                            meta["source"] = "branch"
+                            if not await _blob_put(f"containers/{target}/{new_id}", data, kb=RESP_BLOB_KB):
+                                raise uhp_error(503, "server_error", "A branch artifact could not be saved.")
+                            if not await _blob_put(f"containers/{target}/{new_id}.meta", json.dumps(meta).encode(), kb=RESP_BLOB_KB):
+                                raise uhp_error(503, "server_error", "A branch artifact's metadata could not be saved.")
+                            copied[key] = new_id
+            if copied[key] is not None:
+                value["container_id"], value["file_id"] = target, copied[key]
+                value["download_url"] = _file_url(target, copied[key])
+        for item in value.values():
+            await visit(item)
+
+    for turn in result:
+        await visit(turn.get("output") or [])
+    return result
+
+
+def _uhp_raised(error: HTTPException) -> bool:
+    """An error this module raised through uhp_error, its message already the one to give."""
+    return isinstance(error.detail, dict) and bool(error.detail.get("__uhp__"))
+
+
+async def _branch_prepare(info: dict, target: str, org: str, member: str, backend: str,
+                          harness_id: str, harness_name: str, workspace: str, caller: dict,
+                          before: float, store: bool) -> list[dict]:
+    """_branch_prepare_inner under one deadline, BRANCH_PREPARE_TIMEOUT_S. Every failure is an
+    HTTP error: 409 branch_unavailable when the point can't be a branch, otherwise a retryable 503."""
+    try:
+        return await asyncio.wait_for(
+            _branch_prepare_inner(info, target, org, member, backend, harness_id, harness_name,
+                                  workspace, caller, before, store),
+            timeout=BRANCH_PREPARE_TIMEOUT_S)
+    except TimeoutError as error:
+        raise uhp_error(503, "server_error", "The branch could not be prepared in time. "
+                                             "No session was created. Try again.") from error
+    except HTTPException as error:
+        if error.status_code >= 500 and not (error.status_code == 503 and _uhp_raised(error)):
+            raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.") from error
+        raise
+    except Exception as error:
+        raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.") from error
+
+
+def _runner_said(response: httpx.Response, key: str):
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001
+        return None
+    return body.get(key) if isinstance(body, dict) else None
+
+
+async def _branch_prepare_inner(info: dict, target: str, org: str, member: str, backend: str,
+                          harness_id: str, harness_name: str, workspace: str, caller: dict,
+                          before: float, store: bool) -> list[dict]:
+    """Restore into a new sandbox before publishing the new session or accepting a turn."""
+    point = info["point"]
+    source_sid, rid = info["source_sid"], point["response_id"]
+    # Read the full durable transcript before target work. No storage truncation or later turns.
+    rows = await BACKING.graph.find_strict("HarnessResponse", {"session_id": source_sid})
+    rows.sort(key=lambda row: float(row.get("created_at") or 0))
+    ids = [str(row.get("id")) for row in rows]
+    if rid not in ids:
+        raise uhp_error(409, "branch_unavailable", "The response's original history is unavailable.")
+    # Where the point stands in its session, from 1 (Sessions §3): its place among these rows,
+    # read here rather than at every turn's end (_branch_point_put).
+    position = ids.index(rid) + 1
+    history = []
+    for row in rows[:ids.index(rid) + 1]:
+        response_id = str(row.get("id"))
+        if row.get("status") == "deleted":
+            if response_id == rid:
+                raise uhp_error(409, "branch_unavailable", "The selected response was deleted.")
+            continue
+        rec = await _resp_get(response_id, strict=True)
+        if not rec or rec.get("_session_id") != source_sid or rec.get("_org") != org:
+            raise uhp_error(409, "branch_unavailable", "The response's original history is unavailable.")
+        if rec.get("_deleted") or rec.get("status") == "deleted":
+            if response_id == rid:
+                raise uhp_error(409, "branch_unavailable", "The selected response was deleted.")
+            continue
+        user_parts = []
+        for item in rec.get("_input") or []:
+            content = item.get("content")
+            if isinstance(content, str):
+                user_parts.append(content)
+            elif isinstance(content, list):
+                user_parts.extend(str(part.get("text") or "") for part in content
+                                  if isinstance(part, dict) and part.get("type") == "input_text")
+        user = "\n".join(user_parts)
+        assistant, _, _ = _output_to_turn_fields(rec.get("output") or [])
+        history.append({"user": user, "assistant": assistant, "input": rec.get("_input") or [],
+                        "output": rec.get("output") or []})
+    # No `branch_head`: the runner checks the point against the HEAD of the checkpoint it is
+    # sent, whichever turn last wrote it (see _branch_point_put).
+    params = {"branch_commit": point["commit"],
+              "branch_backend": info["backend"]}
+    try:
+        # From the first restore on, a failure removes whatever the target holds (the cleanup
+        # below), the sandbox's folder included: a refusal, a deadline, an unconfirmed restore.
+        response = None
+        for pause in _HYDRATE_PAUSES:
+            try:
+                response = await _hydrate_relay(target, params, source_sid=source_sid)
+                if response.status_code == 409:
+                    raise uhp_error(409, "branch_unavailable", "The committed files cannot be restored.")
+                if response.status_code < 400:
+                    break
+                if _runner_said(response, "detail") == "branch_restore_failed":
+                    # The restore ran past its time or out of disk: the same again on a resend,
+                    # after the whole upload again, so it is not resent.
+                    raise uhp_error(503, "server_error", "The branch's files could not be restored "
+                                                         "within the server's limits. Try again later.")
+            except HTTPException:
+                raise
+            except Exception:
+                response = None
+            if pause is not None:
+                await asyncio.sleep(pause)
+        if response is None or response.status_code >= 400:
+            raise uhp_error(503, "server_error", "The branch could not be prepared. Try again.")
+        if _runner_said(response, "branched") is not True:
+            # A sandbox from before branching ignores branch_commit, restores the source's latest
+            # workspace whole and answers 200: a branch with the wrong files, in silence. Only a
+            # sandbox that restored the point says `branched: true`.
+            raise uhp_error(503, "server_error", "The branch could not be prepared: the sandbox did not "
+                                                 "confirm it restored this response's files, and may "
+                                                 "predate branching. No session was created.")
+        ok, nbytes, ws_sha, git_head, _ = await _checkpoint_relay(target)
+        if not ok or not nbytes:
+            raise uhp_error(503, "server_error", "The branch workspace could not be saved.")
+        history = await _branch_artifacts(history, source_sid, target, org, caller)
+        # Complete the imported records before the session can be listed or read.
+        await _imported_turns_put(history, sid=target, org=org, member=member, backend=backend,
+                                  before=before, store=store,
+                                  copied_inputs=[turn["input"] for turn in history],
+                                  copied_outputs=[turn["output"] for turn in history])
+        await _resp_resolve_session(org, member, None, backend, harness_id=harness_id,
+                                   harness_name=harness_name, workspace=workspace, caller=caller,
+                                   new_sid=target)
+        await _vertex_upsert(target, {"ws_sha": ws_sha, "git_head": git_head,
+                                      "checkpoint_bytes": str(nbytes),
+                                      "branched_from": json.dumps({"response_id": rid, "session_id": source_sid,
+                                                                   "turn": position})})
+        await _vg_edge("BRANCHED_FROM", target, rid)
+        _session_trace[target]["branched_from"] = rid
+        return history
+    except BaseException:
+        with contextlib.suppress(Exception):
+            await _session_purge(target, await _vertex_get(target))
+        raise
+
+
 # ── session resolution (previous_response_id → reuse prior session for continuity) ──────
 async def _resp_resolve_session(org: str, member: str, prev: str | None, backend_hint: str,
                                 harness_id: str = "", harness_name: str = "",
                                 session_hint: str = "", workspace: str = "",
-                                caller: dict | None = None) -> tuple[str, str | None]:
+                                caller: dict | None = None, new_sid: str = "") -> tuple[str, str | None]:
     # Continue an existing conversation by (1) the response-id chain, or (2) an explicit session id.
     # (2) is the robust path: the client always knows which conversation it's in, so a follow-up never
     # forks a new empty session just because previous_response_id was momentarily unavailable.
@@ -9763,6 +10089,9 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
         # Workspace sticks to the session: the vertex's stamp wins (set at creation/backfill);
         # the caller's workspace only fills the gap for pre-stamping sessions.
         tr["workspace"] = str((v or {}).get("workspace") or "") or tr.get("workspace") or workspace or ""
+        origin = _branch_origin((v or {}).get("branched_from"))
+        if origin:
+            tr["branched_from"] = origin.get("response_id", "")
         # The vertex names the harness the session belongs to, and every app route addressed to a
         # harness refuses a session that names none — correctly, since an unnamed session cannot be
         # proved to be this harness's. But the stamp is written at CREATION only, and this is the
@@ -9811,7 +10140,7 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
             # billed, and rewrote the task's card as if it were live (2026-09-07)
             raise uhp_error(404, "session_not_found", "No session with that id.")
         raise uhp_error(404, "session_not_found", "No session with that id.")
-    sid = "hsess" + uuid.uuid4().hex
+    sid = new_sid or "hsess" + uuid.uuid4().hex
     created = time.time()
     inv = _inv_ts(created)
     trace_prefix = f"{org}/{inv}_{sid}"
@@ -9980,7 +10309,11 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
     # the request — the workspace and AGENTS.md still carry the working context.
     runner_prompt = prompt
-    if backend in _NO_RESUME_BACKENDS and resume:
+    if not resume and (_session_trace.get(sid) or {}).get("branched_from"):
+        # A lost first native turn must not silently lose the branch's transcript either.
+        _hist = (await _session_turns_data(sid, limit=_HISTORY_MAX_TURNS, strict=True)).get("turns") or []
+        runner_prompt = _history_prompt([t for t in _hist if t["id"] != translator.resp_id], prompt)
+    elif backend in _NO_RESUME_BACKENDS and resume:
         try:
             _hist = (await _session_turns_data(sid, limit=_HISTORY_MAX_TURNS)).get("turns") or []
             runner_prompt = _history_prompt(_hist, prompt)
@@ -10346,7 +10679,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         rec["charge"] = translator.charge      # a remote runtime's own bill for the turn, beside the tokens
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
-    await _checkpoint(sid, rec)
+    await _checkpoint(sid, rec, response_id=translator.resp_id)
     _too_large_saved(produced, rec)      # the answer says a file is in the task's files only once it is
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
@@ -10665,6 +10998,7 @@ async def _retention_remove(kind: str, item: dict, ctx: dict) -> str | None:
     elif kind == "responses":
         _resp_cache_forget(iid)
         await _blob_delete(f"responses/{iid}.json", kb=RESP_BLOB_KB)
+        await _blob_delete(_branch_point_key(iid), kb=RESP_BLOB_KB)
         await BACKING.graph.delete(iid, "HarnessResponse")
     elif kind == "harnesses":
         org = str(row.get("org") or "")
@@ -10979,6 +11313,7 @@ class CreateResponseBody(BaseModel):
     input: object = None
     stream: bool = False
     previous_response_id: str | None = None
+    branch: object = None
     store: bool = True
     instructions: str | None = None
     max_output_tokens: int | None = None
@@ -11003,6 +11338,7 @@ _UNAPPLIED_REQUEST_FIELDS = ("tools", "include", "max_output_tokens")
 def _ignored_request_fields(body: "CreateResponseBody") -> list[str]:
     """The fields of this request the gateway will not act on, in a stable order; `None` means the
     client did not send the field, so it is not named."""
+    # `branch` is never in this list: it is acted on, or the request is refused (create_response).
     return [f for f in _UNAPPLIED_REQUEST_FIELDS if getattr(body, f, None) is not None]
 
 
@@ -11096,6 +11432,16 @@ async def create_response(body: CreateResponseBody, request: Request):
     org, member = principal.get("org", ""), principal.get("member", "")
     if not org:
         raise HTTPException(400, "no org resolved for this principal")
+    # A request that asks for a branch and can't have one is refused, never run some other way
+    # (Sessions §1.1). Ignoring it used to be the rule, and with a session hint the task then ran
+    # as a new turn of the very session the client asked to leave alone, which no later answer
+    # can undo. Checked here, before anything is read or claimed: the body alone decides it.
+    if body.branch is not None and body.branch is not False:
+        if body.branch is not True:
+            raise uhp_error(400, "invalid_input", "branch is true or false.", "branch")
+        if not body.previous_response_id:
+            raise uhp_error(400, "invalid_input", "A branch starts from the response named in "
+                                                  "previous_response_id.", "branch")
     meta = body.metadata or {}
     probe = {"systemone": meta["systemone"]} if isinstance(meta.get("systemone"), dict) else None
     # harness id: request metadata, else the X-Harness-Id header (set by a front proxy that maps
@@ -11112,6 +11458,7 @@ async def create_response(body: CreateResponseBody, request: Request):
         _pv = await _vertex_get(_psid) if _psid else None
         harness_id = str((_pv or {}).get("harness_id") or "")
     harness_name = str(meta.get("harness_name") or "")
+    branching = body.branch is True and bool(body.previous_response_id)
     # A calibration credential is held to its one harness HERE, before the idempotency replay below
     # hands back a stored response and before any session is touched: a refusal that comes after a
     # read or a write is not a refusal. It starts runs on that harness, and continues only a
@@ -11125,7 +11472,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     if _cal and body.previous_response_id and not await _calibration_holds_response(
             _calibration_inner(principal), await _resp_get(body.previous_response_id)):
         raise uhp_error(404, "response_not_found", "No response with that id.", "previous_response_id")
-    if _cal and str(meta.get("session_id") or "") and not await _calibration_holds_session(
+    if _cal and not branching and str(meta.get("session_id") or "") and not await _calibration_holds_session(
             _calibration_inner(principal), str(meta.get("session_id") or "")):
         raise uhp_error(404, "session_not_found", "No session with that id.", "metadata.session_id")
     # Request idempotency: the durable control store is the SINGLE authority (create_item = atomic
@@ -11174,6 +11521,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     # SEPARATE Stripe Connect flow — a different fund system, not this credit gate.)
     billing_org = (str(hv.get("org") or "") if hv else "") or org
     await _credit_gate(billing_org)
+    branch_info = await _branch_source(body.previous_response_id, org, harness_id, principal) if branching else None
     # Caller-selected model: the top-level OpenAI `model` field (what the console + API users send),
     # then request metadata. When omitted, fall back to the harness's saved default_model so every
     # session of a custom harness inherits its configured default.
@@ -11282,6 +11630,12 @@ async def create_response(body: CreateResponseBody, request: Request):
     if answer is not None and not body.previous_response_id:
         raise uhp_error(400, "invalid_input", "An input_response answers the response named in "
                                               "previous_response_id.", "previous_response_id")
+    if answer is not None and branching:
+        # The two can't combine: an answer continues the session that asked, a branch leaves it as
+        # it was. A malformed request, so 400, the same as an answer with no response to answer;
+        # the question itself may well be pending, which `input_not_pending` would deny.
+        raise uhp_error(400, "invalid_input", "A branch does not answer the original response's "
+                                              "question. Send the input_response without branch.", "branch")
     if not body.previous_response_id and not str(meta.get("session_id") or "").strip():
         history, live_input = _input_history(body.input, org)
     prompt, files_in, input_items = _parse_input(live_input)
@@ -11311,11 +11665,14 @@ async def create_response(body: CreateResponseBody, request: Request):
     # session_hint: the client's known active session — a fallback continuity signal so a
     # follow-up never forks a new session when previous_response_id was lost client-side
     # (interrupted stream, tab switch). The resolver validates org ownership before reuse.
-    sid, resume = await _resp_resolve_session(org, member, body.previous_response_id, backend,
-                                              harness_id=harness_id, harness_name=harness_name,
-                                              session_hint=str(meta.get("session_id") or ""),
-                                              workspace=str(principal.get("workspace") or ""),
-                                              caller=principal)
+    if branching:
+        sid, resume = "hsess" + uuid.uuid4().hex, None
+    else:
+        sid, resume = await _resp_resolve_session(org, member, body.previous_response_id, backend,
+                                                  harness_id=harness_id, harness_name=harness_name,
+                                                  session_hint=str(meta.get("session_id") or ""),
+                                                  workspace=str(principal.get("workspace") or ""),
+                                                  caller=principal)
     # The previous response's question (Tasks §3.2), now that the response is known to be the
     # caller's: an answer is checked and claimed, and the answer becomes this turn's message,
     # carrying the question with it; any other input voids the question, and the response says
@@ -11331,7 +11688,7 @@ async def create_response(body: CreateResponseBody, request: Request):
     if answer is not None or (not body.previous_response_id and str(meta.get("session_id") or "").strip()):
         with contextlib.suppress(Exception):
             _newest = str((await _session_turns_data(sid)).get("last_response_id") or "")
-    _chained = body.previous_response_id or _newest
+    _chained = None if branching else body.previous_response_id or _newest
     if _chained:
         _prev = await _resp_get(_chained)
         _pend = (_prev or {}).get("_pending_input") if isinstance(_prev, dict) else None
@@ -11379,6 +11736,19 @@ async def create_response(body: CreateResponseBody, request: Request):
             if str(existing.get("req_hash") or "") not in ("", idem_rhash or ""):
                 raise HTTPException(409, "Idempotency-Key reused with a different request payload")
             return await _idem_replay(str(existing.get("resp_id") or ""), bool(body.stream))
+    if branching:
+        try:
+            # The same capacity gates as a turn, without publishing a heartbeat-only session.
+            async with _turn_slot(org, sid, heartbeat=False):
+                history = await _branch_prepare(branch_info, sid, org, member, backend, harness_id,
+                                                harness_name, branch_info["workspace"], principal,
+                                                created_at, body.store)
+            _session_trace[sid]["billing_org"] = billing_org
+        except BaseException:
+            if idem_key and idem_sha_v is not None:
+                with contextlib.suppress(Exception):
+                    await control_store.idem_release(org, idem_sha_v, resp_id)
+            raise
     # This turn owns the session from HERE: clear a leftover Stop flag (it belonged to the
     # previous turn) and mark the vertex starting so cancel_session sees a live turn during
     # the entire warmup window — even while this task waits on the concurrency gates. Stamp
@@ -11417,6 +11787,11 @@ async def create_response(body: CreateResponseBody, request: Request):
         # Reserved fields, named on the response rather than dropped in silence (tasks.md 1.4).
         _ignored = _ignored_request_fields(body)
         tr = _RespTranslator(resp_id, model_req or body.model or backend, body.previous_response_id, body.store, created_at, sid=sid, ignored=_ignored)
+        # Only the response that branched says where it came from (Sessions §1.1). The session
+        # keeps the origin for the rest of its life (its detail, and the trace the transcript
+        # fallback in _resp_execute reads), but a later turn in it is a continuation like any
+        # other: naming the origin there too read as a new branch at every turn.
+        tr.branched_from = str(body.previous_response_id or "") if branching else ""
         tr.environment = str((environment or {}).get("id") or "")
         tr.voided_input_requests = voided     # the question this turn passed over, named (§3.2)
         if effort:   # what the turn asked of the model's thinking; "applied" arrives with the result
@@ -11447,7 +11822,7 @@ async def create_response(body: CreateResponseBody, request: Request):
                 with contextlib.suppress(Exception):
                     await control_store.resp_set_pending_input(org, resp_id, pending["id"], _INPUT_REQUEST_TTL_S)
 
-        if history:
+        if history and not branching:
             # the task's first turns, the conversation it was started with, written before this
             # turn's own record: the thread reads whole from its first read, and a write that fails
             # refuses the turn here (the guard below releases what it holds)
@@ -12049,6 +12424,7 @@ async def delete_response(response_id: str, request: Request):
     try:
         _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
+        await _blob_delete(_branch_point_key(response_id), kb=RESP_BLOB_KB)
     except Exception:  # noqa: BLE001
         pass
     await _vg_upsert("HarnessResponse", response_id, {"status": "deleted", "deleted_at": str(now)})
