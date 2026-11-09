@@ -17,6 +17,11 @@ A base whose request still offers a switched-off tool and carries no block ignor
 With --baseline each base also runs once with nothing switched off, which tells a tool the switch
 withheld from a name the CLI never offered at all (a catalog name that is not one of its tools).
 
+With --platform-memory the turn carries the platform's memories server (the stand-in answers it at
+/v1/mcp/memories, the address the runner knows it by) and, unless --disable names some, nothing is
+switched off: what is left to read is whether the base's own memory is gone. --look-for names words
+to find anywhere in each request (a deferred tool is named in a request without being in its tools).
+
 The turn is started on the runner directly (POST /turn), with the list the gateway would pass it: the
 gateway hands a harness's disabled_tools to the runner as they are stored (tools_disabled), so this
 is the same turn a harness starts, minus the gateway's routing. That is the point: on an instance
@@ -68,6 +73,11 @@ NOT_RUN = {"qoder": "its runtime is the vendor's cloud"}
 class Seen:
     lock = threading.Lock()
     calls: dict[str, list[dict]] = {}      # backend -> one record per model request
+    look_for: tuple[str, ...] = ()
+    mcp_hits = 0
+
+
+MEMORIES_PATH = "/v1/mcp/memories"
 
 
 def tool_names(body: dict) -> list[str]:
@@ -92,6 +102,23 @@ def tool_names(body: dict) -> list[str]:
         else:
             out += [str(k) for k in t]
     return out
+
+
+def opening(body: dict) -> str:
+    """The first words of the request's system prompt, which say which of a CLI's agents sent it."""
+    sys_ = body.get("system") or body.get("instructions") or ""
+    if not sys_:
+        for m in body.get("messages") or []:
+            if isinstance(m, dict) and m.get("role") in ("system", "developer"):
+                sys_ = m.get("content") or ""
+                break
+    if isinstance(sys_, dict):
+        sys_ = " ".join(str(p.get("text") or "") for p in sys_.get("parts") or [] if isinstance(p, dict))
+    if isinstance(sys_, list):
+        sys_ = " ".join(str(p.get("text") or "") if isinstance(p, dict) else str(p) for p in sys_)
+    if not sys_ and isinstance(body.get("systemInstruction"), dict):
+        sys_ = " ".join(str(p.get("text") or "") for p in body["systemInstruction"].get("parts") or [])
+    return " ".join(str(sys_).split())[:140]
 
 
 def _sse(events: list[str]) -> bytes:
@@ -174,6 +201,9 @@ class StandHandler(http.server.BaseHTTPRequestHandler):
         except ValueError:
             body = {}
         path = self.path.split("?")[0]
+        if path.rstrip("/") == MEMORIES_PATH:
+            self._memories(body if isinstance(body, dict) else {})
+            return
         backend = path.strip("/").split("/")[0]
         if path.endswith("/models"):
             self._send(200, "application/json", json.dumps({"object": "list", "data": [{"id": "stand-in", "object": "model"}]}).encode())
@@ -186,9 +216,30 @@ class StandHandler(http.server.BaseHTTPRequestHandler):
             Seen.calls.setdefault(backend, []).append({
                 "path": "/" + "/".join(path.strip("/").split("/")[1:]),
                 "tools": tool_names(body),
-                "block": BLOCK.encode() in raw})
+                "block": BLOCK.encode() in raw,
+                "opening": opening(body),
+                "found": [w for w in Seen.look_for if w.encode() in raw]})
         ctype, data = model_body(path, body)
         self._send(200, ctype, data)
+
+    def _memories(self, body: dict) -> None:
+        """A memories server that holds nothing: enough MCP for a client to connect and list tools."""
+        with Seen.lock:
+            Seen.mcp_hits += 1
+        if self.command != "POST":
+            self._send(405, "application/json", b"{}")
+            return
+        if "id" not in body:
+            self._send(202, "application/json", b"")
+            return
+        method = str(body.get("method"))
+        result = {"initialize": {"protocolVersion": (body.get("params") or {}).get("protocolVersion") or "2025-03-26",
+                                 "capabilities": {"tools": {}}, "serverInfo": {"name": "memories", "version": "1"}},
+                  "tools/list": {"tools": []}, "resources/list": {"resources": []}, "prompts/list": {"prompts": []},
+                  "ping": {}}.get(method)
+        out = {"jsonrpc": "2.0", "id": body.get("id"), "result": result} if result is not None else \
+              {"jsonrpc": "2.0", "id": body.get("id"), "error": {"code": -32601, "message": "not here"}}
+        self._send(200, "application/json", json.dumps(out).encode())
 
     do_GET = do_POST = do_HEAD = _handle  # noqa: N815
 
@@ -229,10 +280,10 @@ def call(method: str, path: str, headers: dict, body: dict | None = None, timeou
 
 
 def run_base(x: dict, stand: str, key: str, runner: str, made: list, disable: list[str],
-             baseline: bool = False) -> dict:
+             baseline: bool = False, memory: bool = False) -> dict:
     base, backend = x["id"], x.get("backend") or x["id"]
-    off = [] if baseline else (disable or [str(t.get("name")) for t in (x.get("tools") or [])
-                                           if isinstance(t, dict) and t.get("name")])
+    off = [] if baseline or (memory and not disable) else \
+        (disable or [str(t.get("name")) for t in (x.get("tools") or []) if isinstance(t, dict) and t.get("name")])
     # the stand-in tells the turns apart by the first segment of the path they call
     tag = backend + ("~baseline" if baseline else "")
     row = {"base": base, "backend": backend, "tag": tag, "off": off, "status": "", "error": "",
@@ -250,6 +301,7 @@ def run_base(x: dict, stand: str, key: str, runner: str, made: list, disable: li
             "prompt": "Reply OK.", "timeout_seconds": TURN_S - 30, "max_turns": 5,
             "auth": {"api_key": f"tools-off-check-{uuid.uuid4().hex}", "base_url": base_url},
             "tools_disabled": off, "agent_doc": "", "idempotency_key": uuid.uuid4().hex,
+            "mcp_servers": ([{"name": "memories", "url": stand + MEMORIES_PATH, "transport": "http"}] if memory else []),
             # the gateway's default for codex on this image (HARNESS_CODEX_APPSERVER=1)
             "codex_appserver": backend == "codex"}
     made.append(ident)
@@ -310,6 +362,10 @@ def main() -> int:
     ap.add_argument("--disable", default="", help="comma-separated tool names to switch off (default: every tool the base offers)")
     ap.add_argument("--jobs", type=int, default=3)
     ap.add_argument("--baseline", action="store_true", help="also run each base once with nothing switched off")
+    ap.add_argument("--verbose", action="store_true", help="list every model request with its own tools")
+    ap.add_argument("--platform-memory", action="store_true",
+                    help="attach the platform's memories server; nothing switched off unless --disable names some")
+    ap.add_argument("--look-for", default="", help="comma-separated words to find anywhere in each request")
     args = ap.parse_args()
 
     for _ in range(90):
@@ -339,11 +395,13 @@ def main() -> int:
     rows: list[dict] = []
     try:
         disable = [t for t in args.disable.split(",") if t]
+        Seen.look_for = tuple(w for w in args.look_for.split(",") if w)
         t0 = time.time()
         work = [(x, False) for x in items] + ([(x, True) for x in items] if args.baseline else [])
         print(f"turns: {len(work)}", flush=True)
         with cf.ThreadPoolExecutor(max(1, args.jobs)) as ex:
-            done = list(ex.map(lambda w: run_base(w[0], stand, key, runner, made, disable, baseline=w[1]), work))
+            done = list(ex.map(lambda w: run_base(w[0], stand, key, runner, made, disable, baseline=w[1],
+                                                  memory=args.platform_memory), work))
         rows = [r for r in done if not r["tag"].endswith("~baseline")]
         base_rows = {r["backend"]: r for r in done if r["tag"].endswith("~baseline")}
         print(f"turns took {round(time.time() - t0)}s", flush=True)
@@ -367,6 +425,15 @@ def main() -> int:
             print(f"    request tools, nothing off ({len(full)}): {', '.join(full) or '-'} "
                   f"[turn {b['status'] or '-'} {b['error'][:60]}]", flush=True)
         print(f"    request tools ({len(offered)}): {', '.join(offered) or '-'}", flush=True)
+        if args.verbose:
+            for i, c in enumerate(calls):
+                print(f"      request {i + 1} {c['path']} block {'yes' if c['block'] else 'no'} "
+                      f"tools ({len(c['tools'])}): {', '.join(c['tools']) or '-'}", flush=True)
+                print(f"        system prompt opens: {c['opening'] or '-'}", flush=True)
+                if Seen.look_for:
+                    print(f"        found in the request: {', '.join(c['found']) or 'none of ' + ', '.join(Seen.look_for)}", flush=True)
+    if args.platform_memory:
+        print(f"memories server calls: {Seen.mcp_hits}", flush=True)
     print("cleanup: " + ("nothing left" if not left else "; ".join(left)), flush=True)
     return 0 if all(verdict(r)[0] not in ("NOTHING", "NO REQUEST") for r in rows) and not left else 1
 

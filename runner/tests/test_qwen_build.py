@@ -193,3 +193,19 @@ def test_disabled_tools_sit_beside_the_mcp_servers():
     _, d, _ = _argv(tools_disabled=["edit"], mcp_servers=[{"name": "graph", "url": "https://mcp.example/mcp"}])
     cfg = _settings(d)
     assert cfg["permissions"]["deny"] == ["edit"] and "graph" in cfg["mcpServers"]
+
+
+def test_a_file_or_shell_tool_off_turns_off_qwens_background_agents():
+    """Its memory extraction subagent is built with a scoped tool set registered past the deny list:
+    measured, its request carried read_file, grep_search, write_file and edit with all four off."""
+    for one in ("write_file", "read_file", "run_shell_command", "grep_search"):
+        _, d, _ = _argv(tools_disabled=[one])
+        assert _settings(d)["memory"] == {"enableManagedAutoMemory": False, "enableManagedAutoDream": False,
+                                          "enableAutoSkill": False}, one
+
+
+def test_a_tool_they_do_not_carry_leaves_them_on():
+    _, d, _ = _argv(tools_disabled=["web_fetch", "agent"])
+    assert "memory" not in _settings(d)
+    _, d, _ = _argv()
+    assert "memory" not in _settings(d)
