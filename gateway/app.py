@@ -10516,12 +10516,15 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         await _vertex_upsert(sid, {"memory": task_memory})     # the session keeps it: its tools and its observation read it
     await _memories_person_begin(org, harness_id, hv, sid, task_person or {}, translator, rec)
     _mem_seam = await _memories_seam(harness_id, org, hv, sid) if harness_id else None
+    # what the agent already knows that may matter for this turn, recalled for it before it starts (in a person's
+    # task, that person's and the agent's own; never when memory is off for the task: no seam)
+    _mem_known, _mem_recalled = await _memories_known_at_start(_mem_seam, user_text, sid)
     _mem_section, _mem_primed = ("", {}) if _mem_seam is None else await memory_tools.doc_section(
         _mem_seam, kept_after=((await _memories_settings(harness_id, org, hv)) or {}).get("observe", True) is not False,
-        person=bool(_mem_seam.person))
+        person=bool(_mem_seam.person), known=_mem_known)
     if _mem_section:
         agent_doc = (agent_doc + "\n\n" + _mem_section).strip()
-        rec["memories"] = {"primed_tokens": _mem_primed}
+        rec["memories"] = {"primed_tokens": _mem_primed, **({"recalled_at_start": _mem_recalled} if _mem_recalled else {})}
     status = "failed"
     # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
@@ -21812,7 +21815,8 @@ async def memories_mcp(request: Request):
             return _jsonrpc_result(rid, {"tools": []})
         return _jsonrpc_result(rid, _tool_text("Memory is off for this task: no person was named for it.", True))
     if method == "tools/list":
-        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(await seam.entries(), await seam.offers())})
+        kept_after = ((await _memories_settings(hid, org, v)) or {}).get("observe", True) is not False
+        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(await seam.entries(), await seam.offers(), kept_after)})
     args = params.get("arguments") or {}
     tool = str(params.get("name") or "")
     text, is_error = await memory_tools.call(seam, tool, args if isinstance(args, dict) else {})
@@ -21834,6 +21838,29 @@ async def _memories_seam(hid: str, org: str, hv: dict | None, sid: str = ""):
     person = _json_obj(sv.get("memory_person"))
     return memory_local.Local(org, hid, await _harness_memories(hid, org, hv, sid=sid),
                               person=person if person.get("node") and person.get("principal") else None)
+
+
+# How long the turn waits for what its agent already knows (memory_tools.recall_at_start). Past it, or on any error,
+# the turn runs without it, and says so once in the log: a slow engine never holds a turn up.
+_RECALL_AT_START_S = float(os.environ.get("HR_MEMORY_RECALL_AT_START_S", "3"))
+
+
+async def _memories_known_at_start(seam, text: str, sid: str) -> tuple[str, int]:
+    """(the Memory section's block of what the agent already knows that may matter for this turn, how many findings),
+    recalled with the turn's own words through the task's seam, so per-person reach is exactly the recall tool's.
+    ("", 0) when memory is off for the task (no seam), there are no words, nothing was found, or it took too long."""
+    if seam is None or not str(text or "").strip():
+        return "", 0
+    try:
+        found = await asyncio.wait_for(memory_tools.recall_at_start(seam, str(text)), _RECALL_AT_START_S)
+    except asyncio.TimeoutError:
+        print(f"[memories] {sid}: the turn starts without what its agent already knows: recall took over "
+              f"{_RECALL_AT_START_S:g} s", flush=True)
+        return "", 0
+    except Exception as e:  # noqa: BLE001 - the turn runs without it
+        print(f"[memories] {sid}: the turn starts without what its agent already knows: {type(e).__name__}", flush=True)
+        return "", 0
+    return memory_tools.known_block(found)
 
 
 _NO_END_USER = "no end user named"

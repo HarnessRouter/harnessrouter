@@ -275,14 +275,17 @@ def test_another_organization_running_the_harness_gets_the_run_and_not_the_owner
     assert [e["memory_id"] for e in asyncio.run(gw._harness_memories(hid, ORG, hv))] == [world["company"]]
 
 
-def _a_finished_turn(monkeypatch, world, sid):
+def _a_finished_turn(monkeypatch, world, sid, user_text="", sent=None, section=None):
     """_resp_execute on a runner that finishes at once, with an observation that never ends. Returns the
-    turn's status, its record, and the observations it started."""
+    turn's status, its record, and the observations it started. `sent` collects what the runner was asked to run;
+    `section` stands in for the Memory section."""
     async def nothing(*a, **kw):
         return None
 
     async def sandbox(path, sid, method="POST", body=None, **kw):
         if path == "/turn":
+            if sent is not None:
+                sent.append(body)
             return {"turn_id": "t1", "status": "running"}
         if path.startswith("/turn/"):
             return {"done": True, "status": "done", "n_total": 1, "events": [{"type": "result", "subtype": "success", "result": "Done."}]}
@@ -323,9 +326,9 @@ def _a_finished_turn(monkeypatch, world, sid):
     monkeypatch.setattr(gw, "RESP_POLL_S", 0)
     monkeypatch.setattr(gw.control_store, "enabled", lambda: False)
 
-    async def section(local, **kw):
+    async def plain_section(local, **kw):
         return "## Memory", 3
-    monkeypatch.setattr(gw.memory_tools, "doc_section", section)
+    monkeypatch.setattr(gw.memory_tools, "doc_section", section or plain_section)
     began = []
 
     async def takes_forever(org, hid, sid, hv, rec, answer, **kw):
@@ -337,7 +340,7 @@ def _a_finished_turn(monkeypatch, world, sid):
         tr = gw._RespTranslator("resp_slow", "m", None, True, time.time())
         out = await asyncio.wait_for(gw._resp_execute(
             tr, org=ORG, member="me@local", sid=sid, backend="claude", chain=["anthropic"], prompt="hi", files_in=[], resume=None,
-            harness_id=world["hid"], emit=lambda ev: asyncio.sleep(0)), 10)
+            harness_id=world["hid"], emit=lambda ev: asyncio.sleep(0), user_text=user_text), 10)
         assert out[0] == "completed", out[2].get("tried")
         await asyncio.sleep(0)           # an observation has started by the time anyone reads the answer
         pending = [t for t in list(gw._inflight) if not t.done()]
@@ -356,6 +359,64 @@ def test_a_slow_memory_never_holds_up_the_turn_it_describes(world, monkeypatch):
     status, rec, began, kept = _a_finished_turn(monkeypatch, world, "sess_slow")
     assert status == "completed" and "memories" in rec
     assert began == [(world["hid"], "sess_slow")] and kept, "it must still run, kept alive and drained at shutdown"
+
+
+def _known_section(given: list):
+    async def section(local, known="", **kw):
+        given.append(known)
+        return ("## Memory\n\n" + known).strip(), {}
+    return section
+
+
+def test_what_the_agent_already_knows_is_recalled_with_the_turns_words_and_given_to_it_as_data(world, monkeypatch):
+    """Memory works even when the model doesn't think to look: on sslip a ReMe agent asked plainly never recalled."""
+    asked, sent, given = [], [], []
+
+    async def recall(seam, query):
+        asked.append(query)
+        return [{"record": {"id": "r1", "type": "fact", "content": [{"type": "text", "text": "Ada prefers short answers."}]}}]
+    monkeypatch.setattr(gw.memory_tools, "recall_at_start", recall)
+    status, rec, _, _ = _a_finished_turn(monkeypatch, world, "sess_known", user_text="How should you answer me?",
+                                         sent=sent, section=_known_section(given))
+    assert status == "completed" and asked == ["How should you answer me?"]
+    assert given[0] == memory_tools.KNOWN_HEAD + "\n\n```text\n- Ada prefers short answers.\n```"
+    assert given[0] in sent[0]["agent_doc"] and rec["memories"]["recalled_at_start"] == 1
+
+
+def test_a_recall_that_is_slow_or_fails_never_holds_up_the_turn_and_is_said_once(world, monkeypatch, capsys):
+    monkeypatch.setattr(gw, "_RECALL_AT_START_S", 0.05)
+
+    async def slow(seam, query):
+        await asyncio.sleep(10)
+        return [{"record": {"id": "r1", "title": "Never seen"}}]
+    monkeypatch.setattr(gw.memory_tools, "recall_at_start", slow)
+    given: list = []
+    started = time.monotonic()
+    status, rec, _, _ = _a_finished_turn(monkeypatch, world, "sess_slowrecall", user_text="Hello", section=_known_section(given))
+    assert status == "completed" and given == [""] and time.monotonic() - started < 5
+    assert "recalled_at_start" not in rec["memories"]
+    said = [x for x in capsys.readouterr().out.splitlines() if "already knows" in x]
+    assert len(said) == 1 and "took over 0.05 s" in said[0]
+
+    async def broken(seam, query):
+        raise memory_tools.Refused("memory_unavailable", "the engine is down")
+    monkeypatch.setattr(gw.memory_tools, "recall_at_start", broken)
+    given.clear()
+    status, _, _, _ = _a_finished_turn(monkeypatch, world, "sess_brokenrecall", user_text="Hello", section=_known_section(given))
+    assert status == "completed" and given == [""]
+    assert len([x for x in capsys.readouterr().out.splitlines() if "already knows" in x]) == 1
+
+
+def test_a_turn_with_no_words_recalls_nothing(world, monkeypatch):
+    asked: list = []
+
+    async def recall(seam, query):
+        asked.append(query)
+        return []
+    monkeypatch.setattr(gw.memory_tools, "recall_at_start", recall)
+    given: list = []
+    _a_finished_turn(monkeypatch, world, "sess_nowords", user_text="  ", section=_known_section(given))
+    assert asked == [] and given == [""]
 
 
 def test_a_turn_that_corrected_memory_is_not_observed(world, monkeypatch):
