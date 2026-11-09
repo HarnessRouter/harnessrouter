@@ -20291,9 +20291,12 @@ _BASE_CATALOG: dict[str, dict] = {
                           "real git workspace, running shell commands and editing files to "
                           "complete the task end to end."),
         # The sdk profile's model-facing tools, read off the request header of a 0.1.2rc1 turn
-        # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). No per-tool
-        # switch exists on the wire, so disabling is an instruction to the model, the same
-        # standing as codex/hermes.
+        # on 2026-09-08 (goal, plan, job and agent-messaging internals left out). The switch is
+        # the profile's rows: a tool whose row registers nothing else is withheld (bash,
+        # str_replace_editor, web_fetch, todo_write, skill, subagent, subagent_fork, workflow;
+        # dsh_driver._rows_off), glob and grep only together, and read, write and edit never, since
+        # their row also holds read_image. So the base stays "instruction": the request covers what
+        # the rows cannot.
         # web_search is not offered: dsh's stock provider calls DeepSeek's own API with the relay's placeholder
         # key (401 every time, and off the turn's connection), so the driver turns that row off.
         "tools": [("bash", "Bash"), ("read", "File Read"), ("write", "File Write"),

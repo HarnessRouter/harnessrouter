@@ -3507,7 +3507,8 @@ DSH_DRIVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dsh_drive
 
 def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                resume_session_id: str | None = None,
-               mcp_servers: list[dict] | None = None, vision: bool = True) -> list[str]:
+               mcp_servers: list[dict] | None = None, vision: bool = True,
+               tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "deepseek"
     if pr not in DSH_PROVIDERS:
         raise HTTPException(400, f"unknown dsh provider '{pr}' (one of {sorted(DSH_PROVIDERS)})")
@@ -3540,7 +3541,9 @@ def _build_dsh(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
     job = {"prompt": prompt, "model": model, "cwd": cwd,
            "session_id": resume_session_id or "",
            # a server is a url or, for a plugin's stdio server, the launcher the runner wrote
-           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url") or (s or {}).get("command")]}
+           "mcp_servers": [s for s in (mcp_servers or []) if (s or {}).get("url") or (s or {}).get("command")],
+           # the profile rows that register only a disabled tool are switched off (dsh_driver._rows_off)
+           "tools_off": _tool_names_off(tools_disabled)}
     if not _DSH_DEEPSEEK_MODEL.search(model or ""):
         # Family decides the route, not the integration's name: deepseek models keep the
         # verified dsh-llm-deepseek launch path whichever endpoint serves them; every other
@@ -17382,7 +17385,11 @@ def capabilities(identifier: str = "") -> dict:
 #   codex       — the one built-in with a switch is web_search (_codex_web_search_off).
 #   hermes      — switches toolsets, not tools, which is a different granularity from the per-tool
 #                 names a harness configures.
-#   dsh         — no per-tool switch on the wire.
+#   dsh         — switches its profile's rows. A row that registers only a disabled tool (bash,
+#                 str_replace_editor, todo_write, skill, subagent, subagent_fork, workflow; web_fetch
+#                 has its row's own switch) is off, so that tool is withheld (dsh_driver._rows_off);
+#                 read, write and edit share a row with read_image, and glob and grep share one, so
+#                 those are asked unless their whole row is off.
 #   opensquilla — `--permissions` picks a posture (restricted / bypass / full); there is no
 #                 per-tool deny list anywhere on its agent CLI.
 # Qwen Code, Gemini CLI and Cline have one each in a settings file (_qwen_settings, _gemini_settings,
@@ -17657,7 +17664,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             model = model or DSH_DEFAULT_MODEL
             cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
                              resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                             vision=bool(req.vision))
+                             vision=bool(req.vision), tools_disabled=req.tools_disabled)
         elif backend == "pi":
             model = model or PI_DEFAULT_MODEL
             cmd = _build_pi(req.provider, auth, model, req.prompt, cwd, env,
