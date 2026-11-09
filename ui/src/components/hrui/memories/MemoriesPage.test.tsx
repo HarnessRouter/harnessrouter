@@ -63,10 +63,6 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); jest.clearAllMocks(); });
 
-const more = async (t: string) => {
-  await press_(page().querySelector('.mm-top button[aria-label="More"]') as HTMLElement);
-  await press_(Array.from(page().querySelectorAll('.mm-top .mm-mi')).find((b) => b.querySelector('b')?.textContent === t) as HTMLElement);
-};
 async function press_(b: HTMLElement | null | undefined) {
   if (!b) throw new Error(`nothing to press: ${page().textContent}`);
   await act(async () => { b.click(); });
@@ -74,13 +70,13 @@ async function press_(b: HTMLElement | null | undefined) {
 }
 
 describe('nothing connected', () => {
-  test('the page explains in one sentence and leads to connecting, or to finding the engines running here', async () => {
+  test('the page explains in one sentence and leads to connecting; there is no Find engines to press', async () => {
     backend({ 'GET /v1/memories/providers': { data: allProviders(NONE) } });
     await open();
     expect(page().querySelector('.mm-empty-list h2')?.textContent).toBe('Connect a memory engine');
     expect(page().querySelectorAll('.mm-empty-list p')).toHaveLength(1);
     expect(button('New memory')).toBeUndefined();
-    expect(button('Find engines')).toBeTruthy();
+    expect(button('Find engines')).toBeUndefined();
     await press('Connect an engine');
     const offered = Array.from(page().querySelectorAll('.mm-pv-o b')).map((b) => b.textContent);
     expect(offered).toEqual(['Mem0', 'Graphiti', 'Hindsight', 'ReMe']);
@@ -128,7 +124,7 @@ describe('nothing connected', () => {
     expect(s.sent('PUT', '/v1/plugs/mem0')[0].body).toEqual({ enabled: true, config: { base_url: 'https://m.example.com' } });
   });
 
-  test('Find engines asks the service to look, and says which it connected, from what it reads after', async () => {
+  test('with nothing connected, the page looks for the engines running here by itself, once, and says what it found', async () => {
     let found = false;
     const s = backend({
       'GET /v1/memories/providers': () => ({ data: allProviders(found ? { ...NONE, hindsight: true, reme: true } : NONE) }),
@@ -141,10 +137,10 @@ describe('nothing connected', () => {
       ] }; },
     });
     await open();
-    await press('Find engines');
     expect(s.sent('POST', '/v1/memory-services/discover')).toHaveLength(1);
     expect(s.sent('POST', '/v1/memory-services/discover')[0].body).toBeUndefined();
-    expect(toast).toHaveBeenCalledWith('Hindsight, ReMe connected.');
+    expect(page().querySelector('.mm-found')?.textContent).toBe('Hindsight, ReMe connected.');
+    expect(page().querySelector('.mm-empty-list h2')?.textContent).toBe('No memories yet');
   });
 
   test('an engine running that needs its key, or one refused, is said in the service’s words', async () => {
@@ -157,9 +153,14 @@ describe('nothing connected', () => {
       ] },
     });
     await open();
-    await press('Find engines');
-    expect(toast).toHaveBeenCalledWith('Mem0 is running. Connect it with deploy/memories/up.sh, which has its key. '
+    expect(page().querySelector('.mm-found')?.textContent).toBe('Mem0 is running. Connect it with deploy/memories/up.sh, which has its key. '
       + 'ReMe answers, but it can\'t read with a model: it has no working model key.');
+  });
+
+  test('where an engine is connected, nothing is looked for', async () => {
+    const s = backend({ 'GET /v1/memories/providers': { data: allProviders({ ...NONE, mem0: true }) }, 'POST /v1/memory-services/discover': { data: [] } });
+    await open();
+    expect(s.sent('POST', '/v1/memory-services/discover')).toHaveLength(0);
   });
 });
 
@@ -201,6 +202,10 @@ describe('New memory: a name, a description if you like, and every engine, the o
     expect(page().textContent).not.toContain('Fixed once created');
     expect(page().querySelector('.mm-sv-facts')).toBeNull();
     expect(page().querySelector('label[for=mmCrDesc]')?.textContent).toContain('optional');
+    // the name, then the description, then what the description is for, tied to it (Richard 11-09: two rows)
+    const nf = page().querySelector('.mm-nf') as HTMLElement;
+    expect(Array.from(nf.children).map((c) => c.querySelector('input,textarea')?.id || c.className)).toEqual(['mmCrName', 'mmCrDesc', 'set-help mm-nf-h']);
+    expect(page().querySelector('#mmCrDesc')?.getAttribute('aria-describedby')).toBe('mmCrDescH');
   });
 
   test('every engine is listed at once, with what it keeps; one not running here is shown and can’t be picked', async () => {
@@ -208,9 +213,14 @@ describe('New memory: a name, a description if you like, and every engine, the o
     expect(rows().map((r) => r.querySelector('b')?.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight', 'ReMe']);
     expect(page().querySelector('[role=radiogroup]')?.getAttribute('aria-labelledby')).toBe('mmCrEng');
     expect(row('Graphiti').textContent).toContain('A graph of people, things and how they connect, tracked over time.');
-    expect(row('ReMe').disabled).toBe(true);
+    expect(row('ReMe').getAttribute('aria-disabled')).toBe('true');
     expect(row('ReMe').textContent).toContain('Not running here');
     expect(row('Mem0').textContent).not.toContain('Not running here');
+    // connecting lives on the row that isn't running, and only there
+    expect(Array.from(page().querySelectorAll('.mm-engs .mm-eng-cn')).map((b) => b.closest('[role=radio]')?.querySelector('b')?.textContent)).toEqual(['ReMe']);
+    await act(async () => { (row('ReMe').querySelector('.mm-eng-cn') as HTMLButtonElement).click(); });
+    await flush();
+    expect(page().querySelector('#mmCn')?.textContent).toBe('Connect ReMe');
     // nothing is folded away, and nothing asks for a click to see the others
     expect(button('Change')).toBeUndefined();
     expect(page().querySelector('.mm-eng [aria-expanded]')).toBeNull();
@@ -310,9 +320,12 @@ describe('New memory: a name, a description if you like, and every engine, the o
     await press('New memory');
     await type('#mmCrName', 'Accounts');
     expect(button('Create')?.disabled).toBe(true);
-    expect(rows().every((r) => r.disabled)).toBe(true);
-    await press('Connect an engine');
-    expect(page().querySelector('#mmCh')?.textContent).toBe('Connect a memory engine');
+    expect(rows().every((r) => r.getAttribute('aria-disabled') === 'true')).toBe(true);
+    // each engine connects from its own row, in one click: Mem0's own cloud as well as an engine at another address
+    await act(async () => { (row('Mem0').querySelector('.mm-eng-cn') as HTMLButtonElement).click(); });
+    await flush();
+    expect(page().querySelector('#mmCn')?.textContent).toBe('Connect Mem0');
+    expect(page().textContent).toContain('Leave it empty to use Mem0’s own cloud.');
   });
 });
 
@@ -437,14 +450,13 @@ describe('the cards', () => {
     expect(toast).toHaveBeenCalledWith('Busy remembers in Idle now.');
   });
 
-  test('connecting and finding engines are under More', async () => {
+  test('the header is the view and New memory, and nothing else: no More', async () => {
     backend({ 'GET /v1/memories/providers': { data: [CAPS.mem0] }, 'GET /v1/memories': { data: [memory({ provider: 'mem0' })] } });
     await open();
+    expect(page().querySelector('.mm-top button[aria-label="More"]')).toBeNull();
+    expect(Array.from(page().querySelectorAll('.mm-top .top-actions > *')).map((x) => x.textContent)).toEqual(['CardsList', 'New memory']);
     expect(button('Connect an engine')).toBeUndefined();
-    await more('Connect an engine');
-    expect(page().querySelector('#mmCh')?.textContent).toBe('Connect a memory engine');
-    // one connected already says Change, not Connect
-    expect(Array.from(page().querySelectorAll('.mm-pv-o .btn')).map((b) => b.textContent)).toEqual(['Change']);
+    expect(button('Find engines')).toBeUndefined();
   });
 });
 
@@ -496,7 +508,8 @@ describe('a card shows its picture', () => {
     expect(s.calls.filter((c) => c.path.startsWith('/v1/memories/hmem_2'))).toEqual([]);
     // the list's row shows the same, small
     await press('List');
-    expect(page().querySelector('.mm-row .mm-mini-box .mm-brick.mini .f-memory')).not.toBeNull();
+    expect(page().querySelector('.mm-row .mm-mini-box .mm-brick.mm-small .f-memory')).not.toBeNull();
+    expect(page().querySelector('.mm-row .mm-mini-box .mini')).toBeNull();
   });
 
   test('a graph with no cover yet waits in a quiet shape of the same size, never the old drawing, and reads nothing at once', async () => {

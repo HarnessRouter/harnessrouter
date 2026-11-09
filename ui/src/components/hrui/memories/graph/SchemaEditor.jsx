@@ -10,19 +10,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConfirmSheet } from '../../Sheet';
 import { toast } from '../../toast';
 import { plural } from '../../setup/settingsModel';
-import { builtinOf, guideLine, hasProperties, hasRelations, NO_RELATIONS_LINE, RELATIONS_LINE, relText, schemaGuides, schemaLabels, schemaWord, TYPES_LINE } from '../caps';
+import { builtinOf, hasProperties, hasRelations, NO_RELATIONS_LINE, RELATIONS_LINE, relText, schemaGuides, schemaLabels, schemaWord, TYPES_LINE } from '../caps';
 import { MM_COLORS, MM_PTYPES, MM_STARTS, propNameOf, schemaProblem, startSchema, typeLabel, typeNameOf, uid } from '../schemaModel';
 import { kindInfo } from '../tree';
 import { StarterArt } from '../CardArt';
 import { vendorName } from '../vendors';
 import CytoscapeCanvas, { colorFor } from './CytoscapeCanvas.jsx';
-import { exploreOf, readGraph, GRAPH_LIMIT } from './adapter';
+import { exploreOf, readGraph } from './adapter';
 import { I, IconByName, needsCatalog, useIconCatalog } from './graphIcons.jsx';
 import { arrive, footprint, initialLayout } from './layout';
 import { applyDrafts, cloneSchema, graphOf, heldGraph, newRelation } from './schemaDraft';
-import { builtinTitles, withBuiltin } from './builtin';
-import { buildSchemaElements } from './schemaElements';
-import { untangleCanvas } from './untangle';
+import { withBuiltin } from './builtin';
+import { buildSchemaElements, schemaCaption } from './schemaElements';
 import { coverGraphOf, useCoverKeeper } from '../cover';
 import './graph.css';
 
@@ -486,36 +485,39 @@ function SaveLine({ doc }) {
   return null;
 }
 
-// One deferred fit: frame everything once the pane has its final size, with a zoom cap so a tiny schema doesn't blow up.
+/** Frame the graph in the canvas below its toolbar (the pencil, + Type, expand), so no type or name is ever under it,
+ *  with `pad` around, never zoomed past 1.3 so a tiny schema doesn't blow up. */
+function frameBelowTools(cy, pad) {
+  const tools = cy.container()?.closest?.('.dg-canvas')?.querySelector('.dg-canvas-tools');
+  const top = tools ? tools.offsetTop + tools.offsetHeight : 0;
+  const W = cy.width(), H = cy.height(), bb = cy.elements().boundingBox();
+  if (!(bb.w > 0) || !(bb.h > 0)) { cy.center(); return; }
+  const z = Math.max(0.1, Math.min((W - 2 * pad) / bb.w, (H - top - 2 * pad) / bb.h, 1.3));
+  cy.zoom(z);
+  cy.pan({ x: (W - bb.w * z) / 2 - bb.x1 * z, y: top + pad + (H - top - 2 * pad - bb.h * z) / 2 - bb.y1 * z });
+}
+// One deferred fit: frame everything once the pane has its final size.
 function fitCanvas(ref) {
   const cy = ref.current?.getCy?.();
   if (!cy || cy.nodes().length === 0) return;
   try {
     cy.resize();
     if (cy.width() < 2 || cy.height() < 2) return;
-    cy.fit(undefined, 40);
-    if (cy.zoom() > 1.3) { cy.zoom(1.3); cy.center(); }
+    frameBelowTools(cy, 32);
     // however narrow the pane, a type stays big enough to read and to press: the drawing scales with the pane, and each
-    // node is drawn larger by as much as the scale took away
+    // node is drawn larger by as much as the scale took away; then the larger drawing is framed again
     const k = Math.max(1, Math.min(2.4, 0.8 / cy.zoom()));
     cy.batch(() => {
       cy.nodes().style({ width: 38 * k, height: 38 * k, 'font-size': 10 * k, 'background-width': 18 * k, 'background-height': 18 * k, 'text-max-width': 140 * k });
       cy.edges().style({ width: 1.4 * k, 'font-size': 10 * k, 'text-max-width': 120 * k });
     });
-    cy.scratch('_k', k);
-    untangleCanvas(cy, k);
+    frameBelowTools(cy, 32);
   } catch { /* gone */ }
-}
-/** Links clear of every type and name they don't belong on, at the size the canvas draws them now (untangle.ts). */
-function untangleNow(ref) {
-  const cy = ref.current?.getCy?.();
-  if (!cy || cy.nodes().length === 0) return;
-  try { untangleCanvas(cy, cy.scratch('_k') || 1); } catch { /* gone */ }
 }
 const fitSoon = (ref) => requestAnimationFrame(() => requestAnimationFrame(() => { fitCanvas(ref); setTimeout(() => fitCanvas(ref), 60); }));
 
 /** The pane. `graph` is what it draws, `caps` what may change, and `doc` where a change goes (none for what a provider holds on its own). */
-function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed, retry, countOf, onOpenData, placeholder, footLine }) {
+function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed, retry, countOf, onOpenData, placeholder }) {
   const [schemaSel, setSchemaSel] = useState(null);   // { kind, label }
   const [edit, setEdit] = useState(false);
   const [addType, setAddType] = useState(false);
@@ -662,7 +664,6 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
   const onSchemaNodeDragEnd = useCallback((cyNodeId, pos) => {
     if (!caps.position || !cyNodeId || !pos) return;
     setPositionDrafts((p) => ({ ...p, [cyNodeId]: { x: Math.round(pos.x), y: Math.round(pos.y) } }));
-    untangleNow(schemaRef);
   }, [caps.position]);
 
   // RULE: any panel appearing/disappearing changes the canvas's available size, so it must recalculate and re-center.
@@ -689,15 +690,12 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
 
   const icons = useMemo(() => (graph?.vertex_types || []).map((v) => v.ui?.icon).concat(Object.values(typeDrafts).map((d) => d.icon)), [graph, typeDrafts]);
   const catalog = useIconCatalog(needsCatalog(icons));
+  // each type's name as the canvas shows it (schemaCaption): the cover names them the same way, without the count
   const captionOf = useCallback((label, d) => {
     const n = countOf(`vertex:${label}`, label);
-    const built = (graph?.vertex_types || []).some((v) => v.label === label && v.builtin);
-    const sub = [built ? 'Built in' : '', n != null ? plural(n, 'record') : ''].filter(Boolean).join(' · ');
-    return `${graph?.titles?.[label] || typeLabel(d?.name || label)}${sub ? `\n${sub}` : ''}`;
+    return schemaCaption(graph, label, d, n != null ? plural(n, 'record') : '');
   }, [countOf, graph]);
   const schemaElements = useMemo(() => buildSchemaElements(graph, positionDrafts, typeDrafts, captionOf), [graph, positionDrafts, typeDrafts, captionOf, catalog]); // eslint-disable-line react-hooks/exhaustive-deps
-  // the canvas has the new elements by now (its own effect ran first): their links are set clear of what they'd cross
-  useEffect(() => { untangleNow(schemaRef); }, [schemaElements]);
   const vertexColorByLabel = useMemo(() => {
     const m = {};
     for (const v of ((graph && graph.vertex_types) || [])) m[v.label] = (v.ui && v.ui.color) || colorFor(v.label).ring;
@@ -732,15 +730,12 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
   const empty = !loading && !failed && graph && !schemaElements.length;
   // only what the provider makes is here: a person's own types go beside it
   const onlyBuiltin = !loading && !failed && graph && schemaElements.length > 0 && !(graph.vertex_types || []).some((v) => !v.builtin);
-  const ownPanel = onlyBuiltin && caps.add && !addType;
-  // the panel under the graph takes its height from the canvas: frame the graph again in what is left
-  useEffect(() => { fitSoon(schemaRef); }, [ownPanel]);
   const selType = schemaSel ? ((schemaSel.kind === 'vertex' ? graph?.vertex_types : graph?.edge_types) || []).find((x) => x.label === schemaSel.label) : null;
   const selLocked = !!selType?.builtin;
 
   return (
     <>
-      <div className={`mgv${expanded ? ' is-max' : ''}${ownPanel ? ' has-own' : ''}`}>
+      <div className={`mgv${expanded ? ' is-max' : ''}`}>
         <div className="dg-body" ref={bodyRef}>
           <div className="dg-canvas">
             <div className="dg-canvas-tools" style={{ zIndex: edit ? 4 : undefined }}>
@@ -813,7 +808,6 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
             )}
             <div className="mm-foot">
               {problem ? <p className="mm-sstat bad" role="alert">{problem}</p> : <SaveLine doc={doc}/>}
-              {footLine ? <p className="mm-guide">{footLine}</p> : null}
             </div>
           </div>
           {edit && (
@@ -833,25 +827,6 @@ function SchemaPane({ memory, provider, graph, saved, doc, caps, loading, failed
             />
           )}
         </div>
-        {/* below the graph, in the page's flow, never over it: on a phone the graph comes first and this scrolls under it */}
-        {ownPanel ? (
-          <div className="mm-sch-own mgv-live">
-            <b>{schemaGuides(provider) ? 'Add your own types' : 'Add your own labels'}</b>
-            <span>{schemaGuides(provider) ? `${vendor} looks for them in what it reads, beside what it makes itself.` : `${vendor} tags each fact it learns with the ones that fit.`}</span>
-            {schemaGuides(provider) ? (
-              <div className="mm-starts">
-                {MM_STARTS.map(([n, sub], i) => (
-                  <button key={n} type="button" className="mm-start" onClick={() => {
-                    const fresh = startSchema(i, provider);
-                    apply((d) => { d.types = fresh.types; d.relations = fresh.relations; });
-                    toast(`Started from ${n}. Rename or remove anything.`);
-                  }}><span className="mm-start-pic"><StarterArt s={startSchema(i, provider)} /></span><b>{n}</b><small>{sub}</small></button>
-                ))}
-                <button type="button" className="mm-start" onClick={() => setAddType(true)}><span className="mm-start-pic"><StarterArt s={null} /></span><b>Blank</b><small>Start with one type</small></button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
       </div>
       {confirm?.kind === 'prop' ? (
         <ConfirmSheet id="mmDp" title={`Delete field "${confirm.p.name}"`} confirmLabel="Delete"
@@ -911,12 +886,10 @@ function WrittenSchema({ memory, provider, doc, ro, countOf, onOpenData }) {
   // the memory's cover is this drawing: made once the schema is read, and again once a change to it is saved
   useCoverKeeper(memory, graph, !!doc.schema && doc.state !== 'saving' && doc.state !== 'error');
   const count = useCallback((key, label) => (key.startsWith('vertex:') ? countOf(label) : null), [countOf]);
-  const made = builtinTitles(provider);
   return (
     <SchemaPane memory={memory} provider={provider} graph={graph} saved={doc.schema} doc={doc} caps={caps}
       loading={!doc.schema && !doc.failed} failed={!doc.schema && doc.failed ? (schemaLabels(provider) ? 'The labels could not be read just now.' : 'The schema could not be read just now.') : ''}
-      retry={doc.retry} countOf={count} onOpenData={onOpenData}
-      footLine={`${made ? `Built into ${vendorName(provider.id)}: ${made}. ` : ''}${guideLine(provider)}`} />
+      retry={doc.retry} countOf={count} onOpenData={onOpenData} />
   );
 }
 
@@ -943,16 +916,12 @@ function HeldSchema({ memory, provider, onOpenData }) {
   // what this memory holds changes with every task; its cover is what the provider makes itself, which doesn't
   const ownGraph = useMemo(() => coverGraphOf(null, provider), [provider]);
   useCoverKeeper(memory, ownGraph, !state.loading);
-  const count = useCallback((key) => (held && held.count[key] != null ? held.count[key] : null), [held]);
-  const vendor = vendorName(provider.id);
-  const made = builtinTitles(provider);
-  const line = made
-    ? `Built into ${vendor}: ${made}. It takes no schema, so nothing here can be changed.${held?.stated ? ' The other types are what writers stated in this memory.' : ''}${state.truncated ? ` Counted from the first ${GRAPH_LIMIT} records.` : ''}`
-    : `${vendor} decides for itself what to keep, and takes no schema, so there is nothing to set here. This is what it holds now.${state.truncated ? ` Counted from the first ${GRAPH_LIMIT} records.` : ''}`;
+  // counted from the records read: where they were cut short, no count is shown rather than one too low
+  const count = useCallback((key) => (held && !state.truncated && held.count[key] != null ? held.count[key] : null), [held, state.truncated]);
   return (
     <SchemaPane memory={memory} provider={provider} graph={held ? held.graph : (state.loading ? null : withBuiltin({ vertex_types: [], edge_types: [] }, provider))} caps={NOTHING}
       loading={state.loading} failed={state.failed ? 'What this memory holds could not be read just now.' : ''} retry={read}
-      countOf={count} onOpenData={onOpenData} footLine={line} />
+      countOf={count} onOpenData={onOpenData} />
   );
 }
 

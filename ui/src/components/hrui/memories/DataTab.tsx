@@ -54,7 +54,7 @@ export function latestWorthOpening(records: MemoryRecord[]): MemoryRecord | null
   return worth.sort((a, b) => at(b) - at(a))[0] || null;
 }
 
-export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, initialIn = '', onOpenRecord, onSchema, onOtherMemory, onChanged, onBelowChanged, liveTick, pulse, showGraph = true, onUseIn, urlRecord = null, urlIn = null, onPlace }: {
+export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, initialIn = '', onOpenRecord, onSchema, onOtherMemory, onChanged, onBelowChanged, liveTick, pulse, showGraph = true, graphToggle, urlRecord = null, urlIn = null, onPlace }: {
   memory: Memory; provider: Provider | null; schema: LSchema | null; read: RecordsRead; setups: Map<string, string> | null;
   typeFilter: string; initialRecord: string;
   /** the memory below this one that `initialRecord` is in (a person's own), where it isn't this one's */
@@ -66,8 +66,8 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   liveTick: number; pulse: string[];
   /** the graph's column: where records link, or when a person asked for it */
   showGraph?: boolean;
-  /** give this memory to a setup, where nothing uses it yet */
-  onUseIn?: () => void;
+  /** the graph's switch, for the record list's bar: where records link it is always on, and there's none */
+  graphToggle?: { on: boolean; toggle: () => void };
   /** the record the address names now (?record=, and ?in= for one below this memory): Back and Forward move it */
   urlRecord?: string | null; urlIn?: string | null;
   /** put the open record in the address: `push` where opening it is going somewhere (the columns are tabs, and the
@@ -295,7 +295,7 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   }, [memory.id, provider, schema]);
   const everyFolder = useMemo(() => (hasFolders(provider) ? allFolders(folderTree(all, [])) : []), [provider, all]);
 
-  const tree = <MemoryTree memory={memory} provider={provider} schema={kinds} read={read} activeId={record?.id || ''} pulse={pulse} filterKind={typeFilter} onOpen={open} onNew={startNew} onChanged={onChanged} />;
+  const tree = <MemoryTree memory={memory} provider={provider} schema={kinds} read={read} activeId={record?.id || ''} pulse={pulse} filterKind={typeFilter} onOpen={open} onNew={startNew} onChanged={onChanged} graphToggle={graphToggle} />;
   // something is kept here, in this memory or below it (null while what is below is still being read)
   const held = all.length ? true : below === null ? (kids ? null : false) : below.n === null ? true : below.n > 0;
   const doc = (
@@ -357,11 +357,10 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
           <span className="mm-none-pic"><KindArt kind={shapeOf(provider)} /></span>
           <h2>Nothing kept yet</h2>
           <p>{`Add the first record, or give ${memory.name} to a setup and let it write.`}</p>
-          {write || create || onUseIn ? (
+          {write || create ? (
             <div className="mm-none-acts">
               {write ? <button type="button" className="btn primary small" onClick={() => startNew(kinds?.types[0]?.name || 'note')}>{PLUS}New record</button> : null}
               {create ? <button type="button" className="btn small" onClick={() => setSubSheet(true)}>New sub memory</button> : null}
-              {onUseIn ? <button type="button" className="btn small" onClick={onUseIn}>Use in…</button> : null}
             </div>
           ) : null}
           {schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>Set what it should look for first</button></p> : null}

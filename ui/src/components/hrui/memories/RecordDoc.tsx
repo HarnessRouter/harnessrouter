@@ -1,6 +1,6 @@
 'use client';
-// One record (the design's mmDocHtml): its title, properties and text, and its version; who wrote it and what the
-// engine kept beside it (the task, the model) are under Details, for operators. What a person
+// One record (the design's mmDocHtml): its title, then one section of what it is (its type, its properties, who wrote it,
+// the task and model it was kept from, anything added to it), never folded (Richard 11-09), then its text. What a person
 // can change follows caps.ts: a record a provider found reads as found, and an action the provider does not serve is
 // not drawn. An open record is a live document: everyone who has it open edits it together and sees what an agent
 // writes as it lands, and it's written back to the memory, as a new version, in the pauses. A record not made yet is
@@ -10,19 +10,20 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { LOCAL_MEMBER } from '@/lib/edition';
+import Link from 'next/link';
 import { getSession } from '@/lib/auth';
 import { gwHeaders } from '@/lib/harness';
 import { harnessFetch } from '@/lib/hfetch';
 import {
-  addRecord, bodyOf, eraseRecords, forgetRecord, getHistory, labelOf, recordFileUrl, reviseRecord,
+  addRecord, bodyOf, forgetRecord, getHistory, labelOf, recordFileUrl, reviseRecord,
   type ContentPart, type Memory, type MemoryRecord, type Provider, type RecordInput,
 } from '@/lib/memories';
-import { ConfirmSheet, Sheet, SheetTop } from '../Sheet';
+import { ConfirmSheet } from '../Sheet';
 import { ago } from '../setups';
 import { plain, plural } from '../setup/settingsModel';
 import { toast } from '../toast';
 import {
-  canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, isKeyWriter, isStanding, kindOf, labelsOf, mayStand, NOTED, readOnlyNote,
+  canEdit, canForget, hasFolders, hasHistory, hasProperties, isKeyWriter, isStanding, kindOf, labelsOf, mayStand, NOTED, readOnlyNote,
   recordTypeOfSchemaKind, relText, schemaGuides, sentenceFirst, standingOf,
 } from './caps';
 import { DOTS, HISTORY, Dot, shownName, whenOf } from './parts';
@@ -73,6 +74,27 @@ function useKeyNames(want: boolean): Map<string, string> | null {
   return names;
 }
 
+/** Where the task a record was kept from opens: its setup's page, open on that task, where the task is there and this
+ *  person may open it (the task's own record names its setup); '' until then, or where it isn't. */
+function useTaskHref(sid: string): string {
+  const [href, setHref] = useState('');
+  useEffect(() => {
+    if (!sid) { setHref(''); return undefined; }
+    let live = true;
+    harnessFetch(`/api/harness/v1/sessions/${encodeURIComponent(sid)}`, { headers: gwHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { harness_id?: unknown } | null) => {
+        const hid = typeof d?.harness_id === 'string' ? d.harness_id : '';
+        if (live) setHref(hid ? `/studio/${encodeURIComponent(hid)}?test=${encodeURIComponent(sid)}` : '');
+      })
+      .catch(() => { if (live) setHref(''); });
+    return () => { live = false; };
+  }, [sid]);
+  return href;
+}
+/** A task's id, short: enough to tell two apart, never the whole of it. */
+const shortId = (id: string) => (id.length > 14 ? `${id.slice(0, 12)}…` : id);
+
 const asText = (v: unknown) => (v == null ? '' : typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : JSON.stringify(v));
 /** A text field's words as the record's parts: files keep their place behind the text. */
 const contentWith = (r: MemoryRecord, text: string): ContentPart[] => [
@@ -91,7 +113,6 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const isNew = !record.id;
   const open = isNew || canEdit(record, provider, memory);
   const forgettable = !isNew && canForget(record, provider, memory);
-  const erasable = !isNew && canErase(record, provider, memory);
   const history = !isNew && hasHistory(provider);
   const movable = open && !isNew && hasFolders(provider);
   const typedKinds = schemaGuides(provider) ? schema?.types || [] : [];
@@ -109,10 +130,9 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const [pop, setPop] = useState<'' | 'hist' | 'more' | 'type'>('');
   const [versions, setVersions] = useState<MemoryRecord[] | null>(null);
   const [histFailed, setHistFailed] = useState(false);
-  const [confirm, setConfirm] = useState<'' | 'forget' | 'erase'>('');
+  const [confirm, setConfirm] = useState<'' | 'forget'>('');
   const [busy, setBusy] = useState(false);
   const [refused, setRefused] = useState('');
-  const [leftover, setLeftover] = useState(false);
   const [edReady, setEdReady] = useState(false);
   const { live, state } = useLiveRecord(memory.id, isNew ? '' : record.id, peerColor);
   // the editor is drawn again after the link comes back: the words show until it is
@@ -205,15 +225,6 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
     try { await forgetRecord(memory.id, record.id); toast(`${short(record)} forgotten`); setConfirm(''); onGone(record.id); }
     catch (e) { setRefused(plain(e, 'It was not forgotten. Try again.')); } finally { setBusy(false); }
   };
-  const erase = async () => {
-    setBusy(true); setRefused('');
-    try {
-      const res = await eraseRecords(memory.id, [record.id]);
-      setConfirm('');
-      if (res.unreachable?.includes(record.id)) setLeftover(true);
-      else { toast(`${short(record)} erased`); onGone(record.id); }
-    } catch (e) { setRefused(plain(e, 'It was not erased. Try again.')); } finally { setBusy(false); }
-  };
   /** Make it a standing instruction, or stop it being one: written as this person, so one an agent set becomes theirs. */
   const setStanding = async (on: boolean) => {
     if (standBusy) return;
@@ -239,7 +250,12 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const when = whenOf(record.time?.written_at);
   const keys = useKeyNames(isKeyWriter(record.written_by) || (pop === 'hist' && !!versions?.some((v) => isKeyWriter(v.written_by))));
   const who = writerOf(record, setups, keys);
-  const extra = Object.entries(attrs).filter(([k, v]) => !NOT_A_ROW.has(k) && !props.some((p) => p.name === k) && v != null && v !== '');
+  // what the record carries beside its properties: the service's own fields as a person reads them (the task it was kept
+  // from, the model), and anything a person or an agent added under its own name, as written
+  const extra = Object.entries(attrs).filter(([k, v]) => !NOT_A_ROW.has(k) && !props.some((p) => p.name === k) && v != null && v !== ''
+    && !(k === 'kind' && v === 'turn'));
+  const taskSid = typeof attrs.session_id === 'string' ? attrs.session_id : '';
+  const taskHref = useTaskHref(taskSid);
   const labels = labelsOf({ attributes: attrs });
   const predicate = String(attrs.predicate || '');
   const files = (record.content || []).map((p, i) => [p, i] as const).filter(([p]) => p.type === 'file');
@@ -327,7 +343,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
             ) : null}
           </span>
         ) : null}
-        {forgettable || erasable || movable ? (
+        {forgettable || movable ? (
           <span className="mm-popw">
             <button type="button" className="icon-btn sm" aria-label="More" title="More" aria-expanded={pop === 'more'} onClick={() => setPop(pop === 'more' ? '' : 'more')}>{DOTS}</button>
             {pop === 'more' ? (
@@ -340,17 +356,12 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
                         {folders.map((f) => <option key={f} value={f}>{f.split('/').join(' / ')}</option>)}
                       </select>
                     </label>
-                    {forgettable || erasable ? <div className="mm-pop-sep" /> : null}
+                    {forgettable ? <div className="mm-pop-sep" /> : null}
                   </>
                 ) : null}
                 {forgettable ? (
                   <button type="button" className="mm-mi" role="menuitem" onClick={() => { setPop(''); setRefused(''); setConfirm('forget'); }}>
                     <b>Forget</b><small>{history ? 'Agents stop seeing it. Its history stays.' : 'Agents stop seeing it.'}</small>
-                  </button>
-                ) : null}
-                {erasable ? (
-                  <button type="button" className="mm-mi bad" role="menuitem" onClick={() => { setPop(''); setRefused(''); setConfirm('erase'); }}>
-                    <b>Erase</b><small>Destroys it and every version. Cannot be undone.</small>
                   </button>
                 ) : null}
               </div>
@@ -368,7 +379,6 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
               onBlur={(e) => { saveTitle(e.relatedTarget); toBody.current = false; }} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); toBody.current = true; (e.currentTarget as HTMLElement).blur(); setEditing(true); } }}>{record.title}</h1>
           ) : <h1 className="mm-title">{record.title}</h1>}
           {err || state?.refused ? <p className="mm-err" role="alert">{err || state?.refused}</p> : null}
-          {stands === 'person' ? <div className="mm-tags"><span className="mm-tag">Standing</span></div> : null}
           <div className={`mm-props${sentence ? ' after-sentence' : ''}`}>
             <div className="mm-prow">
               <label>Type</label>
@@ -386,6 +396,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
                   ) : null}
                 </span>
               ) : <span className="mm-pv mm-typev"><span className="mm-dot sm" style={{ background: kind.color }} />{kind.one}</span>}
+              {note ? <small className="mm-pnote">{note}</small> : null}
             </div>
             {props.map((p) => {
               const v = attrs[p.name];
@@ -412,9 +423,23 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
             {predicate ? <div className="mm-prow"><label>Relation</label><span className="mm-pv mm-pred">{relText(predicate)}</span></div> : null}
             {record.time?.valid_from ? <div className="mm-prow"><label>True from</label><span className="mm-pv">{record.time.valid_from.slice(0, 10)}</span></div> : null}
             {record.time?.valid_to ? <div className="mm-prow"><label>True until</label><span className="mm-pv">{record.time.valid_to.slice(0, 10)}</span></div> : null}
+            {!isNew && (who || when) ? <div className="mm-prow"><label>Written by</label><span className="mm-pv">{[who, when ? ago(when) : ''].filter(Boolean).join(' · ')}</span></div> : null}
+            {extra.map(([k, v]) => (
+              k === 'session_id' ? (
+                <div className="mm-prow" key={k}><label>Task</label>
+                  {taskHref ? <Link className="mm-pv mono link-q" href={taskHref} title={String(v)}>{shortId(String(v))}</Link> : <span className="mm-pv mono" title={String(v)}>{shortId(String(v))}</span>}
+                </div>
+              ) : k === 'model' ? (
+                <div className="mm-prow" key={k}><label>Model</label><span className="mm-pv mono">{asText(v)}</span></div>
+              ) : k === 'kind' ? (
+                <div className="mm-prow" key={k}><label>Kind</label><span className="mm-pv">{asText(v)}</span></div>
+              ) : (
+                <div className="mm-prow" key={k}><label title={k}>{k}</label><span className="mm-pv">{asText(v)}</span></div>
+              )
+            ))}
+            {stands === 'person' ? <div className="mm-tags"><span className="mm-tag">Standing</span></div> : null}
+            {standBlock}
           </div>
-          {standBlock}
-          {note ? <p className="mm-ronote">{note}</p> : null}
           {sentence ? null : bodyBlock}
           {files.length ? (
             <div className="mm-files">
@@ -422,17 +447,6 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
                 <a key={i} className="mm-file" href={recordFileUrl(memory.id, record.id, i)} download={p.file?.name || undefined}>{p.file?.name || 'File'}</a>
               ))}
             </div>
-          ) : null}
-          {/* what the engine and the task kept beside it (which task, which model, who wrote it), for operators: out of
-              the way of what the record says */}
-          {!isNew && (extra.length || who || when) ? (
-            <details className="mm-details">
-              <summary>Details</summary>
-              <div className="mm-props mm-props-d">
-                {extra.map(([k, v]) => <div className="mm-prow" key={k}><label title={k}>{k}</label><span className="mm-pv">{asText(v)}</span></div>)}
-                <div className="mm-prow"><label>Written by</label><span className="mm-pv">{[who, when ? ago(when) : ''].filter(Boolean).join(' · ') || '—'}</span></div>
-              </div>
-            </details>
           ) : null}
         </article>
       </div>
@@ -442,17 +456,6 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
       {confirm === 'forget' ? (
         <ConfirmSheet id="mmFg" title={`Forget ${short(record) || 'this record'}?`} confirmLabel="Forget" busy={busy} refused={refused || undefined}
           body={history ? 'Setups stop seeing it, and its history is kept.' : 'Setups stop seeing it.'} onClose={() => setConfirm('')} onConfirm={() => void forget()} />
-      ) : null}
-      {confirm === 'erase' ? (
-        <ConfirmSheet id="mmEr" title={`Erase ${short(record) || 'this record'}?`} confirmLabel="Erase" busy={busy} refused={refused || undefined}
-          body="Its text, properties and every version are destroyed, along with its links. This cannot be undone." onClose={() => setConfirm('')} onConfirm={() => void erase()} />
-      ) : null}
-      {leftover ? (
-        <Sheet onClose={() => { setLeftover(false); onGone(record.id); }} labelledBy="mmLo" className="small-sheet" alert>
-          <SheetTop id="mmLo" title="Not all of it could be erased" onClose={() => { setLeftover(false); onGone(record.id); }} />
-          <p className="del-p">{`The record is gone from ${memory.name}, but ${vendorName(provider?.id || '')} may still hold its words in what it came from. Remove them there if they must be gone.`}</p>
-          <div className="del-act"><button type="button" className="btn" onClick={() => { setLeftover(false); onGone(record.id); }}>Close</button></div>
-        </Sheet>
       ) : null}
     </>
   );

@@ -61,3 +61,5 @@
 /* a standing instruction's row says so; one an agent set gives way to the record's name on a narrow row */
 #hrui .mt-stand{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
 #hrui .mt-noted{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* a record's title, edited in place in its row (F2, or Rename) */
+#hrui .mt-rename{flex:1 1 auto;min-width:0;height:22px;padding:0 6px;border:1px solid var(--accent);border-radius:5px;font:inherit;font-size:13px;color:var(--fg);background:var(--bg);outline:none}

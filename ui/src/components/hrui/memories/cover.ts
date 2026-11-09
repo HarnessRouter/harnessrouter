@@ -44,7 +44,7 @@ export function picKindOf(m: Pick<Memory, 'cover_at'>, p: Provider | null | unde
 
 /** The drawing's own version: a change to how a cover is drawn (its layout, framing or sizes) bumps it, and every cover
  *  made before is made again (see coverState). */
-export const DRAW_VERSION = 2;
+export const DRAW_VERSION = 3;
 /** A short name for what a drawing shows: `c<version><b|s>_<hash>`, `b` where it is only what the provider makes itself
  *  (so the Memories page can tell, from the provider list alone, whether it is still right), `s` where a person's own
  *  types are in it; the hash covers every type (name, title, colour, icon, place) and every relation (name, colour,

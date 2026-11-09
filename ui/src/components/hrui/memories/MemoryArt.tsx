@@ -2,7 +2,8 @@
 // A memory's picture on its card and in its list row (cover.ts says which): the cover the service keeps, loaded as it
 // comes near the screen and from the browser's own cache after that; the one made here in this visit; a quiet shape of
 // the same size while one is still to be made; or the memory's brick from the agent stack where there is no graph.
-// The only read a card makes is its cover.
+// The only read a card makes is its cover. Small (a list row) is `mm-small`, never `mini`: that is Studio's own class,
+// with a margin of its own that pushed the picture off its box.
 import { useEffect, useRef, useState } from 'react';
 import { readCover, type Memory } from '@/lib/memories';
 import { Markup } from '../Markup';
@@ -13,12 +14,12 @@ import type { Drawn, PicKind } from './cover';
 const BRICK = brickSvg('memory', 'built');
 
 export function MemoryBrick({ mini }: { mini?: boolean }) {
-  return <Markup className={`mm-brick${mini ? ' mini' : ''}`} html={BRICK} />;
+  return <Markup className={`mm-brick${mini ? ' mm-small' : ''}`} html={BRICK} />;
 }
 
 /** Where a picture will be, until it is: the same size, and quiet. */
 export function CoverWait({ mini }: { mini?: boolean }) {
-  return <span className={`mm-cv-wait${mini ? ' mini' : ''}`} aria-hidden="true" />;
+  return <span className={`mm-cv-wait${mini ? ' mm-small' : ''}`} aria-hidden="true" />;
 }
 
 // One watcher for every card: a cover is read when its card comes within a screen of being seen.
@@ -41,7 +42,7 @@ function whenNear(el: Element, go: () => void): () => void {
 }
 
 function Picture({ src, mini }: { src: string; mini?: boolean }) {
-  return <span className={`mm-cv${mini ? ' mini' : ''}`}><img className="mm-cover" src={src} alt="" loading="lazy" decoding="async" /></span>;
+  return <span className={`mm-cv${mini ? ' mm-small' : ''}`}><img className="mm-cover" src={src} alt="" loading="lazy" decoding="async" /></span>;
 }
 
 /** The kept cover, read with the sign-in when it comes near the screen. Until it has come, and if it can't be read,
@@ -63,7 +64,7 @@ export function CoverImg({ id, at, mini }: { id: string; at: number; mini?: bool
     return () => { live = false; stop(); if (obj) URL.revokeObjectURL(obj); };
   }, [id, at]);
   return (
-    <span ref={box} className={`mm-cv${mini ? ' mini' : ''}`}>
+    <span ref={box} className={`mm-cv${mini ? ' mm-small' : ''}`}>
       {src ? <img className="mm-cover" src={src} alt="" loading="lazy" decoding="async" /> : <CoverWait mini={mini} />}
     </span>
   );
