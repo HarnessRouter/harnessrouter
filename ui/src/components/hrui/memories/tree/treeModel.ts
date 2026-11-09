@@ -2,7 +2,7 @@
 // Below a memory come its sub memories, then its folders or its groups of one kind, then records. Only
 // what is expanded becomes a row, and a long group holds back the rest behind Show all, so a memory with
 // thousands of records costs what is on screen. A flat list is also what the arrow keys walk.
-import { bodyOf, labelOf, type Memory, type MemoryRecord, type Provider, type RecallFilter } from '@/lib/memories';
+import { bodyOf, labelOf, shownName, type Memory, type MemoryRecord, type Provider, type RecallFilter } from '@/lib/memories';
 import { coreKindsToWrite, kindOf, recordTypeOfSchemaKind, schemaGuides } from '../caps';
 import { folderTree, groupsOf, kindInfo, type FolderNode, type Kind } from '../tree';
 import type { LSchema } from '../schemaModel';
@@ -80,7 +80,7 @@ export function buildRows(a: BuildArgs): Row[] {
       const inner = () => visit(child.id, depth + 1, key);
       if (filtering) {
         const found = inner();
-        const named = !!needle && child.name.toLowerCase().includes(needle);
+        const named = !!needle && shownName(child).toLowerCase().includes(needle);
         if (!found.length && !named) continue;
         out.push({ kind: 'memory', key, depth, parent, memoryId: child.id, memory: child, count, expandable: found.length > 0, open: found.length > 0 });
         out.push(...found);

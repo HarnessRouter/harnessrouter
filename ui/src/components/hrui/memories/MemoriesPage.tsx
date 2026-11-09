@@ -1,19 +1,23 @@
 'use client';
-// Memories (docs: the design's memoriesView): one card per memory, each with the picture of its schema,
-// who keeps it, and what was read of it. Every figure is the service's; what could not be read is a
-// dash. With no memory service connected the page says so in one sentence and leads to connecting one.
+// Memories (docs: the design's memoriesView): one card per memory, each with the picture of its schema, the engine that
+// keeps it, which setups use it and when it was last used. Search narrows by name, description, engine or setup, and
+// the list is in the order it was last used (the memories spec, C3). Every figure is the service's; what a service before
+// 0.40 doesn't say (who uses it, when) is not drawn. Connecting an engine, and finding the ones running beside this
+// instance, are under More. With no engine connected the page says so in one sentence and leads to connecting one.
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
-import { getSchema, labelOf, listMemories, listRecords, type Memory, type Provider } from '@/lib/memories';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { findEngines, getSchema, labelOf, listMemories, listRecords, type Memory, type Provider } from '@/lib/memories';
+import { ago } from '../setups';
+import { plain } from '../setup/settingsModel';
 import { Skel, SkCards, SkHead } from '../Skel';
 import { toast } from '../toast';
 import { builtinOf, hasSchema, schemaLabels } from './caps';
 import { CardArt, Ghost, MiniArt } from './CardArt';
 import { concepts } from './graph/builtin';
-import { pool, PLUS, useProviders } from './parts';
+import { DOTS, engineOf, msOf, pool, PLUS, SEARCH, speaksUse, useDismiss, useProviders, X } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
-import { ChooseServiceSheet, NewMemorySheet } from './sheets';
+import { ChooseServiceSheet, NewMemorySheet, UseInSheet } from './sheets';
 import { vendorName } from './vendors';
 import './memories.css';
 
@@ -28,13 +32,35 @@ const pictureOf = (f: { schema?: LSchema | null } | undefined, p: Provider | nul
 
 // `recent`: what a memory with no schema to draw shows on its card, the first few records it keeps
 interface Facts { schema?: LSchema | null; recent?: string[] | null }
-type Open = { k: 'new'; picked?: string } | { k: 'choose' } | null;
+type Open = { k: 'new'; picked?: string } | { k: 'choose'; then?: 'new' } | { k: 'use'; m: Memory } | null;
+type Sort = 'recent' | 'name';
 const enc = encodeURIComponent;
 // Cards or a list, as on Studio, and remembered the same way (for this person, in this browser)
 const VM_KEY = 'hr.memories.view';
 type View = 'cards' | 'list';
 const GRID_IC = <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={1.6} aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2" /><rect x="9" y="2" width="5" height="5" rx="1.2" /><rect x="2" y="9" width="5" height="5" rx="1.2" /><rect x="9" y="9" width="5" height="5" rx="1.2" /></svg>;
 const LIST_IC = <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" /></svg>;
+/** Chips past this many are counted, not named. */
+const CHIPS = 2;
+
+/** Who uses a memory, as chips: the first few by name, the rest as a count. Null where the service doesn't say. */
+function UsedBy({ m }: { m: Memory }) {
+  if (!Array.isArray(m.used_by)) return null;
+  const u = m.used_by;
+  if (!u.length) return <span className="mm-ub none">Not used yet</span>;
+  return (
+    <span className="mm-ub" title={`Used by ${u.map((x) => x.name).join(', ')}`}>
+      <span className="mm-ub-k">Used by</span>
+      {u.slice(0, CHIPS).map((x) => <span key={x.harness_id} className="mm-uc">{x.name}</span>)}
+      {u.length > CHIPS ? <span className="mm-uc more">{`+${u.length - CHIPS}`}</span> : null}
+    </span>
+  );
+}
+/** The engine, and when it was last used where the service says. */
+const engineLine = (m: Memory) => {
+  const last = msOf(m.last_used_at);
+  return [vendorName(engineOf(m)), last ? `Used ${ago(last)}` : ''].filter(Boolean).join(' · ');
+};
 
 export function MemoriesPage() {
   const router = useRouter();
@@ -44,13 +70,20 @@ export function MemoriesPage() {
   const [facts, setFacts] = useState<Record<string, Facts>>({});
   const [open, setOpen] = useState<Open>(null);
   const [vm, setVm] = useState<View>('cards');
+  const [q, setQ] = useState('');
+  const [sort, setSort] = useState<Sort>('recent');
+  const [more, setMore] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const moreWrap = useRef<HTMLSpanElement | null>(null);
+  const closeMore = useCallback(() => setMore(false), []);
+  useDismiss(more, moreWrap, closeMore);
   useEffect(() => { try { if (localStorage.getItem(VM_KEY) === 'list') setVm('list'); } catch { /* none */ } }, []);
   const pick = (v: View) => { setVm(v); try { localStorage.setItem(VM_KEY, v); } catch { /* none */ } };
 
   const read = useCallback(() => {
     setFailed(false);
     // no counts: the page shows none, and counting asked every memory's service in turn (13 s for sixty, 2026-11-06)
-    listMemories({ counts: false }).then(setList).catch(() => setFailed(true));
+    listMemories({ counts: false, sort: 'recent' }).then(setList).catch(() => setFailed(true));
   }, []);
   useEffect(() => { read(); }, [read]);
   // a setup's Settings sends a person here to make a memory
@@ -79,23 +112,58 @@ export function MemoriesPage() {
     return () => { live = false; };
   }, [list, providers, providerOf]);
 
-  const created = (m: Memory, p: Provider) => {
-    const toSchema = hasSchema(p);
-    toast(toSchema ? (schemaLabels(p) ? `${m.name} created. Add its labels.` : `${m.name} created. Design its schema.`) : `${m.name} created.`);
-    router.push(`/memories/${enc(m.id)}?tab=${toSchema ? 'schema' : 'data'}`);
+  const created = (m: Memory) => {
+    toast(`${m.name} created.`);
+    router.push(`/memories/${enc(m.id)}?tab=data`);
+  };
+  /** Look for engines running beside this instance, and say which were connected: the providers read before and after. */
+  const find = async () => {
+    setMore(false);
+    if (finding) return;
+    setFinding(true);
+    const before = new Set((providers || []).filter((p) => p.connected).map((p) => p.id));
+    try {
+      await findEngines();
+      const after = (await reloadProviders()) || [];
+      const found = after.filter((p) => p.connected && !before.has(p.id)).map((p) => vendorName(p.id));
+      toast(found.length ? `${found.join(', ')} connected.` : 'No new engine found running here.');
+    } catch (e) { toast(plain(e, 'Engines could not be looked for just now. Try again.')); }
+    finally { setFinding(false); }
   };
 
   const loading = !failed && (!list || (!providers && !providersFailed));
   const noneConnected = !!providers && !providers.some((p) => p.connected);
-  const L = list || [];
+  const L = useMemo(() => list || [], [list]);
+  // the order the service gave is the order it was last used in, where it says (0.40); by name is a click away
+  const dated = L.some((m) => m.last_used_at !== undefined);
+  const needle = q.trim().toLowerCase();
+  const shown = useMemo(() => {
+    const hit = (m: Memory) => !needle || [m.name, m.description, vendorName(engineOf(m)), ...(m.used_by || []).map((u) => u.name)]
+      .some((t) => (t || '').toLowerCase().includes(needle));
+    const out = L.filter(hit);
+    if (sort === 'name' || !dated) return [...out].sort((a, b) => a.name.localeCompare(b.name));
+    return [...out].sort((a, b) => (msOf(b.last_used_at) || 0) - (msOf(a.last_used_at) || 0) || a.name.localeCompare(b.name));
+  }, [L, needle, sort, dated]);
+
+  const moreMenu = (
+    <span className="mm-popw" ref={moreWrap}>
+      <button type="button" className="icon-btn mm-more" aria-label="More" title="More" aria-haspopup="menu" aria-expanded={more} onClick={() => setMore(!more)}>{DOTS}</button>
+      {more ? (
+        <div className="mm-pop mm-pop-r" role="menu">
+          <button type="button" className="mm-mi" role="menuitem" onClick={() => { setMore(false); setOpen({ k: 'choose' }); }}><b>Connect an engine</b><small>An engine you run, by its address</small></button>
+          <button type="button" className="mm-mi" role="menuitem" disabled={finding} onClick={() => void find()}><b>{finding ? 'Looking for engines…' : 'Find engines'}</b><small>The ones running beside this instance</small></button>
+        </div>
+      ) : null}
+    </span>
+  );
 
   const top = (
-    <div className="list-top">
+    <div className="list-top mm-top">
       <div>
         <h1>Memories</h1>
-        {L.length ? null : <p className="sub">What your setups keep from one task to the next.</p>}
+        {L.length ? null : <p className="sub">What your agents remember from one task to the next.</p>}
       </div>
-      {loading || failed || (noneConnected && !L.length) ? null : (
+      {loading || failed ? null : (
         <div className="top-actions">
           {L.length ? (
             <div className="seg vm-seg" role="group" aria-label="View">
@@ -103,11 +171,29 @@ export function MemoriesPage() {
               <button type="button" className={vm === 'list' ? 'on' : ''} aria-pressed={vm === 'list'} onClick={() => pick('list')}>{LIST_IC}List</button>
             </div>
           ) : null}
-          <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>
+          {noneConnected && !L.length ? null : <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>}
+          {moreMenu}
         </div>
       )}
     </div>
   );
+  const tools = L.length && !loading && !failed ? (
+    <div className="mm-tools">
+      <label className="mm-find mm-lfind">{SEARCH}<input type="search" value={q} placeholder={`Search ${L.length} ${L.length === 1 ? 'memory' : 'memories'}`} aria-label="Search memories" autoComplete="off" spellCheck={false} onChange={(e) => setQ(e.target.value)} />
+        {q ? <button type="button" className="mt-clear" aria-label="Clear" onClick={() => setQ('')}>{X}</button> : null}</label>
+      {dated ? (
+        <label className="mm-sort"><span>Sort</span>
+          <select className="set-in slim" value={sort} aria-label="Sort memories" onChange={(e) => setSort(e.target.value as Sort)}>
+            <option value="recent">Recently used</option>
+            <option value="name">Name</option>
+          </select>
+        </label>
+      ) : null}
+    </div>
+  ) : null;
+  /** Use in, on a memory nothing uses yet and this person may give: beside the card, never inside its link. */
+  const useIn = (m: Memory) => (speaksUse(m) && !m.used_by?.length && m.privileges?.includes('write')
+    ? <button type="button" className="btn small mm-usein" onClick={() => setOpen({ k: 'use', m })}>Use in…</button> : null);
 
   let body: React.ReactNode;
   if (failed) {
@@ -118,9 +204,12 @@ export function MemoriesPage() {
     body = (
       <div className="mm-empty-list">
         <div className="mm-art big"><Ghost /></div>
-        <h2>Connect a memory service</h2>
-        <p>A memory lives in a memory service you connect, and your setups read and write it from one task to the next.</p>
-        <button type="button" className="btn primary" onClick={() => setOpen({ k: 'choose' })}>Connect a service</button>
+        <h2>Connect a memory engine</h2>
+        <p>Your agents remember through an engine. Connect one, or find the ones running beside this instance.</p>
+        <div className="mm-none-acts">
+          <button type="button" className="btn primary" onClick={() => setOpen({ k: 'choose' })}>Connect an engine</button>
+          <button type="button" className="btn" disabled={finding} onClick={() => void find()}>{finding ? 'Looking…' : 'Find engines'}</button>
+        </div>
       </div>
     );
   } else if (!L.length) {
@@ -128,28 +217,34 @@ export function MemoriesPage() {
       <div className="mm-empty-list">
         <div className="mm-art big"><Ghost /></div>
         <h2>No memories yet</h2>
-        <p>A memory is where your setups keep what should outlast one task: who your customers are, the rules they follow, what happened last time.</p>
+        <p>A memory is where your agents keep what should outlast one task: who your customers are, the rules they follow, what happened last time. A new setup gets one of its own.</p>
         <button type="button" className="btn primary" onClick={() => setOpen({ k: 'new' })}>{PLUS}New memory</button>
       </div>
     );
+  } else if (!shown.length) {
+    body = <p className="empty-list" role="status">No memory matches that. <button type="button" className="link-q inl" onClick={() => setQ('')}>Clear the search</button></p>;
   } else if (vm === 'list') {
     body = (
       <>
         <div className="rows-head mm-rows-g"><span>Name</span><span>Description</span></div>
         <div className="rows mm-rows">
-          {L.map((m) => {
+          {shown.map((m) => {
             const p = providerOf(m), f = facts[m.id];
             return (
-              <Link key={m.id} href={`/memories/${enc(m.id)}`} className="row mm-rows-g mm-row">
-                <span className="t with-mini">
-                  <span className="mm-mini-box">{f ? <MiniArt {...pictureOf(f, p)} records={f.recent?.length ?? null} /> : null}</span>
-                  <span className="mm-rn">
-                    <span className="mm-ct"><b>{m.name}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
-                    <small className="sub2 mm-cp">{`Kept by ${vendorName(m.provider)}`}</small>
+              <div key={m.id} className="mm-roww">
+                <Link href={`/memories/${enc(m.id)}`} className="row mm-rows-g mm-row">
+                  <span className="t with-mini">
+                    <span className="mm-mini-box">{f ? <MiniArt {...pictureOf(f, p)} records={f.recent?.length ?? null} /> : null}</span>
+                    <span className="mm-rn">
+                      <span className="mm-ct"><b>{m.name}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
+                      <small className="sub2 mm-cp">{engineLine(m)}</small>
+                      <UsedBy m={m} />
+                    </span>
                   </span>
-                </span>
-                <span className="mm-rd">{m.description || 'No description yet.'}</span>
-              </Link>
+                  <span className="mm-rd">{m.description || 'No description yet.'}</span>
+                </Link>
+                {useIn(m)}
+              </div>
             );
           })}
         </div>
@@ -158,23 +253,29 @@ export function MemoriesPage() {
   } else {
     body = (
       <div className="cards mm-cards">
-        {L.map((m) => {
+        {shown.map((m) => {
           const p = providerOf(m), f = facts[m.id];
           return (
-            <Link key={m.id} href={`/memories/${enc(m.id)}`} className="card mm-card">
-              <span className="mm-art"><CardArt {...pictureOf(f, p)} records={f?.recent?.length ?? null} recent={f?.recent} pending={!f} /></span>
-              <span className="mm-cb">
-                <span className="mm-ct"><b>{m.name}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
-                <span className="mm-cp">{`Kept by ${vendorName(m.provider)}`}</span>
-                <span className="mm-cd">{m.description || 'No description yet.'}</span>
-              </span>
-            </Link>
+            <div key={m.id} className="mm-cardw">
+              <Link href={`/memories/${enc(m.id)}`} className="card mm-card">
+                <span className="mm-art"><CardArt {...pictureOf(f, p)} records={f?.recent?.length ?? null} recent={f?.recent} pending={!f} /></span>
+                <span className="mm-cb">
+                  <span className="mm-ct"><b>{m.name}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
+                  <span className="mm-cp">{engineLine(m)}</span>
+                  <span className="mm-cd">{m.description || 'No description yet.'}</span>
+                  <UsedBy m={m} />
+                </span>
+              </Link>
+              {useIn(m)}
+            </div>
           );
         })}
-        <button type="button" className="card new-card mm-new" onClick={() => setOpen({ k: 'new' })}>
-          <span className="mm-art"><Ghost /></span>
-          <span className="nc-b">{PLUS}<span>New memory</span></span>
-        </button>
+        {needle ? null : (
+          <button type="button" className="card new-card mm-new" onClick={() => setOpen({ k: 'new' })}>
+            <span className="mm-art"><Ghost /></span>
+            <span className="nc-b">{PLUS}<span>New memory</span></span>
+          </button>
+        )}
       </div>
     );
   }
@@ -183,15 +284,19 @@ export function MemoriesPage() {
     <div className="scroll">
       <div className="list-wrap">
         {loading ? <Skel label="Loading"><SkHead /></Skel> : top}
+        {tools}
         {body}
       </div>
       {open?.k === 'new' ? (
         <NewMemorySheet providers={providers} failed={providersFailed} retry={() => void reloadProviders()} picked={open.picked}
-          reloadProviders={reloadProviders} onClose={() => setOpen(null)} onCreated={created} />
+          onClose={() => setOpen(null)} onCreated={created} onConnect={() => setOpen({ k: 'choose', then: 'new' })} />
       ) : null}
       {open?.k === 'choose' && providers ? (
         <ChooseServiceSheet providers={providers} onClose={() => setOpen(null)}
-          onConnected={async (id) => { await reloadProviders(); setOpen({ k: 'new', picked: id }); toast(`${vendorName(id)} connected.`); }} />
+          onConnected={async (id) => { const then = open.then; await reloadProviders(); setOpen(then === 'new' || !L.length ? { k: 'new', picked: id } : null); toast(`${vendorName(id)} connected.`); }} />
+      ) : null}
+      {open?.k === 'use' ? (
+        <UseInSheet m={open.m} onClose={() => setOpen(null)} onDone={(setup) => { setOpen(null); toast(`${setup} remembers in ${open.m.name} now.`); read(); }} />
       ) : null}
     </div>
   );

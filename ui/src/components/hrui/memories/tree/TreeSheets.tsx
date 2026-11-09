@@ -22,7 +22,7 @@ export function NewSubMemorySheet({ parent, onClose, onDone }: { parent: Memory;
   };
   return (
     <Sheet onClose={onClose} labelledBy="mtNs" className="mm-sheet mm-nd-sheet" busy={busy}>
-      <SheetTop id="mtNs" title="New sub memory" sub={`Inside ${parent.name}. Kept by the same service.`} onClose={onClose} />
+      <SheetTop id="mtNs" title="New sub memory" sub={`Inside ${parent.name}, with the same engine.`} onClose={onClose} />
       <form noValidate onSubmit={(e) => { e.preventDefault(); void go(); }}>
         <NameFields nameId="mtNsN" descId="mtNsD" name={name} desc={desc} onName={setName} onDesc={setDesc} focus />
         {err ? <p className="mm-err" role="alert">{err}</p> : null}

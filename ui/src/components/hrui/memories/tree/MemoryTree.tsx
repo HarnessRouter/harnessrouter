@@ -4,7 +4,9 @@
 // group per kind of record. A row acts when pressed, a chevron only folds, and hovering a row brings out
 // its actions. Whatever a row offers comes from the provider's capability document and from what this
 // person may do on that memory, so nothing here would be refused. Searching keeps the way to a match
-// open and reads whatever it has to first.
+// open and reads whatever it has to first. A search asks the engine too, by meaning (recall), where it
+// answers that way: what it finds is listed with what matches the words, so "how does Dana like help"
+// finds "prefers written steps". A memory kept for one person is listed by that person's name.
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Eye, FilePlus2, FolderPlus, History, Link2, Lock, Pencil, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
 import { deleteMemory, forgetRecord, labelOf, recall, type Memory, type MemoryRecord, type Provider } from '@/lib/memories';
@@ -13,7 +15,7 @@ import { plain } from '../../setup/settingsModel';
 import { toast } from '../../toast';
 import { canForget, hasFolders, hasHistory, kindOf, labelsOf, schemaGuides, schemaLabels, servesForget } from '../caps';
 import type { RecordsRead } from '../DataTab';
-import { Dot, DOTS, FILTER, FOLDER, FOLDER_OPEN, MmIco, PLUS, SEARCH, X } from '../parts';
+import { Dot, DOTS, FILTER, FOLDER, FOLDER_OPEN, MmIco, PLUS, SEARCH, shownName, X } from '../parts';
 import { typeLabel, type LSchema } from '../schemaModel';
 import { RenameSheet } from '../sheets';
 import { folderName, folderOf, groupsOf, kindInfo, type Kind } from '../tree';
@@ -75,6 +77,8 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
   useEffect(() => { setKindFilter(filterKind || ''); }, [filterKind]);
   const [label, setLabel] = useState('');
   const [labelHits, setLabelHits] = useState<MemoryRecord[]>([]);
+  // what the engine found by meaning for the words in the search (records of this memory and those below it)
+  const [meant, setMeant] = useState<MemoryRecord[]>([]);
   const [gone, setGone] = useState(false);
   const [open, setOpen] = useState<Record<string, boolean>>(() => (typeof window === 'undefined' ? {} : readStore(memory.id)));
   const [allShown, setAllShown] = useState<Record<string, boolean>>({});
@@ -100,7 +104,10 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
   const filtering = !!needle || !!kindFilter || !!label;
 
   // ── what is in each memory ────────────────────────────────────────────────────────────────
-  const hitsOf = useCallback((mid: string) => (label ? labelHits.filter((r) => (r.memory_id || memory.id) === mid) : []), [label, labelHits, memory.id]);
+  const hitsOf = useCallback((mid: string) => [
+    ...(label ? labelHits : []), ...(needle && !label ? meant : []),
+  ].filter((r) => (r.memory_id || memory.id) === mid), [label, labelHits, needle, meant, memory.id]);
+  const meantIds = useMemo(() => new Set(needle && !label ? meant.map((r) => r.id) : []), [needle, label, meant]);
   const goneOf = useCallback((mid: string) => (gone ? branches[mid]?.gone || [] : []), [gone, branches]);
   const rootRecords = useMemo(() => withExtras(read.records, hitsOf(memory.id), goneOf(memory.id)), [read.records, hitsOf, goneOf, memory.id]);
   const view = useCallback((id: string): BranchView | null => {
@@ -120,7 +127,7 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
 
   const match = useCallback((r: MemoryRecord) => (label
     ? labelsOf(r).includes(label) && hitRecord(r, needle)
-    : hitRecord(r, needle) && (!kindFilter || kindOf(r) === kindFilter)), [label, needle, kindFilter]);
+    : (hitRecord(r, needle) || meantIds.has(r.id)) && (!kindFilter || kindOf(r) === kindFilter)), [label, needle, kindFilter, meantIds]);
   const isOpen = useCallback((key: string, otherwise: boolean) => (key in open ? open[key] : otherwise), [open]);
   const showAll = useCallback((key: string) => !!allShown[key], [allShown]);
   const rows = useMemo(() => buildRows({ rootId: memory.id, view, match, needle, filtering, isOpen, showAll, activeId }),
@@ -161,6 +168,21 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
     }, words ? 300 : 0);
     return () => { live = false; clearTimeout(t); };
   }, [label, q, memory.id, provider]);
+
+  // words in the search are asked of the engine too, by meaning where it recalls that way, else by its own text search
+  useEffect(() => {
+    setMeant([]);
+    const words = q.trim();
+    const signals = provider?.recall?.signals || [];
+    if (!words || label || !(signals.includes('query') || signals.includes('text'))) return undefined;
+    let live = true;
+    const t = setTimeout(() => {
+      recall(memory.id, { ...(signals.includes('query') ? { query: words } : { text: words }), limit: 50 })
+        .then((d) => { if (live) setMeant(d.results.map((x) => x.record).filter((r) => r && r.id)); })
+        .catch(() => { if (live) setMeant([]); });
+    }, 300);
+    return () => { live = false; clearTimeout(t); };
+  }, [q, label, memory.id, provider]);
 
   // ── the open record, when it was opened from elsewhere ────────────────────────────────────
   const found = useMemo(() => {
@@ -484,7 +506,7 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
     if (r.kind === 'record') { name = labelOf(r.record) || 'Untitled'; title = name; icon = <span className="mt-ic" style={{ color: r.info.color }}><MmIco k={r.info.icon} size={14} /></span>; }
     if (r.kind === 'group') { name = r.group.many; title = name; icon = <span className="mt-ic" style={{ color: r.group.color }}><MmIco k={r.group.icon} size={14} /></span>; }
     if (r.kind === 'folder') { name = r.name; title = r.path; icon = <span className="mt-ic">{isOn ? FOLDER_OPEN : FOLDER}</span>; }
-    if (r.kind === 'memory') { name = r.memory.name; title = r.memory.description ? `${name}: ${r.memory.description}` : name; icon = <span className="mt-ic">{isOn ? FOLDER_OPEN : FOLDER}</span>; }
+    if (r.kind === 'memory') { name = shownName(r.memory); title = r.memory.description ? `${name}: ${r.memory.description}` : name; icon = <span className="mt-ic">{isOn ? FOLDER_OPEN : FOLDER}</span>; }
     if (r.kind === 'more') name = r.action === 'all' ? `Show all (${r.hidden.toLocaleString()} more)` : 'Show more';
     const count = r.kind === 'group' || r.kind === 'folder' ? `${r.count.toLocaleString()}${r.plus ? '+' : ''}` : r.kind === 'memory' && r.count !== null ? r.count.toLocaleString() : '';
     const inGroup = r.kind === 'group' && items.length === 1 ? items[0] : null;

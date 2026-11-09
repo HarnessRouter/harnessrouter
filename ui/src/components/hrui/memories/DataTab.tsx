@@ -1,10 +1,12 @@
 'use client';
-// A memory's data, in three columns you can drag: everything it holds on the left, the open record in the middle as
-// a document people edit together, and the graph of what connects to what on the right. Under 900 px they become tabs.
+// A memory's data, in columns you can drag: everything it holds on the left, the open record in the middle as a
+// document people edit together, and, where its records link to each other (or when asked), the graph of what
+// connects to what on the right. Under 900 px they become tabs. Opened, it shows the most recent record that says
+// something (never an episode or a bare role name), or nothing.
 import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  bodyOf, getRecord, graphAround, reviseRecord,
+  bodyOf, getRecord, graphAround, labelOf, reviseRecord,
   type GraphEdge, type Memory, type MemoryGraph, type MemoryRecord, type Provider,
 } from '@/lib/memories';
 import { plain } from '../setup/settingsModel';
@@ -30,10 +32,29 @@ export interface RecordsRead {
 }
 export { labelFilter } from './tree/treeModel';
 
-export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, onOpenRecord, onSchema, onOtherMemory, onChanged, liveTick, pulse }: {
+/** Names that stand for a role in a conversation, not for anything a person would look up. */
+const ROLES = new Set(['user', 'assistant', 'system', 'agent', 'human', 'ai', 'me', 'you']);
+/** The record a memory opens on: the most recently written one that says something, never an episode (a whole task),
+ *  a role's bare name or a record with no words. Null when none is worth opening. */
+export function latestWorthOpening(records: MemoryRecord[]): MemoryRecord | null {
+  const worth = records.filter((r) => {
+    if (r.status !== 'active' || r.type === 'episode') return false;
+    const said = (labelOf(r) || '').trim();
+    if (said.length < 3 || ROLES.has(said.toLowerCase())) return false;
+    return !!(bodyOf(r).trim() || r.title.trim());
+  });
+  const at = (r: MemoryRecord) => Date.parse(r.time?.written_at || '') || 0;
+  return worth.sort((a, b) => at(b) - at(a))[0] || null;
+}
+
+export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, onOpenRecord, onSchema, onOtherMemory, onChanged, liveTick, pulse, showGraph = true, onUseIn }: {
   memory: Memory; provider: Provider | null; schema: LSchema | null; read: RecordsRead; setups: Map<string, string> | null;
   typeFilter: string; initialRecord: string; onOpenRecord: (id: string) => void; onSchema: () => void;
   onOtherMemory: (memoryId: string, recordId: string) => void; onChanged: () => void; liveTick: number; pulse: string[];
+  /** the graph's column: where records link, or when a person asked for it */
+  showGraph?: boolean;
+  /** give this memory to a setup, where nothing uses it yet */
+  onUseIn?: () => void;
 }) {
   const write = !!memory.privileges?.includes('write');
   // a record's kind comes from a schema of types; labels are a vocabulary on facts, not kinds of record
@@ -46,10 +67,13 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   useEffect(() => { onOpenRecord(sel); }, [sel, onOpenRecord]);
 
   const all = useMemo(() => read.records || [], [read.records]);
-  // the first record with something in it opens by itself; a person's own choice is never replaced
+  // the most recent record that says something opens by itself, or none: never an episode, a role's bare name or an
+  // empty one (Richard 11-09: a memory opened on "user"); a person's own choice is never replaced
+  const opened = useRef(false);
   useEffect(() => {
-    if (sel || draft || !read.records?.length) return;
-    const first = [...read.records].sort((a, b) => Number(a.type === 'episode') - Number(b.type === 'episode') || bodyOf(b).length - bodyOf(a).length)[0];
+    if (opened.current || sel || draft || !read.records?.length) return;
+    opened.current = true;
+    const first = latestWorthOpening(read.records);
     if (first) setSel(first.id);
   }, [read.records, sel, draft]);
 
@@ -188,10 +212,11 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
           <span className="mm-none-pic"><KindArt kind={shapeOf(provider)} /></span>
           <h2>Nothing kept yet</h2>
           <p>{`Add the first record, or give ${memory.name} to a setup and let it write.`}</p>
-          {write || create ? (
+          {write || create || onUseIn ? (
             <div className="mm-none-acts">
               {write ? <button type="button" className="btn primary small" onClick={() => startNew(kinds?.types[0]?.name || 'note')}>{PLUS}New record</button> : null}
               {create ? <button type="button" className="btn small" onClick={() => setSubSheet(true)}>New sub memory</button> : null}
+              {onUseIn ? <button type="button" className="btn small" onClick={onUseIn}>Use in…</button> : null}
             </div>
           ) : null}
           {schemaGuides(provider) && !schema?.types.length ? <p className="set-help mm-doc-alt"><button type="button" className="link-q inl" onClick={onSchema}>Set what it should look for first</button></p> : null}
@@ -202,10 +227,10 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   }
   return (
     <div className="mm-data">
-      <ResizableColumns storageKey="hr.memory.columns" tab={tab} onTab={setTab} panes={[
+      <ResizableColumns storageKey={showGraph ? 'hr.memory.columns' : 'hr.memory.columns.nograph'} tab={tab} onTab={setTab} panes={[
         { id: 'tree', label: 'Records', min: 220, initial: 280, node: tree },
         { id: 'doc', label: 'Record', min: 380, initial: 640, grow: true, node: doc },
-        { id: 'graph', label: 'Graph', min: 280, initial: 440, node: right },
+        ...(showGraph ? [{ id: 'graph', label: 'Graph', min: 280, initial: 440, node: right }] : []),
       ]} />
     </div>
   );

@@ -87,7 +87,17 @@ const flush = async () => { for (let i = 0; i < 16; i++) await act(async () => {
 const page = () => document.getElementById('hrui') as HTMLElement;
 const button = (t: string) => Array.from(page().querySelectorAll('button')).find((b) => (b.textContent || '').trim() === t) as HTMLButtonElement | undefined;
 const byLabel = (t: string) => page().querySelector(`button[aria-label="${t}"]`) as HTMLButtonElement | null;
-const tabs = () => Array.from(page().querySelectorAll('.ag-tabs [role=tab]')).map((t) => t.textContent);
+/** What the page's More menu offers, opened and read. */
+async function moreItems(): Promise<string[]> {
+  await click(page().querySelector('.mm-page .ag-bar button[aria-label="More"]'));
+  return Array.from(page().querySelectorAll('.ag-bar .mm-mi b')).map((b) => b.textContent || '');
+}
+async function fromMore(t: string) {
+  if (!page().querySelector('.ag-bar .mm-pop')) await click(page().querySelector('.mm-page .ag-bar button[aria-label="More"]'));
+  await click(Array.from(page().querySelectorAll('.ag-bar .mm-mi')).find((b) => b.querySelector('b')?.textContent === t));
+}
+/** A record that links to another: what makes the graph take its column. */
+const linking = (o: Partial<MemoryRecord> = {}) => record({ references: [{ rel: 'about', record_id: 'zz', available: true }], ...o });
 async function click(b: Element | null | undefined) {
   if (!b) throw new Error(`nothing to click: ${page().textContent}`);
   await act(async () => { (b as HTMLElement).click(); });
@@ -112,8 +122,9 @@ function open(o: { provider: Provider; memory?: Memory; records?: MemoryRecord[]
   (harnessFetch as jest.Mock).mockImplementation(s.fetcher);
   return s;
 }
-async function draw(tab: string | null = null) {
-  await act(async () => { root.render(<MemoryPage id="hmem_1" tabParam={tab} recordParam={null} onTab={() => {}} />); });
+const onTab = jest.fn();
+async function draw(tab: string | null = null, rec: string | null = null) {
+  await act(async () => { root.render(<MemoryPage id="hmem_1" tabParam={tab} recordParam={rec} onTab={onTab} />); });
   await flush();
 }
 beforeEach(() => {
@@ -127,33 +138,41 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); el.remove(); jest.clearAllMocks(); });
 
-describe('the schema is always somewhere to go, and says what this provider does with it', () => {
-  test('a provider that decides for itself still has the tab, and nothing asks it for a schema', async () => {
+describe('data comes first; the schema is under More, and says what this provider does with it', () => {
+  test('there are no tabs: the page is its data, and Schema is in More', async () => {
+    open({ provider: CAPS.graphiti, records: [record()] });
+    await draw();
+    expect(page().querySelector('.ag-tabs')).toBeNull();
+    expect(page().querySelector('.mm-data')).toBeTruthy();
+    expect(await moreItems()).toEqual(['Schema', 'Copy memory ID', 'Rename and describe', 'Delete memory']);
+    await fromMore('Schema');
+    expect(onTab).toHaveBeenCalledWith('schema');
+  });
+  test('a provider that decides for itself still has its schema, and nothing asks it for one', async () => {
     const s = open({ provider: CAPS.mem0, records: [record()] });
     await draw('schema');
-    expect(tabs()).toEqual(['Schema', 'Data']);
     expect(page().querySelector('.schema-stub')?.getAttribute('data-mode')).toBe('none');
     expect(s.sent('GET', '/v1/memories/hmem_1/schema')).toHaveLength(0);
+    await click(button('Back to data'));
+    expect(onTab).toHaveBeenCalledWith('data');
   });
   test('one that a schema guides is called Schema', async () => {
     const s = open({ provider: CAPS.graphiti, records: [record()] });
     await draw('schema');
-    expect(tabs()).toEqual(['Schema', 'Data']);
     expect(page().querySelector('.schema-stub')?.getAttribute('data-mode')).toBe('guides');
     expect(s.sent('GET', '/v1/memories/hmem_1/schema').length).toBeGreaterThan(0);
   });
-  test('one that applies labels still calls it Schema: it shows what the provider makes, beside the labels', async () => {
+  test('one that applies labels calls it Labels in More, and shows what the provider makes beside them', async () => {
+    open({ provider: CAPS.hindsight, records: [record()], schema: { types: [{ name: 'Company' }] } });
+    await draw();
+    expect((await moreItems())[0]).toBe('Labels');
+    await act(async () => { root.unmount(); }); root = createRoot(el);
     open({ provider: CAPS.hindsight, records: [record()], schema: { types: [{ name: 'Company' }] } });
     await draw('labels');
-    expect(tabs()).toEqual(['Schema', 'Data']);
     expect(page().querySelector('.schema-stub')?.getAttribute('data-mode')).toBe('labels');
   });
-  test('with nothing in it, a memory a schema guides opens on its schema; one that decides for itself on its data', async () => {
+  test('with nothing in it, a memory opens on its data whatever guides it (Richard 11-09: schema is not the first thing)', async () => {
     open({ provider: CAPS.graphiti, memory: memory({ provider: 'graphiti', records: { count: 0 } }), records: [] });
-    await draw();
-    expect(page().querySelector('.schema-stub')).toBeTruthy();
-    await act(async () => { root.unmount(); }); root = createRoot(el);
-    open({ provider: CAPS.mem0, memory: memory({ provider: 'mem0', records: { count: 0 } }), records: [] });
     await draw();
     expect(page().querySelector('.schema-stub')).toBeNull();
     expect(page().querySelector('.mm-data')).toBeTruthy();
@@ -165,17 +184,32 @@ describe('the schema is always somewhere to go, and says what this provider does
   });
 });
 
-describe('three columns: everything it holds, the open record, and the graph', () => {
-  test('all three are on the page, each by its own name', async () => {
-    open({ provider: CAPS.mem0, records: [record({ id: 'r', title: 'Mine' })] });
+describe('the columns: everything it holds, the open record, and the graph where records link', () => {
+  test('where records link, all three are on the page, each by its own name', async () => {
+    open({ provider: CAPS.mem0, records: [linking({ id: 'r', title: 'Mine' })] });
     await draw();
     expect(page().querySelector('.rc')).toBeTruthy();
     expect(page().querySelector('.mt, .mm-tree, [role=tree]')).toBeTruthy();
     expect(page().querySelector('.mm-doc .editor-stub')).toBeTruthy();
     expect(page().querySelector('.graph-stub')?.getAttribute('data-active')).toBe('r');
   });
-  test('a record in another memory, reached from the graph, opens on that memory', async () => {
+  test('where nothing links, the record takes the graph’s room, and More brings the graph back when asked', async () => {
     open({ provider: CAPS.mem0, records: [record({ id: 'r', title: 'Mine' })] });
+    await draw();
+    expect(page().querySelector('.graph-stub')).toBeNull();
+    expect(page().querySelector('.mm-doc .editor-stub')).toBeTruthy();
+    await fromMore('Show graph');
+    expect(page().querySelector('.graph-stub')?.getAttribute('data-active')).toBe('r');
+    await fromMore('Hide graph');
+    expect(page().querySelector('.graph-stub')).toBeNull();
+  });
+  test('an engine that finds the people and things in what it keeps always has its graph', async () => {
+    open({ provider: CAPS.graphiti, records: [record({ id: 'r', title: 'Mine' })] });
+    await draw();
+    expect(page().querySelector('.graph-stub')).toBeTruthy();
+  });
+  test('a record in another memory, reached from the graph, opens on that memory', async () => {
+    open({ provider: CAPS.mem0, records: [linking({ id: 'r', title: 'Mine' })] });
     await draw();
     await click(page().querySelector('.graph-stub'));
     expect(page().querySelector('.graph-stub')?.getAttribute('data-active')).toBe('r');
@@ -187,7 +221,7 @@ describe('narrow: the columns are tabs', () => {
   beforeEach(() => { Element.prototype.getBoundingClientRect = () => ({ width: 390, height: 800, top: 0, left: 0, right: 390, bottom: 800, x: 0, y: 0, toJSON: () => ({}) }); });
   afterEach(() => { Element.prototype.getBoundingClientRect = wide; });
   test('a record picked on the graph opens in its panel there, and the graph stays (Richard 11-06)', async () => {
-    open({ provider: CAPS.mem0, records: [record({ id: 'r', title: 'Mine' }), record({ id: 'r2', title: 'Other' })] });
+    open({ provider: CAPS.mem0, records: [linking({ id: 'r', title: 'Mine' }), linking({ id: 'r2', title: 'Other' })] });
     await draw();
     const tab = (id: string) => page().querySelector(`#rc-t-${id}`) as HTMLButtonElement;
     expect(tab('graph')).toBeTruthy();
@@ -200,10 +234,10 @@ describe('narrow: the columns are tabs', () => {
 
 describe('a derived record', () => {
   const found = (o: Partial<MemoryRecord> = {}) => record({ id: 'd', type: 'fact', title: 'Acme uses Slack', written_by: { kind: 'provider', id: 'graphiti' }, ...o });
-  test('reads as found and cannot be edited', async () => {
+  test('reads as found, under Details, and cannot be edited', async () => {
     open({ provider: CAPS.graphiti, records: [found()] });
     await draw('data');
-    expect(page().textContent).toContain('Found by Graphiti');
+    expect(page().querySelector('.mm-details')?.textContent).toContain('Found by Graphiti');
     expect(editable()).toBeNull();
     expect(editorReadOnly()).toBe('true');
   });
@@ -279,7 +313,7 @@ describe('an action a provider does not serve is not shown', () => {
   test('an episode is what happened: not edited and not forgotten; an entity the provider derives is not forgotten either', async () => {
     const ep = record({ id: 'ep', type: 'episode', title: 'Task', written_by: { kind: 'provider', id: 'graphiti' } });
     open({ provider: CAPS.graphiti, records: [ep] });
-    await draw('data');
+    await draw('data', 'ep');
     expect(page().textContent).toContain('Kept from a finished task. Read only.');
     await click(page().querySelector('.mm-doc-bar button[aria-label="More"]'));
     expect(Array.from(page().querySelectorAll('.mm-doc-bar .mm-mi b')).map((b) => b.textContent)).toEqual(['Erase']);
@@ -296,8 +330,7 @@ describe('an action a provider does not serve is not shown', () => {
     expect(editable()).toBeNull();
     expect(editorReadOnly()).toBe('true');
     expect(page().querySelector('.mm-doc-bar button[aria-label="More"]')).toBeNull();
-    await click(page().querySelector('.mm-page .ag-bar button[aria-label="More"]'));
-    expect(Array.from(page().querySelectorAll('.ag-bar .mm-mi b')).map((b) => b.textContent)).toEqual(['Copy memory ID']);
+    expect(await moreItems()).toEqual(['Schema', 'Copy memory ID']);
   });
   test('what could not be erased is said', async () => {
     const s = open({ provider: CAPS.mem0, records: [mine], extra: { 'POST /v1/memories/hmem_1/erase': { erased: ['r'], unreachable: ['r'] } } });
@@ -311,11 +344,12 @@ describe('an action a provider does not serve is not shown', () => {
 });
 
 describe('links', () => {
-  test('none kept and none to show: the list goes and the graph stays, which still draws the records', async () => {
+  test('none kept and none to show: no list and no graph, and More doesn’t offer one', async () => {
     open({ provider: { ...CAPS.mem0, graph: { entities: 'none' } }, records: [record({ id: 'r' })] });
     await draw();
     expect(page().querySelector('.mm-clist')).toBeNull();
-    expect(page().querySelector('.graph-stub')).toBeTruthy();
+    expect(page().querySelector('.graph-stub')).toBeNull();
+    expect(await moreItems()).not.toContain('Show graph');
   });
   test('a provider with no links at all isn’t asked what a record links to', async () => {
     const { graph: _g, ...rest } = CAPS.mem0;
@@ -332,6 +366,8 @@ describe('links', () => {
       extra: { 'PATCH /v1/memories/hmem_1/records/a': a, 'PATCH /v1/memories/hmem_1/records/b': b },
     });
     await draw();
+    // nothing links yet, so the graph (where links are made) is asked for
+    await fromMore('Show graph');
     await click(button('Link a record'));
     await click(button('Link'));
     const patched = [...s.sent('PATCH', '/v1/memories/hmem_1/records/a'), ...s.sent('PATCH', '/v1/memories/hmem_1/records/b')][0].body;
@@ -423,5 +459,87 @@ describe('what changes while the page is open', () => {
     await flush();
     expect(editable()).toBeNull();
     expect(editorReadOnly()).toBe('true');
+  });
+});
+
+describe('a record reads as what it says', () => {
+  test('the engine’s fields (the task, the model, the kind) are under Details, not on the record', async () => {
+    const f = record({ id: 'f', type: 'fact', title: '', content: [{ type: 'text', text: 'Dana prefers written steps.' }], attributes: { session_id: 'hsess_1', model: 'm-5', kind: 'turn' } });
+    open({ provider: CAPS.mem0, records: [f] });
+    await draw();
+    const props = page().querySelector('.mm-doc-col > .mm-props') as HTMLElement;
+    expect(props.textContent).not.toMatch(/session_id|hsess_1|kind/);
+    const details = page().querySelector('.mm-details') as HTMLDetailsElement;
+    expect(details.querySelector('summary')?.textContent).toBe('Details');
+    expect(details.textContent).toContain('session_id');
+    expect(details.textContent).toContain('hsess_1');
+  });
+  test('it opens on the most recent record that says something, never on a role’s bare name or an episode', async () => {
+    const at = (d: string) => ({ valid_from: null, valid_to: null, written_at: d, invalidated_at: null });
+    open({
+      provider: CAPS.mem0,
+      records: [
+        record({ id: 'old', title: 'Dana is on the Team plan', time: at('2026-11-01T00:00:00Z') }),
+        record({ id: 'new', title: 'Dana prefers written steps', time: at('2026-11-05T00:00:00Z') }),
+        record({ id: 'u', type: 'entity', title: 'user', time: at('2026-11-07T00:00:00Z') }),
+        record({ id: 'ep', type: 'episode', title: 'A whole task', time: at('2026-11-08T00:00:00Z') }),
+      ],
+    });
+    await draw();
+    expect(page().querySelector('.mm-doc-col .mm-title')?.textContent).toBe('Dana prefers written steps');
+  });
+  test('with nothing worth opening, nothing is open', async () => {
+    open({ provider: CAPS.mem0, records: [record({ id: 'u', type: 'entity', title: 'user' })] });
+    await draw();
+    expect(page().textContent).toContain('Pick a record');
+  });
+});
+
+describe('who uses it', () => {
+  const contract = (o: Partial<Memory> = {}) => memory({ provider: 'mem0', engine: 'mem0', used_by: [], ...o });
+  test('nothing uses it yet: Use in gives it to a setup, which then remembers there', async () => {
+    const s = open({ provider: CAPS.mem0, memory: contract(), records: [record()], extra: { 'PUT /v1/harnesses/chrn_a/memory': { id: 'chrn_a', memory: { id: 'hmem_1', name: 'Brand kits', engine: 'mem0', scope: 'shared', reason: '' } } } });
+    await draw();
+    expect(button('Not used yet')).toBeUndefined();
+    await click(button('Use in…'));
+    expect(page().querySelector('#mmUse')?.textContent).toBe('Use Brand kits in…');
+    await click(button('Use here'));
+    expect(s.sent('PUT', '/v1/harnesses/chrn_a/memory')[0].body).toEqual({ id: 'hmem_1' });
+  });
+  test('a service before 0.40 says nothing of it: no Use in, the old way stays', async () => {
+    open({ provider: CAPS.mem0, records: [record()] });
+    await draw();
+    expect(button('Use in…')).toBeUndefined();
+    expect(button('Not used yet')).toBeTruthy();
+  });
+  test('the last thing that failed is said until something works again', async () => {
+    open({ provider: CAPS.mem0, memory: contract({ last_error: 'Mem0 could not pull facts out: it has no model key.', last_error_at: '2026-11-08T10:00:00Z', last_ok_at: '2026-11-08T09:00:00Z' }), records: [record()] });
+    await draw();
+    expect(page().querySelector('.mm-failing')?.textContent).toContain('it has no model key');
+    await act(async () => { root.unmount(); }); root = createRoot(el);
+    open({ provider: CAPS.mem0, memory: contract({ last_error: 'Old trouble.', last_error_at: '2026-11-08T09:00:00Z', last_ok_at: '2026-11-08T10:00:00Z' }), records: [record()] });
+    await draw();
+    expect(page().querySelector('.mm-failing')).toBeNull();
+  });
+});
+
+describe('finding in it', () => {
+  test('words are asked of the engine by meaning, and what it finds is listed with what matches the words', async () => {
+    const said = record({ id: 'p', title: 'Prefers written steps, no phone calls' });
+    const s = open({ provider: CAPS.mem0, records: [said, record({ id: 'q', title: 'On the Team plan' })],
+      extra: { 'POST /v1/memories/hmem_1/recall': { results: [{ record: said, score: 0.8 }], degraded: [] } } });
+    jest.useFakeTimers();
+    try {
+      await draw();
+      const box = page().querySelector('.mt-top input') as HTMLInputElement;
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      await act(async () => { set.call(box, 'how does she like help'); box.dispatchEvent(new Event('input', { bubbles: true })); });
+      await act(async () => { jest.advanceTimersByTime(400); });
+    } finally { jest.useRealTimers(); }
+    await flush();
+    expect(s.sent('POST', '/v1/memories/hmem_1/recall')[0].body).toEqual({ query: 'how does she like help', limit: 50 });
+    const tree = page().querySelector('[role=tree]')?.textContent || '';
+    expect(tree).toContain('Prefers written steps');
+    expect(tree).not.toContain('On the Team plan');
   });
 });

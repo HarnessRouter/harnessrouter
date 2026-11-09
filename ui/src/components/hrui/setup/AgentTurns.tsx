@@ -12,6 +12,7 @@ import { AgentTurnView, turnFromMessage, motionFor, type OpenStep, type Turn, ty
 import { harnessLogoSrc } from '@/components/HarnessLogo';
 import type { AsstMsg, Msg, UserMsg } from '@/lib/conversation';
 import { limitStopWhy, SETUP_LIMITS } from '@/lib/limit-copy';
+import { readableTurn } from './memorySteps';
 // reifyui/styles/agent-chat.css, scoped under #hrui so the redesign's reset does not undo it
 import './agent-chat.scoped.css';
 import './agent-turns.css';
@@ -41,7 +42,8 @@ export function viewTurn(asst: AsstMsg | null, user: TurnUser | null): Turn {
   // A turn that ended on a question did what it should: nothing stopped it. Its form says what's next.
   const asked = asst?.status === 'incomplete' && asst.incompleteReason === 'input_required';
   const shown = asked && asst ? { ...asst, status: 'done' as const } : asst;
-  const t = shown ? turnFromMessage(shown, shown.clock || null, user) : turnFromMessage({ status: 'done', blocks: [] }, null, user);
+  // a memory search reads as what it looked for and what it found, not as the JSON the agent was given (memorySteps.ts)
+  const t = readableTurn(shown ? turnFromMessage(shown, shown.clock || null, user) : turnFromMessage({ status: 'done', blocks: [] }, null, user));
   if (t.status === 'running' || !t.items.some((x) => x.kind === 'thinking' && x.open)) return t;
   return { ...t, items: t.items.map((x) => (x.kind === 'thinking' && x.open ? { ...x, open: false } : x)) };
 }

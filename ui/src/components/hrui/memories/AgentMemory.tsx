@@ -1,0 +1,111 @@
+'use client';
+// A setup's own memory, as the service chose it for the agent (the memories spec, A1 and C1): one line, "Memory:
+// <Engine>, <why>", and Change, which offers the four engines and None. Drawn on a new setup's save card and in its
+// Settings, from the setup's record, so what is drawn is what was saved. A service before 0.40 says nothing of an
+// agent's memory, and then nothing is drawn.
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { getAgentMemory, getHarnessMemories, setAgentMemory, type AgentMemoryRead, type MemoryChoice } from '@/lib/memories';
+import { announceHarnessMemories } from '../setup/harnessMemories';
+import { plain } from '../setup/settingsModel';
+import { toast } from '../toast';
+import { after, useDismiss, useProviders } from './parts';
+import { VENDORS, vendorName } from './vendors';
+import './memories.css';
+
+const SAID = 'hrui:agent-memory';
+
+/** The engine a person reads, and why: the service's own sentence. */
+export function lineOf(r: AgentMemoryRead): { engine: string; why: string } {
+  return r.memory ? { engine: vendorName(r.memory.engine), why: r.memory.reason || r.reason } : { engine: 'None', why: r.reason };
+}
+
+/** One setup's memory: undefined while it is read, or where the service doesn't say (`said` false). Every view of the
+ *  same setup hears a change made in any of them. */
+export function useAgentMemory(hid: string | null | undefined) {
+  const [read, setRead] = useState<AgentMemoryRead | undefined>(undefined);
+  const [said, setSaid] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const take = useCallback((r: AgentMemoryRead | undefined) => { setRead(r); setSaid(r !== undefined); }, []);
+  useEffect(() => {
+    if (!hid) { setRead(undefined); setSaid(null); return undefined; }
+    let live = true;
+    getAgentMemory(hid).then((r) => { if (live) take(r); }).catch(() => { if (live) setSaid(false); });
+    const heard = (e: Event) => {
+      const d = (e as CustomEvent<{ hid: string; r: AgentMemoryRead }>).detail;
+      if (live && d?.hid === hid) take(d.r);
+    };
+    window.addEventListener(SAID, heard);
+    return () => { live = false; window.removeEventListener(SAID, heard); };
+  }, [hid, take]);
+  /** Give the agent this memory, or none. True once saved; a refusal is said in the service's words. */
+  const set = useCallback(async (choice: MemoryChoice, done?: string): Promise<boolean> => {
+    if (!hid || busy) return false;
+    setBusy(true);
+    try {
+      const r = await setAgentMemory(hid, choice);
+      take(r);
+      if (r) window.dispatchEvent(new CustomEvent(SAID, { detail: { hid, r } }));
+      // the Agent stack counts what the agent holds: it hears the change too
+      getHarnessMemories(hid).then((d) => announceHarnessMemories(hid, d)).catch(() => {});
+      if (done) toast(done);
+      return true;
+    } catch (e) {
+      toast(plain(e, 'The memory was not changed. Try again.'));
+      return false;
+    } finally { setBusy(false); }
+  }, [hid, busy, take]);
+  return { read, said, busy, set };
+}
+
+/** Change: the four engines and None, in a small menu. An engine not running here is shown, and not offered. */
+export function EngineMenu({ current, busy, onPick, label = 'Change' }: {
+  current: string | null; busy?: boolean; onPick: (choice: MemoryChoice) => void; label?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLSpanElement | null>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, wrap, close);
+  const { providers } = useProviders();
+  const running = (id: string) => !providers || !!providers.find((p) => p.id === id)?.connected;
+  const pick = (c: MemoryChoice) => { setOpen(false); onPick(c); };
+  return (
+    <span className="mm-popw am-menu" ref={wrap}>
+      <button type="button" className="link-q inl" aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen(!open)}>{label}</button>
+      {open ? (
+        <div className="mm-pop am-pop" role="menu" aria-label="Engine">
+          {Object.keys(VENDORS).map((id) => {
+            const on = current === id, can = running(id);
+            return (
+              <button key={id} type="button" role="menuitemradio" aria-checked={on} className={`mm-mi${on ? ' on' : ''}`} disabled={!can || on}
+                onClick={() => pick({ engine: id })}>
+                <b>{vendorName(id)}</b><small>{can ? VENDORS[id].line : 'Not running here'}</small>
+              </button>
+            );
+          })}
+          <div className="mm-pop-sep" />
+          <button type="button" role="menuitemradio" aria-checked={current === ''} className={`mm-mi${current === '' ? ' on' : ''}`} disabled={current === ''}
+            onClick={() => pick('none')}>
+            <b>None</b><small>Every task starts from nothing.</small>
+          </button>
+        </div>
+      ) : null}
+    </span>
+  );
+}
+
+/** "Memory: Mem0, it serves people…" and Change. `hid` absent: the line as a build proposes it, before there is a
+ *  setup to change. */
+export function MemoryLine({ hid, proposed }: { hid?: string; proposed?: AgentMemoryRead | null }) {
+  const { read, busy, set } = useAgentMemory(hid);
+  const r = hid ? read : proposed || undefined;
+  if (!r) return null;
+  const { engine, why } = lineOf(r);
+  const pick = (c: MemoryChoice) => void set(c, c === 'none' ? 'Memory off. Each task starts from nothing.' : 'Memory changed.');
+  return (
+    <div className="am-line" role="status">
+      <span className="am-k">Memory:</span>{' '}
+      <b>{engine}</b>{why ? <span className="am-why">{`, ${after(why)}`}</span> : null}
+      {hid ? <>{' '}<EngineMenu current={r.memory ? r.memory.engine : ''} busy={busy} onPick={pick} /></> : null}
+    </div>
+  );
+}
