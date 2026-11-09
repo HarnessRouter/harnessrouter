@@ -145,6 +145,19 @@ def test_a_qwen_turn_with_platform_memory_keeps_none_of_its_own(started):
     assert "memory" not in cfg and "permissions" not in cfg
 
 
+def test_a_qwen_turn_with_platform_memory_runs_no_extraction_whatever_else_is_off(started):
+    """0.40.1's one memory per agent, as Qwen Code 0.26.3 reads it (`memory.enableManagedAutoMemory` and
+    `memory.enableManagedAutoDream`, its settings schema and config reader). Recorded against the stand-in (11-09), two
+    turns each: with the platform's memory attached, one model request a turn and no extraction request, and no
+    MEMORY.md or extract-cursor.json written; without it, a second request each turn ("Managed memory has TWO
+    directories") and both files, since its own memory is then the agent's only one. With a file or shell tool off as
+    well, its other background agents go too, and extraction stays off."""
+    _, ws = started("qwen", [GATEWAY_MEMORIES], provider="openai-api", tools_disabled=["write_file"])
+    cfg = _qwen_settings_of(ws)
+    assert cfg["memory"]["enableManagedAutoMemory"] is False and cfg["memory"]["enableManagedAutoDream"] is False
+    assert {"manage_memory", "search_memory", "save_memory", "write_file"} <= set(cfg["permissions"]["deny"])
+
+
 def test_a_gemini_turn_with_platform_memory_pins_its_auto_memory_off(started):
     """0.58.0 has no memory tool; its auto memory is experimental and off by default, pinned off here."""
     _, ws = started("gemini", [GATEWAY_MEMORIES], provider="google")
