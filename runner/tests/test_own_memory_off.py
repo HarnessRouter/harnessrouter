@@ -162,3 +162,14 @@ def test_a_codex_turn_with_platform_memory_switches_its_memories_off(started):
     assert doc["memories"] == {"generate_memories": False, "use_memories": False}
     _, ws = started("codex", [], provider="openai")
     assert "memories" not in tomllib.loads(next(ws.rglob(".codex/config.toml")).read_text())
+
+
+def test_a_claude_turn_with_platform_memory_switches_its_auto_memory_off(started):
+    """Claude Code 2.1.280 keeps an auto memory of its own by default, -p included: measured, its request
+    carried a "# auto memory" section beside the platform's memories server."""
+    _, ws = started("claude", [GATEWAY_MEMORIES], provider="anthropic")
+    p = next(ws.rglob(".claude/settings.json"))
+    assert json.loads(p.read_text())["autoMemoryEnabled"] is False
+    # the next turn without the platform's memory gives Claude Code its own back
+    _, ws2 = started("claude", [], provider="anthropic")
+    assert not list(ws2.rglob(".claude/settings.json")), "nothing to write on a fresh session"

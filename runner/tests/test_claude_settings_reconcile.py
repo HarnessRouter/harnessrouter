@@ -37,3 +37,10 @@ def test_the_rest_of_the_file_stays(tmp_path):
                              "permissions": {"deny": ["Bash"], "allow": ["Read"]}}))
     cfg = _turn(tmp_path)
     assert cfg == {"theme": "dark", "permissions": {"allow": ["Read"]}}
+
+
+def test_auto_memory_follows_the_platform_memory_turn_by_turn(tmp_path):
+    assert _turn(tmp_path, own_memory_off=True) == {"autoMemoryEnabled": False}
+    assert _turn(tmp_path, own_memory_off=True, disallowed_tools=["Bash"]) == \
+        {"autoMemoryEnabled": False, "permissions": {"deny": ["Bash"]}}
+    assert _turn(tmp_path) == {}, "a turn without the platform's memory gives Claude Code its own back"

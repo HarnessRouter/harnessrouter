@@ -2938,7 +2938,8 @@ def _claude_thinking_env(model: str) -> dict:
 def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns: int,
                   cwd: str, env: dict, resume_session_id: str | None = None,
                   mcp_config: str | None = None, disallowed_tools: list[str] | None = None,
-                  partial: bool = False, plugin_dirs: list[str] | None = None) -> list[str]:
+                  partial: bool = False, plugin_dirs: list[str] | None = None,
+                  own_memory_off: bool = False) -> list[str]:
     p = provider or "anthropic"
     if p not in CLAUDE_PROVIDERS:
         raise HTTPException(400, f"unknown claude provider '{p}' (one of {sorted(CLAUDE_PROVIDERS)})")
@@ -3071,6 +3072,15 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
         current["permissions"] = perms
     else:
         current.pop("permissions", None)
+    # Claude Code's own auto memory (a "# auto memory" section in its system prompt and a MEMORY.md it
+    # keeps under its config dir) is on by default in 2.1.280, -p included: measured, the request
+    # carried that section beside the platform's memories server. With the platform's memory attached
+    # it is off, so the agent keeps one memory; autoMemoryEnabled is the setting its loader reads
+    # before falling back to on.
+    if own_memory_off:
+        current["autoMemoryEnabled"] = False
+    else:
+        current.pop("autoMemoryEnabled", None)
     if current or settings_path.exists():
         settings_path.write_text(json.dumps(current, indent=2))
     if resume_session_id:
@@ -4421,7 +4431,8 @@ def _has_platform_memory(servers: list[dict] | None) -> bool:
 # here, by the names that switch takes: cheetahclaws' measured Memory* tools (CHEETAHCLAWS_TOOLS) through its
 # `disabled_tools`, and Roder's memory and knowledge stores through its allowlist (roder_backend.TOOLS; a switch id
 # takes its whole family); Qwen Code's through permissions.deny, beside its background memory agents (_qwen_settings).
-# Codex's memories are a config table, switched off in _codex_prepare_env, and Gemini CLI 0.58.0 has no memory tool:
+# Claude Code's auto memory and codex's memories are settings, switched off in _build_claude and _codex_prepare_env,
+# and Gemini CLI 0.58.0 has no memory tool:
 # its experimental auto memory is pinned off in _gemini_settings. Already off on every turn, whatever is attached:
 # jcode `memory`, grok GROK_MEMORY=0,
 # agentzero's `_memory` plugin, dcode's memory auto-save, zeroclaw's memory tools (not on its allowlist), and
@@ -17980,7 +17991,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             cmd = _build_claude(req.provider, auth, model, req.prompt, req.max_turns, cwd, env,
                                 resume_session_id=req.resume_session_id, mcp_config=mcp_config,
                                 disallowed_tools=claude_tools_off, partial=bool(req.partial_messages),
-                                plugin_dirs=plugin_dirs)
+                                plugin_dirs=plugin_dirs, own_memory_off=platform_memory)
     resume_lost = _resume_lost(backend, cmd, req.resume_session_id, cwd)
     _isolate_session(cwd)   # everything the runner just wrote into the session is the session's now
     turn_id = "turn" + uuid.uuid4().hex
