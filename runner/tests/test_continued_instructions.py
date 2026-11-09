@@ -96,7 +96,15 @@ def turn(tmp_path, monkeypatch):
                              auth=server.Auth(api_key="k", base_url="https://api.example/v1"),
                              agent_doc=doc, resume_session_id=resume)
         built.clear()
-        server._start_turn(req, "sess-1")
+        held: dict = {}
+        tok = server._TURN_PROMPT.set(held)
+        try:
+            server._start_turn(req, "sess-1")
+        finally:
+            server._TURN_PROMPT.reset(tok)
+        # what the CLI is handed off its command line (stdin or the file its argv names), where it has a route
+        start.handed = pathlib.Path(held["path"]).read_text() if held.get("path") else None
+        server._prompt_discard(held)
         return built[-1] if built else None
     start.ws = ws
     return start
@@ -158,23 +166,27 @@ def test_a_continued_grok_turn_after_an_edit_carries_the_edit(turn):
     d.mkdir(parents=True)
     (d / "summary.json").write_text("{}")
     cmd = turn("grok", "Rule A.", resume=sid)
-    assert cmd[1] == "--single=next message"
+    assert turn.handed == "next message" and not any("next message" in a for a in cmd)
     cmd = turn("grok", "Rule B.", resume=sid)
     assert cmd[cmd.index("-r") + 1] == sid
-    single = cmd[1]
-    assert single.startswith("--single=<system-reminder>") and single.endswith("next message")
+    single = turn.handed
+    assert single.startswith("<system-reminder>") and single.endswith("next message")
     assert "Rule B." in single and "Rule A." not in single
+    assert not any("Rule B." in a for a in cmd), "the note goes the prompt's way, off the command line"
 
 
 def test_a_continued_mimo_turn_after_an_edit_carries_the_edit(turn, monkeypatch):
     monkeypatch.setattr(server, "_opencode_has_session", lambda env, sid, share="": sid == "ses_1")
     turn("mimo", "Rule A.")
-    assert turn("mimo", "Rule A.", resume="ses_1")[-1] == "next message"
+    turn("mimo", "Rule A.", resume="ses_1")
+    assert turn.handed == "next message"
     cmd = turn("mimo", "Rule B.", resume="ses_1")
     assert cmd[cmd.index("-s") + 1] == "ses_1"
-    assert cmd[-1].endswith("next message") and "Rule B." in cmd[-1] and "Rule A." not in cmd[-1]
+    handed = turn.handed
+    assert handed.endswith("next message") and "Rule B." in handed and "Rule A." not in handed
+    assert not any("Rule B." in a or "next message" in a for a in cmd), "both go on stdin"
     cmd = turn("mimo", "Rule C.", resume="ses_gone")
-    assert cmd[-1] == "next message", "a session the store does not hold starts fresh and reads the file"
+    assert turn.handed == "next message", "a session the store does not hold starts fresh and reads the file"
 
 
 def test_a_continued_dcode_turn_after_an_edit_carries_the_edit(turn, monkeypatch):

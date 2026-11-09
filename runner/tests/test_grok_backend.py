@@ -202,7 +202,9 @@ def test_the_argv_is_headless_claude_stream_json_and_a_dash_prompt_stays_the_pro
     d = tempfile.mkdtemp()
     cmd = _build_grok("openai-api", Auth(api_key="k", base_url="https://up.example/v1"), "m",
                       "-rf is not a flag here", d, {})
-    assert cmd[0] == "grok" and "--single=-rf is not a flag here" in cmd
+    # --prompt-file names a file of the session's own; the prompt never reaches the argv to be read as flags
+    assert cmd[0] == "grok" and cmd[1].startswith("--prompt-file=") and not any("-rf" in a for a in cmd)
+    assert pathlib.Path(cmd[1].split("=", 1)[1]).read_text() == "-rf is not a flag here"
     i = cmd.index("--output-format")
     assert cmd[i + 1] == "streaming-messages-json" and "--always-approve" in cmd
     assert cmd[cmd.index("-m") + 1] == "harness"

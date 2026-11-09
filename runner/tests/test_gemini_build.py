@@ -12,6 +12,11 @@ from server import (Auth, _agent_doc_path, _build_gemini, _gemini_settings, _gem
                     _gemini_usage, _norm_token_usage, BACKENDS, GEMINI_HELPER_ALIASES, GEMINI_MODELS, _HERMES_RELAY)
 
 
+def _handed(d) -> list[str]:
+    """The prompt files the builder wrote for the CLI to read (on stdin, or by the path in its argv)."""
+    return [p.read_text() for p in pathlib.Path(d, "tmp").glob(".prompt-*")]
+
+
 def _argv(**kw):
     d = tempfile.mkdtemp()
     env: dict = {}
@@ -20,10 +25,10 @@ def _argv(**kw):
 
 
 def test_argv_is_headless_stream_json():
-    cmd, _, _ = _argv()
-    assert cmd[:3] == ["gemini", "-p", "do it"]
-    assert ["-o", "stream-json"] == cmd[3:5]
-    assert ["-m", "gemini-3.6-flash"] == cmd[5:7]
+    cmd, d, _ = _argv()
+    assert cmd[:3] == ["gemini", "-o", "stream-json"]
+    assert ["-m", "gemini-3.6-flash"] == cmd[3:5]
+    assert "-p" not in cmd and "do it" not in cmd and _handed(d) == ["do it"]   # read on stdin, headless
 
 
 def test_approval_and_trust_flags_present():

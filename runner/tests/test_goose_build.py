@@ -54,6 +54,11 @@ def _norm(events):
     return out, state
 
 
+def _handed(d) -> list[str]:
+    """The prompt files the builder wrote for the CLI to read (on stdin, or by the path in its argv)."""
+    return [p.read_text() for p in pathlib.Path(d, "tmp").glob(".prompt-*")]
+
+
 def _msg(*content, role="assistant", inference=None):
     meta: dict = {"userVisible": True, "agentVisible": True}
     if inference:
@@ -65,11 +70,13 @@ def _msg(*content, role="assistant", inference=None):
 
 # ── argv ──────────────────────────────────────────────────────────────────────────────────────
 def test_argv_is_headless_stream_json():
-    cmd, _, _ = _argv()
+    cmd, d, _ = _argv()
     assert cmd[:2] == ["goose", "run"]
     assert ["--output-format", "stream-json"] == cmd[2:4]
     assert ["--model", "gpt-5.4"] == cmd[4:6]
-    assert ["-t", "do it"] == cmd[8:10]
+    # -i names a file of the session's own holding the prompt, never -t with the prompt itself
+    assert cmd[8] == "-i" and "-t" not in cmd and "do it" not in cmd
+    assert pathlib.Path(cmd[9]).read_text() == "do it" and _handed(d) == ["do it"]
 
 
 def test_auto_mode_and_no_session_naming():

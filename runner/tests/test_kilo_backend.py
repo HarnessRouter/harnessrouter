@@ -117,6 +117,11 @@ def test_tool_calls_render_as_tool_use_and_result():
 
 # ── the builder ───────────────────────────────────────────────────────────────────────────────
 
+def _handed(d) -> list[str]:
+    """The prompt files the builder wrote for the CLI to read (on stdin, or by the path in its argv)."""
+    return [p.read_text() for p in pathlib.Path(d, "tmp").glob(".prompt-*")]
+
+
 def _build(auth=None, provider="openai-api", **kw):
     d = tempfile.mkdtemp()
     env = {"HOME": f"{d}/.harness/home"}
@@ -127,18 +132,18 @@ def _build(auth=None, provider="openai-api", **kw):
 
 
 def test_argv_is_a_headless_json_run_with_the_measured_flags():
-    cmd, _, _, _ = _build()
+    cmd, _, _, d = _build()
     assert cmd[:6] == ["kilo", "run", "--format", "json", "--model", "hr/gpt-5.4"]
     for flag in ("--auto", "--pure", "--thinking"):
         assert flag in cmd
-    assert cmd[-1] == "do it"
+    assert "do it" not in cmd and _handed(d) == ["do it"]     # read on stdin, from the session's own file
 
 
 def test_a_prompt_that_looks_like_a_flag_is_not_read_as_one():
     d = tempfile.mkdtemp()
     cmd = _build_kilo("openai-api", Auth(api_key="k", base_url="https://g.example/v1"), "gpt-5.4",
                       "--version", d, {"HOME": d})
-    assert cmd[-2:] == ["--", "--version"]
+    assert "--version" not in cmd and _handed(d) == ["--version"]   # on stdin it is only ever the prompt
 
 
 def test_the_real_key_never_reaches_the_sandbox():

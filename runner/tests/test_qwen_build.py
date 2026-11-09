@@ -8,6 +8,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import Auth, _agent_doc_path, _build_qwen, _claude_passthrough, BACKENDS  # noqa: E402
 
 
+def _handed(d) -> list[str]:
+    """The prompt files the builder wrote for the CLI to read (on stdin, or by the path in its argv)."""
+    return [p.read_text() for p in pathlib.Path(d, "tmp").glob(".prompt-*")]
+
+
 def _argv(**kw):
     d = tempfile.mkdtemp()
     env: dict = {}
@@ -19,9 +24,9 @@ def _argv(**kw):
 def test_argv_is_headless_stream_json_with_explicit_auth_type():
     """--auth-type is load bearing: without it every -r run on 0.22.1 dies
     'No auth type is selected' — verified live, both directions."""
-    cmd, _, _ = _argv()
-    assert cmd[:3] == ["qwen", "-p", "do it"]
-    assert ["-o", "stream-json"] == cmd[3:5]
+    cmd, d, _ = _argv()
+    assert cmd[:3] == ["qwen", "-o", "stream-json"]
+    assert "-p" not in cmd and "do it" not in cmd and _handed(d) == ["do it"]   # read on stdin, headless
     assert "--auth-type" in cmd and "openai" in cmd
 
 

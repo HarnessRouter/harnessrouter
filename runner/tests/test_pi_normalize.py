@@ -173,7 +173,8 @@ def test_a_direct_anthropic_key_goes_through_the_relay_not_the_environment(tmp_p
     assert hr["baseUrl"].startswith("http://127.0.0.1:") and not hr["baseUrl"].endswith("/v1")   # pi appends /v1/messages
     assert server._HERMES_RELAY["routes"][hr["apiKey"]][:2] == ("https://api.anthropic.com/v1", "k-test")
     assert "--approve" in cmd and "--no-extensions" in cmd
-    assert cmd[-1] == "do it"
+    assert "do it" not in cmd       # read on stdin, from a file of the session's own
+    assert [p.read_text() for p in (tmp_path / "tmp").glob(".prompt-*")] == ["do it"]
 
 
 def test_build_tokenrouter_claude_family_uses_anthropic_messages(tmp_path):

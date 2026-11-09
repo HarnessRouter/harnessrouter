@@ -30,8 +30,14 @@ from server import (ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
                     _produced_visible, _resume_lost, _sse_bridges,
                     _visible_root,
                     _write_input_files, _write_skills)
+import server  # noqa: E402
 
 UP = "https://up.example/v1"
+
+
+def _handed(d) -> list[str]:
+    """The prompt files a builder wrote for the CLI to read, by their text."""
+    return [p.read_text() for p in pathlib.Path(d, "tmp").glob(".prompt-*")]
 
 
 def _ws():
@@ -91,7 +97,8 @@ def test_mimo_argv_is_opencodes_with_its_own_spellings():
     assert "--pure" in cmd and "--thinking" in cmd
     # NOT opencode's --auto / --session: the fork renamed both.
     assert "--auto" not in cmd
-    assert cmd[-1] == "do it"
+    # The prompt is handed over on stdin, from a file of the session's own, not on the command line.
+    assert "do it" not in cmd and _handed(d) == ["do it"]
     # Its own config env var and file name, so two backends in one workspace cannot collide.
     assert env["MIMOCODE_CONFIG"].endswith("/.harness/mimo.json")
     assert (pathlib.Path(d) / ".harness" / "mimo.json").is_file()
@@ -385,7 +392,9 @@ def test_opensquilla_argv_bounds_retries_and_keeps_a_session_db():
     d, env = _ws(), {}
     cmd = _build_opensquilla("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
                              resume_session_id="sess-1", max_turns=12)
-    assert cmd[1] == "agent" and cmd[cmd.index("-m") + 1] == "hi"
+    # Started through the prompt launcher: -m names its placeholder, and the prompt is in the file it reads.
+    assert cmd[1] == server.PROMPT_LAUNCHER and cmd[4:6] == [server.OPENSQUILLA_BIN, "agent"]
+    assert cmd[cmd.index("-m") + 1] == server.PROMPT_ARG and "hi" not in cmd and _handed(d) == ["hi"]
     assert "--json" in cmd and "--event-stream-stderr" in cmd
     assert cmd[cmd.index("--permissions") + 1] == "bypass"
     # The default is `:memory:` — without an explicit file there is NO continuity between turns.

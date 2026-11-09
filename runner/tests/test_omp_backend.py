@@ -41,7 +41,8 @@ def test_omp_argv_native_provider():
     assert "--model" in cmd and "hr/claude-sonnet-4.6" in cmd     # the custom provider: the key rides the relay (#615)
     assert "--auto-approve" in cmd
     assert "--no-extensions" in cmd
-    assert cmd[-1] == "hello world"
+    assert "hello world" not in cmd       # read on stdin, from a file of the session's own
+    assert [p.read_text() for p in pathlib.Path(d, "tmp").glob(".prompt-*")] == ["hello world"]
     assert "ANTHROPIC_API_KEY" not in env and "sk-ant-test" not in json.dumps(env)
     yml = (pathlib.Path(d) / ".omp" / "agent" / "models.yml").read_text()
     assert "sk-ant-test" not in yml
