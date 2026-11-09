@@ -525,10 +525,16 @@ export function useSetups(opts: { live?: boolean; scope?: string } = {}): {
     if (!start) refresh(id);
   }, [draw, refresh]);
 
-  // read again when something else learns they changed (a setup made or deleted elsewhere in the tab)
+  // read again when something else learns they changed (a setup made or deleted elsewhere in the tab,
+  // a build that saved one while the person was here: start/build.ts). One that names a setup the rows
+  // already show needs no read
   useEffect(() => {
     void load();
-    const again = () => { void load(); };
+    const again = (e: Event) => {
+      const id = (e as CustomEvent<{ id?: string } | null>).detail?.id;
+      if (id && src.current?.list.some((x) => x.h.id === id)) return;
+      void load();
+    };
     window.addEventListener(SETUPS_EVENT, again);
     const timers = soon.current;
     const L = loadRetry.current;

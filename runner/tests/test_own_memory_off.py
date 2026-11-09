@@ -124,3 +124,52 @@ def test_a_base_whose_memory_is_already_off_or_absent_is_left_as_it_was():
         assert server._own_memory_off(backend, ["X"]) == ["X"]
     assert server._own_memory_off("roder", ["memory_save"]) == ["memory_save", "knowledge_save"], "never twice"
     assert json.dumps(server._OWN_MEMORY_TOOLS)          # names only, nothing else rides on it
+
+
+# ── Qwen Code, Gemini CLI and codex, whose own memory has a real switch ───────────────────────
+# Measured on the test instance: a Qwen Code turn makes a second model request after the answer, its
+# "managed memory extraction subagent" writing into Qwen Code's private store.
+
+def _qwen_settings_of(ws):
+    return json.loads((ws / ".harness" / "home" / ".qwen" / "settings.json").read_text())
+
+
+def test_a_qwen_turn_with_platform_memory_keeps_none_of_its_own(started):
+    _, ws = started("qwen", [GATEWAY_MEMORIES], provider="openai-api")
+    cfg = _qwen_settings_of(ws)
+    assert cfg["memory"] == {"enableManagedAutoMemory": False, "enableManagedAutoDream": False}, \
+        "extraction and consolidation off; skill review is not memory and stays"
+    assert {"manage_memory", "search_memory", "save_memory"} <= set(cfg["permissions"]["deny"])
+    _, ws = started("qwen", [], provider="openai-api")
+    cfg = _qwen_settings_of(ws)
+    assert "memory" not in cfg and "permissions" not in cfg
+
+
+def test_a_gemini_turn_with_platform_memory_pins_its_auto_memory_off(started):
+    """0.58.0 has no memory tool; its auto memory is experimental and off by default, pinned off here."""
+    _, ws = started("gemini", [GATEWAY_MEMORIES], provider="google")
+    cfg = json.loads((ws / ".harness" / "home" / ".gemini" / "settings.json").read_text())
+    assert cfg["experimental"] == {"dynamicModelConfiguration": True, "autoMemory": False}
+    assert "tools" not in cfg, "no memory tool to exclude"
+    _, ws = started("gemini", [], provider="google")
+    cfg = json.loads((ws / ".harness" / "home" / ".gemini" / "settings.json").read_text())
+    assert "autoMemory" not in cfg["experimental"]
+
+
+def test_a_codex_turn_with_platform_memory_switches_its_memories_off(started):
+    _, ws = started("codex", [GATEWAY_MEMORIES], provider="openai")
+    doc = tomllib.loads(next(ws.rglob(".codex/config.toml")).read_text())
+    assert doc["memories"] == {"generate_memories": False, "use_memories": False}
+    _, ws = started("codex", [], provider="openai")
+    assert "memories" not in tomllib.loads(next(ws.rglob(".codex/config.toml")).read_text())
+
+
+def test_a_claude_turn_with_platform_memory_switches_its_auto_memory_off(started):
+    """Claude Code 2.1.280 keeps an auto memory of its own by default, -p included: measured, its request
+    carried a "# auto memory" section beside the platform's memories server."""
+    _, ws = started("claude", [GATEWAY_MEMORIES], provider="anthropic")
+    p = next(ws.rglob(".claude/settings.json"))
+    assert json.loads(p.read_text())["autoMemoryEnabled"] is False
+    # the next turn without the platform's memory gives Claude Code its own back
+    _, ws2 = started("claude", [], provider="anthropic")
+    assert not list(ws2.rglob(".claude/settings.json")), "nothing to write on a fresh session"

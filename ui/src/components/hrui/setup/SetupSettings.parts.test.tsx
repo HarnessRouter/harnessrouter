@@ -166,10 +166,11 @@ describe('only what a person needs', () => {
     expect(tabs()).toEqual(['Plugins 1', 'Tools 7']);
     expect(names()).toEqual(['brand-kit']);
   });
-  test('a built-in tool says nothing unless turning it off only asks', async () => {
+  test('a built-in tool says nothing unless turning it off only asks, and then says plainly it may still be used', async () => {
     hx.useBases.mockReturnValue({ hermes: { ...BASE, tools: [{ name: 'terminal' }, { name: 'web_search', enforcement: 'instruction' }] } as unknown as BaseInfo });
     await settings(setup(), 'caps', 'tool');
-    expect(rows().map((r) => r.querySelector('small')?.textContent ?? null)).toEqual([null, 'Off asks the agent not to use it.']);
+    expect(rows().map((r) => r.querySelector('small')?.textContent ?? null))
+      .toEqual([null, 'This agent can’t switch it off. Off asks it not to use it, and it may still use it.']);
   });
   test('an agent harness that cannot open an environment has no Environment section, until one is set', async () => {
     hx.useBases.mockReturnValue({ hermes: { ...BASE, takesEnvironments: false } as BaseInfo });

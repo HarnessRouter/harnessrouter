@@ -537,7 +537,7 @@ export function SetupSettings({ r, onSaved, layer, cap, onLayer, onDirty, onNewT
                 return (
                 <div key={x.key} className={`cap-row${on ? '' : ' off'}`} hidden={!found(t.name)}>
                   <span className="cap-ic" dangerouslySetInnerHTML={brick(on)} />
-                  <span className="grow"><b className="mono">{t.name}</b>{t.enforcement === 'instruction' ? <small>Off asks the agent not to use it.</small> : null}</span>
+                  <span className="grow"><b className="mono">{t.name}</b>{t.enforcement === 'instruction' ? <small>This agent can’t switch it off. Off asks it not to use it, and it may still use it.</small> : null}</span>
                   {tog(on, t.name, () => set('tools', on ? [...c.tools, t.name] : c.tools.filter((n) => n !== t.name)))}
                 </div>
                 );

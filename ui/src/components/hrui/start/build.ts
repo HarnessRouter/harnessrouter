@@ -51,6 +51,7 @@ import { setHarnessPlugs } from '@/lib/plugs';
 import { getCurrentWorkspaceRef } from '@/lib/workspace';
 import { track } from '@/lib/analytics';
 import { toast } from '../toast';
+import { SETUPS_EVENT } from '../setups';
 import { seedSetup } from './seed';
 import type { AssemblyState, Attach } from './Assembly';
 import { handFirstTest } from './check';
@@ -437,10 +438,19 @@ function follow(key: string, first: BuildRecord, read: (after: string) => Promis
   });
 }
 
+/** The setups list on screen, if any, is told of a setup a build here saved, so it shows it at once
+ *  (setups.ts reads its setups again on SETUPS_EVENT): the person may have left the build's page for
+ *  Harness Studio while it went on. */
+function tellList(id: string): void {
+  if (typeof window === 'undefined') return;
+  try { window.dispatchEvent(new CustomEvent(SETUPS_EVENT, { detail: { id } })); } catch { /* no list to tell */ }
+}
+
 /** The server saved the setup: its page takes over, with its example request in the box. */
 async function savedByServer(key: string, r: BuildRecord): Promise<void> {
   const id = r.setupId, cfg = r.config, savedAt = Date.now();
   keep(key, { id, ...(cfg ? { cfg, composed: true } : {}), savedAt, plugins: r.attached, done: true });
+  tellList(id);
   // the setup's page opens with it already here (start/seed.ts) when it can be read at once
   const h = await getCustom(id).catch(() => null);
   if (h) seedSetup(id, { h });
@@ -483,7 +493,54 @@ function landed(key: string, c: CustomHarness): string {
   // the setup's page opens with it already here (start/seed.ts): no loading lines in the hand-off
   seedSetup(c.id, { h: c });
   keep(key, { id: c.id });
+  tellList(c.id);
   return c.id;
+}
+
+// ── a build left before it ended ────────────────────────────────────────────────────────────────
+/** The kept builds this page has asked the server for (pickUpBuilds): each is asked once per page. */
+const askedLeft = new Set<string>();
+
+/** A build this tab started and then left before it ended (a page load away from its page, a reload)
+ *  goes on on the server, which saves the setup with no page there to see it. Harness Studio calls this
+ *  as it opens: each such build is asked for by its key, a build the server saved is taken as saved here
+ *  (its setup lands in the list, its first request waits in its box), and one still going on is followed
+ *  until it ends. It only reads: nothing is built or saved from here, and a build the server has no
+ *  record of, or one that failed, is left as it is (its own page, opened again, asks for it as it always
+ *  has). A build this page still follows is passed over: it tells the list itself when it lands. */
+export function pickUpBuilds(): void {
+  for (const key of keptKeys()) {
+    const k = readKept(key);
+    const i = k?.input;
+    // a server build: a demo preset from its recording is saved by the console, on its own page
+    if (!k || !i || k.id || k.done || k.error || k.preset || running.has(key) || askedLeft.has(key)) continue;
+    askedLeft.add(key);
+    running.add(key);
+    void pickUp(key, i)
+      .catch(() => { askedLeft.delete(key); })
+      .finally(() => {
+        running.delete(key);
+        // the build's own page was opened again meanwhile and waits on it: its own work takes over
+        const b = builds.get(key);
+        if (b && b.phase !== 'done' && b.phase !== 'failed' && !readKept(key)?.done) go(key);
+      });
+  }
+}
+
+/** One left build, read by its key and, while it goes on, followed by long poll; saved, it lands. */
+async function pickUp(key: string, i: BuildInput): Promise<void> {
+  const chosen: Chosen = { base: i.base, model: i.model, baseName: i.baseName };
+  const r = await readServerBuild(key, chosen);
+  if (!r) return;
+  // a record that goes missing while followed ends the follow: it is never started again from here
+  const end = r.status === 'building'
+    ? await follow(key, r, async (after) => {
+      const x = await readServerBuild(key, chosen, after);
+      if (!x) throw new BuildRefused('');
+      return x;
+    })
+    : r;
+  if (end && !(end instanceof BuildRefused) && end.status === 'saved' && end.setupId) await savedByServer(key, end);
 }
 /** The setup a create sent at `sentAt` under `name` made, when the server has it (read a few times:
  *  a create that has only just answered can take a moment to be listed). */

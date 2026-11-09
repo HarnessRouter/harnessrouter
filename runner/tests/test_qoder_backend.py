@@ -446,6 +446,29 @@ def test_a_tool_disabled_between_two_turns_is_withheld_on_the_second(tmp_path, s
     assert not [e for e in events if e.get("subtype") == "resume_lost"]
 
 
+def test_instructions_edited_between_two_turns_reach_the_continued_session(tmp_path, stub):
+    """A session keeps the Agent version, and so the system prompt, it was made with; a later turn may
+    replace its tools and servers only. Edited instructions go with the next message, once."""
+    def turn(prompt: str, doc: str, sid: str = "") -> str:
+        if sid:
+            stub.sessions[sid]["stages"] = [[RUNNING, {"type": "agent.message", "content": [{"type": "text", "text": "ok"}]}, IDLE]]
+            stub.sessions[sid]["stage"] = 0
+        run_driver({"cwd": str(tmp_path), "prompt": prompt, "agent_doc": doc,
+                    **({"resume_session_id": sid} if sid else {})}, stub)
+        sent = json.loads((tmp_path / ".harness" / "qoder" / "state.json").read_text())["session_id"]
+        msgs = [c for c in stub.calls if c[0] == "POST" and c[1] == f"/sessions/{sent}/events"]
+        return msgs[-1][2]["events"][0]["content"][0]["text"]
+    stub.script = [[RUNNING, {"type": "agent.message", "content": [{"type": "text", "text": "one"}]}, IDLE]]
+    assert turn("first", "Rule A.") == "first"
+    sid = json.loads((tmp_path / ".harness" / "qoder" / "state.json").read_text())["session_id"]
+    assert turn("second", "Rule A.", sid) == "second", "unchanged instructions add nothing"
+    text = turn("third", "Rule B.", sid)
+    assert text.startswith("<system-reminder>") and text.endswith("third")
+    assert "Rule B." in text and "Rule A." not in text and "replace" in text
+    assert len(stub.posted("POST", "/sessions")) == 1, "the same session, continued"
+    assert turn("fourth", "Rule B.", sid) == "fourth", "told once per edit"
+
+
 def test_a_session_that_is_gone_is_reported_as_lost_and_a_new_one_is_made(tmp_path, stub):
     stub.script = [[RUNNING, {"type": "agent.message", "content": [{"type": "text", "text": "one"}]}, IDLE]]
     run_driver({"cwd": str(tmp_path), "prompt": "first"}, stub)
