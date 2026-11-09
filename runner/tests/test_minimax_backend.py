@@ -26,6 +26,7 @@ import tempfile
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import (Auth, BACKENDS, CHECKPOINT_EXCLUDE, _HERMES_RELAY, _MINIMAX_TOOLS,  # noqa: E402
                     _mcp_headers,
                     _agent_doc_path, _build_minimax, _failure_reason, _minimax_eof,
@@ -54,7 +55,7 @@ def _norm(lines):
 def _argv(d=None, **kw):
     d = d or tempfile.mkdtemp()
     env: dict = {}
-    cmd = _build_minimax("openai-api", Auth(api_key="sk-real-provider-key", base_url="https://up.example/v1"),
+    cmd = handed.build(_build_minimax, "openai-api", Auth(api_key="sk-real-provider-key", base_url="https://up.example/v1"),
                          "minimax/minimax-m3", "do it", d, env, **kw)
     return cmd, d, env
 
@@ -189,7 +190,8 @@ def test_argv_is_exec_stream_json_full_permission_and_the_custom_provider_select
     assert cmd[:6] == ["mcode", "exec", "--output-format", "stream-json", "--permission", "full"]
     assert cmd[cmd.index("--model") + 1] == "custom_provider:hr/minimax/minimax-m3"
     assert cmd[cmd.index("--max-steps") + 1] == "40"
-    assert cmd[-2:] == ["--", "do it"]          # a prompt starting with "-" stays the prompt
+    # read on stdin, from a file of the session's own: a prompt starting with "-" stays the prompt
+    assert "do it" not in cmd and "--" not in cmd and _handed(d) == ["do it"]
     assert "--session" not in cmd
 
 
@@ -280,6 +282,11 @@ def test_a_name_the_cli_does_not_know_disables_nothing_and_changes_nothing():
     assert _policy(tools_disabled=["WebSearch"])["agents"]["default"] == _policy()["agents"]["default"]
 
 
+def _handed(d) -> list[str]:
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
+
+
 def _store(d, sid=SID, keep_open=False):
     """The session table as 0.5.4 creates it (its leading columns), written the way the CLI writes
     it: WAL mode, and optionally with the writer still OPEN so the row lives only in the WAL."""
@@ -306,7 +313,6 @@ def test_a_session_the_store_holds_is_resumed_and_one_it_does_not_hold_is_never_
     _store(d)
     cmd, _, _ = _argv(d, resume_session_id=SID)
     assert cmd[cmd.index("--session") + 1] == SID
-    assert cmd.index("--session") < cmd.index("--")
     assert _resume_lost("minimax", cmd, SID, d) is None
     cmd, _, _ = _argv(d, resume_session_id="mvs_00000000000000000000000000000000")
     assert "--session" not in cmd

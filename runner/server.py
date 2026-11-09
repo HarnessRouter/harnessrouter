@@ -40,8 +40,7 @@ Backends + providers (registry-driven — pi was added as exactly that one entry
     - tokenrouter   : models.json, api by model family (claude -> anthropic-messages)
 
 Creds are injected per-session via env (pool secrets) or a body `auth` override for spikes.
-Phase 0b: buffered turn. SSE streaming, git hydrate/commit, mid-turn /input, and the Node
-Yjs sidecar layer on next.
+Phase 0b: buffered turn. SSE streaming, git hydrate/commit and mid-turn /input on next.
 """
 from __future__ import annotations
 
@@ -66,6 +65,7 @@ import signal
 import sys
 import contextlib
 import ctypes
+import select
 import socket
 import sqlite3
 import subprocess
@@ -73,6 +73,7 @@ import tempfile
 import hmac
 import pwd
 import stat
+import struct
 import threading
 import time
 import urllib.error
@@ -120,8 +121,8 @@ _SANDBOX_PER_SESSION = os.environ.get("HR_SANDBOX_PER_SESSION", "").strip().lowe
 # THE SESSION WRITE-WALL, the second deployment invariant, declared by the self-hosted entrypoint
 # (HR_SESSION_UIDS=1). One runner serves every session there, so "the session workspace" cannot be
 # a sandbox boundary the way it is on a per-session sandbox; it has to be a permission boundary.
-# The runner runs as root and every process that acts for a session (the agent CLI, its sidecar,
-# git, tar) runs as that session's OWN uid, which owns its session directory and nothing else:
+# The runner runs as root and every process that acts for a session (the agent CLI, git, tar)
+# runs as that session's OWN uid, which owns its session directory and nothing else:
 # the workspace root, the data volume, the product's processes and the shared scratch directories
 # belong to other uids. A deliverable written to "/tmp/X", to the workspace parent or into another
 # session's directory is then not lost and not stolen: it fails with EACCES at the write, the one
@@ -1075,6 +1076,9 @@ CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-5.5
 CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-6.1-sol")
 # Hermes default (the gateway maps friendly names to provider ids before the /turn call).
 HERMES_DEFAULT_MODEL = os.environ.get("HERMES_DEFAULT_MODEL", "gpt-6.1-sol")
+# The interpreter of the `hermes` the image installs (its venv's own first line): prompt_launcher.py runs
+# hermes's entry point in it, so the prompt is handed over by file, not on the command line.
+HERMES_PYTHON = os.environ.get("HR_HERMES_PYTHON", "/data/agent-tools/venv/bin/python3")
 # Pi default — pi is multi-family the same way hermes is; same reasoning, same default.
 PI_DEFAULT_MODEL = os.environ.get("PI_DEFAULT_MODEL", "gpt-6.1-sol")
 OPENCODE_DEFAULT_MODEL = os.environ.get("OPENCODE_DEFAULT_MODEL", "gpt-6.1-sol")
@@ -1117,55 +1121,6 @@ AZURE_OPENAI_BASE_URL = os.environ.get("AZURE_OPENAI_BASE_URL", "")
 # Hard wall-clock cap per turn — resource-abuse protection. A runaway/abusive run is killed
 # at this many seconds (default 6h). The agent finishing earlier ends the turn promptly.
 MAX_TURN_SECONDS = int(os.environ.get("MAX_TURN_SECONDS", "21600"))
-
-# ── Yjs blackboard sidecar (realtime co-edit; bridges a workspace file <-> a Hocuspocus room) ──
-# The sidecar is a Node child process baked into the image at /app/sidecar. It is (re)started per
-# session from /hydrate with the session's COLLAB_URL + room (passed as query params by the gateway).
-_SIDECAR_JS = "/app/sidecar/sidecar.mjs"
-_BLACKBOARD_REL = os.path.join(HARNESS_STATE, "BLACKBOARD.md")   # /workspace/.harness/BLACKBOARD.md
-_sidecars: dict[str, dict] = {}          # session id -> {proc, room, error}
-_sidecar_lock = threading.Lock()
-
-
-def _start_sidecar(sid: str, collab_url: str, room: str, token: str = "") -> None:
-    """(Re)start the blackboard sidecar for THIS session. Kill+respawn on every hydrate — a reused
-    warm-pool sandbox may carry a prior tenant's sidecar (same isolation reasoning as the /workspace
-    wipe). Best-effort: a sidecar failure must never affect the turn."""
-    ws = _ws(sid)
-    file = os.path.join(ws, _BLACKBOARD_REL)
-    with _sidecar_lock:
-        entry = _sidecars.setdefault(sid, {"proc": None, "room": None})
-        old = entry.get("proc")
-        if old is not None and old.poll() is None:
-            try:
-                old.terminate()
-            except Exception:  # noqa: BLE001
-                pass
-        if not (collab_url and room and os.path.exists(_SIDECAR_JS)):
-            entry.update(proc=None, room=None)
-            return
-        try:
-            # As the session: the blackboard and the log are in its tree, and a link it planted at either name,
-            # or at the folder holding them, leads nowhere it could not write itself. The log stays open for the
-            # sidecar, which runs as the session too.
-            with _fs_as(_session_uid(ws)):
-                pathlib.Path(file).parent.mkdir(parents=True, exist_ok=True)
-                if not pathlib.Path(file).exists():
-                    pathlib.Path(file).write_text("")
-                logf = open(os.path.join(ws, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
-            env = {**_child_env(), "COLLAB_URL": collab_url, "ROOM": room,
-                   "BLACKBOARD_FILE": file, "COLLAB_TOKEN": token or ""}
-            entry.update(proc=subprocess.Popen(["node", _SIDECAR_JS], cwd=ws, env=env,
-                                               stdout=logf, stderr=logf, **_as_session(ws)),
-                         room=room, error=None)
-        except Exception as e:  # noqa: BLE001
-            entry.update(proc=None, room=None, error=str(e)[:200])
-
-
-def _sidecar_alive(sid: str = "") -> bool:
-    p = (_sidecars.get(sid) or {}).get("proc")
-    return bool(p is not None and p.poll() is None)
-
 
 def _ver(cmd: list[str]) -> str:
     try:
@@ -3133,7 +3088,11 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
             # Claude Code appends /v1/messages itself — a base_url stored with /v1 (the
             # OpenAI-compat form) would double the segment and 404 every call.
             env["ANTHROPIC_BASE_URL"] = auth.base_url.rstrip("/").removesuffix("/v1")
-    cmd = ["claude", "-p", prompt, "--output-format", "stream-json",
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): `-p` is the print
+    # flag, and with no prompt argument Claude Code reads the prompt from stdin ("Input must be provided
+    # either through stdin or as a prompt argument when using --print").
+    _prompt_handover(cwd, prompt, stdin=True)
+    cmd = ["claude", "-p", "--output-format", "stream-json",
            "--verbose", "--dangerously-skip-permissions", "--max-turns", str(max_turns)]
     if partial:   # token-level streaming: emit content_block_delta events (see _claude_passthrough)
         cmd.append("--include-partial-messages")
@@ -3602,6 +3561,9 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
     # in the SAME workspace (files preserved) so a follow-up never hard-fails on a missing session.
     common = ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json",
               "-c", f"model={model}"]
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): a prompt of `-`
+    # is read from stdin, by `exec` and by `exec resume` alike (codex exec --help).
+    _prompt_handover(cwd, prompt, stdin=True)
     if resume_session_id:
         import glob as _glob
         rollouts = _glob.glob(str(cfg_dir / "sessions" / "**" / "*.jsonl"), recursive=True)
@@ -3616,10 +3578,10 @@ def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
             # the most-recent rollout here IS this conversation. Resume by --last instead of matching
             # the thread UUID to the rollout filename (that match is codex-version-fragile and missed
             # ~1/3 of the time). --last is exact here precisely because the home is session-isolated.
-            return ["codex", "exec", "resume", "--last", *common, prompt], ""
+            return ["codex", "exec", "resume", "--last", *common, "-"], ""
         print(f"[resume] codex: no rollout in workspace for {resume_session_id} — starting fresh", flush=True)
-        return ["codex", "exec", *common, "--cd", cwd, prompt], _CODEX_NO_ROLLOUT_NOTE
-    return ["codex", "exec", *common, "--cd", cwd, prompt], ""
+        return ["codex", "exec", *common, "--cd", cwd, "-"], _CODEX_NO_ROLLOUT_NOTE
+    return ["codex", "exec", *common, "--cd", cwd, "-"], ""
 
 
 # ── dsh (DeepSeek Harness) ──────────────────────────────────────────────────────
@@ -3989,7 +3951,9 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
             # (errbuf tail) instead of silently running a turn with no tools.
             print("[pi] MCP servers configured but pi-mcp-adapter not installed "
                   "(HR_PI_MCP_EXT unset or missing) — this turn runs without them", flush=True)
-    cmd.append(prompt)
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): pi reads piped
+    # stdin as the first message in every mode but rpc (readPipedStdin).
+    _prompt_handover(cwd, prompt, stdin=True)
     return cmd
 
 
@@ -4261,7 +4225,9 @@ def _build_omp(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env
         else:
             cmd += [f"--tools={','.join(enabled)}"]
     _omp_write_mcp(omp_agent_dir, mcp_servers)
-    cmd.append(prompt)
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): omp builds its first
+    # message from piped stdin (buildInitialMessage's stdinContent), as pi does.
+    _prompt_handover(cwd, prompt, stdin=True)
     return cmd
 
 
@@ -4391,6 +4357,228 @@ _HERMES_RELAY: dict = {"server": None, "port": 0, "routes": _RelayRoutes(), "loc
 # backend keeps its placeholder in. A context variable, so two turns being built at once never read
 # each other's.
 _TURN_THINKING: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_thinking", default=None)
+
+
+# ── the prompt, handed over by file or stdin, not on the command line ─────────────────────────
+# A process's command line is what `ps` lists (/proc/<pid>/cmdline), and a turn's prompt is the task's own
+# words, kept in the session's own files. So the CLI is not given the prompt as an argument: the builder writes
+# it to a file of the session's own (_prompt_handover), and the CLI reads it on stdin, or from that file's path
+# in its argv, or, for a Python CLI with neither, through prompt_launcher.py. The file is made 0600 by the
+# session's uid, in a 0700 folder of the session's own in its tmp/ (never checkpointed, never shown as
+# produced), and it is gone as soon as the CLI has it: a file read on stdin is removed before the CLI starts
+# (the CLI reads the open descriptor), one read by its path once the CLI has read it, and either, whatever
+# happens, when the turn ends. One per turn, held here for the turn's own thread (_run_turn_bg,
+# _run_hermes_bg).
+_TURN_PROMPT: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_prompt", default=None)
+PROMPT_LAUNCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_launcher.py")
+PROMPT_LAUNCHER_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_launcher.mjs")
+PROMPT_ARG = "{hr:prompt}"   # prompt_launcher.py's placeholder for the file's text
+PROMPT_DIR = ".hr-prompt"    # in the session's tmp/
+_IN_ACCESS, _IN_CLOSE_NOWRITE, _IN_DELETE_SELF, _IN_IGNORED = 0x1, 0x10, 0x400, 0x8000
+_IN_NONBLOCK, _IN_CLOEXEC = 0o4000, 0o2000000
+
+
+def _prompt_folder(cwd: str, uid: int | None) -> int:
+    """A descriptor of the folder a turn's prompt file is made in: tmp/.hr-prompt in the session's tree, a
+    folder of the session's own, 0700. Called as the session (_fs_as); each step is opened without following a
+    link, so the descriptor is of that folder and no other."""
+    tmp = os.path.join(cwd, "tmp")
+    where = os.path.join(tmp, PROMPT_DIR)
+    try:
+        os.makedirs(tmp, exist_ok=True)
+        tfd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            try:
+                os.mkdir(PROMPT_DIR, 0o700, dir_fd=tfd)
+            except FileExistsError:
+                pass
+            dfd = os.open(PROMPT_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=tfd)
+        finally:
+            os.close(tfd)
+    except OSError as e:
+        raise type(e)(e.errno, e.strerror, where) from e      # named by its place in the session's tree
+    try:
+        if uid is not None and os.fstat(dfd).st_uid != uid:
+            raise PermissionError(errno.EPERM, "not the session's own folder", where)
+        os.fchmod(dfd, 0o700)
+    except BaseException:
+        os.close(dfd)
+        raise
+    return dfd
+
+
+def _prompt_handover(cwd: str, text: str, stdin: bool | str = False) -> str:
+    """Write this turn's prompt to a new 0600 file of the session's own and return its path.
+
+    `stdin`: the CLI reads its prompt on stdin, from the descriptor kept for the turn's thread (_prompt_stdin),
+    and the file is removed at once: nothing of it stays on disk while the CLI runs. Otherwise the CLI is handed
+    the path, and the file goes as soon as the CLI has read it (_prompt_watch). Made O_EXCL|O_NOFOLLOW by the
+    session's uid, so a name planted in its tree leads nowhere.
+
+    `stdin="pipe"`: for a CLI that reads only a pipe on stdin, the prompt goes into one (_prompt_pipe) and no
+    file is made at all; the path is then ""."""
+    if stdin == "pipe":
+        return _prompt_pipe(cwd, text)
+    uid = _session_uid(cwd)
+    name = f"prompt-{uuid.uuid4().hex}"
+    path = os.path.join(cwd, "tmp", PROMPT_DIR, name)
+    with _fs_as(uid):
+        made_tmp = not os.path.lexists(os.path.join(cwd, "tmp"))
+        dfd = _prompt_folder(cwd, uid)
+        try:
+            fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                         dir_fd=dfd)
+        except BaseException:
+            os.close(dfd)
+            raise
+    held = _TURN_PROMPT.get()
+    try:
+        data = memoryview((text or "").encode())
+        while data:
+            data = data[os.write(fd, data):]
+        os.lseek(fd, 0, os.SEEK_SET)
+        if stdin or held is None:
+            if stdin:
+                with _fs_as(uid):
+                    os.unlink(name, dir_fd=dfd)
+                _prompt_folder_drop(cwd, uid, made_tmp)
+            if held is None:          # a builder called on its own: nothing to hand it to
+                os.close(fd)
+                os.close(dfd)
+                return path
+    except BaseException:
+        os.close(fd)
+        with _fs_as(uid), contextlib.suppress(OSError):
+            os.unlink(name, dir_fd=dfd)
+        os.close(dfd)
+        raise
+    _prompt_discard(held)     # one per turn
+    held.update(cwd=cwd, uid=uid, path=path, name=name, dfd=dfd, stdin=stdin, fd=fd, made_tmp=made_tmp)
+    if not stdin:
+        _prompt_watch(held)
+        held["fd"] = None
+        os.close(fd)
+    return path
+
+
+def _prompt_pipe(cwd: str, text: str) -> str:
+    """The prompt on stdin through a pipe: a thread of its own writes it and closes its end, so a prompt
+    longer than the pipe holds goes as the CLI reads. The thread ends with the reader: once the CLI and the
+    turn have closed theirs, a write left over fails and it stops."""
+    held = _TURN_PROMPT.get()
+    if held is None:              # a builder called on its own: nothing to hand it to
+        return ""
+    _prompt_discard(held)         # one per turn
+    r, w = os.pipe()              # both close on exec; Popen gives the CLI `r` as its stdin
+    data = (text or "").encode()
+
+    def feed() -> None:
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(w, view):]
+        except OSError:
+            pass                  # the reader went first
+        finally:
+            os.close(w)
+
+    threading.Thread(target=feed, name="prompt-pipe", daemon=True).start()
+    held.update(cwd=cwd, uid=_session_uid(cwd), path="", stdin=True, fd=r)
+    return ""
+
+
+def _prompt_folder_drop(cwd: str, uid: int | None, made_tmp: bool) -> None:
+    """Take the prompt folder away once it holds nothing, and tmp/ with it when the handover made it. A CLI
+    that shows the model its workspace tree (Qwen Code, Gemini CLI) lists what is there when it starts, and
+    the folder showed up in that tree (measured on recorded requests), where it was not before prompts were
+    handed over this way. Only an empty folder goes; as the session."""
+    if not cwd:
+        return
+    with _fs_as(uid):
+        try:
+            os.rmdir(os.path.join(cwd, "tmp", PROMPT_DIR))
+        except OSError:
+            return
+        if made_tmp:
+            with contextlib.suppress(OSError):
+                os.rmdir(os.path.join(cwd, "tmp"))
+
+
+def _prompt_watch(held: dict) -> None:
+    """For a CLI handed its prompt file by path: remove the file as soon as the CLI has read it, at the first
+    close that follows a read (inotify, on the file the descriptor names, so no path is looked up again).
+    Linux only; elsewhere, or when the CLI never reads it, the file goes when the turn ends (_prompt_discard)."""
+    if _LIBC is None or held.get("fd") is None:
+        return
+    ifd = _LIBC.inotify_init1(_IN_NONBLOCK | _IN_CLOEXEC)
+    if ifd < 0:
+        return
+    mask = _IN_ACCESS | _IN_CLOSE_NOWRITE | _IN_DELETE_SELF
+    if _LIBC.inotify_add_watch(ifd, f"/proc/self/fd/{held['fd']}".encode(), mask) < 0:
+        os.close(ifd)
+        return
+    stop = threading.Event()
+    name, dfd, uid = held["name"], held["dfd"], held["uid"]
+    cwd, made_tmp = held["cwd"], held.get("made_tmp", False)
+
+    def run() -> None:
+        seen_read = False
+        try:
+            while not stop.is_set():
+                if not select.select([ifd], [], [], 0.25)[0]:
+                    continue
+                try:
+                    buf = os.read(ifd, 4096)
+                except BlockingIOError:
+                    continue
+                off, done = 0, False
+                while off + 16 <= len(buf):
+                    _wd, ev, _cookie, size = struct.unpack_from("iIII", buf, off)
+                    off += 16 + size
+                    seen_read = seen_read or bool(ev & _IN_ACCESS)
+                    done = done or bool((seen_read and ev & _IN_CLOSE_NOWRITE) or ev & (_IN_DELETE_SELF | _IN_IGNORED))
+                if done:
+                    with _fs_as(uid), contextlib.suppress(OSError):
+                        os.unlink(name, dir_fd=dfd)
+                    _prompt_folder_drop(cwd, uid, made_tmp)
+                    return
+        finally:
+            os.close(ifd)
+
+    t = threading.Thread(target=run, name="prompt-watch", daemon=True)
+    t.start()
+    held["watch"] = (stop, t)
+
+
+def _prompt_stdin(held: dict | None):
+    """What the turn's CLI reads on stdin: its prompt file, or nothing. A CLI that reads stdin when it has
+    no prompt there must still never wait on the runner's own stdin."""
+    if held and held.get("stdin") and held.get("fd") is not None:
+        return held["fd"]
+    return subprocess.DEVNULL
+
+
+def _prompt_discard(held: dict | None) -> None:
+    """Close and remove the turn's prompt file: when the turn is over, or when it never started."""
+    if not held:
+        return
+    watch = held.pop("watch", None)
+    if watch:
+        watch[0].set()
+        watch[1].join(timeout=5)
+    fd = held.pop("fd", None)
+    if fd is not None:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+    dfd, name = held.pop("dfd", None), held.pop("name", None)
+    if dfd is not None:
+        if name:
+            with _fs_as(held.get("uid")), contextlib.suppress(OSError):
+                os.unlink(name, dir_fd=dfd)
+            _prompt_folder_drop(held.get("cwd") or "", held.get("uid"), held.get("made_tmp", False))
+        if not (watch and watch[1].is_alive()):       # never under a watcher still using it
+            os.close(dfd)
+    held.pop("path", None)
 
 
 # The caller's W3C trace context (#473), for the turn being built: {"traceparent": ..., "tracestate":
@@ -8780,6 +8968,13 @@ def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None,
     (qdir / "settings.json").write_text(json.dumps(cfg, indent=2))
 
 
+def _qwen_entry(env: dict) -> str:
+    """The script `qwen` runs, found on the turn's own PATH (the bin entry is a link to it), for
+    prompt_launcher.mjs to import; `qwen` itself when there is none to find."""
+    found = shutil.which("qwen", path=env.get("PATH") or os.environ.get("PATH"))
+    return os.path.realpath(found) if found else "qwen"
+
+
 def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                 tools_disabled: list[str] | None = None, own_memory_off: bool = False) -> list[str]:
@@ -8804,7 +8999,17 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     env["OPENAI_API_KEY"] = auth.api_key or ""
     env["OPENAI_BASE_URL"] = auth.base_url
     _qwen_settings(home, mcp_servers, tools_disabled, own_memory_off=own_memory_off)
-    cmd = ["qwen", "-p", prompt, "-o", "stream-json", "-m", model,
+    # The prompt is handed over by file, not on the command line (_prompt_handover). Qwen Code takes a
+    # typed prompt only as -p TEXT, so the CLI is started through prompt_launcher.mjs, which sets its argv
+    # in-process from the file: the command line names the file, never its text, and the CLI stores the
+    # user's message exactly as -p's was. Both other ways in change what it stores or tells the model
+    # (measured on recorded requests): plain stdin is stored as `${stdin}\n\n`, a blank line after every
+    # message, and a stream-json user message turns its system prompt into an interactive host's, which
+    # invites questions a turn cannot answer. QWEN_CODE_NO_RELAUNCH keeps the CLI in this process: a
+    # relaunch would start a child with the in-process argv on its command line.
+    env["QWEN_CODE_NO_RELAUNCH"] = "1"
+    cmd = ["node", PROMPT_LAUNCHER_JS, _prompt_handover(cwd, prompt), _qwen_entry(env), "-p", PROMPT_ARG,
+           "-o", "stream-json", "-m", model,
            # Resume REQUIRES an explicit auth type in non-interactive mode (verified on 0.22.1:
            # without it every -r run dies "No auth type is selected"); fresh runs take it too for
            # one deterministic path.
@@ -9235,8 +9440,11 @@ def _build_minimax(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
         cmd += ["--max-steps", str(int(max_turns))]
     if resume_session_id and _minimax_has_session(home, resume_session_id):
         cmd += ["--session", resume_session_id]
-    # `--` ends the options: a prompt that starts with "-" is still the prompt.
-    return cmd + ["--", prompt]
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): `--input -` is
+    # exec's one way to read it there (run-exec-command: "A prompt, --input -, or at least one --file is
+    # required"; measured on a stand-in turn, without it exec refuses).
+    _prompt_handover(cwd, prompt, stdin=True)
+    return cmd + ["--input", "-"]
 
 
 # ── grok ─────────────────────────────────────────────────────────────────────────────────────────
@@ -9483,8 +9691,9 @@ def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # always-applied workspace rules) and a resumed one reads none again: an edit is handed over
         # with the message (_PINNED_INSTRUCTIONS).
         prompt = _instructions_changed_note("AGENTS.md", instructions) + prompt
-    # `--single=<prompt>` so a prompt that begins with a dash is the prompt, not a flag (measured).
-    cmd = ["grok", f"--single={prompt}", "-m", _GROK_MODEL_KEY,
+    # The prompt is handed over by file, not on the command line (_prompt_handover): --prompt-file runs
+    # headless with the prompt read from the file, as -p/--single does with its argument.
+    cmd = ["grok", f"--prompt-file={_prompt_handover(cwd, prompt)}", "-m", _GROK_MODEL_KEY,
            "--output-format", "streaming-messages-json", "--always-approve"]
     # The runner owns the conversation id: -s names a NEW session (a uuid the store must not hold),
     # -r continues one the store holds. The init event reports it, and the gateway sends it back.
@@ -9916,7 +10125,10 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
         env["GOOGLE_GEMINI_BASE_URL"] = relay_base
         env["GEMINI_API_KEY"] = relay_tok
     _gemini_settings(home, mcp_servers, model, tools_disabled, own_memory_off=own_memory_off)
-    cmd = ["gemini", "-p", prompt, "-o", "stream-json", "-m", model,
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): with stdin not a
+    # terminal Gemini CLI runs headless and reads its prompt there (up to 8 MiB).
+    _prompt_handover(cwd, prompt, stdin=True)
+    cmd = ["gemini", "-o", "stream-json", "-m", model,
            # Load-bearing, same risk class as qwen's --yolo: gemini-cli gates tool use behind a
            # per-workspace "folder trust" prompt and an approval mode, neither of which can be
            # answered interactively in headless mode. --approval-mode=yolo is the current
@@ -10046,6 +10258,9 @@ def _cline_settings(home: pathlib.Path, base_url: str, api_key: str, model: str,
         gs.write_text(json.dumps(cur, indent=2))
 
 
+CLINE_STDIN_ARG = " "   # cline's prompt argument when the prompt is on stdin: see _build_cline
+
+
 def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                  resume_session_id: str | None = None,
                  mcp_servers: list[dict] | None = None,
@@ -10065,11 +10280,14 @@ def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)          # sessions/settings/db live INSIDE the checkpointed workspace
     _cline_settings(home, auth.base_url, auth.api_key or "", model, mcp_servers, tools_disabled)
-    # A prompt with no whitespace is parsed as a SUBCOMMAND ("Unknown command or unquoted
-    # prompt: hi") and `--` does not rescue it. A trailing newline does, verified on 3.0.60,
-    # and is invisible to the model.
-    if prompt and not any(ch.isspace() for ch in prompt):
-        prompt = prompt + "\n"
+    # The prompt is handed over on stdin, through a pipe, not on the command line (_prompt_handover).
+    # 3.0.60 reads stdin only after --json has insisted on a prompt argument ("JSON output mode requires
+    # a prompt argument or piped stdin", checked before stdin is read), and joins the two as
+    # `${argument}\n\n${stdin}`. So the argument is one space: it carries none of the task, and what the
+    # model reads is the prompt after a blank line. Its stdin read comes back empty from a file (measured
+    # on stand-in turns: "prompt cannot be empty"), so it gets a pipe. On the command line a prompt with
+    # no whitespace was parsed as a SUBCOMMAND ("Unknown command or unquoted prompt: hi").
+    _prompt_handover(cwd, prompt, stdin="pipe")
     # NO resume flag, deliberately. 3.0.60's `--json --id <session>` refuses every way of passing
     # a prompt (argument, =form, piped stdin — all verified individually, and the identical argv
     # without --id runs), so headless resume is unusable in this release. A follow-up turn starts
@@ -10078,7 +10296,7 @@ def _build_cline(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     # lights up here with no storage work.
     # `-z` (background hub daemon) must never be added: one process per turn is the runner's
     # execution model, and the hub is a resident service with its own update/restart lifecycle.
-    return ["cline", prompt, "--json", "--auto-approve", "true",
+    return ["cline", CLINE_STDIN_ARG, "--json", "--auto-approve", "true",
             "-c", cwd, "-P", "openai-compatible", "-m", model]
 
 
@@ -10472,8 +10690,20 @@ def _build_opencode(provider: str, auth: Auth, model: str, prompt: str, cwd: str
         # follow-up run.
         print(f"[resume] opencode: session {resume_session_id} not in this workspace — starting fresh",
               flush=True)
-    cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): `run` folds piped
+    # stdin into its message, as it is. Its message from arguments is quoted (_opencode_typed), and that is
+    # the form every conversation before this one stored, so the text on stdin takes it too.
+    _prompt_handover(cwd, _opencode_typed(prompt), stdin=True)
     return cmd
+
+
+def _opencode_typed(prompt: str) -> str:
+    """The user's message as `run` builds it from its message arguments (one argument, here): an argument
+    with a space in it is wrapped in double quotes, its own double quotes escaped (opencode's, mimo's and
+    kilo's run, `includes(" ")`). Measured on recorded requests: on stdin the text is taken as it is, so the
+    model would read every message after this change without the quotes it read on every one before,
+    and a conversation restored from its checkpoint would mix the two."""
+    return f'"{prompt.replace(chr(34), chr(92) + chr(34))}"' if " " in prompt else prompt
 
 
 # ── MiMo Code (XiaomiMiMo/MiMo-Code, npm @mimo-ai/cli, binary `mimo`) ────────────────────────
@@ -10577,7 +10807,12 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # would be wedged for good rather than for one turn.
         print(f"[resume] mimo: session {resume_session_id} not in this workspace — starting fresh",
               flush=True)
-    cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): `run` folds piped
+    # stdin into its message, as it is; in the quoted form its arguments make, as opencode's (_opencode_typed).
+    # Its run always joins `message + "\n" + stdin`, so with no message argument the stored text opens with
+    # the newline it used to end with; measured on recorded requests, that one newline is the only
+    # difference left, and no other way in keeps the message off the command line.
+    _prompt_handover(cwd, _opencode_typed(prompt), stdin=True)
     return cmd
 
 
@@ -10884,7 +11119,10 @@ def _build_kilo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # _resume_lost reads the missing --session and the reply says the history is gone.
         print(f"[resume] kilo: session {resume_session_id} not in this workspace — starting fresh",
               flush=True)
-    cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): `run` takes piped
+    # stdin as its message, as it is. Its message from arguments is quoted, as opencode's is, except after
+    # `--`, which is where a prompt starting with "-" went (buildRunMessage); stdin gets that same form.
+    _prompt_handover(cwd, prompt if prompt.startswith("-") else _opencode_typed(prompt), stdin=True)
     return cmd
 
 
@@ -11251,7 +11489,9 @@ def _build_goose(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     # Goose prefers the session's saved provider to config.yaml on resume. Override it on every
     # turn so a switch of connection uses the provider matching this turn's endpoint and key.
     cmd = ["goose", "run", "--output-format", "stream-json", "--model", model,
-           "-n", _GOOSE_SESSION_NAME, "-t", prompt, "--provider", goose_provider]
+           # The prompt is handed over by file, not on the command line (_prompt_handover): -i is
+           # goose's instruction file, read as -t's text would be.
+           "-n", _GOOSE_SESSION_NAME, "-i", _prompt_handover(cwd, prompt), "--provider", goose_provider]
     if max_turns:
         # The harness's step budget, which the gateway sends as max_turns (its max_step, default
         # 40). goose's own default is 1000, so without this the budget an operator set is ignored
@@ -12539,6 +12779,9 @@ _OPENSQUILLA_ANTHROPIC_KEY_ENV = "CUSTOM_ANTHROPIC_API_KEY"
 # beside its interpreter.
 OPENSQUILLA_BIN = os.environ.get("HR_OPENSQUILLA_BIN",
                                  "/data/agent-tools/opensquilla-venv/bin/opensquilla")
+# The interpreter OPENSQUILLA_BIN's own first line names: prompt_launcher.py runs the CLI's entry point in it.
+OPENSQUILLA_PYTHON = os.environ.get("HR_OPENSQUILLA_PYTHON",
+                                    os.path.join(os.path.dirname(OPENSQUILLA_BIN), "python3"))
 
 
 # The chat-routing directives OpenSquilla's models embed for its channel adapters:
@@ -12949,7 +13192,11 @@ def _build_opensquilla(provider: str, auth: Auth, model: str, prompt: str, cwd: 
             stale.unlink()
         except OSError:
             pass
-    cmd = [OPENSQUILLA_BIN, "agent", "-m", prompt,
+    # The prompt is handed over by file, not on the command line (_prompt_handover). `agent` takes it
+    # only as -m TEXT, so the CLI is started through prompt_launcher.py, which sets its argv in-process
+    # from the file: the command line names the file, never its text.
+    cmd = [OPENSQUILLA_PYTHON, PROMPT_LAUNCHER, _prompt_handover(cwd, prompt), "opensquilla.cli.main:app",
+           OPENSQUILLA_BIN, "agent", "-m", PROMPT_ARG,
            "--json", "--event-stream-stderr",
            "--workspace", cwd,
            # The sandbox is the trust boundary and nobody is attached to approve anything — the
@@ -14368,7 +14615,9 @@ def _build_vibe(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     # conversation.
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True, exist_ok=True)
-    cmd = [VIBE_BIN, "-p", prompt,
+    # The prompt is handed over by file, not on the command line (_prompt_handover): --prompt-file runs
+    # in programmatic mode with the prompt read from the file, as -p does with its argument.
+    cmd = [VIBE_BIN, "--prompt-file", _prompt_handover(cwd, prompt),
            # Without it a programmatic run ignores the project's AGENTS.md, which is where the
            # harness's whole workspace contract lives (measured; stderr says so).
            "--trust",
@@ -14718,7 +14967,12 @@ def _build_docker_agent(provider: str, auth: Auth, model: str, prompt: str, cwd:
            # that id, so there is no mapping to keep and no second identifier to lose.
            "--session", sid,
            "--session-db", str(_docker_agent_session_db(cwd)),
-           str(cfg), prompt]
+           str(cfg)]
+    # The prompt is handed over on stdin, not on the command line (_prompt_handover): with no message
+    # argument, `run` takes its message from stdin when stdin is not a terminal. Its --prompt-file adds a
+    # file to the agent's instructions and is not a message (measured on a stand-in turn: "no message
+    # provided and stdin is not a terminal").
+    _prompt_handover(cwd, prompt, stdin=True)
     return cmd
 
 
@@ -15778,7 +16032,20 @@ def _count_tool_calls(ev: dict, state: dict) -> int:
 def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
                  timeout_seconds: int | None = None, partial: bool = False,
                  max_turns: int | None = None, prompt: str = "",
-                 count_steps: bool = False) -> None:
+                 count_steps: bool = False, prompt_io: dict | None = None) -> None:
+    """A turn's CLI, from start to its last event. Its prompt file (_prompt_handover) is its stdin where
+    the CLI reads the prompt there, and is removed when the turn is over, however it ends."""
+    try:
+        _run_turn_proc(turn_id, cmd, env, cwd, normalize, model, timeout_seconds, partial, max_turns,
+                       prompt, count_steps, stdin=_prompt_stdin(prompt_io))
+    finally:
+        _prompt_discard(prompt_io)
+
+
+def _run_turn_proc(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, model: str,
+                   timeout_seconds: int | None = None, partial: bool = False,
+                   max_turns: int | None = None, prompt: str = "",
+                   count_steps: bool = False, stdin=subprocess.DEVNULL) -> None:
     rec = _turns[turn_id]
     rec["turn_id"] = turn_id
     state = {"model": model, "final": "", "partial": partial, "cwd": cwd, "started": time.time(),
@@ -15825,9 +16092,11 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
         # start_new_session: own process group so cancel/timeout can killpg the CLI AND its
         # shell children (see _kill_proc_tree) instead of orphaning a pipe-holding child.
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
-                                # NOTHING a turn runs may wait on stdin. Every CLI here is given
-                                # its prompt in argv, and the runner's own stdin is whatever the
-                                # container was started with — so a CLI that reads stdin anyway
+                                # NOTHING a turn runs may wait on stdin. A CLI that takes its
+                                # prompt there reads the turn's prompt file (_prompt_handover),
+                                # which ends; every other one gets nothing, never the runner's
+                                # own stdin, which is whatever the container was started with —
+                                # so a CLI that reads stdin anyway
                                 # blocks until the turn's wall-clock cap with no output at all.
                                 # MEASURED on vtcode 0.177.0 (2026-10-16): `vtcode exec --json
                                 # "<prompt>"` with an inherited stdin produced no events and made
@@ -15835,7 +16104,7 @@ def _run_turn_bg(turn_id: str, cmd: list[str], env: dict, cwd: str, normalize, m
                                 # argv with stdin closed answered in seconds. Isolated against the
                                 # two other suspects (its ripgrep / ast-grep installers), which
                                 # turned out to be irrelevant.
-                                stdin=subprocess.DEVNULL,
+                                stdin=stdin,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 start_new_session=True, **_as_session(cwd, env))
     except Exception as e:  # noqa: BLE001
@@ -16609,7 +16878,26 @@ def _hermes_msg_events(row: sqlite3.Row, state: dict) -> list[dict]:
 
 def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str, prompt: str,
                    resume_session_id: str | None, timeout_seconds: int | None,
-                   mcp_toolsets: list[str] | None = None) -> None:
+                   mcp_toolsets: list[str] | None = None, prompt_io: dict | None = None) -> None:
+    """A hermes turn. Its prompt file (_prompt_handover, made when the turn was built, or here when it was
+    not) is removed once read, and in any case when the turn is over, however it ends."""
+    try:
+        if not (prompt_io or {}).get("path"):
+            held = _TURN_PROMPT.set(prompt_io if prompt_io is not None else {})
+            try:
+                _prompt_handover(cwd, prompt)
+                prompt_io = _TURN_PROMPT.get()
+            finally:
+                _TURN_PROMPT.reset(held)
+        _run_hermes_proc(turn_id, cwd, env, model, provider, str(prompt_io["path"]), resume_session_id,
+                         timeout_seconds, mcp_toolsets)
+    finally:
+        _prompt_discard(prompt_io)
+
+
+def _run_hermes_proc(turn_id: str, cwd: str, env: dict, model: str, provider: str, prompt_path: str,
+                     resume_session_id: str | None, timeout_seconds: int | None,
+                     mcp_toolsets: list[str] | None = None) -> None:
     rec = _turns[turn_id]
     state: dict = {"final": ""}
     db_path = os.path.join(env["HERMES_HOME"], "state.db")
@@ -16647,15 +16935,19 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     #            snapshot (bounded by config mcp_discovery_timeout). A one-shot races discovery
     #            and runs without the MCP tools (verified live on 0.19.0).
     use_chat = bool(resume) or bool(mcp_toolsets)
+    # The prompt is handed over by file, not on the command line (_prompt_handover). Neither -z nor
+    # chat -q reads it from anywhere else, so hermes is started through prompt_launcher.py, which sets
+    # its argv in-process from the file: the command line names the file, never its text.
+    launch = [HERMES_PYTHON, PROMPT_LAUNCHER, prompt_path, "hermes_cli.main:main", "hermes"]
     if use_chat:
         # Final text + per-turn usage come from state.db (chat stdout carries banner noise).
-        cmd = ["hermes", "chat", "-q", prompt, "-Q", "--yolo", "--accept-hooks",
-               "--provider", provider, "--model", model]
+        cmd = launch + ["chat", "-q", PROMPT_ARG, "-Q", "--yolo", "--accept-hooks",
+                        "--provider", provider, "--model", model]
         if resume:
             cmd += ["-r", resume]
     else:
-        cmd = ["hermes", "-z", prompt, "--provider", provider, "--model", model,
-               "--usage-file", usage_path]
+        cmd = launch + ["-z", PROMPT_ARG, "--provider", provider, "--model", model,
+                        "--usage-file", usage_path]
     try:
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True, bufsize=1,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -16833,8 +17125,7 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
 # ── HTTP surface ─────────────────────────────────────────────────────────────────
 @app.get("/healthz")
 def healthz() -> dict:
-    return {"ok": True, "host": socket.gethostname(),
-            "sidecars": sum(1 for s in _sidecars if _sidecar_alive(s))}
+    return {"ok": True, "host": socket.gethostname()}
 
 
 @app.get("/backends")
@@ -17085,14 +17376,7 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         probe = request.query_params.get("probe", "")
         if probe and nbytes == 0:
             if _ws_holds(identifier, ws_path, probe):
-                collab_url = request.query_params.get("collab_url", "")
-                room = request.query_params.get("room", "")
-                if collab_url and room:
-                    _start_sidecar(identifier, collab_url, room,
-                                   request.query_params.get("collab_token", ""))
-                return {"ok": True, "skipped": True, "restored": False,
-                        "sidecar": _sidecar_alive(identifier),
-                        "room": (_sidecars.get(identifier) or {}).get("room")}
+                return {"ok": True, "skipped": True, "restored": False}
             return {"ok": True, "skipped": False}
         # Warm-pool sandboxes are REUSED across sessions, so /workspace may hold a PRIOR session's
         # files (incl. another tenant's). Wipe it before restoring so this session starts from
@@ -17116,15 +17400,8 @@ async def hydrate(request: Request, identifier: str = "") -> dict:
         except OSError:
             pass
     _git_ensure(ws)
-    # (Re)start the realtime blackboard sidecar for this session if the gateway passed a room.
-    collab_url = request.query_params.get("collab_url", "")
-    room = request.query_params.get("room", "")
-    if collab_url and room:
-        _start_sidecar(identifier, collab_url, room, request.query_params.get("collab_token", ""))
     n = sum(1 for p in pathlib.Path(ws).rglob("*") if ".git" not in p.parts)
-    return {"ok": True, "restored": restored, "bytes_in": nbytes, "files": n, "workspace": ws,
-            "sidecar": _sidecar_alive(identifier),
-            "room": (_sidecars.get(identifier) or {}).get("room")}
+    return {"ok": True, "restored": restored, "bytes_in": nbytes, "files": n, "workspace": ws}
 
 
 @app.get("/checkpoint")
@@ -17793,6 +18070,8 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
     running, may have registered routes that nothing would ever use."""
     tokens: list[str] = []
     _TURN_ROUTE_TOKENS.set(tokens)
+    prompt_io: dict = {}
+    prompt_tok = _TURN_PROMPT.set(prompt_io)   # the turn's thread is handed prompt_io itself
     started = False
     try:
         out = _start_turn(req, identifier)
@@ -17806,8 +18085,10 @@ def turn(req: TurnReq, identifier: str = "") -> dict:
         raise HTTPException(409, "a file in this task's workspace can't be written, so it can't go on. "
                                  "Start a new task.") from e
     finally:
+        _TURN_PROMPT.reset(prompt_tok)
         if not started:
             _relay_forget(tokens)
+            _prompt_discard(prompt_io)
 
 
 def _start_turn(req: TurnReq, identifier: str = "") -> dict:
@@ -18003,6 +18284,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                              max_turns=req.max_turns, mcp_servers=req.mcp_servers,
                                              vision_auth=req.vision_auth, own_memory_off=platform_memory,
                                              tools_disabled=req.tools_disabled)
+            _prompt_handover(cwd, req.prompt)    # read by prompt_launcher.py (_run_hermes_proc), here as the session
             if req.resume_session_id and doc_changed:
                 # Hermes then builds the prompt from AGENTS.md as it reads it, the trust of any new
                 # session reading its instruction file; no text of the runner's is said to replace it.
@@ -18269,13 +18551,15 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         threading.Thread(target=_routes_end_with_turn(_run_hermes_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cwd, env, model, hermes_provider, req.prompt,
                                req.resume_session_id, req.timeout_seconds, hermes_mcp),
+                         kwargs={"prompt_io": _TURN_PROMPT.get()},
                          daemon=True).start()
     else:
         threading.Thread(target=_routes_end_with_turn(_run_turn_bg, _TURN_ROUTE_TOKENS.get()),
                          args=(turn_id, cmd, env, cwd, spec["normalize"], model, req.timeout_seconds,
                                bool(req.partial_messages)),   # claude: CLI flag added above
                          kwargs={"max_turns": req.max_turns, "prompt": req.prompt or "",
-                                 "count_steps": backend in _GENERIC_STEP_BUDGET},
+                                 "count_steps": backend in _GENERIC_STEP_BUDGET,
+                                 "prompt_io": _TURN_PROMPT.get()},
                          daemon=True).start()
     cap = min(req.timeout_seconds, MAX_TURN_SECONDS) if req.timeout_seconds else MAX_TURN_SECONDS
     return {"turn_id": turn_id, "status": "running", "backend": backend, "model": model,

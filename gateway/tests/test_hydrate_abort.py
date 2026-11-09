@@ -30,7 +30,6 @@ def _wire(monkeypatch, statuses):
         return {"ws_sha": "abc123"}
     monkeypatch.setattr(gw, "_hydrate_relay", relay)
     monkeypatch.setattr(gw, "_vertex_get", vertex)
-    monkeypatch.setattr(gw, "COLLAB_URL", "")
     return calls
 
 
@@ -108,7 +107,6 @@ def test_a_relay_that_raises_is_tried_again_on_the_same_ladder_and_names_its_cau
         pass
     monkeypatch.setattr(gw, "_hydrate_relay", relay)
     monkeypatch.setattr(gw, "_vertex_get", vertex)
-    monkeypatch.setattr(gw, "COLLAB_URL", "")
     monkeypatch.setattr(gw.asyncio, "sleep", sleep)
     rec = {}
     asyncio.run(gw._hydrate("hsessx", rec, force=True))
@@ -137,7 +135,6 @@ def test_a_raise_without_a_checkpoint_is_not_retried_and_a_pool_refusal_reads_as
         pass
     monkeypatch.setattr(gw, "_hydrate_relay", relay)
     monkeypatch.setattr(gw, "_vertex_get", vertex)
-    monkeypatch.setattr(gw, "COLLAB_URL", "")
     monkeypatch.setattr(gw.asyncio, "sleep", sleep)
     rec = {}
     asyncio.run(gw._hydrate("hsessx", rec, force=True))

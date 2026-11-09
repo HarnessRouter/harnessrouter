@@ -8,22 +8,28 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import (Auth, _agent_doc_path, _build_gemini, _gemini_settings, _gemini_to_claude,  # noqa: E402
                     _gemini_usage, _norm_token_usage, BACKENDS, GEMINI_HELPER_ALIASES, GEMINI_MODELS, _HERMES_RELAY)
+
+
+def _handed(d) -> list[str]:
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
 
 
 def _argv(**kw):
     d = tempfile.mkdtemp()
     env: dict = {}
-    cmd = _build_gemini("google", Auth(api_key="AIza-t"), "gemini-3.6-flash", "do it", d, env, **kw)
+    cmd = handed.build(_build_gemini, "google", Auth(api_key="AIza-t"), "gemini-3.6-flash", "do it", d, env, **kw)
     return cmd, d, env
 
 
 def test_argv_is_headless_stream_json():
-    cmd, _, _ = _argv()
-    assert cmd[:3] == ["gemini", "-p", "do it"]
-    assert ["-o", "stream-json"] == cmd[3:5]
-    assert ["-m", "gemini-3.6-flash"] == cmd[5:7]
+    cmd, d, _ = _argv()
+    assert cmd[:3] == ["gemini", "-o", "stream-json"]
+    assert ["-m", "gemini-3.6-flash"] == cmd[3:5]
+    assert "-p" not in cmd and "do it" not in cmd and _handed(d) == ["do it"]   # read on stdin, headless
 
 
 def test_approval_and_trust_flags_present():

@@ -14,6 +14,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import _opencode_mcp, _opencode_to_claude, _opencode_usage_add  # noqa: E402
 
 SID = "ses_01hzz9k3"
@@ -187,18 +188,23 @@ import tempfile  # noqa: E402
 from server import Auth, _build_opencode  # noqa: E402
 
 
+def _handed(d) -> list[str]:
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
+
+
 def _argv(**kw):
     d = tempfile.mkdtemp()
     env: dict = {}
     auth = Auth(api_key="sk-test", base_url="https://relay.example/v1")
-    return _build_opencode("openai-api", auth, "gpt-5.4", "do it", d, env, **kw), d, env
+    return handed.build(_build_opencode, "openai-api", auth, "gpt-5.4", "do it", d, env, **kw), d, env
 
 
 def test_argv_is_a_headless_json_run():
-    cmd, _, _ = _argv()
+    cmd, d, _ = _argv()
     assert cmd[:4] == ["opencode", "run", "--format", "json"]
     assert "--model" in cmd and "hr/gpt-5.4" in cmd
-    assert cmd[-1] == "do it"
+    assert "do it" not in cmd and _handed(d) == ['"do it"']   # on stdin, in the quoted form run gives its arguments
 
 
 def test_argv_disables_plugins():
@@ -234,9 +240,9 @@ def test_resume_is_dropped_when_the_session_is_not_in_this_workspace():
     d = tempfile.mkdtemp()
     env: dict = {"HOME": d}          # no database at all: a recycled sandbox
     auth = Auth(api_key="sk-test", base_url="https://relay.example/v1")
-    cmd = _build_opencode("openai-api", auth, "gpt-5.4", "do it", d, env, resume_session_id="ses_gone")
+    cmd = handed.build(_build_opencode, "openai-api", auth, "gpt-5.4", "do it", d, env, resume_session_id="ses_gone")
     assert "--session" not in cmd and "ses_gone" not in cmd
-    assert cmd[-1] == "do it"        # the turn still runs
+    assert _handed(d) == ['"do it"']   # the turn still runs
 
 
 def test_resume_finds_a_session_still_sitting_in_the_write_ahead_log():
@@ -267,8 +273,8 @@ def test_the_real_key_stays_in_the_runner_and_never_enters_the_config_or_the_env
 def test_a_prompt_starting_with_a_dash_is_not_read_as_a_flag():
     d = tempfile.mkdtemp()
     auth = Auth(api_key="k", base_url="https://relay.example/v1")
-    cmd = _build_opencode("openai-api", auth, "gpt-5.4", "--version", d, {})
-    assert cmd[-2:] == ["--", "--version"]
+    cmd = handed.build(_build_opencode, "openai-api", auth, "gpt-5.4", "--version", d, {})
+    assert "--version" not in cmd and _handed(d) == ["--version"]   # on stdin it is only ever the prompt
 
 
 def test_opencode_instructions_go_to_agents_md_not_claude_md():

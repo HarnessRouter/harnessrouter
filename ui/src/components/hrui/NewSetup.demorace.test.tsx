@@ -15,6 +15,7 @@ jest.mock('@/lib/harness', () => ({
   oobDefaultModel: () => 'claude-sonnet',
   useBasesRead: () => ({ value: mockBases.value, failed: false, retry: () => {} }),
   useModelCatalogRead: () => ({ value: { models: ['claude-sonnet'] }, failed: false, retry: () => {} }),
+  promptSeenNote: () => null,
 }));
 jest.mock('@/lib/providers', () => ({ providerById: () => null, useModelProviders: () => ({ connectionFor: () => null, state: 'ready' }) }));
 jest.mock('@/components/HarnessLogo', () => ({ harnessLogoSrc: () => '' }));

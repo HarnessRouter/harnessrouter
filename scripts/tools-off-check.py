@@ -22,6 +22,12 @@ With --platform-memory the turn carries the platform's memories server (the stan
 switched off: what is left to read is whether the base's own memory is gone. --look-for names words
 to find anywhere in each request (a deferred tool is named in a request without being in its tools).
 
+With --prompt-route each base runs two turns in one session, a first and a continued one, each with
+words of its own in the prompt, and the instructions edited between them. Read per turn: its words
+reached the model request; the first turn's words are in the continued turn's request (the
+conversation went on); and no process's command line held the prompt's words or the edited
+instructions while the request was open (read as this script's user, another uid than the turn's).
+
 The turn is started on the runner directly (POST /turn), with the list the gateway would pass it: the
 gateway hands a harness's disabled_tools to the runner as they are stored (tools_disabled), so this
 is the same turn a harness starts, minus the gateway's routing. That is the point: on an instance
@@ -74,6 +80,7 @@ class Seen:
     lock = threading.Lock()
     calls: dict[str, list[dict]] = {}      # backend -> one record per model request
     look_for: tuple[str, ...] = ()
+    marks: list[str] = []                  # --prompt-route: each turn's own words, looked for everywhere
     mcp_hits = 0
 
 
@@ -81,6 +88,23 @@ MEMORIES_PATH = "/v1/mcp/memories"
 # The one tool the stand-in memories server lists: in a request, it is the proof the base reached the
 # server through its MCP configuration (look for it with --look-for).
 PROBE_TOOL = "stand_in_lookup"
+
+
+def on_command_lines(words: list[str]) -> list[str]:
+    """The processes whose command line holds any of `words`, read as this script's user: a command
+    line is what `ps` lists, unlike a process's environment or its files."""
+    hits: list[str] = []
+    for d in glob.glob("/proc/[0-9]*"):
+        try:
+            with open(f"{d}/cmdline", "rb") as fh:
+                raw = fh.read()
+        except OSError:
+            continue
+        found = [w for w in words if w.encode() in raw]
+        if found:
+            name = raw.split(b"\0", 1)[0].decode(errors="replace").rsplit("/", 1)[-1]
+            hits.append(f"{name} (pid {d.rsplit('/', 1)[-1]}): {', '.join(found)}")
+    return hits
 
 
 def tool_names(body: dict) -> list[str]:
@@ -151,7 +175,8 @@ def model_body(path: str, body: dict) -> tuple[str, bytes]:
     if path.endswith("/responses"):
         item = {"id": "msg_stand", "type": "message", "role": "assistant", "status": "completed",
                 "content": [{"type": "output_text", "text": "OK", "annotations": []}]}
-        done = {"id": "resp_stand", "object": "response", "status": "completed", "model": model, "output": [item],
+        # created_at: a client on the AI SDK refuses a response event without it (Type validation failed)
+        done = {"id": "resp_stand", "object": "response", "created_at": 1, "status": "completed", "model": model, "output": [item],
                 "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
         if not stream:
             return "application/json", json.dumps(done).encode()
@@ -216,12 +241,17 @@ class StandHandler(http.server.BaseHTTPRequestHandler):
             return
         body = body if isinstance(body, dict) else {}
         with Seen.lock:
+            marks = list(Seen.marks)
+        # read while the CLI that sent this waits for the answer, so it is alive to be read
+        held = on_command_lines(marks) if marks else []
+        with Seen.lock:
             Seen.calls.setdefault(backend, []).append({
                 "path": "/" + "/".join(path.strip("/").split("/")[1:]),
                 "tools": tool_names(body),
                 "block": BLOCK.encode() in raw,
                 "opening": opening(body),
-                "found": [w for w in Seen.look_for if w.encode() in raw]})
+                "found": [w for w in (*Seen.look_for, *marks) if w.encode() in raw],
+                "on_cmdline": held})
         ctype, data = model_body(path, body)
         self._send(200, ctype, data)
 
@@ -285,9 +315,10 @@ def call(method: str, path: str, headers: dict, body: dict | None = None, timeou
 
 
 def run_base(x: dict, stand: str, key: str, runner: str, made: list, disable: list[str],
-             baseline: bool = False, memory: bool = False) -> dict:
+             baseline: bool = False, memory: bool = False, prompt: str = "Reply OK.", ident: str = "",
+             resume: str = "", agent_doc: str = "", appserver: bool | None = None) -> dict:
     base, backend = x["id"], x.get("backend") or x["id"]
-    off = [] if baseline or (memory and not disable) else \
+    off = [] if baseline or (memory and not disable) or ident else \
         (disable or [str(t.get("name")) for t in (x.get("tools") or []) if isinstance(t, dict) and t.get("name")])
     # the stand-in tells the turns apart by the first segment of the path they call
     tag = backend + ("~baseline" if baseline else "")
@@ -300,16 +331,20 @@ def run_base(x: dict, stand: str, key: str, runner: str, made: list, disable: li
         # it under its own root, which it reads off the address (_gemini_channel); the stand-in is
         # named so, or the request would go to Google itself.
         base_url = f"{stand}/{tag}/api.tokenrouter.com/v1"
-    ident = f"tools-off-check-{backend}-{uuid.uuid4().hex[:10]}"
+    if not ident:
+        ident = f"tools-off-check-{backend}-{uuid.uuid4().hex[:10]}"
+    if ident not in made:
+        made.append(ident)
     hdr = {"x-harness-internal": key}
     body = {"backend": backend, "provider": PROVIDER.get(backend, "openai-api"), "model": model,
-            "prompt": "Reply OK.", "timeout_seconds": TURN_S - 30, "max_turns": 5,
+            "prompt": prompt, "timeout_seconds": TURN_S - 30, "max_turns": 5,
             "auth": {"api_key": f"tools-off-check-{uuid.uuid4().hex}", "base_url": base_url},
-            "tools_disabled": off, "agent_doc": "", "idempotency_key": uuid.uuid4().hex,
+            "tools_disabled": off, "agent_doc": agent_doc, "idempotency_key": uuid.uuid4().hex,
             "mcp_servers": ([{"name": "memories", "url": stand + MEMORIES_PATH, "transport": "http"}] if memory else []),
             # the gateway's default for codex on this image (HARNESS_CODEX_APPSERVER=1)
-            "codex_appserver": backend == "codex"}
-    made.append(ident)
+            "codex_appserver": backend == "codex" if appserver is None else appserver}
+    if resume:
+        body["resume_session_id"] = resume
     code, t = call("POST", f"/turn?identifier={ident}", hdr, body, origin=runner)
     if code != 200 or not t.get("turn_id"):
         row["error"] = f"turn {code}: {str(t.get('detail') or t.get('error'))[:120]}"
@@ -323,6 +358,7 @@ def run_base(x: dict, stand: str, key: str, runner: str, made: list, disable: li
         since = int(r.get("n_total") or since)
         if r.get("done"):
             row["status"] = str(r.get("status") or "")
+            row["session_id"] = str(r.get("session_id") or "")
             if r.get("error"):
                 row["error"] = str(r.get("error"))[:160]
             break
@@ -330,6 +366,30 @@ def run_base(x: dict, stand: str, key: str, runner: str, made: list, disable: li
         row["status"] = "timed out"
         call("POST", f"/turn/{tid}/cancel?identifier={ident}", hdr, {}, origin=runner)
     return row
+
+
+def prompt_route(x: dict, stand: str, key: str, runner: str, made: list) -> dict:
+    """A first and a continued turn in one session, each with words of its own, the instructions edited
+    in between; codex on its exec path, which is the one that takes the prompt from the runner."""
+    h = uuid.uuid4().hex[:8]
+    first, second, rules = f"first-{h}", f"second-{h}", f"rules-{h}"
+    with Seen.lock:
+        Seen.marks += [first, second, rules]
+    backend = x.get("backend") or x["id"]
+    ident = f"tools-off-check-{backend}-{uuid.uuid4().hex[:10]}"
+    one = run_base(x, stand, key, runner, made, [], prompt=f"Reply OK. Ref {first}.", ident=ident,
+                   agent_doc="Keep replies short.", appserver=False)
+    two = run_base(x, stand, key, runner, made, [], prompt=f"Reply OK again. Ref {second}.", ident=ident,
+                   resume=one.get("session_id") or "", agent_doc=f"Keep replies short. {rules}", appserver=False)
+    calls = Seen.calls.get(one["tag"]) or []
+    in_one = [c for c in calls if first in c["found"] and second not in c["found"]]
+    in_two = [c for c in calls if second in c["found"]]
+    held = sorted({proc for c in calls for proc in c["on_cmdline"]})
+    return {"base": x["id"], "first": one, "second": two, "requests": len(calls),
+            "reached": bool(in_one) and bool(in_two),
+            "continued": any(first in c["found"] for c in in_two),
+            "rules_in_request": any(rules in c["found"] for c in in_two),
+            "held": held}
 
 
 def offered_by(tag: str) -> list[str]:
@@ -371,6 +431,8 @@ def main() -> int:
     ap.add_argument("--platform-memory", action="store_true",
                     help="attach the platform's memories server; nothing switched off unless --disable names some")
     ap.add_argument("--look-for", default="", help="comma-separated words to find anywhere in each request")
+    ap.add_argument("--prompt-route", action="store_true",
+                    help="a first and a continued turn per base: the prompt reaches the model, off every command line")
     args = ap.parse_args()
 
     for _ in range(90):
@@ -398,21 +460,44 @@ def main() -> int:
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     stand = f"http://127.0.0.1:{srv.server_address[1]}"
     rows: list[dict] = []
+    checked: list[dict] = []
     try:
         disable = [t for t in args.disable.split(",") if t]
         Seen.look_for = tuple(w for w in args.look_for.split(",") if w)
         t0 = time.time()
-        work = [(x, False) for x in items] + ([(x, True) for x in items] if args.baseline else [])
-        print(f"turns: {len(work)}", flush=True)
-        with cf.ThreadPoolExecutor(max(1, args.jobs)) as ex:
-            done = list(ex.map(lambda w: run_base(w[0], stand, key, runner, made, disable, baseline=w[1],
-                                                  memory=args.platform_memory), work))
-        rows = [r for r in done if not r["tag"].endswith("~baseline")]
-        base_rows = {r["backend"]: r for r in done if r["tag"].endswith("~baseline")}
+        if args.prompt_route:
+            print(f"turns: {2 * len(items)}", flush=True)
+            with cf.ThreadPoolExecutor(max(1, args.jobs)) as ex:
+                checked = list(ex.map(lambda x: prompt_route(x, stand, key, runner, made), items))
+        else:
+            work = [(x, False) for x in items] + ([(x, True) for x in items] if args.baseline else [])
+            print(f"turns: {len(work)}", flush=True)
+            with cf.ThreadPoolExecutor(max(1, args.jobs)) as ex:
+                done = list(ex.map(lambda w: run_base(w[0], stand, key, runner, made, disable, baseline=w[1],
+                                                      memory=args.platform_memory), work))
+            rows = [r for r in done if not r["tag"].endswith("~baseline")]
+            base_rows = {r["backend"]: r for r in done if r["tag"].endswith("~baseline")}
         print(f"turns took {round(time.time() - t0)}s", flush=True)
     finally:
         left = cleanup(key, runner, made)
         srv.shutdown()
+    if args.prompt_route:
+        ok = True
+        for c in checked:
+            one, two = c["first"], c["second"]
+            good = c["reached"] and not c["held"]
+            ok = ok and good
+            print(f"{'ok' if good else 'CHECK':6} {c['base']:12} requests {c['requests']} | reached the model "
+                  f"{'yes' if c['reached'] else 'NO'} | on a command line {'NONE' if not c['held'] else 'YES'} "
+                  f"| continued {'yes' if c['continued'] else 'no'} | edited instructions in the request "
+                  f"{'yes' if c['rules_in_request'] else 'no'}", flush=True)
+            print(f"    first turn {one['status'] or '-'} {one['error'][:80]} | continued turn "
+                  f"{two['status'] or '-'} {two['error'][:80]} | resumed {'yes' if one.get('session_id') else 'no id'}",
+                  flush=True)
+            for h in c["held"]:
+                print(f"    held: {h}", flush=True)
+        print("cleanup: " + ("nothing left" if not left else "; ".join(left)), flush=True)
+        return 0 if ok and not left else 1
     for r in rows:
         v, offered, still, block = verdict(r)
         calls = Seen.calls.get(r["tag"]) or []
