@@ -543,7 +543,7 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
   return (
     <aside className="mt" aria-label="Records">
       <div className="mt-top">
-        <label className="mm-find">{SEARCH}<input value={q} placeholder={`Find in ${memory.name}`} aria-label={`Find in ${memory.name}`} autoComplete="off" spellCheck={false} onChange={(e) => setQ(e.target.value)} />
+        <label className="mm-find">{SEARCH}<input value={q} placeholder={`Find in ${shownName(memory)}`} aria-label={`Find in ${shownName(memory)}`} autoComplete="off" spellCheck={false} onChange={(e) => setQ(e.target.value)} />
           {q ? <button type="button" className="mt-clear" aria-label="Clear" onClick={() => setQ('')}>{X}</button> : null}</label>
         {filterItems.length ? (
           <button type="button" className={`icon-btn sm mm-plus mt-opens${gone ? ' mt-btn-on' : ''}`} aria-label={labelled ? 'Filter by label' : 'Filter by type'} title={labelled ? 'Filter by label' : 'Filter by type'} aria-haspopup="menu" aria-expanded={menu?.id === 'head:filter'}

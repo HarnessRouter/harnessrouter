@@ -15,7 +15,7 @@ import { toast } from '../toast';
 import { builtinOf, hasSchema, schemaLabels } from './caps';
 import { CardArt, Ghost, MiniArt } from './CardArt';
 import { concepts } from './graph/builtin';
-import { DOTS, engineOf, msOf, pool, PLUS, SEARCH, speaksUse, useDismiss, useProviders, X } from './parts';
+import { DOTS, engineOf, msOf, pool, PLUS, SEARCH, shownName, speaksUse, useDismiss, useProviders, X } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
 import { ChooseServiceSheet, NewMemorySheet, UseInSheet } from './sheets';
 import { vendorName } from './vendors';
@@ -178,7 +178,7 @@ export function MemoriesPage() {
     </div>
   );
   const tools = L.length && !loading && !failed ? (
-    <div className="mm-tools">
+    <div className="mm-ltools">
       <label className="mm-find mm-lfind">{SEARCH}<input type="search" value={q} placeholder={`Search ${L.length} ${L.length === 1 ? 'memory' : 'memories'}`} aria-label="Search memories" autoComplete="off" spellCheck={false} onChange={(e) => setQ(e.target.value)} />
         {q ? <button type="button" className="mt-clear" aria-label="Clear" onClick={() => setQ('')}>{X}</button> : null}</label>
       {dated ? (
@@ -192,7 +192,7 @@ export function MemoriesPage() {
     </div>
   ) : null;
   /** Use in, on a memory nothing uses yet and this person may give: beside the card, never inside its link. */
-  const useIn = (m: Memory) => (speaksUse(m) && !m.used_by?.length && m.privileges?.includes('write')
+  const useIn = (m: Memory) => (speaksUse(m) && !m.parent_id && !m.used_by?.length && m.privileges?.includes('write')
     ? <button type="button" className="btn small mm-usein" onClick={() => setOpen({ k: 'use', m })}>Use in…</button> : null);
 
   let body: React.ReactNode;
@@ -236,7 +236,7 @@ export function MemoriesPage() {
                   <span className="t with-mini">
                     <span className="mm-mini-box">{f ? <MiniArt {...pictureOf(f, p)} records={f.recent?.length ?? null} /> : null}</span>
                     <span className="mm-rn">
-                      <span className="mm-ct"><b>{m.name}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
+                      <span className="mm-ct"><b>{shownName(m)}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
                       <small className="sub2 mm-cp">{engineLine(m)}</small>
                       <UsedBy m={m} />
                     </span>
@@ -260,7 +260,7 @@ export function MemoriesPage() {
               <Link href={`/memories/${enc(m.id)}`} className="card mm-card">
                 <span className="mm-art"><CardArt {...pictureOf(f, p)} records={f?.recent?.length ?? null} recent={f?.recent} pending={!f} /></span>
                 <span className="mm-cb">
-                  <span className="mm-ct"><b>{m.name}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
+                  <span className="mm-ct"><b>{shownName(m)}</b>{p && !p.connected ? <span className="pill neutral">Not connected</span> : null}</span>
                   <span className="mm-cp">{engineLine(m)}</span>
                   <span className="mm-cd">{m.description || 'No description yet.'}</span>
                   <UsedBy m={m} />

@@ -182,6 +182,7 @@ describe('New memory: a name, a description if you like, and the engine chosen f
     expect(Array.from(page().querySelectorAll('[role=radiogroup] [role=radio] b')).map((b) => b.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight']);
     await act(async () => { (page().querySelector('[role=radiogroup]') as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); });
     const now = page().querySelector('[role=radiogroup] [aria-checked=true] b')?.textContent;
+    await press('Done');
     expect(chosen()).toBe(now);
     await press('Create');
     expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe(now?.toLowerCase());

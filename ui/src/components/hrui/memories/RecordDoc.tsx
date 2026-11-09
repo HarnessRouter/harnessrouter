@@ -22,7 +22,7 @@ import { toast } from '../toast';
 import {
   canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, kindOf, labelsOf, readOnlyNote, recordTypeOfSchemaKind, relText, schemaGuides, sentenceFirst,
 } from './caps';
-import { DOTS, HISTORY, Dot, whenOf } from './parts';
+import { DOTS, HISTORY, Dot, shownName, whenOf } from './parts';
 import { LiveTitle } from './editor/LiveTitle';
 import { useLiveRecord, useLiveText } from './editor/liveRecord';
 import { peerColor } from './editor/presence';
@@ -219,7 +219,7 @@ export function RecordDoc({ memory, provider, record, schema, setups, links, fol
     <>
       <div className="mm-doc-bar" ref={barPops}>
         <div className="mm-crumbs">
-          <span className="mm-cr">{memory.name}</span>
+          <span className="mm-cr">{shownName(memory)}</span>
           {crumbs.split('/').filter(Boolean).map((c, i) => <span key={i} className="mm-crw"><span className="mm-crs">/</span><span className="mm-cr">{c}</span></span>)}
         </div>
         {state?.people.length ? (

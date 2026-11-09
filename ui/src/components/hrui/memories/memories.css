@@ -519,6 +519,8 @@
 #hrui .am-pop .mm-mi:disabled{cursor:default}
 #hrui .am-pop .mm-mi:disabled:not(.on){opacity:.55}
 #hrui .am-pop .mm-mi.on b::after{content:" ✓";color:var(--accent)}
+#hrui .am-pop .mm-mi.on:disabled b{color:var(--fg)}#hrui .am-pop .mm-mi.on:disabled small{color:var(--muted)}
+#hrui .mm-eng .mm-kept-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px}
 /* Settings › Memory: the one switch, then the engine, the scope and the memory under it, then More */
 #hrui .am-rem .cap-row .grow small{white-space:normal;text-wrap:pretty}
 #hrui .am-facts{display:flex;flex-direction:column;gap:2px;margin:12px 0 0;padding:0 2px}
@@ -540,7 +542,7 @@
 #hrui .mm-more{width:40px;height:40px;border:1px solid var(--line);border-radius:999px;display:inline-grid;place-items:center;color:var(--muted)}
 #hrui .mm-more:hover,#hrui .mm-more[aria-expanded="true"]{color:var(--fg);background:var(--surface)}
 #hrui .mm-top .mm-pop{min-width:250px}
-#hrui .mm-tools{display:flex;align-items:center;gap:12px;margin:-8px 0 20px}
+#hrui .mm-ltools{display:flex;align-items:center;gap:12px;margin:-8px 0 20px}
 #hrui .mm-lfind{max-width:420px;padding:8px 12px;border-radius:12px}
 #hrui .mm-lfind input{font-size:14px}
 #hrui .mm-lfind input::-webkit-search-cancel-button{display:none}
@@ -608,7 +610,7 @@
   #hrui .mm-top .vm-seg{display:none}
   #hrui .mm-top .top-actions{gap:8px}
   #hrui .mm-top .top-actions .btn.primary{padding-left:14px;padding-right:14px}
-  #hrui .mm-tools{flex-wrap:wrap}
+  #hrui .mm-ltools{flex-wrap:wrap}
   #hrui .mm-lfind{max-width:none;flex-basis:100%}
   #hrui .mm-sort{margin-left:0}
   #hrui .am-facts>div{grid-template-columns:76px minmax(0,1fr)}

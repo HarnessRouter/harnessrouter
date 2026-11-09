@@ -20,7 +20,7 @@ import { toast } from '../toast';
 import { keepsLinks, kindOf, schemaLabels } from './caps';
 import { DataTab, type RecordsRead } from './DataTab';
 import { ago } from '../setups';
-import { BACK_IC, DOTS, engineOf, msOf, setupsOf, speaksUse, useDismiss, useProviders, useSetupNames } from './parts';
+import { BACK_IC, DOTS, engineOf, msOf, setupsOf, shownName, speaksUse, useDismiss, useProviders, useSetupNames } from './parts';
 import { ConnectSheet, RenameSheet, UseInSheet } from './sheets';
 import { useMemoryEvents, type MemoryEvent } from './editor/useMemoryEvents';
 import { useSchemaDoc } from './useSchemaDoc';
@@ -74,9 +74,7 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
   // data first, always: Schema is opened from More (or by its address)
   const tab: 'schema' | 'data' = tabParam === 'schema' || tabParam === 'labels' ? 'schema' : 'data';
   // the graph takes a column only where records link to each other, or when a person asks for it
-  // (an engine that finds the people and things in what it keeps links them by nature)
-  const linked = useMemo(() => provider?.graph?.entities === 'derived'
-    || (read.records || []).some((r) => (r.references || []).some((x) => x.available !== false)), [provider, read.records]);
+  const linked = useMemo(() => (read.records || []).some((r) => (r.references || []).some((x) => x.available !== false)), [read.records]);
   const [graphAsked, setGraphAsked] = useState(false);
   const [typeFilter, setTypeFilter] = useState('');
   // going to Schema and back opens the record that was open
@@ -160,7 +158,10 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
   const canRename = !!m.privileges?.includes('write'), canDelete = !!m.privileges?.includes('delete');
   const disconnected = provider ? provider.connected === false : true;
   // Use in: where the service gives a setup its memory (0.40), nothing uses this one yet, and this person may give it
-  const canUseIn = speaksUse(m) && !!users && !users.length && !!m.privileges?.includes('write');
+  // (a memory below another, a person's own among them, is reached through the one above it: never given on its own here)
+  const canUseIn = speaksUse(m) && !m.parent_id && !!users && !users.length && !!m.privileges?.includes('write');
+  // a memory with nothing in it offers Use in in the middle of the page, so the bar doesn't say it twice
+  const nothingHere = !!read.records && !read.records.length && !m.children?.count;
   const graphOn = linked || graphAsked;
   // the last failure, said until something works again after it
   const failedAt = msOf(m.last_error_at), okAt = msOf(m.last_ok_at);
@@ -172,12 +173,12 @@ export function MemoryPage({ id, tabParam, recordParam, onTab }: { id: string; t
         <div className="ag-lft">
           <Link className="ag-back" href="/memories" aria-label="Back to Memories" title="Memories">{BACK_IC}</Link>
           <div className="ag-ident">
-            <div className="ag-l1"><h1 className="ag-name" title={m.name}>{m.name}</h1><span className="pill neutral">{vendorName(engineOf(m))}</span></div>
+            <div className="ag-l1"><h1 className="ag-name" title={m.name}>{shownName(m)}</h1><span className="pill neutral">{vendorName(engineOf(m))}</span></div>
           </div>
         </div>
         <div className="ag-right mm-rights">
           {tab === 'schema' ? <button type="button" className="btn small line" onClick={() => onTab('data')}>Back to data</button> : null}
-          {canUseIn && tab === 'data' ? <button type="button" className="btn small line mm-usein-h" onClick={() => setSheet('use')}>Use in…</button> : users && tab === 'data' ? (
+          {canUseIn && tab === 'data' ? (nothingHere ? null : <button type="button" className="btn small line mm-usein-h" onClick={() => setSheet('use')}>Use in…</button>) : users && tab === 'data' ? (
             <div className="mm-right" ref={usersWrap}>
               <button type="button" className="btn small line" aria-expanded={pop === 'users'} onClick={openUsers}>{users.length ? `Used by ${plural(users.length, 'setup')}` : 'Not used yet'}</button>
               {pop === 'users' ? (

@@ -144,7 +144,7 @@ describe('data comes first; the schema is under More, and says what this provide
     await draw();
     expect(page().querySelector('.ag-tabs')).toBeNull();
     expect(page().querySelector('.mm-data')).toBeTruthy();
-    expect(await moreItems()).toEqual(['Schema', 'Copy memory ID', 'Rename and describe', 'Delete memory']);
+    expect(await moreItems()).toEqual(['Schema', 'Show graph', 'Copy memory ID', 'Rename and describe', 'Delete memory']);
     await fromMore('Schema');
     expect(onTab).toHaveBeenCalledWith('schema');
   });
@@ -203,8 +203,12 @@ describe('the columns: everything it holds, the open record, and the graph where
     await fromMore('Hide graph');
     expect(page().querySelector('.graph-stub')).toBeNull();
   });
-  test('an engine that finds the people and things in what it keeps always has its graph', async () => {
+  test('an engine that finds people and things still shows no graph until something links (Richard 11-09)', async () => {
     open({ provider: CAPS.graphiti, records: [record({ id: 'r', title: 'Mine' })] });
+    await draw();
+    expect(page().querySelector('.graph-stub')).toBeNull();
+    await act(async () => { root.unmount(); }); root = createRoot(el);
+    open({ provider: CAPS.graphiti, records: [linking({ id: 'r', title: 'Mine' })] });
     await draw();
     expect(page().querySelector('.graph-stub')).toBeTruthy();
   });
@@ -267,7 +271,7 @@ describe('a derived record', () => {
     expect(editable()?.textContent).toBe('Mine');
   });
   test('a fact with no title leads with its text, its word comes second, and RELATES_TO reads as related to', async () => {
-    const f = found({ title: '', content: [{ type: 'text', text: 'Dana reports to Sam at Acme.' }], attributes: { predicate: 'RELATES_TO' }, references: [] });
+    const f = found({ title: '', content: [{ type: 'text', text: 'Dana reports to Sam at Acme.' }], attributes: { predicate: 'RELATES_TO' }, references: [{ rel: 'RELATES_TO', record_id: 'e', available: true }] });
     open({
       provider: CAPS.graphiti, records: [f],
       graph: {
@@ -330,7 +334,7 @@ describe('an action a provider does not serve is not shown', () => {
     expect(editable()).toBeNull();
     expect(editorReadOnly()).toBe('true');
     expect(page().querySelector('.mm-doc-bar button[aria-label="More"]')).toBeNull();
-    expect(await moreItems()).toEqual(['Schema', 'Copy memory ID']);
+    expect(await moreItems()).toEqual(['Schema', 'Show graph', 'Copy memory ID']);
   });
   test('what could not be erased is said', async () => {
     const s = open({ provider: CAPS.mem0, records: [mine], extra: { 'POST /v1/memories/hmem_1/erase': { erased: ['r'], unreachable: ['r'] } } });
@@ -382,6 +386,7 @@ describe('links', () => {
     });
     await draw('data');
     expect(page().textContent).not.toContain('no relations in the schema');
+    await fromMore('Show graph');
     await click(button('Link a record'));
     expect(page().querySelector('input[aria-label="How they relate"]')).toBeTruthy();
     await click(button('Link'));

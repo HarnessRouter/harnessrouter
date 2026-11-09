@@ -177,7 +177,10 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
       <form className="mm-new-f" noValidate onSubmit={(e) => { e.preventDefault(); void go(); }}>
         <NameFields nameId="mmCrName" descId="mmCrDesc" name={name} desc={desc} onName={setName} onDesc={setDesc} focus optional />
         <div className="set-f mm-eng">
-          <span className="set-lb" id="mmCrEng">Engine</span>
+          <div className="mm-kept-h">
+            <span className="set-lb" id="mmCrEng">Engine</span>
+            {sel && open.length > 1 ? <button type="button" className="link-q inl" aria-expanded={changing} aria-controls="mmCrEngs" onClick={() => setChanging(!changing)}>{changing ? 'Done' : 'Change'}</button> : null}
+          </div>
           {failed ? (
             <p className="mm-err" role="alert">The engines could not be read just now. <button type="button" className="link-q inl" onClick={retry}>Try again</button></p>
           ) : !providers ? (
@@ -186,10 +189,11 @@ export function NewMemorySheet({ providers, failed, retry, picked, onClose, onCr
             <p className="set-help mm-eng-none">No engine is connected yet. {onConnect ? <button type="button" className="link-q inl" onClick={onConnect}>Connect an engine</button> : null}</p>
           ) : (
             <>
-              <div className="mm-eng-now" aria-labelledby="mmCrEng">
-                <span className="grow"><b>{vendorName(sel.id)}</b>{why ? <small>{why}</small> : null}</span>
-                {open.length > 1 ? <button type="button" className="link-q inl" aria-expanded={changing} aria-controls="mmCrEngs" onClick={() => setChanging(!changing)}>{changing ? 'Done' : 'Change'}</button> : null}
-              </div>
+              {changing ? null : (
+                <div className="mm-eng-now" aria-labelledby="mmCrEng">
+                  <span className="grow"><b>{vendorName(sel.id)}</b>{why ? <small>{why}</small> : null}</span>
+                </div>
+              )}
               {changing ? (
                 <div className="mm-prov mm-eng-list" id="mmCrEngs" role="radiogroup" aria-labelledby="mmCrEng" onKeyDown={onKey}>
                   {open.map((p) => (
