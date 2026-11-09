@@ -643,3 +643,12 @@
 #hrui .mm-props a.mm-pv{color:var(--accent);text-decoration:none}
 #hrui .mm-props .mm-tags{margin:10px 0 0}
 @media (max-width:560px){#hrui .mm-prow{grid-template-columns:minmax(0,1fr);gap:2px;min-height:0;padding:5px 0}#hrui .mm-pnote{grid-column:1;margin:0}}
+
+/* a memory's Settings tab: one column of its own sections, as a setup's Settings, Memory */
+#hrui .mm-settings{flex:1;min-height:0}
+#hrui .mm-set-col{max-width:720px;margin:0 auto;padding:20px 24px 64px;box-sizing:border-box}
+#hrui .mm-set-id{margin-top:14px}
+#hrui .mm-set-idv{display:flex;align-items:center;gap:6px;min-width:0}
+#hrui .mm-set-idv code{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+#hrui .mm-set-v{margin:0;font-size:14px;color:var(--fg);overflow-wrap:anywhere}
+@media (max-width:560px){#hrui .mm-set-col{padding:14px 16px 48px}}
