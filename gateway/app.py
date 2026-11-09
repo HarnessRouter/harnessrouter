@@ -12918,7 +12918,9 @@ async def _session_shared(sid: str) -> bool:
 async def workspace_by_path(harness_id: str, sid: str, path: str) -> Response:
     """Canonical artifact URL: /{harness}/{session}/workspace/{path}. Access is one fresh
     session-level check: is the session shared? (The console BFF maps its same-shaped route
-    here.) harness_id is part of the address, not the auth — the sid is the lookup key."""
+    here for anyone it cannot vouch for; a self-hosted console's signed-in member goes to /a/
+    instead, #594.) harness_id is part of the address, not the auth — the sid is the lookup key.
+    This route never reads a caller: a sign-in sent here changes nothing."""
     if not await _session_shared(sid):
         raise HTTPException(404, "file not found")
     return await _serve_workspace_path(sid, path, public=True)
@@ -12926,11 +12928,13 @@ async def workspace_by_path(harness_id: str, sid: str, path: str) -> Response:
 
 @app.get("/a/{sid}/{path:path}")
 async def artifact_by_path(sid: str, path: str, request: Request) -> Response:
-    """Authenticated artifact-by-path: org members open workspace files directly (inline)."""
-    p = await _principal(request)
-    v = await _vertex_get(sid)
-    if not v or str(v.get("tenant") or "") != p.get("org") or not _scope_keeps(p, v.get("workspace")):
-        raise uhp_error(404, "session_not_found", "No session with that id.", "session_id")
+    """Authenticated artifact-by-path: org members open workspace files directly (inline).
+
+    The same check as the content route beside it (_owned_session), not a copy of part of it: this
+    route checked the organization and the workspace and stopped, so a deleted task's files went on
+    opening here while GET /v1/containers/{sid}/files/{id}/content refused them. The console's reply
+    links read here now (#594), so the two signed-in addresses answer alike."""
+    await _owned_session(request, sid)
     return await _serve_workspace_path(sid, path)
 
 
