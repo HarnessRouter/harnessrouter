@@ -459,3 +459,17 @@ test('a long name truncates and keeps its whole self as a title', async () => {
   await mount(t.props);
   expect(row(long).getAttribute('title')).toBe(long);
 });
+
+test('a standing instruction says so on its row; one an agent set says agents get it as a note; what an engine drew says nothing', async () => {
+  const t = open({ records: [
+    record({ id: 'a', title: 'Quote in euros', attributes: { standing: true }, written_by: { kind: 'member', id: 'ada@example.com', type: 'human' } }),
+    record({ id: 'b', title: 'Be brief', attributes: { standing: true }, written_by: { kind: 'member', id: 'chrn_desk', type: 'agent' } }),
+    record({ id: 'c', title: 'Plain note' }),
+    record({ id: 'd', title: 'Drawn', type: 'fact', attributes: { standing: true }, written_by: { kind: 'provider', id: 'x' }, references: [{ rel: 'derived_from', record_id: 'e', available: true }] }),
+  ] });
+  await mount(t.props);
+  expect(row('Quote in euros').querySelector('.mt-stand')?.textContent).toBe('Standing');
+  expect(row('Be brief').querySelector('.mt-noted')?.textContent).toBe('Noted by an agent as standing');
+  expect(row('Plain note').querySelector('.mt-stand, .mt-noted')).toBeNull();
+  expect(row('Drawn').querySelector('.mt-stand, .mt-noted')).toBeNull();
+});
