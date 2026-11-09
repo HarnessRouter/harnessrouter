@@ -2910,8 +2910,21 @@ def _branch_point_key(rid: str) -> str:
     return f"branch-points/{rid}.json"
 
 
-async def _branch_point_put(sid: str, rec: dict, response_id: str, git_commit: str, ws_sha: str) -> None:
-    """The commit an end-of-turn checkpoint closed on, kept as the response's branch point.
+# The point a record from before records carried their own (`_branch_point`) was answered with by
+# the store (_branch_point_of), None for none: read once per replica, not at every read of the turns.
+# Such a record has ended, and its point is written before its end and removed only with it, so the
+# answer holds; it is forgotten whenever the record (_resp_cache_forget) or the point is written here.
+_BRANCH_SEEN: "collections.OrderedDict[str, dict | None]" = collections.OrderedDict()
+
+
+def _branch_seen_forget(rid: str) -> None:
+    _BRANCH_SEEN.pop(rid, None)
+
+
+async def _branch_point_put(sid: str, rec: dict, response_id: str, git_commit: str, ws_sha: str) -> dict | None:
+    """The commit an end-of-turn checkpoint closed on, kept as the response's branch point. Answers
+    the point once it is kept, None when there is none: the turn's record carries the answer as
+    `_branch_point` (_branch_point_of), so a branch, and a session's turns, read it from there.
 
     Only the point: the runner checks it against the HEAD of the checkpoint it is given, so no
     copy of the session's latest commit is kept in step with the tarball (one was, written after
@@ -2921,19 +2934,23 @@ async def _branch_point_put(sid: str, rec: dict, response_id: str, git_commit: s
     turn's end reads nothing back from the store for it. Optional: a failure is recorded on the
     turn's record, never raised, since the durable checkpoint has already succeeded. A runner that
     sends no full commit (one from before branching) leaves no point, and a branch from this
-    response is then branch_unavailable."""
+    response is then branch_unavailable. The point is kept in the store as well as on the record: a
+    record from before the record carried it is answered from the store (_branch_point_of)."""
     if not re.fullmatch(r"[0-9a-f]{40}", git_commit or ""):
-        return
+        return None
     point = {"commit": git_commit, "ws_sha": ws_sha, "session_id": sid,
              "response_id": response_id, "backend": rec.get("backend") or ""}
+    _branch_seen_forget(response_id)
     try:
-        if not await _blob_put(_branch_point_key(response_id), json.dumps(point).encode(), kb=RESP_BLOB_KB):
-            rec["branch_checkpoint_unavailable"] = True
+        if await _blob_put(_branch_point_key(response_id), json.dumps(point).encode(), kb=RESP_BLOB_KB):
+            return point
     except Exception:  # noqa: BLE001
-        rec["branch_checkpoint_unavailable"] = True
+        pass
+    rec["branch_checkpoint_unavailable"] = True
+    return None
 
 
-async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_id: str = "") -> None:
+async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_id: str = "") -> dict | None:
     """Pull the committed /workspace from the sandbox and persist it to durable blob storage.
 
     `mid_turn`: taken after a tool step while the turn runs (_step_checkpoint_maybe, #505). It does
@@ -2943,7 +2960,9 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_i
 
     `response_id`: the turn this end-of-turn checkpoint closes. Its commit is saved as that
     response's branch point (Sessions §1.1). A mid-turn checkpoint never saves one: it commits
-    nothing, and the turn has not ended."""
+    nothing, and the turn has not ended. Answers the branch point it kept, None when it kept none
+    (a mid-turn checkpoint, a skipped or failed one, a runner that sends no full commit)."""
+    point = None
     if not mid_turn:
         await _step_checkpoint_settle(sid)
     _ws_tar_evict(sid)             # workspace changed — next file open refetches
@@ -2955,7 +2974,7 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_i
         # the good durable blob from it would destroy the user's work. Skip the checkpoint entirely.
         if rec.get("hydrate_failed_with_checkpoint"):
             rec["checkpoint_skipped_hydrate_failed"] = True
-            return
+            return None
         # Fence backstop (HR-INF-012): if a NEWER turn has taken the session lease, THIS turn's
         # workspace is superseded — writing it would clobber the newer turn's checkpoint
         # (last-writer-wins). Checked BEFORE the relay so a superseded turn doesn't even pull the
@@ -2967,7 +2986,7 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_i
                     print(f"[lease] stale checkpoint sid={sid} mode={LEASE_MODE} fence={_fence}", flush=True)
                     if LEASE_MODE == "enforce":
                         rec["checkpoint_skipped_stale"] = True
-                        return
+                        return None
             except Exception:  # noqa: BLE001
                 pass
         # Stream runner tar -> VG blob without buffering the whole workspace (HR-INF-015).
@@ -2985,11 +3004,12 @@ async def _checkpoint(sid: str, rec: dict, mid_turn: bool = False, *, response_i
                                            "ws_sha": ws_sha,
                                            "ws_mid_turn_at": str(taken_at) if mid_turn else ""})
                 if response_id and not mid_turn:
-                    await _branch_point_put(sid, rec, response_id, git_commit, ws_sha)
+                    point = await _branch_point_put(sid, rec, response_id, git_commit, ws_sha)
             else:
                 rec["checkpoint_error"] = "durable workspace upload failed; ws_sha not advanced"
     except Exception as e:  # noqa: BLE001
         rec["checkpoint_error"] = str(e)[:200]
+    return point
 
 
 # ── checkpoints while a turn runs (#505) ──────────────────────────────────────────
@@ -3485,7 +3505,7 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
     await _browser_close(sid, "turn_end")
     # Saved before the answer completes, as on the primary path: whether a file too large to
     # attach is in the task's files is known only once the save has landed (_too_large_saved).
-    await _checkpoint(sid, rec, response_id=resp_id)
+    translator.ended_checkpoint(await _checkpoint(sid, rec, response_id=resp_id))
     try:
         _too_large_saved(produced, rec)
         # Translate for the wire, the same way the persist just below does: `rec["status"]` holds
@@ -3506,7 +3526,8 @@ async def _adopt_orphan_turn(sid: str, org: str, v: dict) -> bool:
         full_output = await _replay_output_from_trace(base, resp_id, model, since_ms=turn_since_ms)
         stored = {**translator._response_obj(_status), "_session_id": sid, "_org": org,
                   "_member": member, "_input": (_orig_rec or {}).get("_input") or [],
-                  "_backend": (_orig_rec or {}).get("_backend") or rec.get("backend") or ""}
+                  "_backend": (_orig_rec or {}).get("_backend") or rec.get("backend") or "",
+                  **translator.branch_mark()}
         if _status == "incomplete" and translator.input_request:
             # the question the turn ended on, for the answer to be checked against (§3.2)
             stored["_pending_input"] = translator.pending_input()
@@ -7391,6 +7412,12 @@ class _RespTranslator:
                  sid: str = "", ignored: list[str] | None = None):
         self.resp_id, self.model, self.prev, self.store, self.created_at = resp_id, model, prev, store, created_at
         self.branched_from = ""
+        # The branch point the turn's end-of-turn checkpoint kept (Sessions §1.1), or None when it
+        # kept none; known only once that checkpoint has run (ended_checkpoint). The stored record
+        # carries it from then on (branch_mark), so whether the response can be branched is read
+        # from the record itself (_branch_point_of).
+        self.branch_point: dict | None = None
+        self.branch_point_known = False
         self.sid = sid   # surfaced in response.metadata so the client can highlight/track the session
         # Request fields we accepted and did not act on (tasks.md 1.1). `tools` and `include` are
         # reserved and ignored (1.4), and ignoring has to be observable: a silently dropped field
@@ -7448,6 +7475,16 @@ class _RespTranslator:
         e = {"type": type_, "sequence_number": self.seq, **f}
         self.seq += 1
         return e
+
+    def ended_checkpoint(self, point: dict | None) -> None:
+        """The turn's end-of-turn checkpoint has run, and kept `point` (None: no branch point)."""
+        self.branch_point, self.branch_point_known = point, True
+
+    def branch_mark(self) -> dict:
+        """What the stored record says of its branch point: `_branch_point`, the point or None, once
+        the end-of-turn checkpoint has run; nothing before (a running turn, a turn that never
+        reached it), which _branch_point_of answers from the store."""
+        return {"_branch_point": self.branch_point} if self.branch_point_known else {}
 
     def _response_obj(self, status: str) -> dict:
         meta: dict = {}
@@ -9882,6 +9919,7 @@ _RESP_CACHE_MAX = 4000
 
 def _resp_cache_forget(rid: str) -> None:
     _RESP_CACHE.pop(rid, None)
+    _branch_seen_forget(rid)
 
 
 async def _resp_get(rid: str, *, strict: bool = False) -> dict | None:
@@ -10097,6 +10135,59 @@ def _branch_origin(value) -> dict:
     return {}
 
 
+# A response can be branched from once its turn has ended, however it ended (Sessions §1.1).
+_BRANCH_FROM_STATUS = frozenset({"completed", "failed", "cancelled", "incomplete"})
+
+
+def _branch_ended(rec: dict) -> bool:
+    return _UHP_STATUS.get(str(rec.get("status"))) in _BRANCH_FROM_STATUS
+
+
+def _branch_point_valid(point, rid: str, sid: str) -> dict | None:
+    """`point` when it is response `rid`'s branch point in session `sid`, on a full commit; else None."""
+    if (isinstance(point, dict) and point.get("response_id") == rid and point.get("session_id") == sid
+            and isinstance(point.get("commit"), str) and re.fullmatch(r"[0-9a-f]{40}", point["commit"])):
+        return point
+    return None
+
+
+async def _branch_point_of(rid: str, rec: dict, *, strict: bool = False) -> dict | None:
+    """The point response `rid` (its record, `rec`) can be branched from, or None when it can't be:
+    the one test of whether a response can be branched. The branch route refuses with 409
+    branch_unavailable exactly where this answers None (_branch_source), and a session's turns
+    carry it as `branchable` (_session_turns_data), so the two never disagree.
+
+    A response can be branched once its turn has ended (completed, failed, cancelled or incomplete)
+    and the turn's end-of-turn checkpoint kept a point. A turn the task was started with ran nothing
+    here and has none. A record written since records carry their point (`_branch_point`, the point
+    or None) answers from itself, with no read. An older one, and one settled before its turn's
+    checkpoint ran, answers from the point in the store, read once per replica (_BRANCH_SEEN).
+    strict: a read of the store that failed raises, for the route's 503; otherwise it answers None,
+    and the answer is not kept."""
+    if not _branch_ended(rec) or rec.get("_imported"):
+        return None
+    sid = str(rec.get("_session_id") or "")
+    if "_branch_point" in rec:
+        return _branch_point_valid(rec["_branch_point"], rid, sid)
+    if rid in _BRANCH_SEEN:
+        _BRANCH_SEEN.move_to_end(rid)
+        return _BRANCH_SEEN[rid]
+    try:
+        raw = await _blob_get_or_raise(_branch_point_key(rid), kb=RESP_BLOB_KB)
+    except Exception:
+        if strict:
+            raise
+        return None
+    try:
+        point = _branch_point_valid(json.loads(raw or b"null"), rid, sid)
+    except ValueError:
+        point = None
+    _BRANCH_SEEN[rid] = point
+    while len(_BRANCH_SEEN) > _RESP_CACHE_MAX:
+        _BRANCH_SEEN.popitem(last=False)
+    return point
+
+
 async def _branch_source(rid: str, org: str, harness_id: str, caller: dict) -> dict:
     """Authorize before disclosing whether a response can be restored."""
     try:
@@ -10109,19 +10200,13 @@ async def _branch_source(rid: str, org: str, harness_id: str, caller: dict) -> d
             or vertex.get("status") == "deleted" or not _scope_keeps(caller, vertex.get("workspace"))
             or str(vertex.get("harness_id") or "") != harness_id):
         raise uhp_error(404, "session_not_found", "No session with that id.")
-    if _UHP_STATUS.get(str(rec.get("status"))) not in {"completed", "failed", "cancelled", "incomplete"}:
-        raise uhp_error(409, "branch_unavailable", "Only a completed response checkpoint can be branched.")
     try:
-        point_bytes = await _blob_get_or_raise(_branch_point_key(rid), kb=RESP_BLOB_KB)
+        point = await _branch_point_of(rid, rec, strict=True)
     except Exception as error:
         raise uhp_error(503, "server_error", "The checkpoint could not be read. Try again.") from error
-    try:
-        point = json.loads(point_bytes or b"null")
-        if (not isinstance(point, dict) or point["response_id"] != rid or point["session_id"] != sid
-                or not isinstance(point["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", point["commit"])):
-            raise ValueError("missing checkpoint position")
-    except (ValueError, TypeError, KeyError):
-        raise uhp_error(409, "branch_unavailable", "This response has no restorable checkpoint.")
+    if point is None:
+        raise uhp_error(409, "branch_unavailable", "This response has no restorable checkpoint." if _branch_ended(rec)
+                        else "Only a completed response checkpoint can be branched.")
     return {"point": point, "source_sid": sid,
             "backend": str(point.get("backend") or vertex.get("backend") or ""),
             "workspace": str(vertex.get("workspace") or "")}
@@ -10986,7 +11071,7 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
         rec["charge"] = translator.charge      # a remote runtime's own bill for the turn, beside the tokens
     _cancel_req.pop(sid, None)           # turn settled — a leftover Stop must not hit the next turn
     await _browser_close(sid, "turn_end")     # before the checkpoint and the finalize: the stop row belongs in the trace (see _adopt_orphan_turn)
-    await _checkpoint(sid, rec, response_id=translator.resp_id)
+    translator.ended_checkpoint(await _checkpoint(sid, rec, response_id=translator.resp_id))
     _too_large_saved(produced, rec)      # the answer says a file is in the task's files only once it is
     # The checkpoint replaced the workspace tarball with the sandbox's own copy, so anything the
     # media server wrote into it during the turn is gone. Re-project here — one line, one place,
@@ -12176,7 +12261,7 @@ async def create_response(body: CreateResponseBody, request: Request):
             pending = tr.pending_input() if status == "incomplete" else None
             stored = {**tr._response_obj(status), "_session_id": sid, "_org": org,
                       "_member": member, "_input": input_items, "_backend": backend,
-                      **({"_pending_input": pending} if pending else {}),
+                      **({"_pending_input": pending} if pending else {}), **tr.branch_mark(),
                       **{"_" + k: v for k, v in trace_ctx.items()}}
             await _resp_put(resp_id, stored, org, sid, body.previous_response_id, status, created_at, body.store)
             if pending and control_store.enabled():
@@ -12602,7 +12687,7 @@ async def session_turns(sid: str, request: Request, limit: int = 0) -> dict:
     ?limit=N returns only the LAST N turns (HR-INF-015: bounds the per-open blob fan-out on
     long-horizon sessions; 0/absent = all, preserving existing callers)."""
     _org, v = await _owned_session(request, sid)   # LIVE-B: enforce org ownership before returning content
-    return await _session_turns_data(sid, limit=limit, strict=True, v=v)
+    return await _session_turns_data(sid, limit=limit, strict=True, v=v, branchable=True)
 
 
 def _unix_s(ts) -> int | None:
@@ -12650,7 +12735,10 @@ def _turn_elapsed(rec: dict) -> float | None:
     return round(ended - began, 1) if began > 0 and ended >= began else None
 
 
-async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False, v: dict | None = None) -> dict:
+async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False, v: dict | None = None,
+                              branchable: bool = False) -> dict:
+    """`branchable`: each turn says whether a branch can be made from it (_branch_point_of), for the
+    session's own readers; a share link's reader and the gateway's own reads of a history don't ask."""
     # find this session's response ids (HarnessResponse vertices carry session_id)
     ids: list[str] = []
     safe_sid = re.sub(r"[^A-Za-z0-9_-]", "", sid)
@@ -12696,6 +12784,17 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
         _turns_reads.bump("record_failed")
         print(f"[turns] a turn's record could not be read sid={safe_sid}: {type(e).__name__}", flush=True)
         raise uhp_error(503, "server_error", _TURNS_UNREADABLE) from e
+    # Whether each turn can be branched, by the branch route's own test. A record answers it itself; one
+    # from before records said so reads its point from the store, those reads bounded and in parallel as
+    # the records' are, and kept (_branch_point_of). A point that could not be read is not offered.
+    can_branch: dict[str, bool] = {}
+    if branchable:
+        async def _can(rid: str, rec: dict) -> tuple[str, bool]:
+            async with _sem:
+                return rid, await _branch_point_of(rid, rec) is not None
+
+        can_branch = dict(await asyncio.gather(*(_can(rid, rec) for rid, rec in zip(ids, recs)
+                                                 if rec and not rec.get("_deleted"))))
     for rid, rec in zip(ids, recs):
         if not rec or rec.get("_deleted"):
             continue
@@ -12760,6 +12859,8 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
                       # a turn the task was started with (Tasks §2.1): nothing ran, nothing was spent
                       "imported": bool(rec.get("_imported")),
                       **({"cost_usd": 0.0} if rec.get("_imported") else {}),
+                      # a branch can be made from it (Sessions §1.1): the branch route's own test, on this record
+                      **({"branchable": can_branch.get(rid, False)} if branchable else {}),
                       "_model": rec.get("model") or "",
                       "_since_ms": _turn_since_ms(rec, for_result=False)})
     # Only the LAST turn can be in-flight, and only it can need reconciliation — both want the
@@ -12819,6 +12920,9 @@ async def delete_response(response_id: str, request: Request):
     now = _now_ms()
     rec["_deleted"] = True
     rec["_deleted_at"] = now
+    # its branch point goes now (below), and from the record too: one restored within its 30 days
+    # can't be branched, as it couldn't be before records carried their point (_branch_point_of)
+    rec["_branch_point"] = None
     try:
         _resp_cache_forget(response_id)
         await _blob_put(f"responses/{response_id}.json", json.dumps(rec, default=str).encode(), kb=RESP_BLOB_KB)
