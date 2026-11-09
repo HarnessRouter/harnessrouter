@@ -484,8 +484,9 @@ def test_a_turn_sent_to_be_kept_never_stays_pending(client, settles):
         mp_.setattr(memory_fixture.FixtureProvider, "job", job, raising=False)
         note = run(go())
     if settles == "failed":
+        # the bare reason: the console says the rest ("Couldn't remember this one: <reason>")
         assert note == {"remembered": 0, "records": [], "pending": False, "failed": True,
-                        "reason": "This conversation wasn't kept: The model key was refused (HTTP 401)."}
+                        "reason": "The model key was refused (HTTP 401)"}
     else:
         assert note == {"remembered": 0, "records": [], "pending": False}
 
@@ -511,7 +512,55 @@ def test_a_save_that_fails_says_so_on_the_turn(client):
         run(gw._memories_observe(ORG, hid, sid, run(gw._harness_vertex(hid)), {"user_text": "x", "model": "m"}, "y", resp_id=rid))
     assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {
         "remembered": 0, "records": [], "pending": False, "failed": True,
-        "reason": "This conversation wasn't kept: Graphiti did not answer: the episode was not taken."}
+        "reason": "Graphiti did not answer: the episode was not taken"}
+
+
+def test_the_reason_a_save_failed_is_said_bare_for_the_console_to_say_the_rest():
+    """The console renders `Couldn't remember this one: ${reason}`, and read "...: This conversation wasn't kept: <why>."."""
+    assert gw._memory_save_failed("Graphiti did not answer: HTTP 500.") == "Graphiti did not answer: HTTP 500"
+    assert gw._memory_save_failed("") == "no reason was given"
+    assert "wasn't kept" not in gw._memory_save_failed("The model key was refused (HTTP 401).")
+    assert "sk-live-abcdef1234567890" not in gw._memory_save_failed("key sk-live-abcdef1234567890 refused")
+
+
+def test_a_turn_says_it_is_being_kept_as_soon_as_its_task_is_sent(client):
+    """Graphiti and ReMe draw from a task with a model before they answer: until then the turn had no note at all."""
+    hid, sid, rid = _observed_turn(client, "Slow save")
+    meanwhile = []
+
+    async def slow(self, m, episodes, writer):
+        meanwhile.append((await gw._session_turns_data(sid))["turns"][0]["memory"])     # a reader, while the engine works
+        return {"records": [{"id": "hrec_slow1", "type": "fact"}], "job": None}
+    with pytest.MonkeyPatch.context() as mp_:
+        mp_.setattr(memory_fixture.FixtureProvider, "observe", slow)
+        run(gw._memories_observe(ORG, hid, sid, run(gw._harness_vertex(hid)), {"user_text": "x", "model": "m"}, "y", resp_id=rid))
+    assert meanwhile == [{"remembered": 0, "records": [], "pending": True}]
+    mid = run(gw._harness_vertex(hid))["memory_default"]
+    assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {
+        "remembered": 1, "records": [{"id": "hrec_slow1", "memory_id": mid}], "pending": False}
+
+
+def test_a_reopened_turn_keeps_what_its_memory_tools_answered_and_what_it_took(client):
+    """A turn read back shows what a recall found ("Found 3 things") and how long it took ("Done in 12.4 s")."""
+    _hid, sid, rid = _observed_turn(client, "Reopened")
+    found = json.dumps({"results": [{"record": {"id": "r1", "content": [{"type": "text", "text": "Ada likes tea. Her key is sk-live-abcdef1234567890"}]}}]})
+    output = [{"type": "function_call", "call_id": "c1", "name": "memories.memory_recall", "arguments": '{"query": "tea"}'},
+              {"type": "function_call_output", "call_id": "c1", "output": found},
+              {"type": "function_call", "call_id": "c2", "name": "mcp__memories__memory_remember", "arguments": "{}"},
+              {"type": "function_call_output", "call_id": "c2", "output": "é" * 9000},
+              {"type": "function_call", "call_id": "c3", "name": "Bash", "arguments": '{"command": "ls"}'},
+              {"type": "function_call_output", "call_id": "c3", "output": "notes.txt"},
+              {"type": "message", "content": [{"type": "output_text", "text": "Tea it is."}]}]
+    now = time.time()
+    run(gw._resp_put(rid, {"id": rid, "status": "completed", "output": output, "_input": [{"content": "hi"}],
+                           "_created_ms": int((now - 12.4) * 1000), "_completed_at": now}, ORG, sid, None, "completed", now - 12.4, True))
+    turn = run(gw._session_turns_data(sid))["turns"][0]
+    recall, remember, other = turn["tools"]
+    assert recall["name"] == "memories.memory_recall" and json.loads(recall["output"])["results"][0]["record"]["id"] == "r1"
+    assert "sk-live-abcdef1234567890" not in recall["output"], "redacted as everything a memory keeps"
+    assert len(remember["output"].encode()) <= 8 * 1024 and remember["output"].startswith("éé"), "capped, and whole characters"
+    assert other == {"name": "Bash", "arguments": '{"command": "ls"}'}, "only a memory tool's answer is kept"
+    assert turn["elapsed"] == 12.4
 
 
 def test_a_turn_that_wasnt_sent_to_be_kept_gets_no_note(client):
@@ -619,17 +668,42 @@ def test_an_agents_own_memory_goes_with_it_with_its_peoples_memories(client):
     assert client.delete(f"/v1/harnesses/{h['id']}", headers=ADA).json() == {"id": h["id"], "deleted": True}
 
 
-def test_a_memory_another_agent_uses_is_kept_and_one_chosen_for_an_agent_is_never_its_to_delete(client):
+def test_a_memory_another_agent_uses_is_kept_until_the_last_agent_that_uses_it_goes(client):
     a = _agent(client, name="First desk", prompt="Help each customer with returns.").json()
     b = _agent(client, name="Second desk", memory={"id": a["memory"]["id"]}).json()
     assert b["memory"]["provisioned"] is False
     assert client.get(f"/v1/harnesses/{b['id']}", headers=ADA).json()["memory"]["provisioned"] is False
+    _session(b["id"], {"user": "rae@example.com"})          # a person's memory below it, made in B's task
+    kids = [k["id"] for k in client.get("/v1/memories", params={"parent": a["memory"]["id"]}, headers=ADA).json()["data"]]
+    assert kids
     r = client.delete(f"/v1/orgs/{ORG}/harnesses/{a['id']}", headers=ADA)
     assert r.json() == {"id": a["id"], "deleted": True, "memory_kept": "used by another agent"}
     assert client.get(f"/v1/memories/{a['memory']['id']}", headers=ADA).status_code == 200
+    # B was the last agent using a memory made for an agent that no longer exists: it goes with B, people's included
     r = client.delete(f"/v1/harnesses/{b['id']}", headers=ADA)
-    assert r.json() == {"id": b["id"], "deleted": True}, "it was made for another agent"
-    assert client.get(f"/v1/memories/{a['memory']['id']}", headers=ADA).status_code == 200
+    assert r.json() == {"id": b["id"], "deleted": True, "memory_deleted": a["memory"]["id"]}
+    for gone in (a["memory"]["id"], *kids):
+        assert client.get(f"/v1/memories/{gone}", headers=ADA).status_code == 404
+
+
+def test_a_memory_left_for_nobody_goes_at_the_next_agents_delete(client):
+    """One the person deleting its agent couldn't delete stays then, and goes at the next delete by someone who can."""
+    left = _agent(client, name="Ben's desk", prompt="Help each customer with their plan.").json()
+    assert client.delete(f"/v1/harnesses/{left['id']}", headers=BEN).json()["memory_kept"] == "only whoever manages it can delete it"
+    assert client.get(f"/v1/memories/{left['memory']['id']}", headers=ADA).status_code == 200
+    used = _agent(client, name="Live desk", prompt="Help each customer with refunds.").json()       # one a live agent uses stays
+    other = _agent(client, name="Translator two", prompt="Translate the given text into French.").json()
+    assert client.delete(f"/v1/harnesses/{other['id']}", headers=ADA).json() == {"id": other["id"], "deleted": True}
+    assert client.get(f"/v1/memories/{left['memory']['id']}", headers=ADA).status_code == 404
+    assert client.get(f"/v1/memories/{used['memory']['id']}", headers=ADA).status_code == 200
+
+
+def test_a_memory_someone_chose_for_an_agent_is_never_its_to_delete(client):
+    mine = client.post("/v1/memories", headers=ADA, json={"provider": "mem0", "name": "Ada's own notes"}).json()["id"]
+    h = _agent(client, name="Notes desk", memory={"id": mine}).json()
+    assert h["memory"]["provisioned"] is False
+    assert client.delete(f"/v1/harnesses/{h['id']}", headers=ADA).json() == {"id": h["id"], "deleted": True}
+    assert client.get(f"/v1/memories/{mine}", headers=ADA).status_code == 200
 
 
 def test_someone_who_may_not_delete_the_memory_deletes_the_agent_and_the_memory_stays(client):

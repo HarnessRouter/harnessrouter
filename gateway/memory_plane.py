@@ -24,6 +24,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import os
 import re
 import time
 import uuid
@@ -131,11 +132,12 @@ class Provider:
 
     async def recall_many(self, mids: list[str], req: dict) -> dict:
         """One question asked of several memories this provider keeps: results in one ranking, each
-        carrying `memory_id`. The default asks each memory in turn; a provider that can search
-        several in one request overrides it."""
+        carrying `memory_id`. The default asks every memory at once (a person's task searches the
+        person's memory and the agent's, and one after the other was the sum of two searches); a
+        provider that can search several in one request overrides it."""
         results, degraded, abstains = [], [], []
-        for mid in mids:
-            res = await self.recall(mid, req)
+        answers = await asyncio.gather(*(self.recall(mid, req) for mid in mids))
+        for mid, res in zip(mids, answers):
             results += [{**x, "memory_id": mid} for x in res.get("results") or []]
             degraded += [d for d in res.get("degraded") or [] if d not in degraded]
             abstains.append(bool(res.get("abstain")))
@@ -350,6 +352,39 @@ async def _chain(org: str, memory: dict) -> list[dict]:
     return out
 
 
+# ── the organization's grants, read once for a moment ─────────────────────────────────────────
+# Every access check reads the organization's grants, and a turn's start makes dozens of them: the memories its agent
+# holds, each one's ancestors, what a recall reaches, the memory each finding's references name. So one read answers
+# for GRANTS_TTL_S on this replica, and every grant written here (grant, ungrant, revoke, a person's own) drops it at
+# once. A grant taken away on another replica is still read here for at most GRANTS_TTL_S. 0 reads them every time.
+GRANTS_TTL_S = float(os.environ.get("HR_MEMORY_GRANTS_TTL_S", "3"))
+_GRANTS: dict[tuple[int, str], tuple[float, list[dict]]] = {}
+_GRANTS_GEN = 0
+
+
+async def _org_grants(org: str) -> list[dict]:
+    key = (id(GRAPH), org)
+    hit = _GRANTS.get(key)
+    began = time.monotonic()
+    if hit and began - hit[0] < GRANTS_TTL_S:
+        return hit[1]
+    gen = _GRANTS_GEN
+    rows = await GRAPH.find("MemoryGrant", {"org": org})
+    # a grant written while this read was out may be missing from it: kept only when nothing was written meanwhile,
+    # and never an empty answer, which is also what a store that failed to answer says
+    if rows and GRANTS_TTL_S > 0 and gen == _GRANTS_GEN:
+        _GRANTS[key] = (began, rows)
+    return rows
+
+
+def grants_changed(org: str = "") -> None:
+    """A grant was written: the next access check reads them again (all organizations' when none is named)."""
+    global _GRANTS_GEN
+    _GRANTS_GEN += 1
+    for k in [k for k in _GRANTS if not org or k[1] == org]:
+        _GRANTS.pop(k, None)
+
+
 async def effective(org: str, memory: dict, principals: list[str]) -> list[str]:
     """The privileges these principals hold on the memory: every grant on it and on the ancestors
     the cutoff-aware chain reaches. The creator of a node holds all four on it, an implicit grant
@@ -360,7 +395,7 @@ async def effective(org: str, memory: dict, principals: list[str]) -> list[str]:
     for m in chain:
         if f"member:{m.get('created_by') or ''}" in principals and m.get("created_by"):
             return list(PRIVILEGES)
-    for g in await GRAPH.find("MemoryGrant", {"org": org}):
+    for g in await _org_grants(org):
         if str(g.get("memory_id") or "") in ids and str(g.get("principal") or "") in principals \
                 and str(g.get("deleted") or "0") != "1":
             privs.update(p for p in json.loads(g.get("privileges") or "[]") if p in PRIVILEGES)
@@ -517,6 +552,12 @@ def end_user_mid(parent_id: str, user: str) -> str:
     return "hmem_" + hashlib.sha256(f"{parent_id}\n{end_user_hash(user)}".encode()).hexdigest()[:32]
 
 
+# A person's memory, once found or made, is the same memory on every task of theirs: found again from here for
+# PEOPLE_TTL_S on this replica, and forgotten here the moment it or the agent's memory above it is deleted (unmake).
+PEOPLE_TTL_S = float(os.environ.get("HR_MEMORY_PEOPLE_TTL_S", "60"))
+_PEOPLE: dict[tuple[int, str, str, str], tuple[float, dict, str]] = {}
+
+
 async def end_user_node(org: str, parent: dict, user: str) -> tuple[dict, str]:
     """(this person's memory under `parent`, the principal that reaches it), made on first use. A trusted
     path: the caller has resolved the agent, its memory and the person; nothing here takes a caller's word."""
@@ -524,6 +565,10 @@ async def end_user_node(org: str, parent: dict, user: str) -> tuple[dict, str]:
     if not user:
         raise MemoryError(422, "memory_invalid", "A person's memory needs to know who the person is.", "user")
     pid = str(parent["id"])
+    key = (id(GRAPH), org, pid, end_user_hash(user))
+    hit = _PEOPLE.get(key)
+    if hit and time.monotonic() - hit[0] < PEOPLE_TTL_S:
+        return hit[1], hit[2]
     principal, mid = end_user_principal(pid, user), end_user_mid(pid, user)
     node = await _load(org, mid)
     if node is None:
@@ -534,7 +579,15 @@ async def end_user_node(org: str, parent: dict, user: str) -> tuple[dict, str]:
                and set(json.loads(g.get("privileges") or "[]")) >= {"read", "write"}
                for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid})):
         await _put_grant(org, mid, principal, ["read", "write"], "server")
+    if PEOPLE_TTL_S > 0:
+        _PEOPLE[key] = (time.monotonic(), node, principal)
     return node, principal
+
+
+def _people_forget(ids: set[str]) -> None:
+    """These memories are gone: no person's task finds its memory among them, or under them, from here."""
+    for k in [k for k, v in _PEOPLE.items() if k[2] in ids or str(v[1].get("id") or "") in ids]:
+        _PEOPLE.pop(k, None)
 
 
 # ── what a memory says about its own health, and when it was last used ──────────────────────────
@@ -666,13 +719,16 @@ async def unmake(org: str, m: dict) -> list[str]:
     server's own undoing of a memory it made a moment ago (app.py's provisioning, when a later step failed)."""
     mid = str(m["id"])
     gone = []
-    for x in [m] + await _subtree(org, mid):
-        try:
-            await (await provider_of(x)).drop(str(x["id"]))
-        except MemoryError:
-            pass                       # a provider that is gone cannot hold what is being deleted
-        await GRAPH.upsert("Memory", str(x["id"]), {"deleted": "1", "updated_at": _now_ms()}, raise_on_fail=True)
-        gone.append(str(x["id"]))
+    try:
+        for x in [m] + await _subtree(org, mid):
+            try:
+                await (await provider_of(x)).drop(str(x["id"]))
+            except MemoryError:
+                pass                       # a provider that is gone cannot hold what is being deleted
+            await GRAPH.upsert("Memory", str(x["id"]), {"deleted": "1", "updated_at": _now_ms()}, raise_on_fail=True)
+            gone.append(str(x["id"]))
+    finally:
+        _people_forget({mid, *gone})
     return gone
 
 
@@ -1102,17 +1158,20 @@ async def grant(org: str, mid: str, principals: list[str], principal: str, privi
 
 
 async def _put_grant(org: str, mid: str, principal: str, privs: list[str], by: str) -> dict:
-    for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid, "principal": principal}):
-        if str(g.get("deleted") or "0") != "1":        # one grant per principal per node: it is replaced
-            await GRAPH.upsert("MemoryGrant", str(g["id"]), {"privileges": json.dumps(privs)}, raise_on_fail=True)
-            return {"id": g["id"], "object": "memory.grant", "memory_id": mid, "principal": principal,
-                    "privileges": privs, "inherited": False}
-    gid = "hgrt_" + uuid.uuid4().hex
-    await GRAPH.upsert("MemoryGrant", gid, {"org": org, "memory_id": mid, "principal": principal,
-                                            "privileges": json.dumps(privs), "granted_by": by,
-                                            "created_at": _now_ms(), "deleted": "0"}, raise_on_fail=True)
-    return {"id": gid, "object": "memory.grant", "memory_id": mid, "principal": principal,
-            "privileges": privs, "inherited": False}
+    try:
+        for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid, "principal": principal}):
+            if str(g.get("deleted") or "0") != "1":        # one grant per principal per node: it is replaced
+                await GRAPH.upsert("MemoryGrant", str(g["id"]), {"privileges": json.dumps(privs)}, raise_on_fail=True)
+                return {"id": g["id"], "object": "memory.grant", "memory_id": mid, "principal": principal,
+                        "privileges": privs, "inherited": False}
+        gid = "hgrt_" + uuid.uuid4().hex
+        await GRAPH.upsert("MemoryGrant", gid, {"org": org, "memory_id": mid, "principal": principal,
+                                                "privileges": json.dumps(privs), "granted_by": by,
+                                                "created_at": _now_ms(), "deleted": "0"}, raise_on_fail=True)
+        return {"id": gid, "object": "memory.grant", "memory_id": mid, "principal": principal,
+                "privileges": privs, "inherited": False}
+    finally:
+        grants_changed(org)
 
 
 async def given(org: str, principals: list[str]) -> list[dict]:
@@ -1140,8 +1199,8 @@ async def granted(org: str, principal: str) -> list[tuple[dict, list[str]]]:
     there, highest in the tree first. It is where a member was let in: the same answer for a person
     and for an agent, and the only source of what an agent's harness shows as its memories."""
     res = []
-    for g in await GRAPH.find("MemoryGrant", {"org": org, "principal": principal}):
-        if str(g.get("deleted") or "0") == "1":
+    for g in await _org_grants(org):
+        if str(g.get("principal") or "") != str(principal) or str(g.get("deleted") or "0") == "1":
             continue
         m = await _load(org, str(g.get("memory_id") or ""))
         if m:
@@ -1170,9 +1229,12 @@ async def grant_counts(org: str) -> dict[str, int]:
 async def ungrant(org: str, mid: str, principal: str) -> None:
     """The grant this principal holds ON this memory taken away, by the server: an agent moved off the memory it
     was given (app.py's memory provisioning). It only ever narrows; widening goes through `grant`."""
-    for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid, "principal": principal}):
-        if str(g.get("deleted") or "0") != "1":
-            await GRAPH.upsert("MemoryGrant", str(g["id"]), {"deleted": "1"}, raise_on_fail=True)
+    try:
+        for g in await GRAPH.find("MemoryGrant", {"org": org, "memory_id": mid, "principal": principal}):
+            if str(g.get("deleted") or "0") != "1":
+                await GRAPH.upsert("MemoryGrant", str(g["id"]), {"deleted": "1"}, raise_on_fail=True)
+    finally:
+        grants_changed(org)
 
 
 async def held_on(org: str, mid: str, principal: str) -> list[str]:
@@ -1189,7 +1251,10 @@ async def revoke(org: str, mid: str, principals: list[str], gid: str) -> None:
     g = await GRAPH.get(gid, label="MemoryGrant")
     if not g or str(g.get("org") or "") != org or str(g.get("memory_id") or "") != mid:
         raise MemoryError(404, "memory_not_found", "No such grant on this memory.", "grant_id")
-    await GRAPH.upsert("MemoryGrant", gid, {"deleted": "1"}, raise_on_fail=True)
+    try:
+        await GRAPH.upsert("MemoryGrant", gid, {"deleted": "1"}, raise_on_fail=True)
+    finally:
+        grants_changed(org)
 
 
 # ── records ───────────────────────────────────────────────────────────────────────────────────

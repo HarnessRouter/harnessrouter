@@ -3250,13 +3250,29 @@ async def _trace_terminal_status(base: str, since_ms: int = 0) -> str | None:
     return None
 
 
+# A memory tool's answer is kept on a reopened turn, so it can still say what a recall found ("Found 3 things",
+# "Recalled 3 things"): the memory_* tools of the memories server, under whatever prefix the agent's CLI gives a
+# server's tools (memories.memory_recall, mcp__memories__memory_recall, memories_2/memory_recall). At most this many
+# bytes of each, redacted as everything a memory keeps is. Any other tool's output is not kept here.
+_MEMORY_TOOL = re.compile(r"(?:^|__|\.|:|/)memory_[a-z_]+$")
+_TURN_TOOL_OUTPUT_MAX = 8 * 1024
+
+
+def _turn_tool_output(text) -> str:
+    out = _memory_redact(str(text or ""))
+    raw = out.encode()
+    return out if len(raw) <= _TURN_TOOL_OUTPUT_MAX else raw[:_TURN_TOOL_OUTPUT_MAX].decode("utf-8", "ignore")
+
+
 def _output_to_turn_fields(output: list[dict]) -> tuple[str, list[dict], list[dict]]:
     """Project a Responses output[] into the (assistant_text, tools, files) the Workbench renders.
     ONE parser, shared by the finalized-record path and the in-flight trace-replay path, so both
-    render a turn identically."""
+    render a turn identically. A memory tool's call carries its answer as `output` (_MEMORY_TOOL)."""
     asst_parts: list[str] = []
     tools: list[dict] = []
     files: list[dict] = []
+    answers = {str(o.get("call_id") or ""): o.get("output") for o in (output or [])
+               if isinstance(o, dict) and o.get("type") == "function_call_output" and o.get("call_id")}
     for o in (output or []):
         t = o.get("type")
         if t == "message":
@@ -3272,7 +3288,11 @@ def _output_to_turn_fields(output: list[dict]) -> tuple[str, list[dict], list[di
                                           "filename": a.get("filename"),
                                           "download_url": _file_url(a.get("container_id") or "", a.get("file_id") or "")})
         elif t == "function_call":
-            tools.append({"name": o.get("name"), "arguments": o.get("arguments", "")})
+            tool = {"name": o.get("name"), "arguments": o.get("arguments", "")}
+            said = answers.get(str(o.get("call_id") or ""))
+            if said is not None and _MEMORY_TOOL.search(str(o.get("name") or "")):
+                tool["output"] = _turn_tool_output(said)
+            tools.append(tool)
     return "\n\n".join(asst_parts), tools, files
 
 
@@ -10454,13 +10474,29 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     await _vertex_upsert(sid, {"status": "running", "turn_status": "starting",
                                "heartbeat": str(time.time()), "runner_turn_id": "", "end_reason": "",
                                **({"trace_blob": tr["prefix"]} if tr.get("prefix") else {})})
+    # Memory, begun here and not after the restore: whose task it is (the session keeps it, for the tools and the
+    # observation that follow), then the Memory section and what the agent already knows, as a task that runs while
+    # the workspace is restored and the sandbox made ready. It is awaited where the instructions are written. The
+    # session's memory properties are written before the task starts and never by it, so nothing it reads is
+    # written beside it. After the lease: a turn refused there leaves the running turn's memory alone.
+    if task_memory:
+        await _vertex_upsert(sid, {"memory": task_memory})     # the session keeps it: its tools and its observation read it
+    await _memories_person_begin(org, harness_id, hv, sid, task_person or {}, translator, rec)
+    _mem_start = asyncio.create_task(_memories_turn_start(harness_id, org, hv, sid, user_text)) if harness_id else None
+    if _mem_start is not None:
+        _mem_start.add_done_callback(lambda t: t.cancelled() or t.exception())   # a turn that ended first never reads it
     # Under the session's change lock: an app's PUT, delete, mkdir or move that passed its busy check
     # before this turn was stamped running finishes before the restore reads the workspace, and one
     # that comes after waits, reads the session again under the lock, and is refused (_ws_busy_now).
     # In this process only, like the lock itself.
-    async with _ws_change_lock(sid):
-        await _hydrate(sid, rec)
+    try:
+        async with _ws_change_lock(sid):
+            await _hydrate(sid, rec)
+    except BaseException:
+        _memories_turn_start_drop(_mem_start)
+        raise
     if rec.get("hydrate_failed_with_checkpoint"):
+        _memories_turn_start_drop(_mem_start)
         # The task has a checkpoint and it could not be restored: the turn does not run. Running it
         # on the wiped workspace started the conversation over without a word (2026-09-06); an
         # error the person can retry is the honest answer.
@@ -10488,8 +10524,12 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # HR-INF-010: the caller (create_response) already read this harness's vertex — thread it in
     # instead of re-reading it twice more here. Beyond cutting reads, a same-request snapshot means
     # _harness_plugins and agent_doc can't observe a mid-turn config edit inconsistently.
-    mcp_servers, skills, skills_suppressed, tools_disabled, plugin_pkgs = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
-    turn_env, turn_secret = await _harness_env(hv, org, hdr_vals)
+    try:
+        mcp_servers, skills, skills_suppressed, tools_disabled, plugin_pkgs = await _harness_plugins(harness_id, org, hdr_vals, hv=hv, sid=sid)
+        turn_env, turn_secret = await _harness_env(hv, org, hdr_vals)
+    except BaseException:
+        _memories_turn_start_drop(_mem_start)
+        raise
     if extra_env:
         # ...and a secret answer to the harness's question (Tasks §3.2), for this turn only, under
         # a name the prompt gives; a secret's value is redacted from everything read back.
@@ -10508,23 +10548,25 @@ async def _resp_execute(translator: _RespTranslator, *, org: str, member: str, s
     # The harness's configured instructions are the agent's CLAUDE.md (claude) / AGENTS.md (codex) —
     # written into the workspace by the runner, NOT injected as a system prompt. The model keeps the
     # CLI's default system prompt; persistent project instructions live in the doc the agent reads.
-    agent_doc = _agent_doc_with_plugs(str((hv or {}).get("system_prompt") or ""),
-                                      await _harness_plug_types(harness_id, org, hv))
-    # The Memory section: the attached memories with their descriptions, and what each provider
-    # marks as always relevant. Its size is recorded on the turn, per memory, in tokens.
-    if task_memory:
-        await _vertex_upsert(sid, {"memory": task_memory})     # the session keeps it: its tools and its observation read it
-    await _memories_person_begin(org, harness_id, hv, sid, task_person or {}, translator, rec)
-    _mem_seam = await _memories_seam(harness_id, org, hv, sid) if harness_id else None
-    # what the agent already knows that may matter for this turn, recalled for it before it starts (in a person's
-    # task, that person's and the agent's own; never when memory is off for the task: no seam)
-    _mem_known, _mem_recalled = await _memories_known_at_start(_mem_seam, user_text, sid)
-    _mem_section, _mem_primed = ("", {}) if _mem_seam is None else await memory_tools.doc_section(
-        _mem_seam, kept_after=((await _memories_settings(harness_id, org, hv)) or {}).get("observe", True) is not False,
-        person=bool(_mem_seam.person), known=_mem_known)
+    try:
+        agent_doc = _agent_doc_with_plugs(str((hv or {}).get("system_prompt") or ""),
+                                          await _harness_plug_types(harness_id, org, hv))
+    except BaseException:
+        _memories_turn_start_drop(_mem_start)
+        raise
+    # The Memory section: the attached memories with their descriptions, what each provider marks as always
+    # relevant, and what the agent already knows that may matter for this turn, recalled for it with the turn's own
+    # words (in a person's task, that person's and the agent's own; never when memory is off for the task). Started
+    # above, beside the restore (_memories_turn_start). Its size is recorded on the turn, per memory, in tokens.
+    _mem_section, _mem_primed, _mem_recalled = (await _mem_start) if _mem_start is not None else ("", {}, 0)
     if _mem_section:
         agent_doc = (agent_doc + "\n\n" + _mem_section).strip()
         rec["memories"] = {"primed_tokens": _mem_primed, **({"recalled_at_start": _mem_recalled} if _mem_recalled else {})}
+        if _mem_recalled:
+            # on the turn's record, read back by GET /v1/sessions/{sid}/turns as memory.recalled_at_start, and on the
+            # response's metadata.memory
+            translator.memory_note = {**(translator.memory_note or {}), "recalled_at_start": _mem_recalled}
+            await _turn_memory_recalled(translator.resp_id, _mem_recalled)
     status = "failed"
     # A follow-up on a no-resume backend gets the conversation handed back in its prompt. Read
     # from the durable turn records; a read failure degrades to a fresh turn rather than failing
@@ -12510,6 +12552,30 @@ _turns_reads = _OpsDrops("turns", 60, ("index_failed", "record_failed", "from_se
 _TURNS_UNREADABLE = "This conversation could not be loaded just now. Try again in a moment."
 
 
+def _turn_memory_of(row: dict) -> dict:
+    """A turn's `memory`, from its index row: its note ({remembered, records, pending} or {skipped}), with
+    `recalled_at_start` when findings were recalled for it at its start."""
+    note = _json_obj(row.get("memory_note"))
+    try:
+        n = int(str(row.get("memory_recalled") or "0"))
+    except ValueError:
+        n = 0
+    return {**note, "recalled_at_start": n} if n > 0 else note
+
+
+def _turn_elapsed(rec: dict) -> float | None:
+    """Seconds a finished turn took, from its own record: accepted (_created_ms) to settled (_completed_at), to the
+    tenth. None while it runs and on a record that never said when it ended."""
+    if str(rec.get("status") or "") in _TURN_LIVE:
+        return None
+    try:
+        began = int(rec.get("_created_ms") or 0) / 1000 or float(rec.get("created_at") or 0)
+        ended = float(rec.get("_completed_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    return round(ended - began, 1) if began > 0 and ended >= began else None
+
+
 async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False, v: dict | None = None) -> dict:
     # find this session's response ids (HarnessResponse vertices carry session_id)
     ids: list[str] = []
@@ -12526,8 +12592,9 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
     ids = [str(x.get("id")) for x in rows if x.get("id")]
     # each row's birth as the index holds it: a turn's time when its record carries none
     born = {str(x.get("id")): x.get("created_at") for x in rows if x.get("id")}
-    # what memory kept in each turn, or why it was skipped (_turn_memory_note), from the same rows
-    mem_notes = {str(x.get("id")): _json_obj(x.get("memory_note")) for x in rows if x.get("id") and x.get("memory_note")}
+    # what memory kept in each turn, or why it was skipped (_turn_memory_note), and how many findings were recalled
+    # for it at its start (_turn_memory_recalled), from the same rows
+    mem_notes = {str(x.get("id")): _turn_memory_of(x) for x in rows if x.get("id") and (x.get("memory_note") or x.get("memory_recalled"))}
     if v is None and strict:
         v = await _vertex_get(sid) or {}
     # The session's current turn when the index does not hold it. Counted only once its record shows:
@@ -12612,6 +12679,8 @@ async def _session_turns_data(sid: str, limit: int = 0, *, strict: bool = False,
                       "created_at": _unix_s(rec.get("created_at") or born.get(rid)),
                       "completed_at": (None if str(rec.get("status") or "") in _TURN_LIVE
                                        else _unix_s(rec.get("_completed_at"))),
+                      # and what it took, in seconds to the tenth (a reopened turn says "Done in 12.4 s", not "Done")
+                      "elapsed": _turn_elapsed(rec),
                       # what memory kept in it ({remembered, records}) or why it was skipped ({skipped})
                       "memory": mem_notes.get(rid) or None,
                       # a turn the task was started with (Tasks §2.1): nothing ran, nothing was spent
@@ -21808,17 +21877,20 @@ async def memories_mcp(request: Request):
             return _jsonrpc_result(rid, {"tools": []})
         return _jsonrpc_result(rid, _tool_text("This agent holds no memory yet. Someone who manages a memory can share "
                                                "it with this agent; you cannot do that yourself.", True))
-    # the harness's, the one this session's task named, and in a person's task that person's own
-    seam = await _memories_seam(hid, org, v, sid)
+    args = params.get("arguments") or {}
+    tool = str(params.get("name") or "")
+    # the harness's, the one this session's task named, and in a person's task that person's own. Each memory's record
+    # count is asked of its engine only for the one answer that shows it, memory_list's: a CLI lists the tools before
+    # its first model call, and two counts per memory there were on the way to the turn's first word.
+    seam = await _memories_seam(hid, org, v, sid, counts=method == "tools/call" and tool == "memory_list")
     if seam is None:
         if method == "tools/list":
             return _jsonrpc_result(rid, {"tools": []})
         return _jsonrpc_result(rid, _tool_text("Memory is off for this task: no person was named for it.", True))
     if method == "tools/list":
-        kept_after = ((await _memories_settings(hid, org, v)) or {}).get("observe", True) is not False
-        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(await seam.entries(), await seam.offers(), kept_after)})
-    args = params.get("arguments") or {}
-    tool = str(params.get("name") or "")
+        entries, offers, settings = await asyncio.gather(seam.entries(), seam.offers(), _memories_settings(hid, org, v))
+        kept_after = (settings or {}).get("observe", True) is not False
+        return _jsonrpc_result(rid, {"tools": memory_tools.tool_list(entries, offers, kept_after)})
     text, is_error = await memory_tools.call(seam, tool, args if isinstance(args, dict) else {})
     if tool in ("memory_revise", "memory_forget") and not is_error:
         _memory_corrected.add(sid)
@@ -21829,15 +21901,55 @@ async def memories_mcp(request: Request):
     return _jsonrpc_result(rid, _tool_text(text, is_error))
 
 
-async def _memories_seam(hid: str, org: str, hv: dict | None, sid: str = ""):
+async def _memories_seam(hid: str, org: str, hv: dict | None, sid: str = "", *, counts: bool = True, around: bool = True):
     """The agent's memories as one task reaches them, through the tools' seam on this gateway's own plane. None when
-    memory is off for the task; in a person's task, the seam reads and writes as that person (memory_local)."""
+    memory is off for the task; in a person's task, the seam reads and writes as that person (memory_local).
+    `counts` and `around` as memory_local.Local takes them: what only a tool's answer shows, asked of the engines."""
     sv = ((await _vertex_get(sid)) or {}) if sid else {}
     if sv.get("memory_off"):
         return None
     person = _json_obj(sv.get("memory_person"))
     return memory_local.Local(org, hid, await _harness_memories(hid, org, hv, sid=sid),
-                              person=person if person.get("node") and person.get("principal") else None)
+                              person=person if person.get("node") and person.get("principal") else None,
+                              counts=counts, around=around)
+
+
+async def _memories_turn_start(hid: str, org: str, hv: dict | None, sid: str, text: str) -> tuple[str, dict, int]:
+    """(the Memory section, what was primed per memory in tokens, how many findings were recalled for the turn).
+
+    Started before the turn's workspace is restored and awaited only when its instructions are written
+    (_resp_execute), so what it waits on, an engine's search above all, runs while the sandbox is made ready. Inside
+    it, the recall and the rest of the section (each memory's standing records) are asked at once: the turn waits
+    on the longer of the two, never their sum. Nothing here asks an engine what only a tool's answer shows (record
+    counts, a memory's neighbours): measured on a person's task, those were five of the turn's engine calls, one
+    after the other, before its first word (r3, 11-09). Per-person memory had added 4.9 s to the first token."""
+    if not hid:
+        return "", {}, 0
+    seam = await _memories_seam(hid, org, hv, sid, counts=False, around=False)
+    if seam is None:
+        return "", {}, 0
+
+    async def ahead() -> None:
+        # what doc_section will ask, all at once: the seam keeps each answer (memory_local.Local._shared), and the
+        # section is then written from them. Its errors are the section's to meet, as they were.
+        try:
+            entries = await seam.entries()
+            share = memory_tools.prime_share(entries)
+            await asyncio.gather(seam.offers(), *(seam.prime(str(e["memory"]["id"]), share) for e in entries),
+                                 return_exceptions=True)
+        except Exception:  # noqa: BLE001
+            pass
+    (known, recalled), _, settings = await asyncio.gather(_memories_known_at_start(seam, text, sid), ahead(),
+                                                          _memories_settings(hid, org, hv))
+    section, primed = await memory_tools.doc_section(
+        seam, kept_after=(settings or {}).get("observe", True) is not False, person=bool(seam.person), known=known)
+    return section, primed, recalled if section else 0
+
+
+def _memories_turn_start_drop(task: "asyncio.Task | None") -> None:
+    """A turn that ends before its instructions are written: its memory work is let go, and its answer never read."""
+    if task is not None and not task.done():
+        task.cancel()
 
 
 # How long the turn waits for what its agent already knows (memory_tools.recall_at_start). Past it, or on any error,
@@ -21891,16 +22003,27 @@ async def _turn_memory_note(rid: str, note: dict) -> None:
         await _vg_upsert("HarnessResponse", rid, {"memory_note": json.dumps(note, separators=(",", ":"))})
 
 
+async def _turn_memory_recalled(rid: str, n: int) -> None:
+    """How many findings were recalled for the turn at its start, on the turn's record beside its note: read back as
+    `memory.recalled_at_start` (GET /v1/sessions/{sid}/turns). A property of its own, so the note written when the
+    task is kept (_memories_note) never takes it away."""
+    if rid and n:
+        await _vg_upsert("HarnessResponse", rid, {"memory_recalled": str(int(n))})
+
+
 async def _memories_person_begin(org: str, hid: str, hv: dict | None, sid: str, person: dict, translator, rec: dict) -> None:
     """At a turn's start: whose task it is, kept on the session for the tools and the observation that follow. A
     person's memory is made the first time their task needs it. Every turn says it afresh, so nothing of the last
     turn's person carries over."""
-    if not hid or not sid or not (person or await _memories_settings(hid, org, hv)):
+    if not hid or not sid:
+        return
+    settings = await _memories_settings(hid, org, hv)
+    if not (person or settings):
         return
     props = {"memory_person": "", "memory_off": "", "memory_kept": ""}
     skipped = str(person.get("skipped") or "")
     if person.get("user"):
-        default = str(((await _memories_settings(hid, org, hv)) or {}).get("default_memory_id") or "")
+        default = str((settings or {}).get("default_memory_id") or "")
         shared = await memory_plane._load(org, default) if default else None
         if shared is None:
             skipped = "this agent has no memory to keep it in"
@@ -21967,6 +22090,10 @@ async def _memories_observe(org: str, hid: str, sid: str, hv: dict | None, rec: 
         m, _ = await memory_plane.need(org, mid, seam.wpr, "write")
         try:
             prov = await memory_plane.provider_of(m)
+            # the turn says it is being kept the moment the task is sent, not when the engine answers: Graphiti and
+            # ReMe draw from it with a model before they answer (5.5 s and 7.2 s measured), and until then a reader of
+            # the turn saw no note at all, so nothing told it to wait. Settled below, whatever happens.
+            await _memories_note(org, sid, resp_id, kept, [], pending=True, at=mid)
             out = await memory_plane.observe(prov, mid, [{
                 "content": [{"type": "text", "role": role, "text": text}
                             for role, text in (("user", str(rec.get("user_text") or "")), ("assistant", answer)) if text.strip()],
@@ -22011,10 +22138,16 @@ def _derived_records(records, mid: str, episodes: bool = False) -> list[dict]:
             if isinstance(r, dict) and r.get("id") and (episodes or r.get("type") != "episode")]
 
 
+_MEMORY_SAVE_NO_REASON = "no reason was given"
+
+
 def _memory_save_failed(said: str) -> str:
-    """Why a finished task wasn't kept, one plain sentence for the turn's note (redacted as the memory's last_error is)."""
-    said = " ".join(memory_plane.clean_text(str(said or "")).split()).rstrip(".")
-    return (f"This conversation wasn't kept: {said}." if said else "This conversation wasn't kept.")[:300]
+    """Why a finished task wasn't kept, for the turn's note: the bare reason, never a sentence around it. The console
+    says the rest itself ("Couldn't remember this one: <reason>"), and a reason that already said "This conversation
+    wasn't kept" read twice there. Redacted as the memory's last_error is; never empty, since a failed save always
+    has a note that says so."""
+    said = " ".join(memory_plane.clean_text(str(said or "")).split()).rstrip(". ")
+    return (said or _MEMORY_SAVE_NO_REASON)[:300]
 
 
 async def _memories_kept(sid: str) -> list[dict]:
@@ -23323,29 +23456,77 @@ async def _harness_memory_goes(org: str, hid: str, v: dict, caller: dict) -> dic
     """A deleted agent's memory, when it was made for that agent (`provisioned_for`): deleted with the people's
     memories below it, through the memory delete every caller goes through, unless another agent still uses it (holds
     a grant on it or below it). {"memory_deleted": id}, {"memory_kept": why}, or {} for a memory someone chose for
-    the agent, which is theirs and stays. Never fails the agent's delete: it is already deleted."""
+    the agent, which is theirs and stays. Never fails the agent's delete: it is already deleted.
+
+    Then every memory left for nobody goes too (_memories_left_for_nobody): one made for an agent that no longer
+    exists, that no remaining agent holds a grant on. Agent A's memory, used by B, was kept when A was deleted, and
+    then outlived B as well, since it was never B's own (r3, 11-09). When the memory B used is one of those, B's
+    answer says so: `memory_deleted`, as for a memory of its own."""
     mid = str(_json_obj(v.get("memory_info")).get("id") or "")
+    live: set[str] = set()
     try:
-        m = await memory_plane._load(org, mid) if mid else None
-        if not m or str(m.get("provisioned_for") or "") != hid:
-            return {}
         live = {str(r["id"]) for r in await _vg_list_by_org("Harness", org)
                 if r.get("id") and str(r["id"]) != hid and str(r.get("deleted")) not in ("1", "true", "True")}
-        tree = {mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid))}
-        for g in await BACKING.graph.find("MemoryGrant", {"org": org}):
-            principal = str(g.get("principal") or "")
-            if str(g.get("memory_id") or "") in tree and principal.startswith("member:") and principal[7:] in live \
-                    and str(g.get("deleted") or "0") != "1" and json.loads(g.get("privileges") or "[]"):
-                return {"memory_kept": _MEMORY_KEPT_IN_USE}
-        try:
-            gone = await memory_plane.delete(org, mid, memory_routes.principals_of(caller))
-        except memory_plane.MemoryError:
-            return {"memory_kept": _MEMORY_KEPT_NOT_YOURS}
-        print(f"[memories] {hid}: its memory {mid} went with it ({len(gone)} with the people's memories below)", flush=True)
-        return {"memory_deleted": mid}
+        out = await _harness_own_memory_goes(org, hid, mid, live, caller)
     except Exception as e:  # noqa: BLE001 - the agent is deleted whatever happens to its memory
         print(f"[memories] {hid}: its memory was not deleted with it: {type(e).__name__}", flush=True)
         return {"memory_kept": "it couldn't be deleted just now"}
+    try:
+        swept = await _memories_left_for_nobody(org, live, caller)
+    except Exception as e:  # noqa: BLE001 - a memory left for nobody is swept again at the next agent's delete
+        print(f"[memories] {hid}: the memories left for nobody were not swept: {type(e).__name__}", flush=True)
+        swept = []
+    if swept:
+        print(f"[memories] {hid}: {len(swept)} memories made for agents that no longer exist went with it", flush=True)
+    return {"memory_deleted": mid} if mid and mid in swept and not out.get("memory_deleted") else out
+
+
+async def _harness_own_memory_goes(org: str, hid: str, mid: str, live: set[str], caller: dict) -> dict:
+    m = await memory_plane._load(org, mid) if mid else None
+    if not m or str(m.get("provisioned_for") or "") != hid:
+        return {}
+    tree = {mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid))}
+    if tree & _memories_agents_hold(await BACKING.graph.find("MemoryGrant", {"org": org}), live):
+        return {"memory_kept": _MEMORY_KEPT_IN_USE}
+    try:
+        gone = await memory_plane.delete(org, mid, memory_routes.principals_of(caller))
+    except memory_plane.MemoryError:
+        return {"memory_kept": _MEMORY_KEPT_NOT_YOURS}
+    print(f"[memories] {hid}: its memory {mid} went with it ({len(gone)} with the people's memories below)", flush=True)
+    return {"memory_deleted": mid}
+
+
+def _memories_agents_hold(grants: list[dict], live: set[str]) -> set[str]:
+    """The memories one of these agents holds a grant on (a privilege, not taken away)."""
+    return {str(g.get("memory_id") or "") for g in grants
+            if str(g.get("principal") or "").startswith("member:") and str(g["principal"])[7:] in live
+            and str(g.get("deleted") or "0") != "1" and json.loads(g.get("privileges") or "[]")}
+
+
+async def _memories_left_for_nobody(org: str, live: set[str], caller: dict) -> list[str]:
+    """Every memory made for an agent that no longer exists (`provisioned_for` names no live agent of `live`) that no
+    live agent holds a grant on, on it or below it: deleted through the memory delete every caller goes through,
+    people's memories with it. One the caller may not delete stays, as a memory of the deleted agent's own does.
+    The ids deleted, each memory's own (not those below it)."""
+    made = [m for m in await BACKING.graph.find("Memory", {"org": org})
+            if m.get("id") and str(m.get("deleted") or "0") != "1" and str(m.get("provisioned_for") or "")
+            and str(m["provisioned_for"]) not in live]
+    if not made:
+        return []
+    held = _memories_agents_hold(await BACKING.graph.find("MemoryGrant", {"org": org}), live)
+    gone: list[str] = []
+    for m in made:
+        mid = str(m["id"])
+        if await memory_plane._load(org, mid) is None:
+            continue                                  # went with one deleted before it in this sweep
+        if ({mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid))}) & held:
+            continue
+        try:
+            await memory_plane.delete(org, mid, memory_routes.principals_of(caller))
+        except memory_plane.MemoryError:
+            continue
+        gone.append(mid)
+    return gone
 
 
 # ── workspaces: the DIRECTORY, server-side (fix for the localStorage split-brain) ──────
