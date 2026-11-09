@@ -17,6 +17,7 @@ jest.mock('@/lib/harness', () => ({
   oobDefaultModel: () => 'claude-sonnet',
   useBasesRead: () => ({ value: { 'claude-code': {}, hermes: {} }, failed: false, retry: () => {} }),
   useModelCatalogRead: () => ({ value: { models: ['claude-sonnet'] }, failed: false, retry: () => {} }),
+  promptSeenNote: (id: string) => (id === 'hermes' ? 'A line said for this agent harness.' : null),
 }));
 const mockProviders: { connectionFor: () => null; state: string; refused?: { name: string; provider: string }[] } = { connectionFor: () => null, state: 'ready' };
 jest.mock('@/lib/providers', () => ({ providerById: () => null, useModelProviders: () => mockProviders }));
@@ -124,6 +125,24 @@ test('a harness chosen that no key runs a model on says where keys are added, an
   await flush();
   expect(line()).toContain('None of your keys runs a model on Claude Code yet.');
   expect(save().disabled).toBe(true);
+});
+
+test('an agent harness with a line of its own says it under the picks once chosen, and only that one', async () => {
+  mockRun.models = { 'claude-code': ['claude-sonnet'], hermes: ['gpt-5.4'] };
+  await open({ job: 'Review a contract and flag the risky clauses.' });
+  expect(el.querySelector('#nwHNote')).toBeNull();                  // Auto: no harness chosen yet
+  const choose = async (name: string) => {
+    const opener = el.querySelector('button[aria-haspopup="listbox"]') as HTMLButtonElement;
+    await act(async () => { opener.click(); });
+    await flush();
+    const o = Array.from(document.querySelectorAll('[role="option"]')).find((x) => x.textContent?.includes(name)) as HTMLButtonElement;
+    await act(async () => { o.click(); });
+    await flush();
+  };
+  await choose('Hermes');
+  expect(el.querySelector('#nwHNote')?.textContent).toBe('A line said for this agent harness.');
+  await choose('Claude Code');
+  expect(el.querySelector('#nwHNote')).toBeNull();
 });
 
 test('names nothing this edition does not have: no free requests, balance or request check', async () => {
