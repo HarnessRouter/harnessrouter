@@ -35,14 +35,37 @@ export function relayContentSecurityPolicy(upstream: string | null, contentType:
   return upstream ? `${upstream}, ${local}` : local;
 }
 
+/** A value decoded to a fixed point, at most five rounds, or null when it cannot be: still changing after
+ *  five, or an escape run that is not UTF-8 (%E0%A4; an overlong '.' such as %C0%AE). A '%' that does not
+ *  begin an escape is a character of the name ("50% off.pdf"), as it is to the gateway. */
+export function fullyDecoded(value: string): string | null {
+  let cur = value;
+  for (let round = 0; round <= 5; round++) {
+    let next: string;
+    try {
+      next = cur.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => decodeURIComponent(run));
+    } catch {
+      return null;
+    }
+    if (next === cur) return cur;
+    cur = next;
+  }
+  return null;
+}
+
 /** Whether every segment of an address a relay builds names exactly one thing: none empty, '.' or '..',
  *  none holding a '/' or a '\'. The segments are a route's params, which Next has already decoded once
- *  (`%2e%2e` arrives as '..', `a%2fb` as 'a/b'); they are checked as they are and never decoded again.
- *  fetch() resolves '.' and '..' in the URL it is handed, and encodeURIComponent leaves both as they
- *  are, so one of them in a segment would carry the relay to another of the gateway's routes. */
+ *  (`%2e%2e` arrives as '..', `a%2fb` as 'a/b'). fetch() resolves '.' and '..' in the URL it is handed,
+ *  and encodeURIComponent leaves both as they are, so one of them in a segment would carry the relay to
+ *  another of the gateway's routes. Each segment is judged decoded to a fixed point (CAT, via the pentest
+ *  session): a dot encoded twice or more (%252e arrives as %2e) is still a dot, though these relays
+ *  re-encode every segment, so the guard does not lean on that. What is forwarded is unchanged. */
 export function plainSegments(segments: readonly string[]): boolean {
-  return segments.every((s) => typeof s === 'string' && s !== '' && s !== '.' && s !== '..'
-    && !s.includes('/') && !s.includes('\\'));
+  return segments.every((s) => {
+    if (typeof s !== 'string') return false;
+    const d = fullyDecoded(s);
+    return d !== null && d !== '' && d !== '.' && d !== '..' && !d.includes('/') && !d.includes('\\');
+  });
 }
 
 /** The gateway's own 404 for a file (or a share) that is not there, for a relay that refuses an

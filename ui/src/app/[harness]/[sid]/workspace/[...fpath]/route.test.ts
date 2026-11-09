@@ -149,9 +149,27 @@ describe('an address that is not plain names is refused before the gateway is as
       'http://gateway.test/w/chrn_1/hsess_1/workspace/dir/sub/file.txt']);
   });
 
-  test('a name decoded once is sent as a name: %252e%252e stays a file called %2e%2e, never a step up', async () => {
-    await call(route().GET, 'hr_selfhost=signed-in', {}, { harness: 'chrn_1', sid: 'hsess_1', fpath: asNext('%252e%252e/x') });
-    expect(sent[0].url).toBe('http://gateway.test/a/hsess_1/%252e%252e/x');
-    expect(new URL(sent[0].url).pathname).toBe('/a/hsess_1/%252e%252e/x');
+  // CAT, via the pentest session (LOW): the check read a segment as Next hands it over, decoded once, so a dot
+  // encoded twice or more (%252e%252e arrives as %2e%2e) passed it. This route re-encodes every segment, so
+  // nothing reached another route, but the guard holds on its own now: each segment is checked decoded to a
+  // fixed point (at most five rounds), and one still changing after five, or not UTF-8, is refused.
+  const DEEP = ['%252e%252e/x', '%25252e%25252e/x', '%2525252e%2525252e/internal/x', '%25252e%25252e/internal/x',
+    'a%25252fb', '%25255cb', '%2525252525252e', '%25E0%25A4%25A', '%25C0%25AE%25C0%25AE'];
+  for (const cookie of ['hr_selfhost=signed-in', '']) {
+    test.each(DEEP)(`${cookie ? 'signed in' : 'not signed in'}: the file path %p, decoded to a fixed point, is a 404 and nothing is fetched`, async (raw) => {
+      await refused(await call(route().GET, cookie, {}, { harness: 'chrn_1', sid: 'hsess_1', fpath: asNext(raw) }));
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+    test(`${cookie ? 'signed in' : 'not signed in'}: a session encoded three times as '..' is a 404 and nothing is fetched`, async () => {
+      await refused(await call(route().GET, cookie, {}, { harness: 'chrn_1', sid: decodeURIComponent('%25252e%25252e'), fpath: ['file.txt'] }));
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+  }
+
+  test('a space, dots and a bare % inside a name still open, sent as before', async () => {
+    await call(route().GET, 'hr_selfhost=signed-in', {}, { harness: 'chrn_1', sid: 'hsess_1', fpath: asNext('out/report%20v2..final%25.pptx') });
+    await call(route().GET, '', {}, { harness: 'chrn_1', sid: 'hsess_1', fpath: asNext('50%25%20off.pdf') });
+    expect(sent.map((x) => x.url)).toEqual(['http://gateway.test/a/hsess_1/out/report%20v2..final%25.pptx',
+      'http://gateway.test/w/chrn_1/hsess_1/workspace/50%25%20off.pdf']);
   });
 });

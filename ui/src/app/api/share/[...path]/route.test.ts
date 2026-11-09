@@ -29,6 +29,13 @@ test.each([
   ['..%2f..%2fv1%2fsessions', 'share not found'],
   ['../meta', 'share not found'],
   ['shr1/%2e%2e/%2e%2e/v1/x', 'share not found'],
+  // decoded to a fixed point (CAT, via the pentest session): a dot encoded more than once is still a dot
+  ['shr1/f/%252e%252e', 'file not found'],
+  ['shr1/f/%25252e%25252e/x', 'file not found'],
+  ['shr1/f/%2525252e%2525252e/internal/x', 'file not found'],
+  ['%25252e%25252e/internal/x', 'share not found'],
+  ['shr1/f/%2525252525252e', 'file not found'],
+  ['shr1/f/%25E0%25A4%25A', 'file not found'],
 ])('%p is a 404 and nothing is fetched', async (raw, message) => {
   const res = await call(raw);
   expect(res.status).toBe(404);
@@ -42,10 +49,10 @@ test('a refused file read keeps the artifact sandbox', async () => {
   expect(res.headers.get('content-security-policy')).toContain('sandbox allow-scripts');
 });
 
-test('a nested file, the meta and the files list still reach the share', async () => {
-  for (const raw of ['shr1/f/dir/sub/file.txt', 'shr1/meta', 'shr1/files', 'shr1/f/%252e%252e']) {
+test('a nested file, a name with a space, dots and a bare %, the meta and the files list still reach the share', async () => {
+  for (const raw of ['shr1/f/dir/sub/file.txt', 'shr1/meta', 'shr1/files', 'shr1/f/report%20v2..final%25.pptx']) {
     expect((await call(raw)).status).toBe(200);
   }
   expect(urls.map((u) => new URL(u).pathname)).toEqual(['/share/shr1/f/dir/sub/file.txt', '/share/shr1/meta',
-    '/share/shr1/files', '/share/shr1/f/%252e%252e']);
+    '/share/shr1/files', '/share/shr1/f/report%20v2..final%25.pptx']);
 });
