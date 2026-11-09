@@ -20255,6 +20255,9 @@ _BASE_CATALOG: dict[str, dict] = {
         "tools": [("terminal", "Terminal"), ("read_file", "File Read"), ("write_file", "File Write"),
                   ("patch", "Patch"), ("search_files", "Search"), ("web_search", "Web Search"),
                   ("web_extract", "Web Extract")],
+        # "instruction": hermes switches toolsets, not tools. Terminal is withheld (its toolset holds
+        # only it and the process tool that serves it), and the four file tools are withheld when all
+        # four are off, but one file tool alone can only be asked (_hermes_toolsets_off).
         "tool_enforcement": "instruction",
     },
     "pi": {

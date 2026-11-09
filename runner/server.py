@@ -8339,11 +8339,36 @@ _HERMES_DEFAULT_BASE = {"anthropic": "https://api.anthropic.com/v1", "openai-api
 # once saving into its private store, which nobody sees in the console (sslip, 11-09).
 _HERMES_OWN_MEMORY_TOOLSETS = ("memory", "session_search")
 
+# A harness's disabled tools, as hermes toolsets (hermes-agent 0.19.0 toolsets.py). hermes switches
+# toolsets, never single tools, so a toolset is switched off only when it withholds nothing the
+# harness left on: `file` is read_file, write_file, patch and search_files, all four or none;
+# `search` is web_search alone and `web` is web_search with web_extract. `terminal` is terminal with
+# `process`, which only manages the background runs terminal starts (its own description) and has no
+# switch of its own, so it goes with terminal. Subagents inherit the parent's toolsets and its
+# disabled ones (delegate_tool._build_child_agent), so a withheld tool stays withheld below it.
+#
+# What hermes does with agent.disabled_toolsets differs by path, and the table holds on both: chat -q
+# (resume, MCP) subtracts the toolsets' tools from everything enabled, and the one-shot -z removes the
+# names from the enabled toolsets (tools_config._get_platform_tools). On -z, web_search still comes in
+# through the `browser` toolset where a search backend is configured, which is why it is asked as
+# well (_TOOLS_OFF_BY_REQUEST keeps hermes).
+_HERMES_TOOLSETS_OFF = (("file", ("read_file", "write_file", "patch", "search_files")),
+                        ("terminal", ("terminal",)),
+                        ("web", ("web_search", "web_extract")),
+                        ("search", ("web_search",)))
+
+
+def _hermes_toolsets_off(tools_disabled: list[str] | None) -> list[str]:
+    """The toolsets whose every tool the harness switched off (_HERMES_TOOLSETS_OFF)."""
+    off = set(_tool_names_off(tools_disabled))
+    return [ts for ts, tools in _HERMES_TOOLSETS_OFF if set(tools) <= off]
+
 
 def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
                         model: str = "", max_turns: int | None = None,
                         mcp_servers: list[dict] | None = None,
-                        vision_auth: dict | None = None, own_memory_off: bool = False) -> list[str]:
+                        vision_auth: dict | None = None, own_memory_off: bool = False,
+                        tools_disabled: list[str] | None = None) -> list[str]:
     """Point HERMES_HOME inside the checkpointed workspace home (CODEX_HOME precedent) so the
     conversation state (state.db) survives sandbox recycling, and inject provider creds as env.
     Writes config.yaml fresh each turn (harness config is the source of truth, like the agent doc).
@@ -8382,12 +8407,16 @@ def _hermes_prepare_env(provider: str | None, auth: Auth, cwd: str, env: dict,
     if max_turns:
         # hermes 0.19.0 has no --max-turns CLI flag; agent.max_turns in config.yaml is the knob.
         cfg["agent"]["max_turns"] = int(max_turns)
+    toolsets_off = _hermes_toolsets_off(tools_disabled)
     if own_memory_off:
         # The toolsets come out of what the model is offered (agent.disabled_toolsets, read by the chat path a turn
         # with MCP servers takes), and the store behind them is off too (memory.*_enabled: no MEMORY.md or USER.md
         # in its prompt, and no background review writing to them).
-        cfg["agent"]["disabled_toolsets"] = list(_HERMES_OWN_MEMORY_TOOLSETS)
+        toolsets_off = list(_HERMES_OWN_MEMORY_TOOLSETS) + toolsets_off
         cfg["memory"] = {"memory_enabled": False, "user_profile_enabled": False}
+    if toolsets_off:
+        # with the disabled tools' own toolsets, where a toolset is wholly off (_hermes_toolsets_off)
+        cfg["agent"]["disabled_toolsets"] = toolsets_off
     if vision_auth and vision_auth.get("model"):
         # hermes asks its image questions separately from the conversation (vision_analyze, the
         # browser tools) and, left alone, asks the model the harness writes with. That made a
@@ -17383,8 +17412,9 @@ def capabilities(identifier: str = "") -> dict:
 # a tool off and got neither believes it is off. Qwen Code and Cline were in neither group, and an
 # operator who switched every tool off on them watched the agent use them all.
 #   codex       — the one built-in with a switch is web_search (_codex_web_search_off).
-#   hermes      — switches toolsets, not tools, which is a different granularity from the per-tool
-#                 names a harness configures.
+#   hermes      — switches toolsets, not tools. A toolset whose every tool is off is switched off,
+#                 so those tools are withheld (_hermes_toolsets_off: terminal, the four file tools
+#                 together, the web tools); read_file alone, say, is asked.
 #   dsh         — switches its profile's rows. A row that registers only a disabled tool (bash,
 #                 str_replace_editor, todo_write, skill, subagent, subagent_fork, workflow; web_fetch
 #                 has its row's own switch) is off, so that tool is withheld (dsh_driver._rows_off);
@@ -17659,7 +17689,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             hermes_provider = _hermes_resolve_provider(req.provider, auth)
             hermes_mcp = _hermes_prepare_env(hermes_provider, auth, cwd, env, model=model,
                                              max_turns=req.max_turns, mcp_servers=req.mcp_servers,
-                                             vision_auth=req.vision_auth, own_memory_off=platform_memory)
+                                             vision_auth=req.vision_auth, own_memory_off=platform_memory,
+                                             tools_disabled=req.tools_disabled)
         elif backend == "dsh":
             model = model or DSH_DEFAULT_MODEL
             cmd = _build_dsh(req.provider, auth, model, req.prompt, cwd, env,
