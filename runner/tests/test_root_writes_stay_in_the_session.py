@@ -426,3 +426,17 @@ def test_vibe_reads_its_export_as_the_session(monkeypatch):
     evs = server._vibe_eof({"cwd": str(ws)}, 1)
     seen = json.dumps(evs)
     assert OTHERS not in seen and "4321" not in seen
+
+
+def test_kimi_reads_its_log_as_the_session(monkeypatch):
+    """The MCP servers a kimi turn could not reach are read off its own log, into an event."""
+    import datetime
+    import time
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    log = f'{now} ERROR mcp server unavailable  server=others_server transport=http status=failed reason="{OTHERS}"\n'
+    other = _second_sessions(".harness/home/.kimi-code/logs/kimi-code.log", log.encode())
+    ws = _a_session(monkeypatch)
+    _plant(ws, ".harness/home/.kimi-code/logs/kimi-code.log", other)
+    down = server._kimi_mcp_unavailable({"cwd": str(ws), "started": time.time() - 30})
+    seen = json.dumps(down)
+    assert OTHERS not in seen and "others_server" not in seen

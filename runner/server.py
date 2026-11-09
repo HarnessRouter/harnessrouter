@@ -12130,7 +12130,10 @@ def _kimi_mcp_unavailable(state: dict) -> list[dict]:
         return []
     log = _kimi_home(pathlib.Path(cwd)) / "logs" / "kimi-code.log"
     try:
-        lines = log.read_text(errors="replace").splitlines()[-400:]
+        # As the session: the log is in its tree, and a link it planted at that name leads nowhere it could
+        # not read itself.
+        with _fs_as(_session_uid(cwd)):
+            lines = log.read_text(errors="replace").splitlines()[-400:]
     except OSError:
         return []
     since = float(state.get("started") or 0) - 2.0
