@@ -459,14 +459,15 @@ def _clean(name, description) -> tuple[str, str]:
 
 
 async def create(org: str, member: str, workspace: str, principals: list[str], *, name, description="",
-                 parent_id=None, restricted=False, provider="") -> dict:
+                 parent_id=None, restricted=False, provider="", extra: dict | None = None) -> dict:
+    """`extra`: the server's own properties for the memory (app.py's `provisioned_for`), never a caller's."""
     name, description = _clean(name, description)
     prov = str(provider or "").strip()
     parent = None
     if parent_id:
         parent, _ = await need(org, str(parent_id), principals, "create")
         prov = prov or str(parent.get("provider") or "")
-    return await _make(org, member, workspace, name, description, parent, restricted, prov)
+    return await _make(org, member, workspace, name, description, parent, restricted, prov, extra=extra)
 
 
 async def _make(org: str, member: str, workspace: str, name: str, description: str, parent: dict | None,
@@ -649,6 +650,13 @@ async def update(org: str, mid: str, principals: list[str], patch: dict) -> dict
 
 async def delete(org: str, mid: str, principals: list[str]) -> list[str]:
     m, _ = await need(org, mid, principals, "delete")
+    return await unmake(org, m)
+
+
+async def unmake(org: str, m: dict) -> list[str]:
+    """The memory and everything below it gone, at its engine and here: `delete` once access is checked, and the
+    server's own undoing of a memory it made a moment ago (app.py's provisioning, when a later step failed)."""
+    mid = str(m["id"])
     gone = []
     for x in [m] + await _subtree(org, mid):
         try:

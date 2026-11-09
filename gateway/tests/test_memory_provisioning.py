@@ -562,6 +562,83 @@ def test_a_write_to_a_persons_memory_is_told_on_the_agents_memory_and_says_nothi
     assert run(gw._session_turns_data(sid))["turns"][0]["memory"] == {"remembered": 1, "records": [{"id": record, "memory_id": node}], "pending": False}
 
 
+# ── nothing left for nobody ──────────────────────────────────────────────────────────────────
+def _live_memories() -> set[str]:
+    return {str(m["id"]) for m in run(gw.BACKING.graph.find("Memory", {"org": ORG})) if str(m.get("deleted") or "0") != "1"}
+
+
+def test_a_key_with_no_person_behind_it_makes_no_memory_and_says_why(client):
+    bare = _key(client, member="")
+    before = _live_memories()
+    r = client.post("/v1/harnesses", headers=bare, json={"name": "Keyed support", "base": "claude-code",
+                                                         "system_prompt": "Answer our customers' questions."})
+    assert r.status_code == 200, r.text
+    h = r.json()
+    assert h["memory"] is None and h["memory_reason"] == gw._MEMORY_NO_PERSON
+    assert h["memory_reason"] == ("This key has no person behind it, so it can't own a memory. Use a key made by a "
+                                  "person, or create the agent from the console.")
+    # an engine named, or memory asked for again, is refused in the same words before anything is made
+    r = client.post("/v1/harnesses", headers=bare, json={"name": "Keyed wiki", "base": "claude-code", "memory": {"engine": "mem0"}})
+    assert r.status_code == 422 and r.json()["error"]["message"] == gw._MEMORY_NO_PERSON
+    r = client.put(f"/v1/harnesses/{h['id']}/memory", headers=bare, json={"memory": "auto"})
+    assert r.status_code == 422 and r.json()["error"]["message"] == gw._MEMORY_NO_PERSON
+    assert _live_memories() == before, "no memory nobody can see or delete"
+    # an agent that needs no memory is made as before
+    r = client.post("/v1/harnesses", headers=bare, json={"name": "Translator", "base": "claude-code",
+                                                         "system_prompt": "Translate the given text into French."})
+    assert r.json()["memory_reason"] == memory_choice.REASON["none"]
+
+
+def test_a_memory_made_for_an_agent_is_taken_back_when_a_later_step_fails(client, monkeypatch):
+    before = _live_memories()
+
+    async def broken(org, principal):
+        raise RuntimeError("the tools could not be written")
+    monkeypatch.setattr(gw, "_memories_on_grant", broken)
+    h = _agent(client, name="Unlucky", prompt="Help each customer.").json()
+    assert h["memory"] is None and h["memory_reason"].startswith("The memory couldn't be made just now")
+    assert _live_memories() == before, "the memory made for it is gone again"
+    v = run(gw._harness_vertex(h["id"]))
+    assert not v.get("memory_default") and not run(gw.memory_plane.granted(ORG, f"member:{h['id']}"))
+
+
+# ── an agent's own memory goes with it ───────────────────────────────────────────────────────
+def test_an_agents_own_memory_goes_with_it_with_its_peoples_memories(client):
+    h = _agent(client, name="Short lived", prompt="Help each customer with their order.").json()
+    assert h["memory"]["provisioned"] is True
+    assert client.get(f"/v1/harnesses/{h['id']}", headers=ADA).json()["memory"]["provisioned"] is True
+    mid = h["memory"]["id"]
+    _session(h["id"], {"user": "kim@example.com"})
+    kids = [k["id"] for k in client.get("/v1/memories", params={"parent": mid}, headers=ADA).json()["data"]]
+    assert kids
+    r = client.delete(f"/v1/harnesses/{h['id']}", headers=ADA)
+    assert r.json() == {"id": h["id"], "deleted": True, "memory_deleted": mid}
+    for gone in (mid, *kids):
+        assert client.get(f"/v1/memories/{gone}", headers=ADA).status_code == 404
+    # a second delete has nothing more to say about it
+    assert client.delete(f"/v1/harnesses/{h['id']}", headers=ADA).json() == {"id": h["id"], "deleted": True}
+
+
+def test_a_memory_another_agent_uses_is_kept_and_one_chosen_for_an_agent_is_never_its_to_delete(client):
+    a = _agent(client, name="First desk", prompt="Help each customer with returns.").json()
+    b = _agent(client, name="Second desk", memory={"id": a["memory"]["id"]}).json()
+    assert b["memory"]["provisioned"] is False
+    assert client.get(f"/v1/harnesses/{b['id']}", headers=ADA).json()["memory"]["provisioned"] is False
+    r = client.delete(f"/v1/orgs/{ORG}/harnesses/{a['id']}", headers=ADA)
+    assert r.json() == {"id": a["id"], "deleted": True, "memory_kept": "used by another agent"}
+    assert client.get(f"/v1/memories/{a['memory']['id']}", headers=ADA).status_code == 200
+    r = client.delete(f"/v1/harnesses/{b['id']}", headers=ADA)
+    assert r.json() == {"id": b["id"], "deleted": True}, "it was made for another agent"
+    assert client.get(f"/v1/memories/{a['memory']['id']}", headers=ADA).status_code == 200
+
+
+def test_someone_who_may_not_delete_the_memory_deletes_the_agent_and_the_memory_stays(client):
+    h = _agent(client, name="Ada's desk", prompt="Help each customer.").json()
+    r = client.delete(f"/v1/harnesses/{h['id']}", headers=BEN)
+    assert r.json() == {"id": h["id"], "deleted": True, "memory_kept": "only whoever manages it can delete it"}
+    assert client.get(f"/v1/memories/{h['memory']['id']}", headers=ADA).status_code == 200
+
+
 # ── New memory: the engine chosen by the one scorer ──────────────────────────────────────────
 def test_new_memory_is_given_its_engine_by_the_same_reading_an_agent_gets(client):
     choose = lambda headers=ADA, **q: client.get("/v1/memories/choose", params=q, headers=headers)   # noqa: E731

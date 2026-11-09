@@ -20954,13 +20954,14 @@ def _json_obj(s) -> dict:
 
 
 def _harness_memory_view(v: dict) -> dict:
-    """`memory` ({id, name, engine, scope, reason, observe}) or `memory: null` and `memory_reason`, as the harness
-    keeps them (_memory_provision). Nothing for a harness made before; its memories are still at /memories."""
+    """`memory` ({id, name, engine, scope, reason, observe, provisioned}) or `memory: null` and `memory_reason`, as the
+    harness keeps them (_memory_provision). `provisioned`: the memory was made for this agent, and is deleted with it
+    when no other agent uses it (_harness_delete). Nothing for a harness made before; its memories are at /memories."""
     info, reason = _json_obj(v.get("memory_info")), str(v.get("memory_reason") or "")
     if info.get("id"):
         return {"memory": {"id": info["id"], "name": str(info.get("name") or ""), "engine": str(info.get("engine") or ""),
                            "scope": str(info.get("scope") or memory_choice.SHARED), "reason": reason,
-                           "observe": str(v.get("memory_observe") or "1") != "0"}}
+                           "observe": str(v.get("memory_observe") or "1") != "0", "provisioned": info.get("provisioned") is True}}
     if reason:
         return {"memory": None, "memory_reason": reason}
     return {}
@@ -21487,9 +21488,22 @@ def _json_list(s) -> list:
     return d if isinstance(d, list) else []
 
 
+# A memory the gateway makes for an agent is made by a person, who then manages it (and grants the agent on it). A key
+# no person made can't be that person: before, the memory was made and the grant then failed ("No memory with that
+# id"), leaving a memory nobody calling the API could see or delete. So it is refused before anything is made.
+_MEMORY_NO_PERSON = ("This key has no person behind it, so it can't own a memory. Use a key made by a person, or create "
+                     "the agent from the console.")
+
+
+def _memory_no_person() -> HTTPException:
+    return uhp_error(422, "memory_no_owner", _MEMORY_NO_PERSON, "memory")
+
+
 async def _memory_ask_check(org: str, ws: str, ask: tuple[str, str], p: dict) -> None:
     """An engine or a memory the caller named is checked before anything is made, and refused in words."""
     kind, value = ask
+    if kind == "engine" and not str(p.get("member") or ""):
+        raise _memory_no_person()
     if kind == "engine" and value not in await _memory_engines_running(org, ws):
         raise uhp_error(422, "memory_unavailable", f"{memory_choice.LABEL[value]} isn't running here. Start it with "
                         f"{memory_choice.START_COMMAND} and connect it, or leave memory on auto.", "memory.engine")
@@ -21523,6 +21537,7 @@ async def _memory_provision(org: str, p: dict, hid: str, ask: tuple[str, str], h
     ws = ws or _memory_ws_of(p)
     who, member = memory_routes.principals_of(p), str(p.get("member") or "")
     current = _json_obj(v.get("memory_info"))
+    made: dict | None = None            # a memory made here, for this agent
     words = await _memory_agent_words(org, hid, v, hint or str(v.get("memory_hint") or ""))
 
     async def none(reason: str) -> None:
@@ -21551,23 +21566,50 @@ async def _memory_provision(org: str, p: dict, hid: str, ask: tuple[str, str], h
             return await none(reason)
         m = await memory_plane._load(org, str(current.get("id") or "")) if current.get("id") else None
         if not m or str(m.get("provider") or "") != choice.engine:
-            # named after the agent, made by the person who made it: they manage it like any memory of theirs
+            if not member:
+                raise _memory_no_person()          # before anything is made (_MEMORY_NO_PERSON)
+            # named after the agent, made by the person who made it: they manage it like any memory of theirs. It
+            # says which agent it was made for, so it goes with that agent when nothing else uses it (_harness_delete).
             m = await memory_plane.create(org, member, ws, who, name=str(v.get("name") or "Agent")[:120],
                                           description=f"What {str(v.get('name') or 'this agent')[:80]} remembers from its work.",
-                                          provider=choice.engine)
+                                          provider=choice.engine, extra={"provisioned_for": hid})
+            made = m
     mid = str(m["id"])
-    # read and write, through the grant path, adding to whatever the agent already held there
-    have = await memory_plane.held_on(org, mid, _agent(hid))
-    await memory_plane.grant(org, mid, who, _agent(hid), sorted({"read", "write", *have}, key=memory_plane.PRIVILEGES.index),
-                             member or "server")
-    await _memories_on_grant(org, _agent(hid))
+    try:
+        # read and write, through the grant path, adding to whatever the agent already held there
+        have = await memory_plane.held_on(org, mid, _agent(hid))
+        await memory_plane.grant(org, mid, who, _agent(hid), sorted({"read", "write", *have}, key=memory_plane.PRIVILEGES.index),
+                                 member or "server")
+        await _memories_on_grant(org, _agent(hid))
+        await _memories_ensure(org, hid, await _vertex_get(hid) or v, {"default_memory_id": mid, "observe": True})
+        info = {"id": mid, "name": str(m.get("name") or ""), "engine": str(m.get("provider") or ""), "scope": choice.scope,
+                "provisioned": str(m.get("provisioned_for") or "") == hid}
+        await _vg_upsert("Harness", hid, {"memory_info": json.dumps(info, separators=(",", ":")), "memory_reason": reason,
+                                          "memory_scope": choice.scope, **({"memory_hint": str(hint)[:1000]} if hint else {})})
+    except Exception:
+        if made is not None:
+            # nothing made here is left behind for nobody: the agent's grant, the memory, and its place as the default
+            await _memory_unmake(org, hid, made, str(v.get("memory_default") or ""))
+        raise
     if current.get("id") and str(current["id"]) != mid:
         await _memory_detach(org, hid, current)
-    await _memories_ensure(org, hid, await _vertex_get(hid) or v, {"default_memory_id": mid, "observe": True})
-    info = {"id": mid, "name": str(m.get("name") or ""), "engine": str(m.get("provider") or ""), "scope": choice.scope}
-    await _vg_upsert("Harness", hid, {"memory_info": json.dumps(info, separators=(",", ":")), "memory_reason": reason,
-                                      "memory_scope": choice.scope, **({"memory_hint": str(hint)[:1000]} if hint else {})})
     print(f"[memories] {hid}: given {mid} on {info['engine']} ({choice.scope})", flush=True)
+
+
+async def _memory_unmake(org: str, hid: str, m: dict, default_before: str) -> None:
+    """A memory provisioning made, taken back after a later step failed. Each part is tried whatever the others did."""
+    mid = str(m["id"])
+    for what, step in (("its grant", memory_plane.ungrant(org, mid, _agent(hid))),
+                       ("the memory", memory_plane.unmake(org, m))):
+        try:
+            await step
+        except Exception as e:  # noqa: BLE001
+            print(f"[memories] {hid}: {what} on {mid} was not taken back: {type(e).__name__}", flush=True)
+    try:
+        if str(((await _vertex_get(hid)) or {}).get("memory_default") or "") == mid:
+            await _vg_upsert("Harness", hid, {"memory_default": default_before})
+    except Exception as e:  # noqa: BLE001
+        print(f"[memories] {hid}: its default memory was not put back: {type(e).__name__}", flush=True)
 
 
 async def _memory_provision_new(org: str, p: dict, hid: str, ask: tuple[str, str], hint: str, ws: str) -> None:
@@ -21578,8 +21620,8 @@ async def _memory_provision_new(org: str, p: dict, hid: str, ask: tuple[str, str
         why = (e.detail.get("message") if isinstance(getattr(e, "detail", None), dict) else
                getattr(e, "message", "") or str(getattr(e, "detail", "") or "")) or type(e).__name__
         print(f"[memories] {hid}: no memory was given: {type(e).__name__}: {why}"[:300], flush=True)
-        await _vg_upsert("Harness", hid, {"memory_info": "", "memory_reason": " ".join(
-            f"The memory couldn't be made just now: {memory_plane.clean_text(str(why))}".split())[:300]})
+        said = why if why == _MEMORY_NO_PERSON else f"The memory couldn't be made just now: {memory_plane.clean_text(str(why))}"
+        await _vg_upsert("Harness", hid, {"memory_info": "", "memory_reason": " ".join(said.split())[:300]})
 
 
 async def _harness_memory_live(org: str, v: dict) -> dict:
@@ -21590,7 +21632,8 @@ async def _harness_memory_live(org: str, v: dict) -> dict:
         cur = await memory_plane._load(org, m["id"])
         if not cur:
             return {"memory": None, "memory_reason": "Its memory was deleted."}
-        view["memory"] = {**m, "name": str(cur.get("name") or m["name"])}
+        view["memory"] = {**m, "name": str(cur.get("name") or m["name"]),
+                          "provisioned": bool(v.get("id")) and str(cur.get("provisioned_for") or "") == str(v["id"])}
     return view
 
 
@@ -23044,7 +23087,7 @@ async def create_harness(org: str, body: HarnessBody, request: Request) -> dict:
     await _require_offered_model(org, body.base, body.default_model)
     memory_ws = _plug_workspace(request, p)
     memory_ask = _memory_ask(body.memory)
-    await _memory_ask_check(org, memory_ws, memory_ask, p)
+    await _memory_ask_check(org, memory_ws, memory_ask, {**p, "member": member})
     body.mcp_servers = await _mcp_servers_stored(org, body.mcp_servers)
     body.skills = await _skills_prepare(body.skills)
     await _environment_check_ref(org, body.environment, p)
@@ -23167,21 +23210,57 @@ async def delete_harness(org: str, hid: str, request: Request) -> dict:
     _caller = await _owned_org(request, org)
     # V1C02-005: only delete a harness that belongs to the caller's org.
     cur = await _harness_in_reach(_caller, hid, deleted_ok=True)
-    await _harness_delete(org, hid, cur)
-    return {"id": hid, "deleted": True}
+    who = {**_caller, "member": _caller.get("member") or request.headers.get("x-harness-member", "")}
+    return {"id": hid, "deleted": True, **await _harness_delete(org, hid, cur, who)}
 
 
-async def _harness_delete(org: str, hid: str, v: dict) -> None:
+async def _harness_delete(org: str, hid: str, v: dict, caller: dict | None = None) -> dict:
     """The one delete both routes call. The harness is kept 30 days, restorable, and then removed
     with its plugin packages by the retention sweep (Richard's rule, 2026-10-08); the sessions and
     responses that used it are not touched (Harnesses §5.3). What cannot wait goes now: a deleted
     agent must not still be holding a database password, and must not still be spending at a
-    provider. A second delete keeps the first one's time, so it cannot extend the 30 days."""
+    provider. A second delete keeps the first one's time, so it cannot extend the 30 days.
+    The memory made for it goes with it when nothing else uses it (_harness_memory_goes): what
+    happened is in the answer, `memory_deleted` or `memory_kept`."""
     v = await _mcp_migrate(org, hid, v)
     if str(v.get("deleted")) not in ("1", "true", "True") or not v.get("deleted_at"):
         await _vg_upsert("Harness", hid, {"deleted": "1", "deleted_at": str(_now_ms())})
     await _hosted_scrub_removed(org, hid, _mcp_list(v), [])
     await _media_harness_purge(hid)
+    return await _harness_memory_goes(org, hid, v, caller or {})
+
+
+_MEMORY_KEPT_IN_USE = "used by another agent"
+_MEMORY_KEPT_NOT_YOURS = "only whoever manages it can delete it"
+
+
+async def _harness_memory_goes(org: str, hid: str, v: dict, caller: dict) -> dict:
+    """A deleted agent's memory, when it was made for that agent (`provisioned_for`): deleted with the people's
+    memories below it, through the memory delete every caller goes through, unless another agent still uses it (holds
+    a grant on it or below it). {"memory_deleted": id}, {"memory_kept": why}, or {} for a memory someone chose for
+    the agent, which is theirs and stays. Never fails the agent's delete: it is already deleted."""
+    mid = str(_json_obj(v.get("memory_info")).get("id") or "")
+    try:
+        m = await memory_plane._load(org, mid) if mid else None
+        if not m or str(m.get("provisioned_for") or "") != hid:
+            return {}
+        live = {str(r["id"]) for r in await _vg_list_by_org("Harness", org)
+                if r.get("id") and str(r["id"]) != hid and str(r.get("deleted")) not in ("1", "true", "True")}
+        tree = {mid, *(str(k["id"]) for k in await memory_plane._subtree(org, mid))}
+        for g in await BACKING.graph.find("MemoryGrant", {"org": org}):
+            principal = str(g.get("principal") or "")
+            if str(g.get("memory_id") or "") in tree and principal.startswith("member:") and principal[7:] in live \
+                    and str(g.get("deleted") or "0") != "1" and json.loads(g.get("privileges") or "[]"):
+                return {"memory_kept": _MEMORY_KEPT_IN_USE}
+        try:
+            gone = await memory_plane.delete(org, mid, memory_routes.principals_of(caller))
+        except memory_plane.MemoryError:
+            return {"memory_kept": _MEMORY_KEPT_NOT_YOURS}
+        print(f"[memories] {hid}: its memory {mid} went with it ({len(gone)} with the people's memories below)", flush=True)
+        return {"memory_deleted": mid}
+    except Exception as e:  # noqa: BLE001 - the agent is deleted whatever happens to its memory
+        print(f"[memories] {hid}: its memory was not deleted with it: {type(e).__name__}", flush=True)
+        return {"memory_kept": "it couldn't be deleted just now"}
 
 
 # ── workspaces: the DIRECTORY, server-side (fix for the localStorage split-brain) ──────
@@ -25024,5 +25103,4 @@ async def delete_harness_public(hid: str, request: Request) -> dict:
     _caller = await _pub_principal(request)
     org = _caller["org"]
     v = await _harness_in_reach(_caller, hid, deleted_ok=True)
-    await _harness_delete(org, hid, v)
-    return {"id": hid, "deleted": True}
+    return {"id": hid, "deleted": True, **await _harness_delete(org, hid, v, _caller)}
