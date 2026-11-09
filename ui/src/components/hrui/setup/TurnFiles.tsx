@@ -13,6 +13,7 @@ import { ArtifactPanel, FileCard } from 'reifyui/agent-chat';
 import { authHeaders, containerFileUrl, downloadFile, fetchFileBlob, type RespFile } from '@/lib/chat';
 import { harnessFetch } from '@/lib/hfetch';
 import { isInternalOutput, type Msg } from '@/lib/conversation';
+import { pathSegments } from '@/lib/reply-links';
 import { toast } from '../toast';
 
 export type OpenFile = { key: string; name: string; url: string; path?: string; size?: number; turn?: number };
@@ -67,6 +68,19 @@ export function filesOf(msgs: Msg[]): OpenFile[] {
     }
   }
   return out;
+}
+
+/** What opens when a reply's link names a file of its task (#594), as the preview's files and the one
+ *  shown: the file's own entry when the conversation made it, read by its id with the sign-in as its
+ *  card is; otherwise the file at that path in the task's workspace, through the signed-in read by
+ *  path (the gateway's /a/{session}/{path}, which asks what the content read asks). Null with no task. */
+export function linkedFile(files: OpenFile[], path: string, sid?: string): { files: OpenFile[]; key: string } | null {
+  const hit = files.find((f) => f.path === path);
+  if (hit) return { files, key: hit.key };
+  if (!sid || !path) return null;
+  const own: OpenFile = { key: `path:${path}`, name: base(path), path,
+    url: `/api/harness/a/${encodeURIComponent(sid)}/${pathSegments(path)}` };
+  return { files: [...files, own], key: own.key };
 }
 
 /** One answer's files, as cards, and under them "Download all" when there are two or more. */
