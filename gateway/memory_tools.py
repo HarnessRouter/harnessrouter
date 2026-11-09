@@ -636,6 +636,8 @@ def provenance(r: dict, now: datetime | None = None) -> str:
         return " ".join(x for x in ("a conversation", when) if x)
     if w.get("kind") == "member":
         return " ".join(x for x in ("noted by", "an agent" if w.get("type") == "agent" else "a person", when) if x)
+    if w.get("kind") in _SERVICES:
+        return " ".join(x for x in ("noted by a service", when) if x)
     return f"kept {when} from a conversation" if when else "kept from a conversation"
 
 
@@ -656,9 +658,18 @@ def as_past(words: str, persons: bool = True) -> str:
     return ("the person asked once: " if persons else "a request, noted once: ") + words[:1].lower() + words[1:]
 
 
+_SERVICES = ("x.service", "service")      # a writer with no person behind it (memory_plane.writer_of_caller)
+
+
 def _by_an_agent(r: dict) -> bool:
     w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
     return w.get("kind") == "member" and w.get("type") == "agent"
+
+
+def _by_no_person(r: dict) -> bool:
+    """Written by an agent or a service: its words are nobody's request (as_past)."""
+    w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
+    return _by_an_agent(r) or w.get("kind") in _SERVICES
 
 
 def known_block(results: list[dict], now: datetime | None = None) -> tuple[str, int]:
@@ -679,7 +690,7 @@ def known_block(results: list[dict], now: datetime | None = None) -> tuple[str, 
         if not same or any(f" {same} " in f" {s} " for s in seen):
             continue
         seen.append(same)
-        (raw if is_raw else drawn).append((words if is_raw else as_past(words, not _by_an_agent(rec)), rec))
+        (raw if is_raw else drawn).append((words if is_raw else as_past(words, not _by_no_person(rec)), rec))
     lines, used = [], 0
     for words, rec in (drawn or raw)[:RECALL_AT_START_LIMIT]:
         words = words.replace("```", "'''")
@@ -787,7 +798,8 @@ def _noted_line(r: dict) -> str:
         return ""
     words = words if len(words) <= STANDING_CAP else words[: STANDING_CAP - 1].rstrip() + "…"
     t = _parsed_time((r.get("time") or {}).get("written_at") if isinstance(r.get("time"), dict) else None)
-    who = "noted by an agent" if _by_an_agent(r) else "noted"
+    w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
+    who = "noted by an agent" if _by_an_agent(r) else "noted by a service" if w.get("kind") in _SERVICES else "noted"
     return f"- [{who}{f' on {t.day} {t:%B %Y}' if t else ''}] {words}"
 
 

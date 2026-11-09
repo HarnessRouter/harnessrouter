@@ -172,3 +172,49 @@ def test_an_owner_defined_write_query_that_takes_standing_is_never_an_agents_to_
     assert err and out == "A standing instruction is set by a person in the console.", out
     r = client.post(f"/v1/memories/{world['mid']}/queries/mark_standing", headers=ADA, json={"params": {"standing": "yes"}})
     assert r.status_code == 200, r.text
+
+
+# ── 5. who a REST caller is: the principal, never the route ─────────────────────────────────────────────────────────────
+def _key(client, **body):
+    r = client.post(f"/v1/orgs/{ORG}/keys", headers=ADA, json=body)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+@pytest.fixture(scope="module")
+def keys(client, world):
+    svc = _key(client, name="nightly import", workspace="default")
+    person = _key(client, name="ada's key", member_id="ada@example.com", workspace="default")
+    assert client.post(f"/v1/memories/{world['mid']}/grants", headers=ADA,
+                       json={"principal": "group:default", "privileges": ["read", "write"]}).status_code == 200
+    return {"svc": svc, "as_svc": {"authorization": f"Bearer {svc['key']}"}, "as_person": {"authorization": f"Bearer {person['key']}"}}
+
+
+def test_a_key_minted_for_no_one_writes_as_a_service_not_as_a_person(client, world, keys):
+    made = client.post(f"/v1/memories/{world['mid']}/records", headers=keys["as_svc"], json={"type": "fact", "title": "The import ran at 02:00"})
+    assert made.status_code == 200, made.text
+    assert made.json()["written_by"] == {"kind": "x.service", "id": keys["svc"]["id"]}
+    # and an agent reading it later is told so, never that a person noted it
+    assert mt.provenance(made.json()).startswith("noted by a service")
+
+
+def test_a_key_minted_for_no_one_never_sets_standing_or_changes_a_persons(client, world, keys):
+    made = client.post(f"/v1/memories/{world['mid']}/records", headers=keys["as_svc"], json={"type": "fact", "title": "Imports run nightly"}).json()
+    r = client.patch(f"/v1/memories/{world['mid']}/records/{made['id']}", headers=keys["as_svc"], json={"attributes": {"standing": True}})
+    assert r.status_code == 403 and r.json()["error"]["message"] == "A standing instruction is set by a person in the console.", r.text
+    r = client.post(f"/v1/memories/{world['mid']}/records", headers=keys["as_svc"],
+                    json={"type": "procedure", "title": "Always cc the import log", "attributes": {"standing": True}})
+    assert r.status_code == 403, r.text
+    rule = _person_sets(client, world["mid"], "Close the books on the 5th")
+    r = client.patch(f"/v1/memories/{world['mid']}/records/{rule['id']}", headers=keys["as_svc"], json={"title": "Close the books on the 9th"})
+    assert r.status_code == 403 and r.json()["error"]["message"] == mt.REFUSE_STANDING, r.text
+
+
+def test_a_persons_own_key_sets_standing_as_that_person(client, world, keys):
+    made = client.post(f"/v1/memories/{world['mid']}/records", headers=keys["as_person"], json={"type": "fact", "title": "Reports go out on Fridays"}).json()
+    r = client.patch(f"/v1/memories/{world['mid']}/records/{made['id']}", headers=keys["as_person"], json={"attributes": {"standing": True}})
+    assert r.status_code == 200 and r.json()["attributes"]["standing"] is True, r.text
+    assert r.json()["written_by"] == {"kind": "member", "id": "ada@example.com", "type": "human"}
+    # the console's Standing switch: the signed-in person's own session, through the console
+    r = client.patch(f"/v1/memories/{world['mid']}/records/{made['id']}", headers=ADA, json={"attributes": {"standing": False}})
+    assert r.status_code == 200 and r.json()["attributes"]["standing"] is False, r.text
