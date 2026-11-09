@@ -8577,6 +8577,13 @@ def _tool_names_off(tools_disabled: list[str] | None) -> list[str]:
     return sorted({str(t).split(" (")[0].strip() for t in (tools_disabled or []) if t and str(t).strip()})
 
 
+# The tools Qwen Code 0.26.3's background agents carry in their own scoped tool sets (isScopedTool:
+# file reads, grep and listing in the memory folder, edit, write and the shell; isScopedTool2: read,
+# list, edit and write for skill review).
+_QWEN_BACKGROUND_AGENT_TOOLS = frozenset({"read_file", "grep_search", "list_directory", "edit", "write_file",
+                                          "run_shell_command"})
+
+
 def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None,
                    tools_disabled: list[str] | None = None) -> None:
     """~/.qwen/settings.json under the redirected HOME: mcpServers (gemini-cli schema:
@@ -8622,6 +8629,18 @@ def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None,
     off = _tool_names_off(tools_disabled)
     if off:
         cfg["permissions"] = {"deny": off}
+    if set(off) & _QWEN_BACKGROUND_AGENT_TOOLS:
+        # Qwen Code's own background agents (memory extraction after a turn, memory consolidation,
+        # skill review) are each built with a scoped tool set that is registered whatever the deny
+        # list says (createSkillScopedAgentConfig, isScopedTool), so a switched-off file or shell
+        # tool would still be offered to them: measured, the memory extraction request carried
+        # read_file, grep_search, write_file and edit with all four off. A call is still refused
+        # (the base deny outranks the scoped allow), but the switch must not leave the tool in front
+        # of a model at all, so with any of those tools off these agents are off too. Known effect:
+        # switching a file or shell tool off on Qwen Code also turns off its own background memory
+        # and skill agents (its private memory, not the platform's).
+        cfg["memory"] = {"enableManagedAutoMemory": False, "enableManagedAutoDream": False,
+                         "enableAutoSkill": False}
     (qdir / "settings.json").write_text(json.dumps(cfg, indent=2))
 
 
