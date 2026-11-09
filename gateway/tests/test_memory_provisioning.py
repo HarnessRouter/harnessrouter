@@ -1145,8 +1145,8 @@ def test_remember_is_for_what_the_person_asks_to_keep_and_the_rest_is_kept_for_t
     _, tok = _session(h["id"], {"user": "ivy@guests.example"})
     said = {t["name"]: t for t in _rpc(client, tok, "tools/list")["tools"]}["memory_remember"]["description"]
     assert "kept for you" not in said and "Call it when the person asks you to keep something" in said
-    standing = gw.memory_tools._STANDING_SAYS
-    assert "only when the person told you, in this conversation" in standing and "worked out yourself" in standing
+    # a standing instruction is a person's to set: the tool says so, and drops one an agent sends (test_memory_standing_by_person)
+    assert "is set by a person in the console" in gw.memory_tools._STANDING_SAYS
 
 
 # ── what the agent already knows, at the turn's start ────────────────────────────────────────

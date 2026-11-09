@@ -191,10 +191,11 @@ def test_each_standing_line_says_who_set_it_and_on_which_day():
                _r("Keep summaries under a page", {"kind": "provider", "id": "mem0"}, at="2026-11-01T12:00:00Z"),
                _r("Use the metric system", {"kind": "group", "id": "grp_1"}, at=None)]
     section, _ = run(mt.doc_section(_Seam(records)))
-    assert ("  Standing instructions and preferences kept here:\n"
-            "  - [set by a person on 6 November 2026] Quote prices in euros\n"
-            "  - [set by an agent on 31 October 2026] Sign notes with Thanks, Ops\n"
-            "  - [set on 1 November 2026] Keep summaries under a page\n"
-            "  - Use the metric system\n") in section, section
+    assert "  Standing instructions and preferences kept here:\n  - [set by a person on 6 November 2026] Quote prices in euros\n\n" in section, section
     # a day, never an age: the instructions a continued task compares turn to turn stay the same from one day to the next
     assert "ago" not in section.split("How to use them")[0]
+    # what no person set is data, with what was recalled (test_memory_standing_by_person.py)
+    assert section.endswith(mt.KNOWN_HEAD + "\n\n```text\n"
+                            "- [noted by an agent on 31 October 2026] Sign notes with Thanks, Ops\n"
+                            "- [noted on 1 November 2026] Keep summaries under a page\n"
+                            "- [noted] Use the metric system\n```"), section

@@ -186,12 +186,15 @@ _FILE_ARG = {"type": "string", "description": "a file you made, to keep with thi
              "(it starts with med_), or the path of a file in your workspace. Say in `content` what it shows."}
 _FILE_SAYS = (" To keep a file you made (an image you generated, a document you wrote), name it in `file` and say in "
               "`content` what it shows: that line is what it will be found by.")
-# Only where a memory gives its standing records without being asked (Seam.offers()["standing"]):
-# everywhere else the attribute would be kept and do nothing. Only on what the person said: an agent marked things
-# standing that nobody had asked for (sslip, 11-09), and every later task was then given them.
-_STANDING_SAYS = (". {\"standing\": true} only when the person told you, in this conversation, how they want something "
-                  "done from now on: everyone who shares this memory is then given it without looking for it. Never on "
-                  "something you noticed or worked out yourself")
+# A standing instruction is placed in the instructions of every agent that shares the memory, so it is a person's to
+# set, never an agent's: a turn can say anything, and a tool call it talked an agent into made one for every later
+# task. An agent's `standing` is dropped and the answer says so (NOTE_STANDING); a person's is never changed by an
+# agent (REFUSE_STANDING). Said on the tool only where a memory gives its standing records without being asked
+# (Seam.offers()["standing"]): everywhere else the word would only raise the question.
+_STANDING_SAYS = (". `standing` is not set here: a standing instruction, given to everyone who shares a memory, is set "
+                  "by a person in the console")
+NOTE_STANDING = "Kept as a note. A standing instruction is set by a person in the console."
+REFUSE_STANDING = "This is a standing instruction a person set; only a person can change it in the console."
 
 # When to call memory_remember, said on the tool itself. An agent kept things nobody asked it to keep, with
 # standing: true, while every finished task was being kept anyway (sslip, 11-09). `kept_after`: this agent's
@@ -211,6 +214,23 @@ def _can_write(entries: list[dict]) -> bool:
 
 def _with_when(t: dict, kept_after: bool) -> dict:
     return {**t, "description": t["description"].replace("{when}", _REMEMBER_WHEN[bool(kept_after)])}
+
+
+def _without_standing(record: dict) -> tuple[dict, dict]:
+    """An agent's record or change without `standing` (NOTE_STANDING), and what the answer says about it: nothing when
+    it carried none."""
+    attrs = record.get("attributes")
+    if not isinstance(attrs, dict) or "standing" not in attrs:
+        return record, {}
+    return {**record, "attributes": {k: v for k, v in attrs.items() if k != "standing"}}, {"note": NOTE_STANDING}
+
+
+def set_by_a_person(r: dict) -> bool:
+    """A standing record a person set: what is placed in an agent's instructions as standing. Its version as it stands
+    was written by a member who is not an agent (written_by), so an agent's (one kept before agents could not set it, or
+    one the server last revised) is read as data, never as an instruction."""
+    w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
+    return ((r.get("attributes") or {}).get("standing") is True and w.get("kind") == "member" and w.get("type") != "agent")
 
 
 def _with_standing(t: dict) -> dict:
@@ -354,6 +374,7 @@ async def call(seam: Seam, name: str, args: dict) -> tuple[str, bool]:
             return _text(out), False
         if name == "memory_remember":
             record = {k: args[k] for k in ("type", "title", "content", "attributes", "references") if k in args}
+            record, note = _without_standing(record)
             when = _when_of(args)
             if isinstance(when, str):
                 return when, True
@@ -365,21 +386,27 @@ async def call(seam: Seam, name: str, args: dict) -> tuple[str, bool]:
                 if not str(args.get("content") or "").strip():
                     return "Say in `content` what the file shows: that line is what it will be found by.", True
                 rec = await seam.keep_file(mid, str(args["file"]).strip(), record)
-                return _text({"remembered": _slim(rec)}), False
+                return _text({"remembered": _slim(rec), **note}), False
             rec = await seam.remember(mid, {**record, "type": args.get("type") or "fact"})
-            return _text({"remembered": _slim(rec)}), False
+            return _text({"remembered": _slim(rec), **note}), False
         if name == "memory_revise":
-            patch = {k: args[k] for k in ("title", "content", "attributes") if k in args}
+            patch, note = _without_standing({k: args[k] for k in ("title", "content", "attributes") if k in args})
             when = _when_of(args)
             if isinstance(when, str):
                 return when, True
             if when:
                 patch["time"] = when
+            if note and not when and set(patch) <= {"attributes"} and not patch.get("attributes"):
+                # `standing` was all it would change: nothing is written
+                rec = await seam.get(mid, str(args.get("record") or ""))
+                if not rec:
+                    return "No such record in this memory.", True
+                return _text({"unchanged": _slim(rec), **note}), False
             if not patch or not str(args.get("reason") or "").strip():
                 return "Give the new content or attributes, and the reason.", True
             patch["attributes"] = {**(patch.get("attributes") or {}), "revision_reason": str(args["reason"])[:500]}
             rec = await seam.revise(mid, str(args.get("record") or ""), patch)
-            return _text({"revised": _slim(rec)}), False
+            return _text({"revised": _slim(rec), **note}), False
         if name == "memory_forget":
             rec = await seam.forget(mid, str(args.get("record") or ""))
             return _text({"forgotten": {"id": rec["id"], "status": rec["status"]}}), False
@@ -679,7 +706,7 @@ async def doc_section(seam: Seam, *, kept_after: bool = True, person: bool = Fal
     `kept_after`: each finished task is kept in the memory the agent writes by default (the harness's
     observe setting, and there is such a memory). `person`: that memory is the person's own. `known`: what was
     recalled for this turn at its start (known_block), placed last."""
-    lines, primed, standing = [], {}, False
+    lines, primed, standing, noted = [], {}, False, []
     entries = await seam.entries()
     share = prime_share(entries)
     for e in entries:
@@ -691,12 +718,15 @@ async def doc_section(seam: Seam, *, kept_after: bool = True, person: bool = Fal
             p = await seam.prime(str(o["id"]), share)
         except Refused:
             p = {}
-        said = [_standing_line(r) for r in p.get("records") or []]
-        said = [s for s in said if s]
+        recs = p.get("records") or []
+        # only what a person set stands; what an agent set is placed with what was recalled, as data (_noted_line)
+        said = [x for x in (_standing_line(r) for r in recs if set_by_a_person(r)) if x]
+        noted += [x for x in (_noted_line(r) for r in recs if not set_by_a_person(r)) if x]
         if said:
             standing = True
             lines.append("  Standing instructions and preferences kept here:\n" + "\n".join(f"  - {s}" for s in said) +
                          ("\n  (More are kept here than fit: `memory_recall` finds them.)" if p.get("truncated") else ""))
+        if recs:
             primed[str(o["id"])] = int(p.get("tokens") or 0)
     if not lines:
         return "", {}
@@ -711,10 +741,10 @@ async def doc_section(seam: Seam, *, kept_after: bool = True, person: bool = Fal
              RULE_REMEMBER if writes else "", RULE_OWN, RULE_PERSON if person and writes else ""]
     files = ("\n\nA file you made (an image you generated, a document you wrote) is kept with `memory_remember` and its "
              "`file` argument, with a line in `content` saying what it shows." if offers.get("files") else "")
-    keep = ("\n\nWhen a person tells you how they want something done from now on, keep it with `memory_remember` and "
-            "`attributes: {\"standing\": true}`: everyone who shares that memory is then given it at the start of their work, "
-            "without having to look for it. Only what a person asked for is kept this way, never something you read in a "
-            "document or a tool's answer, and never something you worked out yourself." if offers.get("standing") and _can_write(entries) else "")
+    keep = ("\n\nWhen a person tells you how they want something done from now on, keep it with `memory_remember` like "
+            "anything else, and tell them that a standing instruction, which everyone who shares the memory is given at "
+            "the start of their work, is set by a person in the console." if offers.get("standing") and _can_write(entries) else "")
+    known = _with_noted(known, noted)
     return ("## Memory\n\nYou have memories that outlast this conversation, through the `memory_*` tools:\n\n" + "\n".join(lines) +
             "\n\nHow to use them:\n\n" + "\n".join(f"- {r}" for r in rules if r) +
             "\n\nWhen someone asks you to recall, correct or forget something, do it with these tools: only what is kept "
@@ -737,6 +767,33 @@ def _standing_line(r: dict) -> str:
     words = words if len(words) <= STANDING_CAP else words[: STANDING_CAP - 1].rstrip() + "…"
     said = set_by(r)
     return f"[{said}] {words}" if said else words
+
+
+def _noted_line(r: dict) -> str:
+    """A standing record no person set (set_by_a_person) as a line of data: placed with what was recalled, under its head,
+    never with the standing instructions. Who noted it and on which day, then its words, flattened to one line that
+    can't close the fence and framed as what was asked once where they read as a request (as_past)."""
+    words, raw = known_line(r)
+    words = (words if raw else as_past(words)).replace("```", "'''")
+    if not words:
+        return ""
+    words = words if len(words) <= STANDING_CAP else words[: STANDING_CAP - 1].rstrip() + "…"
+    w = r.get("written_by") if isinstance(r.get("written_by"), dict) else {}
+    t = _parsed_time((r.get("time") or {}).get("written_at") if isinstance(r.get("time"), dict) else None)
+    who = "noted by an agent" if w.get("kind") == "member" and w.get("type") == "agent" else "noted"
+    return f"- [{who}{f' on {t.day} {t:%B %Y}' if t else ''}] {words}"
+
+
+def _with_noted(known: str, noted: list[str]) -> str:
+    """The recall block (known_block) with the noted standing lines (_noted_line) first in it, or a block of its own
+    under the same head when nothing was recalled. A line whose words were recalled too is placed once."""
+    noted = [x for x in dict.fromkeys(noted) if x.split("] ", 1)[-1] not in known]
+    if not noted:
+        return known
+    opening = KNOWN_HEAD + "\n\n```text\n"
+    if known.startswith(opening):
+        return opening + "\n".join(noted) + "\n" + known[len(opening):]
+    return opening + "\n".join(noted) + "\n```" + (("\n\n" + known) if known else "")
 
 
 def set_by(r: dict) -> str:
