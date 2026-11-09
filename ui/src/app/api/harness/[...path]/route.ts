@@ -8,7 +8,7 @@
 //
 // SSE responses (text/event-stream from /v1/responses?stream) stream through unbuffered so the
 // Workbench gets live reasoning/tool/text deltas instead of one blob at turn end.
-//   HARNESS_GATEWAY_URL   e.g. https://harness-gateway.<env>.eastus2.azurecontainerapps.io
+//   HARNESS_GATEWAY_URL   e.g. http://127.0.0.1:8080 (self-hosted) or your gateway's URL
 //   HARNESS_INTERNAL_KEY  internal trust key (matches the gateway's secret)
 //
 // SELF-HOSTED: there is no login, so there is no JWT to gate the key on. The BFF is instead the

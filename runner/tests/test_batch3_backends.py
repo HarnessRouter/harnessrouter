@@ -1162,7 +1162,7 @@ def test_opensquillas_route_asks_openai_for_a_stream_without_padding():
     import server
     from server import _without_stream_obfuscation
     asked = json.dumps({"model": "gpt-5.4-mini", "stream": True, "stream_options": {"include_usage": True}}).encode()
-    for base in ("https://api.openai.com/v1", "https://agentstudio-oai-e2.openai.azure.com/openai/v1"):
+    for base in ("https://api.openai.com/v1", "https://example-resource.openai.azure.com/openai/v1"):
         out = json.loads(_without_stream_obfuscation(asked, base))
         assert out["stream_options"] == {"include_usage": True, "include_obfuscation": False}, base
     # an aggregator's stream, a body that does not stream, and one that already chose are left alone

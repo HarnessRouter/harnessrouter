@@ -1,10 +1,10 @@
 """In-sandbox harness runner server — multi-backend, multi-provider.
 
-Runs INSIDE an ACA Dynamic Sessions custom-container sandbox (one per session, Hyper-V
-isolated, warm-pooled). The `harness-gateway` allocates a session from the pool and proxies
-turn requests here. The agent ALWAYS works on a real local POSIX git working tree at
-/workspace with real bash + git — its native, trained environment (we never map VectorGraph
-into the session; see docs/technical/HARNESS_AS_A_SERVICE_DESIGN.md S0.5).
+Runs inside the sandbox the agent works in: self-hosted, one runner serves every session behind
+the per-session write-wall (HR_SESSION_UIDS); a deployment can instead give each session its own
+container (HR_SANDBOX_PER_SESSION). The `harness-gateway` routes a session here and proxies turn
+requests. The agent ALWAYS works on a real local POSIX git working tree at /workspace with real
+bash + git, its native, trained environment (no remote store is mapped into the session).
 
 A turn runs ONE backend CLI one-shot over /workspace and normalizes its events into a
 single canonical schema (Claude Code `stream-json`) so everything downstream is uniform.
@@ -111,11 +111,10 @@ WORKSPACE_ROOT = os.environ.get("HARNESS_WORKSPACE", "/workspace")
 _SID_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
-# "One sandbox per session" as a DEPLOYMENT INVARIANT, declared by the deployment itself (the
-# hosted session pool sets it: ACA Dynamic Sessions gives each identifier its own
-# Hyper-V-isolated container). Everything it changes fails CLOSED when unset — the self-hosted
-# all-in-one container runs ONE runner for ALL sessions, where these behaviors would break
-# session isolation. See _ws() and _reap_workspaces().
+# "One sandbox per session" as a DEPLOYMENT INVARIANT, declared by the deployment itself (a
+# session pool sets it when it gives each identifier its own isolated container). Everything it
+# changes fails CLOSED when unset — the self-hosted all-in-one container runs ONE runner for ALL
+# sessions, where these behaviors would break session isolation. See _ws() and _reap_workspaces().
 _SANDBOX_PER_SESSION = os.environ.get("HR_SANDBOX_PER_SESSION", "").strip().lower() in ("1", "true", "on")
 
 # THE SESSION WRITE-WALL, the second deployment invariant, declared by the self-hosted entrypoint
@@ -222,8 +221,8 @@ def _ws(identifier: str = "") -> str:
     The gateway already addresses every runner call as ?identifier=<session_id>, so the session
     id IS the directory and nothing on the wire changes.
 
-    UNDER THE PER-SESSION-SANDBOX INVARIANT (HR_SANDBOX_PER_SESSION, declared by the hosted
-    pool: each identifier gets its own Hyper-V-isolated container), the session workspace IS
+    UNDER THE PER-SESSION-SANDBOX INVARIANT (HR_SANDBOX_PER_SESSION, declared by a session
+    pool that gives each identifier its own isolated container), the session workspace IS
     WORKSPACE_ROOT itself. This is the mechanical fix for deliverables written to "/workspace/X"
     — the path models reach for when told they work in a workspace. With a per-session
     subdirectory, that path was a writable trap OUTSIDE the git tree: never collected, never
@@ -845,8 +844,8 @@ async def _internal_callers_only(request: Request, call_next):
 # Where checkpoint/hydrate tarballs spool to disk (HR-INF-015 — never a RAM buffer). MUST be
 # OUTSIDE the workspace (so a leftover temp file can never be caught by a later `git add -A` or
 # re-tarred) AND on a real DISK, not a RAM-backed tmpfs (which would defeat the memory saving).
-# Default: a dedicated dir on the container's disk-backed rootfs (same overlay as /workspace on
-# ACA Dynamic Sessions), created at import. Override with HARNESS_SPOOL_DIR if the runtime differs.
+# Default: a dedicated dir on the container's disk-backed rootfs (the same overlay as
+# /workspace), created at import. Override with HARNESS_SPOOL_DIR if the runtime differs.
 def _spool_dir(path: str) -> str | None:
     """`path`, created if missing, when this process can create files in it; else None, which
     tempfile reads as the OS tmpdir. An EXISTING directory counts only if it is writable: on the
@@ -2950,7 +2949,7 @@ CLAUDE_PROVIDERS = {"anthropic", "bedrock", "vertex", "tokenrouter"}
 #   output_config.effort        -> 400 on haiku-4.5
 #                                  'This model does not support the effort parameter.'
 #
-# The broker strips both centrally (_strip_unsupported in harness_gateway) — but only for traffic
+# The broker strips both centrally (_strip_unsupported in the gateway) — but only for traffic
 # that goes THROUGH the broker. A self-hosted instance is bring-your-own-key: the CLI holds the
 # credential and calls the provider directly, so nothing on that path ever sees the body. The CLI
 # therefore has to be told not to send them.
@@ -3168,8 +3167,9 @@ CODEX_PROVIDERS = {
 # sandbox via --dangerously-bypass-approvals-and-sandbox, but `codex app-server` has no such flag and
 # reads its policy from config.toml. Without this it defaults to read-only, so with approval_policy
 # "never" (never escalate) every apply_patch/file write is silently rejected and the agent gives up
-# ("workspace mounted read-only"). We already run one Hyper-V-isolated sandbox per session, so full
-# access INSIDE it matches the exec path's behavior. The [sandbox_workspace_write] block is inert
+# ("workspace mounted read-only"). The session's sandbox is the boundary (its own container where
+# HR_SANDBOX_PER_SESSION is declared, the per-session write-wall otherwise), so full access INSIDE
+# it matches the exec path's behavior. The [sandbox_workspace_write] block is inert
 # under danger-full-access but kept for anyone who flips the mode down to workspace-write.
 # The provider KEY is ours to choose — it only has to match `model_provider`. It is namespaced
 # because Codex reserves its built-in ids: a [model_providers.openai] block is rejected outright
@@ -3927,7 +3927,7 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
         pname = pr             # a native provider with no key (a key goes the custom way, above)
 
     cmd = ["pi", "-p", "--mode", "json", "--provider", pname, "--model", model,
-           # The sandbox is the trust boundary (one Hyper-V-isolated box per session), so
+           # The sandbox is the trust boundary (see _SANDBOX_PER_SESSION and the write-wall), so
            # project-local files are trusted the same way claude gets
            # --dangerously-skip-permissions: explicitly, because nobody is there to answer.
            "--approve",
@@ -17201,7 +17201,7 @@ def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
     volume by hand while the runner container was merely stopped and started, or removed by
     DELETE /workspace before it learned to drop the marker. Either way the next probe answered
     "held", the gateway skipped the restore, and the turn ran on an empty folder — the CLI found
-    no session to resume and the conversation started over (richard-epsilla, #194). A workspace
+    no session to resume and the conversation started over (#194). A workspace
     restored from a checkpoint always carries its .git (the tarball does, and _git_ensure runs
     after every restore), so a folder without one holds nothing, whatever the marker says; the
     marker that vouched for it is dropped so the full hydrate that follows starts clean."""
@@ -18138,7 +18138,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             _collected_at_turn_start(_ws(identifier))
         except Exception as e:  # noqa: BLE001 — the cursor is collection's; a turn never waits on it
             print(f"[produced] cursor not set at turn start: {str(e)[:160]}", flush=True)
-        # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
+        # Built-in skills the harness disabled must NOT be mounted. Here built-ins aren't
         # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers
         # from req.skills, so this filter is a parity guard: never write a skill whose name is suppressed.
         _skip = set(req.skills_suppressed or [])
