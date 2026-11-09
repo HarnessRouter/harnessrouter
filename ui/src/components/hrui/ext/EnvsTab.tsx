@@ -3,16 +3,15 @@
 // with the old console's whole environment experience in it (Richard, 10-18: "把之前原来那个版本的东西
 // 给弄过来 … 用新的设计 first principle"). The workspace's environments as the service lists them
 // (lib/environments.ts), one row each: its name and where tasks find it, the setups that use it, its
-// files, its declared packages per manager and its state. New environment starts from a git repository
-// (address and branch or tag), an archive, a folder, or nothing; once its files are in it is built,
-// so its packages are installed once. A row opens the environment's own sheet (EnvSheet: files,
+// files, its declared packages per manager and its state. New environment asks only a name and a
+// description (Richard, 11-09: "just give name and description"); it is made empty and opens on its own
+// sheet, where files and packages go in. A row opens the environment's own sheet (EnvSheet: files,
 // packages, builds and versions, details), and the address remembers it (?env=<id>). Remove first
 // takes it off every setup that reads it, as the design says, then removes it. An older console's
 // link to one environment (/environments/<id>) lands here with ?env=<id> and opens it.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  listEnvironments, createEnvironment, deleteEnvironment, importEnvironmentGit, importEnvironmentArchive, writeEnvironmentFile, buildEnvironment,
-  environmentHarnesses, fmtBytes, type Environment,
+  listEnvironments, createEnvironment, deleteEnvironment, environmentHarnesses, fmtBytes, type Environment,
 } from '@/lib/environments';
 import { getCustom, saveCustom, type CustomHarness } from '@/lib/harness';
 import { readSettled } from '@/lib/settle';
@@ -22,7 +21,7 @@ import { ConfirmSheet, Sheet, SheetTop } from '../Sheet';
 import { usedText, plural, PLUS, ReadFailed } from './shared';
 import { Skel, SkRows } from '../Skel';
 import { EnvSheet, type EnvTab, type EnvUser } from './EnvSheet';
-import { MANAGERS, folderFiles, gitUrl, limitOf, sayFail, statusOf, statusView, uploadSummary } from './envModel';
+import { MANAGERS, sayFail, statusView } from './envModel';
 import './envs.css';
 import { Markup } from '../Markup';
 
@@ -159,7 +158,7 @@ export function EnvsTab({ data, setups, reloadSetups }: {
 
       {creating ? (
         <NewEnvSheet taken={names.map((n) => n.name)} onClose={() => setCreating(false)}
-          onCreated={(e, tab, notice) => { setCreating(false); void reload(); open(e.id, tab, notice); }} />
+          onCreated={(e) => { setCreating(false); void reload(); open(e.id, 'files'); }} />
       ) : null}
 
       {opened ? (
@@ -181,146 +180,54 @@ export function EnvsTab({ data, setups, reloadSetups }: {
 
 // ── New environment ───────────────────────────────────────────────────────────────────────────────
 
-type Src = 'git' | 'archive' | 'folder' | 'empty';
-const SRC: [Src, string][] = [['git', 'Git repository'], ['archive', 'Archive'], ['folder', 'Folder'], ['empty', 'Nothing yet']];
-
+/** New environment: a name and, if the person wants, a description; nothing else (Richard, 11-09: "just give name
+ *  and description"). It is made empty and opens on its own sheet, on Files, where files and packages go in. The
+ *  product's own form sheet, as Add MCP server and Connect a plugin draw it: the title alone on its row, each field
+ *  under its label at full width, Cancel then the primary action; a bottom sheet on a phone. */
 export function NewEnvSheet({ taken, onClose, onCreated }: {
   taken: string[]; onClose: () => void;
-  /** made: open it on `tab`, with `notice` when part of it did not go through */
-  onCreated: (e: Environment, tab: EnvTab, notice?: string) => void;
+  /** made: open it */
+  onCreated: (e: Environment) => void;
 }) {
   const [name, setName] = useState('');
-  const [src, setSrc] = useState<Src>('git');
-  const [url, setUrl] = useState('');
-  const [ref, setRef] = useState('');
-  const [archive, setArchive] = useState<File | null>(null);
-  const [folder, setFolder] = useState<{ name: string; files: { path: string; file: File }[] } | null>(null);
   const [description, setDescription] = useState('');
-  const [entry, setEntry] = useState('');
-  const [step, setStep] = useState('');
-  const [err, setErr] = useState<{ field: string; text: string } | null>(null);
-  const archiveRef = useRef<HTMLInputElement | null>(null);
-  const folderRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => { folderRef.current?.setAttribute('webkitdirectory', ''); }, [src]);
-
-  const bad = (field: string, text: string) => { setErr({ field, text }); };
-  function pickFolder(list: FileList | null) {
-    const all = Array.from(list || []);
-    if (!all.length) return;
-    const top = ((all[0] as File & { webkitRelativePath?: string }).webkitRelativePath || '').split('/')[0] || '';
-    setErr(null); setFolder({ name: top, files: folderFiles(all, true) });
-  }
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const nameRef = useRef<HTMLInputElement | null>(null);
 
   async function create() {
+    if (busy) return;
     const n = name.trim();
-    if (!n) return bad('name', 'Give the environment a name.');
-    if (taken.includes(n.toLowerCase())) return bad('name', `“${n}” is already taken. Use another name.`);
-    let git = '';
-    if (src === 'git') { const u = gitUrl(url); if (!u) return bad('url', 'Paste a git repository address, like https://github.com/your-org/project.'); git = u; }
-    if (src === 'archive' && !archive) return bad('archive', 'Choose a zip or tar of the project folder.');
-    if (src === 'folder' && !folder?.files.length) return bad('folder', 'Choose the project folder.');
-    setErr(null); setStep('Creating…');
+    const bad = (text: string) => { setErr(text); nameRef.current?.focus(); };
+    if (!n) return bad('Give the environment a name.');
+    if (taken.includes(n.toLowerCase())) return bad(`“${n}” is already taken. Use another name.`);
+    setErr(''); setBusy(true);
     let env: Environment;
     try {
-      env = await createEnvironment({ name: n, description: description.trim(), entry: entry.trim() });
+      env = await createEnvironment({ name: n, description: description.trim() });
     } catch (e) {
-      setStep('');
-      return bad('name', sayFail(e, 'The environment could not be created.', {
+      setBusy(false);
+      return bad(sayFail(e, 'The environment could not be created.', {
         409: `An environment named like “${n}” already exists. Use another name.`, 422: 'Give it a name that starts with a letter or a digit.',
       }));
     }
-    let files = 0, notice = '';
-    try {
-      if (src === 'git') { setStep('Importing the repository…'); files = (await importEnvironmentGit(env.id, git, ref.trim(), false)).count; }
-      else if (src === 'archive' && archive) { setStep(`Importing ${archive.name}…`); files = Number((await importEnvironmentArchive(env.id, archive, false))?.count) || 0; }
-      else if (src === 'folder' && folder) {
-        // every file, its folders kept; only the service's own limits refuse one
-        const failed: { path: string; tooBig: boolean }[] = [];
-        let full = false;
-        for (const [i, f] of folder.files.entries()) {
-          setStep(`Uploading ${i + 1} of ${folder.files.length}…`);
-          try { await writeEnvironmentFile(env.id, f.path, f.file); files++; }
-          catch (e) {
-            const limit = limitOf(e);
-            if (limit === 'entries') { full = true; break; }   // past it every file is refused: stop here
-            failed.push({ path: f.path, tooBig: limit === 'size' });
-          }
-        }
-        if (failed.length || full) notice = uploadSummary(files, failed, full);
-      }
-    } catch (e) {
-      const why = limitOf(e) === 'entries' ? ' It has more files and folders than one environment holds.'
-        : limitOf(e) === 'size' ? ' It is too large to import here.'
-          : statusOf(e) !== 422 ? '' : src === 'git' ? ' Check the address and the branch or tag; a private repository needs an access token in the address.' : ' That file is not a zip or tar archive.';
-      notice = `It was made, but the ${src === 'git' ? 'repository' : 'archive'} could not be imported.${why} Import it again here on Files.`;
-    }
-    // with its files in, it is built at once, so its packages are installed once
-    let built = false;
-    if (files > 0) {
-      setStep('Starting the build…');
-      try { await buildEnvironment(env.id); built = true; }
-      catch (e) { notice = notice || sayFail(e, 'It was made, but its build could not start. Build it here.').replace(/ Try again\.$/, ''); }
-    }
-    setStep('');
-    onCreated(env, built ? 'builds' : 'files', notice || undefined);
+    onCreated(env);
   }
 
-  const enter = (ev: React.KeyboardEvent) => { if (ev.key === 'Enter') { ev.preventDefault(); void create(); } };
-  const busy = !!step;
   return (
-    <Sheet onClose={onClose} labelledBy="eonh" className="small-sheet eo-new eo-full" busy={busy}>
+    <Sheet onClose={onClose} labelledBy="eonh" className="small-sheet mcp-sheet eo-create" busy={busy} initialFocus={nameRef}>
       <SheetTop id="eonh" title="New environment" onClose={onClose} />
-      <div className="set-f">
-        <label htmlFor="eonName">Name</label>
-        <input id="eonName" className={`set-in${err?.field === 'name' ? ' bad' : ''}`} placeholder="docs-repo" value={name} disabled={busy}
-          aria-invalid={err?.field === 'name' || undefined} onChange={(ev) => { setName(ev.target.value); if (err?.field === 'name') setErr(null); }} onKeyDown={enter} />
+      <div className="set-f"><label htmlFor="eonName">Name</label>
+        <input id="eonName" ref={nameRef} className={`set-in${err ? ' bad' : ''}`} placeholder="my-project" autoComplete="off" spellCheck={false}
+          value={name} disabled={busy} aria-invalid={err ? true : undefined} aria-describedby={err ? 'eonErr' : undefined}
+          onChange={(ev) => { setName(ev.target.value); if (err) setErr(''); }}
+          onKeyDown={(ev) => { if (ev.key === 'Enter' && !ev.nativeEvent.isComposing) { ev.preventDefault(); void create(); } }} />
+        {err ? <p className="set-help eo-err" id="eonErr" role="alert">{err}</p> : null}
       </div>
-      <div className="set-f">
-        <span className="eo-l" id="eonSrcL">Start from</span>
-        <div className="seg eo-src" role="radiogroup" aria-labelledby="eonSrcL">
-          {SRC.map(([k, label]) => (
-            <button key={k} type="button" role="radio" aria-checked={src === k} className={src === k ? 'on' : ''} disabled={busy}
-              onClick={() => { setSrc(k); setErr(null); }}>{label}</button>
-          ))}
-        </div>
-      </div>
-      {src === 'git' ? (
-        <div className="eo-two">
-          <div className="set-f"><label htmlFor="eonUrl">Repository address</label>
-            <input id="eonUrl" className={`set-in mono${err?.field === 'url' ? ' bad' : ''}`} value={url} placeholder="https://github.com/your-org/project" spellCheck={false} disabled={busy}
-              onChange={(ev) => { setUrl(ev.target.value); if (err?.field === 'url') setErr(null); }} onKeyDown={enter} /></div>
-          <div className="set-f"><label htmlFor="eonRef">Branch or tag <span className="muted">optional</span></label>
-            <input id="eonRef" className="set-in mono" value={ref} placeholder="main" spellCheck={false} disabled={busy} onChange={(ev) => setRef(ev.target.value)} onKeyDown={enter} /></div>
-        </div>
-      ) : null}
-      {src === 'archive' ? (
-        <div className="set-f eo-pick">
-          <input ref={archiveRef} type="file" hidden accept=".zip,.tar,.tgz,.tar.gz,application/zip,application/x-tar,application/gzip"
-            onChange={(ev) => { const f = ev.target.files?.[0] || null; ev.target.value = ''; if (f) { setArchive(f); setErr(null); } }} />
-          <button type="button" className={`btn line${err?.field === 'archive' ? ' bad' : ''}`} disabled={busy} onClick={() => archiveRef.current?.click()}>{archive ? 'Choose another' : 'Choose a zip or tar'}</button>
-          {archive ? <span className="set-help"><b>{archive.name}</b> · {fmtBytes(archive.size)}</span> : null}
-        </div>
-      ) : null}
-      {src === 'folder' ? (
-        <div className="set-f eo-pick">
-          <input ref={folderRef} type="file" hidden multiple onChange={(ev) => { pickFolder(ev.target.files); ev.target.value = ''; }} />
-          <button type="button" className={`btn line${err?.field === 'folder' ? ' bad' : ''}`} disabled={busy} onClick={() => folderRef.current?.click()}>{folder ? 'Choose another' : 'Choose a folder'}</button>
-          {folder ? <span className="set-help"><b>{folder.name || 'The folder'}</b> · {plural(folder.files.length, 'file')}</span> : null}
-        </div>
-      ) : null}
-
-      <details className="eo-more">
-        <summary>Description and how it is run <span className="muted">optional</span></summary>
-        <div className="set-f"><label htmlFor="eonDesc">Description</label>
-          <input id="eonDesc" className="set-in" value={description} placeholder="What the project does" disabled={busy} onChange={(ev) => setDescription(ev.target.value)} /></div>
-        <div className="set-f"><label htmlFor="eonEntry">How it is run</label>
-          <input id="eonEntry" className="set-in mono" value={entry} placeholder="python3 run.py --episode <id>" spellCheck={false} disabled={busy} onChange={(ev) => setEntry(ev.target.value)} /></div>
-      </details>
-
-      {err ? <p className="eo-msg bad" role="alert">{err.text}</p> : null}
-
-      <div className="sheet-actions eo-new-act">
-        <span className="eo-state" role="status" aria-live="polite">{step}</span>
+      <div className="set-f"><label htmlFor="eonDesc">Description <span className="muted">optional</span></label>
+        <textarea id="eonDesc" className="set-in" rows={3} placeholder="What the project does" value={description} disabled={busy}
+          onChange={(ev) => setDescription(ev.target.value)} /></div>
+      <div className="sheet-actions">
         <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
         <button type="button" className="btn primary" disabled={busy} onClick={() => void create()}>{busy ? 'Creating…' : 'Create environment'}</button>
       </div>

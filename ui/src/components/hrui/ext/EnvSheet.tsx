@@ -3,8 +3,9 @@
 // whole environment experience, in the new design). The old page's capabilities, each in its place:
 //   Files     the project's tree beside the open file, edited in place in the console's code editor
 //             (CodeEditor: highlighted, long lines wrapped); a file that is not text shown as itself
-//             (an image, a PDF, a video, a sound; Richard 10-21); find a file; new file and folder;
-//             upload files or a folder; import a git repository (URL and branch or tag) or an
+//             (an image, a PDF, a video, a sound; Richard 10-21); find a file; upload files or a
+//             folder (first in the bar, and the whole of an empty environment's Files); new file and
+//             folder; under More options, import a git repository (URL and branch or tag) or an
 //             archive, over the current files or replacing them; remove a file or a folder.
 //   Packages  pip, npm and apt packages declared per manager, each checked with its registry on Add
 //             (the old page's rule, ext/envModel planAdd); the Python a build uses; the version each
@@ -61,7 +62,6 @@ const IC = {
   folderAdd: svg(<><path d={FOLDER} /><path d="M12 10.5v5M9.5 13h5" /></>),
   upload: svg(<><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5" /><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" /></>),
   folderUp: svg(<><path d={FOLDER} /><path d="M12 16v-5M9.8 13.2L12 11l2.2 2.2" /></>),
-  git: svg(<><circle cx="6" cy="6" r="2.2" /><circle cx="6" cy="18" r="2.2" /><circle cx="18" cy="8" r="2.2" /><path d="M6 8.2v7.6M18 10.2c0 3.3-3.4 4-6.2 4.6-2.3.5-4.6 1.1-5.4 2.4" /></>),
   archive: svg(<><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M12 3v2M12 7v2M12 11v2" /><rect x="10" y="14" width="4" height="4" rx="1" /></>),
   chev: svg(<path d="M9 6l6 6-6 6" />),
   x: svg(<path d="M6 6l12 12M18 6L6 18" />),
@@ -280,7 +280,7 @@ export function EnvSheet({ id, tab: firstTab = 'files', notice = '', taken = [],
           <div className={`eo-body eo-on-${tab}`} id="eo-panel" role="tabpanel" aria-labelledby={`eot-${tab}`}>
             {tab === 'files' ? (
               <FilesPane id={id} entries={entries} filesErr={filesErr} edits={edits} setEdits={setEdits}
-                busy={busy === 'files'} setBusy={(b) => setBusy(b ? 'files' : '')} reload={() => load()} />
+                busy={busy === 'files'} setBusy={(b) => setBusy(b ? 'files' : '')} reload={() => load()} toPackages={() => setTab('packages')} />
             ) : null}
             {tab === 'packages' ? (
               <PackagesPane env={env} runtimes={runtimes} declared={declared} setDeclared={setDeclared} python={python} setPython={setPython}
@@ -339,10 +339,12 @@ export function EnvSheet({ id, tab: firstTab = 'files', notice = '', taken = [],
 
 type Imp = { kind: 'git' | 'archive'; url: string; ref: string; file: File | null; replace: boolean };
 
-function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, reload }: {
+function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, reload, toPackages }: {
   id: string; entries: EnvironmentFileEntry[] | null; filesErr: string;
   edits: Record<string, string>; setEdits: (f: (e: Record<string, string>) => Record<string, string>) => void;
   busy: boolean; setBusy: (b: boolean) => void; reload: () => Promise<void>;
+  /** the Packages tab, from an empty environment's Files */
+  toPackages: () => void;
 }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -486,6 +488,11 @@ function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, relo
   );
 
   const empty = entries !== null && !entries.length;
+  // More options: the import from a git repository or an archive, opened and closed in place
+  const more = () => { setMsg(null); setImp(imp ? null : { kind: 'git', url: '', ref: '', file: null, replace: false }); };
+  const moreBtn = (cls: string, label: ReactNode) => (
+    <button type="button" className={cls} disabled={busy} aria-expanded={!!imp} aria-controls={imp ? 'eoImp' : undefined} onClick={more}>{label}</button>
+  );
   const pickers = (
     <>
       <input ref={filesRef} type="file" hidden multiple onChange={(ev) => { void upload(ev.target.files, false); ev.target.value = ''; }} />
@@ -498,20 +505,26 @@ function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, relo
   return (
     <div className="eo-files-pane">
       {pickers}
-      <div className="eo-bar">
-        <label className="eo-find"><span className="sr">Find a file</span>{IC.search}
-          <input type="search" value={q} placeholder="Find a file" spellCheck={false} onChange={(ev) => setQ(ev.target.value)} /></label>
-        <span className="eo-tools">
-          <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setNewPath({ kind: 'file', value: '' }); }} title="New file">{IC.fileAdd}<span>New file</span></button>
-          <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setNewPath({ kind: 'dir', value: '' }); }} title="New folder">{IC.folderAdd}<span>New folder</span></button>
-          <button type="button" className="eo-tool" disabled={busy} onClick={() => filesRef.current?.click()} title="Upload files">{IC.upload}<span>Upload files</span></button>
-          <button type="button" className="eo-tool" disabled={busy} onClick={() => folderRef.current?.click()} title="Upload a folder">{IC.folderUp}<span>Upload a folder</span></button>
-          <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setImp({ kind: 'git', url: '', ref: '', file: null, replace: false }); }} title="Import a git repository or an archive">{IC.git}<span>Import</span></button>
-        </span>
-      </div>
+      {/* an empty environment: adding files is the whole of Files (below); the bar comes with the first file, or
+          with a new file or the import opened from there */}
+      {empty && !imp && !newPath ? null : (
+        <div className="eo-bar">
+          {empty ? null : (
+            <label className="eo-find"><span className="sr">Find a file</span>{IC.search}
+              <input type="search" value={q} placeholder="Find a file" spellCheck={false} onChange={(ev) => setQ(ev.target.value)} /></label>
+          )}
+          <span className="eo-tools">
+            <button type="button" className="eo-tool" disabled={busy} onClick={() => filesRef.current?.click()} title="Upload files">{IC.upload}<span>Upload files</span></button>
+            <button type="button" className="eo-tool" disabled={busy} onClick={() => folderRef.current?.click()} title="Upload a folder">{IC.folderUp}<span>Upload a folder</span></button>
+            <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setNewPath({ kind: 'file', value: '' }); }} title="New file">{IC.fileAdd}<span>New file</span></button>
+            <button type="button" className="eo-tool" disabled={busy} onClick={() => { setMsg(null); setNewPath({ kind: 'dir', value: '' }); }} title="New folder">{IC.folderAdd}<span>New folder</span></button>
+            {moreBtn('eo-tool', <><span>More options</span><span className={`eo-chev eo-more-chev${imp ? ' open' : ''}`} aria-hidden="true">{IC.chev}</span></>)}
+          </span>
+        </div>
+      )}
 
       {imp ? (
-        <div className="eo-imp" role="group" aria-label="Import a project">
+        <div className="eo-imp" id="eoImp" role="group" aria-label="Import a project">
           <div className="seg" role="radiogroup" aria-label="Import from">
             <button type="button" role="radio" aria-checked={imp.kind === 'git'} className={imp.kind === 'git' ? 'on' : ''} onClick={() => setImp({ ...imp, kind: 'git' })}>Git repository</button>
             <button type="button" role="radio" aria-checked={imp.kind === 'archive'} className={imp.kind === 'archive' ? 'on' : ''} onClick={() => setImp({ ...imp, kind: 'archive' })}>Archive</button>
@@ -566,9 +579,22 @@ function FilesPane({ id, entries, filesErr, edits, setEdits, busy, setBusy, relo
 
       {entries === null ? <Skel label="Loading the files"><SkRows n={4} lead={false} /></Skel>
         : empty ? (imp || newPath ? null : (
-          // the bar above has every way in: one line and the likeliest one
-          <p className="eo-none eo-nofiles">No files yet.{' '}
-            <button type="button" className="link-q inl" onClick={() => { setMsg(null); setImp({ kind: 'git', url: '', ref: '', file: null, replace: false }); }}>Import a project</button></p>
+          // nothing in it yet: add files, the two ways most people do; a new file and the import stay one click away
+          <section className="eo-start eo-nofiles" aria-labelledby="eoStartH">
+            <h4 id="eoStartH">Add files</h4>
+            <p>Upload your project’s files, or a whole folder with its folders kept. Packages listed in requirements.txt,
+              pyproject.toml or package.json are installed when it builds; add others on{' '}
+              <button type="button" className="link-q inl" onClick={toPackages}>Packages</button>.</p>
+            <div className="eo-start-act">
+              <button type="button" className="btn primary" disabled={busy} onClick={() => filesRef.current?.click()}>{IC.upload}Upload files</button>
+              <button type="button" className="btn line" disabled={busy} onClick={() => folderRef.current?.click()}>{IC.folderUp}Upload a folder</button>
+            </div>
+            <span className="eo-or">
+              <button type="button" className="link-q inl" disabled={busy} onClick={() => { setMsg(null); setNewPath({ kind: 'file', value: '' }); }}>New file</button>
+              <span aria-hidden="true"> · </span>
+              {moreBtn('link-q inl', 'More options')}
+            </span>
+          </section>
         )) : (
           <div className="eo-files">
             <div className="eo-tree-pane">
@@ -874,7 +900,7 @@ function DetailsPane({ env, form, setForm, users }: {
       <div className="set-f"><label htmlFor="eoName">Name</label>
         <input id="eoName" className={`set-in${form.name.trim() ? '' : ' bad'}`} value={form.name} onChange={(ev) => setForm({ ...form, name: ev.target.value })} /></div>
       <div className="set-f"><label htmlFor="eoDesc">Description <span className="muted">optional</span></label>
-        <input id="eoDesc" className="set-in" value={form.description} placeholder="What the project does" onChange={(ev) => setForm({ ...form, description: ev.target.value })} /></div>
+        <textarea id="eoDesc" className="set-in" rows={3} value={form.description} placeholder="What the project does" onChange={(ev) => setForm({ ...form, description: ev.target.value })} /></div>
       <div className="set-f"><label htmlFor="eoEntry">How it is run <span className="muted">optional</span></label>
         <input id="eoEntry" className="set-in mono" value={form.entry} placeholder="python3 run.py --episode <id>" spellCheck={false} onChange={(ev) => setForm({ ...form, entry: ev.target.value })} /></div>
       <div className="set-f"><span className="eo-l">Where tasks find it</span>
