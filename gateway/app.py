@@ -20644,8 +20644,7 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("todo_write", "Todo"), ("skill", "Skill"), ("agent", "Subagent")],
         # "hard": a disabled tool is a whole-tool rule in the settings file's permissions.deny, and
         # Qwen Code never registers a tool such a rule names, deferred or not (_qwen_settings).
-        # Until this the switch did nothing here at all: measured on 0.40.0 with all ten off, seven
-        # were still in the request and nothing asked the model not to use them.
+        # Measured with every tool off: none of them is in the model's request (scripts/tools-off-check.py).
         "tool_enforcement": "hard",
     },
     "gemini": {
@@ -20692,8 +20691,7 @@ _BASE_CATALOG: dict[str, dict] = {
         # "hard": the runner writes the disabled list into cline's global-settings.json
         # `disabledTools`, which 3.0.60 applies to every tool list it builds, a subagent's included,
         # except a teammate's, so with any tool off the team tools go too (_cline_disabled_tools).
-        # Until this the switch did nothing here at all: measured on 0.40.0 with all seven off, six
-        # were still in the request and nothing asked the model not to use them.
+        # Measured with every tool off: no tool at all is in the model's request (scripts/tools-off-check.py).
         "tool_enforcement": "hard",
     },
     "mimo": {
