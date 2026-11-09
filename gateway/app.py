@@ -21177,7 +21177,9 @@ async def _memory_file_bytes(org: str, file_id: str) -> bytes | None:
 
 async def _memory_used_by(org: str, caller: dict) -> dict[str, list[dict]]:
     """{memory id: [{harness_id, name}]}: the agents holding a grant on each memory, as far as this caller may see
-    agents (a key held to a workspace sees that workspace's). One read of the grants and one of the harnesses."""
+    agents (a key held to a workspace sees that workspace's). A person's memory below an agent's (memory_plane's
+    end_user_node) is used by whoever uses the agent's memory: its own grant is that person's, never an agent's, and
+    it read "Not used yet" while its agent wrote to it. One read each of the grants, the harnesses and the memories."""
     agents = {str(r["id"]): str(r.get("name") or "") for r in await _vg_list_by_org("Harness", org)
               if r.get("id") and str(r.get("deleted")) not in ("1", "true", "True") and _scope_keeps(caller, r.get("workspace"))}
     out: dict[str, list[dict]] = {}
@@ -21192,6 +21194,11 @@ async def _memory_used_by(org: str, caller: dict) -> dict[str, list[dict]]:
             rows.append({"harness_id": hid, "name": agents[hid]})
     for rows in out.values():
         rows.sort(key=lambda x: (x["name"].casefold(), x["harness_id"]))
+    if out:
+        for m in await BACKING.graph.find("Memory", {"org": org}):
+            above = str(m.get("end_user_of") or "")
+            if above in out and str(m.get("deleted") or "0") != "1" and m.get("id"):
+                out.setdefault(str(m["id"]), list(out[above]))
     return out
 
 

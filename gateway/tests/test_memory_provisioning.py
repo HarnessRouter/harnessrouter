@@ -684,6 +684,20 @@ def test_the_list_searches_sorts_by_use_and_says_who_uses_each(client):
     assert all(x["used_by"] == [] for x in seen)
 
 
+def test_a_persons_memory_is_used_by_its_agent_and_says_when_it_was_last_used(client):
+    h = _agent(client, name="Front desk", prompt="Help each guest with bookings.").json()
+    mid = h["memory"]["id"]
+    _, tok = _session(h["id"], {"user": "lou@guests.example"})
+    memory_plane._MARKED.clear()
+    _call(client, tok, "memory_recall", query="anything")
+    lou = client.get("/v1/memories", params={"parent": mid, "counts": "false"}, headers=ADA).json()["data"][0]
+    assert lou["used_by"] == [{"harness_id": h["id"], "name": "Front desk"}] and lou["last_used_at"]
+    got = client.get(f"/v1/memories/{lou['id']}", headers=ADA).json()
+    assert got["used_by"] == lou["used_by"] and got["last_used_at"] == lou["last_used_at"]
+    # the agent's own memory says the same
+    assert client.get(f"/v1/memories/{mid}", headers=ADA).json()["used_by"] == lou["used_by"]
+
+
 # ── New setup ────────────────────────────────────────────────────────────────────────────────
 def test_the_builder_is_told_memory_is_the_platforms_and_its_save_provisions(client):
     inv = {"bases": {"claude-code": {"name": "Claude Code", "default": "m", "models": ["m"], "skills": True, "auto": True}}}
