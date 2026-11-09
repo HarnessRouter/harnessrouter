@@ -628,7 +628,11 @@ def _resume_lost(backend: str, cmd: list[str], resume_session_id: str | None,
     probe = _SESSION_PRESENT.get(backend)
     if probe is None or not resume_session_id:
         return None
-    return None if probe(cwd, cmd, resume_session_id) else resume_session_id
+    # Each probe reads the CLI's own store in the session's tree, after the builders' scope has closed: as the
+    # session, so a link it planted there leads nowhere it could not read itself.
+    with _fs_as(_session_uid(cwd)):
+        present = probe(cwd, cmd, resume_session_id)
+    return None if present else resume_session_id
 
 
 def _git_exclude(ws: str, patterns: list[str], why: str) -> None:

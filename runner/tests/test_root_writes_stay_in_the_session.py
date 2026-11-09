@@ -440,3 +440,11 @@ def test_kimi_reads_its_log_as_the_session(monkeypatch):
     down = server._kimi_mcp_unavailable({"cwd": str(ws), "started": time.time() - 30})
     seen = json.dumps(down)
     assert OTHERS not in seen and "others_server" not in seen
+
+
+def test_whether_a_conversation_is_there_is_asked_as_the_session(monkeypatch):
+    """A continued turn asks the CLI's own store whether the conversation is in it, and says so when it is not."""
+    other = _second_sessions(".harness/opensquilla/sessions.sqlite", b"SQLite format 3\x00 hsessothertoken ")
+    ws = _a_session(monkeypatch)
+    _plant(ws, ".harness/opensquilla/sessions.sqlite", other)
+    assert server._resume_lost("opensquilla", [], "hsessothertoken", str(ws)) == "hsessothertoken"
