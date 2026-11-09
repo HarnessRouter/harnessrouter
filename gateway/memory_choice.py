@@ -78,13 +78,21 @@ _WORDS: dict[str, list[tuple[str, float]]] = {
     ],
     GRAPHITI: [
         (r"research\w*", 2), (r"accounts?", 2), (r"crm", 3), (r"projects?", 1.5), (r"investigat\w*", 2),
-        (r"monitor\w*", 2), (r"competit\w*", 2), (r"timelines?", 2), (r"relationships?", 2), (r"entit(?:y|ies)", 2),
+        (r"monitor\w*", 2), (r"competit\w*", 2), (r"timelines?", 3), (r"relationships?", 3), (r"entit(?:y|ies)", 2),
         (r"track(?:s|ing|er|ers)?", 1.5), (r"deals?", 1.5), (r"stakeholders?", 1.5), (r"intelligence", 1.5),
         (r"genealog\w*", 2), (r"portfolios?", 1.5), (r"suppliers?", 1.5), (r"prospects?", 1.5), (r"leads", 1),
+        (r"chronolog\w*", 2), (r"dependenc(?:y|ies)", 2), (r"interdependen\w*", 3), (r"relations", 2),
         (r"knowledge graph", 3), (r"due diligence", 2), (r"supply chain", 1.5), (r"over time", 2),
-        (r"who,? what,? (?:and )?when", 3), (r"how (?:they|things|people|companies) relate", 3),
-        (r"sales pipelines?", 3), (r"account (?:manager|management|executive|plans?)\w*", 3),
+        (r"who,? what,? (?:and )?when", 3), (r"sales pipelines?", 3), (r"account (?:manager|management|executive|plans?)\w*", 3),
         (r"market (?:research|intelligence|watch)", 3),
+        # How things relate and change, however it is put (sslip, 11-09: each of these stayed on Mem0). "Between"
+        # outweighs a person-serving word in the name: "an assistant that keeps the links between teams" tracks links.
+        (r"how (?:\w+ ){0,3}(?:relates?|related|connect(?:s|ed)?|depends?|interacts?|fit together|link(?:s|ed)?)", 3),
+        (r"(?:relat(?:e|es|ed)|depend(?:s|ed)?|connect(?:s|ed)?|interact(?:s|ed)?) (?:to |on |with )?(?:each other|one another)", 3),
+        (r"(?:relationships?|connections?|links?|dependenc(?:y|ies)) between", 3.5),
+        (r"dependency (?:graph|map|tree)s?", 3), (r"what changed(?:,? and)? when", 3), (r"what changed", 2),
+        (r"when (?:\w+ ){0,3}changed", 2), (r"who knows (?:whom|who)", 3), (r"who reports to (?:whom|who)", 3),
+        (r"who works with (?:whom|who)", 3), (r"who did what", 3), (r"by whom", 2), (r"org(?:anization(?:al)?)? charts?", 3),
     ],
     HINDSIGHT: [
         (r"cod(?:e|es|ing|er|ers)", 2), (r"programm\w*", 2), (r"software", 1.5), (r"developers?", 1.5),

@@ -39,6 +39,18 @@ CASES = [
     ("Incident investigator", "Investigates fraud cases and builds a timeline of who did what.", "", (), mc.GRAPHITI, mc.SHARED),
     ("Project monitor", "Monitors our projects and reports what changed this week.", "", ("linear",), mc.GRAPHITI, mc.SHARED),
     ("Due diligence", "Maps a company's owners, subsidiaries and their relationships over time.", "", (), mc.GRAPHITI, mc.SHARED),
+    # how things relate and change, however it is put (each stayed on Mem0 on sslip, 11-09)
+    ("Feature map", "Explains how features relate to each other.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Product assistant", "Explains how our features relate and depend on each other.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Release history", "Answers what changed when, across our releases.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Team assistant", "Keeps the relationships between teams, partners and vendors.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Launch assistant", "Keeps the launch timeline: what was decided, by whom and when.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Intro helper", "Finds who knows whom so we can ask for an introduction.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Platform helper", "Answers questions about the dependencies between our microservices.", "", (), mc.GRAPHITI, mc.SHARED),
+    ("Org chart", "Knows who reports to whom and how the teams connect.", "", (), mc.GRAPHITI, mc.SHARED),
+    # ... and those words don't pull away an agent whose nature is plainly something else
+    ("Dating coach", "Helps each user think through their relationships.", "", (), mc.MEM0, mc.PER_USER),
+    ("Date extractor", "Extracts a timeline of dates from the given document.", "", (), mc.NONE, mc.SHARED),
     # gets better at its own work: Hindsight
     ("Bug fixer", "Fixes failing tests in our repository and opens a pull request.", "", ("github",), mc.HINDSIGHT, mc.SHARED),
     ("Deploy helper", "Deploys services to Kubernetes and rolls back on errors.", "", (), mc.HINDSIGHT, mc.SHARED),
