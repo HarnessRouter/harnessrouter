@@ -18818,7 +18818,12 @@ def _plug_public(org: str, workspace: str, plug_type: str, rec: dict | None, sta
             "config_fields": list(form["config"]), "version": int((rec or {}).get("version") or 0),
             "tools": len(plugs_plane.tools_of(plug_type)),
             **({"attention": str((rec or {}).get("attention") or "")} if (rec or {}).get("attention") else {}),
+            **({"inherited": True, "note": _memory_inherited_words(plug_type)} if (rec or {}).get("inherited") else {}),
             **({"pricing": browser_plane.pricing()} if plug_type == plugs_plane.BROWSER else {})}
+
+
+def _memory_inherited_words(engine: str) -> str:
+    return f"This workspace uses this instance's {memory_choice.LABEL.get(engine, engine)} (inherited)."
 
 
 @app.get("/v1/plugs")
@@ -18857,6 +18862,17 @@ async def _plug_save(org: str, workspace: str, plug_type: str, body: PlugBody) -
     (_memory_discover), each held to every check."""
     form = _PLUG_FORMS[plug_type]
     _status, prev = await _plug_lookup_local(org, workspace, plug_type)
+    if (body.enabled and not body.secrets and not body.config and _memory_inherits(workspace, plug_type)
+            and not (prev or {}).get("key_refs") and not str(((prev or {}).get("config") or {}).get("base_url") or "")):
+        # on, with no address or key of its own: the instance's engine, as before it was turned off. A record of its
+        # own with nothing in it would read needs_auth and hide the instance's engine for good.
+        if prev:
+            vid = _plug_vid(org, workspace, plug_type, prev)
+            await BACKING.graph.delete(vid, _PLUG_LABEL)
+            _plug_fields_cache.pop(vid, None)
+        status2, rec = await _memory_engine_lookup(org, workspace, plug_type)
+        print(f"[plugs] {workspace}: {plug_type} uses the instance's ({status2})", flush=True)
+        return _plug_public(org, workspace, plug_type, rec, status2)
     config = dict((prev or {}).get("config") or {})
     for k, v in (body.config or {}).items():
         if k not in form["config"]:
@@ -19014,6 +19030,9 @@ async def _memory_discover(org: str, workspace: str) -> list[dict]:
     for engine, url in _MEMORY_STACK.items():
         label = memory_choice.LABEL[engine]
         status, _rec = await _memory_engine_lookup(org, workspace, engine)
+        if status == "connected" and (_rec or {}).get("inherited") and engine not in failing:
+            out.append({"engine": engine, "state": "connected", "inherited": True, "message": _memory_inherited_words(engine)})
+            continue
         if status == "connected" and engine in failing:
             # connected and answering is not working: its writes have been failing, so agents are not given it
             out.append({"engine": engine, "state": "failing", "reason": failing[engine],
@@ -19316,14 +19335,22 @@ async def delete_plug(plug_type: str, request: Request) -> dict:
         raise uhp_error(404, "plug_not_found", f"No plugin of type {plug_type!r}.", "plug_type")
     workspace = _plug_workspace(request, _caller)
     _status, rec = await _plug_lookup_local(org, workspace, plug_type)
-    if not rec:
-        raise uhp_error(404, "plug_not_connected", f"No {plugs_plane.TYPES[plug_type]} plugin is connected for this workspace.", "plug_type")
-    for r in rec.get("key_refs") or []:
-        if isinstance(r, dict) and r.get("ref"):
-            await _vault_delete(org, str(r["ref"]))
-    vid = _plug_vid(org, workspace, plug_type, rec)
-    await BACKING.graph.delete(vid, _PLUG_LABEL)
-    _plug_fields_cache.pop(vid, None)
+    inherits = _memory_inherits(workspace, plug_type)
+    if not rec and not inherits:
+        what = plugs_plane.TYPES.get(plug_type) or memory_choice.LABEL.get(plug_type, plug_type)   # an engine's is a 404 too
+        raise uhp_error(404, "plug_not_connected", f"No {what} plugin is connected for this workspace.", "plug_type")
+    if rec:
+        for r in rec.get("key_refs") or []:
+            if isinstance(r, dict) and r.get("ref"):
+                await _vault_delete(org, str(r["ref"]))
+        vid = _plug_vid(org, workspace, plug_type, rec)
+        await BACKING.graph.delete(vid, _PLUG_LABEL)
+        _plug_fields_cache.pop(vid, None)
+    if inherits:
+        # removed here means off here: absent, the instance's engine would quietly take its place
+        await _plug_save(org, workspace, plug_type, PlugBody(enabled=False))
+        print(f"[plugs] {workspace}: {plug_type} removed, off here", flush=True)
+        return {"type": plug_type, "workspace": workspace, "removed": True, "status": "disabled"}
     print(f"[plugs] {workspace}: {plug_type} removed", flush=True)
     return {"type": plug_type, "workspace": workspace, "removed": True}
 
@@ -21455,10 +21482,16 @@ async def _memory_engine_lookup(org: str, workspace: str, engine: str) -> tuple[
     that connected or turned off its own keeps its own. Only the connection is shared: each memory is still its own
     store inside the engine, made in and read through its own workspace. Never on a shared pool."""
     status, rec = await _plug_lookup(org, workspace, engine)
-    if (status == "missing" and workspace and workspace != _ENGINES_HOME and engine in _MEMORY_STACK
-            and _pool_is_local()):
-        return await _plug_lookup(org, _ENGINES_HOME, engine)
+    if status == "missing" and _memory_inherits(workspace, engine):
+        status, rec = await _plug_lookup(org, _ENGINES_HOME, engine)
+        return status, ({**rec, "inherited": True} if rec else rec)
     return status, rec
+
+
+def _memory_inherits(workspace: str, engine: str) -> bool:
+    """Whether a workspace with no connection of its own for this engine uses the instance's: on an instance with
+    one operator, for the bundled engines, in any workspace but the one they are connected in."""
+    return bool(workspace) and workspace != _ENGINES_HOME and engine in _MEMORY_STACK and _pool_is_local()
 
 
 async def _memory_credentials(org: str, workspace: str, provider: str) -> dict | None:

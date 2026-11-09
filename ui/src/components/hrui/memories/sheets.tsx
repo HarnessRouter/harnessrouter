@@ -26,6 +26,9 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
   const [base, setBase] = useState('');
   const [key, setKey] = useState('');
   const [keptKey, setKeptKey] = useState(false);
+  // the instance's connection, used here with none of this workspace's own: its address and key are not this
+  // workspace's to keep, so the form starts empty and connecting makes one of its own
+  const [inherited, setInherited] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   // changing a connection starts from the address it has; a key is only ever said to be kept
@@ -35,11 +38,13 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
     listProviderPlugs().then((l) => {
       if (!live) return;
       const p = l.find((x) => x.type === id);
+      if (p?.inherited) { setInherited(p.note || `This workspace uses this instance’s ${name} (inherited).`); return; }
       setBase(String(p?.config?.base_url || ''));
       setKeptKey(!!p?.secrets_set?.includes('api_key'));
     }).catch(() => {});
     return () => { live = false; };
-  }, [connected, id]);
+  }, [connected, id, name]);
+  const own = connected && !inherited;
   const needsKey = addressOptional && !base.trim() && !keptKey;
   const ready = (addressOptional || !!base.trim()) && (!needsKey || !!key.trim());
   const go = async () => {
@@ -52,8 +57,9 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
   };
   return (
     <Sheet onClose={onClose} labelledBy="mmCn" className="small-sheet mm-sheet" busy={busy}>
-      <SheetTop id="mmCn" title={`${connected ? 'Change' : 'Connect'} ${name}`} sub={VENDORS[id]?.line} onClose={onClose} />
+      <SheetTop id="mmCn" title={own ? `Change ${name}` : inherited ? `Connect ${name} for this workspace` : `Connect ${name}`} sub={VENDORS[id]?.line} onClose={onClose} />
       <form noValidate onSubmit={(e) => { e.preventDefault(); void go(); }}>
+        {inherited ? <p className="set-help mm-inherited" role="note">{inherited} Connect one here to use it in this workspace instead.</p> : null}
         <div className="set-f">
           <label htmlFor="mmCnBase">Server address</label>
           <input id="mmCnBase" className="set-in" type="url" inputMode="url" value={base} autoComplete="off" placeholder="https://memory.example.com" onChange={(e) => setBase(e.target.value)} />
@@ -71,7 +77,7 @@ export function ConnectSheet({ id, connected, onClose, onConnected }: {
         <div className="sheet-actions">
           <span className="grow" />
           <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn primary" disabled={!ready || busy}>{busy ? 'Connecting…' : connected ? 'Save' : 'Connect'}</button>
+          <button type="submit" className="btn primary" disabled={!ready || busy}>{busy ? 'Connecting…' : own ? 'Save' : 'Connect'}</button>
         </div>
       </form>
     </Sheet>

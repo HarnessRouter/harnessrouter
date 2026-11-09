@@ -1405,8 +1405,12 @@ def test_a_workspace_made_later_remembers_with_the_engines_connected_for_the_ins
     assert str(made.get("workspace") or "") == "ws.later"
     assert client.get(f"/v1/memories/{mid}", headers=later).status_code == 200
     # what the console reads says the same: the engine is connected here, and a new memory can be kept by it
-    plugs = {p["type"]: p["status"] for p in client.get("/v1/plugs?kind=memory", headers=later).json()["plugs"]}
-    assert plugs.get("mem0") == "connected"
+    row = next(p for p in client.get("/v1/plugs?kind=memory", headers=later).json()["plugs"] if p["type"] == "mem0")
+    # and says it is the instance's, never passing it off as this workspace's own
+    assert row["status"] == "connected" and row["inherited"] is True
+    assert row["note"] == "This workspace uses this instance's Mem0 (inherited)."
+    home = next(p for p in client.get("/v1/plugs?kind=memory", headers=ADA).json()["plugs"] if p["type"] == "mem0")
+    assert home["status"] == "connected" and "inherited" not in home and "note" not in home
     provs = {p["id"]: p["connected"] for p in client.get("/v1/memories/providers", headers=later).json()["data"]}
     assert provs.get("mem0") is True
     # and a person's task there keeps and recalls through it
@@ -1417,7 +1421,37 @@ def test_a_workspace_made_later_remembers_with_the_engines_connected_for_the_ins
 
 def test_finding_engines_in_a_workspace_made_later_says_they_are_connected(client, monkeypatch):
     monkeypatch.setattr(gw, "_MEMORY_STACK", {"mem0": "http://mem0:8000"})
-    assert [(x["engine"], x["state"]) for x in run(gw._memory_discover(ORG, "ws.later.found"))] == [("mem0", "connected")]
+    assert [(x["engine"], x["state"], x.get("inherited"), x["message"]) for x in run(gw._memory_discover(ORG, "ws.later.found"))] == [
+        ("mem0", "connected", True, "This workspace uses this instance's Mem0 (inherited).")]
+    assert [(x["engine"], x["state"], x.get("inherited")) for x in run(gw._memory_discover(ORG, "default"))] == [("mem0", "connected", None)]
+
+
+def test_a_workspace_that_connected_its_own_engine_and_removed_it_has_it_off_not_the_instances(client):
+    own = {**ADA, "x-harness-workspace": "ws.own"}
+    r = client.put("/v1/plugs/mem0", headers=own, json={"secrets": {"api_key": KEY}})
+    assert r.status_code == 200 and r.json()["status"] == "connected" and "inherited" not in r.json()
+    gone = client.delete("/v1/plugs/mem0", headers=own)
+    assert gone.status_code == 200 and gone.json()["status"] == "disabled"
+    # removed means off: the instance's engine does not quietly take its place
+    row = next(p for p in client.get("/v1/plugs?kind=memory", headers=own).json()["plugs"] if p["type"] == "mem0")
+    assert row["status"] == "disabled" and "inherited" not in row
+    assert run(gw._memory_credentials(ORG, "ws.own", "mem0")) is None
+    h = client.post("/v1/harnesses", headers=own, json={"name": "Support replies", "base": "claude-code"}).json()
+    assert h["memory"] is None and h["memory_reason"] == memory_choice.NO_ENGINE
+
+
+def test_removing_the_instances_engine_in_a_workspace_turns_it_off_there_and_on_brings_it_back(client):
+    ws = {**ADA, "x-harness-workspace": "ws.toggle"}
+    gone = client.delete("/v1/plugs/mem0", headers=ws)
+    assert gone.status_code == 200 and gone.json()["status"] == "disabled"
+    assert run(gw._memory_credentials(ORG, "ws.toggle", "mem0")) is None
+    # on again with nothing of its own: the instance's engine, said so, and no empty record of its own left behind
+    back = client.put("/v1/plugs/mem0", headers=ws, json={"enabled": True})
+    assert back.status_code == 200 and back.json()["status"] == "connected" and back.json()["inherited"] is True
+    assert run(gw._plug_lookup_local(ORG, "ws.toggle", "mem0"))[0] == "missing"
+    # the home workspace's own removal is a plain removal there (nothing to inherit from), checked on another org
+    other = {**ADA, "x-harness-org": "provorg-home"}
+    assert client.delete("/v1/plugs/mem0", headers=other).status_code == 404
 
 
 def test_a_workspace_that_turned_an_engine_off_keeps_it_off(client):

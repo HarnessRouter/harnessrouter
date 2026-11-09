@@ -114,7 +114,11 @@ const R = (id: string, rid: string) => `${M(id)}/records/${encodeURIComponent(ri
 // ── providers ───────────────────────────────────────────────────────────────────────────────
 export const listProviders = () => call<{ data: Provider[] }>('GET', '/v1/memories/providers').then((d) => d.data);
 /** A provider as the workspace connected it: its address, and which of its secrets are set. */
-export interface ProviderPlug { type: string; status: string; config: { base_url?: string }; secrets_set: string[] }
+export interface ProviderPlug {
+  type: string; status: string; config: { base_url?: string }; secrets_set: string[];
+  /** the instance's connection, which this workspace uses having none of its own; `note` says so in words */
+  inherited?: boolean; note?: string;
+}
 export const listProviderPlugs = () => call<{ plugs: ProviderPlug[] }>('GET', '/v1/plugs?kind=memory').then((d) => d.plugs);
 /** Connect a provider. The service tries the address and the key at once and refuses with a
  *  readable message when either fails. An empty address clears the one kept. */
