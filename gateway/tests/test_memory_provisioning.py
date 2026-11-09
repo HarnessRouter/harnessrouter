@@ -1048,7 +1048,9 @@ def test_new_memory_is_given_its_engine_by_the_same_reading_an_agent_gets(client
 
 def test_new_memorys_choice_reads_the_callers_own_workspace_and_needs_a_credential(client):
     held = _key(client, ws="ws.choose")
-    # mem0 is connected for the default workspace only: a key held to another reads its own, whatever it names
+    # mem0 is turned off in ws.choose and connected in the default workspace: a key held to ws.choose reads its own,
+    # whatever it names (a workspace that never connected one would use the instance's: _memory_engine_lookup)
+    assert client.put("/v1/plugs/mem0", headers={**ADA, "x-harness-workspace": "ws.choose"}, json={"enabled": False}).status_code == 200
     for h in (held, {**held, "x-harness-workspace": "default"}):
         assert client.get("/v1/memories/choose", params={"name": "Customer preferences"}, headers=h).json()["engine"] is None
     assert client.get("/v1/memories/choose", params={"name": "Customer preferences"}, headers=ADA).json()["engine"] == "mem0"
@@ -1370,7 +1372,9 @@ def test_discovery_tries_the_fixed_names_only_and_connects_only_what_needs_no_ke
         tried.append((engine, base))
         return ""
     monkeypatch.setattr(gw, "_memory_round_trip", round_trip)
-    ws = {**ADA, "x-harness-workspace": "ws.found"}
+    # an organization with no engine connected anywhere: the module's mem0 (connected for ORG's instance) would lend
+    # itself to ws.found (test_a_workspace_made_later_remembers_with_the_engines_connected_for_the_instance)
+    ws = {**ADA, "x-harness-org": "provorg-found", "x-harness-workspace": "ws.found"}
     got = {x["engine"]: x for x in client.post("/v1/memory-services/discover", headers=ws).json()["data"]}
     assert set(asked) <= {"mem0:8000", "graphiti:8000", "hindsight:8888", "reme:2333"} and asked
     assert got["hindsight"]["state"] == "connected" and got["reme"]["state"] == "connected"
@@ -1385,3 +1389,53 @@ def test_the_fixed_names_are_the_bundled_stacks_own():
     compose = open(os.path.join(os.path.dirname(gw.__file__), "..", "deploy", "memories", "docker-compose.yml")).read()
     for engine, url in gw._MEMORY_STACK.items():
         assert f"Address: {url}" in compose, (engine, url)
+
+
+# ── a workspace made after the engines were connected ─────────────────────────────────────────
+# deploy/memories/up.sh and the start's discovery connect the engines into the default workspace. A workspace made
+# later never connected one itself, and its new agents got no memory, told "No memory engine is running here" beside
+# four running engines (found 11-09 making an agent in a new workspace on a live instance).
+def test_a_workspace_made_later_remembers_with_the_engines_connected_for_the_instance(client, stub):
+    later = {**ADA, "x-harness-workspace": "ws.later"}
+    h = client.post("/v1/harnesses", headers=later, json={"name": "Support replies", "base": "claude-code"}).json()
+    assert h["memory"] and h["memory"]["engine"] == "mem0" and h["memory"]["scope"] == "per_user", h
+    # the memory is the later workspace's own, made and read there; only the engine's connection is the instance's
+    mid = h["memory"]["id"]
+    made = next(m for m in run(gw.BACKING.graph.find("Memory", {"org": ORG})) if str(m["id"]) == mid)
+    assert str(made.get("workspace") or "") == "ws.later"
+    assert client.get(f"/v1/memories/{mid}", headers=later).status_code == 200
+    # what the console reads says the same: the engine is connected here, and a new memory can be kept by it
+    plugs = {p["type"]: p["status"] for p in client.get("/v1/plugs?kind=memory", headers=later).json()["plugs"]}
+    assert plugs.get("mem0") == "connected"
+    provs = {p["id"]: p["connected"] for p in client.get("/v1/memories/providers", headers=later).json()["data"]}
+    assert provs.get("mem0") is True
+    # and a person's task there keeps and recalls through it
+    sid, tok = _session(h["id"], {"user": "dana@guests.example"})
+    _, err = _call(client, tok, "memory_remember", content="Dana wants a room on a high floor.")
+    assert not err
+
+
+def test_finding_engines_in_a_workspace_made_later_says_they_are_connected(client, monkeypatch):
+    monkeypatch.setattr(gw, "_MEMORY_STACK", {"mem0": "http://mem0:8000"})
+    assert [(x["engine"], x["state"]) for x in run(gw._memory_discover(ORG, "ws.later.found"))] == [("mem0", "connected")]
+
+
+def test_a_workspace_that_turned_an_engine_off_keeps_it_off(client):
+    off = {**ADA, "x-harness-workspace": "ws.off"}
+    assert client.put("/v1/plugs/mem0", headers=off, json={"enabled": False}).status_code == 200
+    h = client.post("/v1/harnesses", headers=off, json={"name": "Support replies", "base": "claude-code"}).json()
+    assert h["memory"] is None and h["memory_reason"] == memory_choice.NO_ENGINE
+
+
+def test_a_shared_pool_never_lends_one_workspaces_engine_to_another(client, monkeypatch):
+    monkeypatch.setenv("HR_POOL_AUTH", "cloud")
+    other = {**ADA, "x-harness-workspace": "ws.pooled"}
+    h = client.post("/v1/harnesses", headers=other, json={"name": "Support replies", "base": "claude-code"}).json()
+    assert h["memory"] is None and h["memory_reason"] == memory_choice.NO_ENGINE
+    assert run(gw._memory_credentials(ORG, "ws.pooled", "mem0")) is None
+
+
+def test_another_organizations_engines_are_never_lent(client):
+    other = {**ADA, "x-harness-org": "provorg-elsewhere", "x-harness-workspace": "ws.later"}
+    h = client.post("/v1/harnesses", headers=other, json={"name": "Support replies", "base": "claude-code"}).json()
+    assert h["memory"] is None and h["memory_reason"] == memory_choice.NO_ENGINE

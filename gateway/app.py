@@ -18831,7 +18831,7 @@ async def list_plugs(request: Request, kind: str = "") -> dict:
     workspace = _plug_workspace(request, _caller)
     out = []
     for t in [t for t, f in _PLUG_FORMS.items() if str(f.get("kind") or "") == kind]:
-        status, rec = await _plug_lookup(org, workspace, t)
+        status, rec = await (_memory_engine_lookup if kind == "memory" else _plug_lookup)(org, workspace, t)
         out.append(_plug_public(org, workspace, t, rec, status))
     return {"workspace": workspace, "plugs": out}
 
@@ -19013,7 +19013,7 @@ async def _memory_discover(org: str, workspace: str) -> list[dict]:
     failing = await _memory_engines_failing(org, workspace)
     for engine, url in _MEMORY_STACK.items():
         label = memory_choice.LABEL[engine]
-        status, _rec = await _plug_lookup_local(org, workspace, engine)
+        status, _rec = await _memory_engine_lookup(org, workspace, engine)
         if status == "connected" and engine in failing:
             # connected and answering is not working: its writes have been failing, so agents are not given it
             out.append({"engine": engine, "state": "failing", "reason": failing[engine],
@@ -21444,10 +21444,28 @@ def _own_service_address(url: str) -> str:
     return ""
 
 
+_ENGINES_HOME = "default"     # where deploy/memories/up.sh and the start's discovery connect the engines
+
+
+async def _memory_engine_lookup(org: str, workspace: str, engine: str) -> tuple[str, dict | None]:
+    """(status, record) of a memory engine's connection as a workspace reaches it. On an instance with one operator,
+    a workspace that never connected that engine itself uses the one connected for the instance (the default
+    workspace, where deploy/memories/up.sh and the start's discovery connect them). Without it, every workspace but
+    the first got no memory at all, told "No memory engine is running here" beside four running engines. A workspace
+    that connected or turned off its own keeps its own. Only the connection is shared: each memory is still its own
+    store inside the engine, made in and read through its own workspace. Never on a shared pool."""
+    status, rec = await _plug_lookup(org, workspace, engine)
+    if (status == "missing" and workspace and workspace != _ENGINES_HOME and engine in _MEMORY_STACK
+            and _pool_is_local()):
+        return await _plug_lookup(org, _ENGINES_HOME, engine)
+    return status, rec
+
+
 async def _memory_credentials(org: str, workspace: str, provider: str) -> dict | None:
     """A memory provider's credential for one workspace, from the plug registry: the workspace's
-    own account, resolved at the moment of the call and never handed to an agent."""
-    status, rec = await _plug_lookup(org, workspace, provider)
+    own account (or, on an instance with one operator, the instance's: _memory_engine_lookup), resolved at the
+    moment of the call and never handed to an agent."""
+    status, rec = await _memory_engine_lookup(org, workspace, provider)
     if status != "connected" or not rec:
         return None
     return {**(rec.get("config") or {}), **await _plug_fields(rec)}
