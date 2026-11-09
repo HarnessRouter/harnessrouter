@@ -3050,20 +3050,29 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
     # ignored, and the console showed "Disabled" next to a tool the agent went on using. Verified
     # both ways against the CLI: with the flag the agent still ran bash; with this deny list it
     # reported having no shell tool and did not run it.
-    if disallowed_tools:
-        names = [t.split(" (")[0].strip() for t in disallowed_tools if t and t.strip()]
-        if names:
-            settings_path = cfg_dir / "settings.json"
-            try:
-                current = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-                if not isinstance(current, dict):
-                    current = {}
-            except Exception:  # noqa: BLE001 — a corrupt file must not lose the restriction
-                current = {}
-            perms = current.get("permissions") if isinstance(current.get("permissions"), dict) else {}
-            perms["deny"] = names
-            current["permissions"] = perms
-            settings_path.write_text(json.dumps(current, indent=2))
+    #
+    # Reconciled on EVERY turn, not only when something is off: HOME is checkpointed, so a deny list an
+    # earlier turn wrote stayed in the file after the harness switched the tool back on, and the tool
+    # stayed withheld. Anything else the file holds is left as it is.
+    names = [t.split(" (")[0].strip() for t in (disallowed_tools or []) if t and t.strip()]
+    settings_path = cfg_dir / "settings.json"
+    try:
+        current = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+        if not isinstance(current, dict):
+            current = {}
+    except Exception:  # noqa: BLE001 — a corrupt file must not lose the restriction
+        current = {}
+    perms = current.get("permissions") if isinstance(current.get("permissions"), dict) else {}
+    if names:
+        perms["deny"] = names
+    else:
+        perms.pop("deny", None)
+    if perms:
+        current["permissions"] = perms
+    else:
+        current.pop("permissions", None)
+    if current or settings_path.exists():
+        settings_path.write_text(json.dumps(current, indent=2))
     if resume_session_id:
         # Only resume if the conversation file is ACTUALLY in the (re)hydrated workspace. A prior turn
         # can record a cli_session_id but fail before checkpointing its .jsonl — then `--resume <id>`
