@@ -35,7 +35,9 @@ def _wire(monkeypatch, module, answer):
 
 
 def _lines(block: str) -> list[str]:
-    return [x[2:] for x in block.split("```text\n", 1)[1].rsplit("\n```", 1)[0].splitlines()] if block else []
+    """Each finding's words, after the line's "- [where it came from, when] "."""
+    rows = block.split("```text\n", 1)[1].rsplit("\n```", 1)[0].splitlines() if block else []
+    return [x[2:].split("] ", 1)[1] if x.startswith("- [") else x[2:] for x in rows]
 
 
 def test_graphiti_says_each_thing_once_never_the_speaker_and_never_the_raw_conversation(monkeypatch):

@@ -59,7 +59,7 @@ def test_the_file_knows_nothing_of_where_memories_are_kept():
     src = open(mt.__file__).read()
     imported = {n.name for node in ast.walk(ast.parse(src)) if isinstance(node, ast.Import) for n in node.names} | \
                {node.module for node in ast.walk(ast.parse(src)) if isinstance(node, ast.ImportFrom)}
-    assert imported <= {"__future__", "json", "re", "datetime", "typing"}, imported   # the standard library only
+    assert imported <= {"__future__", "asyncio", "json", "re", "datetime", "typing"}, imported   # the standard library only
 
 
 def test_only_what_can_be_served_is_listed():

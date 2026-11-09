@@ -287,6 +287,8 @@ class EpisodeIn(BaseModel):
     entity_types: list[dict] = []
     edge_types: list[dict] = []
     edge_type_map: list[dict] = []
+    # Guidance for what extraction keeps, placed in Graphiti's entity and fact prompts (graphiti-core 0.31.2)
+    custom_extraction_instructions: str = ""
     # Taken and read later, in order: what Graphiti pulls out of it lands in the memory a few seconds on. For what an
     # agent writes down, which it shouldn't wait on.
     background: bool = False
@@ -297,7 +299,8 @@ async def _read(b: EpisodeIn, g: Graphiti):
     emap = {(m["from"], m["to"]): m["names"] for m in b.edge_type_map if m.get("from") and m.get("to") and m.get("names")} or None
     return await g.add_episode(name=b.name or f"episode-{uuid.uuid4().hex[:8]}", episode_body=b.content, source=EpisodeType.message,
                                source_description=b.source_description or "conversation", reference_time=when, group_id=b.group_id,
-                               entity_types=models_of(b.entity_types) or None, edge_types=models_of(b.edge_types) or None, edge_type_map=emap)
+                               entity_types=models_of(b.entity_types) or None, edge_types=models_of(b.edge_types) or None, edge_type_map=emap,
+                               custom_extraction_instructions=b.custom_extraction_instructions or None)
 
 
 # One reader a memory: Graphiti reads a memory's episodes one after another (each is resolved against what the ones

@@ -24,11 +24,13 @@ class Local:
     start asks for neither (app.py's _memories_turn_start), and a tool list doesn't ask for counts."""
 
     def __init__(self, org: str, hid: str, entries: list[dict], person: dict | None = None, *,
-                 counts: bool = True, around: bool = True):
+                 counts: bool = True, around: bool = True, session: str = ""):
         self.org, self.hid, self._entries, self.person = org, hid, entries, person or None
         self.pr = [f"member:{hid}"] + ([self.person["principal"]] if self.person else [])
         self.wpr = [self.person["principal"]] if self.person else self.pr
-        self.writer = mp.writer_of(hid, agent=True)
+        # what the agent keeps names the task it was kept in (`session`), as what a finished turn sends does: a later
+        # turn of the same task leaves it out of what it recalls at its start (memory_tools.same_session)
+        self.writer = {**mp.writer_of(hid, agent=True), **({"session_id": session} if session else {})}
         self.counts, self.around = counts, around
         # what this agent kept with memory_remember through this seam, each {"id", "memory_id"}: a turn's record links them
         self.kept: list[dict] = []

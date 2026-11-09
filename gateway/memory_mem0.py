@@ -176,6 +176,8 @@ class Mem0(mp.Provider):
         m[_RESERVED + "writer_kind"], m[_RESERVED + "writer_id"] = writer.get("kind") or "", writer.get("id") or ""
         if writer.get("type"):
             m[_RESERVED + "writer_type"] = writer["type"]
+        if writer.get("session_id"):
+            m[_RESERVED + "writer_session"] = writer["session_id"]
         if record.get("references"):
             m[_RESERVED + "refs"] = json.dumps(record["references"], separators=(",", ":"))
         for k in ("valid_from", "valid_to"):
@@ -195,6 +197,8 @@ class Mem0(mp.Provider):
         writer = {"kind": meta.get(_RESERVED + "writer_kind") or "provider", "id": meta.get(_RESERVED + "writer_id") or "mem0"}
         if meta.get(_RESERVED + "writer_type"):
             writer["type"] = meta[_RESERVED + "writer_type"]
+        if meta.get(_RESERVED + "writer_session"):
+            writer["session_id"] = meta[_RESERVED + "writer_session"]
         if meta.get(_RESERVED + "observed_by"):
             writer = {"kind": "provider", "id": "mem0", "on_behalf_of": meta[_RESERVED + "observed_by"]}
         title, body = _split(item.get("memory") or "", bool(meta.get(_RESERVED + "title")))
@@ -260,7 +264,10 @@ class Mem0(mp.Provider):
                     for p in e.get("content") or [] if p.get("text")]
             meta = self._meta({"type": "fact", "attributes": e.get("attributes") or {}}, {"kind": "provider", "id": "mem0"})
             meta[_RESERVED + "observed_by"] = f"{writer.get('kind')}:{writer.get('id')}"
-            r = await self._call("POST", "/v3/memories/add/", body={"user_id": mid, "messages": msgs, "metadata": meta})
+            # custom_instructions: the Platform's own guidance for what its extraction keeps, per add (mem0's client sends
+            # it in the same /v3/memories/add/ body, AddMemoryOptions at the pinned commit)
+            r = await self._call("POST", "/v3/memories/add/", body={"user_id": mid, "messages": msgs, "metadata": meta,
+                                                                    "custom_instructions": mp.EXTRACTION_GUIDE})
             ev = (r.json() or {}).get("event_id") if r.status_code == 200 else None
             if not ev:
                 raise Mem0Unavailable("the episode was not taken")
@@ -639,7 +646,10 @@ class Mem0Server(Mem0):
                     for p in e.get("content") or [] if p.get("text")]
             meta = self._meta({"type": "fact", "attributes": e.get("attributes") or {}}, {"kind": "provider", "id": "mem0"})
             meta[_RESERVED + "observed_by"] = f"{writer.get('kind')}:{writer.get('id')}"
-            r = await self._call("POST", "/memories", body={"user_id": mid, "messages": msgs, "metadata": meta, "infer": True})
+            # prompt: the server's per-add guidance for its extraction (MemoryCreate.prompt, which Memory.add places as the
+            # extraction's custom instructions at the pinned commit, 753496cf)
+            r = await self._call("POST", "/memories", body={"user_id": mid, "messages": msgs, "metadata": meta, "infer": True,
+                                                            "prompt": mp.EXTRACTION_GUIDE})
             if r.status_code != 200:
                 raise Mem0Unavailable("the episode was not taken")
             for x in (r.json() or {}).get("results") or []:

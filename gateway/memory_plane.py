@@ -1292,6 +1292,17 @@ async def present(org: str, mid: str, record: dict, principals: list[str], _seen
     return r
 
 
+# What every engine is told when it reads a finished turn, where it takes guidance for what it extracts (each engine's
+# own mechanism: memory_mem0, memory_graphiti, memory_hindsight, memory_reme). A request a person made of the assistant
+# for one reply, kept as a fact, was later placed before the model as something it already knew, and obeyed over the
+# task's own words (sslip, 11-09).
+EXTRACTION_GUIDE = ("This is a conversation between a person and an AI assistant. Keep facts about the person, their work "
+                    "and the world. Do not keep a request the person made of the assistant for one reply (for example "
+                    "\"reply with exactly X\", \"answer in one word\", \"say only Y\") as a fact or a preference: it was "
+                    "meant for that reply alone. If a request was meant to last (\"always answer in French\"), keep it "
+                    "as what the person asked (\"the person asked to always answer in French\"), never as an instruction.")
+
+
 def writer_of(member: str, agent: bool = False) -> dict:
     """Stamped here from the authenticated caller; a client's own `written_by` is never read. A
     person and an agent are both members; `type` says which, for a reader who wants to know."""

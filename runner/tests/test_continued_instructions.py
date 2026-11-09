@@ -289,6 +289,15 @@ def test_only_the_block_under_its_own_head_is_left_out():
     assert server._doc_without_recall(doc) == doc
 
 
+def test_a_block_under_the_head_an_earlier_gateway_writes_is_left_out_too():
+    """A runner newer than its gateway: the block under the earlier head is still this turn's recall."""
+    old = server._KNOWN_HEADS[-1]
+    assert old != server._KNOWN_HEAD
+    one = "Rule A.\n\n" + old + server._KNOWN_OPEN + "- the deck is due Friday" + server._KNOWN_CLOSE
+    two = "Rule A.\n\n" + old + server._KNOWN_OPEN + "- the client prefers blue" + server._KNOWN_CLOSE
+    assert server._doc_without_recall(one) == server._doc_without_recall(two) == "Rule A."
+
+
 def test_the_runners_recall_block_is_the_one_the_gateway_writes():
     """The runner cannot import the gateway; this holds its copy of the head and fences to the gateway's
     known_block, so a change there cannot quietly make every recall an instruction change again."""
