@@ -23,6 +23,7 @@ import { harnessFetch } from '@/lib/hfetch';
 import { MemoriesPage } from './MemoriesPage';
 import { toast } from '../toast';
 import { listCustom } from '@/lib/harness';
+import { memoryNowLine, replaceAsk } from './sheets';
 import { CardArt } from './CardArt';
 import { concepts } from './graph/builtin';
 
@@ -351,6 +352,15 @@ describe('the cards', () => {
     await press('Use here');
     expect(s.sent('PUT', '/v1/harnesses/chrn_a/memory')[0].body).toEqual({ memory: { id: 'c' } });
     expect(toast).toHaveBeenCalledWith('Photo cut remembers in Idle now.');
+  });
+
+  test('what Use in asks before it replaces: the memory by its name, or its own where it is named after the setup', () => {
+    const own = (name: string) => ({ k: 'own' as const, id: 'hmem_x', name });
+    expect(replaceAsk({ name: 'Busy', has: own('Busy') }, 'Idle')).toEqual({ title: 'Replace its own memory in Busy?',
+      body: 'Busy remembers in its own memory now. From its next task it remembers in Idle instead. Its own memory is kept, with everything in it.' });
+    expect(replaceAsk({ name: 'Busy', has: own('Support notes') }, 'Idle').title).toBe('Replace Support notes in Busy?');
+    expect(replaceAsk({ name: 'Old', has: { k: 'count', n: 2 } }, 'Idle').body).toBe('Old uses 2 memories now. From its next task it remembers in Idle instead. They are kept, with everything in them.');
+    expect(memoryNowLine(own('Busy'), 'c', 'Busy')).toBe('Remembers in its own memory');
   });
 
   test('Use in lists the setups in use first, each with the memory it has now; replacing one asks first (C6)', async () => {

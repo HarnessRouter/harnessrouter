@@ -326,6 +326,7 @@
 /* a person's record open on their agent's memory: where it is ("Support › Dana") stays at every width, each name giving
    way before the bar's actions do */
 #hrui .mm-crumbs.has-up .mm-crw,#hrui .mm-crumbs.has-up .mm-cr{flex:0 1 auto;min-width:0}
+#hrui .mm-crumbs.has-up>.mm-crw:first-child{flex-shrink:4}
 #hrui .mm-crumbs.has-up .mm-cr-up{color:var(--faint)}
 @media (max-width:860px){#hrui .mm-crumbs.has-up{display:flex}}
 #hrui .mm-doc-alt{margin-top:12px}

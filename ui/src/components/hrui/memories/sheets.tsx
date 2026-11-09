@@ -267,12 +267,26 @@ export function setupMemoryNow(h: CustomHarness): SetupMemoryNow {
 }
 /** The order Use in lists setups in: the ones that ran a task most lately first, then the newest made, then by name. */
 export const byRecent = (a: SetupPick, b: SetupPick) => b.last - a.last || b.created - a.created || a.name.localeCompare(b.name);
+/** The memory a setup remembers in, as Use in names it: by its name, or "its own memory" where it is named after the
+ *  setup (the one made for it) or has no name. */
+const ownName = (has: SetupMemoryNow, setup: string) => (has.k === 'own' && has.name && has.name !== setup ? has.name : 'its own memory');
 /** A setup's line under its name in Use in. */
-export function memoryNowLine(has: SetupMemoryNow, here: string): string {
-  if (has.k === 'own') return has.id === here ? 'Remembers here' : `Remembers in ${has.name || 'another memory'}`;
+export function memoryNowLine(has: SetupMemoryNow, here: string, setup = ''): string {
+  if (has.k === 'own') return has.id === here ? 'Remembers here' : `Remembers in ${ownName(has, setup)}`;
   if (has.k === 'none') return 'No memory';
   if (has.k === 'count') return `Uses ${has.n} ${has.n === 1 ? 'memory' : 'memories'}`;
   return '';
+}
+/** What Use in asks before it replaces the memory a setup has now with `next`. */
+export function replaceAsk(x: Pick<SetupPick, 'name' | 'has'>, next: string): { title: string; body: string } {
+  const then = `From its next task it remembers in ${next} instead.`;
+  if (x.has.k === 'count') {
+    const one = x.has.n === 1;
+    return { title: `Replace its memory in ${x.name}?`, body: `${x.name} uses ${x.has.n} ${one ? 'memory' : 'memories'} now. ${then} ${one ? 'It is kept, with everything in it.' : 'They are kept, with everything in them.'}` };
+  }
+  const now = ownName(x.has, x.name);
+  const kept = now === 'its own memory' ? 'Its own memory' : now;
+  return { title: `Replace ${now} in ${x.name}?`, body: `${x.name} remembers in ${now} now. ${then} ${kept} is kept, with everything in it.` };
 }
 
 /** Use in: give a memory to a setup. The setup then remembers there: it recalls from it, writes to it by default and
@@ -297,7 +311,7 @@ export function UseInSheet({ m, onClose, onDone }: { m: Memory; onClose: () => v
   const using = new Set((m.used_by || []).map((u) => u.harness_id));
   const here = (x: SetupPick) => using.has(x.id) || (x.has.k === 'own' && x.has.id === m.id);
   const needle = q.trim().toLowerCase();
-  const shown = (setups || []).filter((x) => !needle || x.name.toLowerCase().includes(needle) || memoryNowLine(x.has, m.id).toLowerCase().includes(needle));
+  const shown = (setups || []).filter((x) => !needle || x.name.toLowerCase().includes(needle) || memoryNowLine(x.has, m.id, x.name).toLowerCase().includes(needle));
   const use = async (x: SetupPick) => {
     if (busy) return;
     setBusy(x.id); setErr('');
@@ -306,10 +320,9 @@ export function UseInSheet({ m, onClose, onDone }: { m: Memory; onClose: () => v
   };
   const pick = (x: SetupPick) => { if (x.has.k === 'own' || x.has.k === 'count') setAsking(x); else void use(x); };
   if (asking) {
-    const now = asking.has.k === 'own' ? asking.has.name || 'its memory' : 'the memories it uses';
+    const ask = replaceAsk(asking, m.name);
     return (
-      <ConfirmSheet id="mmUseR" title={`Replace ${asking.has.k === 'own' ? now : 'its memory'} in ${asking.name}?`} confirmLabel="Replace" busy={!!busy} refused={err || undefined}
-        body={`${asking.name} remembers in ${now} now. From its next task it remembers in ${m.name} instead. ${asking.has.k === 'own' ? `${now} is kept, with everything in it.` : 'They are kept, with everything in them.'}`}
+      <ConfirmSheet id="mmUseR" title={ask.title} confirmLabel="Replace" busy={!!busy} body={ask.body}
         onClose={() => { if (!busy) { setAsking(null); setErr(''); } }} onConfirm={() => void use(asking)} />
     );
   }
@@ -327,7 +340,7 @@ export function UseInSheet({ m, onClose, onDone }: { m: Memory; onClose: () => v
           {setups.length > 6 ? <input className="set-in slim mm-use-q" type="search" placeholder={`Search ${setups.length} setups`} aria-label="Search setups" autoComplete="off" value={q} onChange={(e) => setQ(e.target.value)} /> : null}
           <div className="mm-use-list" role="list" aria-label="Setups, the ones in use first">
             {shown.map((x) => {
-              const line = memoryNowLine(x.has, m.id);
+              const line = memoryNowLine(x.has, m.id, x.name);
               return (
                 <div key={x.id} className="mm-use-row" role="listitem">
                   <span className="mm-use-n"><b title={x.name}>{x.name}</b>{line && !here(x) ? <small>{line}</small> : null}</span>
