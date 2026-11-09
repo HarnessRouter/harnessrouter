@@ -476,12 +476,37 @@ for a in sys.argv[1:]:
     for cand in (a, a.split("=", 1)[-1]):
         if "/.hr-prompt/prompt-" in cand and os.path.isfile(cand):
             report["files"][cand] = open(cand).read()
+if report["stdin"] or report["files"]:
+    # a helper of its own, as a CLI starts its tools and workers: every process of the session is read below
+    import subprocess
+    report["helper"] = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(8)", "stand-in-helper"],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL).pid
 out = os.path.join(os.getcwd(), ".stand-in-%d.json" % os.getpid())
 with open(out + ".part", "w") as fh:
     json.dump(report, fh)
 os.rename(out + ".part", out)
 if report["stdin"] or report["files"]:
-    time.sleep(6)          # a turn: alive while its command line is read
+    time.sleep(6)          # a turn: alive while its command lines are read
+"""
+# Every process the session's uid has, as another uid reads them: its pid and whether its command line holds any
+# of the words given.
+_SESSION_PROCESSES = r"""
+import json, os, sys
+uid, words = int(sys.argv[1]), sys.argv[2:]
+out = []
+for d in os.listdir("/proc"):
+    if not d.isdigit():
+        continue
+    try:
+        if os.stat("/proc/" + d).st_uid != uid:
+            continue
+        with open("/proc/%s/cmdline" % d, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        continue
+    out.append([int(d), raw.split(b"\0")[0].decode(errors="replace"), [w for w in words if w.encode() in raw]])
+print(json.dumps(out))
 """
 _ON_PATH = ["claude", "codex", "pi", "omp", "qwen", "gemini", "cline", "opencode", "mimo", "kilo", "mcode", "goose",
             "grok", "node"]
@@ -588,6 +613,14 @@ def test_a_turns_command_line_holds_none_of_its_prompt(base, continued, monkeypa
     cmdline = seen.stdout.replace(b"\0", b" ").decode(errors="replace")
     assert seen.returncode == 0 and cmdline.strip(), seen.stderr     # the read itself worked, as another uid
     assert PROMPT_MARK not in cmdline and "edited instructions" not in cmdline, cmdline
+    # ...and every other process the session has while the turn runs: a CLI starts helpers, and one that
+    # starts itself again would start with whatever argv it holds in-process.
+    walk = subprocess.run([sys.executable, "-c", _SESSION_PROCESSES, str(UID), PROMPT_MARK, "edited instructions"],
+                          user=UID2, group=UID2, capture_output=True, text=True, timeout=60)
+    procs = json.loads(walk.stdout or "[]")
+    helper = json.loads(report.read_text()).get("helper")
+    assert pid in [p[0] for p in procs] and helper in [p[0] for p in procs], (pid, helper, procs, walk.stderr)
+    assert not [p for p in procs if p[2]], procs
     files = [f for f in made if f]                                  # cline's goes through a pipe: no file
     assert made and all(_opened_as(UID2, f) in ("EACCES", "ENOENT") for f in files), \
         [(f, _opened_as(UID2, f)) for f in files]
