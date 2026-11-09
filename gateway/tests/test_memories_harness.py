@@ -470,4 +470,4 @@ def test_a_continued_task_is_not_given_back_what_it_kept_itself_and_another_task
     _a_finished_turn(monkeypatch, world, "sess_later", user_text=question, section=_known_section(given))
     print("\n[another task is given]\n" + given[0])
     assert given[0].startswith(memory_tools.KNOWN_HEAD)
-    assert "- [noted by an agent just now] the person asked once: reply with exactly ZEBRA-7" in given[0]
+    assert "- [noted by an agent just now] a request, noted once: reply with exactly ZEBRA-7" in given[0]
