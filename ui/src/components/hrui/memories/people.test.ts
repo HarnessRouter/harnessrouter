@@ -3,7 +3,6 @@
 // service's to say (GET /v1/memories/choose), so nothing here reads what a memory is for.
 import { agentMemoryOf, CONSOLE_PERSON, failedLine, failedReason, personName, recalledAtStartOf, rememberedOf, shownName, userOf } from '@/lib/memories';
 import * as vendors from './vendors';
-import { scopeWord } from './vendors';
 
 test('a person’s memory is shown by the person the service names in end_user', () => {
   expect(shownName({ name: '9f2c41aa', end_user: 'Dana' })).toBe('Dana');
@@ -24,11 +23,6 @@ test('the console’s own test identity reads as you, never as its address; anyo
 
 test('the console keeps no copy of the engine scorer: the service chooses', () => {
   expect('chooseEngine' in vendors).toBe(false);
-});
-
-test('the words people read for how an agent keeps people', () => {
-  expect(scopeWord('per_user')).toBe('Separately for each person');
-  expect(scopeWord('shared')).toBe('Shared');
 });
 
 test('an agent’s memory on its record: undefined where the record says nothing, null with why where it has none', () => {

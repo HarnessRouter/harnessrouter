@@ -1,8 +1,8 @@
 'use client';
 // A setup's own memory, as the service chose it for the agent (the memories spec, A1 and C1): on a new setup's save card
-// one line, "Memory: <Engine>, <why>", and Change, which offers the four engines and None in a small menu; in its
-// Settings the same choice as a list (EngineList). Drawn from the setup's record, so what is drawn is what was saved. A service before 0.40 says nothing of an
-// agent's memory, and then nothing is drawn.
+// one line, "Memory: <Engine>, <why>", and Change, which offers the four engines and None in a small menu. Drawn from
+// the setup's record, so what is drawn is what was saved. A service before 0.40 says nothing of an agent's memory, and
+// then nothing is drawn.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getAgentMemory, getHarnessMemories, setAgentMemory, type AgentMemoryRead, type MemoryChoice } from '@/lib/memories';
 import { announceHarnessMemories } from '../setup/harnessMemories';
@@ -96,46 +96,6 @@ export function EngineMenu({ current, busy, onPick, label = 'Change' }: {
         </div>
       ) : null}
     </span>
-  );
-}
-
-/** The engine an agent's memory is kept by, as a list in its Settings (Richard 11-09: never behind a click): the four
- *  engines and None, each with what kind of memory it keeps, the current one picked and why it was chosen said under
- *  it. An engine not running here is shown, and can't be picked. Picking is `onPick`'s to confirm and do. */
-export function EngineList({ current, why, busy, onPick }: {
-  current: string; why?: string; busy?: boolean; onPick: (choice: MemoryChoice) => void;
-}) {
-  const { providers } = useProviders();
-  const running = (id: string) => !providers || !!providers.find((p) => p.id === id)?.connected;
-  // arrows move along the list as in any group of radio buttons; picking stays a press, since it asks first
-  const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    const d = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0;
-    if (!d) return;
-    const all = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role=radio]:not(:disabled)'));
-    const at = all.indexOf(document.activeElement as HTMLButtonElement);
-    if (!all.length) return;
-    e.preventDefault();
-    all[(at + d + all.length) % all.length].focus();
-  };
-  const row = (id: string, name: string, line: string, can: boolean) => {
-    const on = current === id;
-    return (
-      <button key={id || 'none'} type="button" role="radio" aria-checked={on} disabled={busy || !can}
-        className={`mm-eng-o${on ? ' on' : ''}${can ? '' : ' off'}`} onClick={() => { if (!on) onPick(id ? { engine: id } : 'none'); }}>
-        <i className="mm-eng-dot" aria-hidden="true" />
-        <span className="mm-eng-t">
-          <span className="mm-eng-n"><b>{name}</b>{can ? null : <span className="mm-eng-nr">Not running here</span>}</span>
-          {line ? <small>{line}</small> : null}
-          {on && why ? <small className="mm-eng-why">{why}</small> : null}
-        </span>
-      </button>
-    );
-  };
-  return (
-    <div className="mm-engs am-engs" role="radiogroup" aria-label="Engine" onKeyDown={onKey}>
-      {Object.keys(VENDORS).map((id) => row(id, vendorName(id), VENDORS[id].line, running(id)))}
-      {row('', 'None', 'Every task starts from nothing.', true)}
-    </div>
   );
 }
 

@@ -1082,11 +1082,3 @@
 #hrui .set-split>.agent-side[data-focus="memory"]:has(.bk[data-tw="memory"]) .iso-wrap .bk:not([data-tw="memory"]){opacity:.28}
 /* Five parts in one row (hrui.css: each column as wide as its own label): a word never breaks */
 #hrui .agent-side .part-n,#hrui .agent-side .part small{white-space:nowrap}
-/* A memory's row in a setup's Settings: read or write, quiet beside the switch, as Edit and Delete are */
-#hrui .mm-acc-q{appearance:none;-webkit-appearance:none;border:0;background:transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 2px center;padding:2px 15px 2px 2px;font:inherit;font-size:13px;color:var(--muted);cursor:pointer;border-radius:6px;max-width:150px;flex:none}
-#hrui .mm-acc-q:hover{color:var(--fg)}
-@supports (field-sizing:content){#hrui .mm-acc-q{field-sizing:content}}
-/* on a phone it does what an MCP row does: the switch stays beside the name, the rest drops below */
-@media (max-width:520px){#hrui .cap-mcp .mm-acc-q{order:3;margin-left:36px}#hrui .cap-mcp .mm-row-a{order:4}#hrui .cap-mcp .mm-row-a.first{margin-left:36px}}
-#hrui .mm-acc-q:disabled{opacity:.5;cursor:default}
-#hrui .mm-acc-q:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
