@@ -22152,7 +22152,8 @@ async def _memories_known_at_start(seam, text: str, sid: str) -> tuple[str, int]
     except Exception as e:  # noqa: BLE001 - the turn runs without it
         print(f"[memories] {sid}: the turn starts without what its agent already knows: {type(e).__name__}", flush=True)
         return "", 0
-    return memory_tools.known_block(found)
+    # in a person's task, what was found in that person's own memory says it is theirs
+    return memory_tools.known_block(found, yours=str((getattr(seam, "person", None) or {}).get("node") or ""))
 
 
 _NO_END_USER = "no end user named"
