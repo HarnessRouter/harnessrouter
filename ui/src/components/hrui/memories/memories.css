@@ -622,3 +622,13 @@
 #hrui .mm-set-idv code{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
 #hrui .mm-set-v{margin:0;font-size:14px;color:var(--fg);overflow-wrap:anywhere}
 @media (max-width:560px){#hrui .mm-set-col{padding:14px 16px 48px}}
+
+/* the graph folded (Richard 11-09: "collapse to the right as a single column"): a slim rail, as a setup's folded Agent
+   stack, its toggle where the open panel's is and its name read upwards; the line under the toggle meets the bars beside */
+#hrui .mm-conn.mm-rail{align-items:center;gap:28px;padding:12px 0 0;border-left:1px solid var(--line);box-sizing:border-box;
+  background-image:linear-gradient(var(--line),var(--line));background-repeat:no-repeat;background-position:0 55px;background-size:100% 1px}
+#hrui .mm-rail-tog{width:32px;height:32px;flex:none}
+#hrui .mm-rail-l{writing-mode:vertical-rl;transform:rotate(180deg);font-size:12px;color:var(--muted)}
+#hrui .mgv .sp-explore-bar .mgv-fold{flex:none;background:var(--bg);color:var(--muted)}
+/* with the fold chevron in its bar, the search gives up a little room before the depth wraps under it */
+#hrui .mgv .sp-explore-bar:has(>.mgv-fold) .sbar{min-width:112px;flex-basis:112px}

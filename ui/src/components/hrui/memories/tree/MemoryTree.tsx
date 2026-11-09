@@ -15,7 +15,7 @@ import { plain } from '../../setup/settingsModel';
 import { toast } from '../../toast';
 import { canEdit, canErase, canForget, hasFolders, hasHistory, kindOf, labelsOf, schemaGuides, schemaLabels, servesForget, standingOf, NOTED } from '../caps';
 import type { RecordsRead } from '../DataTab';
-import { Dot, DOTS, FILTER, FOLDER, FOLDER_OPEN, MmIco, PLUS, RELATE, SEARCH, shownName, userOf, X } from '../parts';
+import { Dot, DOTS, FILTER, FOLDER, FOLDER_OPEN, MmIco, PLUS, SEARCH, shownName, userOf, X } from '../parts';
 import { typeLabel, type LSchema } from '../schemaModel';
 import { RenameSheet } from '../sheets';
 import { folderName, folderOf, groupsOf, kindInfo, type Kind } from '../tree';
@@ -40,8 +40,6 @@ export interface MemoryTreeProps {
    *  memory has (recordOfKind in ./treeModel turns it into what the service takes); `folder` is where it goes. */
   onNew: (type: string, folder?: string) => void;
   onChanged: () => void;
-  /** the graph's switch, on the list's bar beside search, filter and new (where the memory's records don't link) */
-  graphToggle?: { on: boolean; toggle: () => void };
 }
 
 interface MenuItem { key: string; label?: string; icon?: ReactNode; bad?: boolean; on?: boolean; head?: boolean; sep?: boolean; run?: () => void }
@@ -76,7 +74,7 @@ function withExtras(base: MemoryRecord[] | null, ...extras: MemoryRecord[][]): M
   return more.length ? [...base, ...more] : base;
 }
 
-export function MemoryTree({ memory, provider, schema, read, activeId, pulse, filterKind, onOpen, onNew, onChanged, graphToggle }: MemoryTreeProps) {
+export function MemoryTree({ memory, provider, schema, read, activeId, pulse, filterKind, onOpen, onNew, onChanged }: MemoryTreeProps) {
   const labelled = schemaLabels(provider);
   const rootKinds = schemaGuides(provider) ? schema : null;
   const b = useBranches(memory, provider);
@@ -641,10 +639,6 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
         {filterItems.length ? (
           <button type="button" className={`icon-btn sm mm-plus mt-opens${gone ? ' mt-btn-on' : ''}`} aria-label={labelled ? 'Filter by label' : 'Filter by type'} title={labelled ? 'Filter by label' : 'Filter by type'} aria-haspopup="menu" aria-expanded={menu?.id === 'head:filter'}
             onClick={(e) => openMenu('head:filter', e.currentTarget.getBoundingClientRect(), filterItems.length)}>{FILTER}</button>
-        ) : null}
-        {graphToggle ? (
-          <button type="button" className={`icon-btn sm mm-plus${graphToggle.on ? ' mt-btn-on' : ''}`} aria-label="Graph" aria-pressed={graphToggle.on}
-            title={graphToggle.on ? 'Hide the graph' : 'Show the graph'} onClick={graphToggle.toggle}>{RELATE}</button>
         ) : null}
         {newItems.length ? (
           <button type="button" className="icon-btn sm mm-plus mt-opens" aria-label="New" title={folders ? 'New record or folder' : 'New record'} aria-haspopup="menu" aria-expanded={menu?.id === 'head:new'}

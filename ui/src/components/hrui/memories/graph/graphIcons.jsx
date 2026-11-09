@@ -18,6 +18,9 @@ export const I = {
   info: <Icon d={<><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5" /><path d="M12 8v.01" /></>} />,
   cornersOut: <Icon d={<><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></>} />,
   cornersIn: <Icon d={<><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></>} />,
+  // Center (Richard 11-09: "a target icon"): a ring, its centre and four ticks
+  target: <Icon d={<><circle cx="12" cy="12" r="6.5" /><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" /></>} />,
+  chevronRight: <Icon d={<path d="M9 6l6 6-6 6" />} />,
 };
 
 const OWN = { ArrowRight, Check, Trash2, Undo2 };

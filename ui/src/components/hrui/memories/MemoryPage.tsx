@@ -1,8 +1,8 @@
 'use client';
 // One memory (the design's memoryView): back, its name and the engine that keeps it, and three tabs (Richard 11-09), as a
-// setup's page has Tasks and Settings: Data, what it holds, the open record, and the graph of what connects to what
-// where its records link (or when asked for, from the record list's own bar); Schema, the types to edit where a schema
-// guides the engine, labels where it applies them, and what it makes itself; Settings, its name and description, its
+// setup's page has Tasks and Settings: Data, what it holds, the open record, and the graph of what connects to what,
+// open until a person folds it to the right; Schema, called that for every engine (Richard 11-09: "make them
+// consistent called schema"), what it makes itself and what a person sets; Settings, its name and description, its
 // ID, the agent harnesses that use it, and Delete. The last thing that failed here is said at the top, in the service's
 // words, until something works again. Whatever changes in the memory while this is open, by anyone, comes in on its
 // event stream. A person's own memory (below an agent's, kept for one person) says where it sits: under its name, the
@@ -18,7 +18,7 @@ import { Skel, SkHead, SkRows } from '../Skel';
 import { SETTINGS_IC } from '../setup/parts';
 import { tabKeys } from '../tabKeys';
 import { toast } from '../toast';
-import { keepsLinks, kindOf, schemaLabels } from './caps';
+import { keepsLinks, kindOf } from './caps';
 import { DataTab, type RecordsRead } from './DataTab';
 import { ago } from '../setups';
 import { BACK_IC, BADGE, engineOf, msOf, shownName, useProviders, useSetupNames } from './parts';
@@ -84,9 +84,8 @@ export function MemoryPage({ id, tabParam, recordParam, inParam = null, onTab }:
 
   // the open tab is in the address; Data where it names none
   const tab: MemoryTab = tabParam === 'schema' || tabParam === 'labels' ? 'schema' : tabParam === 'settings' ? 'settings' : 'data';
-  // the graph takes a column only where records link to each other, or when a person asks for it
+  // the graph has its column wherever there can be one: an engine that keeps links, or records that link
   const linked = useMemo(() => (read.records || []).some((r) => (r.references || []).some((x) => x.available !== false)), [read.records]);
-  const [graphAsked, setGraphAsked] = useState(false);
   const [typeFilter, setTypeFilter] = useState('');
   // going to Schema and back opens the record that was open, in the memory it was open in
   const openRecord = useRef({ rid: recordParam || '', in: (recordParam && inParam) || '' });
@@ -158,12 +157,8 @@ export function MemoryPage({ id, tabParam, recordParam, inParam = null, onTab }:
   }
 
   const m = memory;
-  // every provider has a schema: what it makes itself, drawn locked, and where it reads one, what a person sets
-  const schemaWord = schemaLabels(provider) ? 'Labels' : 'Schema';
   const disconnected = provider ? provider.connected === false : true;
-  const graphOn = linked || graphAsked;
-  // the graph is a column of its own where records link; elsewhere, where the engine keeps links, the list's bar has it
-  const graphToggle = provider && keepsLinks(provider) && !linked ? { on: graphAsked, toggle: () => setGraphAsked(!graphAsked) } : undefined;
+  const graphOn = keepsLinks(provider) || linked;
   const tabs: MemoryTab[] = provider ? ['data', 'schema', 'settings'] : ['data', 'settings'];
   const tb = (k: MemoryTab, icon: React.ReactNode, label: string) => (
     <button type="button" role="tab" aria-selected={tab === k} tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => onTab(k)}>{icon}{label}</button>
@@ -195,7 +190,7 @@ export function MemoryPage({ id, tabParam, recordParam, inParam = null, onTab }:
         {/* the memory's tabs, where a setup's Tasks and Settings sit */}
         <div ref={tabsRef} className="tabs inline ag-tabs" role="tablist" aria-label="Memory" onKeyDown={(e) => tabKeys(e, tabs, tab, (k) => { refocus.current = true; onTab(k); })}>
           {tb('data', DATA_IC, 'Data')}
-          {provider ? tb('schema', SCHEMA_IC, schemaWord) : null}
+          {provider ? tb('schema', SCHEMA_IC, 'Schema') : null}
           {tb('settings', SETTINGS_IC, 'Settings')}
         </div>
       </header>
@@ -216,7 +211,7 @@ export function MemoryPage({ id, tabParam, recordParam, inParam = null, onTab }:
         <MemorySettings memory={m} onSaved={(x) => setMemory({ ...m, ...x })} onDeleted={() => router.push(m.parent_id ? upHref : '/memories')} />
       ) : (
         <DataTab memory={m} provider={provider} schema={doc.schema} read={read} setups={names} typeFilter={typeFilter} initialRecord={openRecord.current.rid} initialIn={openRecord.current.in} onOpenRecord={keepOpen}
-          urlRecord={recordParam} urlIn={inParam} onPlace={place} showGraph={graphOn} graphToggle={graphToggle}
+          urlRecord={recordParam} urlIn={inParam} onPlace={place} showGraph={graphOn}
           onSchema={() => onTab('schema')} onOtherMemory={(mid, rid) => router.push(`/memories/${enc(mid)}?tab=data&record=${enc(rid)}`)} onChanged={readMemory}
           onBelowChanged={(ids) => { setLiveTick((x) => x + 1); lit(ids); }} liveTick={liveTick} pulse={pulse} />
       )}

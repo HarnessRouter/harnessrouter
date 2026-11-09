@@ -2,12 +2,13 @@
 // Panes side by side, the rule between two of them draggable. Dragging moves only those two; one pane
 // takes whatever is left. What a person chose is kept apart from what fits: a narrow window squeezes the
 // panes and a wide one gives them back. Where they can't all fit they become tabs, one at a time, full
-// width, every pane staying mounted so an editor or a canvas keeps its state.
+// width, every pane staying mounted so an editor or a canvas keeps its state. A pane of a fixed width (a folded panel's
+// rail) has no rule to drag beside it and keeps that width.
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { tabKeys } from '../tabKeys';
 import './tree/columns.css';
 
-export interface ColumnPane { id: string; label: string; min: number; initial: number; grow?: boolean; node: ReactNode }
+export interface ColumnPane { id: string; label: string; min: number; initial: number; grow?: boolean; fixed?: number; node: ReactNode }
 export interface ResizableColumnsProps {
   storageKey: string;
   panes: ColumnPane[];
@@ -36,10 +37,11 @@ export function resolveWidths(panes: ColumnPane[], chosen: Record<string, number
   const g = growing(panes);
   const out: Record<string, number> = {};
   const rest = panes.filter((p) => p !== g);
-  rest.forEach((p) => { out[p.id] = Math.max(p.min, chosen[p.id] ?? p.initial); });
+  rest.forEach((p) => { out[p.id] = p.fixed ?? Math.max(p.min, chosen[p.id] ?? p.initial); });
   const left = () => total - SEP * (panes.length - 1) - rest.reduce((n, p) => n + out[p.id], 0);
   let short = g.min - left();
   for (let i = rest.length - 1; i >= 0 && short > 0; i--) {
+    if (rest[i].fixed != null) continue;
     const take = Math.min(out[rest[i].id] - rest[i].min, short);
     out[rest[i].id] -= take;
     short -= take;
@@ -163,7 +165,7 @@ export function ResizableColumns({ storageKey, panes, tab, onTab, onNarrow }: Re
               style={narrow ? undefined : p === g ? { flex: '1 1 0' } : { flex: `0 0 ${widthOf(p)}px` }}>
               {p.node}
             </section>
-            {!narrow && i < panes.length - 1 ? (
+            {!narrow && i < panes.length - 1 && panes[i + 1].fixed == null && p.fixed == null ? (
               <div className={`rc-sep${dragging === i ? ' on' : ''}`} role="separator" aria-orientation="vertical" aria-label={`Resize ${p.label} and ${panes[i + 1].label}`} tabIndex={0}
                 aria-valuenow={Math.round(widthOf(p))} aria-valuemin={p.min} aria-valuemax={Math.round(widthOf(p) + widthOf(panes[i + 1]) - panes[i + 1].min)}
                 onPointerDown={(e) => onDown(e, i)} onPointerMove={onMove} onPointerUp={onEnd} onPointerCancel={onEnd} onLostPointerCapture={onEnd}
