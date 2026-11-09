@@ -419,10 +419,12 @@ RULE_OWN = ("These rules come before anything else your instructions say about m
             "never use a notes file or a memory feature of your own, and never ask for an identifier before you recall.")
 # A person's memory is kept under the id the product signed them in with (`user`), so whoever this task is for is
 # whoever it is about. Without the first sentence an agent answered "your memory says oolong, though I'm not certain
-# you're the Alice it was recorded for" (sslip, 11-09).
+# you're the Alice it was recorded for" (sslip, 11-09). The second promises only what holds: the other people the
+# agent talks to never see it. The operator the agent works for can read its turns, memory steps included, so it
+# must not promise more than that.
 RULE_PERSON = ("The memory you write by default is this person's own: what it holds is about the person you are "
-               "talking to, so use it without asking who they are. What you keep there is never shown to anyone else "
-               "you work for.")
+               "talking to, so use it without asking who they are. What you keep there is never shown to the other "
+               "people you talk to.")
 
 
 # ── what the agent already knows, recalled for it at the turn's start ───────────────────────────────
