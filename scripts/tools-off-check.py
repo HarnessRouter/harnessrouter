@@ -94,6 +94,23 @@ def tool_names(body: dict) -> list[str]:
     return out
 
 
+def opening(body: dict) -> str:
+    """The first words of the request's system prompt, which say which of a CLI's agents sent it."""
+    sys_ = body.get("system") or body.get("instructions") or ""
+    if not sys_:
+        for m in body.get("messages") or []:
+            if isinstance(m, dict) and m.get("role") in ("system", "developer"):
+                sys_ = m.get("content") or ""
+                break
+    if isinstance(sys_, dict):
+        sys_ = " ".join(str(p.get("text") or "") for p in sys_.get("parts") or [] if isinstance(p, dict))
+    if isinstance(sys_, list):
+        sys_ = " ".join(str(p.get("text") or "") if isinstance(p, dict) else str(p) for p in sys_)
+    if not sys_ and isinstance(body.get("systemInstruction"), dict):
+        sys_ = " ".join(str(p.get("text") or "") for p in body["systemInstruction"].get("parts") or [])
+    return " ".join(str(sys_).split())[:140]
+
+
 def _sse(events: list[str]) -> bytes:
     return "".join(events).encode()
 
@@ -186,7 +203,8 @@ class StandHandler(http.server.BaseHTTPRequestHandler):
             Seen.calls.setdefault(backend, []).append({
                 "path": "/" + "/".join(path.strip("/").split("/")[1:]),
                 "tools": tool_names(body),
-                "block": BLOCK.encode() in raw})
+                "block": BLOCK.encode() in raw,
+                "opening": opening(body)})
         ctype, data = model_body(path, body)
         self._send(200, ctype, data)
 
@@ -310,6 +328,7 @@ def main() -> int:
     ap.add_argument("--disable", default="", help="comma-separated tool names to switch off (default: every tool the base offers)")
     ap.add_argument("--jobs", type=int, default=3)
     ap.add_argument("--baseline", action="store_true", help="also run each base once with nothing switched off")
+    ap.add_argument("--verbose", action="store_true", help="list every model request with its own tools")
     args = ap.parse_args()
 
     for _ in range(90):
@@ -367,6 +386,11 @@ def main() -> int:
             print(f"    request tools, nothing off ({len(full)}): {', '.join(full) or '-'} "
                   f"[turn {b['status'] or '-'} {b['error'][:60]}]", flush=True)
         print(f"    request tools ({len(offered)}): {', '.join(offered) or '-'}", flush=True)
+        if args.verbose:
+            for i, c in enumerate(calls):
+                print(f"      request {i + 1} {c['path']} block {'yes' if c['block'] else 'no'} "
+                      f"tools ({len(c['tools'])}): {', '.join(c['tools']) or '-'}", flush=True)
+                print(f"        system prompt opens: {c['opening'] or '-'}", flush=True)
     print("cleanup: " + ("nothing left" if not left else "; ".join(left)), flush=True)
     return 0 if all(verdict(r)[0] not in ("NOTHING", "NO REQUEST") for r in rows) and not left else 1
 
