@@ -120,8 +120,8 @@ const results = {};
 // skill's script), something that reads or writes FILES, whatever loads a SKILL, and the MCP path.
 // Agent Zero names its file tool `text_editor` and its loader `skills_tool`, so a list written from
 // grok's and minimax's names alone picked `text_editor` — the tool the fixture writes with.
-// opensquilla and nanobot name theirs `exec` (and nanobot has `exec_session` too), which `execute`
-// does not match — so the list would have withheld the tool the fixture runs its script with.
+// nanobot names its shell `exec` (and has `exec_session` too) and opensquilla `exec_command`; `execute`
+// matches neither — so the list would have withheld the tool the fixture runs its script with.
 // vibe adds two names of its own kind: `run_typescript` executes a script with the tool registry in
 // scope and `search_tool_functions` looks a tool up by name, and together they are how that runtime
 // reaches an MCP server's tools — so withholding either would break the fixture's MCP half for the

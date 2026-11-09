@@ -1,10 +1,10 @@
 """In-sandbox harness runner server — multi-backend, multi-provider.
 
-Runs INSIDE an ACA Dynamic Sessions custom-container sandbox (one per session, Hyper-V
-isolated, warm-pooled). The `harness-gateway` allocates a session from the pool and proxies
-turn requests here. The agent ALWAYS works on a real local POSIX git working tree at
-/workspace with real bash + git — its native, trained environment (we never map VectorGraph
-into the session; see docs/technical/HARNESS_AS_A_SERVICE_DESIGN.md S0.5).
+Runs inside the sandbox the agent works in: self-hosted, one runner serves every session behind
+the per-session write-wall (HR_SESSION_UIDS); a deployment can instead give each session its own
+container (HR_SANDBOX_PER_SESSION). The `harness-gateway` routes a session here and proxies turn
+requests. The agent ALWAYS works on a real local POSIX git working tree at /workspace with real
+bash + git, its native, trained environment (no remote store is mapped into the session).
 
 A turn runs ONE backend CLI one-shot over /workspace and normalizes its events into a
 single canonical schema (Claude Code `stream-json`) so everything downstream is uniform.
@@ -111,11 +111,10 @@ WORKSPACE_ROOT = os.environ.get("HARNESS_WORKSPACE", "/workspace")
 _SID_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
-# "One sandbox per session" as a DEPLOYMENT INVARIANT, declared by the deployment itself (the
-# hosted session pool sets it: ACA Dynamic Sessions gives each identifier its own
-# Hyper-V-isolated container). Everything it changes fails CLOSED when unset — the self-hosted
-# all-in-one container runs ONE runner for ALL sessions, where these behaviors would break
-# session isolation. See _ws() and _reap_workspaces().
+# "One sandbox per session" as a DEPLOYMENT INVARIANT, declared by the deployment itself (a
+# session pool sets it when it gives each identifier its own isolated container). Everything it
+# changes fails CLOSED when unset — the self-hosted all-in-one container runs ONE runner for ALL
+# sessions, where these behaviors would break session isolation. See _ws() and _reap_workspaces().
 _SANDBOX_PER_SESSION = os.environ.get("HR_SANDBOX_PER_SESSION", "").strip().lower() in ("1", "true", "on")
 
 # THE SESSION WRITE-WALL, the second deployment invariant, declared by the self-hosted entrypoint
@@ -222,8 +221,8 @@ def _ws(identifier: str = "") -> str:
     The gateway already addresses every runner call as ?identifier=<session_id>, so the session
     id IS the directory and nothing on the wire changes.
 
-    UNDER THE PER-SESSION-SANDBOX INVARIANT (HR_SANDBOX_PER_SESSION, declared by the hosted
-    pool: each identifier gets its own Hyper-V-isolated container), the session workspace IS
+    UNDER THE PER-SESSION-SANDBOX INVARIANT (HR_SANDBOX_PER_SESSION, declared by a session
+    pool that gives each identifier its own isolated container), the session workspace IS
     WORKSPACE_ROOT itself. This is the mechanical fix for deliverables written to "/workspace/X"
     — the path models reach for when told they work in a workspace. With a per-session
     subdirectory, that path was a writable trap OUTSIDE the git tree: never collected, never
@@ -845,8 +844,8 @@ async def _internal_callers_only(request: Request, call_next):
 # Where checkpoint/hydrate tarballs spool to disk (HR-INF-015 — never a RAM buffer). MUST be
 # OUTSIDE the workspace (so a leftover temp file can never be caught by a later `git add -A` or
 # re-tarred) AND on a real DISK, not a RAM-backed tmpfs (which would defeat the memory saving).
-# Default: a dedicated dir on the container's disk-backed rootfs (same overlay as /workspace on
-# ACA Dynamic Sessions), created at import. Override with HARNESS_SPOOL_DIR if the runtime differs.
+# Default: a dedicated dir on the container's disk-backed rootfs (the same overlay as
+# /workspace), created at import. Override with HARNESS_SPOOL_DIR if the runtime differs.
 def _spool_dir(path: str) -> str | None:
     """`path`, created if missing, when this process can create files in it; else None, which
     tempfile reads as the OS tmpdir. An EXISTING directory counts only if it is writable: on the
@@ -2953,7 +2952,7 @@ CLAUDE_PROVIDERS = {"anthropic", "bedrock", "vertex", "tokenrouter"}
 #   output_config.effort        -> 400 on haiku-4.5
 #                                  'This model does not support the effort parameter.'
 #
-# The broker strips both centrally (_strip_unsupported in harness_gateway) — but only for traffic
+# The broker strips both centrally (_strip_unsupported in the gateway) — but only for traffic
 # that goes THROUGH the broker. A self-hosted instance is bring-your-own-key: the CLI holds the
 # credential and calls the provider directly, so nothing on that path ever sees the body. The CLI
 # therefore has to be told not to send them.
@@ -2990,6 +2989,17 @@ def _claude_thinking_env(model: str) -> dict:
         thinking["applied"] = level
     return env
 
+
+# Claude Code 2.1.280's built-in tools, by the names its permission rules take, read off the pinned
+# release's own tool definitions. The gateway's catalog offers switches only from these (or from an
+# id in _CLAUDE_TOOL_RENAMES), which gateway/tests/test_catalog_tool_names.py holds.
+CLAUDE_TOOLS = ("Agent", "AskUserQuestion", "Bash", "Edit", "EnterPlanMode", "ExitPlanMode", "Glob", "Grep",
+                "LSP", "NotebookEdit", "Read", "Skill", "TaskCreate", "TaskGet", "TaskList", "TaskStop",
+                "TaskUpdate", "TodoWrite", "ToolSearch", "WebFetch", "WebSearch", "Write")
+# A catalog id that is a tool's earlier name, and the name the tool has now. "Task" is the subagent
+# tool before it became Agent: harnesses store the catalog's id, so the id stays, and the deny list is
+# written with the current name rather than relying on the CLI's own table of old names.
+_CLAUDE_TOOL_RENAMES = {"Task": "Agent"}
 
 
 def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns: int,
@@ -3116,7 +3126,8 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
     # Reconciled on EVERY turn, not only when something is off: HOME is checkpointed, so a deny list an
     # earlier turn wrote stayed in the file after the harness switched the tool back on, and the tool
     # stayed withheld. Anything else the file holds is left as it is.
-    names = [t.split(" (")[0].strip() for t in (disallowed_tools or []) if t and t.strip()]
+    names = list(dict.fromkeys(_CLAUDE_TOOL_RENAMES.get(n, n) for n in
+                               (t.split(" (")[0].strip() for t in (disallowed_tools or []) if t and t.strip())))
     settings_path = cfg_dir / "settings.json"
     try:
         current = json.loads(settings_path.read_text()) if settings_path.exists() else {}
@@ -3171,8 +3182,9 @@ CODEX_PROVIDERS = {
 # sandbox via --dangerously-bypass-approvals-and-sandbox, but `codex app-server` has no such flag and
 # reads its policy from config.toml. Without this it defaults to read-only, so with approval_policy
 # "never" (never escalate) every apply_patch/file write is silently rejected and the agent gives up
-# ("workspace mounted read-only"). We already run one Hyper-V-isolated sandbox per session, so full
-# access INSIDE it matches the exec path's behavior. The [sandbox_workspace_write] block is inert
+# ("workspace mounted read-only"). The session's sandbox is the boundary (its own container where
+# HR_SANDBOX_PER_SESSION is declared, the per-session write-wall otherwise), so full access INSIDE
+# it matches the exec path's behavior. The [sandbox_workspace_write] block is inert
 # under danger-full-access but kept for anyone who flips the mode down to workspace-write.
 # The provider KEY is ours to choose — it only has to match `model_provider`. It is namespaced
 # because Codex reserves its built-in ids: a [model_providers.openai] block is rejected outright
@@ -3269,10 +3281,21 @@ def _codex_web_search_off(tools_disabled: list[str] | None) -> bool:
                for x in (tools_disabled or []) if x and x.strip())
 
 
+# The core tools a codex 0.154 turn offers its model, read off the pinned release (its multi-agent,
+# MCP-resource and plugin tools aside). The shell is exec_command, with write_stdin, under unified
+# exec; apply_patch is not offered on a custom Responses endpoint (_CODEX_CUSTOM_EDITING). The
+# gateway's catalog offers switches only from these and _CODEX_SHELL_NAMES, which
+# gateway/tests/test_catalog_tool_names.py holds.
+CODEX_TOOLS = ("apply_patch", "exec_command", "update_plan", "view_image", "web_search", "write_stdin")
+# The names that switch the shell off: the catalog's id ("shell", which harnesses store) and the one
+# 0.154 sends the model.
+_CODEX_SHELL_NAMES = frozenset({"shell", "exec_command"})
+
+
 def _codex_shell_off(tools_disabled: list[str] | None) -> bool:
     """Whether the turn's disabled list names codex's shell, by the catalog's name or the one 0.154
     sends the model (exec_command, with write_stdin, under unified exec)."""
-    return bool({t.lower() for t in _tool_names_off(tools_disabled)} & {"shell", "exec_command"})
+    return bool({t.lower() for t in _tool_names_off(tools_disabled)} & _CODEX_SHELL_NAMES)
 
 
 def _codex_flag(value: str | bool | None) -> bool | None:
@@ -3930,7 +3953,7 @@ def _build_pi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env:
         pname = pr             # a native provider with no key (a key goes the custom way, above)
 
     cmd = ["pi", "-p", "--mode", "json", "--provider", pname, "--model", model,
-           # The sandbox is the trust boundary (one Hyper-V-isolated box per session), so
+           # The sandbox is the trust boundary (see _SANDBOX_PER_SESSION and the write-wall), so
            # project-local files are trusted the same way claude gets
            # --dangerously-skip-permissions: explicitly, because nobody is there to answer.
            "--approve",
@@ -12774,6 +12797,24 @@ _jcode_to_claude.eof = _jcode_eof   # type: ignore[attr-defined]
 # — which does carry them — is written once, after the run (cli/agent_cmd.py `_write_jsonl`), by
 # which time the call has already been reported. Said here rather than left to be discovered.
 OPENSQUILLA_PROVIDERS = {"anthropic", "openai", "azure", "openrouter", "tokenrouter", "openai-api"}
+# Every tool 0.5.6 registers (its tools/builtin, @tool(name=...)), read off the pinned wheel. A turn is
+# offered a subset, by configuration. The CLI has no per-tool switch, so a disabled tool is asked off in
+# the agent doc by this name; the gateway's catalog offers switches only from these, which
+# gateway/tests/test_catalog_tool_names.py holds.
+OPENSQUILLA_TOOLS = (
+    "agents_list", "apply_patch", "audio_config", "audio_provider_capabilities", "background_process",
+    "browser", "canvas", "create_goal", "create_source", "cron", "dubbing_download", "dubbing_generate",
+    "dubbing_status", "edit_file", "edit_source", "exec_command", "execute_code", "gateway", "get_goal",
+    "git_commit", "git_diff", "git_log", "git_status", "glob_search", "grep_search", "http_request", "image",
+    "image_generate", "install_skill_deps", "list_dir", "memory_delete", "memory_get", "memory_save",
+    "memory_search", "message", "music_generate", "nodes", "open_workspace_preview", "pdf", "process",
+    "publish_artifact", "read_file", "read_source", "read_spreadsheet", "request_user_input",
+    "retrieve_tool_result", "router_control", "session_search", "session_status", "sessions_history",
+    "sessions_list", "sessions_send", "sessions_spawn", "sessions_yield", "skill_create", "skill_delete",
+    "skill_edit", "skill_install_community", "skill_list", "skill_search_community", "skill_view",
+    "song_generate", "source_symbols", "subagents", "submit_plan", "tool_search", "tts", "update_goal",
+    "update_plan", "voice_clone", "voice_convert", "voice_search", "web_discover", "web_fetch", "web_search",
+    "write_file", "write_scratch")
 
 # Its own name for the key of the generic OpenAI-compatible provider (`custom`), and of the generic
 # Messages one. The driver puts the relay's per-turn placeholder here, in the ENVIRONMENT, which is
@@ -17204,7 +17245,7 @@ def _ws_holds(identifier: str, ws_path: pathlib.Path, sha: str) -> bool:
     volume by hand while the runner container was merely stopped and started, or removed by
     DELETE /workspace before it learned to drop the marker. Either way the next probe answered
     "held", the gateway skipped the restore, and the turn ran on an empty folder — the CLI found
-    no session to resume and the conversation started over (richard-epsilla, #194). A workspace
+    no session to resume and the conversation started over (#194). A workspace
     restored from a checkpoint always carries its .git (the tarball does, and _git_ensure runs
     after every restore), so a folder without one holds nothing, whatever the marker says; the
     marker that vouched for it is dropped so the full hydrate that follows starts clean."""
@@ -17989,7 +18030,7 @@ def capabilities(identifier: str = "") -> dict:
 # a tool off and got neither believes it is off. Qwen Code and Cline were in neither group, and an
 # operator who switched every tool off on them watched the agent use them all.
 #   codex       — web_search and the shell have switches (_codex_web_search_off, _codex_shell_off);
-#                 the catalog's other names are not tools codex 0.154 offers, so they are asked.
+#                 apply_patch, update_plan and view_image have none in 0.154, so they are asked.
 #   hermes      — switches toolsets, not tools. A toolset whose every tool is off is switched off,
 #                 so those tools are withheld (_hermes_toolsets_off: terminal, the four file tools
 #                 together, the web tools); read_file alone, say, is asked.
@@ -18141,7 +18182,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             _collected_at_turn_start(_ws(identifier))
         except Exception as e:  # noqa: BLE001 — the cursor is collection's; a turn never waits on it
             print(f"[produced] cursor not set at turn start: {str(e)[:160]}", flush=True)
-        # Built-in skills the harness disabled must NOT be mounted. On BusinessOS built-ins aren't
+        # Built-in skills the harness disabled must NOT be mounted. Here built-ins aren't
         # image-mounted (there is no _mount_builtin_skills), and the gateway already drops suppress markers
         # from req.skills, so this filter is a parity guard: never write a skill whose name is suppressed.
         _skip = set(req.skills_suppressed or [])

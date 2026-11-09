@@ -136,8 +136,47 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Pushed BY DIGEST, with no tag. Nothing a user can pull exists until the merge job says so.
+      #
+      # ONE more attempt, after a pause, when the first failed upstream and for no other reason: the
+      # registry lost a layer upload ("error writing layer blob: not_found", Docker Hub, 2026-11-09),
+      # answered 5xx, or reset the connection. A failure of the build itself, or a 4xx, fails here
+      # as before. The second attempt is the same step with the same inputs; keep the two `with:`
+      # blocks identical.
       - name: Build and push by digest
-        id: build
+        id: build1
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            HR_SKILLS_REF=${{ needs.plan.outputs.skills }}
+            HR_KITS_REF=${{ needs.plan.outputs.kits }}
+            HR_VERSION=${{ needs.plan.outputs.version }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Decide whether the build failed upstream
+        if: steps.build1.outcome == 'failure'
+        run: |
+          set -uo pipefail
+          # The failed build's own error, from the builder's record of it. No record, no retry.
+          MSG=$(docker buildx history inspect --format json 2>/dev/null | jq -r '.Error.Message // ""' || true)
+          echo "first attempt: ${MSG:-no build record}"
+          UPSTREAM='error writing layer blob: not_found|unexpected status( code)?[^:]*: 5[0-9][0-9]|[^0-9]5[0-9][0-9] (Bad Gateway|Service Unavailable|Gateway Time-?out|Internal Server Error)|[Cc]onnection reset'
+          CLIENT='unexpected status( code)?[^:]*: 4[0-9][0-9]|[^0-9]4[0-9][0-9] (Bad Request|Unauthorized|Forbidden|Not Found|Too Many Requests)'
+          if grep -Eq "$UPSTREAM" <<<"$MSG" && ! grep -Eq "$CLIENT" <<<"$MSG"; then
+            echo "::warning::the registry failed the push on ${{ matrix.arch }}; building once more in 30 s"
+            sleep 30
+          else
+            echo "::error::the build failed on ${{ matrix.arch }}, and not upstream"
+            exit 1
+          fi
+
+      - name: Build and push by digest (second attempt)
+        id: build2
+        if: steps.build1.outcome == 'failure'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -156,9 +195,11 @@ jobs:
       # gate runs the image the way a NEW user does: empty volume, and read what it says — and now
       # it does that on EACH architecture, on hardware of that architecture.
       - name: Smoke-test this architecture on a fresh volume
+        env:
+          DIGEST: ${{ steps.build2.outputs.digest || steps.build1.outputs.digest }}
         run: |
           set -euo pipefail
-          REF="${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
+          REF="${{ env.IMAGE }}@$DIGEST"
           docker rm -f smoke 2>/dev/null || true
           docker volume rm smoke-data 2>/dev/null || true
           # No HR_SECRET_KEY: the image gets one at its first start, the way a new install does.
@@ -184,12 +225,48 @@ jobs:
           # the catalogue, on one architecture only (#623). Each must also carry its stamp.
           DEFAULT=$(sed -n 's/^export HR_BACKENDS="\${HR_BACKENDS:-\(.*\)}"$/\1/p' docker/entrypoint.sh)
           [ -n "$DEFAULT" ] || { echo "::error::could not read the default HR_BACKENDS from docker/entrypoint.sh"; exit 1; }
-          AVAIL=" ${LINE#*backends available:} "
-          bad=""
-          for b in ${DEFAULT//,/ }; do
-            case "$AVAIL" in *" $b "*) ;; *) bad="$bad $b" ;; esac
-            docker exec smoke test -s "/data/agent-tools/.versions/$b" || bad="$bad $b(no stamp)"
-          done
+          not_installed() {   # <backends available line>: the default bases it lacks, or without a stamp
+            local avail=" ${1#*backends available:} " b out=""
+            for b in ${DEFAULT//,/ }; do
+              case "$avail" in *" $b "*) ;; *) out="$out $b" ;; esac
+              docker exec smoke test -s "/data/agent-tools/.versions/$b" || out="$out $b(no stamp)"
+            done
+            printf '%s' "$out"
+          }
+          bad=$(not_installed "$LINE")
+          # ONE more start, after a pause, when every install that failed failed upstream: a 5xx or a
+          # reset connection from where it downloads (GitHub's anonymous 504s on a release asset, for
+          # goose and for MiniMax Code's tarball, 2026-11-09). A start installs exactly the bases that
+          # have no stamp, through the same pinned, checksummed install. A 4xx, a checksum or any other
+          # failure is not retried, and one failure of that kind means no retry for any.
+          if [ -n "$bad" ]; then
+            UPSTREAM='returned error: 5[0-9][0-9]|error code E5[0-9][0-9]|[^0-9]5[0-9][0-9] (Bad Gateway|Service Unavailable|Gateway Time-?out|Internal Server Error)|server error \(5[0-9][0-9]|ECONNRESET|[Cc]onnection reset'
+            CLIENT='returned error: 4[0-9][0-9]|error code E4[0-9][0-9]|[^0-9]4[0-9][0-9] (Bad Request|Unauthorized|Forbidden|Not Found|Too Many Requests)|client error \(4[0-9][0-9]'
+            # Each failed install's report: its WARN line and the indented lines under it.
+            FAILS=$(docker logs smoke 2>&1 | awk '/WARN: could not install/ {n++; inb=1; print n "\t" $0; next}
+                                                  inb && /^\[[^]]*\]   / {print n "\t" $0; next} {inb=0}')
+            N=$(cut -f1 <<<"$FAILS" | sort -u | grep -c . || true)
+            retry=$([ "$N" -gt 0 ] && echo 1 || echo 0)
+            for k in $(seq 1 "$N"); do
+              one=$(awk -F'\t' -v k="$k" '$1 == k' <<<"$FAILS")
+              grep -Eq "$UPSTREAM" <<<"$one" && ! grep -Eq "$CLIENT" <<<"$one" || retry=0
+            done
+            if [ "$retry" = 1 ]; then
+              echo "::warning::upstream fault installing on ${{ matrix.arch }}:$bad; one more start in 30 s"
+              sleep 30
+              SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+              docker restart smoke >/dev/null
+              for i in $(seq 1 72); do
+                docker logs --since "$SINCE" smoke 2>&1 | grep "backends available" >/dev/null && break
+                sleep 5
+              done
+              docker logs --since "$SINCE" smoke 2>&1 | tail -30
+              LINE=$(docker logs --since "$SINCE" smoke 2>&1 | grep "backends available" | tail -1 || true)
+              [ -n "$LINE" ] || { echo "::error::the second try did not finish within 6 minutes on ${{ matrix.arch }}"; exit 1; }
+              echo "$LINE"
+              bad=$(not_installed "$LINE")
+            fi
+          fi
           [ -z "$bad" ] || { echo "::error::did not install on ${{ matrix.arch }}:$bad"; exit 1; }
           # A second start installs nothing and runs nothing to find that out: the stamps are read.
           SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -231,7 +308,7 @@ jobs:
       - name: Hand the digest to the merge
         run: |
           mkdir -p /tmp/digests
-          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
+          echo "${{ steps.build2.outputs.digest || steps.build1.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
           name: digest-${{ matrix.arch }}

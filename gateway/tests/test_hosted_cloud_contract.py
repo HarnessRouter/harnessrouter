@@ -13,8 +13,8 @@ paired again, often more than once (hosted logs, 2026-11-06 to 11-08). Three thi
   second connection behind the refused one, and nothing changed.
 - Nothing said the key had been refused; the only way forward the console showed was another pairing.
 
-The fake below enforces Cloud's own rules, read from the hosted gateway (backend/harness_gateway/app.py
-at c009a5d0e): `_principal_resolve_caller` takes `Authorization: Bearer <API key>` and nothing else,
+The fake below enforces Cloud's own rules, read from the hosted gateway's source
+(at c009a5d0e): `_principal_resolve_caller` takes `Authorization: Bearer <API key>` and nothing else,
 and answers 401 "missing or invalid API key" without one, on /v1/models as on every public route;
 POST /v1/harnesses validates its body against `HarnessBody`, which refuses a field it does not have
 by name (422 unknown_field) and lets the read-only fields a harness comes back with through, and
