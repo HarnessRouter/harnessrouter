@@ -230,3 +230,89 @@ def test_a_continued_fast_agent_turn_after_an_edit_takes_the_current_file(turn, 
 def test_the_bases_that_keep_their_first_copy_are_named():
     """Each one measured keeping it; a base that rebuilds its prompt every turn is not sent a note."""
     assert server._PINNED_INSTRUCTIONS == {"kimi", "grok", "mimo", "dcode", "openhands"}
+
+
+# ── what memory recalled for a turn is not an edit ──────────────────────────────────────────
+# The Memory section as the gateway writes it (gateway/memory_tools.py doc_section): stable per agent,
+# but for the block of what was recalled for this turn's words, placed last (known_block).
+def _memory_section(standing: str = "Answer in French.", known: list[str] | None = None) -> str:
+    out = ("## Memory\n\nYou have memories that outlast this conversation, through the `memory_*` tools:\n\n"
+           "- **Notes** (`mem_1`, read and write, where you write by default)\n"
+           f"  Standing instructions and preferences kept here:\n  - {standing}\n\nHow to use them:\n\n- Recall first.")
+    if known:
+        out += "\n\n" + server._KNOWN_HEAD + server._KNOWN_OPEN + "\n".join(f"- {k}" for k in known) + server._KNOWN_CLOSE
+    return out
+
+
+def _doc(rule: str = "Rule A.", **kw) -> str:
+    return (rule + "\n\n" + _memory_section(**kw)).strip()     # the gateway joins the two this way
+
+
+def test_a_turn_whose_recall_alone_differs_is_not_an_instruction_change(tmp_path):
+    ws = str(tmp_path)
+    assert server._write_agent_doc(ws, "hermes", _doc(known=["the deck is due Friday"]), []) is True
+    assert server._write_agent_doc(ws, "hermes", _doc(known=["the client prefers blue", "budget is 5k"]), []) is False
+    assert "the client prefers blue" in server._read_agent_doc(ws, "hermes"), "the file still carries this turn's recall"
+
+
+def test_a_recall_block_that_appears_or_disappears_is_not_an_instruction_change(tmp_path):
+    ws = str(tmp_path)
+    server._write_agent_doc(ws, "kimi", _doc(), [])
+    assert server._write_agent_doc(ws, "kimi", _doc(known=["first finding"]), []) is False, "appears"
+    assert server._write_agent_doc(ws, "kimi", _doc(), []) is False, "disappears"
+
+
+def test_a_newly_kept_standing_preference_is_an_instruction_change(tmp_path):
+    ws = str(tmp_path)
+    server._write_agent_doc(ws, "kimi", _doc(known=["x"]), [])
+    assert server._write_agent_doc(ws, "kimi", _doc(standing="Answer in German.", known=["x"]), []) is True
+
+
+def test_an_edited_harness_doc_is_an_instruction_change_whatever_was_recalled(tmp_path):
+    ws = str(tmp_path)
+    server._write_agent_doc(ws, "kimi", _doc(known=["x"]), [])
+    assert server._write_agent_doc(ws, "kimi", _doc("Rule B.", known=["x"]), []) is True
+    assert server._write_agent_doc(ws, "kimi", _doc("Rule C.", known=["y"]), []) is True
+
+
+def test_only_the_block_under_its_own_head_is_left_out():
+    """The head is anchored with its fences: the same words elsewhere, unfenced, are instructions."""
+    doc = "Rule A.\n\n" + server._KNOWN_HEAD + "\n\nsomething a person wrote"
+    assert server._doc_without_recall(doc) == doc
+
+
+def test_the_runners_recall_block_is_the_one_the_gateway_writes():
+    """The runner cannot import the gateway; this holds its copy of the head and fences to the gateway's
+    known_block, so a change there cannot quietly make every recall an instruction change again."""
+    import ast
+    src = (pathlib.Path(__file__).resolve().parents[2] / "gateway" / "memory_tools.py").read_text()
+    tree = ast.parse(src)
+    head = next(n.value.value for n in tree.body if isinstance(n, ast.Assign)
+                and any(getattr(t, "id", "") == "KNOWN_HEAD" for t in n.targets))
+    assert head == server._KNOWN_HEAD
+    fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "known_block")
+    shape = ast.unparse(fn.body[-1].value)          # its closing return: the block itself
+    assert shape == ("(KNOWN_HEAD + " + repr(server._KNOWN_OPEN) + " + '\\n'.join(lines) + "
+                     + repr(server._KNOWN_CLOSE) + ", len(lines))")
+    place = ast.unparse(next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "doc_section"))
+    assert "'\\n\\n' + known" in place, "placed after a blank line, which the runner's pattern takes with it"
+
+
+def test_a_memory_on_agents_continued_turns_change_nothing_until_an_edit(turn):
+    turn("hermes", _doc(known=["one"]))
+    db = turn.ws / ".harness" / "home" / ".hermes" / "state.db"
+    _hermes_db(db, "hs1", "system prompt built with Rule A.")
+    turn("hermes", _doc(known=["two"]), resume="hs1")
+    assert _hermes_row(db, "hs1")[0] == "system prompt built with Rule A.", "recall alone: the prompt and its cache stay"
+    turn("hermes", _doc("Rule B.", known=["three"]), resume="hs1")
+    assert _hermes_row(db, "hs1")[0] is None, "an edit: rebuilt"
+
+
+def test_a_memory_on_kimi_turn_gets_a_note_only_for_an_edit_and_it_carries_this_turns_file(turn):
+    turn("kimi", _doc(known=["one"]))
+    _kimi_session(turn.ws, "ks1")
+    cmd = turn("kimi", _doc(known=["two"]), resume="ks1")
+    assert cmd[cmd.index("-p") + 1] == "next message"
+    cmd = turn("kimi", _doc("Rule B.", known=["three"]), resume="ks1")
+    note = cmd[cmd.index("-p") + 1]
+    assert "Rule B." in note and "- three" in note and note.endswith("next message")
