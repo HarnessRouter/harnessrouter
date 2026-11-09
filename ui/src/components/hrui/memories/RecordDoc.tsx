@@ -11,6 +11,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { LOCAL_MEMBER } from '@/lib/edition';
 import { getSession } from '@/lib/auth';
+import { gwHeaders } from '@/lib/harness';
+import { harnessFetch } from '@/lib/hfetch';
 import {
   addRecord, bodyOf, eraseRecords, forgetRecord, getHistory, labelOf, recordFileUrl, reviseRecord,
   type ContentPart, type Memory, type MemoryRecord, type Provider, type RecordInput,
@@ -20,8 +22,8 @@ import { ago } from '../setups';
 import { plain, plural } from '../setup/settingsModel';
 import { toast } from '../toast';
 import {
-  canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, isStanding, kindOf, labelsOf, mayStand, readOnlyNote, recordTypeOfSchemaKind, relText,
-  schemaGuides, sentenceFirst, standingOf,
+  canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, isKeyWriter, isStanding, kindOf, labelsOf, mayStand, NOTED, readOnlyNote,
+  recordTypeOfSchemaKind, relText, schemaGuides, sentenceFirst, standingOf,
 } from './caps';
 import { DOTS, HISTORY, Dot, shownName, whenOf } from './parts';
 import { LiveTitle } from './editor/LiveTitle';
@@ -37,16 +39,38 @@ const DocEditor = dynamic(() => import('./editor/DocEditor').then((m) => m.DocEd
 /** The record's fields a person does not read as a field of their own. */
 const NOT_A_ROW = new Set(['entity_type', 'folder', 'labels', 'predicate', 'standing']);
 
-/** Who wrote a record, in a person's words. */
-function writerOf(r: MemoryRecord, setups: Map<string, string> | null): string {
+/** Who wrote a record, in a person's words. An API key no person holds is "An API key", by its name where the keys
+ *  list gives it (`keys`), never by its id. */
+function writerOf(r: MemoryRecord, setups: Map<string, string> | null, keys?: Map<string, string> | null): string {
   const w = r.written_by;
   if (!w) return '';
+  if (isKeyWriter(w)) { const n = keys?.get(w.id); return n ? `An API key (${n})` : 'An API key'; }
   if (w.kind === 'provider') return `Found by ${vendorName(w.id)}`;
   const named = setups?.get(w.id);
   if (named) return named;
   const me = getSession()?.member;
   if (w.id === LOCAL_MEMBER || (me && (w.id === me.email || w.id === me.id))) return 'You';
   return w.id?.startsWith('chrn_') ? 'An agent' : w.id || '';
+}
+
+// The organization's keys by id, to name an API key that wrote a record: read once a visit, and only when one did.
+const keyNames = new Map<string, Promise<Map<string, string>>>();
+function useKeyNames(want: boolean): Map<string, string> | null {
+  const [names, setNames] = useState<Map<string, string> | null>(null);
+  useEffect(() => {
+    const org = getSession()?.orgId || '';
+    if (!want || !org) return undefined;
+    let live = true;
+    if (!keyNames.has(org)) {
+      keyNames.set(org, harnessFetch(`/api/harness/v1/orgs/${encodeURIComponent(org)}/keys`, { headers: gwHeaders() })
+        .then((r) => (r.ok ? r.json() : { keys: [] }))
+        .then((d: { keys?: { id?: string; name?: string }[] }) => new Map((d.keys || []).filter((k) => k.id && k.name).map((k) => [k.id as string, k.name as string])))
+        .catch(() => new Map()));
+    }
+    void keyNames.get(org)!.then((m) => { if (live) setNames(m); });
+    return () => { live = false; };
+  }, [want]);
+  return names;
 }
 
 const asText = (v: unknown) => (v == null ? '' : typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : JSON.stringify(v));
@@ -213,7 +237,8 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const note = readOnlyNote(record);
   const counted = !isNew && live && state?.synced ? liveText : body;
   const when = whenOf(record.time?.written_at);
-  const who = writerOf(record, setups);
+  const keys = useKeyNames(isKeyWriter(record.written_by) || (pop === 'hist' && !!versions?.some((v) => isKeyWriter(v.written_by))));
+  const who = writerOf(record, setups, keys);
   const extra = Object.entries(attrs).filter(([k, v]) => !NOT_A_ROW.has(k) && !props.some((p) => p.name === k) && v != null && v !== '');
   const labels = labelsOf({ attributes: attrs });
   const predicate = String(attrs.predicate || '');
@@ -222,12 +247,13 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const stands = standingOf({ ...record, attributes: attrs });
   const standsMay = mayStand(record, provider, memory, person);
   const standOn = isStanding({ attributes: attrs });
-  const standBlock = stands === 'agent' || stands === 'other' ? (
-    // set before agents could not set one, or last changed by the service: agents get it as a note until a person sets it
+  const standBlock = stands && stands !== 'person' ? (
+    // set by an agent, with an API key no person holds, or last changed by the service: agents get it as a note until a
+    // person sets it
     <div className="mm-stand noted">
       <span className="mm-stand-t">
-        <span className="mm-tag noted">{stands === 'agent' ? 'Noted by an agent as standing' : 'Noted as standing'}</span>
-        <small>{stands === 'agent' ? 'An agent set this, so agents get it as a note, not as an instruction.' : 'It was last changed automatically, so agents get it as a note, not as an instruction.'}</small>
+        <span className="mm-tag noted">{NOTED[stands].tag}</span>
+        <small>{NOTED[stands].line}</small>
       </span>
       {standsMay ? <button type="button" className="btn small" disabled={standBusy} onClick={() => void setStanding(true)}>Make it standing</button> : null}
     </div>
@@ -292,7 +318,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
                   return (
                     <div key={v.version} className={`mm-vr${i === 0 ? ' cur' : ''}`}>
                       <b className="mono">{`v${v.version}`}</b>
-                      <span>{writerOf(v, setups)}{at ? <small>{ago(at)}</small> : null}</span>
+                      <span>{writerOf(v, setups, keys)}{at ? <small>{ago(at)}</small> : null}</span>
                       {i === 0 ? <em>Current</em> : null}
                     </div>
                   );

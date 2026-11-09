@@ -83,15 +83,25 @@ export function canStand(r: Stands): boolean {
   const w = r.written_by;
   return !(w?.kind === 'provider' && !w.on_behalf_of);
 }
-/** How a record stands: `person`, set by a person and given to agents as an instruction; `agent`, set by an agent before
- *  agents could not, and `other`, last changed by the service itself, both given to agents only as a note until a person
- *  sets it again; '' for a record that doesn't stand, or can't. */
-export function standingOf(r: Stands): '' | 'person' | 'agent' | 'other' {
+/** An API key with no person behind it: what the service stamps on a write made with one. */
+export const isKeyWriter = (w: Pick<MemoryRecord, 'written_by'>['written_by'] | undefined) => w?.kind === 'x.service' || w?.kind === 'service';
+/** How a record stands: `person`, set by a person and given to agents as an instruction; `agent`, set by an agent (or a
+ *  key an agent holds for someone), `service`, set with an API key no person holds, and `other`, last changed by the
+ *  service itself, each given to agents only as a note until a person sets it again; '' for a record that doesn't
+ *  stand, or can't. */
+export function standingOf(r: Stands): '' | 'person' | 'agent' | 'service' | 'other' {
   if (!isStanding(r) || !canStand(r)) return '';
   const w = r.written_by;
-  if (w?.kind === 'member' && w.type !== 'agent') return 'person';
+  if (isKeyWriter(w)) return 'service';
+  if (w?.kind === 'member' && w.type !== 'agent' && !w.delegated) return 'person';
   return w?.kind === 'member' ? 'agent' : 'other';
 }
+/** What a standing record no person set says, as its tag and in a line. */
+export const NOTED: Record<'agent' | 'service' | 'other', { tag: string; line: string }> = {
+  agent: { tag: 'Noted by an agent as standing', line: 'An agent set this, so agents get it as a note, not as an instruction.' },
+  service: { tag: 'Noted by an API key as standing', line: 'An API key set this, so agents get it as a note, not as an instruction.' },
+  other: { tag: 'Noted as standing', line: 'It was last changed automatically, so agents get it as a note, not as an instruction.' },
+};
 /** Whether this person may make a record stand, or stop it: someone signed in to the console (a person, never an
  *  agent's key), who may write the memory, on a record that can stand and that the engine lets be changed. */
 export function mayStand(r: Stands & Pick<MemoryRecord, 'id' | 'status'>, p: Provider | null | undefined, m: Pick<Memory, 'privileges'> | null | undefined, person: boolean): boolean {

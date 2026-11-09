@@ -30,7 +30,9 @@ export interface Memory {
    *  drawing it shows (cover.ts coverSig), so another is made only when the drawing changes. */
   cover_at?: number | null; cover_sig?: string | null;
 }
-export interface Writer { kind: string; id: string; type?: 'human' | 'agent'; on_behalf_of?: string; consolidation_id?: string }
+/** Who wrote a version: a member (a person, or an agent: `type`), the provider itself, or `x.service`, an API key with no
+ *  person behind it (`id` is the key's own id, never shown). `delegated`: a key an agent holds for someone. */
+export interface Writer { kind: string; id: string; type?: 'human' | 'agent'; on_behalf_of?: string; consolidation_id?: string; delegated?: boolean }
 export interface ContentPart { type: string; text?: string; role?: string; file?: { id: string; name?: string; media_type?: string; bytes?: number }; text_source?: string }
 export interface Reference { rel?: string; memory_id?: string; record_id: string; available: boolean }
 export interface MemoryRecord {

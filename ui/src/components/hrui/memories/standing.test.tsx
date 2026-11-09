@@ -170,3 +170,42 @@ test('a new record gets the same switch, and is made standing when it is made', 
   await flush();
   expect(s.sent('POST', '/v1/memories/hmem_1/records')[0].body).toMatchObject({ title: 'Always answer in French', attributes: { standing: true } });
 });
+
+describe('a write made with an API key no person holds', () => {
+  const KEY = { kind: 'x.service', id: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' };
+  const writtenBy = () => Array.from(el.querySelectorAll('.mm-props-d .mm-prow')).find((r) => r.querySelector('label')?.textContent === 'Written by')?.querySelector('.mm-pv')?.textContent;
+  function keys(list: unknown) {
+    const s = service({ 'GET /v1/orgs/org1/keys': list, 'PATCH /v1/memories/hmem_1/records/r1': (c: { body: { attributes?: Record<string, unknown> } }) => note({ version: 2, attributes: { ...c.body.attributes } }) });
+    (harnessFetch as jest.Mock).mockImplementation(s.fetcher);
+    return s;
+  }
+  beforeEach(() => { session = { member: { id: 'ada@example.com' }, orgId: 'org1' } as never; });
+
+  test('it is "An API key", by the name the keys list gives it, and never by its id', async () => {
+    const s = keys({ keys: [{ id: KEY.id, name: 'production' }, { id: 'other', name: 'staging' }] });
+    await draw(note({ written_by: KEY }));
+    expect(writtenBy()).toBe('An API key (production) · 2 d ago');
+    expect(el.textContent).not.toContain(KEY.id);
+    expect(s.sent('GET', '/v1/orgs/org1/keys')).toHaveLength(1);
+  });
+  test('where the keys list can’t name it, it is "An API key", still never its id', async () => {
+    keys({ $status: 403, error: { message: 'No.' } });
+    await draw(note({ id: 'r2', written_by: { ...KEY, id: 'not-listed' } }));
+    expect(writtenBy()).toBe('An API key · 2 d ago');
+    expect(el.textContent).not.toContain('not-listed');
+  });
+  test('a standing record it set reads like an agent’s: a note to agents until a person makes it standing', async () => {
+    const s = keys({ keys: [] });
+    await draw(note({ attributes: { standing: true }, written_by: KEY }));
+    expect(el.querySelector('.mm-stand.noted .mm-tag')?.textContent).toBe('Noted by an API key as standing');
+    expect(el.querySelector('.mm-stand.noted small')?.textContent).toBe('An API key set this, so agents get it as a note, not as an instruction.');
+    expect(el.querySelector('.mm-tags')).toBeNull();
+    await press(Array.from(el.querySelectorAll('.mm-stand button')).find((b) => b.textContent === 'Make it standing') as HTMLElement);
+    expect(s.sent('PATCH', '/v1/memories/hmem_1/records/r1').map((c) => c.body)).toEqual([{ attributes: { standing: true } }]);
+    expect(el.querySelector('.mm-tags .mm-tag')?.textContent).toBe('Standing');
+  });
+  test('a key an agent holds for someone is an agent’s, as the service reads it', () => {
+    expect(standingOf(note({ attributes: { standing: true }, written_by: { kind: 'member', id: 'ada@example.com', type: 'human', delegated: true } }))).toBe('agent');
+    expect(standingOf(note({ attributes: { standing: true }, written_by: KEY }))).toBe('service');
+  });
+});
