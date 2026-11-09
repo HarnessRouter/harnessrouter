@@ -9,6 +9,7 @@ session (Part D). These run as root on Linux, where the wall exists; elsewhere t
 import json
 import os
 import pathlib
+import stat
 import subprocess
 import sys
 import tempfile
@@ -153,7 +154,14 @@ def test_a_new_sessions_first_turn_builds_as_the_session(backend, provider, auth
     ws = pathlib.Path(root, f"hsess{backend}")
     uid = ws.stat().st_uid
     assert server._SESSION_UID_BASE <= uid
-    rooted = [str(p.relative_to(ws)) for p in ws.rglob("*") if p.lstat().st_uid == 0]
+    rooted = []
+    for top, dirs, files in os.walk(ws):          # the turn's own thread is still at work: what it removes
+        for name in dirs + files:                 # meanwhile (its prompt file) is no longer there to read
+            try:
+                if os.lstat(os.path.join(top, name)).st_uid == 0:
+                    rooted.append(os.path.relpath(os.path.join(top, name), ws))
+            except FileNotFoundError:
+                pass
     assert rooted == [], f"left root-owned in the session: {rooted[:8]}"
 
 
@@ -502,3 +510,142 @@ def _assert_clean_file(d: str, victim: pathlib.Path, st) -> None:
     now = os.stat(victim)
     assert (now.st_uid, now.st_gid, now.st_mode & 0o7777) == (st.st_uid, st.st_gid, st.st_mode & 0o7777)
     assert sorted(os.listdir(d)) == ["victim"], f"written beside it: {sorted(os.listdir(d))}"
+
+
+# ── the prompt is handed over by file or stdin, never on the command line ─────────────────────
+# A process's command line is what `ps` lists. Each turn below is started for real, as the session, with a
+# stand-in under the CLI's own name that records what it was handed and then waits. Meanwhile, as another uid:
+# its command line holds none of the prompt's words, and the prompt file can't be opened (EACCES while it is
+# there, ENOENT once it is gone). The stand-in has the words all the same.
+PROMPT_MARK = "the task's own words 7f3a91c2"
+_STAND_IN = r"""#!{python}
+import json, os, sys, time
+report = {{"argv": sys.argv, "stdin": "", "files": {{}}}}
+try:
+    if not os.isatty(0):
+        report["stdin"] = sys.stdin.read()
+except Exception as e:
+    report["stdin_error"] = repr(e)
+for a in sys.argv[1:]:
+    for cand in (a, a.split("=", 1)[-1]):
+        if "/.hr-prompt/prompt-" in cand and os.path.isfile(cand):
+            report["files"][cand] = open(cand).read()
+out = os.path.join(os.getcwd(), ".stand-in-%d.json" % os.getpid())
+with open(out + ".part", "w") as fh:
+    json.dump(report, fh)
+os.rename(out + ".part", out)
+if report["stdin"] or report["files"]:
+    time.sleep(6)          # a turn: alive while its command line is read
+"""
+_ON_PATH = ["claude", "codex", "pi", "omp", "qwen", "gemini", "cline", "opencode", "mimo", "kilo", "mcode", "goose",
+            "grok"]
+_PROMPT_BASES = {  # base: (provider, auth)
+    "claude": ("anthropic", {"api_key": "k-0123456789abcdef"}),
+    "codex": ("openai", _KEYED), "pi": ("openai-api", _KEYED), "omp": ("openai-api", _KEYED),
+    "qwen": ("openai-api", _KEYED), "gemini": ("google", {"api_key": "k-0123456789abcdef"}),
+    "cline": ("openai-api", _KEYED), "opencode": ("openai-api", _KEYED), "mimo": ("openai-api", _KEYED),
+    "kilo": ("openai-api", _KEYED), "minimax": ("openai-api", _KEYED), "goose": ("openai-api", _KEYED),
+    "grok": ("openai-api", _KEYED), "vibe": ("openai-api", _KEYED), "docker-agent": ("openai-api", _KEYED),
+    "opensquilla": ("openai-api", _KEYED), "hermes": ("openai-api", _KEYED),
+}
+
+
+def _opened_as(uid: int, path: str) -> str:
+    """What opening `path` for reading gives `uid`: "opened", or the errno's name."""
+    out = subprocess.run([sys.executable, "-c", "import errno, sys\n"
+                          "try:\n    open(sys.argv[1], 'rb').close()\n    print('opened')\n"
+                          "except OSError as e:\n    print(errno.errorcode.get(e.errno, str(e.errno)))", path],
+                         user=uid, group=uid, capture_output=True, text=True, timeout=30)
+    return out.stdout.strip() or out.stderr.strip()[-200:]
+
+
+def test_while_the_prompt_file_is_there_another_uid_cant_open_it(monkeypatch):
+    """Even with every folder above it passable: the file is the session's, 0600, in a 0700 folder of its own."""
+    root = tempfile.mkdtemp(prefix="hrroot-")
+    os.chmod(root, 0o755)
+    monkeypatch.setattr(server, "_SESSION_UIDS", True)
+    ws = pathlib.Path(root, "hsesspromptfile")
+    (ws / "tmp").mkdir(parents=True)
+    for d in (ws, ws / "tmp"):
+        os.chown(d, UID, UID)
+        os.chmod(d, 0o755)
+    held: dict = {}
+    tok = server._TURN_PROMPT.set(held)
+    try:
+        path = server._prompt_handover(str(ws), PROMPT_MARK)
+    finally:
+        server._TURN_PROMPT.reset(tok)
+    try:
+        st, folder = os.stat(path), os.stat(os.path.dirname(path))
+        assert (st.st_uid, stat.S_IMODE(st.st_mode)) == (UID, 0o600)
+        assert (folder.st_uid, stat.S_IMODE(folder.st_mode)) == (UID, 0o700)
+        assert _opened_as(UID, path) == "opened"           # the session itself, as its CLI would
+        assert _opened_as(UID2, path) == "EACCES"
+    finally:
+        server._prompt_discard(held)
+    assert not os.path.exists(path)
+
+
+def _stand_ins(monkeypatch) -> pathlib.Path:
+    """A folder of stand-ins, one per CLI name, first on PATH; and the absolute ones pointed at it."""
+    d = pathlib.Path(tempfile.mkdtemp(prefix="hrstandin-"))
+    os.chmod(d, 0o755)
+    text = _STAND_IN.format(python=sys.executable)
+    for name in _ON_PATH + ["vibe", "docker-agent", "python-opensquilla", "python-hermes"]:
+        (d / name).write_text(text)
+        os.chmod(d / name, 0o755)
+    monkeypatch.setenv("PATH", f"{d}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(server, "VIBE_BIN", str(d / "vibe"))
+    monkeypatch.setattr(server, "DOCKER_AGENT_BIN", str(d / "docker-agent"))
+    monkeypatch.setattr(server, "OPENSQUILLA_PYTHON", str(d / "python-opensquilla"))
+    monkeypatch.setattr(server, "HERMES_PYTHON", str(d / "python-hermes"))
+    return d
+
+
+@pytest.mark.parametrize("continued", [False, True], ids=["first-turn", "continued-turn"])
+@pytest.mark.parametrize("base", sorted(_PROMPT_BASES))
+def test_a_turns_command_line_holds_none_of_its_prompt(base, continued, monkeypatch):
+    import time
+    from fastapi.testclient import TestClient
+    root = tempfile.mkdtemp(prefix="hrroot-")
+    os.chmod(root, 0o751)
+    monkeypatch.setattr(server, "_SESSION_UIDS", True)
+    monkeypatch.setattr(server, "WORKSPACE_ROOT", root)
+    monkeypatch.setattr(server, "_ws", lambda identifier="": os.path.join(root, identifier or "s1"))
+    _stand_ins(monkeypatch)
+    provider, auth = _PROMPT_BASES[base]
+    ident = f"hsessprompt{base.replace('-', '')}{int(continued)}"
+    ws = pathlib.Path(root, ident)
+    ws.mkdir()
+    os.chown(ws, UID, UID)
+    os.chmod(ws, 0o700)
+    body = {"backend": base, "provider": provider, "model": server.BACKENDS[base]["default_model"],
+            "prompt": PROMPT_MARK, "auth": auth, "agent_doc": "first instructions"}
+    if continued:   # instructions edited since the last turn: where a note joins the prompt, it goes the same way
+        body.update(resume_session_id="hsessresumed", agent_doc="edited instructions")
+    made: list[str] = []
+    real = server._prompt_handover
+    monkeypatch.setattr(server, "_prompt_handover", lambda *a, **k: made.append(real(*a, **k)) or made[-1])
+    client = TestClient(server.app, raise_server_exceptions=False)
+    r = client.post("/turn", params={"identifier": ident}, json=body)
+    assert r.status_code == 200, r.text[:300]
+    tid = r.json()["turn_id"]
+    report = None
+    for _ in range(400):
+        pid = server._turns[tid].get("pid")
+        if pid and (ws / f".stand-in-{pid}.json").exists():
+            report = ws / f".stand-in-{pid}.json"
+            break
+        time.sleep(0.05)
+    assert report, f"the turn's CLI never started: {server._turns[tid].get('events', [])[-3:]}"
+    seen = subprocess.run(["cat", f"/proc/{pid}/cmdline"], user=UID2, group=UID2, capture_output=True, timeout=30)
+    cmdline = seen.stdout.replace(b"\0", b" ").decode(errors="replace")
+    assert seen.returncode == 0 and cmdline.strip(), seen.stderr     # the read itself worked, as another uid
+    assert PROMPT_MARK not in cmdline and "edited instructions" not in cmdline, cmdline
+    assert made and all(_opened_as(UID2, f) in ("EACCES", "ENOENT") for f in made), \
+        [(f, _opened_as(UID2, f)) for f in made]
+    got = json.loads(report.read_text())
+    handed = got["stdin"] + "".join(got["files"].values())
+    assert PROMPT_MARK in handed, got                                  # ...and the CLI still has its prompt
+    _settle(client, ident, r)
+    assert not list((ws / "tmp").glob(".prompt-*")), "the prompt file outlived the turn"
