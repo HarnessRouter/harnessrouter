@@ -20,19 +20,20 @@
    filling four fifths of the box in the direction that limits it (graph/coverShot.js sizes it for that); or its brick from the agent stack, about three fifths of the box high; or, while a cover is still to be
    made, a quiet shape of the same size */
 #hrui .mm-cv{display:flex;align-items:center;justify-content:center;width:100%;height:100%;min-width:0;min-height:0}
-#hrui .mm-cover{display:block;width:80%;height:80%;object-fit:contain}
+#hrui .mm-cover{display:block;width:80%;height:80%;min-width:0;object-fit:contain;object-position:center}
 #hrui .mm-brick{display:flex;align-items:center;justify-content:center;height:60%;max-width:80%}
 #hrui .mm-brick svg{display:block;height:100%;width:auto;max-width:100%;overflow:visible}
 #hrui .mm-cv-wait{display:block;width:42%;height:58%;border-radius:18px;background:var(--line);opacity:.4}
-#hrui .mm-mini-box .mm-cover{width:86%;height:86%}
-#hrui .mm-brick.mini{height:26px;max-width:none}
-#hrui .mm-cv-wait.mini{width:22px;height:22px;border-radius:7px}
+#hrui .mm-mini-box .mm-cv{padding:3px;box-sizing:border-box}
+#hrui .mm-mini-box .mm-cover{width:100%;height:100%}
+#hrui .mm-brick.mm-small{height:26px;max-width:none}
+#hrui .mm-cv-wait.mm-small{width:22px;height:22px;border-radius:7px}
 @media (max-width:520px){#hrui .mm-art{height:168px}}
 /* the list: Studio's rows, with the memory's picture small beside its name */
 #hrui .mm-rows-g{grid-template-columns:minmax(0,1.25fr) minmax(0,2fr)!important}
 #hrui .mm-row{color:inherit;text-decoration:none}
 #hrui .mm-row .t{white-space:normal}
-#hrui .mm-mini-box{flex:none;width:40px;height:40px;margin-right:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:grid;place-items:center}
+#hrui .mm-mini-box{flex:none;width:40px;height:40px;margin-right:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:grid;place-items:center;overflow:hidden}
 #hrui .mm-rn{min-width:0;display:block}
 #hrui .mm-rn .mm-ct{justify-content:flex-start}
 #hrui .mm-rn .mm-ct b{font-family:var(--sans);font-size:14px;letter-spacing:0}

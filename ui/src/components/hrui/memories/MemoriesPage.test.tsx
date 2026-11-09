@@ -508,7 +508,8 @@ describe('a card shows its picture', () => {
     expect(s.calls.filter((c) => c.path.startsWith('/v1/memories/hmem_2'))).toEqual([]);
     // the list's row shows the same, small
     await press('List');
-    expect(page().querySelector('.mm-row .mm-mini-box .mm-brick.mini .f-memory')).not.toBeNull();
+    expect(page().querySelector('.mm-row .mm-mini-box .mm-brick.mm-small .f-memory')).not.toBeNull();
+    expect(page().querySelector('.mm-row .mm-mini-box .mini')).toBeNull();
   });
 
   test('a graph with no cover yet waits in a quiet shape of the same size, never the old drawing, and reads nothing at once', async () => {
