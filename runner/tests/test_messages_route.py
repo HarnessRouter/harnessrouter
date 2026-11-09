@@ -219,7 +219,7 @@ def test_a_hermes_turn_is_launched_on_the_provider_its_config_names(monkeypatch,
     endpoint in the Messages format arrives as openai-api; it was configured as anthropic and
     launched as openai-api, and hermes refused it for want of an OPENAI_API_KEY (#374)."""
     launched = []
-    monkeypatch.setattr(server, "_run_hermes_bg", lambda *args: launched.append(args))
+    monkeypatch.setattr(server, "_run_hermes_bg", lambda *args, **kwargs: launched.append(args))
     wirings = [("openai-api", "anthropic", "anthropic", "ANTHROPIC_BASE_URL"),   # custom, Messages format
                ("openai-api", "openai", "openai-api", "OPENAI_BASE_URL"),        # custom, Chat Completions
                ("anthropic", None, "anthropic", "ANTHROPIC_BASE_URL"),

@@ -5,6 +5,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import (_same_model,   # noqa: E402
     _agent_doc_path,
     _build_omp,
@@ -34,14 +35,15 @@ def test_omp_argv_native_provider():
     d = tempfile.mkdtemp()
     env = {"HOME": d}
     auth = Auth(api_key="sk-ant-test")
-    cmd = _build_omp("anthropic", auth, "claude-sonnet-4.6", "hello world", d, env)
+    cmd = handed.build(_build_omp, "anthropic", auth, "claude-sonnet-4.6", "hello world", d, env)
 
     assert cmd[:3] == ["omp", "-p", "--mode"]
     assert cmd[3] == "json"
     assert "--model" in cmd and "hr/claude-sonnet-4.6" in cmd     # the custom provider: the key rides the relay (#615)
     assert "--auto-approve" in cmd
     assert "--no-extensions" in cmd
-    assert cmd[-1] == "hello world"
+    assert "hello world" not in cmd       # read on stdin, from a file of the session's own
+    assert handed.by_folder(d) == ["hello world"]
     assert "ANTHROPIC_API_KEY" not in env and "sk-ant-test" not in json.dumps(env)
     yml = (pathlib.Path(d) / ".omp" / "agent" / "models.yml").read_text()
     assert "sk-ant-test" not in yml

@@ -21,6 +21,7 @@ import tempfile
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import (ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
                     Auth, BACKENDS, CHECKPOINT_EXCLUDE, _agent_doc_path,                     _build_jcode, _build_mimo, _build_nanobot, _build_opensquilla,
                     _BRIDGED_TRANSPORTS, _JCODE_SANDBOX_OFF, _jcode_eof, _jcode_to_claude,
@@ -30,8 +31,14 @@ from server import (ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
                     _produced_visible, _resume_lost, _sse_bridges,
                     _visible_root,
                     _write_input_files, _write_skills)
+import server  # noqa: E402
 
 UP = "https://up.example/v1"
+
+
+def _handed(d) -> list[str]:
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
 
 
 def _ws():
@@ -83,7 +90,7 @@ def test_skills_land_where_each_loader_looks():
 
 def test_mimo_argv_is_opencodes_with_its_own_spellings():
     d, env = _ws(), {}
-    cmd = _build_mimo("openai-api", Auth(api_key="sk-t", base_url=UP), "gpt-5.4", "do it", d, env)
+    cmd = handed.build(_build_mimo, "openai-api", Auth(api_key="sk-t", base_url=UP), "gpt-5.4", "do it", d, env)
     assert cmd[0] == "mimo" and cmd[1] == "run"
     assert "--format" in cmd and cmd[cmd.index("--format") + 1] == "json"
     # Nothing runs unattended without this: measured, the turn stops at the first write.
@@ -91,7 +98,8 @@ def test_mimo_argv_is_opencodes_with_its_own_spellings():
     assert "--pure" in cmd and "--thinking" in cmd
     # NOT opencode's --auto / --session: the fork renamed both.
     assert "--auto" not in cmd
-    assert cmd[-1] == "do it"
+    # The prompt is handed over on stdin, from a file of the session's own, not on the command line.
+    assert "do it" not in cmd and _handed(d) == ['"do it"']    # quoted, as run quotes its arguments
     # Its own config env var and file name, so two backends in one workspace cannot collide.
     assert env["MIMOCODE_CONFIG"].endswith("/.harness/mimo.json")
     assert (pathlib.Path(d) / ".harness" / "mimo.json").is_file()
@@ -383,9 +391,11 @@ def test_opensquilla_reply_language_rules_come_out_of_its_template(tmp_path, mon
 
 def test_opensquilla_argv_bounds_retries_and_keeps_a_session_db():
     d, env = _ws(), {}
-    cmd = _build_opensquilla("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+    cmd = handed.build(_build_opensquilla, "openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
                              resume_session_id="sess-1", max_turns=12)
-    assert cmd[1] == "agent" and cmd[cmd.index("-m") + 1] == "hi"
+    # Started through the prompt launcher: -m names its placeholder, and the prompt is in the file it reads.
+    assert cmd[1] == server.PROMPT_LAUNCHER and cmd[4:6] == [server.OPENSQUILLA_BIN, "agent"]
+    assert cmd[cmd.index("-m") + 1] == server.PROMPT_ARG and "hi" not in cmd and _handed(d) == ["hi"]
     assert "--json" in cmd and "--event-stream-stderr" in cmd
     assert cmd[cmd.index("--permissions") + 1] == "bypass"
     # The default is `:memory:` — without an explicit file there is NO continuity between turns.

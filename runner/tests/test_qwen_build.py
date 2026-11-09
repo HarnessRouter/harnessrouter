@@ -5,13 +5,20 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import Auth, _agent_doc_path, _build_qwen, _claude_passthrough, BACKENDS  # noqa: E402
+import server  # noqa: E402
+
+
+def _handed(d) -> list[str]:
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
 
 
 def _argv(**kw):
     d = tempfile.mkdtemp()
     env: dict = {}
-    cmd = _build_qwen("openai-api", Auth(api_key="sk-t", base_url="https://relay.example/v1"),
+    cmd = handed.build(_build_qwen, "openai-api", Auth(api_key="sk-t", base_url="https://relay.example/v1"),
                       "qwen3.7-max", "do it", d, env, **kw)
     return cmd, d, env
 
@@ -19,9 +26,10 @@ def _argv(**kw):
 def test_argv_is_headless_stream_json_with_explicit_auth_type():
     """--auth-type is load bearing: without it every -r run on 0.22.1 dies
     'No auth type is selected' — verified live, both directions."""
-    cmd, _, _ = _argv()
-    assert cmd[:3] == ["qwen", "-p", "do it"]
-    assert ["-o", "stream-json"] == cmd[3:5]
+    cmd, d, _ = _argv()
+    # started through prompt_launcher.mjs, which gives it -p TEXT in-process from a file of the session's own
+    assert cmd[:2] == ["node", server.PROMPT_LAUNCHER_JS] and "do it" not in cmd
+    assert cmd[4:8] == ["-p", server.PROMPT_ARG, "-o", "stream-json"] and _handed(d) == ["do it"]
     assert "--auth-type" in cmd and "openai" in cmd
 
 

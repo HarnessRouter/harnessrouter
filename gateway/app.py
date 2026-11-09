@@ -478,10 +478,6 @@ RESP_BLOB_KB = os.environ.get("HARNESS_RESP_BLOB_KB", "harness-responses")  # re
 # Durable session-workspace store (git checkpoint tarball per session) lives in vg-gateway blob
 # storage under this "graph" namespace: <KB>/sessions/<sid>/workspace.tgz.
 BLOB_KB = os.environ.get("HARNESS_BLOB_KB", "harness-sessions")
-# Realtime blackboard: the Company Brain Hocuspocus wss endpoint the in-sandbox sidecar connects to.
-# At session-create the gateway mints a Brain doc (under the DEFAULT tenant, so the studio editor —
-# which opens by bare ULID — resolves the SAME room) and uses its ULID as the room. Empty = disabled.
-COLLAB_URL = os.environ.get("COLLAB_URL", "").rstrip("/")        # wss://<company-brain-fqdn>
 # Public base for URLs we hand back to clients (annotations, files listings). The content
 # proxy stays header-authenticated; this only makes the returned links resolvable OUTSIDE
 # the backend host (set it to your public base URL). Empty -> host-relative.
@@ -498,9 +494,6 @@ DEFAULT_MAX_STEP = int(os.environ.get("HARNESS_DEFAULT_MAX_STEP", "400"))
 
 def _file_url(container_id: str, file_id: str) -> str:
     return f"{PUBLIC_BASE_URL}/v1/containers/{container_id}/files/{file_id}/content"
-COLLAB_TOKEN = os.environ.get("COLLAB_TOKEN", "")
-BRAIN_INTERNAL_KEY = os.environ.get("BRAIN_INTERNAL_KEY", "")   # brain REST is internal-key gated
-BRAIN_HTTP = COLLAB_URL.replace("wss://", "https://", 1).replace("ws://", "http://", 1)  # mint via REST
 # Traces: full session transcripts persist to a dedicated blob KB, keyed for native per-org
 # reverse-chronological pagination (the Traces app's source of truth). Key = <org>/<inv_ts>_<sid>/...
 # where inv_ts = (TS_MAX - created_ms) zero-padded — ABS lists ASCENDING-lexical, so inverted == newest-first.
@@ -2821,24 +2814,6 @@ async def _trace_finalize(sid: str, rec: dict) -> None:
         pass
 
 
-async def _brain_mint_room(sid: str) -> str | None:
-    """Mint a Company Brain doc for the session's blackboard and return its ULID (the Hocuspocus
-    room). Minted under the DEFAULT tenant (no ?tenant) so the room is a BARE ULID — which is what
-    the studio CollaborativeMarkdownEditor opens. Best-effort; never blocks session create."""
-    if not BRAIN_HTTP:
-        return None
-    try:
-        r = await _client().put(f"{BRAIN_HTTP}/v1/doc",
-                                json={"relpath": f"sessions/{sid}/BLACKBOARD.md",
-                                      "title": f"Harness session {sid[:12]}", "kind": "doc", "body": ""},
-                                headers={"x-internal-key": BRAIN_INTERNAL_KEY}, timeout=20)
-        if r.status_code < 400:
-            return (r.json() or {}).get("id")
-    except Exception:  # noqa: BLE001
-        pass
-    return None
-
-
 _HYDRATE_FAILED_MESSAGE = "This task's files and conversation could not be restored just now, so nothing ran. Try again in a moment."
 
 
@@ -2846,15 +2821,10 @@ _HYDRATE_PAUSES = (1.0, 3.0, 6.0, 12.0, 24.0, 48.0, None)     # seven tries, 94 
 
 
 async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
-    """Restore the session's last checkpoint into the sandbox /workspace before the turn runs, and
-    pass the blackboard room so the runner (re)starts the realtime sidecar for this session.
+    """Restore the session's last checkpoint into the sandbox /workspace before the turn runs.
     `force` skips the warm-sandbox probe: the workspace is wiped and restored from the durable
     checkpoint even when the sandbox still holds it (a recycle on purpose)."""
-    params = {}
-    v = await _vertex_get(sid) or {}          # single durable read: blackboard room + checkpoint sha
-    room = (v.get("brain_room") or None) if COLLAB_URL else None
-    if COLLAB_URL and room:
-        params = {"collab_url": COLLAB_URL, "room": room, "collab_token": COLLAB_TOKEN}
+    v = await _vertex_get(sid) or {}          # single durable read: the checkpoint sha
     try:
         # Instant resume on a warm sandbox: if the sandbox still holds EXACTLY the last
         # checkpoint (sha marker kept by the runner), skip the blob download and the full
@@ -2863,7 +2833,7 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
         if want_sha and not force:
             try:
                 pr = await _sandbox("/hydrate", sid, "POST", content=b"",
-                                    params={**(params or {}), "probe": want_sha})
+                                    params={"probe": want_sha})
                 pj = pr.json() if pr.headers.get("content-type", "").startswith("application/json") else {}
                 if pr.status_code < 400 and pj.get("skipped"):
                     rec["hydrated"] = True
@@ -2883,7 +2853,7 @@ async def _hydrate(sid: str, rec: dict, force: bool = False) -> None:
         for attempt, pause in enumerate(_HYDRATE_PAUSES):
             refused = False
             try:
-                r = await _hydrate_relay(sid, params)
+                r = await _hydrate_relay(sid, None)
             except Exception as e:  # noqa: BLE001
                 # The relay itself raised: the sandbox dropped the streaming POST under a burst, or
                 # the blob read failed. Twelve restores in two minutes went this way on hosted while
@@ -10447,10 +10417,9 @@ async def _resp_resolve_session(org: str, member: str, prev: str | None, backend
     _session_trace[sid] = {"prefix": trace_prefix, "org": org, "since": 0, "chunk": 0, "count": 0,
                            "member": member, "harness_id": harness_id, "harness_name": harness_name,
                            "workspace": workspace or ""}
-    room = await _brain_mint_room(sid)   # persisted on the vertex (brain_room) below — the durable copy
     await _vertex_upsert(sid, {"tenant": org, "member_id": member or "", "backend": backend_hint,
                                "conv_id": "", "status": "created", "created_at": str(created),
-                               "created_at_inv": inv, "trace_blob": trace_prefix, "brain_room": room or "",
+                               "created_at_inv": inv, "trace_blob": trace_prefix,
                                "harness_id": harness_id or "", "harness_name": harness_name or "",
                                "workspace": workspace or ""})
     # Stamp the ownership/usage topology: Account OWNS HarnessSession USES Harness (HR tenant).

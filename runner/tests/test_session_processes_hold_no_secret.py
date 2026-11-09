@@ -62,10 +62,10 @@ def test_an_fsmonitor_command_the_agent_set_does_not_run(monkeypatch):
 
 
 def test_the_hydrate_tar_starts_from_the_scrubbed_environment(monkeypatch):
-    """The other spawns as the session (hydrate's tar, the collab sidecar, the qoder purge) take
-    _child_env, never the runner's own: the source names it at each one."""
+    """The other spawns as the session (hydrate's tar, the qoder purge) take _child_env, never the
+    runner's own: the source names it at each one."""
     src = (pathlib.Path(__file__).resolve().parents[1] / "server.py").read_text()
-    for marker in ('["tar", "xzf", "-", "-C", ws]', '"COLLAB_URL": collab_url', "_driver_cmd(QODER_PYTHON, QODER_DRIVER, job, penv)"):
+    for marker in ('["tar", "xzf", "-", "-C", ws]', "_driver_cmd(QODER_PYTHON, QODER_DRIVER, job, penv)"):
         at = src.index(marker)
         window = src[max(0, at - 300): at + 300]
         assert "_child_env()" in window, marker

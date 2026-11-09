@@ -11,21 +11,28 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import handed  # noqa: E402
 from server import (Auth, BACKENDS, _agent_doc_path, _build_cline, _cline_eof,  # noqa: E402
                     _cline_to_claude)
+
+
+def _handed(d) -> list[str]:
+    """What each builder call in session folder d handed its CLI as the prompt (handed.py)."""
+    return handed.by_folder(d)
 
 
 def _argv(prompt="do the thing", **kw):
     d = tempfile.mkdtemp()
     env: dict = {}
-    cmd = _build_cline("openai-api", Auth(api_key="", base_url="https://relay.example/v1"),
+    cmd = handed.build(_build_cline, "openai-api", Auth(api_key="", base_url="https://relay.example/v1"),
                        "gpt-5.4", prompt, d, env, **kw)
     return cmd, d, env
 
 
 def test_argv_is_headless_json_with_auto_approve():
     cmd, d, env = _argv()
-    assert cmd[0] == "cline" and cmd[1] == "do the thing"
+    assert cmd[0] == "cline" and "do the thing" not in cmd
+    assert _handed(d) == ["do the thing"]          # on stdin, from a file of the session's own
     assert "--json" in cmd and "--auto-approve" in cmd
     assert "-P" in cmd and "openai-compatible" in cmd
     assert "-z" not in cmd, "the background hub daemon must never be part of a turn"
@@ -51,13 +58,12 @@ def test_home_is_redirected_and_settings_land_inside_the_workspace():
         "updatedAt missing: cline will silently discard the whole provider entry"
 
 
-def test_a_whitespace_free_prompt_gets_a_trailing_newline():
-    """A single-token prompt is parsed as a SUBCOMMAND ('Unknown command or unquoted prompt: hi')
-    and `--` does not rescue it. A trailing newline does — verified on 3.0.60 both ways."""
-    cmd, _, _ = _argv(prompt="hi")
-    assert cmd[1] == "hi\n"
-    cmd2, _, _ = _argv(prompt="hi there")
-    assert cmd2[1] == "hi there"
+def test_a_whitespace_free_prompt_is_never_a_positional_argument():
+    """A single-token prompt given as an argument is parsed as a SUBCOMMAND ('Unknown command or unquoted
+    prompt: hi'), and `--` does not rescue it. Read on stdin it is only ever the prompt, as it was written."""
+    cmd, d, _ = _argv(prompt="hi")
+    assert "hi" not in cmd and "hi\n" not in cmd
+    assert _handed(d) == ["hi"]
 
 
 def test_resume_is_deliberately_not_wired():

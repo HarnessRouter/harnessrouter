@@ -7,8 +7,7 @@
 #
 # Phase 0 base: python + git + bash + Node 20 + Claude Code CLI + a small FastAPI server
 # the gateway proxies turns into. Grows in 0b/1 with: git hydrate/commit of the session
-# branch, the headless CLI one-shot stream-json loop, and the Node Yjs sidecar
-# (fsnotify <-> Hocuspocus room) for the realtime blackboard. Doc-skills / libreoffice
+# branch and the headless CLI one-shot stream-json loop. Doc-skills / libreoffice
 # layer is added when the doc backend needs it.
 #
 # Build context = backend/harness_runner (see infra/azure/provision-harness.sh).
@@ -75,12 +74,6 @@ RUN useradd -m -u 10001 -s /bin/bash agent \
 
 COPY requirements.txt /tmp/req.txt
 RUN pip install --no-cache-dir -r /tmp/req.txt
-
-# Yjs blackboard sidecar deps — a cached layer that reinstalls only when sidecar/package.json
-# changes (a code-only change to sidecar.mjs reuses it). .dockerignore excludes
-# sidecar/node_modules so the blanket `COPY . /app/` below can't clobber this install.
-COPY sidecar/package.json /app/sidecar/package.json
-RUN cd /app/sidecar && npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 
 COPY . /app/
 RUN chown -R agent:agent /app

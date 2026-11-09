@@ -694,7 +694,7 @@ def _launch(monkeypatch, tmp_path, backend, provider, auth, model):
         launched.update(argv=list(cmd), env=dict(env), cwd=cwd)
         started.set()
 
-    def fake_hermes(turn_id, cwd, env, model, provider, prompt, *a):
+    def fake_hermes(turn_id, cwd, env, model, provider, prompt, *a, **k):
         # the hermes command line is built from these alone (see _run_hermes_bg)
         launched.update(argv=["hermes", "-z", prompt, "--provider", provider, "--model", model,
                               *[str(x) for x in a]], env=dict(env), cwd=cwd)
