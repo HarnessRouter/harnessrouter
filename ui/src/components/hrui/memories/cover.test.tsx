@@ -13,7 +13,7 @@ jest.mock('./graph/coverShot', () => ({ drawCover: (...a: unknown[]) => drawCove
 
 import { harnessFetch } from '@/lib/hfetch';
 import { brickSvg } from '../tower';
-import { coverGraphOf, coverSig, isGraph, keepCover, picKindOf } from './cover';
+import { coverGraphOf, coverSig, coverState, DRAW_VERSION, isGraph, keepCover, picKindOf } from './cover';
 import { MemoryArt } from './MemoryArt';
 import { schemaIn } from './schemaModel';
 
@@ -51,7 +51,11 @@ describe('the name a drawing goes by', () => {
   test('the same drawing is always the same name, whatever order it was read in', () => {
     expect(sig(doc)).toBe(sig(JSON.parse(JSON.stringify(doc))));
     expect(sig(doc)).toBe(sig({ ...doc, types: [...doc.types].reverse() }));
-    expect(sig(doc)).toMatch(/^c1[0-9a-z]{1,16}$/);
+    expect(sig(doc)).toMatch(new RegExp(`^c${DRAW_VERSION}s_[0-9a-z]{1,16}$`));
+  });
+  test('it says whether the drawing is only what the provider makes, or has a person’s own types', () => {
+    expect(coverSig(coverGraphOf(null, graphiti))).toMatch(/^c\d+b_/);
+    expect(sig(doc)).toMatch(/^c\d+s_/);
   });
   test('a name, colour, icon, place or relation changed is another drawing', () => {
     const was = sig(doc);
@@ -65,6 +69,24 @@ describe('the name a drawing goes by', () => {
       { ...doc, relations: [{ ...doc.relations[0], color: '#14b8a6' }] },
       { ...doc, relations: [] },
     ]) expect(sig(d as typeof doc)).not.toBe(was);
+  });
+});
+
+describe('a cover kept from before', () => {
+  const now = coverSig(coverGraphOf(null, graphiti));
+  test('one of what the provider makes is checked against the provider list alone, and made again when it differs', () => {
+    expect(coverState({ cover_at: 1, cover_sig: now }, graphiti)).toBe('fresh');
+    expect(coverState({ cover_at: 1, cover_sig: now.replace(`c${DRAW_VERSION}`, `c${DRAW_VERSION - 1}`) }, graphiti)).toBe('builtin');
+    expect(coverState({ cover_at: 1, cover_sig: `c${DRAW_VERSION}b_0` }, graphiti)).toBe('builtin');
+  });
+  test('one with a person’s own types waits for its Schema tab, whatever its version', () => {
+    expect(coverState({ cover_at: 1, cover_sig: `c${DRAW_VERSION - 1}s_abc` }, graphiti)).toBe('fresh');
+  });
+  test('one made before drawings said which they were is read once where the provider reads a schema, else made from the list', () => {
+    expect(coverState({ cover_at: 1, cover_sig: 'c1abc123' }, graphiti)).toBe('read');
+    const reme = withBuiltin(CAPS.reme, B(['episode', 'note'], [['derived_from', 'note', 'episode']]));
+    expect(coverState({ cover_at: 1, cover_sig: 'c1abc123' }, reme)).toBe('builtin');
+    expect(coverState({ cover_at: null, cover_sig: null }, graphiti)).toBe('fresh');
   });
 });
 

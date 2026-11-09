@@ -10,7 +10,7 @@
 // one; anyone else sees the one made here, for this visit.
 import { useEffect, useRef } from 'react';
 import { putCover, type BuiltinSchema, type Memory, type Provider } from '@/lib/memories';
-import { builtinOf, hasRelations, schemaGuides } from './caps';
+import { builtinOf, hasRelations, hasSchema, schemaGuides } from './caps';
 import type { LSchema } from './schemaModel';
 import { graphOf, type VGraph } from './graph/schemaDraft';
 import { withBuiltin, type BGraph } from './graph/builtin';
@@ -42,15 +42,36 @@ export function picKindOf(m: Pick<Memory, 'cover_at'>, p: Provider | null | unde
   return 'brick';
 }
 
-/** A short name for what a drawing shows: every type (name, title, colour, icon, place) and every relation (name,
- *  colour, ends). The same drawing always has the same name; "c1" is the drawing's own version. */
+/** The drawing's own version: a change to how a cover is drawn (its layout, framing or sizes) bumps it, and every cover
+ *  made before is made again (see coverState). */
+export const DRAW_VERSION = 2;
+/** A short name for what a drawing shows: `c<version><b|s>_<hash>`, `b` where it is only what the provider makes itself
+ *  (so the Memories page can tell, from the provider list alone, whether it is still right), `s` where a person's own
+ *  types are in it; the hash covers every type (name, title, colour, icon, place) and every relation (name, colour,
+ *  ends). The same drawing always has the same name. */
 export function coverSig(g: CoverGraph): string {
   const titles = (g as BGraph).titles || {};
   const v = (g.vertex_types || []).map((t) => [t.label, titles[t.label] || '', t.ui?.color || '', t.ui?.icon || '',
     Math.round(t.ui?.position?.x ?? 0), Math.round(t.ui?.position?.y ?? 0), (t as { builtin?: boolean }).builtin ? 1 : 0].join('|')).sort();
   const e = (g.edge_types || []).flatMap((x) => (x.connections || []).map((c) => [x.label, x.ui?.color || '', c.from_type, c.to_type].join('|'))).sort();
-  return `c1${hash53(`${v.join('\n')}\n--\n${e.join('\n')}`)}`;
+  const own = (g.vertex_types || []).some((t) => !(t as { builtin?: boolean }).builtin);
+  return `c${DRAW_VERSION}${own ? 's' : 'b'}_${hash53(`${v.join('\n')}\n--\n${e.join('\n')}`)}`;
 }
+const SIG = /^c(\d+)([bs])_/;
+
+/** What the Memories page does about a kept cover: nothing (`fresh`, or one with a person's own types, which only its
+ *  Schema tab makes again); draw again what the provider makes (`builtin`, no read: the list says it); or read the
+ *  schema once to find out (`read`: a cover made before drawings said which they were, for a provider that reads one). */
+export type CoverState = 'fresh' | 'builtin' | 'read';
+export function coverState(m: Pick<Memory, 'cover_at' | 'cover_sig'>, p: Provider | null | undefined): CoverState {
+  if (!m.cover_at) return 'fresh';
+  const said = SIG.exec(m.cover_sig || '');
+  if (!said) return hasSchema(p) ? 'read' : 'builtin';
+  if (said[2] === 's') return 'fresh';
+  const now = coverGraphOf(null, p);
+  return !isGraph(now) || coverSig(now) === m.cover_sig ? 'fresh' : 'builtin';
+}
+
 /** cyrb53: 53 bits of a string, in base 36. */
 function hash53(s: string): string {
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
@@ -67,7 +88,8 @@ function hash53(s: string): string {
 export const canDraw = () => typeof window !== 'undefined' && typeof (window as { CanvasRenderingContext2D?: unknown }).CanvasRenderingContext2D !== 'undefined'
   && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function';
 
-/** A cover drawn in this visit: what it shows, and where the browser holds it. */
+/** A cover drawn in this visit: what it shows, and where the browser holds it. It is the newest the page knows of, so a
+ *  card shows it over the one the list named. */
 export interface Drawn { sig: string; url: string }
 const drawn = new Map<string, Drawn>();
 /** The cover drawn for this memory in this visit, if any. */

@@ -28,6 +28,7 @@ import { MemoriesPage } from './MemoriesPage';
 import { toast } from '../toast';
 import { listCustom } from '@/lib/harness';
 import { memoryNowLine, replaceAsk } from './sheets';
+import { coverGraphOf, coverSig, DRAW_VERSION } from './cover';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root; let el: HTMLElement;
@@ -535,7 +536,8 @@ describe('a cover still missing is made once the page has settled', () => {
       'GET /v1/memories': { data: [
         memory({ id: 'hmem_w', name: 'Writable' }),
         memory({ id: 'hmem_r', name: 'Read only', privileges: ['read'] }),
-        memory({ id: 'hmem_k', name: 'Kept', cover_at: 5, cover_sig: 'c1x' }),
+        // kept, and showing what the drawing would be now: nothing to do
+        memory({ id: 'hmem_k', name: 'Kept', cover_at: 5, cover_sig: coverSig(coverGraphOf(null, graphiti)) }),
       ] },
       'GET /v1/memories/hmem_w/schema': { types: [{ name: 'Company', color: '#ec4899', icon: 'building', x: 10, y: 20 }], relations: [] },
       'GET /v1/memories/hmem_r/schema': { types: [], relations: [] },
@@ -557,13 +559,42 @@ describe('a cover still missing is made once the page has settled', () => {
     expect(put).toHaveLength(1);
     expect(put[0].body).toBe(DRAWN);
     expect(put[0].headers['content-type']).toBe('image/png');
-    expect(put[0].headers['x-cover-sig']).toMatch(/^c1[0-9a-z]+$/);
+    expect(put[0].headers['x-cover-sig']).toMatch(new RegExp(`^c${DRAW_VERSION}s_[0-9a-z]+$`));
     // read only: drawn for this visit, never kept
     expect(s.sent('PUT', '/v1/memories/hmem_r/cover')).toHaveLength(0);
     expect(s.sent('GET', '/v1/memories/hmem_k/schema')).toHaveLength(0);
     const src = (n: string) => (Array.from(page().querySelectorAll('.mm-card')).find((c) => c.textContent?.includes(n))?.querySelector('img') as HTMLImageElement | null)?.getAttribute('src');
     expect(src('Writable')).toMatch(/^blob:drawn\//);
     expect(src('Read only')).toMatch(/^blob:drawn\//);
+  });
+
+  test('a cover drawn before the drawing changed is made again in the same pass: from the list where it is what the provider makes, with one read where nothing says what it was, never one with a person’s own types', async () => {
+    const now = coverSig(coverGraphOf(null, graphiti));
+    const older = now.replace(`c${DRAW_VERSION}`, `c${DRAW_VERSION - 1}`);
+    const s = backend({
+      'GET /v1/memories/providers': { data: [graphiti] },
+      'GET /v1/memories': { data: [
+        memory({ id: 'hmem_b', name: 'Made by the engine', cover_at: 5, cover_sig: older }),
+        memory({ id: 'hmem_u', name: 'Made before marks', cover_at: 5, cover_sig: 'c1abc123' }),
+        memory({ id: 'hmem_s', name: 'Own types', cover_at: 5, cover_sig: `c${DRAW_VERSION - 1}s_abc` }),
+        memory({ id: 'hmem_o', name: 'Someone else’s', cover_at: 5, cover_sig: older, privileges: ['read'] }),
+      ] },
+      'GET /v1/memories/hmem_u/schema': { types: [], relations: [] },
+      'PUT /v1/memories/hmem_b/cover': { cover_at: 9 }, 'PUT /v1/memories/hmem_u/cover': { cover_at: 9 },
+      ...Object.fromEntries(['hmem_b', 'hmem_u', 'hmem_s', 'hmem_o'].map((id) => [`GET /v1/memories/${id}/cover`, new Blob(['x'], { type: 'image/png' })])),
+    });
+    await open();
+    await settle();
+    await act(async () => { await new Promise((r) => setTimeout(r, 200)); }); await flush();
+    expect(drawCover).toHaveBeenCalledTimes(2);
+    expect(s.sent('PUT', '/v1/memories/hmem_b/cover')[0].headers['x-cover-sig']).toBe(now);
+    expect(s.sent('PUT', '/v1/memories/hmem_u/cover')[0].headers['x-cover-sig']).toBe(now);
+    // the only schema read: the cover that didn't say what it was
+    expect(s.calls.filter((c) => c.path.endsWith('/schema')).map((c) => c.path)).toEqual(['/v1/memories/hmem_u/schema']);
+    expect(s.sent('PUT', '/v1/memories/hmem_s/cover')).toHaveLength(0);
+    expect(s.sent('PUT', '/v1/memories/hmem_o/cover')).toHaveLength(0);
+    // until a new one comes, and after, the card shows a picture, never the wait
+    expect(page().querySelectorAll('.mm-card .mm-cv-wait')).toHaveLength(0);
   });
 });
 

@@ -5,7 +5,6 @@
 import type { Provider } from '@/lib/memories';
 import { builtinOf, relText } from '../caps';
 import { kindInfo } from '../tree';
-import { footprint, initialLayout } from './layout';
 import type { EType, VGraph, VType } from './schemaDraft';
 
 export type BConn = { from_type: string; to_type: string; builtin?: boolean };
@@ -19,6 +18,19 @@ const andList = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, 
 export function builtinTitles(provider: Provider | null | undefined): string {
   return andList((builtinOf(provider)?.types || []).map((t) => kindInfo(t.name, null).one));
 }
+
+/** The corners of a regular figure of `n` types, each side long enough for a link's name between its two ends: an odd
+ *  number with a point at the top, an even one lying flat, the first on the left. */
+export function figure(n: number): { x: number; y: number }[] {
+  if (n < 2) return [{ x: 0, y: 0 }].slice(0, n);
+  const R = SIDE / 2 / Math.sin(Math.PI / n), start = n % 2 ? -Math.PI / 2 : Math.PI / 2 + Math.PI / n;
+  return Array.from({ length: n }, (_, i) => {
+    const a = start + (2 * Math.PI * i) / n;
+    return { x: Math.round(R * Math.cos(a)) || 0, y: Math.round(R * Math.sin(a)) || 0 };
+  });
+}
+/** A side of that figure: two types and the longest link name a provider has, with room. */
+const SIDE = 260;
 
 export function withBuiltin<G extends VGraph | BGraph | null>(graph: G, provider: Provider | null | undefined): G | BGraph {
   const b = builtinOf(provider);
@@ -47,19 +59,19 @@ export function withBuiltin<G extends VGraph | BGraph | null>(graph: G, provider
   }
   for (const e of ets) if (e.connections.length && e.connections.every((c) => c.builtin)) e.builtin = true;
   if (fresh.length) {
-    const ids = new Set(fresh.map((v) => v.label));
-    const nodes = fresh.map((v) => ({ id: v.label, ...footprint(`${titles[v.label]}\nBuilt in · 00 records`, 38) }));
-    const links = (b.relations || []).filter((r) => ids.has(r.from) && ids.has(r.to) && r.from !== r.to).map((r) => ({ source: r.from, target: r.to }));
-    const { pos } = initialLayout(nodes, links, { spread: 1.7 });
-    const placed = vts.filter((v) => !ids.has(v.label) && v.ui && v.ui.position);
-    const xs = [...pos.values()].map((q) => q.x), ys = [...pos.values()].map((q) => q.y);
+    // What the provider makes is set out as a regular figure, one type on each corner (a triangle for three, the first
+    // on top; two side by side, the first on the left): a link between two corners never passes under a third, and
+    // each link's name has the side between them to itself. Never the force layout, which could put three in a line.
+    const at = figure(fresh.length);
+    const placed = vts.filter((v) => !fresh.includes(v) && v.ui && v.ui.position);
+    const xs = at.map((q) => q.x), ys = at.map((q) => q.y);
     let dx = 0, dy = 0;
     if (placed.length) {
       const px = placed.map((v) => v.ui.position!.x), py = placed.map((v) => v.ui.position!.y);
       dx = Math.min(...px) - 280 - Math.max(...xs);
       dy = (Math.min(...py) + Math.max(...py)) / 2 - (Math.min(...ys) + Math.max(...ys)) / 2;
     }
-    for (const v of fresh) { const q = pos.get(v.label)!; v.ui = { ...v.ui, position: { x: Math.round(q.x + dx), y: Math.round(q.y + dy) } }; }
+    fresh.forEach((v, i) => { v.ui = { ...v.ui, position: { x: Math.round(at[i].x + dx), y: Math.round(at[i].y + dy) } }; });
   }
   return { ...graph, titles, vertex_types: vts, edge_types: ets };
 }

@@ -71,7 +71,7 @@ export function CoverImg({ id, at, mini }: { id: string; at: number; mini?: bool
 
 /** A memory's picture: `kind` from the list (cover.ts picKindOf), and `drawn`, one made here in this visit. */
 export function MemoryArt({ m, kind, drawn, mini }: { m: Pick<Memory, 'id' | 'cover_at' | 'cover_sig'>; kind: PicKind; drawn?: Drawn | null; mini?: boolean }) {
-  if (drawn && (!m.cover_at || drawn.sig === m.cover_sig)) return <Picture src={drawn.url} mini={mini} />;
+  if (drawn) return <Picture src={drawn.url} mini={mini} />;
   if (kind === 'cover' && m.cover_at) return <CoverImg id={m.id} at={m.cover_at} mini={mini} />;
   if (kind === 'brick') return <MemoryBrick mini={mini} />;
   return <CoverWait mini={mini} />;

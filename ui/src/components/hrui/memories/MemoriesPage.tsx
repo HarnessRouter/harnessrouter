@@ -18,7 +18,7 @@ import { Skel, SkCards, SkHead } from '../Skel';
 import { toast } from '../toast';
 import { hasSchema } from './caps';
 import { Ghost } from './CardArt';
-import { canDraw, coverGraphOf, drawnCover, isGraph, keepCover, picKindOf, type Drawn } from './cover';
+import { canDraw, coverGraphOf, coverState, drawnCover, isGraph, keepCover, picKindOf, type Drawn } from './cover';
 import { MemoryArt } from './MemoryArt';
 import { DOTS, engineOf, msOf, PLUS, SEARCH, shownName, speaksUse, useDismiss, useProviders, X } from './parts';
 import { schemaIn, type LSchema } from './schemaModel';
@@ -99,34 +99,41 @@ export function MemoriesPage() {
     const p = (providers || []).find((x) => x.id === m.provider) || null;
     return p && m.builtin !== undefined ? { ...p, schema: { ...p.schema, builtin: m.builtin || undefined } } : p;
   }, [providers]);
-  // The covers still missing, made one at a time once the page has settled: the schema where the engine reads one (its
-  // only read), drawn offscreen as the Schema tab draws it, kept where this person may write the memory, and shown.
+  // The covers still missing, and the ones drawn before the drawing changed, made one at a time once the page has
+  // settled: the schema read where the engine reads one and nothing says what the cover showed (its only read), drawn
+  // offscreen as the Schema tab draws it, kept where this person may write the memory, and shown. One with a person's
+  // own types is made again by its Schema tab, never here. Until a new one comes, a card shows the one it has.
   useEffect(() => {
     if (!list || !providers || !canDraw()) return undefined;
-    const todo = list.filter((m) => {
-      const k = picKindOf(m, providerOf(m));
-      return (k === 'graph' || k === 'maybe') && !drawnCover(m.id);
+    const todo = list.flatMap((m) => {
+      if (drawnCover(m.id)) return [];
+      const p = providerOf(m), k = picKindOf(m, p);
+      if (k === 'graph' || k === 'maybe') return [{ m, read: hasSchema(p) }];
+      if (k !== 'cover' || !m.privileges?.includes('write')) return [];
+      const st = coverState(m, p);
+      return st === 'fresh' ? [] : [{ m, read: st === 'read' }];
     });
     if (!todo.length) return undefined;
     let live = true;
     const t = setTimeout(() => {
       void (async () => {
-        for (const m of todo) {
+        for (const { m, read: wants } of todo) {
           await idle();
           if (!live) return;
           const p = providerOf(m);
           let schema: LSchema | null = null, read = true;
-          if (hasSchema(p)) {
+          if (wants) {
             try { schema = schemaIn(await getSchema(m.id)); } catch { read = false; }
           }
           if (!live) return;
           const g = coverGraphOf(schema, p);
           if (!isGraph(g)) {
-            if (read) setFlat((f) => ({ ...f, [m.id]: true }));
+            if (read && !m.cover_at) setFlat((f) => ({ ...f, [m.id]: true }));
             continue;
           }
+          // a schema that couldn't be read draws what the engine makes, for this visit only: never kept
+          if (!read && m.cover_at) continue;
           try {
-            // a schema that couldn't be read draws what the engine makes, for this visit only: never kept
             const d = await keepCover(m, g, read && !!m.privileges?.includes('write'));
             if (live && d) setDrawn((x) => ({ ...x, [m.id]: d }));
           } catch { /* this one waits for the next visit */ }
