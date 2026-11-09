@@ -9579,8 +9579,17 @@ GEMINI_MODELS = ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemi
                  "gemini-3-flash-preview")
 
 
-def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: str = "") -> None:
+def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: str = "",
+                     tools_disabled: list[str] | None = None) -> None:
     """~/.gemini/settings.json under the redirected HOME.
+
+    A disabled tool goes in `tools.exclude`. Gemini CLI 0.58.0 builds the model's function
+    declarations from its registry's ACTIVE tools, and a tool whose name (or legacy alias:
+    search_file_content is grep_search) is in the exclude set is not active (ToolRegistry
+    getActiveTools / isActiveTool, fed by Config.getExcludeTools, which the loader fills from
+    settings.tools.exclude). A subagent's registry is built on the same Config and filtered the
+    same way. --approval-mode=yolo decides how an active tool's call is approved, which is a
+    separate question, so the exclusion holds under it.
 
     mcpServers uses gemini-cli's own schema (command/args/env for stdio, url/httpUrl/headers for
     remote) — the same shape _qwen_settings already writes, because qwen inherited it unchanged
@@ -9653,12 +9662,15 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
                                   "modelChains": {k: own for k in ("preview", "default", "lite", "auto-preview", "auto-default")}}}
     if servers:
         cfg["mcpServers"] = servers
+    off = _tool_names_off(tools_disabled)
+    if off:
+        cfg["tools"] = {"exclude": off}
     (gdir / "settings.json").write_text(json.dumps(cfg, indent=2))
 
 
 def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                   resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-                  native_model: str | None = None) -> list[str]:
+                  native_model: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "google"
     if pr not in GEMINI_PROVIDERS:
         raise HTTPException(400, f"unknown gemini provider '{pr}' (one of {sorted(GEMINI_PROVIDERS)})")
@@ -9683,7 +9695,7 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
         relay_base, relay_tok = _gemini_relay_route("https://generativelanguage.googleapis.com", auth.api_key, model, "")
         env["GOOGLE_GEMINI_BASE_URL"] = relay_base
         env["GEMINI_API_KEY"] = relay_tok
-    _gemini_settings(home, mcp_servers, model)
+    _gemini_settings(home, mcp_servers, model, tools_disabled)
     cmd = ["gemini", "-p", prompt, "-o", "stream-json", "-m", model,
            # Load-bearing, same risk class as qwen's --yolo: gemini-cli gates tool use behind a
            # per-workspace "folder trust" prompt and an approval mode, neither of which can be
@@ -17322,12 +17334,11 @@ def capabilities(identifier: str = "") -> dict:
 #   dsh         — no per-tool switch on the wire.
 #   opensquilla — `--permissions` picks a posture (restricted / bypass / full); there is no
 #                 per-tool deny list anywhere on its agent CLI.
-#   gemini      — no confirmed per-tool switch in headless mode.
 #   cline       — no per-tool switch was found headless.
-# Qwen Code has one, `permissions.deny` in its settings file (_qwen_settings).
+# Qwen Code and Gemini CLI have one each in their settings file (_qwen_settings, _gemini_settings).
 # The gateway's catalog says the same thing per base (tool_enforcement "instruction" for exactly
 # these), and gateway/tests/test_tool_enforcement_parity.py holds the two together.
-_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "gemini", "opensquilla", "cline"})
+_TOOLS_OFF_BY_REQUEST = frozenset({"codex", "hermes", "dsh", "opensquilla", "cline"})
 
 
 def _disabled_tools_note(backend: str, tools_disabled: list[str] | None) -> str:
@@ -17700,7 +17711,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             model = model or GEMINI_DEFAULT_MODEL
             cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
                                 resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                                native_model=req.native_model)
+                                native_model=req.native_model, tools_disabled=req.tools_disabled)
         elif backend == "cline":
             model = model or CLINE_DEFAULT_MODEL
             cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,

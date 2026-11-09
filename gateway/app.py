@@ -20663,9 +20663,13 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("web_fetch", "Web Fetch"), ("google_web_search", "Web Search"),
                   ("write_todos", "Todo"), ("save_memory", "Memory"),
                   ("activate_skill", "Skill"), ("update_topic", "Topic")],
-        # No confirmed hard per-tool kill switch in headless mode (only --allowed-mcp-server-names
-        # gates MCP servers) — instruction tier until proven otherwise, same as qwen/cline/codex.
-        "tool_enforcement": "instruction",
+        # "hard": a disabled tool goes in the settings file's tools.exclude, and Gemini CLI leaves an
+        # excluded tool (or its legacy alias) out of the function declarations it sends, for
+        # subagents too (_gemini_settings). Until this it was a request: measured on 0.40.0 with all
+        # twelve off, nine were still in the request. search_file_content, write_todos and
+        # save_memory were not offered even with nothing off on 0.58.0 (the first is now
+        # grep_search, which the exclusion's alias expansion covers).
+        "tool_enforcement": "hard",
     },
     "cline": {
         "label": "Cline", "backend": "cline", "status": "ready",
