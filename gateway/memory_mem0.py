@@ -606,7 +606,8 @@ class Mem0Server(Mem0):
         hit = self._counts.get(mid)
         if hit and time.time() - hit[0] < 30:
             return hit[1]
-        n = len(await self._all(mid)) + len(await self._entities(mid))
+        items, ents = await asyncio.gather(self._all(mid), self._entities(mid))
+        n = len(items) + len(ents)
         self._counts[mid] = (time.time(), n)
         return n
 
@@ -759,8 +760,8 @@ class Mem0Server(Mem0):
             raise mp.MemoryError(422, "memory_unsupported", "This memory's provider does not list a memory as of a past time.")
         degraded: list[str] = []
         flat, later = self._flat(mid, req, degraded)
-        ents = await self._entities(mid)
-        rows = self._about(mid, [self._out(i) for i in await self._all(mid, expired=req.get("include") == "all")], ents)
+        ents, items = await asyncio.gather(self._entities(mid), self._all(mid, expired=req.get("include") == "all"))
+        rows = self._about(mid, [self._out(i) for i in items], ents)
         rows += [self._entity_out(e) for e in ents]
         checks = [{"field": "type", "op": "eq", "value": flat[_RESERVED + "type"]}] if _RESERVED + "type" in flat else []
         checks += [{"field": f"attributes.{k}", "op": "eq", "value": v} for k, v in flat.items() if k not in ("user_id", _RESERVED + "type")]
@@ -783,9 +784,8 @@ class Mem0Server(Mem0):
         if text:
             degraded.append("text:searched_with_the_query")
         filters = {k: v for k, v in flat.items() if k != "user_id"}
-        ents = await self._entities(mid)
-        r = await self._call("POST", "/search", body={
-            "query": f"{query} {text}".strip(), "user_id": mid, "top_k": limit * (3 if later else 1), **({"filters": {"user_id": mid, **filters}} if filters else {})})
+        ents, r = await asyncio.gather(self._entities(mid), self._call("POST", "/search", body={
+            "query": f"{query} {text}".strip(), "user_id": mid, "top_k": limit * (3 if later else 1), **({"filters": {"user_id": mid, **filters}} if filters else {})}))
         results = []
         for item in (r.json() or {}).get("results") or [] if r.status_code == 200 else []:
             if str(item.get("user_id") or "") != mid:
