@@ -1,10 +1,10 @@
-# Memory vendors beside HarnessRouter. Run the ones you want, each under its own profile:
+# Memory engines beside HarnessRouter. Start them with one command, from this folder:
 #
-#   cp .env.example .env        # then fill it in
-#   docker compose --profile graphiti --profile reme up -d
-#   docker network connect harnessrouter-memories <your HarnessRouter container>
+#   ./up.sh                  # every engine; or name some: ./up.sh mem0 hindsight
 #
-# Then connect each one in the console under Memories, with the address its section below names.
+# up.sh writes .env (secrets, and each engine's model credential from your HarnessRouter), creates the
+# network, runs this file with a profile per engine, puts HarnessRouter on the network and connects each
+# engine to it. ./up.sh --down stops them. See README.md here and docs/memories-engines.md.
 #
 # Nothing here publishes a port. Most of these servers take no key, so keep them on this network.
 # Images are pinned to what the conformance suite passed against; move them on purpose.
@@ -20,7 +20,7 @@ services:
     profiles: [graphiti]
     build: ./graphiti
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-${GRAPHITI_MODEL_KEY:-}}
       OPENAI_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       MODEL_NAME: ${MEMORY_MODEL:-gpt-4o-mini}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
@@ -38,11 +38,11 @@ services:
     image: ghcr.io/vectorize-io/hindsight:latest@sha256:19d0c08f3df79acac29384826419a1ca158129e81ec527cdcbd8c97ff4ef76da
     environment:
       HINDSIGHT_API_LLM_PROVIDER: openai
-      HINDSIGHT_API_LLM_API_KEY: ${OPENAI_API_KEY:-}
+      HINDSIGHT_API_LLM_API_KEY: ${OPENAI_API_KEY:-${HINDSIGHT_MODEL_KEY:-}}
       HINDSIGHT_API_LLM_MODEL: ${MEMORY_MODEL:-gpt-4o-mini}
       HINDSIGHT_API_LLM_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: openai
-      HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${OPENAI_API_KEY:-${HINDSIGHT_MODEL_KEY:-}}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       # The model downloads once, into hindsight-cache.
@@ -66,7 +66,7 @@ services:
         mem0: https://github.com/mem0ai/mem0.git#753496cf1435d76c3a711f3af51303f7fdcb6420:server
     entrypoint: ["sh", "-c", "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port 8000"]
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-${MEM0_MODEL_KEY:-}}
       OPENAI_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
@@ -110,10 +110,10 @@ services:
     command: ["start"]
     environment:
       REME_CONFIG: /etc/reme/config.yaml
-      LLM_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_API_KEY: ${OPENAI_API_KEY:-${REME_MODEL_KEY:-}}
       LLM_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       LLM_MODEL_NAME: ${MEMORY_MODEL:-gpt-4o-mini}
-      EMBEDDING_API_KEY: ${OPENAI_API_KEY:-}
+      EMBEDDING_API_KEY: ${OPENAI_API_KEY:-${REME_MODEL_KEY:-}}
       EMBEDDING_BASE_URL: ${MEMORY_BASE_URL:-https://api.openai.com/v1}
       EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL:-text-embedding-3-small}
     volumes:
@@ -127,6 +127,9 @@ volumes:
   mem0-history:
   reme:
 
+# Made by up.sh (docker network create), and kept when the engines stop, so a HarnessRouter container
+# started with `--network harnessrouter-memories` always starts. HR_MEMORIES_NAME runs a second stack.
 networks:
   default:
-    name: harnessrouter-memories
+    name: ${HR_MEMORIES_NAME:-harnessrouter-memories}
+    external: true

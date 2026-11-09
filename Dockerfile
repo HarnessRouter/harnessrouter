@@ -174,6 +174,10 @@ COPY docker/entrypoint.sh /app/entrypoint.sh
 COPY docker/locks/ /app/locks/
 COPY docker/hr-retention /usr/local/bin/hr-retention
 RUN chmod +x /app/entrypoint.sh /usr/local/bin/hr-retention
+# The memory engines' stack, so nobody needs a clone to start them: `docker cp <container>:/app/deploy/memories .`
+# then `./memories/up.sh` on the host. Files only, root's like the rest of /app (below): nothing in the
+# container runs them, and up.sh runs on the host, where Docker is. Its .env is never copied (.dockerignore).
+COPY deploy/memories/ /app/deploy/memories/
 
 # Next.js standalone output: server + only the modules it actually needs.
 COPY --from=ui /ui/.next/standalone /app/ui/
@@ -210,6 +214,8 @@ RUN useradd -m -u 10001 agent \
 
 EXPOSE 3000
 VOLUME ["/data"]
+# How deploy/memories/up.sh finds a running HarnessRouter, whatever the image is named or tagged.
+LABEL io.harnessrouter.role=instance
 
 # The UI is the only published port. The gateway and runner stay on loopback — nothing else
 # needs to be reachable from outside the container.

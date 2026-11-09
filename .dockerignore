@@ -5,10 +5,14 @@ data/
 *.db-wal
 *.db-shm
 
-# Secrets / operator config
+# Secrets / operator config. At any depth: a pattern here matches only at the top unless it says
+# **/, and deploy/memories, which the image carries, gets a .env full of secrets from its up.sh.
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
+!**/.env.example
 *.pem
 *.key
 
