@@ -127,9 +127,8 @@ export function MemoryLayer({ hid, onRead }: { hid: string; onRead?: (d: Harness
     if (d?.default_memory_id !== mid) return;
     const other = d.data.find((x) => x.id !== mid && x.privileges.includes('write'));
     if (!other) { await setHarnessMemories(hid, { default_memory_id: '', observe: false }); return; }
+    // said by nothing: the page has no default to name, and the switch's own state is the feedback
     await setHarnessMemories(hid, { default_memory_id: other.id });
-    // what changed without being pressed is said: where the agent writes now, and where tasks are kept now
-    toast(d.observe ? `${other.name} is now the default. Finished tasks are kept there.` : `${other.name} is now the default.`);
   };
   const ownId = own.read?.memory?.id || '';
   const turnOn = (mid: string) => run(async () => {

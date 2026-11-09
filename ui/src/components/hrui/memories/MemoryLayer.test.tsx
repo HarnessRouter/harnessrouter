@@ -134,17 +134,19 @@ test('a switch that fails says so and goes back to what’s true', async () => {
   expect(toast).toHaveBeenCalled();
   expect(sw('Support').getAttribute('aria-pressed')).toBe('false');
 });
-test('turned off, the default is handed on, or cleared', async () => {
-  const s = backend({ data: [held('m1', 'Brand kits', true, true), held('m2', 'Support', true)], def: 'm1' });
+test('turned off, the default is handed on, or cleared, and nothing is said: the switch is the feedback', async () => {
+  const s = backend({ data: [held('m1', 'Brand kits', true, true), held('m2', 'Support', true)], def: 'm1', observe: true });
   await draw();
   await press(sw('Brand kits'));
   expect(s.sent('PUT', `/v1/harnesses/${H}/memories`)[0].body).toEqual({ default_memory_id: 'm2' });
+  expect(toast).not.toHaveBeenCalled();
   await act(async () => { root.unmount(); }); root = createRoot(el);
   const s2 = backend({ data: [held('m1', 'Brand kits', true, true)], def: 'm1' });
   await draw();
   await press(sw('Brand kits'));
   // no default left: keeping tasks goes with it
   expect(s2.sent('PUT', `/v1/harnesses/${H}/memories`)[0].body).toEqual({ default_memory_id: '', observe: false });
+  expect(toast).not.toHaveBeenCalled();
 });
 test('a memory below one that’s on comes with it: on, and not a switch of its own', async () => {
   backend({
@@ -249,6 +251,15 @@ describe('the agent’s own memory, where the service gives one (0.40): a row li
     expect(s.sent('DELETE', '/v1/memories/m1/grants/g1')).toHaveLength(1);
     expect(s.sent('PUT', `/v1/harnesses/${H}/memories`).map((c) => c.body)).toEqual([{ default_memory_id: '', observe: false }]);
     expect(s.sent('PUT', `/v1/harnesses/${H}/memory`)).toHaveLength(0);
+    expect(toast).not.toHaveBeenCalled();
+  });
+  test('off while another memory is on: the default goes there, keeping finished tasks as before, and nothing is said', async () => {
+    const s = contract({ on: true, observe: true, others: [held('m2', 'Support', true)] });
+    await draw();
+    await press(sw('Photo cut'));
+    expect(s.sent('DELETE', '/v1/memories/m1/grants/g1')).toHaveLength(1);
+    expect(s.sent('PUT', `/v1/harnesses/${H}/memories`).map((c) => c.body)).toEqual([{ default_memory_id: 'm2' }]);
+    expect(toast).not.toHaveBeenCalled();
   });
   test('on again: the full grant, and it is the default again, keeping finished tasks, wherever the default had gone', async () => {
     const s = contract({ on: false, def: 'm2', observe: false, others: [held('m2', 'Support', true, true)] });
