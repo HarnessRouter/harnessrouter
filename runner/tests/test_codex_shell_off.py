@@ -35,9 +35,9 @@ def test_shell_on_leaves_the_features_alone(tmp_path):
 
 
 def test_the_feature_table_and_the_mcp_block_keep_to_their_own_keys(tmp_path):
-    """The MCP block opens with a top-level key; written after the feature table, it would land
-    inside it (and codex refuses a feature it does not know)."""
+    """Every table holds only its own keys: a key written after a table lands inside it (the MCP
+    block used to open with one, and codex refuses a feature it does not know)."""
     mcp = rs._codex_mcp_toml([{"name": "graph", "url": "https://mcp.example/mcp", "auth": "t"}])
-    assert not mcp.lstrip().startswith("["), "the case this guards: a top-level key first"
     doc = _cfg(tmp_path, ["shell"], mcp_toml=mcp)
     assert doc["features"] == {"shell_tool": False} and "graph" in doc["mcp_servers"]
+    assert set(doc["sandbox_workspace_write"]) == {"network_access", "exclude_slash_tmp"}

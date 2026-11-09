@@ -1549,8 +1549,9 @@ def _write_mcp_config_claude(cwd: str, servers: list[dict],
 
 
 def _codex_mcp_toml(servers: list[dict]) -> str:
-    """Render [mcp_servers.*] config.toml blocks for Codex's experimental remote-MCP (rmcp)
-    HTTP client. Returns '' if there are no HTTP servers to add."""
+    """Render [mcp_servers.*] config.toml blocks: url (streamable HTTP) or command (stdio). Returns
+    '' if there are no servers to add. Tables only, so the block can sit anywhere after the top-level
+    keys."""
     blocks: list[str] = []
     for s in servers or []:
         url = (s or {}).get("url")
@@ -1579,9 +1580,11 @@ def _codex_mcp_toml(servers: list[dict]) -> str:
         blocks.append("\n".join(lines))
     if not blocks:
         return ""
-    # rmcp HTTP client is opt-in in Codex; enable it when any HTTP MCP server is configured.
-    # (stdio servers need no switch; the flag is harmless beside them.)
-    return "\nexperimental_use_rmcp_client = true\n" + "\n".join(blocks) + "\n"
+    # No experimental_use_rmcp_client: an opt-in that older Codex releases needed for an HTTP server,
+    # and that 0.154 neither reads nor names (the HTTP client is built in). It was also a top-level key
+    # appended after the last table, so it landed inside whichever table came before it:
+    # [sandbox_workspace_write], a resumed session's provider alias, or the turn's own tables.
+    return "\n" + "\n".join(blocks) + "\n"
 
 
 def _skill_desc(files: list[dict]) -> str:
@@ -3351,8 +3354,7 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         # nothing). It goes before the first table header: appended at the end it would belong
         # to the last table and switch nothing (measured on rc.1: the tool stayed in the request).
         cfg = _codex_insert_top_level(cfg, 'web_search = "disabled"')
-    # Tables of this turn's own, written LAST: the MCP block below opens with a top-level key
-    # (experimental_use_rmcp_client), which would otherwise land inside whichever table came before it.
+    # Tables of this turn's own, written last, after every other table.
     last_tables = ""
     if _codex_shell_off(tools_disabled):
         # The shell is a feature in codex 0.154's own table (`codex features list`: shell_tool), and
