@@ -25,7 +25,7 @@
 // free requests are not part of this edition).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
-import { offeredOob, oobById, oobDefaultModel, promptSeenNote, useBasesRead, useModelCatalogRead } from '@/lib/harness';
+import { offeredOob, oobById, oobDefaultModel, useBasesRead, useModelCatalogRead } from '@/lib/harness';
 import { providerById, useModelProviders } from '@/lib/providers';
 import { harnessLogoSrc } from '@/components/HarnessLogo';
 import { Sheet } from './Sheet';
@@ -296,7 +296,6 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
     : demo != null && bases && dp && !dp.base ? ['warn', <>{`${baseName(DEMOS[demo].base, bases)} is not available to you, so Auto picks the harness.`}</>]
     : !bases || !catalog ? ['', sk('Loading')]
     : ['', null];
-  const hNote = h && !hAuto ? promptSeenNote(h) : null;
   const pickH = hAuto ? <span>Auto</span> : <>{h ? logo(h) : null}<span>{hName}</span></>;
   const pickM = mAuto ? <span>Auto</span> : <span className="mono">{m}</span>;
   return (
@@ -321,7 +320,6 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
           {list}
         </div>
       </div>
-      {hNote ? <p className="set-help nw-hnote" id="nwHNote">{hNote}</p> : null}
       <>
           <label className="nw-l" htmlFor="nwJob">What should it do for your users?</label>
           <div className="nw-ask">

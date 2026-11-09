@@ -4401,7 +4401,13 @@ _TURN_THINKING: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr
 _TURN_PROMPT: contextvars.ContextVar[dict | None] = contextvars.ContextVar("hr_turn_prompt", default=None)
 PROMPT_LAUNCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_launcher.py")
 PROMPT_LAUNCHER_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_launcher.mjs")
-PROMPT_ARG = "{hr:prompt}"   # prompt_launcher.py's placeholder for the file's text
+# For a CLI that is one executable, with no entry point for a launcher to run in-process: the prompt's argument
+# is set inside the CLI's own process before its code reads it, by a Node preload (kimi, a Node single
+# executable) or by a library the dynamic loader runs first (jcode, a native binary; built into the image by
+# the Dockerfile's prompt-argv stage). Either way the command line holds only PROMPT_ARG.
+PROMPT_PRELOAD_CJS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_preload.cjs")
+PROMPT_ARGV_SO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_argv.so")
+PROMPT_ARG = "{hr:prompt}"   # the launchers' placeholder for the file's text
 PROMPT_DIR = ".hr-prompt"    # in the session's tmp/
 _IN_ACCESS, _IN_CLOSE_NOWRITE, _IN_DELETE_SELF, _IN_IGNORED = 0x1, 0x10, 0x400, 0x8000
 _IN_NONBLOCK, _IN_CLOEXEC = 0o4000, 0o2000000
@@ -9231,7 +9237,14 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     resuming = bool(resume_session_id) and _kimi_has_session(home, resume_session_id)
     if resuming and instructions and instructions.strip():
         prompt = _instructions_changed_note("AGENTS.md", instructions) + prompt
-    cmd = ["kimi", "-p", prompt, "--output-format", "stream-json"]
+    # The prompt is handed over by file, not on the command line (_prompt_handover). Kimi Code takes it only as
+    # -p TEXT and reads nothing on stdin, and as a Node single executable it has no entry script for
+    # prompt_launcher.mjs to import, so the file is read in its own process by a Node preload (prompt_preload.cjs,
+    # through NODE_OPTIONS, which the executable honours: measured on 2.0.0), which sets -p's argument before the
+    # CLI parses it. The CLI stores the message exactly as -p's was, and the command line holds the placeholder.
+    env["NODE_OPTIONS"] = " ".join(x for x in (env.get("NODE_OPTIONS", ""), f"--require {PROMPT_PRELOAD_CJS}") if x)
+    env["HR_PROMPT_FILE"] = _prompt_handover(cwd, prompt)
+    cmd = ["kimi", "-p", PROMPT_ARG, "--output-format", "stream-json"]
     if resuming:
         cmd += ["-r", resume_session_id]
     else:
@@ -13948,9 +13961,39 @@ def _build_jcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     if not _jcode_write_mcp(home, mcp_servers) and mcp_servers:
         print("[jcode] every configured MCP server was remote and could not be bridged — "
               "this turn runs without them", flush=True)
-    cmd += ["run", "--ndjson"]
-    cmd += ["--", prompt] if prompt.startswith("-") else [prompt]
+    cmd += ["run", "--ndjson", "--", PROMPT_ARG]
+    # The prompt is handed over by file, not on the command line (_prompt_handover). `run` takes the message only
+    # as <MESSAGE>, so the file is read in jcode's own process by prompt_argv.so, which the dynamic loader runs
+    # before jcode's own code and which points <MESSAGE> at the file's text: jcode parses and stores the message
+    # exactly as it would have from its command line, and the command line holds the placeholder. After `--`, so a
+    # message that begins with a dash is still the message.
+    exe = _jcode_exe(env)
+    if not os.path.isfile(PROMPT_ARGV_SO):
+        raise HTTPException(500, "jcode can't run here: this installation was built without the part that hands jcode "
+                                 "its prompt privately (prompt_argv.so), so the prompt would show in the machine's "
+                                 "process list")
+    if exe != "jcode":
+        # the release's own launcher only puts its folder on LD_LIBRARY_PATH and execs this binary; started here
+        # directly, so the library acts in jcode itself and no shell in between holds the arguments
+        here = os.path.dirname(exe)
+        env["LD_LIBRARY_PATH"] = here + (os.pathsep + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+        cmd[0] = exe
+    env["LD_PRELOAD"] = PROMPT_ARGV_SO
+    env["HR_PROMPT_EXE"] = os.path.realpath(shutil.which(exe, path=env.get("PATH") or os.environ.get("PATH")) or exe)
+    env["HR_PROMPT_FILE"] = _prompt_handover(cwd, prompt)
     return cmd
+
+
+def _jcode_exe(env: dict) -> str:
+    """The binary jcode runs as. Its Linux release is a pair (docker/entrypoint.sh, install_jcode): a launcher that
+    puts its own folder on LD_LIBRARY_PATH and execs `<itself>.bin`; that binary, when it is there. Otherwise
+    `jcode` itself (a single binary, as on macOS)."""
+    found = shutil.which("jcode", path=env.get("PATH") or os.environ.get("PATH"))
+    if found:
+        real = os.path.realpath(found)
+        if os.path.isfile(real + ".bin"):
+            return real + ".bin"
+    return "jcode"
 
 
 
