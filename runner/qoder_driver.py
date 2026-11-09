@@ -474,6 +474,20 @@ def system_prompt(job: dict) -> str:
     return (base + "\n\n" + block) if base else block
 
 
+def instructions_changed_note(agent_doc: str) -> str:
+    """What a continued session is handed, ahead of its message, when the harness's instructions
+    changed since the session was made. A session keeps the Agent version it was created with, and
+    with it the system prompt; a later turn may replace its tools and servers and nothing else, so
+    an edited instruction never reached a continued task. The current instructions go with the
+    message instead, said to replace the stale copy: the shape the runner gives the other bases that
+    keep their first copy (server._instructions_changed_note)."""
+    return ("<system-reminder>\n"
+            "Your instructions changed after this conversation started. The instructions below "
+            "replace the ones in your system prompt, which are stale: follow these.\n\n"
+            f"{agent_doc.strip()}\n"
+            "</system-reminder>\n\n")
+
+
 def config_hash(body: dict) -> str:
     return _sha(json.dumps(body, sort_keys=True).encode())
 
@@ -608,6 +622,7 @@ class Turn:
         self.written: list[str] = []            # paths the agent wrote or edited this turn
         self.delivered_paths: set[str] = set()  # paths it passed to DeliverArtifacts
         self.nudging = False                    # the delivery round (deliver_written) is running
+        self.instructions_note = ""             # the changed instructions, ahead of this turn's message
 
     # ── remote objects ──
     def ensure_environment(self) -> str:
@@ -1053,6 +1068,7 @@ class Turn:
             text = str(self.job.get("prompt") or "")
             if self.mounts:
                 text = ("[Attached files, mounted read-only: " + ", ".join(f"`{m}`" for m in self.mounts) + "]\n\n" + text)
+            text = self.instructions_note + text
         events = [{"type": "user.message", "content": [{"type": "text", "text": text}]}]
         try:
             for e in self.api.events_send(self.session_id, events, idempotency_key=uuid.uuid4().hex):
@@ -1195,14 +1211,22 @@ class Turn:
         self.mounts = [r["mount_path"] for r in resources]
         body = agent_body(job, bindings, servers)
         aid, version, changed = self.ensure_agent(body)
+        system_sha = _sha(body["system"].encode())
         if sid:
             if changed:
                 # a session pins its Agent version; its tools and servers are what it lets a
                 # later turn replace, so a tool disabled between turns is withheld on this one
                 self.api.session_update(sid, {"agent": {"tools": body["tools"], "mcp_servers": body["mcp_servers"]}})
             self.mount_resources(sid, resources)
+            # ...and not its system prompt: instructions edited since the session began go with the
+            # message, once per edit (instructions_changed_note). A session recorded before this
+            # was kept has no record of what it was told, and is taken to hold what it has now.
+            told = str(self.st.get("session_system") or "")
+            if told and told != system_sha and str(self.job.get("agent_doc") or "").strip():
+                self.instructions_note = instructions_changed_note(str(self.job.get("agent_doc")))
         else:
             sid = self.create_session(aid, version, env_id, vault_ids, resources)
+        self.st["session_system"] = system_sha
         self.session_id = sid
         _emit("session", {"session_id": sid, "agent_id": aid, "agent_version": version,
                           "environment_id": env_id})
