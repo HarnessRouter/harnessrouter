@@ -168,6 +168,8 @@ jobs:
           CLIENT='unexpected status( code)?[^:]*: 4[0-9][0-9]|[^0-9]4[0-9][0-9] (Bad Request|Unauthorized|Forbidden|Not Found|Too Many Requests)'
           if grep -Eq "$UPSTREAM" <<<"$MSG" && ! grep -Eq "$CLIENT" <<<"$MSG"; then
             echo "::warning::the registry failed the push on ${{ matrix.arch }}; building once more in 30 s"
+            STATUS=$(grep -Eo 'not_found|5[0-9][0-9]|[Cc]onnection reset' <<<"$MSG" | head -1)
+            echo "RETRIED build-push ${{ matrix.arch }}: first attempt ${STATUS:-upstream}"
             sleep 30
           else
             echo "::error::the build failed on ${{ matrix.arch }}, and not upstream"
@@ -253,6 +255,8 @@ jobs:
             done
             if [ "$retry" = 1 ]; then
               echo "::warning::upstream fault installing on ${{ matrix.arch }}:$bad; one more start in 30 s"
+              STATUS=$(grep -Eo 'E?5[0-9][0-9]|ECONNRESET|[Cc]onnection reset' <<<"$FAILS" | head -1)
+              echo "RETRIED install ${{ matrix.arch }}:$bad: first attempt ${STATUS:-upstream}"
               sleep 30
               SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
               docker restart smoke >/dev/null
