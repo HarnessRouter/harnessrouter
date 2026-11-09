@@ -34,3 +34,22 @@ export function relayContentSecurityPolicy(upstream: string | null, contentType:
   const local = /^application\/pdf\b/i.test(contentType.trim()) ? "frame-ancestors 'none'" : PUBLIC_ARTIFACT_CSP;
   return upstream ? `${upstream}, ${local}` : local;
 }
+
+/** Whether every segment of an address a relay builds names exactly one thing: none empty, '.' or '..',
+ *  none holding a '/' or a '\'. The segments are a route's params, which Next has already decoded once
+ *  (`%2e%2e` arrives as '..', `a%2fb` as 'a/b'); they are checked as they are and never decoded again.
+ *  fetch() resolves '.' and '..' in the URL it is handed, and encodeURIComponent leaves both as they
+ *  are, so one of them in a segment would carry the relay to another of the gateway's routes. */
+export function plainSegments(segments: readonly string[]): boolean {
+  return segments.every((s) => typeof s === 'string' && s !== '' && s !== '.' && s !== '..'
+    && !s.includes('/') && !s.includes('\\'));
+}
+
+/** The gateway's own 404 for a file (or a share) that is not there, for a relay that refuses an
+ *  address before asking: the same status, body and headers, so a refusal reads as a missing file. */
+export function notFoundResponse(message: 'file not found' | 'share not found', artifact: boolean): Response {
+  const body = { error: { type: 'invalid_request_error', code: 'not_found', message, param: null, detail: null }, detail: message };
+  return new Response(JSON.stringify(body), {
+    status: 404, headers: publicShareResponseHeaders(new Headers({ 'content-type': 'application/json' }), artifact),
+  });
+}

@@ -43,7 +43,7 @@ import { forkFiles, forkInput, forkOffered, importedFirst, inputHistory, noteFor
 import { AgentConversation, AgentComposer } from 'reifyui/agent-chat';
 import { AgentTurns, harnessMark } from './AgentTurns';
 import { InputRequestCard } from './InputRequestCard';
-import { FileCards, filesOf, type OpenFile } from './TurnFiles';
+import { FileCards, filesOf, linkedFile, type OpenFile } from './TurnFiles';
 import { workingNow } from './stackLive';
 import { sec } from './fmt';
 import { Md } from './TaskThread';
@@ -374,7 +374,13 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   // what this task made, for the links a reply makes to its own files (TaskThread Md)
   const produced = useMemo(() => conv.msgs.flatMap((m) => (m.role === 'assistant' ? m.files.map((f) => f.filename) : [])), [conv.msgs]);
   const liveSid = sid || conv.liveSessionId || undefined;
-  const md = (text: string) => <Md text={text} sid={liveSid} harnessId={r.h.id} produced={produced} />;
+  // a click on a reply's link to one of them opens it beside the conversation, read with the sign-in, as
+  // its card does; the link's own address is the public one, which opens only a shared task's files (#594)
+  const openLinked = (path: string) => {
+    const to = linkedFile(filesOf(conv.msgs), path, liveSid);
+    if (to) onPreview(to.files, to.key);
+  };
+  const md = (text: string) => <Md text={text} sid={liveSid} harnessId={r.h.id} produced={produced} onOpen={openLinked} />;
   const copyRid = async (id: string) => { try { await navigator.clipboard.writeText(id); toast('Copied'); } catch { toast('Text selected. Press Cmd or Ctrl + C.'); } };
   const copyReply = async (text: string) => {
     try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Couldn’t copy automatically. Try again.'); }
