@@ -125,12 +125,25 @@ def test_a_pipe_nobody_reads_lets_its_writer_go(tmp_path):
 
 @pytest.mark.parametrize("backend", BY_PATH)
 def test_the_prompt_goes_by_file(backend):
+    """The file waits for the CLI: nothing the build did counts as its read. The test's own read below is the
+    one the CLI would make, so on Linux the file is gone right after it (_prompt_watch); everything else about
+    the file is looked at first, without reading it."""
+    import time
     cmd, held, d = _build(backend)
     assert not any(MARK in a for a in cmd), cmd
     p = _file_named_in(cmd, d)
-    assert p.read_text() == MARK and stat.S_IMODE(p.stat().st_mode) == 0o600
+    time.sleep(0.6)
+    assert p.exists(), "removed before anything read it"
+    assert stat.S_IMODE(p.stat().st_mode) == 0o600
     _folder_is_private(d)
     assert held.get("stdin") is False and str(p) == held["path"] and held.get("fd") is None
+    assert p.read_text() == MARK                                      # the CLI's read
+    if server._LIBC is not None:
+        for _ in range(40):
+            if not p.exists():
+                break
+            time.sleep(0.05)
+        assert not p.exists(), "read, closed, and still there"
     server._prompt_discard(held)
     assert not p.exists()
 
