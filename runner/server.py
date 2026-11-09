@@ -628,7 +628,11 @@ def _resume_lost(backend: str, cmd: list[str], resume_session_id: str | None,
     probe = _SESSION_PRESENT.get(backend)
     if probe is None or not resume_session_id:
         return None
-    return None if probe(cwd, cmd, resume_session_id) else resume_session_id
+    # Each probe reads the CLI's own store in the session's tree, after the builders' scope has closed: as the
+    # session, so a link it planted there leads nowhere it could not read itself.
+    with _fs_as(_session_uid(cwd)):
+        present = probe(cwd, cmd, resume_session_id)
+    return None if present else resume_session_id
 
 
 def _git_exclude(ws: str, patterns: list[str], why: str) -> None:
@@ -1141,12 +1145,16 @@ def _start_sidecar(sid: str, collab_url: str, room: str, token: str = "") -> Non
             entry.update(proc=None, room=None)
             return
         try:
-            pathlib.Path(file).parent.mkdir(parents=True, exist_ok=True)
-            if not pathlib.Path(file).exists():
-                pathlib.Path(file).write_text("")
+            # As the session: the blackboard and the log are in its tree, and a link it planted at either name,
+            # or at the folder holding them, leads nowhere it could not write itself. The log stays open for the
+            # sidecar, which runs as the session too.
+            with _fs_as(_session_uid(ws)):
+                pathlib.Path(file).parent.mkdir(parents=True, exist_ok=True)
+                if not pathlib.Path(file).exists():
+                    pathlib.Path(file).write_text("")
+                logf = open(os.path.join(ws, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
             env = {**_child_env(), "COLLAB_URL": collab_url, "ROOM": room,
                    "BLACKBOARD_FILE": file, "COLLAB_TOKEN": token or ""}
-            logf = open(os.path.join(ws, HARNESS_STATE, "sidecar.log"), "ab")  # diagnostics
             entry.update(proc=subprocess.Popen(["node", _SIDECAR_JS], cwd=ws, env=env,
                                                stdout=logf, stderr=logf, **_as_session(ws)),
                          room=room, error=None)
@@ -12130,7 +12138,10 @@ def _kimi_mcp_unavailable(state: dict) -> list[dict]:
         return []
     log = _kimi_home(pathlib.Path(cwd)) / "logs" / "kimi-code.log"
     try:
-        lines = log.read_text(errors="replace").splitlines()[-400:]
+        # As the session: the log is in its tree, and a link it planted at that name leads nowhere it could
+        # not read itself.
+        with _fs_as(_session_uid(cwd)):
+            lines = log.read_text(errors="replace").splitlines()[-400:]
     except OSError:
         return []
     since = float(state.get("started") or 0) - 2.0
@@ -12602,7 +12613,10 @@ def _opensquilla_transcript(state: dict) -> list[dict]:
         return []
     state_dir, transcript, _ = _opensquilla_paths(cwd)
     try:
-        lines = transcript.read_text(errors="replace").splitlines()
+        # As the session: the transcript is in its tree, and a link it planted at that name leads nowhere
+        # it could not read itself. This runs on the turn's thread, which is root's.
+        with _fs_as(_session_uid(cwd)):
+            lines = transcript.read_text(errors="replace").splitlines()
     except OSError:
         return []
     msgs: list[dict] = []
@@ -14177,9 +14191,10 @@ def _vibe_profile(home: pathlib.Path, model: str) -> None:
 
 
 def _vibe_export(cwd: str) -> dict:
-    """This turn's export.json, or {} when the run died before writing one."""
+    """This turn's export.json, or {} when the run died before writing one. Read as the session: the file
+    is in its tree, and a link it planted at that name leads nowhere it could not read itself."""
     try:
-        with open(_vibe_out(cwd) / "export.json", encoding="utf-8") as fh:
+        with _fs_as(_session_uid(cwd)), open(_vibe_out(cwd) / "export.json", encoding="utf-8") as fh:
             obj = json.load(fh)
         return obj if isinstance(obj, dict) else {}
     except (OSError, ValueError):
@@ -16598,6 +16613,10 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     rec = _turns[turn_id]
     state: dict = {"final": ""}
     db_path = os.path.join(env["HERMES_HOME"], "state.db")
+    # The database is in the session's tree, and this thread is root's: every read of it below is made as the
+    # session (_fs_as), so a link the session planted at its name, or at its -wal beside it, leads nowhere it
+    # could not read itself. What it reads becomes this turn's events and its usage.
+    suid = _session_uid(cwd)
     t0 = time.time()
 
     def append(ev: dict) -> None:
@@ -16610,7 +16629,8 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     resume = None
     pre = None
     if resume_session_id:
-        pre = _hermes_session_row(db_path, resume_session_id)
+        with _fs_as(suid):
+            pre = _hermes_session_row(db_path, resume_session_id)
         if pre:
             resume = resume_session_id
         else:
@@ -16668,18 +16688,23 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     produced = False        # has the model emitted ANY message yet (see _HERMES_STARTUP_TIMEOUT_S)
     last_msg = t0           # when the last message of this turn was read from the CLI's database
     if resume:
-        db = _hermes_db_ro(db_path)
-        if db is not None:
-            try:  # only rows appended by THIS turn become events
-                cursor = db.execute("SELECT COALESCE(MAX(id),0) FROM messages WHERE session_id=?",
-                                    (resume,)).fetchone()[0]
-            except Exception:  # noqa: BLE001
-                pass
-            finally:
-                db.close()
+        with _fs_as(suid):
+            db = _hermes_db_ro(db_path)
+            if db is not None:
+                try:  # only rows appended by THIS turn become events
+                    cursor = db.execute("SELECT COALESCE(MAX(id),0) FROM messages WHERE session_id=?",
+                                        (resume,)).fetchone()[0]
+                except Exception:  # noqa: BLE001
+                    pass
+                finally:
+                    db.close()
         append({"type": "system", "subtype": "init", "session_id": resume, "model": model})
 
     def _sweep() -> None:
+        with _fs_as(suid):
+            _sweep_db()
+
+    def _sweep_db() -> None:
         nonlocal sid, cursor, produced, last_msg
         db = _hermes_db_ro(db_path)
         if db is None:
@@ -16738,7 +16763,8 @@ def _run_hermes_bg(turn_id: str, cwd: str, env: dict, model: str, provider: str,
     usage = {"input_tokens": 0, "output_tokens": 0}
     run_failed = False
     if sid:
-        post = _hermes_session_row(db_path, sid) or {}
+        with _fs_as(suid):
+            post = _hermes_session_row(db_path, sid) or {}
         usage = {"input_tokens": max(0, int(post.get("input_tokens") or 0) - int((pre or {}).get("input_tokens") or 0)),
                  "output_tokens": max(0, int(post.get("output_tokens") or 0) - int((pre or {}).get("output_tokens") or 0))}
     if not use_chat:

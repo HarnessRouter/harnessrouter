@@ -94,6 +94,12 @@ jobs:
       # against botocore's own for the same request; without it they skip.
       - run: pip install -r runner/requirements.txt pytest pytest-asyncio httpx boto3 "systemone-harness @ https://github.com/HarnessRouter/SystemOneHarness/archive/3266a17537e283dc5539439835c0b4cab02bf5c0.tar.gz" "cheetahclaws==3.5.88" "qca-sdk==0.6.0"
       - run: python -m pytest runner/tests -q
+      # The tests that hold the runner's work in a session's tree to the session's own identity need root on
+      # Linux and skip anywhere else, so the step above skips them. This step runs that file as root, with the
+      # job's own python and packages. HR_REQUIRE_ROOT_TESTS=1 makes a run that is not root fail instead of
+      # skip, so this step can never quietly go back to skipping; -p no:cacheprovider leaves no root-owned
+      # cache in the checkout.
+      - run: sudo -E env "PATH=$PATH" HR_REQUIRE_ROOT_TESTS=1 python -m pytest runner/tests/test_root_writes_stay_in_the_session.py -q -rs -p no:cacheprovider
 
   integration:
     runs-on: ubuntu-latest
