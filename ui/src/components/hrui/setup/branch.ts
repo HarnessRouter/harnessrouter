@@ -23,6 +23,14 @@ export async function sessionBranching(): Promise<boolean> {
   } catch { return false; }
 }
 
+/** Which of a task's turns a branch can be made from, in order, as its turns say (`branchable`). A
+ *  turn that does not say is not offered: the server refuses a branch from any reply it holds no branch
+ *  point for (one from before branching, one whose files weren't kept, one that was deleted), and the
+ *  turn is where it says which those are. */
+export function branchableTurns(turns: { branchable?: boolean }[]): boolean[] {
+  return turns.map((t) => t.branchable === true);
+}
+
 /** A branch not sent yet: what the new conversation shows, and what its first message branches from. */
 export interface BranchDraft {
   /** the task it was branched from, and that task's title */

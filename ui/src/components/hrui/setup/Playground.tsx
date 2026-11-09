@@ -13,8 +13,9 @@
 // is not the setup's own, how it ended and how long it took (when the record kept it), then three small
 // actions (Richard 10-18): copy the reply as Markdown, copy its ID, and copy a request your own app can
 // send to carry on the conversation from that reply. The conversation scrolls in its own column, the
-// composer pinned at its foot. Where the server branches sessions, a reply has a fourth action, Branch:
-// a new conversation with this one up to that reply, whose first message makes the branch (branch.ts).
+// composer pinned at its foot. Where the server branches sessions, a reply its turn says can be branched
+// has a fourth action, Branch: a new conversation with this one up to that reply, whose first message
+// makes the branch (branch.ts).
 //
 // A new setup's first task (start/build.ts) starts with its save card (start/Assembly), and its first
 // request, the one the build wrote as an end user would send it, waits in the box until the person
@@ -53,7 +54,7 @@ import { failedLine, recalledAtStartOf, recordHref, rememberedOf, type Remembere
 import { recalledIn, recalledLine, recalledTitle } from './memorySteps';
 import { useAgentMemory } from '../memories/AgentMemory';
 import { useMemoryEvents } from '../memories/editor/useMemoryEvents';
-import { branchMsgs, importedTurnCount, sessionBranching, type BranchDraft } from './branch';
+import { branchableTurns, branchMsgs, importedTurnCount, sessionBranching, type BranchDraft } from './branch';
 import { BRANCH_ICON, BranchMark } from './BranchMark';
 const MAX_FILE = 25 * 1024 * 1024;
 
@@ -136,6 +137,8 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   const [turnIds, setTurnIds] = useState<string[]>([]);
   // what each turn remembered, as its record says once the task's memory has kept it (0.40: `memory` on the turn)
   const [turnMem, setTurnMem] = useState<TurnMemory[]>([]);
+  // which turns a new task can be branched from, as the record says (the server's own test)
+  const [turnBranch, setTurnBranch] = useState<boolean[]>([]);
   const seenRef = useRef(onSeen);
   seenRef.current = onSeen;
   const fromRecord = useRef(false);
@@ -155,6 +158,7 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
       }));
       setTurnIds(turns.map((x) => String(x.id || '')));
       setTurnMem(memoryOfTurns(turns));
+      setTurnBranch(branchableTurns(turns));
     }).catch(() => { if (alive) t = setTimeout(() => void read(n + 1), Math.min(30_000, 2000 * 2 ** n)); });
     void read(0);
     return () => { alive = false; if (t) clearTimeout(t); };
@@ -205,16 +209,27 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   useEffect(() => () => liveRef.current?.(null), []);
   // a turn sent here has ended: its response ID is in the record now
   const wasBusy = useRef(false);
+  const branchingRef = useRef(false);
   useEffect(() => {
     const was = wasBusy.current;
     wasBusy.current = conv.busy;
     const live = sid || conv.liveSessionId;
     if (!was || conv.busy || !live) return undefined;
     let alive = true, t: ReturnType<typeof setTimeout> | undefined;
-    // a read that fails keeps the IDs already read, and is read again shortly (at most three more times)
-    const read = (n: number) => loadSessionTurns(live).then(({ turns }) => { if (alive) { setTurnIds(turns.map((x) => String(x.id || ''))); setTurnMem(memoryOfTurns(turns)); } })
-      .catch(() => { if (alive && n < 3) t = setTimeout(() => void read(n + 1), 1000 * 2 ** n); });
-    void read(0);
+    // a read that fails keeps the IDs already read, and is read again shortly (at most three more times).
+    // A turn stopped here can still be saving its files when the stop is answered, and can be branched
+    // only once they are kept: while its reply can't be, it is read again, twice at most.
+    const read = (n: number, again: number) => loadSessionTurns(live).then(({ turns }) => {
+      if (!alive) return;
+      setTurnIds(turns.map((x) => String(x.id || ''))); setTurnMem(memoryOfTurns(turns));
+      const can = branchableTurns(turns);
+      setTurnBranch(can);
+      const last = turns[turns.length - 1];
+      if (branchingRef.current && last && !last.imported && !can[can.length - 1] && again < 2) {
+        t = setTimeout(() => void read(0, again + 1), 1500 * 3 ** again);
+      }
+    }).catch(() => { if (alive && n < 3) t = setTimeout(() => void read(n + 1, again), 1000 * 2 ** n); });
+    void read(0, 0);
     return () => { alive = false; if (t) clearTimeout(t); };
   }, [conv.busy, sid, conv.liveSessionId]);
   // What a finished turn remembered is written on its record once the memory has kept it, after the turn ends. The
@@ -235,11 +250,13 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
   // once, as it opens: from here the conversation is the store's
   // eslint-disable-next-line react-hooks/exhaustive-deps
   []);
-  // Branch is offered only where the server says it branches (an optional capability)
-  const [branchable, setBranchable] = useState(false);
+  // Branch is offered only where the server says it branches (an optional capability), and then only on a
+  // reply its turn says can be branched (turnBranch)
+  const [branching, setBranching] = useState(false);
+  branchingRef.current = branching;
   useEffect(() => {
     let alive = true;
-    void sessionBranching().then((ok) => { if (alive) setBranchable(ok); });
+    void sessionBranching().then((ok) => { if (alive) setBranching(ok); });
     return () => { alive = false; };
   }, []);
   // The task this one was branched from, for the line where its history ends. A draft knows it; an
@@ -477,9 +494,12 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
         acts.push(<button key="c" type="button" className="icon-btn xs" aria-label="Copy a request that continues this conversation"
           title="Copy a request that continues from here" onClick={() => void copyNext(t, rid)}>{CODE}</button>);
       }
-      // an imported turn has no checkpoint of its own, and the server would refuse a branch from it
+      // only where the turn says a branch from it will be made: the server refuses one from a reply it
+      // holds no branch point for (one from before branching, one whose files weren't kept, a turn the
+      // task brought with it). A reply deleted since this was read is still refused (conversation.ts
+      // branchRefusal says so in words).
       const source = sid || conv.liveSessionId;
-      if (branchable && onBranch && source && !recorded && !m.imported && m.status !== 'running') {
+      if (branching && turnBranch[t] === true && onBranch && source && !recorded && !m.imported && m.status !== 'running') {
         acts.push(<button key="b" type="button" className="icon-btn xs" aria-label="Branch in a new task"
           title="Branch from here in a new task" onClick={() => {
             const firstAsked = conv.msgs.find((x) => x.role === 'user');

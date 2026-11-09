@@ -10,7 +10,7 @@ jest.mock('@/lib/hfetch', () => ({
   },
 }));
 
-import { branchMsgs, importedTurnCount, sessionBranching } from './branch';
+import { branchableTurns, branchMsgs, importedTurnCount, sessionBranching } from './branch';
 
 const asst = (text: string, over: Partial<AsstMsg> = {}): AsstMsg => ({ role: 'assistant', blocks: [{ kind: 'text', text }], files: [], status: 'done', ...over });
 const MSGS: Msg[] = [{ role: 'user', text: 'a' }, asst('one'), { role: 'user', text: 'b' }, asst('two'), { role: 'user', text: 'c' }, asst('three')];
@@ -71,5 +71,15 @@ describe('importedTurnCount', () => {
   test('counts the turns brought along, by their answers', () => {
     expect(importedTurnCount(MSGS)).toBe(0);
     expect(importedTurnCount([...branchMsgs(MSGS, MSGS[3]), { role: 'user', text: 'new' }, asst('new')])).toBe(2);
+  });
+});
+
+describe('branchableTurns', () => {
+  test('a turn is offered only where it says it can be branched', () => {
+    expect(branchableTurns([{ branchable: true }, { branchable: false }, {}])).toEqual([true, false, false]);
+  });
+  test('anything but true is not: a server that does not say is not guessed for', () => {
+    expect(branchableTurns([{ branchable: 'yes' as unknown as boolean }, { branchable: null as unknown as boolean }])).toEqual([false, false]);
+    expect(branchableTurns([])).toEqual([]);
   });
 });

@@ -1,7 +1,8 @@
 /** @jest-environment jsdom */
 // Branching a task from a reply (issue #477). A reply has a Branch action only where the server says
-// it branches, and only where a branch could work: not while it runs, not on a turn the task brought
-// with it, which has no checkpoint of its own. The action opens a draft that sends nothing; the draft's
+// it branches, and only where its turn says a branch from it will be made (`branchable`, the server's
+// own test): not while it runs, not on a turn the task brought with it, not on a reply from before
+// branching or one whose files weren't kept. The action opens a draft that sends nothing; the draft's
 // first message is the one request with `branch`, and after it the task is a task like any other.
 // A branched task, new or reopened, has its line ("Continued from ...") where its history ends.
 import { act } from 'react';
@@ -12,6 +13,7 @@ import type { AsstMsg, Msg } from '@/lib/conversation';
 const mockConv = {
   msgs: [] as Msg[],
   live: '',
+  busy: false,
   send: jest.fn(async (_t: string, _f: unknown[], _o?: unknown) => true),
   setMsgs: jest.fn(),
 };
@@ -19,18 +21,19 @@ jest.mock('@/lib/conversation', () => ({
   isInternalOutput: () => false,
   useHarnessBus: () => {},
   useConversationTurn: () => ({
-    msgs: mockConv.msgs, busy: false, stopping: false, liveSessionId: mockConv.live,
+    msgs: mockConv.msgs, busy: mockConv.busy, stopping: false, liveSessionId: mockConv.live,
     // two arguments when the caller gave two: an ordinary message names no branch at all
     send: (...a: [string, unknown[], unknown?]) => mockConv.send(...a),
     replay: () => () => {}, stop: () => {}, setMsgs: mockConv.setMsgs, loadFailed: false, reload: () => {},
   }),
 }));
 const mockChat = {
-  turns: [] as { id: string; imported?: boolean; _model?: string }[],
+  turns: [] as { id: string; status?: string; imported?: boolean; _model?: string; branchable?: boolean }[],
   origin: jest.fn(),
+  reads: 0,
 };
 jest.mock('@/lib/chat', () => ({
-  loadSessionTurns: jest.fn(async () => ({ turns: mockChat.turns })),
+  loadSessionTurns: jest.fn(async () => { mockChat.reads += 1; return { turns: mockChat.turns }; }),
   loadSessionOrigin: (sid: string) => mockChat.origin(sid),
 }));
 const mockCat: { read: { value: ModelCatalog | null; failed: boolean; retry: jest.Mock } } = { read: { value: null, failed: false, retry: jest.fn() } };
@@ -84,7 +87,7 @@ const THREE: Msg[] = [
   { role: 'user', text: 'second' }, asst('two'),
   { role: 'user', text: 'third' }, asst('three'),
 ];
-const IDS = [{ id: 'r1', _model: 'gpt-5.4' }, { id: 'r2', _model: 'gpt-5.5' }, { id: 'r3', _model: 'gpt-5.4' }];
+const IDS = [{ id: 'r1', _model: 'gpt-5.4', branchable: true }, { id: 'r2', _model: 'gpt-5.5', branchable: true }, { id: 'r3', _model: 'gpt-5.4', branchable: true }];
 const DRAFT: BranchDraft = {
   from: 's1', title: 'Enable the service', responseId: 'r2', models: ['gpt-5.4', 'gpt-5.5'], model: 'gpt-5.5',
   msgs: THREE.slice(0, 4).map((m) => ({ ...m, imported: true as const })),
@@ -115,6 +118,8 @@ beforeEach(() => {
   mockCat.read = { value: CAT, failed: false, retry: jest.fn() };
   mockConv.msgs = [];
   mockConv.live = '';
+  mockConv.busy = false;
+  mockChat.reads = 0;
   mockConv.send.mockClear(); mockConv.setMsgs.mockClear(); onBranch.mockClear();
   mockChat.turns = [];
   mockChat.origin.mockReset();
@@ -125,10 +130,74 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); el.remove(); });
 
 describe('the Branch action on a reply', () => {
-  test('every finished reply has one where the server says it branches', async () => {
+  test('every finished reply has one where the server says it branches, and its turn that it can be', async () => {
     mockConv.msgs = THREE; mockChat.turns = IDS;
     await open(OPENED);
     expect(branches()).toHaveLength(3);
+  });
+
+  test('none on a reply its turn says can\'t be branched: the server would refuse it', async () => {
+    // one from before branching, one whose files weren't kept: the server holds no branch point for either
+    mockConv.msgs = THREE;
+    mockChat.turns = [{ id: 'r1', branchable: false }, { id: 'r2', branchable: true }, { id: 'r3', branchable: false }];
+    await open(OPENED);
+    const feet = [...el.querySelectorAll('.foot')];
+    expect(feet.map((f) => !!f.querySelector('button[aria-label="Branch in a new task"]'))).toEqual([false, true, false]);
+  });
+
+  test('none where the turns don\'t say: a server that does not answer it is not guessed for', async () => {
+    mockConv.msgs = THREE; mockChat.turns = IDS.map(({ branchable: _b, ...t }) => t);
+    await open(OPENED);
+    expect(branches()).toHaveLength(0);
+    // the reply's other actions are still there
+    expect(el.querySelectorAll('button[aria-label="Copy response ID"]')).toHaveLength(3);
+  });
+
+  test('a reply that ends here has one once its turn says it can be branched', async () => {
+    jest.useFakeTimers();
+    try {
+      // its answer has come (the stream's end), and the conversation is still busy with it
+      mockConv.msgs = [{ role: 'user', text: 'a' }, asst('done')];
+      mockChat.turns = [{ id: 'r1', status: 'running', branchable: false }];
+      mockConv.busy = true;
+      await open(OPENED);
+      expect(branches()).toHaveLength(0);
+      // it ends; its files are still being kept as the turns are first read, and are a moment later
+      mockChat.turns = [{ id: 'r1', branchable: false }];
+      mockConv.busy = false;
+      await open(OPENED);
+      expect(branches()).toHaveLength(0);
+      mockChat.turns = [{ id: 'r1', branchable: true }];
+      const before = mockChat.reads;
+      await act(async () => { jest.advanceTimersByTime(1500); });
+      await flush();
+      expect(mockChat.reads).toBe(before + 1);
+      expect(branches()).toHaveLength(1);
+      // and once it can be, it is not read again
+      await act(async () => { jest.advanceTimersByTime(10_000); });
+      await flush();
+      expect(mockChat.reads).toBe(before + 1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('a reply that can\'t be branched is read again twice at most', async () => {
+    jest.useFakeTimers();
+    try {
+      mockConv.msgs = [{ role: 'user', text: 'a' }, asst('done')];
+      mockChat.turns = [{ id: 'r1', branchable: false }];
+      mockConv.busy = true;
+      await open(OPENED);
+      mockConv.busy = false;
+      await open(OPENED);
+      const before = mockChat.reads;
+      for (let i = 0; i < 4; i++) { await act(async () => { jest.advanceTimersByTime(20_000); }); await flush(); }
+      expect(mockChat.reads).toBe(before + 2);
+      expect(branches()).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test.each([
@@ -142,14 +211,14 @@ describe('the Branch action on a reply', () => {
   });
 
   test('none on a reply still running: the server refuses a branch from one', async () => {
-    mockConv.msgs = [{ role: 'user', text: 'a' }, asst('', { status: 'running' })]; mockChat.turns = [{ id: 'r1' }];
+    mockConv.msgs = [{ role: 'user', text: 'a' }, asst('', { status: 'running' })]; mockChat.turns = [{ id: 'r1', branchable: false }];
     await open(OPENED);
     expect(branches()).toHaveLength(0);
   });
 
   test('none on a turn the task brought with it, which has no checkpoint to branch from', async () => {
     mockConv.msgs = [{ role: 'user', text: 'a', imported: true }, asst('old', { imported: true }), { role: 'user', text: 'b' }, asst('new')];
-    mockChat.turns = [{ id: 'r1', imported: true }, { id: 'r2' }];
+    mockChat.turns = [{ id: 'r1', imported: true, branchable: false }, { id: 'r2', branchable: true }];
     mockChat.origin.mockResolvedValue({ title: '', branchedFrom: null });
     await open(OPENED);
     const feet = [...el.querySelectorAll('.foot')];

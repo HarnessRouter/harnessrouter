@@ -111,6 +111,9 @@ export interface SessionTurn {
   user_files?: { name: string }[];   // caller-attached input files (names; bytes live in the workspace)
   /** a turn the task was started with (a branch's history, a fork's recording): nothing ran */
   imported?: boolean;
+  /** a new task can be branched from this turn's reply: the server's own test, the one its branch
+   *  request applies. Absent where the server does not say, which offers no branch (setup/branch.ts). */
+  branchable?: boolean;
   tools: { name: string; arguments: string; result?: string; output?: string; is_error?: boolean }[]; files: RespFile[];
 }
 
