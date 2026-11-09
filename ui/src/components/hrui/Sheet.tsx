@@ -127,27 +127,29 @@ export function SheetTop({ id, title, sub, onClose }: { id: string; title: React
 
 /** A destructive confirm, as the design draws every one (`.del-sheet`): a title, what happens,
  *  Cancel and the red button. `refused`: the service's own answer that this person can't do it (who
- *  can, by role), said in the sheet in place of the red button, with Close. */
-export function ConfirmSheet({ id, title, body, confirmLabel, onConfirm, onClose, busy, focusConfirm, refused }: {
+ *  can, by role), said in the sheet in place of the red button, with Close. `tone: 'primary'`: a
+ *  change that loses nothing but is worth a second look, with the primary button in place of the red. */
+export function ConfirmSheet({ id, title, body, confirmLabel, onConfirm, onClose, busy, focusConfirm, refused, tone = 'danger' }: {
   id: string; title: ReactNode; body: ReactNode; confirmLabel: string;
   onConfirm: () => void; onClose: () => void; busy?: boolean;
   /** the red button takes focus on open (the design does this where the action is the expected one) */
   focusConfirm?: boolean;
   refused?: string;
+  tone?: 'danger' | 'primary';
 }) {
   const go = useRef<HTMLButtonElement | null>(null);
   const shut = useRef<HTMLButtonElement | null>(null);
   // the red button goes when the answer is a refusal: the focus moves to Close, never to the page
   useEffect(() => { if (refused) shut.current?.focus(); }, [refused]);
   return (
-    <Sheet onClose={onClose} labelledBy={`${id}h`} describedBy={`${id}p`} className="small-sheet del-sheet" alert busy={busy}
+    <Sheet onClose={onClose} labelledBy={`${id}h`} describedBy={`${id}p`} className="small-sheet del-sheet" alert={tone === 'danger'} busy={busy}
       initialFocus={focusConfirm ? go : undefined}>
       <SheetTop id={`${id}h`} title={title} onClose={onClose} />
       <p className="del-p" id={`${id}p`}>{body}</p>
       {refused ? <p className="del-p del-refused" role="alert">{refused}</p> : null}
       <div className="del-act">
         <button ref={shut} type="button" className="btn" onClick={onClose} disabled={busy}>{refused ? 'Close' : 'Cancel'}</button>
-        {refused ? null : <button ref={go} type="button" className="btn del-go" onClick={onConfirm} disabled={busy}>{confirmLabel}</button>}
+        {refused ? null : <button ref={go} type="button" className={tone === 'primary' ? 'btn primary' : 'btn del-go'} onClick={onConfirm} disabled={busy}>{confirmLabel}</button>}
       </div>
     </Sheet>
   );

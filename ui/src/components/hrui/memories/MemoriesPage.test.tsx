@@ -107,7 +107,7 @@ describe('nothing connected', () => {
     refuse = false;
     await press('Connect');
     expect(page().querySelector('#mmCrT')?.textContent).toBe('New memory');
-    expect(page().querySelector('.mm-eng-now b')?.textContent).toBe('Graphiti');
+    expect(page().querySelector('.mm-engs [role=radio][aria-checked=true] b')?.textContent).toBe('Graphiti');
   });
 
   test('an engine that may go without an address needs a key then, and no key is sent when none is typed', async () => {
@@ -162,7 +162,7 @@ describe('nothing connected', () => {
   });
 });
 
-describe('New memory: a name, a description if you like, and the engine chosen for you', () => {
+describe('New memory: a name, a description if you like, and every engine, the one chosen for you picked', () => {
   const connected = { ...NONE, mem0: true, graphiti: true, hindsight: true };
   // the service's answers (GET /v1/memories/choose), by the name asked about: the console reads them, it never scores
   const PEOPLE = 'It serves people, so it keeps each person’s facts and preferences, separately per person.';
@@ -188,7 +188,11 @@ describe('New memory: a name, a description if you like, and the engine chosen f
   };
   // typing rests before the service is asked again
   const rest = async () => { await act(async () => { await new Promise((r) => setTimeout(r, 350)); }); await flush(); };
-  const chosen = () => page().querySelector('.mm-eng-now b')?.textContent;
+  const rows = () => Array.from(page().querySelectorAll<HTMLButtonElement>('.mm-engs [role=radio]'));
+  const row = (name: string) => rows().find((r) => r.querySelector('b')?.textContent === name) as HTMLButtonElement;
+  const chosen = () => page().querySelector('.mm-engs [role=radio][aria-checked=true] b')?.textContent;
+  const recommended = () => page().querySelector('.mm-engs .mm-eng-rec')?.closest('[role=radio]')?.querySelector('b')?.textContent;
+  const pick = async (name: string) => { await act(async () => { row(name).click(); }); await flush(); };
 
   test('nothing to compare and nothing to lock: no Kept by, no Fixed once created', async () => {
     await start();
@@ -198,37 +202,65 @@ describe('New memory: a name, a description if you like, and the engine chosen f
     expect(page().querySelector('label[for=mmCrDesc]')?.textContent).toContain('optional');
   });
 
-  test('the service chooses the engine from what the memory is for, as typing rests, and says why', async () => {
+  test('every engine is listed at once, with what it keeps; one not running here is shown and can’t be picked', async () => {
+    await start();
+    expect(rows().map((r) => r.querySelector('b')?.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight', 'ReMe']);
+    expect(page().querySelector('[role=radiogroup]')?.getAttribute('aria-labelledby')).toBe('mmCrEng');
+    expect(row('Graphiti').textContent).toContain('A graph of people, things and how they connect, tracked over time.');
+    expect(row('ReMe').disabled).toBe(true);
+    expect(row('ReMe').textContent).toContain('Not running here');
+    expect(row('Mem0').textContent).not.toContain('Not running here');
+    // nothing is folded away, and nothing asks for a click to see the others
+    expect(button('Change')).toBeUndefined();
+    expect(page().querySelector('.mm-eng [aria-expanded]')).toBeNull();
+  });
+
+  test('the one the service chooses is picked and marked Recommended, with why, and follows what is typed', async () => {
     const s = await start();
     expect(chosen()).toBe('Mem0');
+    expect(recommended()).toBe('Mem0');
     await type('#mmCrName', 'Customer preferences');
     await type('#mmCrDesc', 'What each customer likes.');
     await rest();
     expect(chosen()).toBe('Mem0');
-    expect(page().querySelector('.mm-eng-now small')?.textContent).toBe(PEOPLE);
+    expect(row('Mem0').querySelector('.mm-eng-why')?.textContent).toBe(PEOPLE);
+    expect(page().querySelectorAll('.mm-eng-rec')).toHaveLength(1);
     const sent = s.sent('GET', '/v1/memories/choose');
     const last = sent[sent.length - 1];
     expect([asked(last).get('name'), asked(last).get('description')]).toEqual(['Customer preferences', 'What each customer likes.']);
     await type('#mmCrName', 'Account research');
     await type('#mmCrDesc', '');
     await rest();
-    expect(chosen()).toBe('Graphiti');
+    expect([chosen(), recommended()]).toEqual(['Graphiti', 'Graphiti']);
     await type('#mmCrName', 'Incident lessons');
     await rest();
-    expect(chosen()).toBe('Hindsight');
+    expect([chosen(), recommended()]).toEqual(['Hindsight', 'Hindsight']);
     // one question per pause in the typing, never one per key
     expect(s.sent('GET', '/v1/memories/choose').length).toBeLessThanOrEqual(5);
   });
 
-  test('no engine answering here: the service says so in its words, and Change still offers the connected ones', async () => {
+  test('once the person picks one, the recommendation still says what it is but no longer moves the choice', async () => {
+    const s = await start();
+    await type('#mmCrName', 'Account research');
+    await rest();
+    expect(chosen()).toBe('Graphiti');
+    await pick('Hindsight');
+    expect(chosen()).toBe('Hindsight');
+    await type('#mmCrName', 'Customer preferences');
+    await rest();
+    expect([chosen(), recommended()]).toEqual(['Hindsight', 'Mem0']);
+    await press('Create');
+    expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe('hindsight');
+  });
+
+  test('no engine answering here: the service says so in its words, and a connected one can still be picked', async () => {
     const s = await start({ ...NONE, mem0: true, graphiti: true }, () => ({ engine: null, scope: 'per_user', reason: 'No memory engine is running here; one command starts them: deploy/memories/up.sh' }));
     expect(chosen()).toBeUndefined();
+    expect(recommended()).toBeUndefined();
     expect(page().querySelector('.mm-eng-none')?.textContent).toBe('No memory engine is running here; one command starts them: deploy/memories/up.sh');
     await type('#mmCrName', 'Accounts');
     expect(button('Create')?.disabled).toBe(true);
-    await press('Change');
-    await act(async () => { (page().querySelector('[data-sv=graphiti]') as HTMLButtonElement).click(); });
-    await press('Done');
+    await pick('Graphiti');
     expect(chosen()).toBe('Graphiti');
     await press('Create');
     expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe('graphiti');
@@ -238,23 +270,28 @@ describe('New memory: a name, a description if you like, and the engine chosen f
     let up = false;
     await start(connected, () => (up ? CHOICES.Accounts : { $status: 503, error: { message: 'Not now.' } }));
     expect(page().querySelector('.mm-eng .mm-err')?.textContent).toContain('The engine couldn’t be chosen just now.');
+    expect(rows()).toHaveLength(4);
     up = true;
     await press('Try again');
     await rest();
     expect(chosen()).toBe('Mem0');
   });
 
-  test('Change offers the connected engines only, as a group of radio buttons, and the choice is what gets created', async () => {
+  test('arrows move the choice along the engines that can be picked, and the choice is what gets created', async () => {
     const s = await start();
     await type('#mmCrName', 'Accounts');
-    await press('Change');
-    expect(Array.from(page().querySelectorAll('[role=radiogroup] [role=radio] b')).map((b) => b.textContent)).toEqual(['Mem0', 'Graphiti', 'Hindsight']);
-    await act(async () => { (page().querySelector('[role=radiogroup]') as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); });
-    const now = page().querySelector('[role=radiogroup] [aria-checked=true] b')?.textContent;
-    await press('Done');
-    expect(chosen()).toBe(now);
+    await rest();
+    const group = page().querySelector('[role=radiogroup]') as HTMLElement;
+    const key = async (k: string) => { await act(async () => { group.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })); }); };
+    await key('ArrowDown');
+    expect(chosen()).toBe('Graphiti');
+    await key('ArrowDown'); await key('ArrowDown');
+    // ReMe isn't running here, so the choice goes round to Mem0
+    expect(chosen()).toBe('Mem0');
+    await key('ArrowUp');
+    expect(chosen()).toBe('Hindsight');
     await press('Create');
-    expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe(now?.toLowerCase());
+    expect((s.sent('POST', '/v1/memories')[0].body as { provider: string }).provider).toBe('hindsight');
   });
 
   test('Create makes it with its name and description and opens its data, whatever the engine reads', async () => {
@@ -272,6 +309,7 @@ describe('New memory: a name, a description if you like, and the engine chosen f
     await press('New memory');
     await type('#mmCrName', 'Accounts');
     expect(button('Create')?.disabled).toBe(true);
+    expect(rows().every((r) => r.disabled)).toBe(true);
     await press('Connect an engine');
     expect(page().querySelector('#mmCh')?.textContent).toBe('Connect a memory engine');
   });
