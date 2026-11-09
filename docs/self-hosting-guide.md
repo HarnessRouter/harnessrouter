@@ -520,7 +520,7 @@ the instance, and are then removed.
 | A file or folder in a task's workspace (`DELETE /v1/sessions/{session_id}/files/{path}`) | Removed at once from the workspace and from its checkpoint, so no later turn sees it, together with the copy an app saved there. A copy that a turn handed back as one of its outputs stays readable from that turn's response until the task is deleted. |
 | An API key | Removed at once. It stops working immediately and leaves the list of keys. |
 | A credential | Removed at once: a plugin's stored secrets when the plugin is removed, a database connection when it is removed from a harness or its harness is deleted, a stored tool token deleted with `DELETE /v1/mcp-secrets/{ref}`. |
-| A harness | Kept 30 days, then removed with its skill bundles and plugin packages. A restored harness comes back without its credentials, since those went at once. The tasks and responses that used it are kept. |
+| A harness | Kept 30 days, then removed with its skill bundles and plugin packages, and with the memory made for it and each person's memory, unless another agent uses that memory ([Memories](#what-agents-remember)). A restored harness comes back with its memory, and without its credentials, since those went at once. The tasks and responses that used it are kept. |
 | A response deleted on its own | Unreadable at once, kept 30 days, then removed. A response of a deleted task goes with the task. |
 | An environment | Its `/env/<name>` path goes at once, so no task sees it and the name is free; its files and builds are kept 30 days, then removed. |
 | An upload (`DELETE /v1/files/{id}`) | Refused to new tasks at once, kept 30 days, then removed. |
@@ -953,6 +953,10 @@ Each agent you create from then on gets its own memory, named after it, on the e
 **Separately for each person.** For an agent that serves people, memory is kept separately for each person, identified by the task's `user`. Send your own authenticated user id there, never text the person types, because the `user` decides whose memory a task reads. A task sent with an API key and no `user` runs without memory.
 
 **Personal data.** The user ids you send are stored with each person's memory, as data you hold about them. When someone asks you to delete what an agent remembers about them, delete their memory: in the console, open the agent's memory, where each person's memory is listed under it, and delete theirs; or with the API, `DELETE /v1/memories/{id}`, where `GET /v1/memories?ancestor=<the agent's memory id>` lists each person's memory and its id. Deleting a memory deletes what its engine holds for it too, so do it while the engines run.
+
+**When an agent is deleted.** Its memory, and each person's memory, are kept with it for the 30 days a deleted agent can be restored, so a restored agent comes back with everything it remembered. When the agent is removed for good, they are deleted with it, unless another agent still uses that memory: then it stays until the last agent using it is removed too. A deleted agent inside its 30 days still counts as using the memory it used. They are deleted as whoever deleted the agent, so a memory that person may not delete stays, for whoever manages it. One daily sweep deletes at most 25 memories, and the next one goes on where it stopped. Keep the engines running: deleting a memory deletes what its engine holds for it.
+
+**More than one replica.** Which memories an agent or a person may reach is read once and kept for 3 seconds on each replica. If you run more than one HarnessRouter replica, set `HR_MEMORY_GRANTS_TTL_S=0` on every replica, so that access taken away on one replica is refused on the others at once, not up to 3 seconds later.
 
 What each engine is, its licence, its addresses and files, and how to run them by hand: [Memory engines](memories-engines.md).
 
