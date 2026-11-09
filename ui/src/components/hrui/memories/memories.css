@@ -630,3 +630,15 @@
   #hrui .mm-roww>.mm-row{flex-basis:100%}
   #hrui .mm-roww>.mm-usein{margin:0 0 10px 64px}
 }
+
+/* A standing instruction: its tag under the record's title, and, for a person who may write the memory, the switch that
+   makes it one; one an agent set says so, with the way for a person to make it theirs */
+#hrui .mm-tags{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0}
+#hrui .mm-tag{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:12px;font-weight:600;white-space:nowrap}
+#hrui .mm-tag.noted{background:var(--surface-2);color:var(--muted);font-weight:500}
+#hrui .mm-stand{display:flex;align-items:center;gap:14px;margin:16px 0 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+#hrui .mm-stand-t{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+#hrui .mm-stand-t b{font-size:14px;font-weight:600}
+#hrui .mm-stand-t small{font-size:12.5px;line-height:1.45;color:var(--muted);text-wrap:pretty}
+#hrui .mm-stand .tog,#hrui .mm-stand .btn{flex:none}
+@media (max-width:560px){#hrui .mm-stand{flex-wrap:wrap}#hrui .mm-stand .btn{margin-left:auto}}

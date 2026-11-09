@@ -58,3 +58,6 @@
 #hrui .mt-mi>svg{color:var(--muted)}
 #hrui .mt-mi span:last-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #hrui .mt-mi.bad,#hrui .mt-mi.bad>svg{color:var(--bad)}
+/* a standing instruction's row says so; one an agent set gives way to the record's name on a narrow row */
+#hrui .mt-stand{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
+#hrui .mt-noted{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

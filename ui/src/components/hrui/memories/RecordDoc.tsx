@@ -20,7 +20,8 @@ import { ago } from '../setups';
 import { plain, plural } from '../setup/settingsModel';
 import { toast } from '../toast';
 import {
-  canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, kindOf, labelsOf, readOnlyNote, recordTypeOfSchemaKind, relText, schemaGuides, sentenceFirst,
+  canEdit, canErase, canForget, hasFolders, hasHistory, hasProperties, isStanding, kindOf, labelsOf, mayStand, readOnlyNote, recordTypeOfSchemaKind, relText,
+  schemaGuides, sentenceFirst, standingOf,
 } from './caps';
 import { DOTS, HISTORY, Dot, shownName, whenOf } from './parts';
 import { LiveTitle } from './editor/LiveTitle';
@@ -34,7 +35,7 @@ import { vendorName } from './vendors';
 const DocEditor = dynamic(() => import('./editor/DocEditor').then((m) => m.DocEditor), { ssr: false, loading: () => null });
 
 /** The record's fields a person does not read as a field of their own. */
-const NOT_A_ROW = new Set(['entity_type', 'folder', 'labels', 'predicate']);
+const NOT_A_ROW = new Set(['entity_type', 'folder', 'labels', 'predicate', 'standing']);
 
 /** Who wrote a record, in a person's words. */
 function writerOf(r: MemoryRecord, setups: Map<string, string> | null): string {
@@ -94,6 +95,9 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const synced = !!state?.synced;
   useEffect(() => { if (!synced) setEdReady(false); }, [synced]);
   const member = getSession()?.member;
+  // the console is a person's: a session's member, never an agent's key, is who may make a record stand
+  const person = !!member && (member as { type?: unknown }).type !== 'agent';
+  const [standBusy, setStandBusy] = useState(false);
   const me = useMemo(() => ({ id: member?.id || member?.email || LOCAL_MEMBER, name: member?.name || member?.email || 'Operator' }), [member?.id, member?.email, member?.name]);
   const titleEl = useRef<HTMLHeadingElement | null>(null);
   const toBody = useRef(false);
@@ -186,6 +190,18 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
       else { toast(`${short(record)} erased`); onGone(record.id); }
     } catch (e) { setRefused(plain(e, 'It was not erased. Try again.')); } finally { setBusy(false); }
   };
+  /** Make it a standing instruction, or stop it being one: written as this person, so one an agent set becomes theirs. */
+  const setStanding = async (on: boolean) => {
+    if (standBusy) return;
+    const was = attrs, next = { ...attrs, standing: on };
+    setAttrs(next);
+    if (isNew) { void write({ attributes: { standing: on } }, { attrs: next }); return; }
+    setStandBusy(true); setErr('');
+    try {
+      onSaved(await reviseRecord(memory.id, record.id, { attributes: { standing: on } }));
+      toast(on ? 'Standing instruction set. Agents get it from their next task.' : 'No longer a standing instruction.');
+    } catch (e) { setAttrs(was); setErr(plain(e, 'That was not changed. Try again.')); } finally { setStandBusy(false); }
+  };
   const move = (path: string) => { setPop(''); void write({ attributes: { folder: path } }); toast(path ? `Moved to ${path}` : `Moved to ${shownName(memory)}`); };
 
   const sentence = sentenceFirst({ type: record.type, title });
@@ -203,6 +219,28 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const predicate = String(attrs.predicate || '');
   const files = (record.content || []).map((p, i) => [p, i] as const).filter(([p]) => p.type === 'file');
   const crumbs = folderOf({ attributes: attrs });
+  const stands = standingOf({ ...record, attributes: attrs });
+  const standsMay = mayStand(record, provider, memory, person);
+  const standOn = isStanding({ attributes: attrs });
+  const standBlock = stands === 'agent' || stands === 'other' ? (
+    // set before agents could not set one, or last changed by the service: agents get it as a note until a person sets it
+    <div className="mm-stand noted">
+      <span className="mm-stand-t">
+        <span className="mm-tag noted">{stands === 'agent' ? 'Noted by an agent as standing' : 'Noted as standing'}</span>
+        <small>{stands === 'agent' ? 'An agent set this, so agents get it as a note, not as an instruction.' : 'It was last changed automatically, so agents get it as a note, not as an instruction.'}</small>
+      </span>
+      {standsMay ? <button type="button" className="btn small" disabled={standBusy} onClick={() => void setStanding(true)}>Make it standing</button> : null}
+    </div>
+  ) : standsMay ? (
+    <div className="mm-stand">
+      <span className="mm-stand-t">
+        <b id="mmStandL">Standing instruction</b>
+        <small id="mmStandH">Every agent that uses this memory gets it at the start of each task.</small>
+      </span>
+      <button type="button" className={`tog${standOn ? ' on' : ''}`} aria-pressed={standOn} aria-labelledby="mmStandL" aria-describedby="mmStandH"
+        disabled={standBusy} onClick={() => void setStanding(!standOn)}><i />{standOn ? 'On' : 'Off'}</button>
+    </div>
+  ) : null;
 
   const bodyBlock = !isNew ? (
     live && state?.synced ? (
@@ -304,6 +342,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
               onBlur={(e) => { saveTitle(e.relatedTarget); toBody.current = false; }} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); toBody.current = true; (e.currentTarget as HTMLElement).blur(); setEditing(true); } }}>{record.title}</h1>
           ) : <h1 className="mm-title">{record.title}</h1>}
           {err || state?.refused ? <p className="mm-err" role="alert">{err || state?.refused}</p> : null}
+          {stands === 'person' ? <div className="mm-tags"><span className="mm-tag">Standing</span></div> : null}
           <div className={`mm-props${sentence ? ' after-sentence' : ''}`}>
             <div className="mm-prow">
               <label>Type</label>
@@ -348,6 +387,7 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
             {record.time?.valid_from ? <div className="mm-prow"><label>True from</label><span className="mm-pv">{record.time.valid_from.slice(0, 10)}</span></div> : null}
             {record.time?.valid_to ? <div className="mm-prow"><label>True until</label><span className="mm-pv">{record.time.valid_to.slice(0, 10)}</span></div> : null}
           </div>
+          {standBlock}
           {note ? <p className="mm-ronote">{note}</p> : null}
           {sentence ? null : bodyBlock}
           {files.length ? (

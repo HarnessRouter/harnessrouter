@@ -67,6 +67,38 @@ export function readOnlyNote(r: MemoryRecord): string {
   return '';
 }
 
+// ── standing instructions ───────────────────────────────────────────────────────────────────
+// A standing instruction (`attributes.standing` true) is given to every agent that uses the memory at the start of each
+// task. Since 0.40.4 it is a person's to set: an agent's tools never set one, and one an agent set before is given to
+// agents as a note, not as an instruction. These read the service's own rules (its drawn_by_the_engine
+// and set_by_a_person); the service enforces them where the write lands.
+type Stands = Pick<MemoryRecord, 'type' | 'attributes' | 'references' | 'written_by' | 'follows'>;
+/** Set to stand. */
+export const isStanding = (r: Pick<MemoryRecord, 'attributes'>) => r.attributes?.standing === true;
+/** Whether a record can stand at all: a conversation kept as it happened can't here, nor anything an engine drew from
+ *  another record or kept itself, nor a record that follows a source it changes with. */
+export function canStand(r: Stands): boolean {
+  if (r.type === 'episode' || r.follows) return false;
+  if ((r.references || []).some((x) => x.rel === 'derived_from')) return false;
+  const w = r.written_by;
+  return !(w?.kind === 'provider' && !w.on_behalf_of);
+}
+/** How a record stands: `person`, set by a person and given to agents as an instruction; `agent`, set by an agent before
+ *  agents could not, and `other`, last changed by the service itself, both given to agents only as a note until a person
+ *  sets it again; '' for a record that doesn't stand, or can't. */
+export function standingOf(r: Stands): '' | 'person' | 'agent' | 'other' {
+  if (!isStanding(r) || !canStand(r)) return '';
+  const w = r.written_by;
+  if (w?.kind === 'member' && w.type !== 'agent') return 'person';
+  return w?.kind === 'member' ? 'agent' : 'other';
+}
+/** Whether this person may make a record stand, or stop it: someone signed in to the console (a person, never an
+ *  agent's key), who may write the memory, on a record that can stand and that the engine lets be changed. */
+export function mayStand(r: Stands & Pick<MemoryRecord, 'id' | 'status'>, p: Provider | null | undefined, m: Pick<Memory, 'privileges'> | null | undefined, person: boolean): boolean {
+  if (!person || !can(m, 'write') || !canStand(r)) return false;
+  return !r.id || (r.status === 'active' && servesRevise(p));
+}
+
 // ── connections ─────────────────────────────────────────────────────────────────────────────
 /** Whether the provider keeps links at all. */
 export const keepsLinks = (p?: Provider | null) => !!p?.graph && p.graph.entities !== 'none';
