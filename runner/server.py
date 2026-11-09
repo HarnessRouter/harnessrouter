@@ -3332,11 +3332,14 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         # nothing). It goes before the first table header: appended at the end it would belong
         # to the last table and switch nothing (measured on rc.1: the tool stayed in the request).
         cfg = _codex_insert_top_level(cfg, 'web_search = "disabled"')
+    # Tables of this turn's own, written LAST: the MCP block below opens with a top-level key
+    # (experimental_use_rmcp_client), which would otherwise land inside whichever table came before it.
+    last_tables = ""
     if _codex_shell_off(tools_disabled):
         # The shell is a feature in codex 0.154's own table (`codex features list`: shell_tool), and
         # off it takes the shell family out of the tools codex builds (exec_command and write_stdin
-        # under unified exec). A table of its own, so it never lands inside another one.
-        cfg += "[features]\nshell_tool = false\n"
+        # under unified exec).
+        last_tables += "[features]\nshell_tool = false\n"
     if resume:
         # A resumed session keeps the provider id it started under; Codex looks that id up in the
         # config and refuses to load without it ("Model provider `azure` not found", a July
@@ -3349,6 +3352,8 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
                                             env_key=spec["env_key"], wire_api=auth.wire_api or "responses")
     if mcp_toml:   # owner-attached MCP servers via Codex's experimental rmcp HTTP client
         cfg += mcp_toml
+    if last_tables:
+        cfg += ("" if cfg.endswith("\n") else "\n") + last_tables
     (cfg_dir / "config.toml").write_text(cfg)
     env["CODEX_HOME"] = str(cfg_dir)
     env["TMPDIR"] = str(pathlib.Path(cwd) / "tmp")

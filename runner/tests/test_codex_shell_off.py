@@ -34,6 +34,10 @@ def test_shell_on_leaves_the_features_alone(tmp_path):
     assert "features" not in _cfg(tmp_path, ["read_file"])
 
 
-def test_the_feature_table_survives_mcp_servers_after_it(tmp_path):
-    doc = _cfg(tmp_path, ["shell"], mcp_toml='[mcp_servers.graph]\nurl = "https://mcp.example/mcp"\n')
+def test_the_feature_table_and_the_mcp_block_keep_to_their_own_keys(tmp_path):
+    """The MCP block opens with a top-level key; written after the feature table, it would land
+    inside it (and codex refuses a feature it does not know)."""
+    mcp = rs._codex_mcp_toml([{"name": "graph", "url": "https://mcp.example/mcp", "auth": "t"}])
+    assert not mcp.lstrip().startswith("["), "the case this guards: a top-level key first"
+    doc = _cfg(tmp_path, ["shell"], mcp_toml=mcp)
     assert doc["features"] == {"shell_tool": False} and "graph" in doc["mcp_servers"]
