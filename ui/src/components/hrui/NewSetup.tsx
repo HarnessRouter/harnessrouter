@@ -285,6 +285,9 @@ export function NewSetup({ pre, onClose }: { pre?: NewSetupPre; onClose: () => v
       <button type="button" className="link-q inl" onClick={() => { basesRead.retry(); catalogRead.retry(); }}>Try again</button></>]
     : bases && !offered.length ? ['bad', <>No agent harness is available on this instance.</>]
     // nothing runs without a model key: the builder and the setup both run on one of yours
+    // a stored key its provider refused is said as that: asking to connect a key the person already
+    // connected sends them to pair again with no reason given
+    : catalog && bases && (noneRuns || (hAuto && !anyRuns)) && providers.refused?.length ? ['warn', <>HarnessRouter Cloud refused your stored key, so no model can run on it. <a className="link-q inl" href="/byok">Reconnect it</a></>]
     : catalog && bases && (noneRuns || (hAuto && !anyRuns)) ? ['warn', <>Connect a model key to set up an agent harness. <a className="link-q inl" href="/byok">Connect a key</a></>]
     : catalog && h && !hAuto && !hRuns ? ['warn', <>None of your keys runs a model on {hName} yet. <a className="link-q inl" href="/byok">Add a key</a> or choose another harness.</>]
     : code ? ['warn', <><b>Changing code in your project?</b> Your coding agent does that.</>]

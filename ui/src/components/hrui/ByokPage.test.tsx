@@ -235,3 +235,37 @@ it('Get a key opens the hand-off, reads the code until the key is ready, and sav
   const put = lastPut() as { integrations: { name: string; provider: string; config: Record<string, string> }[] };
   expect(put.integrations).toEqual([{ name: 'My account', provider: 'harnessrouter', models: [], config: { api_key: 'hr-key-1', base_url: 'https://hosted.example/v1' } }]);
 });
+
+it('a key HarnessRouter Cloud refused says so on its own line, and Reconnect puts the new key in that connection', async () => {
+  // Cloud refused the stored key (the server read it and was answered 401). It used to read "serves no
+  // model now" with Get a key beside it, and the new key went in as a second connection behind the
+  // refused one, which stayed the one asked: the person paired again and again (hosted, 2026-11-08).
+  jest.useFakeTimers();
+  const opened = jest.fn();
+  Object.defineProperty(window, 'open', { value: opened, configurable: true });
+  doc.integrations = [{ name: 'HarnessRouter API', provider: 'harnessrouter', models: [], key_state: 'refused',
+    config: { api_key: SECRET, base_url: 'https://hosted.example/v1', models_url: 'https://hosted.example/v1/models' } }];
+  let ready = false;
+  fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
+    if (url.startsWith('/api/harness/v1/harnesses')) return ok({ harnesses: [] });
+    if (url === '/api/harness/v1/admin/connect') return ok({ code: 'c2', url: 'https://hosted.example/connect/c2' });
+    if (url === '/api/harness/v1/admin/connect/c2') return ready ? ok({ status: 'ready', api_key: 'hr-key-2', endpoint: 'https://hosted.example/v1', name: 'HarnessRouter API' }) : ok({}, 202);
+    if (url === '/api/harness/v1/admin/integrations' && init?.method === 'PUT') { puts.push(JSON.parse(init.body || '{}')); return ok({}); }
+    return ok(doc);
+  });
+  await open();
+  const line = rowOf('harnessrouter').querySelector('[data-key-state="refused"]') as HTMLElement;
+  expect(line).not.toBeNull();
+  expect(line.textContent).toContain('HarnessRouter Cloud refused this key. Reconnect to get a new one.');
+  expect(line.textContent).not.toContain('Connected');
+  await click('Reconnect', line);
+  expect(opened).toHaveBeenCalledWith('https://hosted.example/connect/c2', '_blank', 'noopener');
+  ready = true;
+  await act(async () => { await jest.advanceTimersByTimeAsync(HANDOFF_POLL_MS); });
+  const put = lastPut() as { integrations: { name: string; provider: string; config: Record<string, string> }[] };
+  // one connection, the same name, the new key: never a second connection beside the refused one
+  expect(put.integrations).toHaveLength(1);
+  expect(put.integrations[0]).toMatchObject({ name: 'HarnessRouter API', provider: 'harnessrouter',
+    config: { api_key: 'hr-key-2', base_url: 'https://hosted.example/v1', models_url: 'https://hosted.example/v1/models' } });
+  expect(toast).toHaveBeenCalledWith('HarnessRouter API is reconnected to HarnessRouter.');
+});
