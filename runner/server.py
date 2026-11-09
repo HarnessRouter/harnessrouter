@@ -1549,8 +1549,9 @@ def _write_mcp_config_claude(cwd: str, servers: list[dict],
 
 
 def _codex_mcp_toml(servers: list[dict]) -> str:
-    """Render [mcp_servers.*] config.toml blocks for Codex's experimental remote-MCP (rmcp)
-    HTTP client. Returns '' if there are no HTTP servers to add."""
+    """Render [mcp_servers.*] config.toml blocks: url (streamable HTTP) or command (stdio). Returns
+    '' if there are no servers to add. Tables only, so the block can sit anywhere after the top-level
+    keys."""
     blocks: list[str] = []
     for s in servers or []:
         url = (s or {}).get("url")
@@ -1579,9 +1580,11 @@ def _codex_mcp_toml(servers: list[dict]) -> str:
         blocks.append("\n".join(lines))
     if not blocks:
         return ""
-    # rmcp HTTP client is opt-in in Codex; enable it when any HTTP MCP server is configured.
-    # (stdio servers need no switch; the flag is harmless beside them.)
-    return "\nexperimental_use_rmcp_client = true\n" + "\n".join(blocks) + "\n"
+    # No experimental_use_rmcp_client: an opt-in that older Codex releases needed for an HTTP server,
+    # and that 0.154 neither reads nor names (the HTTP client is built in). It was also a top-level key
+    # appended after the last table, so it landed inside whichever table came before it:
+    # [sandbox_workspace_write], a resumed session's provider alias, or the turn's own tables.
+    return "\n" + "\n".join(blocks) + "\n"
 
 
 def _skill_desc(files: list[dict]) -> str:
@@ -3021,7 +3024,8 @@ def _claude_thinking_env(model: str) -> dict:
 def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns: int,
                   cwd: str, env: dict, resume_session_id: str | None = None,
                   mcp_config: str | None = None, disallowed_tools: list[str] | None = None,
-                  partial: bool = False, plugin_dirs: list[str] | None = None) -> list[str]:
+                  partial: bool = False, plugin_dirs: list[str] | None = None,
+                  own_memory_off: bool = False) -> list[str]:
     p = provider or "anthropic"
     if p not in CLAUDE_PROVIDERS:
         raise HTTPException(400, f"unknown claude provider '{p}' (one of {sorted(CLAUDE_PROVIDERS)})")
@@ -3133,20 +3137,38 @@ def _build_claude(provider: str, auth: Auth, model: str, prompt: str, max_turns:
     # ignored, and the console showed "Disabled" next to a tool the agent went on using. Verified
     # both ways against the CLI: with the flag the agent still ran bash; with this deny list it
     # reported having no shell tool and did not run it.
-    if disallowed_tools:
-        names = [t.split(" (")[0].strip() for t in disallowed_tools if t and t.strip()]
-        if names:
-            settings_path = cfg_dir / "settings.json"
-            try:
-                current = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-                if not isinstance(current, dict):
-                    current = {}
-            except Exception:  # noqa: BLE001 — a corrupt file must not lose the restriction
-                current = {}
-            perms = current.get("permissions") if isinstance(current.get("permissions"), dict) else {}
-            perms["deny"] = names
-            current["permissions"] = perms
-            settings_path.write_text(json.dumps(current, indent=2))
+    #
+    # Reconciled on EVERY turn, not only when something is off: HOME is checkpointed, so a deny list an
+    # earlier turn wrote stayed in the file after the harness switched the tool back on, and the tool
+    # stayed withheld. Anything else the file holds is left as it is.
+    names = [t.split(" (")[0].strip() for t in (disallowed_tools or []) if t and t.strip()]
+    settings_path = cfg_dir / "settings.json"
+    try:
+        current = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+        if not isinstance(current, dict):
+            current = {}
+    except Exception:  # noqa: BLE001 — a corrupt file must not lose the restriction
+        current = {}
+    perms = current.get("permissions") if isinstance(current.get("permissions"), dict) else {}
+    if names:
+        perms["deny"] = names
+    else:
+        perms.pop("deny", None)
+    if perms:
+        current["permissions"] = perms
+    else:
+        current.pop("permissions", None)
+    # Claude Code's own auto memory (a "# auto memory" section in its system prompt and a MEMORY.md it
+    # keeps under its config dir) is on by default in 2.1.280, -p included: measured, the request
+    # carried that section beside the platform's memories server. With the platform's memory attached
+    # it is off, so the agent keeps one memory; autoMemoryEnabled is the setting its loader reads
+    # before falling back to on.
+    if own_memory_off:
+        current["autoMemoryEnabled"] = False
+    else:
+        current.pop("autoMemoryEnabled", None)
+    if current or settings_path.exists():
+        settings_path.write_text(json.dumps(current, indent=2))
     if resume_session_id:
         # Only resume if the conversation file is ACTUALLY in the (re)hydrated workspace. A prior turn
         # can record a cli_session_id but fail before checkpointing its .jsonl — then `--resume <id>`
@@ -3415,8 +3437,7 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         # nothing). It goes before the first table header: appended at the end it would belong
         # to the last table and switch nothing (measured on rc.1: the tool stayed in the request).
         cfg = _codex_insert_top_level(cfg, 'web_search = "disabled"')
-    # Tables of this turn's own, written LAST: the MCP block below opens with a top-level key
-    # (experimental_use_rmcp_client), which would otherwise land inside whichever table came before it.
+    # Tables of this turn's own, written last, after every other table.
     last_tables = ""
     if _codex_shell_off(tools_disabled):
         # The shell is a feature in codex 0.154's own table (`codex features list`: shell_tool), and
@@ -4495,7 +4516,8 @@ def _has_platform_memory(servers: list[dict] | None) -> bool:
 # here, by the names that switch takes: cheetahclaws' measured Memory* tools (CHEETAHCLAWS_TOOLS) through its
 # `disabled_tools`, and Roder's memory and knowledge stores through its allowlist (roder_backend.TOOLS; a switch id
 # takes its whole family); Qwen Code's through permissions.deny, beside its background memory agents (_qwen_settings).
-# Codex's memories are a config table, switched off in _codex_prepare_env, and Gemini CLI 0.58.0 has no memory tool:
+# Claude Code's auto memory and codex's memories are settings, switched off in _build_claude and _codex_prepare_env,
+# and Gemini CLI 0.58.0 has no memory tool:
 # its experimental auto memory is pinned off in _gemini_settings. Already off on every turn, whatever is attached:
 # jcode `memory`, grok GROK_MEMORY=0,
 # agentzero's `_memory` plugin, dcode's memory auto-save, zeroclaw's memory tools (not on its allowlist), and
@@ -18167,7 +18189,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             cmd = _build_claude(req.provider, auth, model, req.prompt, req.max_turns, cwd, env,
                                 resume_session_id=req.resume_session_id, mcp_config=mcp_config,
                                 disallowed_tools=claude_tools_off, partial=bool(req.partial_messages),
-                                plugin_dirs=plugin_dirs)
+                                plugin_dirs=plugin_dirs, own_memory_off=platform_memory)
     resume_lost = _resume_lost(backend, cmd, req.resume_session_id, cwd)
     _isolate_session(cwd)   # everything the runner just wrote into the session is the session's now
     turn_id = "turn" + uuid.uuid4().hex

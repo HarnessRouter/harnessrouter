@@ -78,6 +78,9 @@ class Seen:
 
 
 MEMORIES_PATH = "/v1/mcp/memories"
+# The one tool the stand-in memories server lists: in a request, it is the proof the base reached the
+# server through its MCP configuration (look for it with --look-for).
+PROBE_TOOL = "stand_in_lookup"
 
 
 def tool_names(body: dict) -> list[str]:
@@ -223,7 +226,7 @@ class StandHandler(http.server.BaseHTTPRequestHandler):
         self._send(200, ctype, data)
 
     def _memories(self, body: dict) -> None:
-        """A memories server that holds nothing: enough MCP for a client to connect and list tools."""
+        """A memories server that holds nothing: enough MCP for a client to connect and list one tool."""
         with Seen.lock:
             Seen.mcp_hits += 1
         if self.command != "POST":
@@ -235,7 +238,9 @@ class StandHandler(http.server.BaseHTTPRequestHandler):
         method = str(body.get("method"))
         result = {"initialize": {"protocolVersion": (body.get("params") or {}).get("protocolVersion") or "2025-03-26",
                                  "capabilities": {"tools": {}}, "serverInfo": {"name": "memories", "version": "1"}},
-                  "tools/list": {"tools": []}, "resources/list": {"resources": []}, "prompts/list": {"prompts": []},
+                  "tools/list": {"tools": [{"name": PROBE_TOOL, "description": "Looks nothing up.",
+                                            "inputSchema": {"type": "object", "properties": {}}}]},
+                  "resources/list": {"resources": []}, "prompts/list": {"prompts": []},
                   "ping": {}}.get(method)
         out = {"jsonrpc": "2.0", "id": body.get("id"), "result": result} if result is not None else \
               {"jsonrpc": "2.0", "id": body.get("id"), "error": {"code": -32601, "message": "not here"}}
