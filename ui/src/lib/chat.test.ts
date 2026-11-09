@@ -9,7 +9,7 @@ jest.mock('@/lib/auth', () => ({ getSession: () => ({ orgId: 'org.a', member: { 
 jest.mock('@/lib/workspace', () => ({ workspaceHeaders: () => ({}) }));
 
 import { harnessFetch } from '@/lib/hfetch';
-import { loadSessionTurns, streamResponse, subscribeHarnessEvents, TurnsReadError, STREAM_IDLE_MS, BUS_BACKOFF_MAX_MS } from './chat';
+import { loadSessionOrigin, loadSessionTurns, streamResponse, subscribeHarnessEvents, TurnsReadError, STREAM_IDLE_MS, BUS_BACKOFF_MAX_MS } from './chat';
 
 const hf = harnessFetch as jest.MockedFunction<typeof harnessFetch>;
 const enc = new TextEncoder();
@@ -64,6 +64,42 @@ describe('loadSessionTurns', () => {
     const c = new AbortController();
     await loadSessionTurns('s1', c.signal);
     expect(hf.mock.calls[0][1]?.signal).toBe(c.signal);
+  });
+});
+
+describe('a branch (issue #477)', () => {
+  const sent = async (opts: Parameters<typeof streamResponse>[0]) => {
+    hf.mockResolvedValueOnce(new Response('nope', { status: 500 }));
+    await streamResponse(opts, {}).catch(() => null);
+    return JSON.parse(String((hf.mock.calls[hf.mock.calls.length - 1][1] as RequestInit).body));
+  };
+  test('asking for one puts branch beside previous_response_id', async () => {
+    const b = await sent({ input: 'hi', previousResponseId: 'r1', branch: true });
+    expect(b.branch).toBe(true);
+    expect(b.previous_response_id).toBe('r1');
+  });
+  test('any other turn sends no branch field at all', async () => {
+    expect('branch' in await sent({ input: 'hi', previousResponseId: 'r1' })).toBe(false);
+  });
+});
+
+describe('loadSessionOrigin', () => {
+  const answer = (status: number, body: unknown) => hf.mockResolvedValueOnce(new Response(typeof body === 'string' ? body : JSON.stringify(body), { status }));
+  test('a branched task says the task it came from, and its own title', async () => {
+    answer(200, { session_id: 's2', title: 'Hello', branched_from: { response_id: 'r1', session_id: 's1', turn: 1 } });
+    await expect(loadSessionOrigin('s2')).resolves.toEqual({ title: 'Hello', branchedFrom: 's1' });
+  });
+  test.each([[{ title: 'T' }], [{ title: 'T', branched_from: {} }], [{ title: 'T', branched_from: { session_id: 7 } }]])('%j was not branched', async (d) => {
+    answer(200, d);
+    await expect(loadSessionOrigin('s2')).resolves.toEqual({ title: 'T', branchedFrom: null });
+  });
+  test('a 404 is a task that is gone', async () => {
+    answer(404, {});
+    await expect(loadSessionOrigin('s2')).resolves.toEqual({ title: '', branchedFrom: null, missing: true });
+  });
+  test.each([[500, {}], [200, 'not json']])('%i with %j throws: an unread task is never taken for one not branched', async (st, b) => {
+    answer(st as number, b);
+    await expect(loadSessionOrigin('s2')).rejects.toBeInstanceOf(TurnsReadError);
   });
 });
 

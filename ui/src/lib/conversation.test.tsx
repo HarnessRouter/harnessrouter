@@ -92,6 +92,89 @@ afterEach(async () => {
   jest.useRealTimers();
 });
 
+describe('a branch (issue #477)', () => {
+  test('a turn the record says was imported reads imported, both halves of it; any other does not', () => {
+    const { msgs } = C.msgsFromTurns([turn({ imported: true }), turn({ id: 'r2' })]);
+    expect(msgs.map((m) => m.imported)).toEqual([true, true, undefined, undefined]);
+  });
+
+  test('the message sent with branchFrom asks for a branch from that response, and names no session', async () => {
+    mockChat.stream.mockImplementation(async (_o: StreamOpts, h: StreamHandlers) => { h.onCreated?.('r9'); h.onSession?.('s-new'); h.onDone?.('completed', {}); return 'r9'; });
+    await render(<Conv sid={null} />);
+    await act(async () => { await api.send('Try another way', [], { branchFrom: 'r2' }); });
+    const opts = mockChat.stream.mock.calls[0][0] as StreamOpts;
+    expect(opts.previousResponseId).toBe('r2');
+    expect(opts.branch).toBe(true);
+    expect(opts.sessionHint).toBeFalsy();
+  });
+
+  test('a message sent without it never asks for one', async () => {
+    mockChat.stream.mockImplementation(async (_o: StreamOpts, h: StreamHandlers) => { h.onCreated?.('r9'); h.onSession?.('s-new'); h.onDone?.('completed', {}); return 'r9'; });
+    await render(<Conv sid={null} />);
+    await act(async () => { await api.send('Hello'); });
+    expect((mockChat.stream.mock.calls[0][0] as StreamOpts).branch).toBeUndefined();
+  });
+
+  test('the turn after the branch continues the branch: its own response, no branch', async () => {
+    // the stream stays open across a render, as a real one does: the conversation moves onto its
+    // session between the session's arrival and the end of the turn
+    let handlers: StreamHandlers = {};
+    let end: (id: string) => void = () => {};
+    mockChat.stream.mockImplementationOnce((_o: StreamOpts, h: StreamHandlers) => {
+      handlers = h; h.onCreated?.('r9'); h.onSession?.('s-new');
+      return new Promise((r) => { end = r; });
+    }).mockImplementation(async () => 'r10');
+    mockChat.load.mockResolvedValue(record([]));
+    await render(<Conv sid={null} />);
+    await act(async () => { await api.send('Try another way', [], { branchFrom: 'r2' }); });
+    await tick();
+    await act(async () => { handlers.onDone?.('completed', {}); end('r9'); });
+    await tick();
+    await act(async () => { await api.send('And then?'); });
+    const opts = mockChat.stream.mock.calls[1][0] as StreamOpts;
+    expect(opts.previousResponseId).toBe('r9');
+    expect(opts.branch).toBeUndefined();
+    expect(opts.sessionHint).toBe('s-new');
+  });
+});
+
+describe('a branch the server would not make', () => {
+  const refuse = (status: number, code: string, message: string) => mockChat.stream.mockImplementation(async () => {
+    throw Object.assign(new Error(message), { status, code });
+  });
+  const lastText = () => {
+    const a = [...api.msgs].reverse().find((m) => m.role === 'assistant') as AsstMsg;
+    return a.blocks.map((b) => (b.kind === 'text' ? b.text : '')).join('');
+  };
+  test('a reply that can’t be branched is said in plain words, with where to go instead, never the server’s jargon', async () => {
+    refuse(409, 'branch_unavailable', 'This response has no restorable checkpoint.');
+    await render(<Conv sid={null} />);
+    let took: boolean | undefined;
+    await act(async () => { took = await api.send('Try another way', [], { branchFrom: 'r2' }); });
+    expect(took).toBe(false);
+    expect(lastText()).toContain(C.BRANCH_REFUSED);
+    expect(lastText()).not.toMatch(/checkpoint|response/i);
+    expect((api.msgs[api.msgs.length - 1] as AsstMsg).status).toBe('failed');
+  });
+  test('the task it goes on from out of reach (404) says so', async () => {
+    refuse(404, 'session_not_found', 'No session with that id.');
+    await render(<Conv sid={null} />);
+    await act(async () => { await api.send('Try another way', [], { branchFrom: 'r2' }); });
+    expect(lastText()).toContain(C.BRANCH_SOURCE_GONE);
+    expect(lastText()).not.toContain('session');
+  });
+  test('any other refusal of a branch keeps the server’s sentence, and an ordinary message is never read as a branch', async () => {
+    refuse(429, 'one_at_a_time', 'One task at a time on this setup. Try again when it ends.');
+    await render(<Conv sid={null} />);
+    await act(async () => { await api.send('Try another way', [], { branchFrom: 'r2' }); });
+    expect(lastText()).toContain('One task at a time on this setup.');
+    refuse(409, 'branch_unavailable', 'A server sentence.');
+    await act(async () => { await api.send('Hello'); });
+    expect(lastText()).toContain('A server sentence.');
+    expect(C.branchRefusal(undefined, 404, 'branch_unavailable')).toBe('');
+  });
+});
+
 describe('a turn’s state as the record says it', () => {
   test.each(['queued', 'starting', 'running', 'in_progress'])('%s is live: running', (s) => {
     expect(C.turnStatus(s)).toBe('running');
