@@ -75,3 +75,34 @@ test('a name with a slash, a space or dots inside it still passes, as the file r
   expect(sent()).toEqual(['/v1/sessions/hsess_1/files/dir/sub/report%20v2.pdf', '/v1/environments/env_1/files/a/b.txt',
     '/v1/sessions/hsess_1/files/dir/sub/notes..md', '/v1/memories/hmem_1/records/rec.1', '/v1/harnesses/chrn_1']);
 });
+
+// CAT, via the pentest session (LOW): a dot that was percent-encoded more than once (%25252e, which Next
+// turns into %252e) passed, since the check decoded %2e once. Not reachable today (neither fetch() nor the
+// gateway folds %252e), but the guard must hold on its own: every part is decoded to a fixed point, at most
+// five rounds, and checked fully decoded; one still changing after five, or whose escapes are not UTF-8,
+// is refused. What is forwarded is unchanged.
+const DEEP = [
+  'v1/%25252e%25252e/internal/x', 'v1/%2525252e%2525252e/internal/x', '%25252e%25252e/internal/x',
+  'v1/sessions/s/files/a%25252f%25252e%25252e%25252finternal',   // a slash and dots, three times encoded, inside one name
+  'v1/%25255c',                                                      // a backslash, three times encoded
+  'v1/%2525252525252e',                                              // still changing after five rounds
+  'v1/%25E0%25A4%25A', 'v1/%25C0%25AE%25C0%25AE/internal',           // escapes that are not UTF-8 (the second an overlong '.')
+];
+for (const edition of ['hosted', 'self-hosted']) {
+  test.each(DEEP)(`${edition}: %p is a 404 and nothing is fetched`, async (raw) => {
+    mockEdition.selfHosted = edition === 'self-hosted';
+    await refused(await call(raw));
+  });
+}
+
+test('hosted: an /internal first segment encoded three times is still /internal', async () => {
+  await refused(await call('%25252569nternal/x'));
+});
+
+test('a percent sign that is not an escape is a character of the name, and the value forwarded is unchanged', async () => {
+  for (const raw of ['v1/sessions/hsess_1/files/50%25%20off.pdf', 'v1/sessions/hsess_1/files/dir%2F100%25.pptx']) {
+    expect((await call(raw)).status).toBe(200);
+  }
+  // as the proxy has always sent it: the decoded segments, joined
+  expect(urls.map((u) => u.slice(u.indexOf('/v1/')))).toEqual(['/v1/sessions/hsess_1/files/50% off.pdf', '/v1/sessions/hsess_1/files/dir/100%.pptx']);
+});

@@ -47,3 +47,12 @@ test('a nested path opens, written with slashes or with one encoded inside a nam
   expect(urls.map((u) => new URL(u).pathname)).toEqual(['/v1/sessions/hsess_1/files', '/v1/containers/hsess_1/files/wf_1/content',
     '/v1/sessions/hsess_1/files', '/v1/containers/hsess_1/files/wf_1/content']);
 });
+
+// The same fixed point as the API proxy (lib/relay-path): a dot or a slash encoded more than once is
+// checked fully decoded, and escapes that are not UTF-8 are refused.
+test.each([['%25252e%25252e', 'x'], ['hsess_1', '%25252e%25252e/x'], ['hsess_1', 'a%25252f%25252e%25252e'],
+  ['%25E0%25A4%25A', 'x'], ['hsess_1', '%2525252525252e']])('the session %p with the path %p is a 404 and nothing is fetched', async (sid, raw) => {
+  const res = await call(sid, raw);
+  expect(res.status).toBe(404);
+  expect(global.fetch).not.toHaveBeenCalled();
+});
