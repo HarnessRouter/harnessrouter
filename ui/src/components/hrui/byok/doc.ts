@@ -30,6 +30,8 @@ export interface Integration {
   image_models?: ModelRow[];
   /** what is left on a HarnessRouter API key's account, read by the server; absent while unknown */
   balance?: { usd: number; is_deficit: boolean; as_of: string };
+  /** 'refused': HarnessRouter Cloud answered the last read with this key by refusing it (absent otherwise) */
+  key_state?: 'refused';
 }
 export interface ProviderField { key: string; label: string; placeholder?: string }
 export interface CatalogEntry {

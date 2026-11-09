@@ -11,6 +11,9 @@
 //     deploys to another workspace (the destinations this instance keeps: CloudUploadSheet).
 // The cloud copy is one way: this instance stays the source, and every deploy replaces the copy under
 // the same cloud id. What it says of the copy (deployed, changed since) is the server's own status.
+// A sign-in is opened only when this instance keeps no workspace, and it says why when the reason is a
+// key Cloud refused (Reconnect to Cloud). When the kept workspaces could not be read, nothing is opened:
+// that read failing used to read as "none kept", and the click started a new pairing.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listTargets, pollDeploySignIn, startDeploySignIn, statusOne, uploadOne, type CloudStatus, type CloudTarget } from '@/lib/cloud-upload';
 import { toast } from '../toast';
@@ -30,7 +33,8 @@ export function DeployCloud({ id, name }: { id: string; name: string }) {
   const [status, setStatus] = useState<CloudStatus | null>(null);
   // the destinations this instance keeps (null while read): known before the click, so the click
   // decides at once whether it deploys or opens the sign-in (a tab opened after a wait is blocked)
-  const [targets, setTargets] = useState<{ list: CloudTarget[]; last: string } | null>(null);
+  // `refused`: kept workspaces whose key Cloud refused (each needs a sign-in again); 'failed': not read
+  const [targets, setTargets] = useState<{ list: CloudTarget[]; last: string; refused: number } | null | 'failed'>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [signinUrl, setSigninUrl] = useState('');
   const [menu, setMenu] = useState(false);
@@ -43,8 +47,9 @@ export function DeployCloud({ id, name }: { id: string; name: string }) {
     statusOne(id).then((s) => { if (alive.current) setStatus(s); }).catch(() => { /* the button says Deploy to Cloud */ });
   }, [id]);
   const readTargets = useCallback(() => {
-    listTargets().then((r) => { if (alive.current) setTargets({ list: r.targets.filter((t) => !t.revoked), last: r.last }); })
-      .catch(() => { if (alive.current) setTargets(null); });
+    listTargets().then((r) => {
+      if (alive.current) setTargets({ list: r.targets.filter((t) => !t.revoked), last: r.last, refused: r.targets.filter((t) => t.revoked).length });
+    }).catch(() => { if (alive.current) setTargets('failed'); });
   }, []);
   useEffect(() => { setStatus(null); readStatus(); readTargets(); }, [readStatus, readTargets]);
 
@@ -67,7 +72,9 @@ export function DeployCloud({ id, name }: { id: string; name: string }) {
       setStatus({ ...r.status, open_url: r.open_url || r.status?.open_url || '' });
       toast(r.action === 'create' ? `${name} is deployed to HarnessRouter Cloud.` : `${name} is updated in HarnessRouter Cloud.`);
     } catch (e) {
-      if (alive.current) toast(plain(e, `${name} could not be deployed. Try again.`));
+      // a key Cloud refused is marked on its workspace by the server: read them again, so the button
+      // says Reconnect to Cloud instead of failing the same way
+      if (alive.current) { toast(plain(e, `${name} could not be deployed. Try again.`)); readTargets(); }
     } finally {
       if (alive.current) setPhase('idle');
     }
@@ -99,7 +106,7 @@ export function DeployCloud({ id, name }: { id: string; name: string }) {
       catch (e) { setPhase('idle'); setSigninUrl(''); toast(plain(e, 'The sign-in ended. Deploy again.')); return; }
       if (got === 'waiting') continue;
       setSigninUrl('');
-      setTargets({ list: [got], last: got.id });
+      setTargets({ list: [got], last: got.id, refused: 0 });
       await deployTo(got.id);
       return;
     }
@@ -110,27 +117,38 @@ export function DeployCloud({ id, name }: { id: string; name: string }) {
     setMenu(false);
     if (phase === 'signin') { if (signinUrl) window.open(signinUrl, '_blank'); return; }
     if (phase !== 'idle') return;
-    const pick = targets?.list.find((t) => t.id === targets.last) || targets?.list[0];
+    if (targets === null) return;          // still reading: the button is disabled until it is read
+    if (targets === 'failed') {
+      toast('Your HarnessRouter Cloud workspaces could not be read just now, so nothing was deployed. Try again.');
+      readTargets();
+      return;
+    }
+    const pick = targets.list.find((t) => t.id === targets.last) || targets.list[0];
     if (pick) void deployTo(pick.id);
     else void signIn();
   };
 
   const deployed = !!status?.uploaded;
   const current = deployed && !status?.changed;
+  // every kept workspace's key was refused: the next deploy signs in again, and the button says why
+  const reconnect = !!targets && targets !== 'failed' && !targets.list.length && targets.refused > 0;
+  const inCloud = current && !reconnect;     // the menu, only while a kept key can still deploy
   const label = phase === 'deploying' ? 'Deploying…'
     : phase === 'signin' ? 'Finish signing in'
-      : current ? 'In Cloud' : deployed ? 'Update Cloud' : 'Deploy to Cloud';
+      : reconnect && phase === 'idle' ? 'Reconnect to Cloud'
+        : current ? 'In Cloud' : deployed ? 'Update Cloud' : 'Deploy to Cloud';
   const tip = phase === 'signin' ? 'Finish signing in to HarnessRouter Cloud in the tab it opened. The deploy goes on by itself.'
-    : current ? `${name} is deployed to HarnessRouter Cloud${status?.target ? `, ${status.target}` : ''}.`
-      : deployed ? `${name} changed since its deploy. Update the copy in HarnessRouter Cloud.`
-        : `Deploy ${name} to HarnessRouter Cloud.`;
+    : reconnect ? `HarnessRouter Cloud refused the key this instance keeps. Sign in again to reconnect, then ${name} deploys.`
+      : current ? `${name} is deployed to HarnessRouter Cloud${status?.target ? `, ${status.target}` : ''}.`
+        : deployed ? `${name} changed since its deploy. Update the copy in HarnessRouter Cloud.`
+          : `Deploy ${name} to HarnessRouter Cloud.`;
   return (
     <span ref={wrap} className="dc-w">
-      <button type="button" className={`btn small ag-act dc-b${current ? ' on' : ''}`} aria-label={label} title={tip}
-        aria-haspopup={current ? 'menu' : undefined} aria-expanded={current ? menu : undefined}
-        aria-busy={phase !== 'idle' || undefined} disabled={phase === 'deploying'}
-        onClick={() => (current && phase === 'idle' ? setMenu(!menu) : deploy())}>
-        {current ? OK_IC : UP_IC}<span className="ag-act-l">{label}</span>
+      <button type="button" className={`btn small ag-act dc-b${inCloud ? ' on' : ''}`} aria-label={label} title={tip}
+        aria-haspopup={inCloud ? 'menu' : undefined} aria-expanded={inCloud ? menu : undefined}
+        aria-busy={phase !== 'idle' || undefined} disabled={phase === 'deploying' || targets === null}
+        onClick={() => (inCloud && phase === 'idle' ? setMenu(!menu) : deploy())}>
+        {inCloud ? OK_IC : UP_IC}<span className="ag-act-l">{label}</span>
         {deployed && !current && phase === 'idle' ? <i className="dc-dot" aria-hidden="true" /> : null}
       </button>
       {menu ? (
