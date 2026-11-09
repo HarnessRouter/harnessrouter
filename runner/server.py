@@ -2322,18 +2322,11 @@ def _agent_doc_path(cwd: str, backend: str) -> pathlib.Path:
         else "CLAUDE.md")
 
 
-def _read_agent_doc(cwd: str, backend: str) -> str:
-    """The instruction file as this turn wrote it, read as the session; "" when there is none."""
-    try:
-        with _fs_as(_session_uid(cwd)):
-            return _agent_doc_path(cwd, backend).read_text()
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-# The most of an instruction file a changed-instructions note carries itself. The note rides in the
-# CLI's argv with the message, and one argument is capped at 128 KiB on Linux; a larger file is named
-# for the agent to read instead.
+# The largest instruction file a changed-instructions note carries. The note rides in the CLI's argv
+# with the message (or in the driver's job, one environment string), and one is capped at 128 KiB on
+# Linux. A larger file gets no note at all, and the turn says so in the log: the continued task keeps
+# the instructions it started with, and a new task reads the edit. Never a note that points at the
+# file instead: the workspace is the agent's to write, and a note says it replaces the instructions.
 _NOTE_INLINE_MAX = 64 * 1024
 
 # Bases whose resumed conversation keeps the instruction file it read when the conversation began,
@@ -2373,57 +2366,28 @@ def _doc_without_recall(text: str | None) -> str | None:
     return None if text is None else _KNOWN_BLOCK.sub("", text)
 
 
-def _instructions_changed_note(doc_name: str, text: str, path: str = "") -> str:
+def _instructions_changed_note(doc_name: str, text: str) -> str:
     """What a resumed conversation is handed, ahead of its message, when the instructions changed
     since it began and the base keeps the copy it read then: the current file, said to replace that
     copy. The shape Claude Code, Codex and dsh give an edited file in a resumed session on their own
     (the new copy after the old one, and the old one named stale), and what Kimi Code tells its model
-    when the file changes while it runs, with the contents here rather than a request to read them."""
-    body = text.strip()
-    if len(body.encode()) > _NOTE_INLINE_MAX:
-        return ("<system-reminder>\n"
-                f"The {doc_name} instructions changed after this conversation started. The copy in your "
-                f"system prompt is stale and is replaced by the current file: read {path or doc_name} "
-                "now and follow it.\n"
-                "</system-reminder>\n\n")
+    when the file changes while it runs, with the contents here rather than a request to read them.
+    `text` is the runner's composed file (_compose_agent_doc), within _NOTE_INLINE_MAX (_start_turn)."""
     return ("<system-reminder>\n"
             f"The {doc_name} instructions changed after this conversation started. The contents below "
             "replace the copy in your system prompt, which is stale: follow these.\n\n"
-            f"{body}\n"
+            f"{text.strip()}\n"
             "</system-reminder>\n\n")
 
 
-def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict],
-                     environment: dict | None = None) -> bool:
-    """Compose the agent's instruction file from (1) the harness's user-authored doc and (2) a managed
-    block: the workspace contract, always, plus an 'Available skills' section when skills are
-    installed. The user doc is the base; the managed block is appended inside HTML-comment markers.
-    Source of truth is the harness config, so this OVERWRITES any stale file each turn.
-
-    THE WORKSPACE CONTRACT IS ALWAYS PRESENT, so the file now always exists. Produced files are
-    collected from the session directory only (/produced runs git status in _ws), so a deliverable
-    written to an absolute path outside it — the workspace parent, /tmp, /app, $HOME — is invisible
-    to the user and is not even checkpointed. Nothing ever told the model that: four backends write
-    relative paths by habit, and the first dsh deck task (deepseek-v4-pro, 2026-08-21) saved to the
-    workspace PARENT, the user saw an empty turn, and three turns went to copying files into view.
-    An instruction is the right mechanism here: writes cannot be walled in a sandbox whose point is
-    real bash, and widening collection would ship every scratch file as a deliverable.
-
-    Scratch files have a place INSIDE the workspace, `tmp/`, which is already what the platform
-    treats as scratch: git-ignored (_git_ensure), so never a produced file; left out of the
-    checkpoint (CHECKPOINT_EXCLUDE); hidden from the gateway's file listing. Without it the rule
-    read as "writes are restricted to the workspace" while nothing enforces that, and hermes, told
-    by its own stop-time check to write under /tmp, spent tool calls and its reply on the conflict
-    (2026-10-19, see _hermes_prepare_env). One rule, and the reality agrees with it.
-
-    Answers whether the instructions changed since the last turn: a person edited them, or the
-    platform changed a section (a standing preference kept in memory, a skill, the environment). What
-    memory recalled for this turn's words is not counted (_doc_without_recall). A base that keeps the
-    copy it read when its conversation started has to be told, or a continued task goes on with the
-    old instructions (see _hermes_forget_system_prompt, _instructions_changed_note)."""
+def _compose_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict],
+                       environment: dict | None = None) -> str:
+    """The agent's instruction file for this turn, as the runner composes it from the harness's
+    instructions and its managed block (_write_agent_doc says what is in it); "" for a base that reads
+    no workspace. Made from the turn's request alone, with nothing read from the workspace, so it is
+    the owner's text whatever the agent has written there."""
     if backend in ("systemone", "qoder"):
-        return False            # reads no workspace; its instructions travel in the job (_build_systemone, _build_qoder)
-    p = _agent_doc_path(cwd, backend)
+        return ""
     base = (agent_doc or "").strip()
     lines = [_AGENTS_BEGIN, "## Workspace", "",
              "Your working directory is this task's workspace and the ONLY place the user can see "
@@ -2455,6 +2419,44 @@ def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta:
     block = "\n".join(lines).rstrip("\n") + "\n" + _AGENTS_END + "\n"
     body = ((base + "\n\n") if base else "") + block
     body = body if body.endswith("\n") else body + "\n"
+    return body
+
+
+def _write_agent_doc(cwd: str, backend: str, agent_doc: str | None, skills_meta: list[dict],
+                     environment: dict | None = None, *, body: str | None = None) -> bool:
+    """Compose the agent's instruction file from (1) the harness's user-authored doc and (2) a managed
+    block: the workspace contract, always, plus an 'Available skills' section when skills are
+    installed. The user doc is the base; the managed block is appended inside HTML-comment markers.
+    Source of truth is the harness config, so this OVERWRITES any stale file each turn.
+
+    THE WORKSPACE CONTRACT IS ALWAYS PRESENT, so the file now always exists. Produced files are
+    collected from the session directory only (/produced runs git status in _ws), so a deliverable
+    written to an absolute path outside it — the workspace parent, /tmp, /app, $HOME — is invisible
+    to the user and is not even checkpointed. Nothing ever told the model that: four backends write
+    relative paths by habit, and the first dsh deck task (deepseek-v4-pro, 2026-08-21) saved to the
+    workspace PARENT, the user saw an empty turn, and three turns went to copying files into view.
+    An instruction is the right mechanism here: writes cannot be walled in a sandbox whose point is
+    real bash, and widening collection would ship every scratch file as a deliverable.
+
+    Scratch files have a place INSIDE the workspace, `tmp/`, which is already what the platform
+    treats as scratch: git-ignored (_git_ensure), so never a produced file; left out of the
+    checkpoint (CHECKPOINT_EXCLUDE); hidden from the gateway's file listing. Without it the rule
+    read as "writes are restricted to the workspace" while nothing enforces that, and hermes, told
+    by its own stop-time check to write under /tmp, spent tool calls and its reply on the conflict
+    (2026-10-19, see _hermes_prepare_env). One rule, and the reality agrees with it.
+
+    Answers whether the instructions changed since the last turn: a person edited them, or the
+    platform changed a section (a standing preference kept in memory, a skill, the environment). What
+    memory recalled for this turn's words is not counted (_doc_without_recall). A base that keeps the
+    copy it read when its conversation started has to be told, or a continued task goes on with the
+    old instructions (see _hermes_forget_system_prompt, _instructions_changed_note).
+
+    `body` is the text _compose_agent_doc made for this turn, when the caller keeps it: a turn hands a
+    base that keeps its first copy that same text, never the file read back (see _start_turn)."""
+    body = _compose_agent_doc(cwd, backend, agent_doc, skills_meta, environment) if body is None else body
+    if not body:
+        return False            # reads no workspace; its instructions travel in the job (_build_systemone, _build_qoder)
+    p = _agent_doc_path(cwd, backend)
     try:
         # As the session: a link it planted at the doc's name leads nowhere it could not write itself.
         with _fs_as(_session_uid(cwd)):
@@ -8986,7 +8988,7 @@ def _build_kimi(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     # beside it); stream-json is one message per line. The process's cwd is the workspace.
     resuming = bool(resume_session_id) and _kimi_has_session(home, resume_session_id)
     if resuming and instructions and instructions.strip():
-        prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "kimi"))) + prompt
+        prompt = _instructions_changed_note("AGENTS.md", instructions) + prompt
     cmd = ["kimi", "-p", prompt, "--output-format", "stream-json"]
     if resuming:
         cmd += ["-r", resume_session_id]
@@ -9472,7 +9474,7 @@ def _build_grok(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
         # The conversation carries the AGENTS.md it read on its first turn (its first message, as
         # always-applied workspace rules) and a resumed one reads none again: an edit is handed over
         # with the message (_PINNED_INSTRUCTIONS).
-        prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "grok"))) + prompt
+        prompt = _instructions_changed_note("AGENTS.md", instructions) + prompt
     # `--single=<prompt>` so a prompt that begins with a dash is the prompt, not a flag (measured).
     cmd = ["grok", f"--single={prompt}", "-m", _GROK_MODEL_KEY,
            "--output-format", "streaming-messages-json", "--always-approve"]
@@ -10560,7 +10562,7 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
             # Unlike opencode, mimo pins a session's system prompt, AGENTS.md included, in its
             # prefix snapshot for the provider's cache, so a resumed session reads none again: an
             # edit is handed over with the message (_PINNED_INSTRUCTIONS).
-            prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "mimo"))) + prompt
+            prompt = _instructions_changed_note("AGENTS.md", instructions) + prompt
     elif resume_session_id:
         # opencode's guard, unchanged: naming a session this database does not hold exits 1 before
         # the first event, and since every later turn passes the same dead id the conversation
@@ -12022,8 +12024,7 @@ def _build_openhands(provider: str, auth: Auth, model: str, prompt: str, cwd: st
         # context and its system prompt event, and a resumed one loads none again: an edit is handed
         # over with the message. Only the driver knows whether the conversation is resumed (it asks
         # the agent-server), so it adds this then and only then (_PINNED_INSTRUCTIONS).
-        job["instructions_changed"] = _instructions_changed_note(
-            "AGENTS.md", instructions, str(_agent_doc_path(cwd, "openhands")))
+        job["instructions_changed"] = _instructions_changed_note("AGENTS.md", instructions)
     return _driver_cmd(OPENHANDS_PYTHON, OPENHANDS_DRIVER, job, env)
 
 
@@ -14873,7 +14874,7 @@ def _build_dcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
         # The agent's memory middleware reads AGENTS.md into the thread's checkpointed state once, and
         # a resumed thread keeps that copy: an edit is handed over with the message
         # (_PINNED_INSTRUCTIONS).
-        prompt = _instructions_changed_note("AGENTS.md", instructions, str(_agent_doc_path(cwd, "dcode"))) + prompt
+        prompt = _instructions_changed_note("AGENTS.md", instructions) + prompt
     # The driver speaks ACP to that process and claude's stream-json to the runner.
     job = {"argv": cmd, "cwd": str(pathlib.Path(cwd).resolve()),
            # The task rides the protocol, not the command line: ACP takes it in session/prompt.
@@ -15316,7 +15317,7 @@ def _build_fast_agent(provider: str, auth: Auth, model: str, prompt: str, cwd: s
         _fast_agent_set_model(cwd, resume_session_id, model)
         if instructions_changed:
             # ...and the prompt it stored is let go when the instructions changed, so the agent keeps
-            # the one -i reads now (_fast_agent_forget_prompt).
+            # the one -i reads now (_fast_agent_forget_prompt): the file, read as any new session reads it.
             _fast_agent_forget_prompt(cwd, resume_session_id)
         if not vision:
             # ...and an image an earlier model attached is not sent to one that refuses images.
@@ -17866,11 +17867,22 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
         # The layer is mounted read-only in THIS sandbox; a remote runtime sees only what its driver
         # uploads. Said here, before anything starts, rather than run without it.
         raise HTTPException(400, f"the {backend} backend runs in a remote runtime and cannot mount an environment")
-    doc_changed = _write_agent_doc(cwd, backend, agent_doc, installed_skills, environment=turn_environment)
-    # The current file, for a base that keeps its first copy, when there is a conversation to continue
-    # and the instructions changed since its last turn; each builder adds it only when it resumes.
-    changed_doc = (_read_agent_doc(cwd, backend) or None) if (
+    doc_body = _compose_agent_doc(cwd, backend, agent_doc, installed_skills, environment=turn_environment)
+    doc_changed = _write_agent_doc(cwd, backend, agent_doc, installed_skills, environment=turn_environment,
+                                   body=doc_body)
+    # The instructions, for a base that keeps its first copy, when there is a conversation to continue
+    # and they changed since its last turn; each builder adds them only when it resumes. THE TEXT THE
+    # RUNNER COMPOSED, never the file read back: the note says it replaces the instructions, and the
+    # workspace is the agent's to write, so a process it left running could rewrite the file between
+    # the write above and any read. Hermes and fast-agent are not handed text: they rebuild from the
+    # file on disk, the same trust as any new session reading its instruction file.
+    changed_doc = (doc_body or None) if (
         doc_changed and req.resume_session_id and backend in _PINNED_INSTRUCTIONS) else None
+    if changed_doc and len(changed_doc.encode()) > _NOTE_INLINE_MAX:
+        print(f"[instructions] {backend} session {identifier}: the edited instructions ({len(changed_doc.encode())} "
+              f"bytes) are too large to hand to a continued turn, so this task keeps the instructions it started "
+              f"with; a new task uses the edit", flush=True)
+        changed_doc = None
     # The harness's own variables under the runner's, so nothing a caller names shadows the
     # runner's credentials or paths; the platform's HR_ names come after and win (below).
     env = {**_caller_env(req.env), **_child_env()}
@@ -17966,6 +17978,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
                                              vision_auth=req.vision_auth, own_memory_off=platform_memory,
                                              tools_disabled=req.tools_disabled)
             if req.resume_session_id and doc_changed:
+                # Hermes then builds the prompt from AGENTS.md as it reads it, the trust of any new
+                # session reading its instruction file; no text of the runner's is said to replace it.
                 _hermes_forget_system_prompt(os.path.join(env["HERMES_HOME"], "state.db"), req.resume_session_id)
         elif backend == "dsh":
             model = model or DSH_DEFAULT_MODEL

@@ -1221,6 +1221,8 @@ class Turn:
             # ...and not its system prompt: instructions edited since the session began go with the
             # message, once per edit (instructions_changed_note). A session recorded before this
             # was kept has no record of what it was told, and is taken to hold what it has now.
+            # The note's text is the job's instructions, as the runner sent them, never a file: it says
+            # it replaces the instructions, so nothing the agent could write may be in it.
             told = str(self.st.get("session_system") or "")
             if told and told != system_sha and str(self.job.get("agent_doc") or "").strip():
                 self.instructions_note = instructions_changed_note(str(self.job.get("agent_doc")))
