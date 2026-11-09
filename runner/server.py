@@ -3263,7 +3263,7 @@ def _codex_effort(model: str) -> str:
 
 def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
                        env: dict, mcp_toml: str = "", resume: bool = False,
-                       tools_disabled: list[str] | None = None) -> "pathlib.Path":
+                       tools_disabled: list[str] | None = None, own_memory_off: bool = False) -> "pathlib.Path":
     """Shared codex setup for BOTH exec and app-server: write config.toml (model/provider/base_url +
     MCP), point CODEX_HOME at the checkpointed workspace, set provider auth + TMPDIR. Returns the
     CODEX_HOME dir. Mutates env."""
@@ -3340,6 +3340,10 @@ def _codex_prepare_env(provider: str, auth: Auth, model: str, cwd: str,
         # off it takes the shell family out of the tools codex builds (exec_command and write_stdin
         # under unified exec).
         last_tables += "[features]\nshell_tool = false\n"
+    if own_memory_off:
+        # The platform's memory is attached, so codex keeps none of its own: 0.154's [memories] table
+        # (MemoriesToml) neither writes memories from a session's rollouts nor reads them into a turn.
+        last_tables += "[memories]\ngenerate_memories = false\nuse_memories = false\n"
     if resume:
         # A resumed session keeps the provider id it started under; Codex looks that id up in the
         # config and refuses to load without it ("Model provider `azure` not found", a July
@@ -3474,10 +3478,10 @@ def _sanitize_codex_rollout(rollouts: list[str], *, content_only: bool = True) -
 
 def _build_codex(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
                  env: dict, mcp_toml: str = "", resume_session_id: str | None = None,
-                 tools_disabled: list[str] | None = None) -> tuple[list[str], str]:
+                 tools_disabled: list[str] | None = None, own_memory_off: bool = False) -> tuple[list[str], str]:
     """The exec command, and the note the transcript must carry when a follow-up's rollout is gone."""
     cfg_dir = _codex_prepare_env(provider, auth, model, cwd, env, mcp_toml, resume=bool(resume_session_id),
-                                 tools_disabled=tools_disabled)
+                                 tools_disabled=tools_disabled, own_memory_off=own_memory_off)
     # Drop --ephemeral so codex PERSISTS the rollout to $CODEX_HOME/sessions (inside the checkpointed
     # workspace) — that's what makes a follow-up history-aware. Mirror the claude resume guard: only
     # `resume <id>` if the rollout is actually present in the (re)hydrated workspace, else start fresh
@@ -4407,12 +4411,19 @@ def _has_platform_memory(servers: list[dict] | None) -> bool:
 # switched off in its own config, _hermes_prepare_env). Only bases whose switch withholds the tool from the model are
 # here, by the names that switch takes: cheetahclaws' measured Memory* tools (CHEETAHCLAWS_TOOLS) through its
 # `disabled_tools`, and Roder's memory and knowledge stores through its allowlist (roder_backend.TOOLS; a switch id
-# takes its whole family). Already off on every turn, whatever is attached: jcode `memory`, grok GROK_MEMORY=0,
+# takes its whole family); Qwen Code's through permissions.deny, beside its background memory agents (_qwen_settings).
+# Codex's memories are a config table, switched off in _codex_prepare_env, and Gemini CLI 0.58.0 has no memory tool:
+# its experimental auto memory is pinned off in _gemini_settings. Already off on every turn, whatever is attached:
+# jcode `memory`, grok GROK_MEMORY=0,
 # agentzero's `_memory` plugin, dcode's memory auto-save, zeroclaw's memory tools (not on its allowlist), and
 # docker-agent's memory toolset (never declared).
 _OWN_MEMORY_TOOLS: dict[str, tuple[str, ...]] = {
     "cheetahclaws": ("MemoryDelete", "MemoryList", "MemorySave", "MemorySearch", "MemoryVerify"),
     "roder": ("memory_save", "knowledge_save"),
+    # Qwen Code 0.26.3's memory tools (ToolNames.MANAGE_MEMORY, SEARCH_MEMORY, and the older
+    # save_memory name its aliases still resolve), withheld through permissions.deny. Its background
+    # memory agents are switched off in its settings file as well (_qwen_settings, own_memory_off).
+    "qwen": ("manage_memory", "save_memory", "search_memory"),
 }
 
 
@@ -8590,7 +8601,7 @@ _QWEN_BACKGROUND_AGENT_TOOLS = frozenset({"read_file", "grep_search", "list_dire
 
 
 def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None,
-                   tools_disabled: list[str] | None = None) -> None:
+                   tools_disabled: list[str] | None = None, own_memory_off: bool = False) -> None:
     """~/.qwen/settings.json under the redirected HOME: mcpServers (gemini-cli schema:
     command/args/env for stdio, url/httpUrl for remote) and the disabled tools. Auth stays in the
     ENVIRONMENT (OPENAI_API_KEY / OPENAI_BASE_URL + --auth-type openai), so unlike pi and opencode
@@ -8646,12 +8657,17 @@ def _qwen_settings(home: pathlib.Path, mcp_servers: list[dict] | None,
         # and skill agents (its private memory, not the platform's).
         cfg["memory"] = {"enableManagedAutoMemory": False, "enableManagedAutoDream": False,
                          "enableAutoSkill": False}
+    elif own_memory_off:
+        # The platform's memory is attached, so Qwen Code keeps none of its own: no extraction after a
+        # turn and no consolidation (its memory tools are withheld through permissions.deny, by
+        # _OWN_MEMORY_TOOLS). Skill review is not memory and stays.
+        cfg["memory"] = {"enableManagedAutoMemory": False, "enableManagedAutoDream": False}
     (qdir / "settings.json").write_text(json.dumps(cfg, indent=2))
 
 
 def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-                tools_disabled: list[str] | None = None) -> list[str]:
+                tools_disabled: list[str] | None = None, own_memory_off: bool = False) -> list[str]:
     pr = provider or "openai-api"
     if pr not in QWEN_PROVIDERS:
         raise HTTPException(400, f"unknown qwen provider '{pr}' (one of {sorted(QWEN_PROVIDERS)})")
@@ -8672,7 +8688,7 @@ def _build_qwen(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     env["HOME"] = str(home)                      # sessions/skills/settings live INSIDE the workspace
     env["OPENAI_API_KEY"] = auth.api_key or ""
     env["OPENAI_BASE_URL"] = auth.base_url
-    _qwen_settings(home, mcp_servers, tools_disabled)
+    _qwen_settings(home, mcp_servers, tools_disabled, own_memory_off=own_memory_off)
     cmd = ["qwen", "-p", prompt, "-o", "stream-json", "-m", model,
            # Resume REQUIRES an explicit auth type in non-interactive mode (verified on 0.22.1:
            # without it every -r run dies "No auth type is selected"); fresh runs take it too for
@@ -9647,7 +9663,7 @@ GEMINI_MODELS = ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.7-flash", "gemi
 
 
 def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: str = "",
-                     tools_disabled: list[str] | None = None) -> None:
+                     tools_disabled: list[str] | None = None, own_memory_off: bool = False) -> None:
     """~/.gemini/settings.json under the redirected HOME.
 
     A disabled tool goes in `tools.exclude`. Gemini CLI 0.58.0 builds the model's function
@@ -9732,12 +9748,19 @@ def _gemini_settings(home: pathlib.Path, mcp_servers: list[dict] | None, model: 
     off = _tool_names_off(tools_disabled)
     if off:
         cfg["tools"] = {"exclude": off}
+    if own_memory_off:
+        # The platform's memory is attached. 0.58.0 has no memory tool ("There is no `save_memory`
+        # tool", its own prompt says); its one memory of its own is the experimental auto memory, an
+        # extraction agent that is off unless experimental.autoMemory is set. Pinned off here, so a
+        # default that changes in a later pin cannot give the agent a second memory.
+        cfg["experimental"]["autoMemory"] = False
     (gdir / "settings.json").write_text(json.dumps(cfg, indent=2))
 
 
 def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                   resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
-                  native_model: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
+                  native_model: str | None = None, tools_disabled: list[str] | None = None,
+                  own_memory_off: bool = False) -> list[str]:
     pr = provider or "google"
     if pr not in GEMINI_PROVIDERS:
         raise HTTPException(400, f"unknown gemini provider '{pr}' (one of {sorted(GEMINI_PROVIDERS)})")
@@ -9762,7 +9785,7 @@ def _build_gemini(provider: str, auth: Auth, model: str, prompt: str, cwd: str, 
         relay_base, relay_tok = _gemini_relay_route("https://generativelanguage.googleapis.com", auth.api_key, model, "")
         env["GOOGLE_GEMINI_BASE_URL"] = relay_base
         env["GEMINI_API_KEY"] = relay_tok
-    _gemini_settings(home, mcp_servers, model, tools_disabled)
+    _gemini_settings(home, mcp_servers, model, tools_disabled, own_memory_off=own_memory_off)
     cmd = ["gemini", "-p", prompt, "-o", "stream-json", "-m", model,
            # Load-bearing, same risk class as qwen's --yolo: gemini-cli gates tool use behind a
            # per-workspace "folder trust" prompt and an approval mode, neither of which can be
@@ -17716,10 +17739,12 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             mcp_toml = _codex_mcp_toml(req.mcp_servers)
             if use_appserver:
                 _codex_prepare_env(req.provider, auth, model, cwd, env, mcp_toml, resume=bool(req.resume_session_id),
-                                   tools_disabled=req.tools_disabled)   # config.toml + CODEX_HOME + auth
+                                   tools_disabled=req.tools_disabled,
+                                   own_memory_off=platform_memory)   # config.toml + CODEX_HOME + auth
             else:
                 cmd, codex_note = _build_codex(req.provider, auth, model, req.prompt, cwd, env,
-                                               mcp_toml=mcp_toml, resume_session_id=req.resume_session_id, tools_disabled=req.tools_disabled)
+                                               mcp_toml=mcp_toml, resume_session_id=req.resume_session_id, tools_disabled=req.tools_disabled,
+                                               own_memory_off=platform_memory)
         elif backend == "hermes":
             model = model or HERMES_DEFAULT_MODEL
             hermes_provider = _hermes_resolve_provider(req.provider, auth)
@@ -17746,7 +17771,7 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             model = model or QWEN_DEFAULT_MODEL
             cmd = _build_qwen(req.provider, auth, model, req.prompt, cwd, env,
                               resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                              tools_disabled=req.tools_disabled)
+                              tools_disabled=req.tools_disabled, own_memory_off=platform_memory)
         elif backend == "kimi":
             model = model or KIMI_DEFAULT_MODEL
             # _write_skills has already run, so the directory is on disk and can simply be named:
@@ -17836,7 +17861,8 @@ def _start_turn(req: TurnReq, identifier: str = "") -> dict:
             model = model or GEMINI_DEFAULT_MODEL
             cmd = _build_gemini(req.provider, auth, model, req.prompt, cwd, env,
                                 resume_session_id=req.resume_session_id, mcp_servers=req.mcp_servers,
-                                native_model=req.native_model, tools_disabled=req.tools_disabled)
+                                native_model=req.native_model, tools_disabled=req.tools_disabled,
+                                own_memory_off=platform_memory)
         elif backend == "cline":
             model = model or CLINE_DEFAULT_MODEL
             cmd = _build_cline(req.provider, auth, model, req.prompt, cwd, env,
