@@ -63,7 +63,9 @@ export function deletedToast(setup: string, out: SetupDeleted | null | undefined
     const by = kept && typeof kept === 'object' && Array.isArray((kept as { used_by?: unknown }).used_by)
       ? ((kept as { used_by: unknown[] }).used_by).map((u) => (u && typeof u === 'object' ? String((u as { name?: unknown }).name || '') : '')).filter(Boolean)
       : [];
-    return by.length ? `${name} deleted. Its memory stays: ${names(by)} ${by.length === 1 ? 'uses' : 'use'} it.` : `${name} deleted. Its memory stays: another agent uses it.`;
+    if (by.length) return `${name} deleted. Its memory stays: ${names(by)} ${by.length === 1 ? 'uses' : 'use'} it.`;
+    // the service's own reason (another agent uses it; only whoever manages it can delete it)
+    return typeof kept === 'string' && kept.trim() ? `${name} deleted. Its memory stays: ${kept.trim().replace(/\.$/, '')}.` : `${name} deleted. Its memory stays: another agent uses it.`;
   }
   return `${name} deleted`;
 }

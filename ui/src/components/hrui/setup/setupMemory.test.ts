@@ -80,3 +80,10 @@ test('rename: through the memory update route, and only for a memory the service
   expect(await followRename({ id: H }, 'Support', 'Customer care')).toBe(false);
   expect(t.calls).toHaveLength(0);
 });
+
+describe('deletedToast with the service reason', () => {
+  it('repeats why the memory was kept', () => {
+    expect(deletedToast('Support', { memory_kept: 'only whoever manages it can delete it' } as never))
+      .toBe('Support deleted. Its memory stays: only whoever manages it can delete it.');
+  });
+});

@@ -398,7 +398,9 @@ function Test({ r, model, defaultModel, headerValues, onRan, onBorn, pgOpts, fir
     // what this turn remembered, linked to where it was kept: a record in a person's memory opens on the agent's
     // memory's page, the person's record open in it, so Back is the agent's memory
     const kept = m.status !== 'running' ? turnMem[t] : null;
-    if (kept) {
+    if (kept?.failed) {
+      bits.push(<span key="mem" className="pg-mem pg-mem-failed" title={kept.failed}>{`Couldn't remember this one: ${kept.failed}`}</span>);
+    } else if (kept) {
       const said = `Remembered ${kept.count} ${kept.count === 1 ? 'thing' : 'things'}`;
       const mid = kept.memoryId || memoryId;
       const rec = kept.records[0];

@@ -229,11 +229,13 @@ export const chooseEngine = (name: string, description: string) =>
 
 /** What a finished task kept, on its turn record (`memory: {remembered, records: [{id, memory_id}], pending?}`), read
  *  leniently: a record may also be a bare id. Null where the turn kept nothing or says nothing of it. */
-export interface Remembered { count: number; records: { id: string; memory_id?: string }[]; memoryId: string }
+export interface Remembered { count: number; records: { id: string; memory_id?: string }[]; memoryId: string; failed?: string }
 export function rememberedOf(turn: unknown): Remembered | null {
   const m = turn && typeof turn === 'object' ? (turn as { memory?: unknown }).memory : null;
   if (!m || typeof m !== 'object') return null;
-  const o = m as { remembered?: unknown; records?: unknown; memory_id?: unknown };
+  const o = m as { remembered?: unknown; records?: unknown; memory_id?: unknown; failed?: unknown; reason?: unknown };
+  // a save that failed says so on its turn, in the service's own words (never a silent miss)
+  if (o.failed === true) return { count: 0, records: [], memoryId: '', failed: typeof o.reason === 'string' && o.reason.trim() ? o.reason.trim() : 'the memory could not be reached' };
   const n = typeof o.remembered === 'number' && Number.isFinite(o.remembered) ? o.remembered : 0;
   if (n <= 0) return null;
   const records = (Array.isArray(o.records) ? o.records : []).flatMap((x) => {

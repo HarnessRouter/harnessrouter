@@ -52,3 +52,16 @@ test('what a turn remembered, as the service writes it: each record with the mem
   expect(rememberedOf({ memory: { skipped: 'no end user named' } })).toBeNull();
   expect(rememberedOf({ id: 'resp' })).toBeNull();
 });
+
+describe('a turn whose save failed', () => {
+  it('says so in the service words, with nothing to link', () => {
+    const r = rememberedOf({ memory: { failed: true, reason: 'Graphiti did not answer' } });
+    expect(r).toEqual({ count: 0, records: [], memoryId: '', failed: 'Graphiti did not answer' });
+  });
+  it('still says so when no reason came', () => {
+    expect(rememberedOf({ memory: { failed: true } })?.failed).toBe('the memory could not be reached');
+  });
+  it('is nothing when the turn kept nothing and nothing failed', () => {
+    expect(rememberedOf({ memory: { remembered: 0, records: [], pending: false } })).toBeNull();
+  });
+});

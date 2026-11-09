@@ -27,6 +27,7 @@
 #hrui .pg-turn-meta .tr-link { font-size: 12.5px; }
 /* what a turn remembered (Playground.tsx): a quiet link to the records, in the turn's own line */
 #hrui .pg-turn-meta .pg-mem { color: var(--accent); text-decoration: none; }
+#hrui .pg-turn-meta .pg-mem-failed { color: var(--text-muted, inherit); }
 #hrui .pg-turn-meta .pg-mem:hover { text-decoration: underline; }
 /* what its memory searches found (the steps above say what): the line's own words, not a link */
 #hrui .pg-turn-meta .pg-recalled, #hrui .pg-turn-meta .pg-recalled:hover { color: inherit; text-decoration: none; }
