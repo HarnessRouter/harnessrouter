@@ -861,7 +861,7 @@ def test_someone_who_may_not_delete_the_memory_deletes_the_agent_and_the_memory_
     assert client.get(f"/v1/memories/{h['memory']['id']}", headers=ADA).status_code == 200
 
 
-# ── CAT 5b: a deleted agent is restorable for 30 days, and so is its memory ──────────────────
+# ── Review 5b: a deleted agent is restorable for 30 days, and so is its memory ──────────────────
 def test_a_restored_agent_comes_back_with_its_memory_and_its_peoples(client):
     hdr = _org_of_its_own(client, "restore")
     org = hdr["x-harness-org"]
@@ -909,7 +909,7 @@ def test_a_deleted_agent_inside_its_30_days_still_holds_the_memory_it_uses(clien
     assert _live_memories(org) == set(), "B's 30 days are over: A's memory goes, with the people's below it"
 
 
-# ── CAT 5a: a read that fails deletes nothing ────────────────────────────────────────────────
+# ── Review 5a: a read that fails deletes nothing ────────────────────────────────────────────────
 def test_a_failed_read_of_the_agents_deletes_no_memory(client, monkeypatch, capsys):
     """find answers a read it couldn't perform with [], which read as "no agent is left": one failed read during any
     agent's delete deleted its memory though another agent used it, and every memory made for an agent in the

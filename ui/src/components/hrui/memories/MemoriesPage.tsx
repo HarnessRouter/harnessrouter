@@ -22,7 +22,7 @@ import { ChooseServiceSheet, NewMemorySheet, UseInSheet } from './sheets';
 import { vendorName } from './vendors';
 import './memories.css';
 
-/** What a memory's picture draws (Richard 11-06): labels as Vivian's chips where a person set them; otherwise the
+/** What a memory's picture draws (Richard 11-06): labels as the designed chips where a person set them; otherwise the
  *  provider's own concepts with any types a person set, as the Schema tab draws them. */
 const pictureOf = (f: { schema?: LSchema | null } | undefined, p: Provider | null | undefined) => {
   const asLabels = schemaLabels(p) && !!f?.schema?.types.length;

@@ -65,7 +65,7 @@ export function withBuiltin<G extends VGraph | BGraph | null>(graph: G, provider
   return { ...graph, titles, vertex_types: vts, edge_types: ets };
 }
 
-/** A memory's schema as its card draws it (Richard 11-06: the vendor's concepts where nobody set a schema, in Vivian's
+/** A memory's schema as its card draws it (Richard 11-06: the vendor's concepts where nobody set a schema, in the design's
  *  drawing): what the provider makes itself and the types a person set, with the links between them, in the schema's
  *  own shape. A provider that declares nothing gives back what was set. */
 export function concepts(s: LSchema | null | undefined, provider: Provider | null | undefined): LSchema | null {
