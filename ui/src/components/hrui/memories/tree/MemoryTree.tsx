@@ -33,7 +33,8 @@ export interface MemoryTreeProps {
   activeId: string; pulse?: string[];
   /** A type to start filtered to, chosen somewhere else on the page. */
   filterKind?: string;
-  onOpen: (recordId: string, memoryId?: string) => void;
+  /** `record`: the list's own copy of it, drawn at once while the record itself is read */
+  onOpen: (recordId: string, memoryId?: string, record?: MemoryRecord) => void;
   /** A new record of this memory, as a draft: `type` is a kind, a schema's type name or a kind every
    *  memory has (recordOfKind in ./treeModel turns it into what the service takes); `folder` is where it goes. */
   onNew: (type: string, folder?: string) => void;
@@ -266,7 +267,7 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
   }, [read.records, branches, memory.id]);
 
   // ── what a row does ───────────────────────────────────────────────────────────────────────
-  const openRecordRow = useCallback((r: Row) => { if (r.kind === 'record') onOpen(r.record.id, r.memoryId === memory.id ? undefined : r.memoryId); }, [onOpen, memory.id]);
+  const openRecordRow = useCallback((r: Row) => { if (r.kind === 'record') onOpen(r.record.id, r.memoryId === memory.id ? undefined : r.memoryId, r.record); }, [onOpen, memory.id]);
   const toggle = (r: Row, to?: boolean) => {
     if (filtering || !isExpandable(r)) return;
     setOpen((o) => ({ ...o, [r.key]: to ?? !isOpenRow(r) }));
@@ -631,7 +632,7 @@ export function MemoryTree({ memory, provider, schema, read, activeId, pulse, fi
           bump(mid, (m) => ({ ...m, records: { count: (m.records?.count || 0) + 1 } }));
           setOpen((o) => ({ ...o, [memoryKey(mid)]: true }));
           closeSheet();
-          onOpen(r.id, mid);
+          onOpen(r.id, mid, r);
           onChanged();
         }} />
       ) : null}

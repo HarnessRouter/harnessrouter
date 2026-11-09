@@ -26,7 +26,11 @@ import { listChildren } from './tree/api';
 import { recordOfKind } from './tree/treeModel';
 
 // Client only: the live document's library is the server's too, and a second copy of it in the same process warns and misbehaves.
-const RecordDoc = dynamic(() => import('./RecordDoc').then((m) => m.RecordDoc), { ssr: false });
+// Its code is read ahead as the page opens, and until it is here a record shows what the list holds of it (never a blank
+// page while it loads, a phone's first tap on 11-09).
+let recordDocHere = false;
+const loadRecordDoc = () => import('./RecordDoc').then((m) => { recordDocHere = true; return m.RecordDoc; });
+const RecordDoc = dynamic(loadRecordDoc, { ssr: false });
 const MemoryGraphView = dynamic(() => import('./graph/MemoryGraph').then((m) => m.MemoryGraph), { ssr: false, loading: () => <p className="mm-muted mm-cpad">Drawing the graph…</p> });
 
 export interface RecordsRead {
@@ -50,7 +54,7 @@ export function latestWorthOpening(records: MemoryRecord[]): MemoryRecord | null
   return worth.sort((a, b) => at(b) - at(a))[0] || null;
 }
 
-export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, initialIn = '', onOpenRecord, onSchema, onOtherMemory, onChanged, onBelowChanged, liveTick, pulse, showGraph = true, onUseIn }: {
+export function DataTab({ memory, provider, schema, read, setups, typeFilter, initialRecord, initialIn = '', onOpenRecord, onSchema, onOtherMemory, onChanged, onBelowChanged, liveTick, pulse, showGraph = true, onUseIn, urlRecord = null, urlIn = null, onPlace }: {
   memory: Memory; provider: Provider | null; schema: LSchema | null; read: RecordsRead; setups: Map<string, string> | null;
   typeFilter: string; initialRecord: string;
   /** the memory below this one that `initialRecord` is in (a person's own), where it isn't this one's */
@@ -64,6 +68,11 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   showGraph?: boolean;
   /** give this memory to a setup, where nothing uses it yet */
   onUseIn?: () => void;
+  /** the record the address names now (?record=, and ?in= for one below this memory): Back and Forward move it */
+  urlRecord?: string | null; urlIn?: string | null;
+  /** put the open record in the address: `push` where opening it is going somewhere (the columns are tabs, and the
+   *  list gives way to it, so Back returns to the list), else `replace`; '' takes it out */
+  onPlace?: (recordId: string, inMemory: string, how: 'push' | 'replace') => void;
 }) {
   const write = !!memory.privileges?.includes('write');
   // a record's kind comes from a schema of types; labels are a vocabulary on facts, not kinds of record
@@ -74,10 +83,67 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   const [inMemory, setInMemory] = useState<Memory | null>(null);
   const [draft, setDraft] = useState<MemoryRecord | null>(null);
   const [outside, setOutside] = useState<MemoryRecord | null>(null);    // open, but not in the list: forgotten, or past a page
+  // the list's own copy of the record just opened from it: its title and words show at once, while the record (and,
+  // for a person's record, their memory) is read
+  const [peek, setPeek] = useState<MemoryRecord | null>(null);
+  const [missed, setMissed] = useState('');      // the open record that could not be read ("in:id")
+  const [docHere, setDocHere] = useState(recordDocHere);
+  useEffect(() => {
+    if (docHere) return undefined;
+    let live = true;
+    loadRecordDoc().catch(() => undefined).finally(() => { if (live) setDocHere(true); });
+    return () => { live = false; };
+  }, [docHere]);
   // where the columns are tabs: the list, unless the page was sent to a record
   const [tab, setTab] = useState(initialRecord ? 'doc' : 'tree');
   const [subSheet, setSubSheet] = useState(false);
   useEffect(() => { onOpenRecord(sel, selIn); }, [sel, selIn, onOpenRecord]);
+
+  // ── the open record in the address ────────────────────────────────────────────────────────
+  // Where the columns are tabs (a phone), opening a record from the list is going somewhere: it is pushed, so Back
+  // comes back to the list, not out of the memory. Side by side, the list stays and a record is only picked: the
+  // address follows it in place. Back and Forward (and a link) move the open record with the address.
+  const narrow = useRef(false);
+  const pushed = useRef(false);                  // the address's record is one this page pushed (Back is the list)
+  const at = useRef(`${urlIn || ''}:${urlRecord || ''}`);
+  const placed = useRef<string | null>(null);    // the address this page last asked for
+  const placeRef = useRef(onPlace);
+  placeRef.current = onPlace;
+  const place = useCallback((rid: string, inMid: string, going: boolean) => {
+    const key = `${rid ? inMid : ''}:${rid}`;
+    if (!placeRef.current || key === at.current) return;
+    const push = going && narrow.current && !!rid;
+    if (push) pushed.current = true;
+    placed.current = key;
+    placeRef.current(rid, rid ? inMid : '', push ? 'push' : 'replace');
+  }, []);
+  const selNow = useRef({ sel, selIn });
+  selNow.current = { sel, selIn };
+  useEffect(() => {
+    const key = `${urlIn || ''}:${urlRecord || ''}`;
+    if (key === at.current) return;
+    at.current = key;
+    if (key === placed.current) { placed.current = null; return; }   // the page's own doing
+    if (!urlRecord) {
+      // Back to the list
+      pushed.current = false;
+      if (narrow.current) setTab('tree');
+      return;
+    }
+    // Forward, or a link: that record
+    const inMid = urlIn && urlIn !== memory.id ? urlIn : '';
+    if (urlRecord !== selNow.current.sel || inMid !== selNow.current.selIn) { setDraft(null); setPeek(null); setSelIn(inMid); setSel(urlRecord); }
+    setTab('doc');
+  }, [urlRecord, urlIn, memory.id]);
+  // the tabs: the Record tab is going to the record (pushed, so Back is the list), and the Records tab after a push is Back
+  const pickTab = useCallback((id: string) => {
+    if (id === 'doc' && selNow.current.sel) place(selNow.current.sel, selNow.current.selIn, true);
+    if (id === 'tree' && at.current !== ':') {
+      if (pushed.current && typeof window !== 'undefined') { pushed.current = false; window.history.back(); }
+      else place('', '', false);
+    }
+    setTab(id);
+  }, [place]);
 
   // the memory below this one a record is open in: read for what it lets a person do, and checked to be below this one
   // (anything else opens on its own page)
@@ -127,7 +193,7 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   useEffect(() => {
     if (!sel || listed || !read.records) { setOutside(null); return undefined; }
     let live = true;
-    getRecord(selIn || memory.id, sel).then((r) => { if (live) setOutside(r); }).catch(() => { if (live) setOutside(null); });
+    getRecord(selIn || memory.id, sel).then((r) => { if (live) setOutside(r); }).catch(() => { if (live) { setOutside(null); setMissed(`${selIn}:${sel}`); } });
     return () => { live = false; };
   }, [sel, selIn, listed, read.records, memory.id]);
   const record = draft || listed || outside;
@@ -136,16 +202,27 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
 
   // A record picked on the graph opens in the graph's own panel, so where the columns are tabs the graph stays (Richard
   // 11-06: in a narrow view the panel takes the bottom of the graph); picked anywhere else, the Record tab shows it.
-  const show = useCallback((rid: string, mid?: string) => {
+  const pick = useCallback((rid: string, mid?: string) => {
     if (mid && mid !== memory.id) { onOtherMemory(mid, rid); return false; }
-    setDraft(null); setSelIn(''); setSel(rid);
+    setDraft(null); setPeek(null); setSelIn(''); setSel(rid);
     return true;
   }, [memory.id, onOtherMemory]);
-  // from the list: a record of a memory below this one (a person's own) opens here, in that memory
-  const open = useCallback((rid: string, mid?: string) => {
-    if (mid && mid !== memory.id) { setDraft(null); setSelIn(mid); setSel(rid); setTab('doc'); return; }
-    if (show(rid, mid)) setTab('doc');
-  }, [show, memory.id]);
+  // from the graph or a link: the record is picked where it is (the graph stays), and the address follows in place
+  const show = useCallback((rid: string, mid?: string) => {
+    const ok = pick(rid, mid);
+    if (ok) place(rid, '', false);
+    return ok;
+  }, [pick, place]);
+  // from the list: a record of a memory below this one (a person's own) opens here, in that memory; on a phone the
+  // list gives way to it, and Back brings the list back
+  const open = useCallback((rid: string, mid?: string, item?: MemoryRecord) => {
+    const below = !!mid && mid !== memory.id;
+    if (below) { setDraft(null); setSelIn(mid); setSel(rid); }
+    else if (!pick(rid, mid)) return;
+    setPeek(item && item.id === rid ? item : null);
+    setTab('doc');
+    place(rid, below ? mid : '', true);
+  }, [pick, place, memory.id]);
 
   // ── what the open record links to ─────────────────────────────────────────────────────────
   const links = keepsLinks(provider);
@@ -223,7 +300,7 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   const held = all.length ? true : below === null ? (kids ? null : false) : below.n === null ? true : below.n > 0;
   const doc = (
     <main className="mm-doc">
-      {record && docMemory ? (
+      {record && docMemory && docHere ? (
         <RecordDoc key={`${selIn}:${record.id || 'draft'}`} memory={docMemory} above={selIn ? shownName(memory) : undefined} provider={provider} record={record} schema={kinds} setups={setups} links={linkCount} folders={selIn ? [] : everyFolder}
           onSaved={(r) => {
             if (selIn) { onBelowChanged?.([r.id]); return; }
@@ -233,8 +310,11 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
             if (selIn) { setSel(''); setSelIn(''); onBelowChanged?.([id]); return; }
             read.drop(id); setSel(''); onChanged();
           }} />
-      ) : record ? (
-        <><div className="mm-doc-bar"><span className="grow" /></div><p className="mm-muted mm-cpad" role="status">Opening…</p></>
+      ) : record || (peek && peek.id === sel) ? (
+        // read, or its memory still being read: what the list showed of it, at once
+        <RecordPeek r={(record || peek) as MemoryRecord} />
+      ) : sel && !draft && read.records && missed !== `${selIn}:${sel}` ? (
+        <><div className="mm-doc-bar"><span className="grow" /><span className="mm-saved" role="status">Opening…</span></div></>
       ) : (
         <>
           <div className="mm-doc-bar"><span className="grow" /></div>
@@ -292,11 +372,31 @@ export function DataTab({ memory, provider, schema, read, setups, typeFilter, in
   }
   return (
     <div className="mm-data">
-      <ResizableColumns storageKey={showGraph ? 'hr.memory.columns' : 'hr.memory.columns.nograph'} tab={tab} onTab={setTab} panes={[
+      <ResizableColumns storageKey={showGraph ? 'hr.memory.columns' : 'hr.memory.columns.nograph'} tab={tab} panes={[
         { id: 'tree', label: 'Records', min: 220, initial: 280, node: tree },
         { id: 'doc', label: 'Record', min: 380, initial: 640, grow: true, node: doc },
         ...(showGraph ? [{ id: 'graph', label: 'Graph', min: 280, initial: 440, node: right }] : []),
-      ]} />
+      ]} onTab={pickTab} onNarrow={(n) => { narrow.current = n; }} />
     </div>
+  );
+}
+
+const PEEK_MAX = 600;
+/** A record as the list holds it, drawn at once while it is opened: its title and the start of its words, laid out as
+ *  the record itself will be, and "Opening…" where its version will say how it is saved. */
+function RecordPeek({ r }: { r: MemoryRecord }) {
+  const title = (r.title || '').trim();
+  const words = (bodyOf(r) || (title ? '' : labelOf(r))).replace(/\s+/g, ' ').trim();
+  const excerpt = words.length > PEEK_MAX ? `${words.slice(0, PEEK_MAX - 1).trim()}…` : words;
+  return (
+    <>
+      <div className="mm-doc-bar"><span className="grow" /><span className="mm-saved" role="status">Opening…</span></div>
+      <div className="mm-doc-scroll">
+        <article className="mm-doc-col mm-peek" aria-busy="true">
+          {title ? <h1 className="mm-title">{title}</h1> : null}
+          {excerpt ? <div className={`mm-body${title ? '' : ' mm-sentence'}`}><p>{excerpt}</p></div> : null}
+        </article>
+      </div>
+    </>
   );
 }

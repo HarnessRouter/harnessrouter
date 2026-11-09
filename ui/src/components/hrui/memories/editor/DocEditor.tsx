@@ -9,7 +9,7 @@
 // the ID), so a stylesheet of plain classes, a CSS module or the editor's own injected rules, never reaches in here.
 'use client';
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -28,6 +28,8 @@ export interface DocEditorProps {
   placeholder?: string;
   readOnly?: boolean;
   className?: string;
+  /** Told once the editor is drawn, so the page can show the record's own words until then (never "Opening…"). */
+  onReady?: () => void;
 }
 
 type Someone = { id?: unknown; name?: unknown } | null | undefined;
@@ -46,7 +48,7 @@ const tint = (hex: string, alpha: number) => {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 };
 
-export function DocEditor({ doc, provider, currentUser, placeholder = '', readOnly = false, className }: DocEditorProps) {
+export function DocEditor({ doc, provider, currentUser, placeholder = '', readOnly = false, className, onReady }: DocEditorProps) {
   const myColor = useMemo(() => colorOf(currentUser), [currentUser]);
 
   const editor = useEditor(
@@ -90,6 +92,9 @@ export function DocEditor({ doc, provider, currentUser, placeholder = '', readOn
   useEffect(() => {
     editor?.setEditable(!readOnly);
   }, [editor, readOnly]);
+  const readyRef = useRef(onReady);
+  readyRef.current = onReady;
+  useEffect(() => { if (editor) readyRef.current?.(); }, [editor]);
 
   if (!editor) return <p className="mm-muted">Opening…</p>;
   return <EditorContent editor={editor} className={`mm-ed${className ? ` ${className}` : ''}`} />;

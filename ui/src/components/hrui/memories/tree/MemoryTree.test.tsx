@@ -95,13 +95,13 @@ test('a sub memory reads itself only when it is opened, and its record opens wit
   expect(t.s.calls.some((c) => c.path.includes('hmem_s/records'))).toBe(true);
   expect(said()).toEqual(['1:Sub', '2:Notes', '3:In the sub']);
   await click(row('In the sub'));
-  expect(t.props.onOpen).toHaveBeenCalledWith('s1', 'hmem_s');
+  expect(t.props.onOpen).toHaveBeenCalledWith('s1', 'hmem_s', expect.objectContaining({ id: 's1' }));
 });
 test('a record of this memory opens with no memory named', async () => {
   const t = open({ records: [record({ id: 'a', title: 'A note' })] });
   await mount(t.props);
   await click(row('A note'));
-  expect(t.props.onOpen).toHaveBeenCalledWith('a', undefined);
+  expect(t.props.onOpen).toHaveBeenCalledWith('a', undefined, expect.objectContaining({ id: 'a' }));
 });
 test('a search reads what is below and keeps the way to a match open', async () => {
   const t = open({ records: [record({ id: 'a', title: 'Nothing like it' })], subs: [sub()], routes: { 'GET /v1/memories/hmem_s/records': { data: [record({ id: 's1', title: 'The needle', memory_id: 'hmem_s' })], next: null } } });
@@ -174,7 +174,7 @@ test('the keys: down and up move focus, left closes a group, right opens it, ent
   await key('ArrowDown');
   expect((document.activeElement as HTMLElement).dataset.key).toBe(row('First').dataset.key);
   await key('Enter');
-  expect(t.props.onOpen).toHaveBeenCalledWith('a', undefined);
+  expect(t.props.onOpen).toHaveBeenCalledWith('a', undefined, expect.objectContaining({ id: 'a' }));
   await key('ArrowUp');
   expect(document.activeElement).toBe(row('Notes'));
   await key('ArrowLeft');
@@ -286,7 +286,7 @@ test('a new record in a sub memory is made there and opened; this memory\'s goes
   await type(document.getElementById('mtNrT') as HTMLInputElement, 'Made');
   await click(sheetButton('Save'));
   expect(t.s.sent('POST', '/v1/memories/hmem_s/records')[0].body).toMatchObject({ type: 'note', title: 'Made' });
-  expect(t.props.onOpen).toHaveBeenCalledWith('s2', 'hmem_s');
+  expect(t.props.onOpen).toHaveBeenCalledWith('s2', 'hmem_s', expect.objectContaining({ id: 's2' }));
   expect(t.props.onNew).not.toHaveBeenCalled();
   await click(el.querySelector('button[aria-label="New"]'));
   await click(menuItem('New Fact'));
@@ -330,6 +330,9 @@ test('labels: the menu lists them, and choosing one asks the service and shows o
   await click(el.querySelector('button[aria-label="Filter by label"]'));
   expect(Array.from(el.querySelectorAll('[role=menuitem]')).map((m) => m.textContent)).toEqual(expect.arrayContaining(['billing', 'support']));
   await click(menuItem('billing'));
+  // the label's search goes out on a timer (0 ms with no words): let it run, then what it found draws
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  await flush();
   expect(t.s.sent('POST', '/v1/memories/hmem_1/recall')[0].body).toMatchObject({ filters: { field: 'attributes.labels', op: 'contains', value: 'billing' } });
   expect(row('Not read yet')).toBeDefined();
   expect(row('Other')).toBeUndefined();

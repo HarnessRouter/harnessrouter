@@ -12,7 +12,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  deleteMemory, getHarnessMemories, getMemory, getRecord, listGrants, listRecords, MemoryApiError,
+  deleteMemory, getHarnessMemories, getMemory, getRecord, listGrants, listRecords, MemoryApiError, recordHref,
   type Grant, type Memory, type MemoryRecord,
 } from '@/lib/memories';
 import { ConfirmSheet } from '../Sheet';
@@ -87,6 +87,11 @@ export function MemoryPage({ id, tabParam, recordParam, inParam = null, onTab }:
   // going to Schema and back opens the record that was open, in the memory it was open in
   const openRecord = useRef({ rid: recordParam || '', in: (recordParam && inParam) || '' });
   const keepOpen = useCallback((rid: string, inMid: string) => { openRecord.current = { rid, in: inMid }; }, []);
+  // the open record in the address (DataTab says how): a phone's Back from a record comes back to the list
+  const place = useCallback((rid: string, inMid: string, how: 'push' | 'replace') => {
+    const to = rid ? recordHref(id, inMid || id, rid) : `/memories/${enc(id)}?tab=data`;
+    if (how === 'push') router.push(to, { scroll: false }); else router.replace(to, { scroll: false });
+  }, [id, router]);
 
   // what changes while the page is open: the tree and the graph read it again, and what changed shows for a moment
   const [liveTick, setLiveTick] = useState(0);
@@ -261,6 +266,7 @@ export function MemoryPage({ id, tabParam, recordParam, inParam = null, onTab }:
         <SchemaEditor memory={m} provider={provider} doc={doc} ro={ro} countOf={countOf} onOpenData={(t: string) => { setTypeFilter(t); onTab('data'); }} />
       ) : (
         <DataTab memory={m} provider={provider} schema={doc.schema} read={read} setups={names} typeFilter={typeFilter} initialRecord={openRecord.current.rid} initialIn={openRecord.current.in} onOpenRecord={keepOpen}
+          urlRecord={recordParam} urlIn={inParam} onPlace={place}
           showGraph={graphOn} onUseIn={canUseIn ? () => setSheet('use') : undefined}
           onSchema={() => onTab('schema')} onOtherMemory={(mid, rid) => router.push(`/memories/${enc(mid)}?tab=data&record=${enc(rid)}`)} onChanged={readMemory}
           onBelowChanged={(ids) => { setLiveTick((x) => x + 1); lit(ids); }} liveTick={liveTick} pulse={pulse} />

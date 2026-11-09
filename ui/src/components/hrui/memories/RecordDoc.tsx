@@ -30,7 +30,8 @@ import { typeLabel, choicesOf, type LSchema } from './schemaModel';
 import { folderOf, kindInfo } from './tree';
 import { vendorName } from './vendors';
 
-const DocEditor = dynamic(() => import('./editor/DocEditor').then((m) => m.DocEditor), { ssr: false, loading: () => <p className="mm-muted">Opening…</p> });
+// while its code loads the record's own words show in its place (bodyBlock), so the loading state draws nothing
+const DocEditor = dynamic(() => import('./editor/DocEditor').then((m) => m.DocEditor), { ssr: false, loading: () => null });
 
 /** The record's fields a person does not read as a field of their own. */
 const NOT_A_ROW = new Set(['entity_type', 'folder', 'labels', 'predicate']);
@@ -87,7 +88,11 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
   const [busy, setBusy] = useState(false);
   const [refused, setRefused] = useState('');
   const [leftover, setLeftover] = useState(false);
+  const [edReady, setEdReady] = useState(false);
   const { live, state } = useLiveRecord(memory.id, isNew ? '' : record.id, peerColor);
+  // the editor is drawn again after the link comes back: the words show until it is
+  const synced = !!state?.synced;
+  useEffect(() => { if (!synced) setEdReady(false); }, [synced]);
   const member = getSession()?.member;
   const me = useMemo(() => ({ id: member?.id || member?.email || LOCAL_MEMBER, name: member?.name || member?.email || 'Operator' }), [member?.id, member?.email, member?.name]);
   const titleEl = useRef<HTMLHeadingElement | null>(null);
@@ -201,8 +206,13 @@ export function RecordDoc({ memory, above, provider, record, schema, setups, lin
 
   const bodyBlock = !isNew ? (
     live && state?.synced ? (
+      // the record's own words until the editor is drawn (its code and its first paint take a moment on a phone),
+      // never "Opening…" over a record that is already here
       <div className={`mm-live mm-body${sentence ? ' mm-sentence' : ''}`}>
-        <DocEditor doc={live.doc} provider={live} currentUser={me} readOnly={!writable} placeholder={writable ? 'Write it down. Setups read all of it.' : ''} />
+        {edReady ? null : body ? <div className="mm-ed-wait"><ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown></div> : null}
+        <div className="mm-ed-box" hidden={!edReady}>
+          <DocEditor doc={live.doc} provider={live} currentUser={me} readOnly={!writable} placeholder={writable ? 'Write it down. Setups read all of it.' : ''} onReady={() => setEdReady(true)} />
+        </div>
       </div>
     ) : state?.denied ? <p className="mm-err" role="alert">{state.denied}</p> : <div className={`mm-body${sentence ? ' mm-sentence' : ''}`}>{body ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown> : null}</div>
   ) : open ? (
